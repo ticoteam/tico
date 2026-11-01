@@ -365,7 +365,7 @@ def card_update_limit(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         alloc.apply(aid)                            # the limit follows the allocation (`limit_follows`)
         return {"card_id": str(card["id"]), "limit": amount}
-    gate = handlers.HIDDEN_GATE if route else K.default_gate(ctx.org, who, "card_update_limit")
+    gate = alloc.gate if route else K.default_gate(ctx.org, who, "card_update_limit")
     return Plan(gate, f"Set card ••{card['last4'] or '----'}'s limit to {amount / 100:.2f} a month", apply,
                 facts={"amount": amount, "holder": str(card["holder"]), "budget_id": str(card["budget_id"] or "")})
 

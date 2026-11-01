@@ -998,3 +998,35 @@ def test_a_hold_inside_a_child_counts_once_against_the_parents_teammate_allocati
         assert lowered.status == "committed", (lowered.status, lowered.code, lowered.reason)
         refused = act(c, OWNER, "budget_update", {"budget_id": parent, "amount": 59_900}, key="child-hold-599")
         assert (refused.status, refused.code) == ("failed", "invalid"), (refused.status, refused.code, refused.reason)
+
+
+def test_lowering_a_parent_below_an_ended_childs_card_reserve_is_refused(books):
+    """Eng tools (100.00) carries an 80.00 card under Tools (100.00). Ending Eng tools keeps that card reserved against
+    Tools (spec 4.4), so Tools cannot drop to 10.00; it can go down to the 80.00 it reserves and no lower."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c, amount=10_000)
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=line)
+        assert _bot_card(c, eng, "bot:coder", amount=8_000).status == "committed"
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        lowered = act(c, OWNER, "budget_update", {"budget_id": line, "amount": 1_000})
+        assert lowered.code == "invalid" and "reserve 80.00" in lowered.reason, lowered
+        assert FA.budget_state(c, line, AT).amount == 10_000
+        assert act(c, OWNER, "budget_update", {"budget_id": line, "amount": 8_000}).status == "committed"
+
+
+def test_a_card_limit_request_the_requester_cannot_see_goes_to_their_manager(books):
+    """Cara leads Web (she reports to Ben) and has finance.cards only. She sees Web but not the company Tools budget above
+    it, so her request to raise Web's card limit goes to Ben under the budget-request rule, not to the install owner."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c, amount=10_000)
+        web = _budget(c, name="Web tools", amount=10_000, team="web", parent_id=line)
+        card = _bot_card(c, web, "bot:coder", amount=5_000)
+        assert card.status == "committed", card
+        assert act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.cards"}).status == "committed"
+        asked = act(c, "human:cara", "card_update_limit", {"card_id": str(card.result["card_id"]), "amount": 6_000})
+        assert (asked.status, asked.approver, asked.rule) == ("needs_approval", "human:ben", "default:budget-request"), \
+            (asked.code, asked.reason, asked.approver, asked.rule)

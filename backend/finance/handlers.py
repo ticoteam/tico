@@ -458,6 +458,7 @@ def _raise_to(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str) -> i
     when a later parent version would still be passed, since one raise cannot reach that day, or when the parent has no
     amount from `effective`."""
     parent, children, parent_versions = _parent_side(ctx, b, mine)
+    children.update({k: vs for k, vs in _kid_versions(ctx, parent.id).items() if k not in children})
     start = dates.day(effective)
     cap = B.amount_at(parent_versions, start)
     if cap is None:
@@ -528,8 +529,9 @@ def _over_children(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str)
 
 
 def _kid_versions(ctx: Ctx, budget_id: str) -> dict[str, list[B.Version]]:
-    """Each active child budget's versions."""
-    kids = [x.id for x in ctx.budgets().values() if x.parent_id == budget_id and x.active]
+    """Each child budget's versions, ended ones too: an ended child keeps its allocations reserved against this budget
+    (`_owed` counts what it still holds, and nothing else of it)."""
+    kids = [x.id for x in ctx.budgets().values() if x.parent_id == budget_id]
     return SB.versions(ctx.c, kids) if kids else {}
 
 
@@ -602,7 +604,8 @@ def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: d
         reserves, direct = _reserves(ctx, b, start.isoformat(), end.isoformat(), list(kids))
         owed = _owed(ctx, kids, at)
         total = sum(reserve for _, _, reserve in reserves) + direct + owed
-        if (not reserves and not direct) or total <= cap:
+        # A day with nothing of its own reserved is skipped, unless an ended child still holds something on it.
+        if total <= cap or (not reserves and not direct and not _ended_held(ctx, kids, at)):
             continue
         on = at.isoformat()
         if not reserves:
@@ -626,10 +629,14 @@ def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: d
 def _owed(ctx: Ctx, kids: dict[str, list[B.Version]], at: date) -> int:
     """What a budget's children hold it to on `at`. Each child counts once, as its amount or as what it already needs if
     that is more: its spend, holds and allocation reserves (budgeting.state), all inside its own envelope. So nothing that
-    sits inside a child is counted again on its parent. A child with no stored budget yet needs nothing."""
+    sits inside a child is counted again on its parent. A child with no stored budget yet needs nothing. An ended child
+    has no envelope any more: it counts only what it still holds (its allocations' reserves and holds)."""
     budgets = ctx.budgets()
     total = 0
     for cid, versions in kids.items():
+        if cid in budgets and not budgets[cid].active:
+            total += budgeting.state(ctx, cid, at).held
+            continue
         amount = B.amount_at(versions, at) or 0
         need = 0
         if cid in budgets:
@@ -637,6 +644,12 @@ def _owed(ctx: Ctx, kids: dict[str, list[B.Version]], at: date) -> int:
             need = st.actual + st.held
         total += max(amount, need)
     return total
+
+
+def _ended_held(ctx: Ctx, kids: dict[str, list[B.Version]], at: date) -> int:
+    """What the ended children among `kids` still hold on `at`, as `_owed` counts it."""
+    budgets = ctx.budgets()
+    return sum(budgeting.state(ctx, cid, at).held for cid in kids if cid in budgets and not budgets[cid].active)
 
 
 def _reserves(ctx: Ctx, b: B.Budget, start: str, end: str, kid_ids: list[str]
