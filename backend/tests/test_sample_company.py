@@ -53,7 +53,7 @@ def environment(tmp_path):
                 c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO NOTHING",
                           (encode(PEOPLE),))
                 for slug, config in SEED.items():
-                    c.execute("INSERT INTO bot_config(bot,config,operator,repo) VALUES(?,?,?,?)",
+                    c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
                               (slug, encode(config), "owner", "bot-" + slug))
         return client
 
@@ -93,7 +93,7 @@ def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_st
     assert [b["template"] for b in draft["bots"]] == ["coo", "product-lead", "pr-reviewer", "support", "content"]
     assert [b["title"] for b in draft["bots"]] == ["Assistant", "Head of Product", "Builder", "Support Agent",
                                                    "Content Marketer"]
-    assert sorted(g["owner"] for g in draft["goals"]) == sorted(b["id"] for b in draft["bots"])
+    assert sorted(g["owner_id"] for g in draft["goals"]) == sorted(b["id"] for b in draft["bots"])
     runs_on = [row["runs_on"] for row in extra.values()]
     assert set(runs_on) == set(sample_company.RUNS_ON) and min(runs_on.count(r) for r in set(runs_on)) >= 2
     for row in extra.values():
@@ -138,14 +138,14 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
     # No "Finish onboarding" reminder in Needs you for a sample bot.
     assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Finish onboarding%' AND status NOT IN ('done','closed')")
 
-    goals = {row["owner"]: row for row in rows(api, "SELECT id,owner,title FROM goals WHERE owner LIKE 'bot:%'")}
+    goals = {row["owner_id"]: row for row in rows(api, "SELECT id,owner_id,title FROM goals WHERE owner_id LIKE 'bot:%'")}
     assert {"bot:" + ids[slug] for slug in ("coo", *ROLE_BOTS)} <= set(goals)
-    tasks = rows(api, "SELECT id,owner,requester,title,body,goal_id,status FROM tasks WHERE id IN (%s)"
+    tasks = rows(api, "SELECT id,owner_id,requester_id,title,body,goal_id,status FROM tasks WHERE id IN (%s)"
                  % ",".join("?" * len(record["sample"]["tasks"])), tuple(record["sample"]["tasks"]))
-    assert sorted(t["owner"] for t in tasks) == sorted("bot:" + ids[slug] for slug in ("coo", *ROLE_BOTS))
+    assert sorted(t["owner_id"] for t in tasks) == sorted("bot:" + ids[slug] for slug in ("coo", *ROLE_BOTS))
     for task in tasks:
-        assert task["requester"] == "human:owner" and task["status"] == "open"
-        assert task["goal_id"] == goals[task["owner"]]["id"]
+        assert task["requester_id"] == "human:owner" and task["status"] == "open"
+        assert task["goal_id"] == goals[task["owner_id"]]["id"]
         # Each ends by asking the owner one Yes/No question, the card in Needs you.
         assert re.search(r'hub task question --on owner "Approve [^"]+\?"', task["body"]), task["body"]
 
@@ -161,7 +161,7 @@ def test_the_sample_company_is_only_for_a_new_company_and_only_the_owner_starts_
     assert again.status_code == 409, again.text
     assert again.json()["error"]["code"] == "sample_company" and "already set up" in again.json()["error"]["detail"]
     builder = bot_ids(api)["builder"]
-    assert len(rows(api, "SELECT id FROM tasks WHERE owner=?", ("bot:" + builder,))) == 1        # nothing made twice
+    assert len(rows(api, "SELECT id FROM tasks WHERE owner_id=?", ("bot:" + builder,))) == 1        # nothing made twice
 
 
 def test_a_company_with_its_own_provider_keeps_it(environment):
@@ -185,7 +185,7 @@ def test_the_bots_start_once_a_computer_runs_them(environment):
     ids = bot_ids(api)
     assert {ids[slug] for slug in ("coo", *ROLE_BOTS)} <= placed
     # Each starter task woke its bot: a job waits for the computer to claim it.
-    queued = {row["bot"] for row in rows(api, "SELECT bot FROM jobs WHERE state='queued'")}
+    queued = {row["bot"] for row in rows(api, "SELECT bot_id FROM jobs WHERE state='queued'")}
     assert {ids[slug] for slug in ("coo", *ROLE_BOTS)} <= queued
 
 

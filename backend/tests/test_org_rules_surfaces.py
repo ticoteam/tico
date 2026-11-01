@@ -87,7 +87,7 @@ def test_the_cli_manages_due_dates_and_marks_one_satisfied(api):
     start = (D.local_today("America/Los_Angeles") - timedelta(days=1)).isoformat()
     due = cli(api, "ana-test", "due", "add", rule["id"], "--first", start, "--repeats", "once", "--owner", "ops")
     listed = cli(api, "ana-test", "due", "list")
-    assert [d["id"] for d in listed["due"]] == [due["id"]] and listed["due"][0]["status"] == "overdue"
+    assert [d["id"] for d in listed["due_at"]] == [due["id"]] and listed["due_at"][0]["status"] == "overdue"
     marked = cli(api, "ana-test", "due", "satisfied", due["id"])
     assert marked["satisfied"] == start
 
@@ -108,7 +108,7 @@ def test_a_retired_rule_is_no_longer_in_force_and_its_due_dates_come_back(api):
     rule = cli(api, "ana-test", "add", "--kind", "internal", "--text", "Ops answers within a day.", "--who", "ops")
     cli(api, "ana-test", "due", "add", rule["id"], "--first", "2026-06-01", "--repeats", "yearly", "--owner", "ops")
     retired = cli(api, "ana-test", "retire", rule["id"], "--version", "1")
-    assert retired["rule"]["status"] == "retired" and len(retired["due"]) == 1
+    assert retired["rule"]["status"] == "retired" and len(retired["due_at"]) == 1
     assert cli(api, "ana-test", "list")["rules"] == []
 
 
@@ -188,5 +188,5 @@ def test_rules_due_takes_the_next_window_and_list_is_the_same_view(api):
     soon = (D.local_today("America/Los_Angeles") + timedelta(days=3)).isoformat()
     due = cli(api, "ana-test", "due", "add", rule["id"], "--first", soon, "--repeats", "once", "--owner", "ops")
     upcoming = cli(api, "ana-test", "due", "--next", "30d")
-    assert [d["id"] for d in upcoming["due"]] == [due["id"]]
-    assert cli(api, "ana-test", "due", "list", "--next", "30d")["due"] == upcoming["due"]
+    assert [d["id"] for d in upcoming["due_at"]] == [due["id"]]
+    assert cli(api, "ana-test", "due", "list", "--next", "30d")["due_at"] == upcoming["due_at"]

@@ -89,7 +89,7 @@ def load(onboarding, c, who):
     record["names"] = {**record["names"], "company_name": name}
     record["answers"] = {**record["answers"], "what_we_do": ours(company["about"]), "customers": "businesses",
                          "team_size": "1 (just me)", "software_product": "yes",
-                         "departments": [b["dept"] for b in draft["bots"] if b is not assistant]}
+                         "departments": [b["department"] for b in draft["bots"] if b is not assistant]}
     names = O.display_names(settings, record)
     # The assistant is a required card: complete() makes it (or keeps the one there is) under the company's own name.
     record["selected"] = {
@@ -109,8 +109,8 @@ def load(onboarding, c, who):
     ids = {slug: (H.resolve_bot(c, slug) or {}).get("id", slug) for slug in set(slugs.values())}
     goals = {}
     for goal in draft["goals"]:
-        made = G.create(c, who.actor, ours(goal["title"]), "bot:" + ids[slugs[goal["owner"]]], body=name + "'s goal.")
-        goals.setdefault(goal["owner"], made["id"])
+        made = G.create(c, who.actor, ours(goal["title"]), "bot:" + ids[slugs[goal["owner_id"]]], body=name + "'s goal.")
+        goals.setdefault(goal["owner_id"], made["id"])
     tasks = []
     for bot_id, row in extra.items():
         for task in row["tasks"]:

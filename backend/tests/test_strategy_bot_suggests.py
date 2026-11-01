@@ -44,7 +44,7 @@ def recovery(api, goal_id, ops_task, token, expected=200):
 
 def tasks_of(api, owner):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE owner=? ORDER BY created_at", (owner,))]
+        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE owner_id=? ORDER BY created_at", (owner,))]
 
 
 def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api):
@@ -62,7 +62,7 @@ def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api)
     # A task for a person stays the person's to make, at every level.
     post(api, "goal-proposals", {"kind": "recovery", "goal_id": goal["id"], "payload": {
         "evidence": "x", "options": [{"label": "Ana does it", "actions": [
-            {"do": "create", "owner": OWNER, "title": "Fix it yourself"}]}]}}, token=strategy_token, expected=422)
+            {"do": "create", "owner_id": OWNER, "title": "Fix it yourself"}]}]}}, token=strategy_token, expected=422)
     before = {t["id"]: t["rank"] for t in tasks_of(api, "bot:ops")}
     proposal = recovery(api, goal["id"], second, strategy_token)
     sync(api)
@@ -81,7 +81,7 @@ def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api)
     assert decided["result"]["left"] == [] and decided["result"]["follow_up"] is None
     ops = tasks_of(api, "bot:ops")
     [made] = [t for t in ops if t["id"] not in before]
-    assert (made["title"], made["requester"], made["goal_id"]) == \
+    assert (made["title"], made["requester_id"], made["goal_id"]) == \
         ("Fix the setup step that drops new accounts", STRATEGY_BOT, goal["id"])
     live = sorted((t for t in ops if t["status"] in H.ACTIVE_STATUSES), key=lambda t: t["rank"])
     assert live[0]["id"] == second and first in {t["id"] for t in live}                            # moved to the top
@@ -166,7 +166,7 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
     post(api, "strategy-bot/merge", body, token=bot(api, "ops"), expected=403)    # only the Strategy Bot
     merged = post(api, "strategy-bot/merge", body, token=strategy_token)
     item = merged["task"]
-    assert (item["owner"], item["status"], item["waiting_on"]) == (STRATEGY_BOT, "waiting", OWNER)
+    assert (item["owner_id"], item["status"], item["waiting_on"]) == (STRATEGY_BOT, "waiting", OWNER)
     assert [o["task_id"] for o in merged["originals"]] == originals
     shown = needs_tasks(api, "ana-test")
     assert item["id"] in shown and not set(originals) & shown                # one item, not three
@@ -182,11 +182,11 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
     with api.app.state.store.read() as c:
         assert H.task(c, item["id"])["status"] == "done"
         for task_id, to in ((asked, "bot:ops"), (waiting, "bot:coo")):
-            reply = c.execute("SELECT * FROM messages WHERE kind='answer' AND to_actor=? "
+            reply = c.execute("SELECT * FROM messages WHERE kind='answer' AND recipient_id=? "
                               "AND json_extract(refs,'$.task')=?", (to, task_id)).fetchone()
             assert reply and "The landlord page first." in reply["body"] and '"quiet"' not in reply["refs"]
             assert not H.open_task_asks(c, H.task(c, task_id))
-        said = c.execute("SELECT body FROM messages WHERE from_actor=? AND to_actor='bot:finance' AND "
+        said = c.execute("SELECT body FROM messages WHERE sender_id=? AND recipient_id='bot:finance' AND "
                          "json_extract(refs,'$.task')=? ORDER BY created_at DESC", (STRATEGY_BOT, filed)).fetchone()
         assert said and "The landlord page first." in said[0]
         assert H.task(c, waiting)["waiting_on"] is None
@@ -211,7 +211,7 @@ def test_three_bots_asking_the_same_thing_are_one_item_and_the_answer_reaches_ea
     # Answered as an open question (the "answer" step in Needs you) rather than a reply: the same pass-on.
     third = post(api, "strategy-bot/merge", {**body, "tasks": again}, token=strategy_token)["task"]
     with api.app.state.store.transaction() as c:
-        ask = next(a for a in H.open_task_asks(c, H.task(c, third["id"])) if a["to_actor"] == OWNER)
+        ask = next(a for a in H.open_task_asks(c, H.task(c, third["id"])) if a["recipient_id"] == OWNER)
         H.answer(c, OWNER, ask["id"], "The help page first.")
     with api.app.state.store.read() as c:
         assert H.task(c, third["id"])["status"] == "done"
@@ -232,7 +232,7 @@ def test_a_merged_item_names_only_the_originals_its_reader_may_read(api):
                 {"person": OWNER, "title": "Which pricing page first?", "question": "Which one?",
                  "tasks": [asked, filed]}, token=strategy_token)["task"]
     with api.app.state.store.transaction() as c:      # Ops' task becomes its own private task, out of Ana's reach
-        c.execute("UPDATE tasks SET private=1, requester='bot:ops', guest=NULL WHERE id=?", (asked,))
+        c.execute("UPDATE tasks SET private=1, requester_id='bot:ops', guest=NULL WHERE id=?", (asked,))
     page = test_goal_asks.get(api, "needs-you", "ana-test")["items"]
     assert next(i for i in page if i["id"] == item["id"])["merged"] == [filed]
 
@@ -274,13 +274,13 @@ def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):
         if n == 2:
             assert get(api, "strategy-bot")["level3_offer"]["streak"] == 0
         if n == 11:
-            assert get(api, "strategy-bot", token=strategy_token)["level3_offer"]["due"] is False
+            assert get(api, "strategy-bot", token=strategy_token)["level3_offer"]["due_at"] is False
             post(api, "strategy-bot/level3-offer", {}, token=strategy_token, expected=422)            # not due yet
     offer = get(api, "strategy-bot", token=strategy_token)["level3_offer"]
-    assert (offer["streak"], offer["due"]) == (10, True)
+    assert (offer["streak"], offer["due_at"]) == (10, True)
     post(api, "strategy-bot/level3-offer", {}, token="ana-test", expected=403)          # the Strategy Bot's note only
     made = post(api, "strategy-bot/level3-offer", {}, token=strategy_token)["level3_offer"]
-    assert made["due"] is False and made["last_offered_at"]
+    assert made["due_at"] is False and made["last_offered_at"]
     # not again this month
     post(api, "strategy-bot/level3-offer", {}, token=strategy_token, expected=422)
     # never raises its own level
@@ -289,5 +289,5 @@ def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):
         record = strategy_suggest.strategy_bot._record(c)
         record["level3_offers"] = [H.shift(H.now(), days=-31)]
         strategy_suggest.strategy_bot._save(c, record)
-    assert get(api, "strategy-bot", token=strategy_token)["level3_offer"]["due"] is True
+    assert get(api, "strategy-bot", token=strategy_token)["level3_offer"]["due_at"] is True
     assert get(api, "strategy-bot")["level"] == 2

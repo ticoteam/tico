@@ -19,7 +19,7 @@ async function access(browser) {
   const EVERYONE = {everyone: true, people: [], teams: [], bots: []};
   const ME = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true};
   const bot = (name, display_name, extra = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
-    state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], operator: 'ana', revision: 1, ...extra});
+    state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], owner_id: 'ana', revision: 1, ...extra});
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
   const errors = [], puts = [], saved = [];
   let serverMine = null;
@@ -227,14 +227,14 @@ async function roles(browser) {
   bot_admin: true, can_create_bots: true, can_add_people: true};
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
   const errors = [], posts = [];
-  let action = {id: 'act1', owner: 'human:ana', status: 'pending', proposer: 'botops', proposed_via: 'botops',
+  let action = {id: 'act1', owner_id: 'human:ana', status: 'pending', proposer: 'botops', proposed_via: 'botops',
     description: 'Add Sean (sean@example.test) to the roster, and let them sign in', summary: 'Add Sean (sean@example.test) to the roster',
     method: 'POST', path: '/api/v2/access/humans', body: {name: 'Sean', email: 'sean@example.test'}, diff: []};
   let accepts = false;
   // The runner keeps a limit of 2, as one that cannot take a raised Turns at once setting does.
   let turnsAtOnce = null, holdTurns = false, heldTurns = null;
   const bot = (name, display_name, extra = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
-    state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], operator: 'ana', revision: 1,
+    state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], owner_id: 'ana', revision: 1,
     can_manage: true, ...extra});
   const conv = {id: 'botops-chat', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']};
   await page.route('**/*', route => {
@@ -249,19 +249,19 @@ async function roles(browser) {
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', org_parent: ''}, {id: 'ben', name: 'Ben Cole', org_parent: ''},
       {id: 'cara', name: 'Cara Diaz', org_parent: ''}], org_groups: []});
     if (p === '/api/employees') return json([
-      bot('jira-manager', 'Jira Manager', {operator: 'cara', bot_owners: [{id: 'cara', name: 'Cara Diaz'}], access_policy: null}),
+      bot('jira-manager', 'Jira Manager', {owner_id: 'cara', bot_owners: [{id: 'cara', name: 'Cara Diaz'}], access_policy: null}),
       bot('botops', 'BotOps'),
       // Synced Grok Bots: Ana's own, and Cara's, already delivered through the app on Cara's Mac.
       bot('groky', 'Grok Groky', {harness: 'grokbot', app_delivery_app: 'grok', agent: {harness: 'grokbot', synced: true, credential: true, profile: 'Groky'}}),
-      bot('cara-grok', 'Grok Scout', {operator: 'cara', harness: 'grokbot', app_delivery_app: 'grok', agent: {harness: 'grokbot', synced: true, credential: true},
+      bot('cara-grok', 'Grok Scout', {owner_id: 'cara', harness: 'grokbot', app_delivery_app: 'grok', agent: {harness: 'grokbot', synced: true, credential: true},
         app_delivery: {computer: 'r9', app: 'grok', app_label: 'Grok', computer_label: 'Cara Mac', active: true}})]);
     if (p === '/api/issues') return json([]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Shared Mac', operator: 'ana', last_seen_at: new Date().toISOString(),
+    if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Shared Mac', owner_id: 'ana', last_seen_at: new Date().toISOString(),
       platform: 'darwin', bots: [], readiness: {}, accepts_member_bots: accepts, turns_at_once: turnsAtOnce,
       turn_limit: 2, capacity: 2},
-      {id: 'r2', label: 'Acme Mac', operator: 'ana', last_seen_at: new Date().toISOString(), platform: 'darwin', bots: [],
+      {id: 'r2', label: 'Acme Mac', owner_id: 'ana', last_seen_at: new Date().toISOString(), platform: 'darwin', bots: [],
        readiness: {appdriver: {trusted: true, apps: {grok: {installed: true, signed_in: true, background_ok: true, ready: true, state: 'ready'}}}}}],
       agents: [], services: []});
     if (p.match(/^\/api\/v2\/bots\/[^/]+\/definition$/) && method === 'POST') { posts.push(['definition', request.postDataJSON()]); return json({}); }
@@ -285,9 +285,9 @@ async function roles(browser) {
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: [conv]});
     if (p.endsWith('/snapshot') || p.endsWith('/messages')) return json({conversation: conv, messages: [
-      {id: 'm1', conversation_id: conv.id, from_actor: 'human:ana', to_actor: 'bot:botops', kind: 'say', body: 'Add sean@example.test please',
+      {id: 'm1', conversation_id: conv.id, sender_id: 'human:ana', recipient_id: 'bot:botops', kind: 'say', body: 'Add sean@example.test please',
        created_at: new Date().toISOString(), refs: {}},
-      {id: 'm2', conversation_id: conv.id, from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Needs your OK: Add Sean (sean@example.test) to the roster',
+      {id: 'm2', conversation_id: conv.id, sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Needs your OK: Add Sean (sean@example.test) to the roster',
        created_at: new Date().toISOString(), refs: {assistant: true, action: 'act1'}}], execution: null, has_more: false, next_before: null});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));

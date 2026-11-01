@@ -10,7 +10,7 @@ from backend.tests.test_wake_rules import jobs, setup
 
 def due(c, task):
     key = "github-task-wake:" + task["id"]
-    save_metadata(c, key, {**metadata(c, key), "due": H.shift(H.now(), seconds=-1)})
+    save_metadata(c, key, {**metadata(c, key), "due_at": H.shift(H.now(), seconds=-1)})
 
 
 def sent(c, task, item="Checks finished on tico#1: passed", armed=False, head="a" * 40, result="pass"):
@@ -18,8 +18,8 @@ def sent(c, task, item="Checks finished on tico#1: passed", armed=False, head="a
     G.queue_checks_done(c, task, head, result, item, armed)
     due(c, task)
     assert G.flush_wakes(c) == [task["id"]]
-    return H.message(c, c.execute("SELECT id FROM messages WHERE to_actor=? ORDER BY rowid DESC LIMIT 1",
-                                  (task["owner"],)).fetchone()[0])
+    return H.message(c, c.execute("SELECT id FROM messages WHERE recipient_id=? ORDER BY rowid DESC LIMIT 1",
+                                  (task["owner_id"],)).fetchone()[0])
 
 
 def test_finished_checks_wake_the_owner_at_a_working_step_and_are_a_note_elsewhere(api):
@@ -46,5 +46,5 @@ def test_a_review_that_is_not_a_persons_is_a_note(api):
         G.queue_note(c, task, "2 review comments on tico#1")
         due(c, task)
         assert G.flush_wakes(c) == [task["id"]]
-        msg = H.message(c, c.execute("SELECT id FROM messages WHERE to_actor='bot:cpo' ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+        msg = H.message(c, c.execute("SELECT id FROM messages WHERE recipient_id='bot:cpo' ORDER BY rowid DESC LIMIT 1").fetchone()[0])
         assert msg["refs"]["rule"] == "pr_review_note" and jobs(c, "cpo") == 0

@@ -65,7 +65,7 @@ def rows(api, sql, args=()):
 
 
 def wakes(api, tid):
-    return rows(api, "SELECT m.* FROM messages m WHERE m.to_actor='bot:cmo' "
+    return rows(api, "SELECT m.* FROM messages m WHERE m.recipient_id='bot:cmo' "
                      "AND json_extract(m.refs,'$.worktree_wait') IS NOT NULL AND json_extract(m.refs,'$.task')=?",
                 (tid,))
 
@@ -111,7 +111,7 @@ def test_a_freed_place_is_reserved_prepared_and_wakes_the_task_once_after_setup(
     api, tid, _ = prepared
     filler, links = setup_wait(api, tid)
     wait = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']['wait']
-    jobs_before = rows(api, "SELECT id FROM jobs WHERE bot='cmo'")
+    jobs_before = rows(api, "SELECT id FROM jobs WHERE bot_id='cmo'")
     # Still full: heartbeats and sweeps change nothing and say nothing.
     for _ in range(3):
         assert beat(api) == []
@@ -137,7 +137,7 @@ def test_a_freed_place_is_reserved_prepared_and_wakes_the_task_once_after_setup(
     assert len(woke) == 1 and link['path'] in woke[0]['body'] and 'ready' in woke[0]['body']
     assert rows(api, 'SELECT state FROM worktree_waits')[0]['state'] == 'woken'
     # The wake is a new message to the task, not the turn's message again; nothing is said twice.
-    jobs = rows(api, "SELECT j.message_id FROM jobs j WHERE j.bot='cmo'")
+    jobs = rows(api, "SELECT j.message_id FROM jobs j WHERE j.bot_id='cmo'")
     assert len(jobs) == len(jobs_before) + 1 and jobs[-1]['message_id'] == woke[0]['id']
     for _ in range(3):
         beat(api)
@@ -270,7 +270,7 @@ def test_close_reassign_revoke_and_stop_end_the_wait_without_touching_other_task
         assert 'wait' in post(api, f'tasks/{task}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tasks[0],))
-        c.execute("UPDATE tasks SET owner='bot:cpo' WHERE id=?", (tasks[1],))
+        c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tasks[1],))
     waits.tick(api.app_state.store, 'Acme', force=True)
     state = {r['task_id']: r['state'] for r in rows(api, 'SELECT * FROM worktree_waits')}
     assert state == {tasks[0]: 'cancelled', tasks[1]: 'cancelled', tasks[2]: 'waiting', tasks[3]: 'waiting'}

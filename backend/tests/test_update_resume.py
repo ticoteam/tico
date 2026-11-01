@@ -35,7 +35,7 @@ def capture(api, machine, bots):
                 "draining": sorted(r[0] for r in c.execute("SELECT bot FROM bot_control WHERE draining=1")),
                 "bot_state": {b: H.bot(c, b)["state"] for b in bots},
                 "status": {b: {k: (H.status(c, b) or {}).get(k) for k in ("state", "focus")} for b in bots},
-                "jobs": {b: [(r[0], r[1]) for r in c.execute("SELECT state,created_at FROM jobs WHERE bot=? ORDER BY created_at",
+                "jobs": {b: [(r[0], r[1]) for r in c.execute("SELECT state,created_at FROM jobs WHERE bot_id=? ORDER BY created_at",
                                                              (b,))] for b in bots},
                 "refusal": {b: execution.bot_refusal(c, api.app.state.store.settings, machine["runner_id"], b)
                             for b in bots}}
@@ -84,7 +84,7 @@ def test_queued_work_starts_after_the_update_clears_and_an_operator_pause_stays(
         assign(api, machine, bot)
     beat(api, machine, bots, OLD, {"state": "idle"})
     for bot in bots:
-        post(api, "tasks", {"owner": bot, "title": "Check the synthetic report", "body": "Fixture data."})
+        post(api, "tasks", {"owner_id": bot, "title": "Check the synthetic report", "body": "Fixture data."})
     pause(api, "doc-updater")
     running = claim(api, machine, "ops")
     post(api, f"attempts/{running['id']}/started", {"thread_id": "midturn"}, machine["token"])
@@ -120,7 +120,7 @@ def test_a_capped_turn_continues_after_it_finished_its_own_task(api, monkeypatch
     post(api, "chat/finance", {"text": "Please ask Ops to check the synthetic report."})
     filer = claim(api, machine, "finance")
     post(api, f"attempts/{filer['id']}/started", {"thread_id": "filer"}, machine["token"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Check the synthetic report", "body": "Fixture data."},
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Check the synthetic report", "body": "Fixture data."},
                 token=filer["token"])
     post(api, f"attempts/{filer['id']}/complete", {"outcome": "completed", "text": "Filed.", "last_seq": 0},
          machine["token"])
@@ -149,7 +149,7 @@ def test_a_drained_turn_that_cannot_continue_is_held_with_its_reason_and_other_w
         assign(api, machine, bot)
     beat(api, machine, bots, OLD, {"state": "idle"})
     for bot in bots:
-        post(api, "tasks", {"owner": bot, "title": "Check the synthetic report", "body": "Fixture data."})
+        post(api, "tasks", {"owner_id": bot, "title": "Check the synthetic report", "body": "Fixture data."})
     turn = claim(api, machine, "ops")
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "midturn"}, machine["token"])
     beat(api, machine, bots, OLD, {"state": "waiting", "target": NEW, "running": 1, "handed_back": 0})
@@ -181,10 +181,10 @@ def test_holds_that_are_not_the_updates_stay_in_force_when_it_clears(api, monkey
             assign(api, machine, bot)
         beat(api, machine, bots, OLD, {"state": "idle"})
         for bot in bots:
-            post(api, "tasks", {"owner": bot, "title": "Check the synthetic report", "body": "Fixture data."})
+            post(api, "tasks", {"owner_id": bot, "title": "Check the synthetic report", "body": "Fixture data."})
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_status(bot,state,since,updated_at) VALUES('finance','limited',?,?) "
-                  "ON CONFLICT(bot) DO UPDATE SET state='limited',since=excluded.since", (H.now(), H.now()))
+        c.execute("INSERT INTO bot_status(bot,state,changed_at,updated_at) VALUES('finance','limited',?,?) "
+                  "ON CONFLICT(bot) DO UPDATE SET state='limited',changed_at=excluded.changed_at", (H.now(), H.now()))
     for machine, bots in places:
         beat(api, machine, bots, OLD, {"state": "updating", "target": NEW, "running": 0, "handed_back": 0})
     before = {m["runner_id"]: capture(api, m, bots) for m, bots in places}
@@ -205,6 +205,6 @@ def test_holds_that_are_not_the_updates_stay_in_force_when_it_clears(api, monkey
     post(api, f"attempts/{ops['id']}/started", {"thread_id": "ops"}, current["token"])
     post(api, f"attempts/{ops['id']}/complete", {"outcome": "completed", "text": "Done.", "last_seq": 0},
          current["token"])
-    post(api, "tasks", {"owner": "ops", "title": "Check the second synthetic report", "body": "Fixture data."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Check the second synthetic report", "body": "Fixture data."})
     got = post(api, "jobs/claim", {"bot": None, "start_places": True}, token=current["token"])
     assert got["attempt"] is None and got.get("waiting") == org_turns.REASON

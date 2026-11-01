@@ -64,7 +64,7 @@ async function integrationDetail(service, load, {base = RD_TOOLS, head = '', fac
   $('#int-detail').innerHTML = `<div class="meeting-head">${head}<div><h1>${esc(page.title)}</h1></div></div>
     <div id="tool-facts">${facts ? facts(page) : ''}</div>
     <section class="card"><dl class="int-meta">${metaRow('Via', esc(page.access))}
-      <dt>Writes</dt><dd>${toolWritePill(page.writes)} · owner ${esc(page.owner)}${page.aliases?.length ? ' · also <span class="mono">' + page.aliases.map(esc).join(', ') + '</span>' : ''}</dd>
+      <dt>Writes</dt><dd>${toolWritePill(page.writes)} · owner ${esc(page.owner_id)}${page.aliases?.length ? ' · also <span class="mono">' + page.aliases.map(esc).join(', ') + '</span>' : ''}</dd>
       ${metaRow('Declared as', page.declared_as.trim() && `<pre class="mono">${esc(page.declared_as.trim())}</pre>`)}</dl></section>
     ${page.body?.trim() ? `<section class="card"><div class="md docs-content" id="int-body">${safeMd(page.body)}</div></section>` : ''}
     ${page.queries.length ? `<section class="card" id="int-queries"><header><h2>Queries</h2></header>

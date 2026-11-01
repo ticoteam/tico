@@ -87,7 +87,7 @@ SCHEMA = (
     "status TEXT NOT NULL CHECK (status IN ('draft','published')), guide TEXT NOT NULL DEFAULT 'default', "
     "summary TEXT NOT NULL DEFAULT '', vision TEXT NOT NULL DEFAULT '', sections TEXT NOT NULL DEFAULT '{}', "
     "bets TEXT NOT NULL DEFAULT '[]', note TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0, "
-    "updated_at TEXT, updated_by TEXT, published TEXT, published_by TEXT)",
+    "updated_at TEXT, updated_by TEXT, published_at TEXT, published_by TEXT)",
     # The one-draft rule.
     "CREATE UNIQUE INDEX IF NOT EXISTS strategy_versions_draft ON strategy_versions(status) WHERE status='draft'",
     "CREATE TABLE IF NOT EXISTS strategy_bets (id TEXT PRIMARY KEY, statement TEXT NOT NULL, "
@@ -95,9 +95,9 @@ SCHEMA = (
     "status TEXT NOT NULL CHECK (status IN ('proposed','active','retired')), since_n INTEGER, until_n INTEGER, "
     "rank INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS strategy_events (id TEXT PRIMARY KEY, kind TEXT NOT NULL, actor TEXT NOT NULL, "
-    "at TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')",
-    "CREATE INDEX IF NOT EXISTS strategy_events_at ON strategy_events(at)",
-    "CREATE INDEX IF NOT EXISTS strategy_events_kind ON strategy_events(kind, at)",
+    "created_at TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}')",
+    "CREATE INDEX IF NOT EXISTS strategy_events_at ON strategy_events(created_at)",
+    "CREATE INDEX IF NOT EXISTS strategy_events_kind ON strategy_events(kind, created_at)",
 )
 
 
@@ -145,7 +145,7 @@ def loads(value, default):
 
 
 def _event(c, actor, kind, payload):
-    c.execute("INSERT INTO strategy_events (id, kind, actor, at, payload) VALUES (?,?,?,?,?)",
+    c.execute("INSERT INTO strategy_events (id, kind, actor, created_at, payload) VALUES (?,?,?,?,?)",
               (H.new_id(), kind, actor, H.now(), dumps(payload or {})))
 
 
@@ -220,7 +220,7 @@ def version(c, n):
 
 def versions(c, limit=VERSIONS_PAGE):
     """The published versions, newest first: what the history list shows, without the sections and the bets."""
-    return H._rows(c.execute("SELECT n, note, published, published_by, guide, summary FROM strategy_versions "
+    return H._rows(c.execute("SELECT n, note, published_at, published_by, guide, summary FROM strategy_versions "
                              "WHERE status='published' ORDER BY n DESC LIMIT ?", (max(1, min(limit, VERSIONS_PAGE)),)))
 
 
@@ -269,7 +269,7 @@ def goals_by_bet(c, auth, who, bet_ids):
     if not bet_ids:
         return {}
     marks = ",".join("?" * len(bet_ids))
-    rows = H._rows(c.execute(f"SELECT * FROM goals WHERE bet_id IN ({marks}) ORDER BY owner, rank, created_at",
+    rows = H._rows(c.execute(f"SELECT * FROM goals WHERE bet_id IN ({marks}) ORDER BY owner_id, rank, created_at",
                              tuple(bet_ids)))
     out = {}
     for row in goal_routes.readable_goals(c, auth, who, rows):
@@ -466,7 +466,7 @@ def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=No
 
 def _vision_event(c, actor, old, new):
     """The vision everyone sees changed: its history on the Goals page (GET /company/history)."""
-    c.execute("INSERT INTO company_events (id, ts, actor, field, old, new) VALUES (?,?,?,?,?,?)",
+    c.execute("INSERT INTO company_events (id, created_at, actor, field, old, new) VALUES (?,?,?,?,?,?)",
               (H.new_id(), H.now(), actor, "vision", old, new))
 
 
@@ -738,7 +738,7 @@ def publish(c, actor, note="", revision=None):
         H.refuse(c, actor, "lint", f"nothing has changed since version {last['n']}; edit the draft or a bet first")
     n = (last["n"] if last else 0) + 1
     now = H.now()
-    c.execute("UPDATE strategy_versions SET status='published', n=?, bets=?, note=?, published=?, published_by=? "
+    c.execute("UPDATE strategy_versions SET status='published', n=?, bets=?, note=?, published_at=?, published_by=? "
               "WHERE id=?", (n, dumps(snapshot), note, now, actor, row["id"]))
     # The fresh draft's revision follows on, so a page still holding the published one gets a 409, not a new draft.
     c.execute("INSERT INTO strategy_versions (id, n, status, guide, summary, vision, sections, bets, note, revision, "
@@ -774,12 +774,12 @@ def _realign_goals(c, before, after):
     if not moved:
         return []
     marks = ",".join("?" * len(moved))
-    rows = c.execute(f"SELECT id, title, owner, bet_id FROM goals WHERE bet_id IN ({marks}) AND "
-                     "coalesce(status,'') NOT IN ('done','dropped') ORDER BY owner, rank, created_at", tuple(moved))
+    rows = c.execute(f"SELECT id, title, owner_id, bet_id FROM goals WHERE bet_id IN ({marks}) AND "
+                     "coalesce(status,'') NOT IN ('done','dropped') ORDER BY owner_id, rank, created_at", tuple(moved))
     out = []
     for r in rows:
         change, statement, was = moved[r["bet_id"]]
-        out.append({"goal_id": r["id"], "title": r["title"], "owner": r["owner"], "bet_id": r["bet_id"],
+        out.append({"goal_id": r["id"], "title": r["title"], "owner_id": r["owner_id"], "bet_id": r["bet_id"],
                     "change": change, "statement": statement, **({"was": was} if was else {})})
     return out
 
@@ -884,7 +884,7 @@ def apply_realign(c, actor, payload, moves):
 # ----------------------------------------------------------------------------- the fit check
 def _published_light(c):
     try:
-        return H._one(c, "SELECT id, n, bets, published FROM strategy_versions WHERE status='published' "
+        return H._one(c, "SELECT id, n, bets, published_at FROM strategy_versions WHERE status='published' "
                          "ORDER BY n DESC LIMIT 1")
     except sqlite3.OperationalError:        # a database from before the strategy tables
         return None
@@ -915,13 +915,13 @@ def _evidence(c, item, published, today):
         ids = list(dict.fromkeys([wrong["market_id"], *(item.get("cites") or [])]))
         marks = ",".join("?" * len(ids))
         rows = H._rows(c.execute(
-            f"SELECT subject_kind, subject_id, field, old, new, ts, actor FROM market_events WHERE subject_id IN "
-            f"({marks}) AND ts > ? AND actor <> 'seed' ORDER BY ts DESC LIMIT 3", (*ids, published or "")))
+            f"SELECT subject_kind, subject_id, field, old, new, created_at, actor FROM market_events WHERE subject_id IN "
+            f"({marks}) AND created_at > ? AND actor <> 'seed' ORDER BY created_at DESC LIMIT 3", (*ids, published or "")))
         if not rows:
             return None
         return "The market changed since it was published: " + "; ".join(
             f"{r['subject_id']} {r['field']}: {_one_line(r['old'], 80) or '(none)'} -> {_one_line(r['new'], 80)}"
-            f" ({r['ts'][:10]})" for r in rows) + "."
+            f" ({r['created_at'][:10]})" for r in rows) + "."
     if wrong.get("kind") == "text" and wrong.get("check_by") and wrong["check_by"] < today:
         return f"Its check date {wrong['check_by']} has passed: look again at \"{wrong.get('text')}\"."
     return None

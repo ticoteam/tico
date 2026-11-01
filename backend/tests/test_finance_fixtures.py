@@ -36,7 +36,7 @@ def _seed(c: sqlite3.Connection) -> None:
     c.execute("INSERT OR REPLACE INTO registry_metadata(key, value) VALUES('people', ?)",
               (json.dumps({"people": PEOPLE, "org_groups": GROUPS, "default_user": "ana"}),))
     for slug, (team, boss) in BOTS.items():
-        c.execute("INSERT OR REPLACE INTO bot_config(bot, config, team, operator, reports_to) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, config, team, owner_id, reports_to) VALUES(?,?,?,?,?)",
                   (slug, json.dumps({"team": team}), team, "human:ana", boss))
 
 

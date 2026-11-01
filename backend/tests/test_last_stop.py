@@ -52,10 +52,10 @@ def test_covering_a_queued_notice_clears_its_status_and_notifies_open_headers(ap
     import json
     machine, message, lapsed = setup_attempt(api)
     lapse(api, lapsed)
-    task = post(api, "tasks", {"owner": "human:ana", "title": "Already handled", "body": "Handled elsewhere."})
+    task = post(api, "tasks", {"owner_id": "human:ana", "title": "Already handled", "body": "Handled elsewhere."})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
-        c.execute("UPDATE messages SET from_actor=?,kind='notice',refs=? WHERE id=?",
+        c.execute("UPDATE messages SET sender_id=?,kind='notice',refs=? WHERE id=?",
                   (H.KEEPER, json.dumps({"task": task["id"]}), message["id"]))
         cursor = c.execute("SELECT coalesce(max(seq),0) FROM changes").fetchone()[0]
     assert claim(api, machine) is None
@@ -109,8 +109,8 @@ def test_quick_hand_backs_wait_between_tries_and_do_not_fail_the_run(api, monkey
             until = execution.handed_back_until(c, dict(c.execute("SELECT * FROM jobs").fetchone()))
             waits.append(round((H.parse_ts(until) - H.parse_ts(H.now())).total_seconds()))
             if n < 3:
-                c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,"
-                          "finished_at,final_text) SELECT ?,job_id,bot,runner_id,generation,?,state,lease_until,created_at,"
+                c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
+                          "finished_at,final_text) SELECT ?,job_id,bot_id,runner_id,generation,?,state,lease_until,created_at,"
                           "finished_at,final_text FROM attempts WHERE job_id=? LIMIT 1", (f"x{n}", f"h{n}", job["id"]))
     assert [w - waits[0] for w in waits] == [0, execution.HAND_BACK_WAIT, 3 * execution.HAND_BACK_WAIT]
 
@@ -157,8 +157,8 @@ def test_the_latest_failed_start_is_not_hidden_by_an_older_held_run(api):
     newer = post(api, "chat/ops", {"text": "Another request."})
     with api.app.state.store.transaction() as c:
         job = c.execute("SELECT id FROM jobs WHERE message_id=?", (newer["id"],)).fetchone()[0]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,"
-                  "finished_at,final_text) SELECT 'new-start',?,bot,runner_id,generation,'new-hash','failed',lease_until,"
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
+                  "finished_at,final_text) SELECT 'new-start',?,bot_id,runner_id,generation,'new-hash','failed',lease_until,"
                   "created_at,?,? FROM attempts WHERE id=?",
                   (job, H.now(), "Check the newer Computer", old["id"]))
         c.execute("UPDATE jobs SET state='failed',attempt_id='new-start' WHERE id=?", (job,))

@@ -97,7 +97,7 @@ SCHEMA = (
     + _touch("'t:'||OLD.id") + _touch("'a:'||OLD.carried_by") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_insert AFTER INSERT ON attempts BEGIN "
     "INSERT OR IGNORE INTO read_dirty VALUES('a:'||NEW.id); " + _touch("'a:'||NEW.id") + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_update AFTER UPDATE OF id, bot, job_id, state ON attempts "
+    "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_update AFTER UPDATE OF id, bot_id, job_id, state ON attempts "
     f"WHEN {_changed(('id', 'bot', 'job_id', 'state'))} BEGIN " + _touch("'a:'||OLD.id") + _touch("'a:'||NEW.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_delete AFTER DELETE ON attempts BEGIN " + _touch("'a:'||OLD.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_input_insert AFTER INSERT ON attempt_inputs BEGIN "

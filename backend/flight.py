@@ -40,21 +40,21 @@ from . import hubdb
 LOG = logging.getLogger("tico.flight")
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS flight_requests(ts INTEGER NOT NULL, span INTEGER NOT NULL, route TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS flight_requests(created_at INTEGER NOT NULL, span INTEGER NOT NULL, route TEXT NOT NULL,
   caller TEXT NOT NULL, n INTEGER NOT NULL, errors INTEGER NOT NULL, bytes INTEGER NOT NULL, total_ms REAL NOT NULL,
-  p50 REAL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(ts, span, route, caller)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS flight_slow(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, route TEXT, caller TEXT,
+  p50 REAL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(created_at, span, route, caller)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS flight_slow(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, route TEXT, caller TEXT,
   actor TEXT, ms REAL, bytes INTEGER, status INTEGER, sql_ms REAL, wait_ms REAL, queries INTEGER);
-CREATE TABLE IF NOT EXISTS flight_process(ts INTEGER PRIMARY KEY, cpu REAL, rss INTEGER, threads INTEGER,
+CREATE TABLE IF NOT EXISTS flight_process(created_at INTEGER PRIMARY KEY, cpu REAL, rss INTEGER, threads INTEGER,
   fds INTEGER, sockets INTEGER, lag_p95 REAL, lag_max REAL, requests INTEGER, queries INTEGER, sql_ms REAL,
   txns INTEGER, wait_max REAL, hold_max REAL, hold_p95 REAL, locked INTEGER, dropped INTEGER);
-CREATE TABLE IF NOT EXISTS flight_sql(ts INTEGER NOT NULL, fingerprint TEXT NOT NULL, n INTEGER NOT NULL,
-  total_ms REAL NOT NULL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(ts, fingerprint)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS flight_db(ts INTEGER PRIMARY KEY, bytes INTEGER, wal_bytes INTEGER, free_bytes INTEGER,
+CREATE TABLE IF NOT EXISTS flight_sql(created_at INTEGER NOT NULL, fingerprint TEXT NOT NULL, n INTEGER NOT NULL,
+  total_ms REAL NOT NULL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(created_at, fingerprint)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS flight_db(created_at INTEGER PRIMARY KEY, bytes INTEGER, wal_bytes INTEGER, free_bytes INTEGER,
   detail TEXT);
-CREATE TABLE IF NOT EXISTS flight_events(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, kind TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS flight_events(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, kind TEXT NOT NULL,
   detail TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS flight_events_kind ON flight_events(kind, ts);
+CREATE INDEX IF NOT EXISTS flight_events_kind ON flight_events(kind, created_at);
 """
 
 SLOW_MS = 1000                  # a request this slow is logged on its own
@@ -233,7 +233,7 @@ def _log_hold(route, hold_ms, wait_ms):
 
 def caller_kind(who):
     role = getattr(who, "role", "") if who is not None else ""
-    return {"owner": "human", "human": "human", "bot": "bot", "runner": "runner", "service": "service"}.get(role, "anonymous")
+    return {"owner_id": "human", "human": "human", "bot": "bot", "runner": "runner", "service": "service"}.get(role, "anonymous")
 
 
 class Recorder:
@@ -478,11 +478,11 @@ class Recorder:
 
 def write(c, taken):
     c.executemany("INSERT OR REPLACE INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", taken["requests"])
-    c.executemany("INSERT INTO flight_slow(ts,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries) VALUES(?,?,?,?,?,?,?,?,?,?)", taken["slow"])
+    c.executemany("INSERT INTO flight_slow(created_at,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries) VALUES(?,?,?,?,?,?,?,?,?,?)", taken["slow"])
     c.execute("INSERT OR REPLACE INTO flight_process VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", taken["process"])
     c.executemany("INSERT OR REPLACE INTO flight_sql VALUES(?,?,?,?,?,?,?)", taken["sql"])
     for hold in taken.get("long_holds") or []:
-        _event(c, "long_hold", {k: v for k, v in hold.items() if k != "ts"}, hold["ts"])
+        _event(c, "long_hold", {k: v for k, v in hold.items() if k != "ts"}, hold["created_at"])
 
 
 def process_stats():
@@ -708,7 +708,7 @@ def start_event(settings, check=True):
 
 
 def _event(c, kind, detail, now=None):
-    c.execute("INSERT INTO flight_events(ts,kind,detail) VALUES(?,?,?)",
+    c.execute("INSERT INTO flight_events(created_at,kind,detail) VALUES(?,?,?)",
               (int(now or time.time()), kind, json.dumps(detail, separators=(",", ":"))))
 
 
@@ -718,7 +718,7 @@ def record_event(store, kind, detail, now=None):
 
 
 def last_start(c):
-    row = c.execute("SELECT ts,detail FROM flight_events WHERE kind='start' ORDER BY ts DESC,id DESC LIMIT 1"
+    row = c.execute("SELECT created_at,detail FROM flight_events WHERE kind='start' ORDER BY created_at DESC,id DESC LIMIT 1"
                     ).fetchone()
     return {"at": row[0], **json.loads(row[1])} if row else None
 
@@ -815,14 +815,14 @@ def sweep(store, now=None):
     cutoff = now - MINUTE_DAYS * 86400
     while True:
         with store.transaction() as c:
-            row = c.execute("SELECT min(ts) FROM flight_requests WHERE span=60 AND ts<?", (cutoff,)).fetchone()
+            row = c.execute("SELECT min(created_at) FROM flight_requests WHERE span=60 AND created_at<?", (cutoff,)).fetchone()
             if row[0] is None:
                 break
             hour = row[0] // 3600 * 3600
             end = min(hour + 3600, cutoff)
             merged = {}
             for r in c.execute("SELECT route,caller,n,errors,bytes,total_ms,max_ms,hist FROM flight_requests "
-                               "WHERE span=60 AND ts>=? AND ts<?", (hour, end)):
+                               "WHERE span=60 AND created_at>=? AND created_at<?", (hour, end)):
                 m = merged.setdefault((r[0], r[1]), [0, 0, 0, 0.0, 0.0, {}])
                 m[0] += r[2]
                 m[1] += r[3]
@@ -831,7 +831,7 @@ def sweep(store, now=None):
                 m[4] = max(m[4], r[6] or 0)
                 _merge(m[5], json.loads(r[7] or "{}"))
             for (route, caller), m in merged.items():
-                old = c.execute("SELECT n,errors,bytes,total_ms,max_ms,hist FROM flight_requests WHERE ts=? AND span=3600 "
+                old = c.execute("SELECT n,errors,bytes,total_ms,max_ms,hist FROM flight_requests WHERE created_at=? AND span=3600 "
                                 "AND route=? AND caller=?", (hour, route, caller)).fetchone()
                 if old:                         # the hour's earlier part, rolled up by an earlier sweep
                     m[0] += old[0]
@@ -843,15 +843,15 @@ def sweep(store, now=None):
                 c.execute("INSERT OR REPLACE INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                           (hour, 3600, route, caller, m[0], m[1], m[2], round(m[3], 1), quantile(m[5], .5),
                            quantile(m[5], .95), m[4], json.dumps(m[5], separators=(",", ":"))))
-            c.execute("DELETE FROM flight_requests WHERE span=60 AND ts>=? AND ts<?", (hour, end))
+            c.execute("DELETE FROM flight_requests WHERE span=60 AND created_at>=? AND created_at<?", (hour, end))
     short, long = now - SHORT_DAYS * 86400, now - LONG_DAYS * 86400
     with store.transaction() as c:
-        c.execute("DELETE FROM flight_requests WHERE ts<?", (short,))
-        c.execute("DELETE FROM flight_slow WHERE ts<? OR id<=(SELECT max(id) FROM flight_slow)-?", (short, SLOW_KEEP))
-        c.execute("DELETE FROM flight_process WHERE ts<?", (short,))
-        c.execute("DELETE FROM flight_sql WHERE ts<?", (long,))
-        c.execute("DELETE FROM flight_db WHERE ts<?", (long,))
-        c.execute("DELETE FROM flight_events WHERE ts<? AND kind<>'start'", (long,))
+        c.execute("DELETE FROM flight_requests WHERE created_at<?", (short,))
+        c.execute("DELETE FROM flight_slow WHERE created_at<? OR id<=(SELECT max(id) FROM flight_slow)-?", (short, SLOW_KEEP))
+        c.execute("DELETE FROM flight_process WHERE created_at<?", (short,))
+        c.execute("DELETE FROM flight_sql WHERE created_at<?", (long,))
+        c.execute("DELETE FROM flight_db WHERE created_at<?", (long,))
+        c.execute("DELETE FROM flight_events WHERE created_at<? AND kind<>'start'", (long,))
         c.execute("DELETE FROM flight_events WHERE kind='start' AND id NOT IN "
                   "(SELECT id FROM flight_events WHERE kind='start' ORDER BY id DESC LIMIT 500)")
 
@@ -1024,10 +1024,10 @@ class Flight(threading.Thread):
         started = time.monotonic()
         self.db_next = now + self.db_every
         with self.store.read() as c:
-            latest = c.execute("SELECT ts,detail FROM flight_db ORDER BY ts DESC LIMIT 1").fetchone()
+            latest = c.execute("SELECT created_at,detail FROM flight_db ORDER BY created_at DESC LIMIT 1").fetchone()
         previous = json.loads(latest["detail"] or "{}") if latest else {}
         # The original scan timestamp travels with each hourly sample, including across recorder restarts.
-        objects_at = previous.get("objects_at", latest["ts"] if latest else None)
+        objects_at = previous.get("objects_at", latest["created_at"] if latest else None)
         scan = objects_at is None or now - objects_at >= SIZES_EVERY
         size, wal, free, detail = db_stats(self.store, sizes=scan)
         detail["objects_at"] = int(now) if scan else objects_at
@@ -1050,7 +1050,7 @@ SECTIONS = ("requests", "slow", "process", "sql", "db", "events")
 
 def _requests(c, since):
     merged = {}
-    for r in c.execute("SELECT route,caller,n,errors,bytes,total_ms,max_ms,hist FROM flight_requests WHERE ts>=?",
+    for r in c.execute("SELECT route,caller,n,errors,bytes,total_ms,max_ms,hist FROM flight_requests WHERE created_at>=?",
                        (since,)):
         m = merged.setdefault(r[0], {"route": r[0], "n": 0, "errors": 0, "bytes": 0, "total_ms": 0.0, "max_ms": 0.0,
                                      "callers": {}, "_h": {}})
@@ -1073,7 +1073,7 @@ def _requests(c, since):
 
 def _sql(c, since):
     merged = {}
-    for r in c.execute("SELECT fingerprint,n,total_ms,max_ms,hist FROM flight_sql WHERE ts>=?", (since // 3600 * 3600,)):
+    for r in c.execute("SELECT fingerprint,n,total_ms,max_ms,hist FROM flight_sql WHERE created_at>=?", (since // 3600 * 3600,)):
         m = merged.setdefault(r[0], {"sql": r[0], "n": 0, "total_ms": 0.0, "max_ms": 0.0, "_h": {}})
         m["n"] += r[1]
         m["total_ms"] += r[2]
@@ -1086,7 +1086,7 @@ def _sql(c, since):
 
 
 def _process(c, since):
-    rows = [dict(r) for r in c.execute("SELECT * FROM flight_process WHERE ts>=? ORDER BY ts", (since,))]
+    rows = [dict(r) for r in c.execute("SELECT * FROM flight_process WHERE created_at>=? ORDER BY created_at", (since,))]
     def peak(key):
         values = [r[key] for r in rows if r[key] is not None]
         return max(values) if values else None
@@ -1100,16 +1100,16 @@ def _process(c, since):
 
 
 def _db(c, now):
-    latest = c.execute("SELECT * FROM flight_db ORDER BY ts DESC LIMIT 1").fetchone()
+    latest = c.execute("SELECT * FROM flight_db ORDER BY created_at DESC LIMIT 1").fetchone()
     if not latest:
         return {}
-    day = c.execute("SELECT * FROM flight_db WHERE ts<=? ORDER BY ts DESC LIMIT 1", (latest["ts"] - 86400 + 1800,)
+    day = c.execute("SELECT * FROM flight_db WHERE created_at<=? ORDER BY created_at DESC LIMIT 1", (latest["created_at"] - 86400 + 1800,)
                     ).fetchone()
     detail = json.loads(latest["detail"] or "{}")
     before = json.loads(day["detail"] or "{}") if day else {}
-    return {"at": latest["ts"], "bytes": latest["bytes"], "wal_bytes": latest["wal_bytes"],
+    return {"at": latest["created_at"], "bytes": latest["bytes"], "wal_bytes": latest["wal_bytes"],
             "free_bytes": latest["free_bytes"], "growth_24h": latest["bytes"] - day["bytes"] if day else None,
-            "objects": detail.get("objects"), "objects_at": detail.get("objects_at", latest["ts"]),
+            "objects": detail.get("objects"), "objects_at": detail.get("objects_at", latest["created_at"]),
             "rows": detail.get("rows"), "oldest": detail.get("oldest"),
             "rows_24h": {k: v - (before.get("rows") or {}).get(k, v) for k, v in (detail.get("rows") or {}).items()}
             if day else None}
@@ -1123,7 +1123,7 @@ def view(c, minutes=60, sections=SECTIONS, now=None):
         out["requests"] = _requests(c, since)
     if "slow" in sections:
         out["slow"] = [dict(r) for r in c.execute(
-            "SELECT ts,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries FROM flight_slow WHERE ts>=? ORDER BY id DESC LIMIT 50",
+            "SELECT created_at,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries FROM flight_slow WHERE created_at>=? ORDER BY id DESC LIMIT 50",
             (since,))]
     if "process" in sections:
         out["process"] = _process(c, since)
@@ -1134,7 +1134,7 @@ def view(c, minutes=60, sections=SECTIONS, now=None):
     if "events" in sections:
         out["events"] = {"start": last_start(c), "recent": [
             {"id": r[0], "at": r[1], "kind": r[2], **json.loads(r[3])} for r in c.execute(
-                "SELECT id,ts,kind,detail FROM flight_events WHERE ts>=? ORDER BY id DESC LIMIT 20", (since,))]}
+                "SELECT id,created_at,kind,detail FROM flight_events WHERE created_at>=? ORDER BY id DESC LIMIT 20", (since,))]}
     return out
 
 

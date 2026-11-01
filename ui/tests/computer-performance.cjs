@@ -14,7 +14,7 @@ const {unrouted} = require('./support/routes.cjs');
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('dialog', d => d.accept());
-    const machines = [{id: 'c1', label: 'Build server', operator: 'ana', bots: [], platform: 'linux', last_seen_at: new Date().toISOString(),
+    const machines = [{id: 'c1', label: 'Build server', owner_id: 'ana', bots: [], platform: 'linux', last_seen_at: new Date().toISOString(),
       readiness: {}, screen: 'off', screen_available: false, performance: 'on'}];
     const now = Math.floor(Date.now() / 1000 / 60) * 60, since = now - 86400;
     const points = [];

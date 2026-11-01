@@ -20,11 +20,11 @@ const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
 
 const now = new Date().toISOString();
-const task = (id, title, over) => ({id, title, body: 'Details.', owner: 'human:ana', requester: 'bot:ops', status: 'open', lane: 'company',
+const task = (id, title, over) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:ops', status: 'open', lane: 'company',
   labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
 const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Friday fine for the summary?', first_line: 'Is Friday fine for the summary?',
-  body: 'Is Friday fine for the summary?', requester: 'bot:ops', origin_actor: 'bot:ops', created_at: now,
-  ask: {id: 'm-loose', from_actor: 'bot:ops', to_actor: 'human:ana', body: 'Is Friday fine for the summary?', created_at: now}};
+  body: 'Is Friday fine for the summary?', requester_id: 'bot:ops', origin_actor: 'bot:ops', created_at: now,
+  ask: {id: 'm-loose', sender_id: 'bot:ops', recipient_id: 'human:ana', body: 'Is Friday fine for the summary?', created_at: now}};
 
 (async () => {
   const browser = await chromium.launch();

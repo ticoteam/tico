@@ -101,7 +101,7 @@ class World:
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
                 {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
                           (slug, encode(config), "engineering", "ana"))
             if "release-manager" in bots:   # signed in as an agent, as an external Release Manager is
                 c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) "
@@ -114,7 +114,7 @@ class World:
             if "engineering-lead" in bots:   # a live install's Dev type is its Head of Engineering's (fixed by role)
                 c.execute("UPDATE task_types SET manager='engineering-lead' WHERE id=?", (self.dev["id"],))
         self.scheduler = Scheduler(self.store, self.app.state.execution)
-        code = self.post("enrollments", {"operator": "ana"})["code"]
+        code = self.post("enrollments", {"owner_id": "ana"})["code"]
         self.runner = self.post("runners/enroll", {"code": code, "label": "Sim", "platform": "test"})
         for slug in self.bot_slugs:
             self.post("bots/" + slug + "/assignment", {"runner_id": self.runner["runner_id"], "expected_generation": 0})
@@ -131,7 +131,7 @@ class World:
         self.dev = self.post("task-types/" + self.dev["id"], {"steps": steps})["type"]
         for lead in self.roles.get("lead", []) if self.board.lead_sweep else []:
             self.post("automations", {
-                "name": "Hourly board sweep", "owner": "bot:" + lead, "enabled": True, "builtin": False,
+                "name": "Hourly board sweep", "owner_id": "bot:" + lead, "enabled": True, "builtin": False,
                 "trigger": {"type": "schedule", "cron": f"0 */{max(1, int(self.board.lead_sweep_hours))} * * *",
                             "tz": "UTC"},
                 "steps": [{"id": "sweep", "type": "bot_turn", "bot": "bot:" + lead,
@@ -511,7 +511,7 @@ class World:
     # ------------------------------------------------------------------ board reads (no turn, no side effects)
     def tickets(self):
         """The Dev tickets: tasks of the Dev type, with their step names."""
-        rows = self.sql("SELECT t.id,t.title,t.owner,t.status,t.step_id,s.name step,t.blocked_since,t.updated_at,"
+        rows = self.sql("SELECT t.id,t.title,t.owner_id,t.status,t.step_id,s.name step,t.blocked_since,t.updated_at,"
                         "t.labels,t.created_at FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id WHERE t.type_id=?",
                         (self.dev["id"],))
         for r in rows:
@@ -525,7 +525,7 @@ class World:
     def slots(self, slug):
         """Tickets the builder is actively working: at one of the board's work steps."""
         work = [s.name for s in self.board.steps if s.work]
-        return sum(1 for t in self.tickets() if t["owner"] == "bot:" + slug and t["step"] in work
+        return sum(1 for t in self.tickets() if t["owner_id"] == "bot:" + slug and t["step"] in work
                    and t["status"] not in ("done", "closed", "declined"))
 
     def cleared(self, task_id):
@@ -533,7 +533,7 @@ class World:
         no check at the step failed. A round that timed out at a failed head is recorded as skipped too, but sends the
         ticket to the step's on_fail (backend/verdict_moves.py `timeouts`), so it clears nothing."""
         entered = self.step_entered_at(task_id) or ""
-        for e in self.sql("SELECT field, new FROM task_events WHERE task_id=? AND ts>=? "
+        for e in self.sql("SELECT field, new FROM task_events WHERE task_id=? AND created_at>=? "
                           "AND field IN ('step_skipped','round_skipped')", (task_id, entered)):
             step_id, _, head = str(e["new"] or "").partition(":")
             step = self.sql("SELECT name FROM task_steps WHERE id=?", (step_id,))
@@ -558,7 +558,7 @@ class World:
         """The head a check was filed for (its newest review_head), which a check done with no verdict judged, as
         backend/verdict_moves.py `_judged_head` reads it."""
         filed = self.sql("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
-                         "ORDER BY ts DESC, rowid DESC LIMIT 1", (check["id"],))
+                         "ORDER BY created_at DESC, rowid DESC LIMIT 1", (check["id"],))
         return str(filed[0]["new"] if filed else "").split(",")[0].lower()
 
     def fallback(self, who, task_id, what):
@@ -568,7 +568,7 @@ class World:
         """The board step a check subtask was filed for: where its ticket was when the check was made."""
         parent = self.parent_of(child["id"])
         found = self.sql("SELECT s.name FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
-                         "AND e.field='step' AND e.ts<=? ORDER BY e.ts DESC, e.rowid DESC LIMIT 1",
+                         "AND e.field='step' AND e.created_at<=? ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1",
                          (parent, child["created_at"]))
         return found[0]["name"] if found else None
 
@@ -593,7 +593,7 @@ class World:
         return found[-1] if found else None
 
     def open_checks(self, slug):
-        return self.sql("SELECT count(*) n FROM tasks WHERE owner=? AND status NOT IN ('done','closed','declined')",
+        return self.sql("SELECT count(*) n FROM tasks WHERE owner_id=? AND status NOT IN ('done','closed','declined')",
                         ("bot:" + slug,))[0]["n"]
 
     def parent_of(self, task_id):
@@ -612,17 +612,17 @@ class World:
         (as `keeper`), and that is no reason to call the notice stale. Nor is a hold clearing: the ticket goes back
         to its step because of the news the notice brings."""
         hold = next((st["id"] for st in self.dev["steps"] if st["name"] == self.board.hold_step), "")
-        found = self.sql("SELECT max(ts) ts FROM task_events WHERE task_id=? AND field='step' AND ts<? "
+        found = self.sql("SELECT max(created_at) created_at FROM task_events WHERE task_id=? AND field='step' AND created_at<? "
                          "AND coalesce(old,'')<>?", (task_id, self.H.now(), hold))
-        return found[0]["ts"] if found else None
+        return found[0]["created_at"] if found else None
 
     def step_spans(self, task_id, until=None):
         """[(step name, hours there)] in order, the last one up to `until` (default now)."""
-        rows = self.sql("SELECT e.ts, s.name FROM task_events e LEFT JOIN task_steps s ON s.id=e.new "
-                        "WHERE e.task_id=? AND e.field='step' ORDER BY e.ts, e.rowid", (task_id,))
+        rows = self.sql("SELECT e.created_at, s.name FROM task_events e LEFT JOIN task_steps s ON s.id=e.new "
+                        "WHERE e.task_id=? AND e.field='step' ORDER BY e.created_at, e.rowid", (task_id,))
         out = []
-        for row, nxt in zip(rows, rows[1:] + [{"ts": until or self.H.now()}]):
-            span = self.H.parse_ts(nxt["ts"]) - self.H.parse_ts(row["ts"])
+        for row, nxt in zip(rows, rows[1:] + [{"created_at": until or self.H.now()}]):
+            span = self.H.parse_ts(nxt["created_at"]) - self.H.parse_ts(row["created_at"])
             out.append((row["name"], span.total_seconds() / 3600))
         return out
 
@@ -630,16 +630,16 @@ class World:
         """[(step name, hours)] per stay at a step, each ended by the first thing that settles it: leaving the step, a
         verdict move, a skipped round or a merge wake. Read for check steps: what follows a settled check (the owner's
         merge) is the owner's time, not the check's."""
-        rows = self.sql("SELECT e.ts, e.field, s.name FROM task_events e LEFT JOIN task_steps s ON s.id=e.new "
+        rows = self.sql("SELECT e.created_at, e.field, s.name FROM task_events e LEFT JOIN task_steps s ON s.id=e.new "
                         "WHERE e.task_id=? AND e.field IN ('step','verdict_move','round_skipped','merge_wake') "
-                        "ORDER BY e.ts, e.rowid", (task_id,))
+                        "ORDER BY e.created_at, e.rowid", (task_id,))
         out, stay = [], None
-        for row in rows + [{"ts": until or self.H.now(), "field": "end", "name": None}]:
+        for row in rows + [{"created_at": until or self.H.now(), "field": "end", "name": None}]:
             if stay:
-                out.append((stay[0], (self.H.parse_ts(row["ts"]) - self.H.parse_ts(stay[1])).total_seconds() / 3600))
+                out.append((stay[0], (self.H.parse_ts(row["created_at"]) - self.H.parse_ts(stay[1])).total_seconds() / 3600))
                 stay = None
             if row["field"] == "step":
-                stay = (row["name"], row["ts"])
+                stay = (row["name"], row["created_at"])
         return out
 
     def idle_hours(self, task_id, until=None):
@@ -649,7 +649,7 @@ class World:
 
     def queued(self, slug=None):
         """Queued jobs per bot, and how many are held."""
-        rows = self.sql("SELECT bot, count(*) n, sum(held) held FROM jobs WHERE state='queued' "
-                        + ("AND bot=? " if slug else "") + "GROUP BY bot", (slug,) if slug else ())
-        return {r["bot"]: (r["n"], r["held"] or 0) for r in rows}
+        rows = self.sql("SELECT bot_id, count(*) n, sum(held) held FROM jobs WHERE state='queued' "
+                        + ("AND bot_id=? " if slug else "") + "GROUP BY bot_id", (slug,) if slug else ())
+        return {r["bot_id"]: (r["n"], r["held"] or 0) for r in rows}
 

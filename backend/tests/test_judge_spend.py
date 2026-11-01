@@ -22,7 +22,7 @@ def spend(api, usd, ts=None, actor="bot:ops"):
     with api.app.state.store.transaction() as c:
         H.event(c, actor, "judge.spend", "mail-triage@1", {"cost_usd": usd})
         if ts:
-            c.execute("UPDATE events SET ts=? WHERE id=(SELECT id FROM events WHERE action='judge.spend' "
+            c.execute("UPDATE events SET created_at=? WHERE id=(SELECT id FROM events WHERE action='judge.spend' "
                       "ORDER BY rowid DESC LIMIT 1)", (ts,))
 
 
@@ -578,13 +578,13 @@ def test_the_month_total_is_a_running_sum_that_stays_exact_per_database_and_mont
     def record(s, usd, ts):
         with s.transaction() as c:
             H.event(c, "bot:ops", "judge.spend", "mail-triage@1", {"cost_usd": usd})
-            c.execute("UPDATE events SET ts=? WHERE id=(SELECT id FROM events WHERE action='judge.spend' "
+            c.execute("UPDATE events SET created_at=? WHERE id=(SELECT id FROM events WHERE action='judge.spend' "
                       "ORDER BY rowid DESC LIMIT 1)", (ts,))
 
     def full(s, month):
         with s.read() as c:
             return round(float(c.execute("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events "
-                                         "WHERE ts>=? AND action='judge.spend'", (month + "-01T00:00:00",)).fetchone()[0]), 6)
+                                         "WHERE created_at>=? AND action='judge.spend'", (month + "-01T00:00:00",)).fetchone()[0]), 6)
 
     def running(s, at):
         with s.read() as c:

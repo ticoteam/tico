@@ -99,7 +99,7 @@ def install(app, store, auth):
             for part in H.chunks(wanted):
                 for tid in part:
                     task_memo[tid] = None
-                for row in c.execute("SELECT id,title,owner,requester,status,created_at FROM tasks WHERE id IN (%s) AND (%s)"
+                for row in c.execute("SELECT id,title,owner_id,requester_id,status,created_at FROM tasks WHERE id IN (%s) AND (%s)"
                                      % (",".join("?" * len(part)), visible_sql), part):
                     task_memo[row["id"]] = dict(row)
             return {tid: task_memo.get(tid) for tid in ids}
@@ -115,21 +115,21 @@ def install(app, store, auth):
 
         # Tasks made in the window, then their status and owner changes.
         created = []
-        for scanned, row in enumerate(c.execute(f"SELECT id,title,owner,requester,status,created_at FROM tasks WHERE created_at>=? "
+        for scanned, row in enumerate(c.execute(f"SELECT id,title,owner_id,requester_id,status,created_at FROM tasks WHERE created_at>=? "
                                                 f"AND created_at<? AND ({visible_sql}) ORDER BY created_at", (first, last)), 1):
             if scanned > SCAN_MAX:
                 caps.append(row["created_at"])
                 break
             task_memo[row["id"]] = dict(row)
-            if within(row["owner"], row["requester"]):
+            if within(row["owner_id"], row["requester_id"]):
                 created.append(dict(row))
             if len(created) > LIMIT:
                 caps.append(created[-1]["created_at"])
                 break
         changes, seen = [], 0
         marks = ",".join("?" * len(TASK_FIELDS))
-        cursor = c.execute(f"SELECT task_id,ts,actor,field,old,new,note FROM task_events WHERE field IN ({marks}) "
-                           "AND ts>=? AND ts<? ORDER BY ts", (*TASK_FIELDS, first, last))
+        cursor = c.execute(f"SELECT task_id,created_at,actor,field,old,new,note FROM task_events WHERE field IN ({marks}) "
+                           "AND created_at>=? AND created_at<? ORDER BY created_at", (*TASK_FIELDS, first, last))
         cut = False
         while len(changes) <= LIMIT and not cut:
             batch = cursor.fetchmany(500)
@@ -137,7 +137,7 @@ def install(app, store, auth):
                 break
             cut = seen + len(batch) > SCAN_MAX
             if cut:
-                caps.append(batch[SCAN_MAX - seen]["ts"])    # the first row not read
+                caps.append(batch[SCAN_MAX - seen]["created_at"])    # the first row not read
                 batch = batch[:SCAN_MAX - seen]
             seen += len(batch)
             rows = tasks_by_id([r["task_id"] for r in batch])
@@ -145,15 +145,15 @@ def install(app, store, auth):
                 task = rows.get(event["task_id"])
                 if event["field"] == "status" and not event["old"]:
                     continue        # the status a task is made with: its task.created says it
-                if task and within(task["owner"], task["requester"], event["actor"]):
+                if task and within(task["owner_id"], task["requester_id"], event["actor"]):
                     changes.append((dict(event), task))
         if len(changes) > LIMIT:
-            caps.append(changes[-1][0]["ts"])
+            caps.append(changes[-1][0]["created_at"])
         first_status = {}
         for event, task in changes:
             if event["field"] == "status":
                 first_status.setdefault(task["id"], event["old"])
-        sources.append([{"at": t["created_at"], "kind": "task.created", "who": t["requester"], "owner": t["owner"],
+        sources.append([{"at": t["created_at"], "kind": "task.created", "who": t["requester_id"], "owner_id": t["owner_id"],
                          "task": {"id": t["id"], "title": t["title"]},
                          "status": first_status.get(t["id"]) or t["status"] or "open"} for t in created])
         items = []
@@ -161,7 +161,7 @@ def install(app, store, auth):
             note = event["note"] or ""
             if note and not privacy.content_readable(c, reader, note):
                 note = ""
-            item = {"at": event["ts"], "kind": "task." + event["field"], "who": event["actor"],
+            item = {"at": event["created_at"], "kind": "task." + event["field"], "who": event["actor"],
                     "task": {"id": task["id"], "title": task["title"]}, "old": event["old"], "new": event["new"]}
             if note:
                 item["text"] = clip_text(note, 400)
@@ -191,7 +191,7 @@ def install(app, store, auth):
             if scanned > SCAN_MAX or len(items) > LIMIT:
                 caps.append(row["created_at"])
                 break
-            if not within(row["from_actor"], row["to_actor"]):
+            if not within(row["sender_id"], row["recipient_id"]):
                 continue
             if not privacy.message_readable(c, reader, row, current=True):
                 continue
@@ -199,7 +199,7 @@ def install(app, store, auth):
             tid = H.message_task_id(message, conv)
             comment = bool(conv.get("task_id")) or H.is_comment(message)
             item = {"at": row["created_at"], "kind": "task.comment" if comment and tid else "chat.message",
-                    "who": row["from_actor"], "to": row["to_actor"], "room": conv["id"],
+                    "who": row["sender_id"], "to": row["recipient_id"], "room": conv["id"],
                     "text": clip_text(row["body"])}
             ref = task_ref(tid)
             if ref:
@@ -244,15 +244,15 @@ def install(app, store, auth):
         inputs = privacy.status_inputs(c, slugs) if slugs else {}
         items, start_states = [], {}
         for slug in slugs:
-            rows = H._rows(c.execute("SELECT bot,state,focus,task_id,since FROM bot_status_history WHERE bot=? "
-                                     "AND since>=? AND since<? ORDER BY since LIMIT ?", (slug, first, last, LIMIT + 1)))
-            current = H._one(c, "SELECT bot,state,focus,task_id,since FROM bot_status WHERE bot=?", (slug,))
+            rows = H._rows(c.execute("SELECT bot,state,focus,task_id,started_at FROM bot_status_history WHERE bot=? "
+                                     "AND started_at>=? AND started_at<? ORDER BY started_at LIMIT ?", (slug, first, last, LIMIT + 1)))
+            current = H._one(c, "SELECT bot,state,focus,task_id,changed_at FROM bot_status WHERE bot=?", (slug,))
             if len(rows) > LIMIT:
                 caps.append(rows[-1]["since"])
             if current and first <= (current["since"] or "") < last:
                 rows.append(current)
-            before = H._one(c, "SELECT bot,state,focus,task_id,since FROM bot_status_history WHERE bot=? AND since<? "
-                               "ORDER BY since DESC LIMIT 1", (slug, first))
+            before = H._one(c, "SELECT bot,state,focus,task_id,started_at FROM bot_status_history WHERE bot=? AND started_at<? "
+                               "ORDER BY started_at DESC LIMIT 1", (slug, first))
             if current and (current["since"] or "") < first:
                 before = current
             if before:
@@ -267,13 +267,13 @@ def install(app, store, auth):
         # Goals: a bot's own goals for whoever may Read it (the Goals page's rule); the company's for everyone.
         hidden = {"bot:" + slug for slug in auth.unreadable_bots(c, who)}
         items = []
-        for goal in H._rows(c.execute("SELECT id,title,owner FROM goals")):
-            if goal["owner"] in hidden:
+        for goal in H._rows(c.execute("SELECT id,title,owner_id FROM goals")):
+            if goal["owner_id"] in hidden:
                 continue
-            for event in c.execute("SELECT ts,actor,field,old,new FROM goal_events WHERE goal_id=? AND field='status' "
-                                   "AND ts>=? AND ts<? ORDER BY ts", (goal["id"], first, last)):
-                if within(goal["owner"], event["actor"]):
-                    items.append({"at": event["ts"], "kind": "goal.status", "who": event["actor"],
+            for event in c.execute("SELECT created_at,actor,field,old,new FROM goal_events WHERE goal_id=? AND field='status' "
+                                   "AND created_at>=? AND created_at<? ORDER BY created_at", (goal["id"], first, last)):
+                if within(goal["owner_id"], event["actor"]):
+                    items.append({"at": event["created_at"], "kind": "goal.status", "who": event["actor"],
                                   "goal": {"id": goal["id"], "title": goal["title"]},
                                   "old": event["old"], "new": event["new"]})
         sources.append(items)
@@ -287,29 +287,29 @@ def install(app, store, auth):
 
         # The board as it stood at `from`: tasks open then, each in the status it had.
         candidates = {}
-        for row in c.execute(f"SELECT id,title,owner,requester,status,created_at FROM tasks WHERE created_at<? "
+        for row in c.execute(f"SELECT id,title,owner_id,requester_id,status,created_at FROM tasks WHERE created_at<? "
                              f"AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND ({visible_sql}) "
                              f"ORDER BY created_at DESC LIMIT ?", (first, *H.ACTIVE_STATUSES, SNAPSHOT_MAX)):
             candidates[row["id"]] = dict(row)
         lanes = ",".join("?" * len(H.TASK_LANES))
-        for row in c.execute(f"SELECT id,title,owner,requester,status,created_at FROM tasks WHERE lane IN ({lanes}) "
+        for row in c.execute(f"SELECT id,title,owner_id,requester_id,status,created_at FROM tasks WHERE lane IN ({lanes}) "
                              f"AND status IN ('done','closed') AND COALESCE(closed_at,done_at,updated_at,created_at)>=? "
                              f"AND created_at<? AND ({visible_sql}) LIMIT ?", (*H.TASK_LANES, first, first, SNAPSHOT_MAX)):
             candidates.setdefault(row["id"], dict(row))
         board = []
         for task in candidates.values():
-            if not within(task["owner"], task["requester"]):
+            if not within(task["owner_id"], task["requester_id"]):
                 continue
-            later = c.execute("SELECT old FROM task_events WHERE task_id=? AND field='status' AND ts>=? ORDER BY ts LIMIT 1",
+            later = c.execute("SELECT old FROM task_events WHERE task_id=? AND field='status' AND created_at>=? ORDER BY created_at LIMIT 1",
                               (task["id"], first)).fetchone()
             status = (later["old"] if later and later["old"] else task["status"]) or "open"
             if status in H.ACTIVE_STATUSES:
-                board.append({"id": task["id"], "title": task["title"], "owner": task["owner"], "status": status})
+                board.append({"id": task["id"], "title": task["title"], "owner_id": task["owner_id"], "status": status})
         board = sorted(board, key=lambda t: t["id"])[:SNAPSHOT_MAX]
 
         # Names for every actor shown, so a reader (a page, or a bot writing a recap) needs nothing else.
         shown = {item.get("who") for item in merged} | {item.get("to") for item in merged} \
-            | {item.get("owner") for item in merged} | {t["owner"] for t in board} \
+            | {item.get("owner_id") for item in merged} | {t["owner_id"] for t in board} \
             | {"bot:" + slug for slug in start_states}
         bots = {row["id"]: row for row in H.bots(c)}
         people = {p["id"]: p for p in views.roster(c).get("people") or []}

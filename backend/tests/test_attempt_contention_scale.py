@@ -34,7 +34,7 @@ def test_busy_install_routes(api, monkeypatch):
         for i in range(100):
             for j in range(20):
                 mid = f'input-{i}-{j}'
-                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at,refs,in_reply_to) "
+                c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs,in_reply_to) "
                           "VALUES(?,?,'human:ana','bot:ops','say','Synthetic input',?,?,?)",
                           (mid, f'room-{i}', now, encode({'task': f'task-{i}', 'answers': [f'message-{k}' for k in range(10)]}),
                            f'input-{i}-{j-1}' if j else None))
@@ -46,10 +46,10 @@ def test_busy_install_routes(api, monkeypatch):
         c.execute('UPDATE runners SET capacity=200,capabilities=? WHERE id=?',
                   (encode([execution.LANES, execution.ROOTS]), computer['runner_id']))
         for i in range(197, 200):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at,refs) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                       "VALUES(?,?,'human:ana','bot:ops','say','Synthetic queued work',?,?)",
                       (f'queued-{i}', f'room-{i}', now, encode({'task': f'task-{i}'})))
-        c.execute("UPDATE tasks SET updated_at=?,owner='bot:finance',private=0 WHERE id IN (" + ','.join('?' * 10) + ")",
+        c.execute("UPDATE tasks SET updated_at=?,owner_id='bot:finance',private=0 WHERE id IN (" + ','.join('?' * 10) + ")",
                   (H.shift(now, hours=-2), *(f'task-{i}' for i in range(100, 110))))
         # Fixture construction is not part of the lease workload. Start the real lease
         # clock only after all synthetic inputs have been inserted.
@@ -146,7 +146,7 @@ def test_busy_install_routes(api, monkeypatch):
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE id LIKE 'attempt-%' AND state='running' AND lease_until>?", (H.now(),)).fetchone()[0] == 100
         assert c.execute("SELECT count(*) FROM attempts WHERE id LIKE 'attempt-%' AND lease_until>?", (original_lease,)).fetchone()[0] == 100
-        assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:finance'").fetchone()[0] >= 10
+        assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:finance'").fetchone()[0] >= 10
     # Wall-clock p95 under twelve threads on a shared VM varies run to run; the receipt above records it, and the lock
     # holds below are what the contention fix bounds. A hold is wall time, so it includes GIL waits behind the other
     # eleven threads: the heartbeat's cache-miss write runs about 0.2 s and has reached 0.87 s on a busy release VM with

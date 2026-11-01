@@ -179,7 +179,7 @@ def suggested_who(c, source_name):
         return {"groups": [], "bots": []}
     marks = ",".join("?" * len(ids))
     subjects = {r["subject"] for r in c.execute(
-        f"SELECT DISTINCT subject FROM credential_grants WHERE credential_id IN ({marks}) AND revoked IS NULL "
+        f"SELECT DISTINCT subject FROM credential_grants WHERE credential_id IN ({marks}) AND revoked_at IS NULL "
         "AND subject LIKE 'bot:%'", ids)}
     ctx = O._ctx(c)
     bots, groups = [], set()
@@ -213,7 +213,7 @@ def _link_plan(c, who, url, text):
     is its requester's (one per link and person), so it is readable exactly as the requester's task is."""
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     identity = "rule-doc:" + hashlib.sha256(f"{url}\n{who.actor}".encode("utf-8")).hexdigest()[:24]
-    row = c.execute("SELECT * FROM bot_files WHERE bot=? AND identity=?", (SLUG, identity)).fetchone()
+    row = c.execute("SELECT * FROM bot_files WHERE bot_id=? AND identity=?", (SLUG, identity)).fetchone()
     if not row:
         return {"identity": identity, "digest": digest, "row": None, "id": F.new_id(), "number": 1, "changed": True}
     held = c.execute("SELECT COALESCE(v.source_digest, b.digest) AS digest FROM bot_file_versions v "
@@ -289,8 +289,8 @@ def refused(store, who, path, method):
     match = TASK_COMMENT.match(path)
     if match:
         with store.read() as c:
-            row = c.execute("SELECT owner FROM tasks WHERE id=?", (match.group(1),)).fetchone()
-        return bool(row) and row["owner"] != "bot:" + SLUG
+            row = c.execute("SELECT owner_id FROM tasks WHERE id=?", (match.group(1),)).fetchone()
+        return bool(row) and row["owner_id"] != "bot:" + SLUG
     return False
 
 
@@ -408,7 +408,7 @@ def read(c, auth, who, files, blobs, body, found):
     if plan:
         _store_link(c, blobs, files, plan, task["id"], text, title)
     H.event(c, who.actor, "rules.read_requested", file_id, {"source": source["id"], "version": number,
-                                                          "task": task["id"], "bot": SLUG, "truncated": cut,
+                                                          "task": task["id"], "bot_id": SLUG, "truncated": cut,
                                                           "screening": verdict["action"]})
     c.execute("INSERT INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, source_id) "
               "VALUES(?,?,?,?,?,?,?)", (task["id"], file_id, number, who.actor, H.now(), int(cut), source["id"]))
@@ -424,7 +424,7 @@ def attempt_read(c, aid):
     tasks = carried_tasks(c, aid)
     if len(tasks) != 1:
         return None
-    row = c.execute("SELECT r.* FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.task_id=? AND t.owner=?",
+    row = c.execute("SELECT r.* FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.task_id=? AND t.owner_id=?",
                     (next(iter(tasks)), "bot:" + SLUG)).fetchone()
     return dict(row) if row else None
 
@@ -539,7 +539,7 @@ def cite_readers(c, auth, who):
     readers = []
     for task_id in sorted(carried_tasks(c, who.attempt_id)):
         task = H.task(c, task_id)
-        requester = task["requester"] if task else None
+        requester = task["requester_id"] if task else None
         if not requester or not H.is_human(requester):
             return []
         try:
@@ -567,7 +567,7 @@ def turn_done(c, attempt, outcome, task_id, text):
     if not read or read["task_id"] != task_id:
         return          # a run that carried another task: its text stays on the run, the task to the normal cleanup
     row = H.task(c, task_id)
-    if not row or row["owner"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
+    if not row or row["owner_id"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
         return
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip() and not _disclaimer(line)]
     H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None))

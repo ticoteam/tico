@@ -70,7 +70,7 @@ def test_a_feature_matching_an_open_roadmap_item_names_the_item_and_product_sees
     model.match = "Internal title"
     shown = suggest(api, "Let me export reports", "Export to CSV would help a lot")
     task = shown["task"]
-    assert task["owner"] == "bot:cpo", "a feature stays with Head of Product"
+    assert task["owner_id"] == "bot:cpo", "a feature stays with Head of Product"
     assert task["body"].startswith("Idea triage (idea-triage, routing only): for product (product 90%).\n"
                                    "Probably covered by the open roadmap item “Internal title” (task "
                                    + item["id"] + ", 85%)")
@@ -93,7 +93,7 @@ def test_a_bug_goes_to_head_of_engineering(roadmap):
     api, _, model = roadmap
     model.kind, model.confidence = "engineering", 0.93
     task = suggest(api, "The save button does nothing", "Clicking save on settings shows no change")["task"]
-    assert task["owner"] == "bot:ops"
+    assert task["owner_id"] == "bot:ops"
     assert task["body"].startswith("Idea triage (idea-triage, routing only): a bug or small change (93%), "
                                    "sent to engineering.\n\nCustomer suggestion")
     assert not task["relations"].get("related"), "no covering item, no link"
@@ -134,7 +134,7 @@ def test_anything_short_of_a_confident_answer_goes_to_product_as_today(roadmap, 
     task = suggest(api, "The save button does nothing", "Clicking save shows no change")["task"]
     if model.hold:
         model.hold.set()
-    assert task["owner"] == "bot:cpo"
+    assert task["owner_id"] == "bot:cpo"
     calls = audits(api)
     if case in ("off", "spend_cap", "unconfigured", "budget"):
         assert not calls and not model.calls, "no call is made, so nothing is audited"
@@ -169,7 +169,7 @@ def test_a_covered_match_under_its_threshold_is_neither_named_nor_linked(roadmap
     api, _, model = roadmap
     model.match, model.covered = "Internal title", 0.6
     task = suggest(api, "Let me export reports")["task"]
-    assert task["owner"] == "bot:cpo" and "Probably covered" not in task["body"]
+    assert task["owner_id"] == "bot:cpo" and "Probably covered" not in task["body"]
     assert not task["relations"].get("related")
     assert audits(api)[-1][2]["covered"] is None
 
@@ -178,7 +178,7 @@ def test_a_malformed_extra_answer_neither_breaks_the_suggestion_nor_enters_the_a
     api, _, model = roadmap
     model.extra = {"extra": {"noul": "invalid"}}
     task = suggest(api, "Let me export reports")["task"]
-    assert task["owner"] == "bot:cpo"
+    assert task["owner_id"] == "bot:cpo"
     (_, _, detail), = audits(api)
     assert set(detail["answers"]) == {"kind", "covered"}
 

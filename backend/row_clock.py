@@ -12,7 +12,7 @@ import sqlite3
 from threading import Lock
 from types import MappingProxyType
 
-PARTIES = "SELECT id,requester,owner,guest,private FROM tasks INDEXED BY tasks_private_parties WHERE private IS NOT 0"
+PARTIES = "SELECT id,requester_id,owner_id,guest,private FROM tasks INDEXED BY tasks_private_parties WHERE private IS NOT 0"
 ACCESS = "SELECT key,value FROM registry_metadata WHERE key IN ('owner','access','rules')"
 _IN_ACCESS = "IN ('owner','access','rules')"
 # Every task id, and every room's task. Only the existence of a task and a room's task reference are shared: a status
@@ -34,7 +34,7 @@ def ensure(c):
     triggers = (
         ("row_clock_parties_insert", "AFTER INSERT ON tasks WHEN NEW.private IS NOT 0", bump % "parties"),
         ("row_clock_parties_delete", "AFTER DELETE ON tasks WHEN OLD.private IS NOT 0", bump % "parties"),
-        ("row_clock_parties_update", "AFTER UPDATE OF requester,owner,guest,private ON tasks WHEN "
+        ("row_clock_parties_update", "AFTER UPDATE OF requester_id,owner_id,guest,private ON tasks WHEN "
          "(OLD.requester IS NOT NEW.requester OR OLD.owner IS NOT NEW.owner OR OLD.guest IS NOT NEW.guest "
          "OR OLD.private IS NOT NEW.private) AND (OLD.private IS NOT 0 OR NEW.private IS NOT 0)", bump % "parties"),
         ("row_clock_access_insert", f"AFTER INSERT ON registry_metadata WHEN NEW.key {_IN_ACCESS}", bump % "access"),

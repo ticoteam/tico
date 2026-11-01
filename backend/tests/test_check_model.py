@@ -86,5 +86,5 @@ def test_the_owner_saves_the_order_and_turning_a_listed_provider_off_still_saves
     assert refused.status_code == 422
     assert refused.json()["error"]["detail"] == "Check model 'gemini': its provider (google) is not enabled"
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT detail FROM events WHERE action='providers.updated' ORDER BY ts DESC LIMIT 1").fetchone()
+        event = c.execute("SELECT detail FROM events WHERE action='providers.updated' ORDER BY created_at DESC LIMIT 1").fetchone()
     assert '"check_models"' in event[0]

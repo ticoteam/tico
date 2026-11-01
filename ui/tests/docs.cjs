@@ -67,9 +67,9 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     const externalCitation = 'https://github.com/acme/handbook/blob/' + 'a'.repeat(40) + '/docs/refunds.md?plain=1#L3-L4';
     const answer = 'See [Internal doc · Refund policy](doc:doc-000000000001). [External · Refunds — Policy](' + externalCitation + ')';
     const chatMessages = new Map([
-      ['docs-earlier', [{id: 'earlier-question', from_actor: 'human:ana', body: 'Who helps new hires?'}]],
-      ['docs-archived', [{id: 'old-question', from_actor: 'human:ana', body: 'How do refunds work?'},
-        {id: 'old-answer', in_reply_to: 'old-question', from_actor: 'bot:librarian', body: 'Refunds take 30 days. ' + answer + '<script>window.docsUnsafe = true</script>'}]],
+      ['docs-earlier', [{id: 'earlier-question', sender_id: 'human:ana', body: 'Who helps new hires?'}]],
+      ['docs-archived', [{id: 'old-question', sender_id: 'human:ana', body: 'How do refunds work?'},
+        {id: 'old-answer', in_reply_to: 'old-question', sender_id: 'bot:librarian', body: 'Refunds take 30 days. ' + answer + '<script>window.docsUnsafe = true</script>'}]],
     ]);
     const outside = (id, body, actor = 'human:ben') => {       // someone else saves while this person is editing
       const doc = docs.get(id); doc.version += 1; doc.body = body; doc.updated_by = actor; doc.updated_at = ago(0); stamp(doc, actor, 'Their edit', 0);
@@ -126,8 +126,8 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
           chats.unshift({id, title: body.question, created_at: ago(0), closed_at: null});
         }
         const messageId = 'ask-docs-' + requests.length;
-        chatMessages.set(id, [...(chatMessages.get(id) || []), {id: messageId, from_actor: 'human:ana', body: body.question},
-          ...(!librarianQueued ? [{id: 'answer-' + messageId, in_reply_to: messageId, from_actor: 'bot:librarian', body: answer}] : [])]);
+        chatMessages.set(id, [...(chatMessages.get(id) || []), {id: messageId, sender_id: 'human:ana', body: body.question},
+          ...(!librarianQueued ? [{id: 'answer-' + messageId, in_reply_to: messageId, sender_id: 'bot:librarian', body: answer}] : [])]);
         return json({conversation_id: id, message_id: messageId, results: [{id: 'doc-000000000001', title: 'Refund policy', type: 'internal'}]});
       }
       const chatRead = /^\/api\/v2\/conversations\/([^/]+)\/(watch|snapshot)$/.exec(p);
@@ -141,7 +141,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/company-docs') return json({documents: []});
       if (p === '/api/v2/setup/getting-started' && method === 'GET') return json({items: [], done: 0, total: 0, complete: true, dismissed: true, tour_seen: true,
-        cards_dismissed: started.cards, can_build: true, owner: me.role === 'owner', empty: {docs: true, market: false, tasks: false, updates: false, goals: false, meetings: false, ...started.empty}});
+        cards_dismissed: started.cards, can_build: true, owner_id: me.role === 'owner', empty: {docs: true, market: false, tasks: false, updates: false, goals: false, meetings: false, ...started.empty}});
       if (p === '/api/v2/setup/getting-started/state') return json({tour: true, checklist: true, cards: [], skipped: []});
       if (!p.startsWith('/api/v2/')) return json({});
       const api = p.slice(8);

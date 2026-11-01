@@ -59,7 +59,7 @@ def first_result(c, settings):
     the scan reads only the built-in bots' turns before it (tens of milliseconds at 20,000 Assistant turns)."""
     from .getting_started import built_in
     skip = sorted(built_in(settings))
-    row = c.execute("SELECT finished_at FROM attempts WHERE state='completed' AND finished_at IS NOT NULL AND bot NOT IN (%s) "
+    row = c.execute("SELECT finished_at FROM attempts WHERE state='completed' AND finished_at IS NOT NULL AND bot_id NOT IN (%s) "
                     "LIMIT 1" % ",".join("?" * len(skip)), skip).fetchone()
     return row[0] if row else ""
 

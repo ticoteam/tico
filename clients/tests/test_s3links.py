@@ -88,7 +88,7 @@ class Api:
 
 def test_the_tools_rewrite_text_before_sending_and_say_so():
     api = Api()
-    made = hubtools.BY_NAME["hub_task_create"]["fn"](api, {"owner": "human:ana", "title": "Review the drafts",
+    made = hubtools.BY_NAME["hub_task_create"]["fn"](api, {"owner_id": "human:ana", "title": "Review the drafts",
                                                           "body": "Draft: s3://acme-files/d/launch.md"})
     assert made["sent"]["body"] == "Draft: " + VIEW + "/d/launch.md"
     assert made["s3_links"]["rewritten"] == [{"from": "s3://acme-files/d/launch.md", "to": VIEW + "/d/launch.md"}]
@@ -111,7 +111,7 @@ def test_the_tools_rewrite_text_before_sending_and_say_so():
 
 def test_a_server_without_the_mapping_leaves_text_alone_with_the_hint():
     api = Api(mapping=None)
-    made = hubtools.BY_NAME["hub_task_create"]["fn"](api, {"owner": "human:ana", "title": "T", "body": "s3://acme-files/d.md"})
+    made = hubtools.BY_NAME["hub_task_create"]["fn"](api, {"owner_id": "human:ana", "title": "T", "body": "s3://acme-files/d.md"})
     assert made["sent"]["body"] == "s3://acme-files/d.md" and made["s3_links"]["unmapped"] == ["s3://acme-files/d.md"]
 
 

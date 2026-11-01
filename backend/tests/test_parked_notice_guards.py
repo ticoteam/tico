@@ -36,7 +36,7 @@ def test_notice_turn_never_clears_an_independent_wait(api, wait):
     with api.app.state.store.transaction() as c:
         task, blocker = parked(c, incident=True)
         if wait == 'approval':
-            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by,created_at) "
+            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by_id,created_at) "
                       "VALUES('approval','send',?,'bot:cpo',?)", (task['id'], H.now()))
         elif wait == 'worktree':
             from backend.worktree_waits import ensure
@@ -116,7 +116,7 @@ def test_person_message_during_notice_turn_gets_its_own_reply(api, lanes):
     post(api, f"attempts/{answer['id']}/complete", {'outcome': 'completed', 'last_seq': 0,
                                                  'text': 'Here is your answer.'}, r['token'])
     with api.app.state.store.read() as c:
-        reply = c.execute("SELECT body FROM messages WHERE in_reply_to=? AND from_actor='bot:cpo'",
+        reply = c.execute("SELECT body FROM messages WHERE in_reply_to=? AND sender_id='bot:cpo'",
                           (person['id'],)).fetchone()
         assert reply and reply[0] == 'Here is your answer.'
 

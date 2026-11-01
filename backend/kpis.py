@@ -467,7 +467,7 @@ def _unique_slug(conn, name):
 
 
 def _version(conn, row, actor, ts):
-    conn.execute("INSERT OR IGNORE INTO kpi_definitions (id, kpi_id, version, ts, actor, name, definition, unit, "
+    conn.execute("INSERT OR IGNORE INTO kpi_definitions (id, kpi_id, version, created_at, actor, name, definition, unit, "
                  "direction, cadence, source_note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                  (f"{row['id']}:{row['definition_version']}", row["id"], row["definition_version"], ts, actor,
                   row["name"], row["definition"], row["unit"], row["direction"], row["cadence"], row["source_note"]))
@@ -501,13 +501,13 @@ def create(conn, actor, owner, fields, kid=None):
         raise ValueError("name the measure, in words: what is counted, per what")
     ts = H.now()
     row = {"id": kid or H.new_id(), "goal_id": "", "name": values["name"], "unit": values.get("unit", ""), "target": None,
-           "created_at": ts, "created_by": actor, "slug": _unique_slug(conn, values["name"]),
+           "created_at": ts, "created_by_id": actor, "slug": _unique_slug(conn, values["name"]),
            "definition": values.get("definition", ""), "direction": values.get("direction", "up"),
-           "cadence": values.get("cadence", "weekly"), "owner": owner, "source_note": values.get("source_note", ""),
+           "cadence": values.get("cadence", "weekly"), "owner_id": owner, "source_note": values.get("source_note", ""),
            "definition_version": 1, "updated_at": ts}
-    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created_at, created_by, slug, definition, direction, "
-                 "cadence, owner, source_note, definition_version, updated_at) VALUES (:id, :goal_id, :name, :unit, "
-                 ":target, :created_at, :created_by, :slug, :definition, :direction, :cadence, :owner, :source_note, "
+    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created_at, created_by_id, slug, definition, direction, "
+                 "cadence, owner_id, source_note, definition_version, updated_at) VALUES (:id, :goal_id, :name, :unit, "
+                 ":target, :created_at, :created_by_id, :slug, :definition, :direction, :cadence, :owner_id, :source_note, "
                  ":definition_version, :updated_at)", row)
     _version(conn, row, actor, ts)
     return kpi(conn, row["id"])
@@ -522,8 +522,8 @@ def update(conn, actor, kpi_id, fields, owner=None):
     row = kpi(conn, kpi_id)
     values = clean(fields)
     changes = {k: (row[k], v) for k, v in values.items() if row[k] != v}
-    if owner is not None and owner != row["owner"]:
-        changes["owner"] = (row["owner"], owner)
+    if owner is not None and owner != row["owner_id"]:
+        changes["owner_id"] = (row["owner_id"], owner)
     if not changes:
         return row, {}
     ts = H.now()
@@ -548,11 +548,11 @@ def set_archived(conn, actor, kpi_id, archived):
         return row
     if archived:
         ts = H.now()
-        conn.execute("UPDATE kpis SET archived_at=?, archived_by=?, updated_at=? WHERE id=?",
+        conn.execute("UPDATE kpis SET archived_at=?, archived_by_id=?, updated_at=? WHERE id=?",
                      (ts, actor, ts, kpi_id))
         H.event(conn, actor, "kpi.archive", kpi_id)
     else:
-        conn.execute("UPDATE kpis SET archived_at=NULL, archived_by=NULL, updated_at=? WHERE id=?",
+        conn.execute("UPDATE kpis SET archived_at=NULL, archived_by_id=NULL, updated_at=? WHERE id=?",
                      (H.now(), kpi_id))
         H.event(conn, actor, "kpi.restore", kpi_id)
     return kpi(conn, kpi_id)
@@ -601,13 +601,13 @@ def add_reading(conn, actor, row, value, period_start=None, period_end=None, col
             raise ValueError(f"reading {supersedes} was already corrected by {newer[0]}; correct that one")
         if not (note or str(evidence or "").strip()):
             raise ValueError("say what the correction changes, in the note or the evidence")
-    reading = {"id": H.new_id(), "kpi_id": row["id"], "ts": end, "value": float(value), "actor": actor,
+    reading = {"id": H.new_id(), "kpi_id": row["id"], "measured_at": end, "value": float(value), "actor_id": actor,
                "source": source, "note": note, "created_at": now, "period_start": start, "period_end": end,
                "collected_at": collected, "evidence": str(evidence or "").strip()[:2000], "quality": quality,
                "definition_version": version, "supersedes": supersedes or None}
-    conn.execute("INSERT INTO kpi_readings (id, kpi_id, ts, value, actor, source, note, created_at, period_start, "
+    conn.execute("INSERT INTO kpi_readings (id, kpi_id, measured_at, value, actor_id, source, note, created_at, period_start, "
                  "period_end, collected_at, evidence, quality, definition_version, supersedes) VALUES (:id, :kpi_id, "
-                 ":ts, :value, :actor, :source, :note, :created_at, :period_start, :period_end, :collected_at, "
+                 ":measured_at, :value, :actor_id, :source, :note, :created_at, :period_start, :period_end, :collected_at, "
                  ":evidence, :quality, :definition_version, :supersedes)", reading)
     return reading
 
@@ -619,11 +619,11 @@ def set_link(conn, actor, goal_id, kpi_id, values):
     ts = H.now()
     if old:
         conn.execute("UPDATE goal_kpis SET kind=:kind, baseline=:baseline, baseline_at=:baseline_at, target=:target, "
-                     "deadline=:deadline, min=:min, max=:max, updated_at=:ts, updated_by=:actor WHERE id=:id",
+                     "deadline=:deadline, min=:min, max=:max, updated_at=:ts, updated_by_id=:actor WHERE id=:id",
                      {**values, "ts": ts, "actor": actor, "id": old["id"]})
     else:
         conn.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, baseline, baseline_at, target, deadline, min, max, "
-                     "created_at, created_by, updated_at, updated_by) VALUES (:id, :goal_id, :kpi_id, :kind, :baseline, "
+                     "created_at, created_by_id, updated_at, updated_by_id) VALUES (:id, :goal_id, :kpi_id, :kind, :baseline, "
                      ":baseline_at, :target, :deadline, :min, :max, :ts, :actor, :ts, :actor)",
                      {**values, "id": H.new_id(), "goal_id": goal_id, "kpi_id": kpi_id, "ts": ts, "actor": actor})
     return link(conn, goal_id, kpi_id), old

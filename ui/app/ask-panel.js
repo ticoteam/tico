@@ -282,8 +282,8 @@ function askClick(ev) {
 // question with a line of words; several picks at once, or several questions, open the task.
 function askQuestions() {
   const me = myActor();
-  return (S.v2?.needs || []).filter(it => ['question', 'ask'].includes(it.kind) && it.ask?.to_actor === me
-    && it.ask.from_actor !== me).slice(0, ASK_CARDS_MAX);
+  return (S.v2?.needs || []).filter(it => ['question', 'ask'].includes(it.kind) && it.ask?.recipient_id === me
+    && it.ask.sender_id !== me).slice(0, ASK_CARDS_MAX);
 }
 // Who asks: the panel's own bot by the panel's name, anyone else as the question card names them.
 const askAsker = actor => actor === 'bot:' + assistantBot() ? askName() : qcardAsker(actor);
@@ -294,7 +294,7 @@ const ASK_Q_LONG = 160;
 // id) and kept as its label: the thread is drawn again whenever the chat changes. Questions no longer shown drop out.
 const askPicks = new Map(), askPickKey = (it, q) => `${it.id}:${q.id}`;
 function askQuestionHTML(it) {
-  const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.from_actor);
+  const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.sender_id);
   const text = plainActors(q ? q.question : it.ask.body);
   const body = `<div class="ask-card-who">${esc(who)} asks</div>${text.length > ASK_Q_LONG
     ? `<button type="button" class="ask-card-q" data-ask-more aria-expanded="false">${esc(text)}</button>` : `<div class="ask-card-q">${esc(text)}</div>`}`;
@@ -313,7 +313,7 @@ function askQuestionHTML(it) {
 async function askAnswer(card, {pick, text}) {
   const it = (S.v2?.needs || []).find(x => String(x.id) === card?.dataset.askQ);
   if (!it || card.dataset.busy) return;
-  const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.from_actor);
+  const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.sender_id);
   const writes = pick !== undefined && q ? qcardWrites(it, q, [q.options[pick].label])
     : it.kind === 'ask' ? [{path: `/v2/messages/${encodeURIComponent(it.id)}/answer`, body: {text}}]
     : [{path: `/v2/tasks/${encodeURIComponent(it.id)}/comments`, body: {text}}];
@@ -401,7 +401,7 @@ async function askLoad(chat) {
   let info = null, messages = [], execution = null, rendered = '', es = null, poll = null;
   const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
   chat.stop = stopStream;
-  const isReply = m => m.from_actor === 'bot:' + info?.bot;
+  const isReply = m => m.sender_id === 'bot:' + info?.bot;
   let pending = [], readFor = '';
   const seenRows = new Set();
   const draw = () => {
@@ -460,7 +460,7 @@ async function askLoad(chat) {
   };
   chat.draw = draw;
   // What turning Tico Support on shares: the chat's turns, Ben's and the Assistant's, scrubbed (ask-rules askShareText).
-  chat.share = () => askShareText(messages.filter(m => m.body && (isReply(m) || m.from_actor === myActor()))
+  chat.share = () => askShareText(messages.filter(m => m.body && (isReply(m) || m.sender_id === myActor()))
     .map(m => ({me: !isReply(m), text: plainActors(m.body)})), info?.name || 'Assistant');
   // The whole chat again, with the Confirm cards waiting in other chats.
   const snapshot = async () => {

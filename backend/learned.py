@@ -146,7 +146,7 @@ def growth_facing(c, bot):
 
 def _layers(c, settings, conversation, bot):
     conversation = conversation or {}
-    owner = str(conversation.get("owner_actor") or "")
+    owner = str(conversation.get("owner_id") or "")
     if conversation.get("scope") != rooms.PERSONAL or not H.is_human(owner) or conversation.get("closed_at"):
         return None
     if bot != settings.assistant_bot or conversation.get("room_key") != rooms.ASSISTANT_ROOM:

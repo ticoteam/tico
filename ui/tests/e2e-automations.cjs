@@ -8,7 +8,7 @@ const NAME = 'Friday status check';
 journey('e2e-automations', async ({hub, browser, phone}) => {
   const where = phone ? 'phone' : 'desktop';
   const made = await must(hub, 'dana', 'POST', 'automations', {
-    name: NAME, owner: 'person:dana', enabled: true, builtin: false,
+    name: NAME, owner_id: 'person:dana', enabled: true, builtin: false,
     trigger: {type: 'schedule', cron: '0 16 * * 5', tz: 'UTC'}, steps: [],
   }, 'make the automation');
   const id = made.id || made.automation?.id;

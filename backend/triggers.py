@@ -239,10 +239,10 @@ def summary(c, settings, t, since=None):
         "SELECT count(CASE WHEN outcome='accepted' THEN 1 END), count(CASE WHEN outcome='refused' THEN 1 END) "
         "FROM trigger_deliveries WHERE trigger_id=? AND received_at>?", (t["id"], since)).fetchone()
     used = [dict(r) for r in c.execute(
-        "SELECT id,name,owner FROM automations WHERE trigger_type='webhook' AND deleted_at IS NULL "
+        "SELECT id,name,owner_id FROM automations WHERE trigger_type='webhook' AND deleted_at IS NULL "
         "AND json_extract(flow,'$.trigger.id')=? ORDER BY name,id LIMIT ?", (t["id"], LISTED_AUTOMATIONS)).fetchall()]
     return {"id": t["id"], "name": t["name"], "kind": t["kind"], "event": event_of(t["id"]),
-            "url": "" if builtin(t["id"]) else address(settings, t["id"]), "builtin": builtin(t["id"]), "created_by": t["created_by"], "created_at": t["created_at"],
+            "url": "" if builtin(t["id"]) else address(settings, t["id"]), "builtin": builtin(t["id"]), "created_by_id": t["created_by_id"], "created_at": t["created_at"],
             "last_received": last, "received_24h": day, "refused_24h": refused,
             "signed": bool(t["signing_secret"]), "preset": effective_preset(t), "consumer": t["consumer"],
             "type_from": type_spec(t),
@@ -733,17 +733,17 @@ def _delivery_match(column, base):
 def given_to(c, bot, trigger_id, base):
     """Whether a task made from this delivery is the bot's, or a message to it names the delivery."""
     on, params = _delivery_match("o.occurrence", f"{event_of(trigger_id)}:{base}")
-    if c.execute("SELECT 1 FROM schedule_occurrences o JOIN tasks t ON t.id=o.task_id WHERE t.owner=? AND " + on + " LIMIT 1",
+    if c.execute("SELECT 1 FROM schedule_occurrences o JOIN tasks t ON t.id=o.task_id WHERE t.owner_id=? AND " + on + " LIMIT 1",
                  (bot, *params)).fetchone():
         return True
     # A turn or wake an automation run on this call sent the bot (Tico's notice names the run).
     on, params = _delivery_match("r.trigger_ref", f"webhook:{trigger_id}:{base}")
     if c.execute("SELECT 1 FROM messages m JOIN automation_runs r ON r.id=json_extract(m.refs,'$.automation_run') "
-                 "WHERE m.to_actor=? AND m.from_actor=? AND " + on + " LIMIT 1", (bot, H.KEEPER, *params)).fetchone():
+                 "WHERE m.recipient_id=? AND m.sender_id=? AND " + on + " LIMIT 1", (bot, H.KEEPER, *params)).fetchone():
         return True
     on, params = _delivery_match("json_extract(refs,'$.delivery')", base)
     # Only Tico's own notices count: a person can put any refs on a message they send.
-    return bool(c.execute("SELECT 1 FROM messages WHERE to_actor=? AND from_actor=? AND json_extract(refs,'$.trigger')=? AND "
+    return bool(c.execute("SELECT 1 FROM messages WHERE recipient_id=? AND sender_id=? AND json_extract(refs,'$.trigger')=? AND "
                           + on + " LIMIT 1", (bot, H.KEEPER, trigger_id, *params)).fetchone())
 
 

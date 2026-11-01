@@ -61,7 +61,7 @@ async function open(browser, {route = '#/updates', viewport = PHONE, goalsDelay 
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals/tree') goals.asked++;
-    if (p === '/api/v2/goals/tree') return new Promise(done => setTimeout(done, goalsDelay)).then(() => json({goals: [{id: 'g-1', title: 'Ship the Acme portal', owner: 'company', parent_id: null, status: 'green', rank: 0, kpis: []}], owners: {}, other_kpis: [], proposals: []}));
+    if (p === '/api/v2/goals/tree') return new Promise(done => setTimeout(done, goalsDelay)).then(() => json({goals: [{id: 'g-1', title: 'Ship the Acme portal', owner_id: 'company', parent_id: null, status: 'green', rank: 0, kpis: []}], owners: {}, other_kpis: [], proposals: []}));
     if (p === '/api/v2/goals/needs-you') return json({items: []});
     if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
     if (p === '/api/v2/conversations') return json({conversations: []});
@@ -158,7 +158,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       assert.equal(said, CAP_409.message, tag + ': the 409 reads as its message');
       const chat = await page.evaluate(m => {
         const div = document.createElement('div');
-        div.innerHTML = v2MessageHTML({id: 'm1', from_actor: 'bot:eng-lead', body: 'Sending the review to Ana.', created_at: new Date().toISOString(),
+        div.innerHTML = v2MessageHTML({id: 'm1', sender_id: 'bot:eng-lead', body: 'Sending the review to Ana.', created_at: new Date().toISOString(),
           run: {id: 'r1', status: 'done', did: [{kind: 'refused', rule: 'task_cap', text: m}]}});
         return div.textContent.replace(/\s+/g, ' ');
       }, CAP_409.message);

@@ -446,7 +446,7 @@ def restore_snapshot(source, destination):
         c.execute("UPDATE enrollments SET expires_at=?", (now,))
         c.execute("UPDATE bots SET token_hash=NULL")
         # An old backup must not resurrect a credential grant revoked after it was taken.
-        c.execute("UPDATE credential_grants SET revoked=coalesce(revoked,?),revoked_by='recovery'", (now,))
+        c.execute("UPDATE credential_grants SET revoked_at=coalesce(revoked_at,?),revoked_by='recovery'", (now,))
         c.execute("UPDATE service_jobs SET state='queued',runner_id=NULL,token_hash=NULL,lease_until=NULL,updated_at=? WHERE state='running'", (now,))
         H.event(c, H.KEEPER, "recovery.fenced", "database", {"source_sha256": report["sha256"], "active_attempts": active})
     return {"source": report, "restored": inspect(destination), "reenrollment_required": True, "fenced_attempts": active}

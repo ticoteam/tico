@@ -2,7 +2,7 @@
 'use strict';
 
 const branchBotLink = slug => `#/bot/${encodeURIComponent(slug)}`;
-const branchPersonLabel = branch => `${botPersonName(branch.operator)}'s branch`;
+const branchPersonLabel = branch => `${botPersonName(branch.owner_id)}'s branch`;
 
 function branchDialog(title) {
   const previous = $('#branch-editor');
@@ -18,7 +18,7 @@ function branchDialog(title) {
 function botBranchChatTarget(slug) {
   const original = botRow(slug);
   if (!original?.shared) return slug;
-  return S.emps.find(e => e.shared_from === slug && e.operator === S.me?.id && e.status === 'active')?.id || slug;
+  return S.emps.find(e => e.shared_from === slug && e.owner_id === S.me?.id && e.status === 'active')?.id || slug;
 }
 
 async function botBranchesLoad(slug) {
@@ -31,8 +31,8 @@ async function botBranchesLoad(slug) {
     const branches = [...(data.branches || [])];
     if (!data.shared && !bot.shared_from && !branches.length) { host.innerHTML = ''; return; }
     if (bot.shared_from && !branches.some(b => b.id === slug)) branches.push(bot);
-    const mine = branches.find(b => b.operator === S.me?.id);
-    const make = data.shared && original?.operator !== S.me?.id && !mine;
+    const mine = branches.find(b => b.owner_id === S.me?.id);
+    const make = data.shared && original?.owner_id !== S.me?.id && !mine;
     // With no branches yet the picker has nothing to choose, so the button alone offers a branch.
     const pick = branches.length > 0;
     host.innerHTML = `${pick ? `<select aria-label="Branch" aria-description="Press Enter to open" data-branch-picker>
@@ -63,7 +63,7 @@ async function botBranchesLoad(slug) {
 async function botBranchCreate(source) {
   try {
     const data = await get('/v2/computers');
-    const owned = (data.computers || []).filter(c => !c.revoked_at && c.operator === S.me?.id);
+    const owned = (data.computers || []).filter(c => !c.revoked_at && c.owner_id === S.me?.id);
     const family = new Set(S.emps.filter(e => e.id === source || e.shared_from === source).map(e => e.id));
     const occupied = new Set(S.emps.filter(e => family.has(e.id)).map(e => e.machine?.runner_id || e.assignment?.runner_id).filter(Boolean));
     const computers = owned.filter(c => !occupied.has(c.id) && !(c.bots || []).some(bot => family.has(typeof bot === 'string' ? bot : bot.id || bot.slug)));

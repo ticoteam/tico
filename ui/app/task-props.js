@@ -15,7 +15,7 @@ const PROP_ICON = {
 // who may change what (the server holds the rules; this only hides controls that could never work)
 function taskPropRights(t) {
   const me = myActor(), mover = canMove();
-  const party = !!me && [t.owner, t.requester, taskRequester(t)].includes(me);
+  const party = !!me && [t.owner_id, t.requester_id, taskRequester(t)].includes(me);
   const live = !taskFinished(t);
   const onTask = !!me && Object.values(t.roles || {}).some(actors => actors.includes(me));
   return {mover, party, live, edit: (mover || party) && live, links: mover && live, reopen: mover || party,
@@ -53,7 +53,7 @@ function taskPropsHTML(t, opts = {}) {
   const statusName = STATUS_WORD[t.status] || String(t.status || '');
   rows.push(row('status', 'Status', txt(statusName), {edit: r.edit || (!r.live && r.reopen), words: statusName}));
   // Owner and who asked
-  rows.push(row('owner', 'Owner', actorFace(t.owner, 16) + txt(actorLabel(t.owner)), {edit: r.edit, words: actorLabel(t.owner),
+  rows.push(row('owner', 'Owner', actorFace(t.owner_id, 16) + txt(actorLabel(t.owner_id)), {edit: r.edit, words: actorLabel(t.owner_id),
     extra: t.private ? '<small>Reassigning grants the new assignee access and removes the previous assignee’s access unless they requested the task.</small>' : ''}));
   const asker = taskRequester(t);
   rows.push(row('asker', 'Asked by', asker ? actorFace(asker, 16) + txt(actorLabel(asker)) : txt('Unknown'), {words: actorLabel(asker) || 'Unknown', empty: !asker}));
@@ -61,20 +61,20 @@ function taskPropsHTML(t, opts = {}) {
   // Private: the label never changes; a few words beside the box say who sees it, the tooltip says it in full
   const seenBy = t.private ? (t.guest ? `Requester, owner, ${actorLabel(t.guest)}` : 'Requester and owner') : 'Everyone';
   const seenTip = t.private ? (t.guest ? `Only the requester, the assignee and ${actorLabel(t.guest)}, whom the assignee brought in, can see this task` : 'Only the requester and assignee can see a private task') : 'Visible to everyone in the company';
-  rows.push(`<div class="prop" data-prop-row="private" title="${esc(seenTip)}"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester) ? '' : 'disabled'}><span class="prop-txt">${esc(seenBy)}</span></label></span></div>`);
+  rows.push(`<div class="prop" data-prop-row="private" title="${esc(seenTip)}"><span class="prop-k">Private</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Private" data-task-private ${t.private ? 'checked' : ''} ${r.party && (!t.private || myActor() === t.requester_id) ? '' : 'disabled'}><span class="prop-txt">${esc(seenBy)}</span></label></span></div>`);
   if (roadmapTask(t)) {
     rows.push(`<div class="prop" data-prop-row="publication"><span class="prop-k">Public</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Public" data-task-public ${t.visibility === 'public' ? 'checked' : ''} ${r.reopen && !t.private ? '' : 'disabled'}><span class="prop-txt">${t.visibility === 'public' ? 'Shown on the public roadmap' : 'Team only'}</span></label></span></div>`);
     rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
   }
   // Due: a deadline (red once passed; taskDueInfo), or when a bot's parked task wakes (muted "Wakes Oct 2")
-  const dueAt = parseServerTime(t.due);
+  const dueAt = parseServerTime(t.due_at);
   const info = taskDueInfo(t);
   const dueDayAt = occurrenceDay(t) || dueAt;   // an occurrence's calendar day is its routine's, not the viewer's zone
   const dueDay = dueAt ? new Date(dueDayAt).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}) : '';
   const dueWords = !dueAt ? '' : info?.kind === 'wake' ? `${info.words.split(' ')[0]} ${dueDay}` : dueDay;
   const dueLate = !!info?.late;
   const dueISO = dueAt ? new Date(dueDayAt - new Date(dueDayAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
-  rows.push(row('due', 'Due', `<span class="prop-ic${dueLate ? ' late' : ''}">${PROP_ICON.due}</span>` + (dueAt ? `<span class="prop-txt${dueLate ? ' late' : ''}${info?.kind === 'wake' ? ' wake' : ''}">${esc(dueWords)}</span>` : txt('Add due date')),
+  rows.push(row('due', 'Due', `<span class="prop-ic${dueLate ? ' late' : ''}">${PROP_ICON.due_at}</span>` + (dueAt ? `<span class="prop-txt${dueLate ? ' late' : ''}${info?.kind === 'wake' ? ' wake' : ''}">${esc(dueWords)}</span>` : txt('Add due date')),
     {edit: r.edit, empty: !dueAt, popup: 'dialog', words: dueWords || 'none',
       extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
         + (r.edit && dueAt ? `<button type="button" class="prop-x" data-prop-clear="due" aria-label="Clear the due date" title="Clear">${TL_ICON.x}</button>` : '')}));
@@ -292,8 +292,8 @@ function taskPropsBind(d, task, change) {
       const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll('option[value]:not([value=""])');
       propMenu(d, b, {label: 'Owner', find: 'Find a person or bot', items: [...opts].map(o => {
         const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
-        return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: task.owner === actor, actor};
-      }), onPick: it => { if (it.actor !== task.owner) void save('owner', {owner: it.actor}); }});
+        return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: task.owner_id === actor, actor};
+      }), onPick: it => { if (it.actor !== task.owner_id) void save('owner', {owner: it.actor}); }});
     } else if (key === 'due') {
       const input = $('[data-prop-date]', d);
       d.focusProp = 'due';
@@ -308,8 +308,8 @@ function taskPropsBind(d, task, change) {
     } else if (key === 'parent') {
       const rows = await taskPropCandidates(task, key);
       if (!b.isConnected) return;
-      propMenu(d, b, {label: 'Part of', find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner)}`,
-        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner))}</span>`,
+      propMenu(d, b, {label: 'Part of', find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
+        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`,
         checked: taskParentId(task) === String(x.id)})), onPick: it => {
           if (taskPropLoops(task, key, TASKS_ST?.tasks || PROP_TASKS?.rows || []).has(String(it.value))) { d.propsErrs = {id: String(task.id), map: new Map([[key, 'That would make a loop.']])}; taskPropsMsgPaint(d); return; }
           if (String(it.value) !== taskParentId(task)) { d.focusProp = key; void taskRelate(d, task, {task: it.value, kind: 'parent'}); }
@@ -359,7 +359,7 @@ function taskPropsBind(d, task, change) {
     if (!r.live && r.reopen && !stepsOnly) items.push({text: 'Reopen', run: () => save('status', {status: 'open'})});
     if (task.status !== 'closed' && (r.mover || r.party)) items.push({text: 'Close task', danger: true, run: () => save('status', {close: true})});
     // Closing counts as finished work; a task made by mistake is deleted into the trash instead.
-    if (r.mover || task.requester === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {
+    if (r.mover || task.requester_id === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {
       if (!window.confirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`)) return;
       try { await post(`/v2/tasks/${encodeURIComponent(task.id)}/delete`, {}); } catch (e) { toast(e.body?.error?.code === 'has_work' ? "This task has work on it, such as a bot's turn, an approval, a bot's file or a subtask, so it can't be deleted. Close it instead." : e.message, true); return; }
       d.close(); toast('Deleted');

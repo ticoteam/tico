@@ -31,7 +31,7 @@ def during(run, w, team, i):
         held = w.sql("SELECT id FROM tasks WHERE type_id=? AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=tasks.id AND e.field='move_retry') ORDER BY created_at, id LIMIT 1",
                      (w.dev["id"],))
         if held:
-            child = w.post("tasks", {"owner": "ana", "title": "Confirm the wording with support",
+            child = w.post("tasks", {"owner_id": "ana", "title": "Confirm the wording with support",
                                      "body": "Check the new wording before this goes to review.",
                                      "relations": [{"task": held[0]["id"], "kind": "parent"}]})
             run.child = [held[0]["id"], child.get("task", child)["id"], None]
@@ -44,10 +44,10 @@ def during(run, w, team, i):
 def _outage_refusals(run):
     """{ticket id: (first refusal ts, the step it was going to)} for review moves refused while GitHub was unreadable."""
     out = {}
-    for e in run.w.sql("SELECT task_id, new, ts FROM task_events WHERE field='move_retry' ORDER BY ts, rowid"):
+    for e in run.w.sql("SELECT task_id, new, created_at FROM task_events WHERE field='move_retry' ORDER BY created_at, rowid"):
         detail = json.loads(e["new"] or "{}")
         if detail.get("outage") and e["task_id"] not in out:
-            out[e["task_id"]] = (e["ts"], detail.get("step"))
+            out[e["task_id"]] = (e["created_at"], detail.get("step"))
     return out
 
 
@@ -61,9 +61,9 @@ def outage_refused_moves(run):
 
 def no_task_for_temporary_failure(run):
     """A timeout, 5xx or 429 never files a task (for DevOps, or the board's manager when there is none)."""
-    rows = run.w.sql("SELECT e.target, t.owner FROM events e LEFT JOIN tasks t ON t.id=json_extract(e.detail,'$.task') "
+    rows = run.w.sql("SELECT e.target, t.owner_id FROM events e LEFT JOIN tasks t ON t.id=json_extract(e.detail,'$.task') "
                      "WHERE e.action='blocker.routed'")
-    return not rows, ", ".join(f"{r['owner']}: {r['target']}" for r in rows[:4])
+    return not rows, ", ".join(f"{r['owner_id']}: {r['target']}" for r in rows[:4])
 
 
 def moved_once_github_reads(run):
@@ -76,10 +76,10 @@ def moved_once_github_reads(run):
         clears = RECOVERED
         if run.child and run.child[0] == task_id:
             clears = max(clears, run.child[2] or run.end)
-        moved = w.sql("SELECT e.ts FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
-                      "AND e.field='step' AND e.ts>? AND s.name<>? ORDER BY e.ts, e.rowid LIMIT 1",
+        moved = w.sql("SELECT e.created_at FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
+                      "AND e.field='step' AND e.created_at>? AND s.name<>? ORDER BY e.created_at, e.rowid LIMIT 1",
                       (task_id, first, hold))
-        when = w.H.parse_ts(moved[0]["ts"]) if moved else None
+        when = w.H.parse_ts(moved[0]["created_at"]) if moved else None
         if not when or when > clears + slack:
             late.append(f"{w.title(task_id)} " + (f"moved {(when - clears).total_seconds() / 60:.0f} min after"
                                                    if when else "never moved"))
@@ -92,13 +92,13 @@ def told_once_per_move(run):
     w, hold = run.w, run.w.board.hold_step
     bad = []
     notices = w.sql("SELECT json_extract(refs,'$.task') task, json_extract(refs,'$.review_gate') gate, "
-                    "json_extract(refs,'$.move_retry') moved, created_at FROM messages WHERE from_actor='keeper' AND "
+                    "json_extract(refs,'$.move_retry') moved, created_at FROM messages WHERE sender_id='keeper' AND "
                     "(json_extract(refs,'$.review_gate') IS NOT NULL OR json_extract(refs,'$.move_retry'))")
     gates = [(n["task"], n["gate"]) for n in notices if n["gate"]]
     bad += [f"{w.title(t)} refusal told {gates.count((t, g))}x" for t, g in sorted(set(gates)) if gates.count((t, g)) > 1]
     for n in (n for n in notices if n["moved"]):
         real = w.sql("SELECT 1 FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? AND e.field='step' "
-                     "AND e.ts=? AND s.name<>?", (n["task"], n["created_at"], hold))
+                     "AND e.created_at=? AND s.name<>?", (n["task"], n["created_at"], hold))
         if not real:
             bad.append(f"{w.title(n['task'])} told of a move at {n['created_at'][11:16]} that was not made")
     return not bad, ", ".join(bad[:4]) + (f" (+{len(bad) - 4})" if len(bad) > 4 else "")

@@ -38,10 +38,10 @@ def rows(c, obj=None, actor=None, limit=LIMIT, before=None):
             args.append(value)
     if before:
         at, _, row_id = before.partition("|")
-        sql += " AND (at<? OR (at=? AND id<?))"
+        sql += " AND (created_at<? OR (created_at=? AND id<?))"
         args += [at, at, row_id]
     limit = max(1, min(int(limit or LIMIT), 200))
-    found = [_row(r) for r in c.execute(sql + " ORDER BY at DESC, id DESC LIMIT ?", (*args, limit + 1))]
+    found = [_row(r) for r in c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, limit + 1))]
     shown, used = [], 256
     for row in found[:limit]:
         size = len(json.dumps(row, default=str).encode()) + 1
@@ -50,7 +50,7 @@ def rows(c, obj=None, actor=None, limit=LIMIT, before=None):
         used += size
         shown.append(row)
     last = shown[-1] if len(shown) < len(found) else None
-    return {"rows": shown, "next": last and last["at"] + "|" + last["id"]}
+    return {"rows": shown, "next": last and last["created_at"] + "|" + last["id"]}
 
 
 def install(app, store, auth):

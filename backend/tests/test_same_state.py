@@ -11,7 +11,7 @@ from backend.tests.test_wake_rules import skips
 
 def jobs(c, bot):
     """Runs waiting to start (the checkpointing turn's own job is done)."""
-    return c.execute("SELECT count(*) FROM jobs WHERE bot=? AND id NOT IN (SELECT job_id FROM attempts)",
+    return c.execute("SELECT count(*) FROM jobs WHERE bot_id=? AND id NOT IN (SELECT job_id FROM attempts)",
                      (bot,)).fetchone()[0]
 
 
@@ -25,7 +25,7 @@ def setup(api):
 
 def checkpointed(api, r, title="Build 3/9"):
     """A task of cpo's whose last completed turn left a checkpoint; returns the task id."""
-    task = post(api, "tasks", {"owner": "cpo", "title": title, "body": "Build it."})
+    task = post(api, "tasks", {"owner_id": "cpo", "title": title, "body": "Build it."})
     complete_task(api, r, task["id"])
     return task["id"]
 
@@ -45,7 +45,7 @@ def check(c, tid, wake="status_check"):
     """The stall check the scheduler writes for a task that has not moved."""
     c.execute("DELETE FROM jobs WHERE id NOT IN (SELECT job_id FROM attempts)")
     task = H.task(c, tid)
-    msg = H._wake(c, task, task["owner"], "Status check: anything to report?", {"wake": wake}, trigger="stall_check")
+    msg = H._wake(c, task, task["owner_id"], "Status check: anything to report?", {"wake": wake}, trigger="stall_check")
     return msg
 
 
@@ -171,7 +171,7 @@ def test_wakes_that_are_not_plain_checks_still_run(api):
 
 def test_someone_changing_the_task_during_the_turn_leaves_no_state_to_compare(api):
     r = setup(api)
-    task = post(api, "tasks", {"owner": "cpo", "title": "Busy", "body": "Build it."})
+    task = post(api, "tasks", {"owner_id": "cpo", "title": "Busy", "body": "Build it."})
     attempt = post(api, "jobs/claim", {"next_run": True, "bot": "cpo"}, token=r["token"])["attempt"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t1"}, token=r["token"])
     post(api, f"tasks/{task['id']}/comments", {"text": "While you work: use blue."})   # a person, mid-turn
@@ -188,7 +188,7 @@ def test_another_bots_task_is_not_held_for_this_bots_checkpoint(api):
     r = setup(api)
     tid = checkpointed(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:ops' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET owner_id='bot:ops' WHERE id=?", (tid,))
         c.execute("DELETE FROM jobs WHERE id NOT IN (SELECT job_id FROM attempts)")
         task = H.task(c, tid)
         H._wake(c, task, "bot:ops", "Status check", {"wake": "status_check"}, trigger="stall_check")
@@ -198,7 +198,7 @@ def test_another_bots_task_is_not_held_for_this_bots_checkpoint(api):
 def test_synchronizing_an_existing_pr_head_with_unchanged_checks_runs_the_next_check(api):
     from backend import github as G
     r = setup(api)
-    task = post(api, "tasks", {"owner": "cpo", "title": "Review code", "body": "Build it."})
+    task = post(api, "tasks", {"owner_id": "cpo", "title": "Review code", "body": "Build it."})
     tid = task["id"]
     url = "https://github.com/acme/widget/pull/9"
     with api.app.state.store.transaction() as c:
@@ -224,7 +224,7 @@ def test_synchronizing_an_existing_pr_head_with_unchanged_checks_runs_the_next_c
 
 def test_editing_an_existing_comment_through_the_api_runs_the_next_check(api):
     r = setup(api)
-    task = post(api, "tasks", {"owner": "cpo", "title": "Use the correction", "body": "Build it."})
+    task = post(api, "tasks", {"owner_id": "cpo", "title": "Use the correction", "body": "Build it."})
     tid = task["id"]
     comment = post(api, f"tasks/{tid}/comments", {"text": "Use blue."})["comment"]
     complete_task(api, r, tid)
@@ -242,8 +242,8 @@ def test_editing_an_existing_comment_through_the_api_runs_the_next_check(api):
 
 def test_an_existing_related_task_changing_mid_turn_is_not_checkpointed_unseen(api):
     r = setup(api)
-    other = post(api, "tasks", {"owner": "ops", "title": "Related work", "body": "Do it."})
-    task = post(api, "tasks", {"owner": "cpo", "title": "Parent work", "body": "Build it."})
+    other = post(api, "tasks", {"owner_id": "ops", "title": "Related work", "body": "Do it."})
+    task = post(api, "tasks", {"owner_id": "cpo", "title": "Parent work", "body": "Build it."})
     tid = task["id"]
     with api.app.state.store.transaction() as c:
         H.TR.relate(c, "human:ana", tid, other["id"], "related")
@@ -294,7 +294,7 @@ def test_a_second_active_turn_keeps_status_retry_and_diagnostic_recovery(api, mo
     r = setup(api)
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": [LANES],
                                   "readiness": {"cpo": True, "ops": True}}, token=r["token"])
-    task = post(api, "tasks", {"owner": "cpo", "title": "Resume unchanged work", "body": "Build it."})
+    task = post(api, "tasks", {"owner_id": "cpo", "title": "Resume unchanged work", "body": "Build it."})
     tid = task["id"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET next_run=0 WHERE id=?", (tid,))
@@ -335,8 +335,8 @@ def test_a_related_task_changed_by_another_lane_of_the_same_bot_is_not_seen(api)
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capacity": 8,
                                   "capabilities": [LANES], "readiness": {"cpo": True, "ops": True}},
          token=r["token"])
-    first = post(api, "tasks", {"owner": "cpo", "title": "Lane A", "body": "Build it."})
-    second = post(api, "tasks", {"owner": "cpo", "title": "Lane B", "body": "Build it too."})
+    first = post(api, "tasks", {"owner_id": "cpo", "title": "Lane A", "body": "Build it."})
+    second = post(api, "tasks", {"owner_id": "cpo", "title": "Lane B", "body": "Build it too."})
     with api.app.state.store.transaction() as c:
         H.TR.relate(c, "human:ana", first["id"], second["id"], "related")
     a, b = [post(api, "jobs/claim", {"next_run": True, "bot": "cpo"}, token=r["token"])["attempt"]
@@ -346,7 +346,7 @@ def test_a_related_task_changed_by_another_lane_of_the_same_bot_is_not_seen(api)
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["lane"]}, token=r["token"])
     with api.app.state.store.read() as c:
         before = H.task(c, first["id"])
-        comments_before = c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND from_actor<>?",
+        comments_before = c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND sender_id<>?",
                                     (first["conversation_id"], H.KEEPER)).fetchone()[0]
     # B's leased identity changes an already-related General task while A runs.
     post(api, f"tasks/{second['id']}", {"status": "waiting", "version": b["task"]["version"]}, token=b["token"])
@@ -354,7 +354,7 @@ def test_a_related_task_changed_by_another_lane_of_the_same_bot_is_not_seen(api)
     post(api, f"attempts/{b['id']}/complete", {"outcome": "completed", "text": "B moved.", "last_seq": 0},
          token=r["token"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND from_actor<>?",
+        assert c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND sender_id<>?",
                          (first["conversation_id"], H.KEEPER)).fetchone()[0] == comments_before
     post(api, f"attempts/{a['id']}/complete", {"outcome": "completed", "text": "A checkpoint.", "last_seq": 0},
          token=r["token"])

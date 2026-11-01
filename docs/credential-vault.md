@@ -144,7 +144,7 @@ that this server could not keep. Secrets an older release kept in plaintext are 
 idempotent, and when the vault cannot be opened at start they are sealed on the next start or the next use.
 
 **Company model subscriptions.** A Claude setup-token, ChatGPT login or model API key an owner or admin saves in
-Settings > Models ([Computers](computers.md#company-subscriptions)) is sealed the same way (`model_subscriptions.sealed`,
+Settings > Models ([Computers](computers.md#company-subscriptions)) is sealed the same way (`model_subscriptions.sealed_at`,
 bound to the subscription), saved through the vault's keyed request fingerprint, and never returned by a list. Bots, the
 Assistant or BotOps acting for a person, and support sessions cannot save one. Only a run its claim handed the
 subscription (its computer's, recorded in `attempt_subscriptions`) reads the value, from `credential-runtime` with its

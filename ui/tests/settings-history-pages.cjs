@@ -30,7 +30,7 @@ const {unrouted} = require('./support/routes.cjs');
       return {changes: slice, next_before: start + 2 < rows.length ? slice.at(-1).id : null};
     };
     const bot = (name, display_name, revision) => ({name, display_name, description: '', status: 'active',
-      state: 'active', host: 'keeper', can_chat: true, can_manage: true, operator: 'ana',
+      state: 'active', host: 'keeper', can_chat: true, can_manage: true, owner_id: 'ana',
       my_access: {see: true, read: true, write: true}, schedules: [], revision, thread_mode: 'personal', users: [],
       online: true, machine: null});
     const bots = [bot('helper', 'Helper', 3), bot('ops', 'Ops', 5)];

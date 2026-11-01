@@ -78,7 +78,7 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       await sheet.locator('button[type="submit"]').click();
       await page.waitForFunction(() => !document.querySelector('#goal-sheet')?.open);
       assert.deepEqual(goalWrites(writes), [
-        ['/api/v2/goals', {title: 'Close 10 deals', owner: 'human:ben'}],
+        ['/api/v2/goals', {title: 'Close 10 deals', owner_id: 'human:ben'}],
         ['/api/v2/goals/g-3/kpis', {name: 'Deals closed', kind: 'improve', target: 10, deadline: '2026-12-31'}]]);
 
       // Remove it from its sheet.
@@ -125,7 +125,7 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       await shot(page, 'desktop-goal-sheet');
       await sheet.locator('button[type="submit"]').click();
       await page.waitForFunction(() => !document.querySelector('#goal-sheet')?.open);
-      assert.deepEqual(goalWrites(writes), [['/api/v2/goals', {title: 'Ship the Acme mobile app', owner: 'company'}]]);
+      assert.deepEqual(goalWrites(writes), [['/api/v2/goals', {title: 'Ship the Acme mobile app', owner_id: 'company'}]]);
 
       // Hand Sales Lead's goal to the SDR, and Details opens the owner's panel.
       writes.length = 0;
@@ -133,7 +133,7 @@ const longPress = (page, selector) => page.evaluate(async sel => {
       await sheet.locator('select[name="owner"]').selectOption('bot:sdr');
       await sheet.locator('button[type="submit"]').click();
       await page.waitForFunction(() => !document.querySelector('#goal-sheet')?.open);
-      assert.deepEqual(goalWrites(writes), [['/api/v2/goals/g-sales', {owner: 'bot:sdr'}]]);
+      assert.deepEqual(goalWrites(writes), [['/api/v2/goals/g-sales', {owner_id: 'bot:sdr'}]]);
       await page.locator('#goal-tree .gt-row[data-owner="bot:sdr"][data-goal="g-sales"] .gt-goal').click();
       await sheet.locator('[data-gs-details]').click();
       await page.locator('#goal-panel[open][data-owner="bot:sdr"]').waitFor();

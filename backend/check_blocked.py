@@ -57,7 +57,7 @@ def blocked(c, child):
     if child["status"] in H.ACTIVE_STATUSES:
         blocker = H.task(c, TR.live_blocker(c, child["id"], H.ACTIVE_STATUSES) or "")
         if blocker:
-            return {"why": f"it waits on {blocker['title']}", "on": blocker["owner"]}
+            return {"why": f"it waits on {blocker['title']}", "on": blocker["owner_id"]}
     return None
 
 
@@ -91,12 +91,12 @@ def notify(c, row):
     H = _H()
     row = H.task(c, row["id"])
     since = row.get("blocked_since")
-    if not since or row.get("blocked_kind") != "check" or not H.is_bot(row["owner"]):
+    if not since or row.get("blocked_kind") != "check" or not H.is_bot(row["owner_id"]):
         return None
     if c.execute("SELECT 1 FROM events WHERE action='task.check_blocked' AND target=? "
                  "AND json_extract(detail,'$.since')=?", (row["id"], since)).fetchone():
         return None
-    sent = H._wake(c, row, row["owner"], f"Blocked: {row['title']}\n{row['blocked_reason']}\n"
+    sent = H._wake(c, row, row["owner_id"], f"Blocked: {row['title']}\n{row['blocked_reason']}\n"
                    "It goes back to its step by itself when the check works again.",
                    refs={"news": "check_blocked"}, quiet_bots=True)
     H.event(c, H.KEEPER, "task.check_blocked", row["id"], {"since": since, "message": (sent or {}).get("id")})
@@ -128,7 +128,7 @@ def changed(c, task_id):
     H = _H()
     from . import task_relations as TR
     row = H.task(c, task_id)
-    if not row or not H.is_bot(row["owner"]) or not kind(c, row):
+    if not row or not H.is_bot(row["owner_id"]) or not kind(c, row):
         return
     parent = TR.parent_of(c, task_id)
     if parent:

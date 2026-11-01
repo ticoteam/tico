@@ -247,7 +247,7 @@ def record(store, send, timestamp, status, head, error, abort, ms):
     now = H.now()
     with store.transaction() as c:
         n = (c.execute("SELECT max(n) FROM webhook_attempts WHERE send_id=?", (send["id"],)).fetchone()[0] or 0) + 1
-        c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,at,timestamp_sent,status,ms,response_head,error) "
+        c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,created_at,timestamp_sent,status,ms,response_head,error) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (send["id"], send["webhook_id"], n, now, timestamp, status, ms,
                                                 head[:1024], error[:300]))
         if status is not None and 200 <= status < 300:
@@ -317,7 +317,7 @@ def prune(c, now=None):
               (*TERMINAL, cutoff))
     c.execute("DELETE FROM webhook_attempts WHERE send_id NOT IN (SELECT id FROM webhook_sends)")
     c.execute("DELETE FROM webhook_attempts WHERE rowid IN (SELECT rowid FROM (SELECT rowid, row_number() OVER "
-              "(PARTITION BY webhook_id ORDER BY at DESC, n DESC) AS rank FROM webhook_attempts) WHERE rank>?)",
+              "(PARTITION BY webhook_id ORDER BY created_at DESC, n DESC) AS rank FROM webhook_attempts) WHERE rank>?)",
               (KEEP_ATTEMPTS,))
     c.execute("DELETE FROM webhooks WHERE deleted_at IS NOT NULL AND deleted_at<? "
               "AND NOT EXISTS(SELECT 1 FROM webhook_sends s WHERE s.webhook_id=webhooks.id)", (cutoff,))

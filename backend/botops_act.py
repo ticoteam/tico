@@ -40,20 +40,20 @@ def own_run(c, auth, attempt_id):
     a watcher's task, a stopped job's request, a routine BotOps set itself while it worked for someone, a task someone
     commented on."""
     from .store import H
-    turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.bot=?",
+    turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=? AND a.bot_id=?",
                      (attempt_id, H.FLEET_MAINTAINER)).fetchone() if attempt_id else None
     msg = H.message(c, turn["message_id"]) if turn and turn["message_id"] else None
     refs = (msg or {}).get("refs") or {}
     # A converted routine's task is opened by its automation as BotOps itself (backend/automation_actions.py).
-    if not msg or msg["from_actor"] not in (H.KEEPER, "bot:" + H.FLEET_MAINTAINER):
+    if not msg or msg["sender_id"] not in (H.KEEPER, "bot:" + H.FLEET_MAINTAINER):
         return False
-    if msg["from_actor"] != H.KEEPER and not refs.get("automation"):
+    if msg["sender_id"] != H.KEEPER and not refs.get("automation"):
         return False
     if any(refs.get(key) for key in OTHERS_WORDS):
         return False
     task_id = H.message_task_id(msg)
     if not task_id:
-        return msg["from_actor"] == H.KEEPER and msg["kind"] == "notice" and refs.get("wake") == "update"
+        return msg["sender_id"] == H.KEEPER and msg["kind"] == "notice" and refs.get("wake") == "update"
     task = H.task(c, task_id)
     if refs.get("automation"):
         return _owners_automation_task(c, auth, task, refs)
@@ -65,9 +65,9 @@ def _owners_routine_task(c, auth, task):
     the routine (created and since changed only by them), the task itself, and anything said on it."""
     from .store import H
     keeper, botops = H.KEEPER, "bot:" + H.FLEET_MAINTAINER
-    if not task or task["requester"] != keeper or task["owner"] != botops:
+    if not task or task["requester_id"] != keeper or task["owner_id"] != botops:
         return False
-    made = c.execute("SELECT actor FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
+    made = c.execute("SELECT actor FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
                      (task["id"],)).fetchone()
     if not made or made["actor"] != keeper:
         return False
@@ -87,11 +87,11 @@ def _owners_automation_task(c, auth, task, refs):
     from .store import H
     botops = "bot:" + H.FLEET_MAINTAINER
     automation_id = str(refs.get("automation") or "")
-    if not task or task["owner"] != botops or task["requester"] not in (H.KEEPER, botops):
+    if not task or task["owner_id"] != botops or task["requester_id"] not in (H.KEEPER, botops):
         return False
-    row = c.execute("SELECT owner, flow, trigger_type FROM automations WHERE id=? AND deleted_at IS NULL",
+    row = c.execute("SELECT owner_id, flow, trigger_type FROM automations WHERE id=? AND deleted_at IS NULL",
                     (automation_id,)).fetchone()
-    if not row or row["owner"] != botops or row["trigger_type"] != "schedule" \
+    if not row or row["owner_id"] != botops or row["trigger_type"] != "schedule" \
             or refs.get("trigger_source") != "automation:" + automation_id:
         return False
     # The run that opened this task is that automation's own, from its schedule or a Run now, not a chained event.
@@ -111,7 +111,7 @@ def _owners_automation_task(c, auth, task, refs):
         actors.add(r["actor"])
     if not actors or any(a != H.KEEPER and not _is_owner(c, auth, a) for a in actors):
         return False
-    return _untouched(c, task, task["requester"])
+    return _untouched(c, task, task["requester_id"])
 
 
 def _owners_routine(c, auth, schedule_id):
@@ -136,7 +136,7 @@ def _untouched(c, task, writer):
     if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('title','body') AND actor NOT IN (?,?) LIMIT 1",
                  (task["id"], writer, H.KEEPER)).fetchone():
         return False
-    said = c.execute("SELECT 1 FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? AND m.from_actor NOT IN (?,?,?) "
+    said = c.execute("SELECT 1 FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? AND m.sender_id NOT IN (?,?,?) "
                      "LIMIT 1", (task["id"], H.KEEPER, botops, writer)).fetchone()
     return not said
 
@@ -156,7 +156,7 @@ def lend_lapsed(c, task):
     than the requester moved it back from done, closed or declined (the request it carried was finished), or the
     requester last spoke on it more than LEND_MAX_DAYS ago."""
     from .store import H
-    requester = task["requester"]
+    requester = task["requester_id"]
     for row in c.execute("SELECT * FROM task_events WHERE task_id=? AND field='status' AND old IN (?,?,?) "
                          "AND new NOT IN (?,?,?)", (task["id"], *TERMINAL, *TERMINAL)):
         if row["actor"] != requester or dict(row).get("via"):
@@ -166,15 +166,15 @@ def lend_lapsed(c, task):
                     "again, even after they reply. Only a run their own comment on it or their message in their BotOps chat "
                     "starts has their rights: in such a run, send no on_behalf_of; otherwise ask them there and end this run")
     spoke = []
-    made = c.execute("SELECT actor,detail FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
+    made = c.execute("SELECT actor,detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
                      (task["id"],)).fetchone()
     if made and made["actor"] == requester and H._json(made["detail"], {}).get("via") != "assistant":
         spoke.append(task["created_at"])
     origin = H.message(c, task["request_id"]) if task.get("request_id") else None
-    if origin and origin["from_actor"] == requester:
+    if origin and origin["sender_id"] == requester:
         spoke.append(origin["created_at"])
     comment = c.execute("SELECT max(m.created_at) FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? "
-                        "AND m.from_actor=? AND json_extract(m.refs,'$.comment') IS NOT NULL "
+                        "AND m.sender_id=? AND json_extract(m.refs,'$.comment') IS NOT NULL "
                         "AND json_extract(m.refs,'$.via') IS NULL AND json_extract(m.refs,'$.assistant') IS NULL",
                         (task["id"], requester)).fetchone()[0]
     if comment:

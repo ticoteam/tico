@@ -65,14 +65,14 @@ def test_approve_emits_once_and_reimports_never_undo_review_privacy(api):
     assert not get(api, 'tasks')['tasks']
     approved = review(api, made['id'], token='ana-test', private=False)
     assert approved['review_state'] == 'live' and approved['delivery']['task_id']
-    assert len([t for t in get(api, 'tasks')['tasks'] if t['owner'] == 'bot:ops']) == 1
+    assert len([t for t in get(api, 'tasks')['tasks'] if t['owner_id'] == 'bot:ops']) == 1
     review(api, made['id'], token='ana-test')
     imported(api, token='ana-test', transcript='Sam: Corrected transcript.', private=True)
     assert get(api, 'meetings/' + made['id'])['private'] is False
     post(api, f"meetings/{made['id']}/review", {'action': 'dismiss'}, expected=409)
     assert get(api, 'meetings/' + made['id'])['review_state'] == 'live'
     review(api, made['id'], token='ana-test')
-    assert len([t for t in get(api, 'tasks')['tasks'] if t['owner'] == 'bot:ops']) == 1
+    assert len([t for t in get(api, 'tasks')['tasks'] if t['owner_id'] == 'bot:ops']) == 1
 
 
 def test_dismiss_survives_sync_restore_and_batch_selection_is_atomic(api):
@@ -103,7 +103,7 @@ def test_legacy_hub_migration_backfills_live_and_cloud_restart_keeps_queue(api, 
     for version, script in enumerate(H.MIGRATIONS[:19], 1):
         H._apply(db, script)
         db.execute(f'PRAGMA user_version={version}')
-    db.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+    db.execute("INSERT INTO meetings(id,title,owner_id,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
                ('legacy', 'Meeting', 'ben@acme.example', json.dumps({'id': 'legacy', 'kind': 'meeting'}), H.now(), H.now()))
     H.migrate(db)
     assert db.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
@@ -138,7 +138,7 @@ def test_released_migrations_remain_in_place(tmp_path, version):
         H._apply(db, script)
         db.execute(f'PRAGMA user_version={i}')
     db.execute("INSERT INTO blob_locations VALUES('digest','example-bucket','2026-10-01')")
-    db.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+    db.execute("INSERT INTO meetings(id,title,owner_id,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
                ('released', 'Existing notes', 'ben@acme.example', '{}', H.now(), H.now()))
     H.migrate(db)
     assert db.execute('SELECT bucket FROM blob_locations').fetchone()[0] == 'example-bucket'

@@ -343,8 +343,8 @@ def test_needs_you_supplements_deduplicate_beyond_first_page_without_leaking_pri
 
 def test_attention_counts_include_approvals_in_whole_list():
     from backend import views
-    items = [{"kind": "task", "id": "owned", "owner": "human:ana", "requester": "bot:ops", "status": "open"},
-             {"kind": "waiting", "id": "wait", "owner": "bot:ops", "requester": "human:ana", "status": "waiting", "waiting_on": "human:ana"},
+    items = [{"kind": "task", "id": "owned", "owner_id": "human:ana", "requester_id": "bot:ops", "status": "open"},
+             {"kind": "waiting", "id": "wait", "owner_id": "bot:ops", "requester_id": "human:ana", "status": "waiting", "waiting_on": "human:ana"},
              {"kind": "approval", "id": "approval", "requested_by": "bot:ops"},
              {"kind": "approval", "id": "other", "requested_by": "human:ben"}]
     assert views.needs_bots(items, "human:ana") == {"bot:ops": 3}
@@ -379,7 +379,7 @@ def test_bot_filter_finds_an_api_saved_wait_and_drops_it_on_resolution(api):
     out = get(api, "bots/ops/task-tabs/tasks")
     assert out["tabs"][0]["count"] == 1 and out["tabs"][0]["ids"] == [tid]
     assert out["tasks"][0]["waiting_on"] is None
-    assert out["tasks"][0]["relations"]["blocks"][0]["owner"] == "bot:cpo"
+    assert out["tasks"][0]["relations"]["blocks"][0]["owner_id"] == "bot:cpo"
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:cpo", pre, status="done", note="Reviewed.")
     out = get(api, "bots/ops/task-tabs/tasks")

@@ -17,7 +17,7 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     page.on('pageerror', e => errors.push(e.message));
     const now = Date.now(), at = ms => new Date(now + ms).toISOString();
     const tool = (name, runtime) => ({name, runtime, installed: true, version: '1.0', managed: true, state: 'idle', wanted: true, pinned: false, update_available: false, detail: ''});
-    const box = {id: 'box', label: 'Team box', operator: 'ana', bots: ['writer'], platform: 'linux', version: '0.3.53',
+    const box = {id: 'box', label: 'Team box', owner_id: 'ana', bots: ['writer'], platform: 'linux', version: '0.3.53',
       last_seen_at: at(-3000), readiness_at: at(-60000), needed_runtimes: ['codex'], bot_runtimes: ['codex'],
       readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}, claude: {installed: true, authenticated: 'missing'},
         grok: {installed: false}},
@@ -51,8 +51,8 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
       const config = {version: '0.1.0', app_name: 'Tico'};
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
-      if (p === '/api/employees') return json([{name: 'writer', display_name: 'Writer', status: 'active', operator: 'ana', can_manage: true,
-        users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', operator: 'ana'}}]);
+      if (p === '/api/employees') return json([{name: 'writer', display_name: 'Writer', status: 'active', owner_id: 'ana', can_manage: true,
+        users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', owner_id: 'ana'}}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});

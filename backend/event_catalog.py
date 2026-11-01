@@ -41,7 +41,7 @@ _TASK = "5b1d2c0e-7f34-4a9e-8c1b-2f6a9d3e4b10"
 
 def _task(**more):
     return {"id": _TASK, "title": "Renew the acme.example domain", "status": "doing", "step": "doing",
-            "owner": "bot:ops", "requester": "human:ana", "actor": "bot:ops", **more}
+            "owner_id": "bot:ops", "requester_id": "human:ana", "actor": "bot:ops", **more}
 
 
 def _change(field, old, new, **more):

@@ -56,7 +56,7 @@ def test_the_safe_identity_shows_scheme_host_and_port_and_nothing_else():
 def events(api, action=destinations.EVENT):
     with api.app.state.store.read() as c:
         return [dict(r, detail=json.loads(r["detail"])) for r in
-                c.execute("SELECT * FROM events WHERE action=? ORDER BY ts, id", (action,))]
+                c.execute("SELECT * FROM events WHERE action=? ORDER BY created_at, id", (action,))]
 
 
 def everything(api, receipts=True):

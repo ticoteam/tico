@@ -31,7 +31,7 @@ def fake_claude(api, live, tmp_path, rust_binary):
 
 def job_for(api, message_id):
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT id, bot, state, attempt_id FROM jobs WHERE message_id=?", (message_id,)).fetchone()
+        row = c.execute("SELECT id, bot_id, state, attempt_id FROM jobs WHERE message_id=?", (message_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -61,7 +61,7 @@ def test_a_bot_hands_a_message_to_another_bot_that_needs_action_and_the_other_bo
 
     attempt = post(api, "jobs/claim", {"next_run": True, "bot": "cpo"}, token=r["token"])["attempt"]
     assert attempt["bot"] == "cpo" and attempt["message"]["id"] == handoff["id"]
-    assert attempt["message"]["from_actor"] == "bot:ops"
+    assert attempt["message"]["sender_id"] == "bot:ops"
 
 
 def test_an_approval_a_bot_asks_for_is_decided_by_its_owner_and_consumed_once(api):

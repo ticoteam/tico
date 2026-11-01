@@ -285,8 +285,8 @@ function taskModalBind(d, task, full = false) {
       const have = new Set(Object.values(task.relations || {}).flat().map(r => String(r.id)));
       const rows = (await taskPropCandidates(task, kind.value)).filter(x => !have.has(String(x.id)));
       if (!addRelated.isConnected) return;
-      propMenu(d, addRelated, {label: kind.text, find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner)}`,
-        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner))}</span>`})),
+      propMenu(d, addRelated, {label: kind.text, find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
+        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`})),
         onPick: it => taskRelate(d, task, {task: it.value, kind: kind.value})});
     }, 0)});
   d.querySelectorAll('[data-drop-rel]').forEach(b => b.onclick = () => {
@@ -362,7 +362,7 @@ function taskRunModelBody(run, rows, pick, may = true) {
 }
 // Shown on a bot's task once GET /v2/tasks/{id} has answered (list rows leave out run_model).
 function taskRunModelHTML(t) {
-  if (!String(t.owner || '').startsWith('bot:') || t.run_model === undefined) return '';
+  if (!String(t.owner_id || '').startsWith('bot:') || t.run_model === undefined) return '';
   return `<section class="tsec task-run-model" data-task-run-model aria-label="Runs on">${taskRunModelBody(t.run_model, TASK_RUN_ROWS, taskRunPick(t.run_model), taskRunMay(t))}</section>`;
 }
 // A model change redraws the harness and effort it offers, starting on that model's own (or the task's saved ones when
@@ -569,7 +569,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
     }
     const say = TASK_EVENT_WORDS[x.field] ? TASK_EVENT_WORDS[x.field](x.new, x) : `changed ${x.field}`;
     // A result mirrored into a comment keeps its full text there; the event still records the status move.
-    const mirrored = x.note && all?.some(y => y.kind === 'comment' && y.message?.from_actor === x.actor
+    const mirrored = x.note && all?.some(y => y.kind === 'comment' && y.message?.sender_id === x.actor
       && String(y.message.body || '').trim() === String(x.note).trim() && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 5000);
     // A QA waiver is a person's decision, never a verdict: it keeps its own mark and its full reason.
     const waived = x.field === 'qa_waiver' ? ' <span class="verdict-chip waived" data-qa-waiver>QA waived</span>' : '';
@@ -583,18 +583,18 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
   const kind = m.kind === 'ask' ? '<span class="pill needs">question</span>' : m.kind === 'answer' ? '<span class="pill">answer</span>' : '';
   // As in a bot's chat with several people: a person's line is a bubble on the right under their name (yours needs
   // none), the bot's reads as page text under its own.
-  const person = !!actorPerson(m.from_actor), me = m.from_actor === myActor();
-  return `<div class="tcomment tmsg${person ? ' you' : ''}${me ? ' from-me' : ''}${String(m.from_actor || '').startsWith('bot:') ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.from_actor, m.refs?.via)}</span>${kind}${roadmapCommentMark(m, taskId)}
+  const person = !!actorPerson(m.sender_id), me = m.sender_id === myActor();
+  return `<div class="tcomment tmsg${person ? ' you' : ''}${me ? ' from-me' : ''}${String(m.sender_id || '').startsWith('bot:') ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.sender_id, m.refs?.via)}</span>${kind}${roadmapCommentMark(m, taskId)}
       ${m.refs?.quiet ? '<span class="muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}
       <span class="spacer"></span>${m.edited_at ? `<span class="muted" title="Edited ${esc(fmt(m.edited_at))}">edited</span>` : ''}<time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
     <div class="bubble ${person ? 'you' : 'bot'}">${body ? `<div class="md">${safeMd(body)}</div>` : ''}
-    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, askTargetOf(m), m.from_actor, taskId, files, canAnswer) : ''}</div>${taskStepsHTML(m)}</div>`;
+    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, askTargetOf(m), m.sender_id, taskId, files, canAnswer) : ''}</div>${taskStepsHTML(m)}</div>`;
 }
 // A bot's work on this task stopped on an account (backend/reconnects.py): its one line, the fix for the person who
 // can make it, and Reconnected once it works. A missing secret's fix is its credential card (ui/credential-card.js).
 function reconnectCardHTML(m) {
   const r = m.refs.reconnect, fix = r.fix || {}, status = r.status || 'open', fixed = status === 'fixed', mine = r.person === myActor();
-  const head = `<div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.from_actor)}</span><span class="spacer"></span><time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>`;
+  const head = `<div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.sender_id)}</span><span class="spacer"></span><time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>`;
   const wrap = inner => `<div class="tcomment tmsg bot" data-message="${esc(m.id || '')}">${head}${inner}</div>`;
   // A retired card asks nothing: its request is cancelled, so it shows Not needed, never a card to save.
   if (r.service === 'secret' && mine && m.refs.credential_request && status !== 'retired') {
@@ -983,7 +983,7 @@ async function taskChatSend(state) { return taskCommentSend(state); }
 function issueModalHTML(i) {
   const running = new Set((S.status?.active || []).map(a => a.issue));
   const tag = boardTag(i, running);
-  return `<div class="tmodal-head">${avatar(i.owner, 22, stateOf(i.owner))}<span class="who">${empName(i.owner)}</span>
+  return `<div class="tmodal-head">${avatar(i.owner_id, 22, stateOf(i.owner_id))}<span class="who">${empName(i.owner_id)}</span>
       <span class="mono muted">#${esc(i.number)}</span>${statusPill(i)}${i.priority && i.priority !== 'p2' ? prioPill(i) : ''}
       ${tag ? `<span class="tag">${esc(tag)}</span>` : ''}${isRecurringIssue(i) ? '<span class="gl" title="Scheduled">⟳</span>' : ''}
       <span class="spacer"></span><span class="muted tnum">${esc(ago(i.state === 'CLOSED' ? i.closedAt : i.updatedAt))}</span>
@@ -1044,7 +1044,7 @@ function hubModalHTML(t, it, opts = {}) {
   const pos = opts.peek ? taskPeekPos(t.id) : '';
   // Done for the owner; Close as the "…" menu allows it (who may move tasks, or the task's parties)
   const rights = taskPropRights(t);
-  const canDone = !finished && t.status !== 'done' && !!myActor() && myActor() === t.owner && !pipelineStepsOnly(t);
+  const canDone = !finished && t.status !== 'done' && !!myActor() && myActor() === t.owner_id && !pipelineStepsOnly(t);
   const snooze = taskHold(t, 'snoozed') || {};
   const canClose = t.status !== 'closed' && (rights.mover || rights.party) && !pipelineStepsOnly(t);
   // The thread view's own header pieces: back, the title in the bar, and Details (task-modal.css hides the rest).
@@ -1053,7 +1053,7 @@ function hubModalHTML(t, it, opts = {}) {
       <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}<span class="pill tstatus">${esc(statusWord)}</span>${statusWord === 'Waiting' || finished ? '' : taskWaitTag(t)}${blockers.length && !finished
       ? `<span class="tchip-blocked" title="Blocked by ${esc(blockers.map(b => b.title).join(', '))}">blocked</span>` : ''}${taskSnoozed(t)
       ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="Snoozed until ${esc(fmt(snooze.until))} by ${esc(actorLabel(snooze.by))}${snooze.reason ? ` · ${esc(snooze.reason)}` : ''}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>Snoozed to ${esc(snoozeDay(t))}${chipNoteHTML(snooze.reason)}</button>` : ''}
-      ${finished ? '' : taskScreenLinkHTML(t.owner)}
+      ${finished ? '' : taskScreenLinkHTML(t.owner_id)}
       <span class="spacer"></span>${pos ? `<span class="peek-pos tnum" title="J / K or ↑ / ↓ move to the next or previous task">${esc(pos)}</span>` : ''}
       <span class="muted tnum tmodal-age" title="${esc(`${taskSourceLine(t)}${t.created_at ? ' ' + fmt(t.created_at) : ''} · Updated ${fmt(it.updated_at)}`)}">${esc(ago(it.updated_at))}</span>
       ${canDone ? `<button class="ghost tmodal-act" type="button" data-task-finish="done" title="Mark this task done">${PROP_ICON.check}<span>Done</span></button>` : ''}

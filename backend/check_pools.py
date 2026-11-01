@@ -83,33 +83,33 @@ def capture_attempt(c, turn_id):
     if not check or not ticket_id or not (is_check_title(c, H.task(c, ticket_id), check.get("title"))
                                           or step_flow.check_step(c, check)):
         return None
-    finished_owner = check.get("owner")
+    finished_owner = check.get("owner_id")
     head = str(check.get("verdict_head") or "").lower()
     if not head:
         event = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
-                          "ORDER BY ts DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
+                          "ORDER BY created_at DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
         head = str(event[0] if event else "").split(",")[0].lower()
     from . import check_independence
     result = check_independence.capture_attempt(c, ticket_id, check["id"], head, turn_id)
     verdict = str(check.get("verdict") or "").lower()
-    decided = c.execute("SELECT ts FROM task_events WHERE task_id=? AND field='verdict' "
-                        "ORDER BY ts DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
+    decided = c.execute("SELECT created_at FROM task_events WHERE task_id=? AND field='verdict' "
+                        "ORDER BY created_at DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
     started = c.execute("SELECT started_at FROM turns WHERE id=?", (turn_id,)).fetchone()
     from . import verdict_moves
-    if verdict and decided and started and decided["ts"] >= started["started_at"]:
+    if verdict and decided and started and decided["created_at"] >= started["started_at"]:
         verdict_moves.after_capture(c, check["id"], head, turn_id)
     elif not verdict and check.get("status") == "done" and step_flow.check_step(c, check):
         # Finished with no verdict: its comments are the feedback, and the ticket goes to the step's on_fail.
         if verdict_moves.after_verdict(c, check):
             verdict_moves.after_capture(c, check["id"], head, turn_id)
     current = H.task(c, check["id"])
-    if current and current.get("status") in H.ACTIVE_STATUSES and current.get("owner") == finished_owner:
+    if current and current.get("status") in H.ACTIVE_STATUSES and current.get("owner_id") == finished_owner:
         return result
     done = c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_pool_freed' AND new=? LIMIT 1",
                      (check["id"], turn_id)).fetchone()
     if not done:
         H._task_event(c, check["id"], H.KEEPER, "check_pool_freed", None, turn_id, "")
-        freed(c, {**check, "owner": finished_owner})
+        freed(c, {**check, "owner_id": finished_owner})
     return result
 
 
@@ -206,7 +206,7 @@ def open_checks(c, slug):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     rows = c.execute(f"SELECT t.title, p.type_id FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
                      f"JOIN tasks p ON p.id=r.to_task "
-                     f"WHERE t.owner=? AND t.status IN ({marks})", ("bot:" + slug, *H.ACTIVE_STATUSES)).fetchall()
+                     f"WHERE t.owner_id=? AND t.status IN ({marks})", ("bot:" + slug, *H.ACTIVE_STATUSES)).fetchall()
     return sum(1 for title, type_id in rows if is_check_title(c, {"type_id": type_id}, title))
 
 
@@ -309,7 +309,7 @@ def builder_makers(c, ticket, whole=False):
         return set()
     if built:
         return set(built)
-    owner = ticket.get("owner") or ""
+    owner = ticket.get("owner_id") or ""
     return ({maker(c, H.actor_id(owner))} if H.is_bot(owner) else set()) - {""}
 
 
@@ -360,8 +360,8 @@ def _earlier_reviewers(c, ticket, step):
     for child_id in TR.child_ids(c, ticket["id"]) if before else ():
         child = H.task(c, child_id)
         found = step_flow.child_check(c, child, ticket) if child else None
-        if found and found["id"] in before and H.is_bot(child["owner"]):
-            out.add(H.actor_id(child["owner"]))
+        if found and found["id"] in before and H.is_bot(child["owner_id"]):
+            out.add(H.actor_id(child["owner_id"]))
     return out
 
 
@@ -387,7 +387,7 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
     builder = builder_makers(c, ticket, whole=required) if kind else set()
     free, why = [], set()
     for slug in slugs:
-        if slug in excluded or "bot:" + slug == ticket["owner"]:
+        if slug in excluded or "bot:" + slug == ticket["owner_id"]:
             continue
         decision = assess(c, ticket, slug)
         if not online(c, slug):
@@ -471,7 +471,7 @@ def has_open_check(c, ticket, step, heads):
         if not found or found["id"] != step["id"]:
             continue
         seen = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
-                         "ORDER BY ts DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
+                         "ORDER BY created_at DESC, rowid DESC LIMIT 1", (child_id,)).fetchone()
         judged = set(filter(None, (seen[0] if seen else "").split(",")))
         if heads and judged and not set(heads) & judged:
             continue
@@ -518,7 +518,7 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
             + f". Tico gave it to you from the {step['name']} pool ({why}). End with your VERDICT line for that head.")
     c.execute("SAVEPOINT check_pool_file")
     try:
-        child = H.task_create(c, ticket["owner"], title, body, "bot:" + slug, parent_id=ticket["id"],
+        child = H.task_create(c, ticket["owner_id"], title, body, "bot:" + slug, parent_id=ticket["id"],
                               review_prs=snapshots, wake_refs={"check_pool": step["name"]})
     except H.Refused as exc:
         c.execute("ROLLBACK TO check_pool_file")
@@ -633,7 +633,7 @@ def _take(c, wait, only=None):
         c.execute("UPDATE check_waits SET state='filed',updated_at=? WHERE id=?", (H.now(), wait["id"]))
         child = H.task(c, wait.get("child_id")) if wait.get("child_id") else None
         if child and TR_parent(c, child["id"]) == ticket["id"]:
-            child = H.task_update(c, ticket["owner"], child["id"], owner="bot:" + slug, status="open",
+            child = H.task_update(c, ticket["owner_id"], child["id"], owner="bot:" + slug, status="open",
                                   note="Tico routed this waiting check to the first available reviewer.")
         else:
             child = _file(c, ticket, step, slug, wait["title"], heads, None,
@@ -656,18 +656,18 @@ def _all_waiting(c):
 def freed(c, row):
     """A check request left the board (done, declined or closed): its bot takes the oldest waiting check it may. A wait
     a free bot of a better company takes instead does not stop it looking at the next."""
-    parent = H.TR.parent_of(c, row["id"]) if H.is_bot(row.get("owner")) else None
+    parent = H.TR.parent_of(c, row["id"]) if H.is_bot(row.get("owner_id")) else None
     if not parent or not is_check_title(c, H.task(c, parent), row.get("title")):
         return None
     if c.execute("SELECT 1 FROM turns WHERE task_id=? AND finished_at IS NULL LIMIT 1", (row["id"],)).fetchone():
         return None
-    slug = H.actor_id(row["owner"])
+    slug = H.actor_id(row["owner_id"])
     for wait in _all_waiting(c):
         found = pool(c, wait["step_id"])
         if not found or slug not in found[1]:
             continue
         child = _take(c, wait, only=slug)
-        if child and child["owner"] == "bot:" + slug:
+        if child and child["owner_id"] == "bot:" + slug:
             return child
     return None
 

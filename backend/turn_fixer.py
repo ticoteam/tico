@@ -99,7 +99,7 @@ def free(c, execution):
             continue                        # given grace by expiry: not freed after all
         freed += 1
         msg, task = _task_of(c, row['job_id'])
-        H.event(c, H.KEEPER, 'turns.dead_freed', row['id'], {'bot': row['bot'], 'why': why,
+        H.event(c, H.KEEPER, 'turns.dead_freed', row['id'], {'bot': row['bot_id'], 'why': why,
                                                               'job_state': after['job_state']})
         if after['job_state'] == 'queued':
             _note(c, task, FREED)
@@ -145,10 +145,10 @@ def finding(c, settings, value):
                           'running': here['running']})
     now = H.now()
     running = []
-    for row in c.execute("SELECT a.id,a.bot,a.runner_id,a.started_at,d.heartbeat_at,d.last_event_at FROM attempts a "
+    for row in c.execute("SELECT a.id,a.bot_id,a.runner_id,a.started_at,d.heartbeat_at,d.last_event_at FROM attempts a "
                          "LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id WHERE a.state='running'"):
         progress = max(x for x in (row['last_event_at'], row['heartbeat_at'], row['started_at'], '') if x is not None)
-        running.append({'turn': row['id'], 'bot': row['bot'], 'last_progress': progress or None})
+        running.append({'turn': row['id'], 'bot': row['bot_id'], 'last_progress': progress or None})
     running.sort(key=lambda r: (r['last_progress'] or '', r['turn']))
     stale = [r for r in running if not r['last_progress'] or r['last_progress'] < H.shift(now, seconds=-STALE_PROGRESS_S)]
     waits = sorted(({'reason': k, 'count': n, 'oldest': oldest[k]} for k, n in reasons.items()),

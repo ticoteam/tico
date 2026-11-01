@@ -139,7 +139,7 @@ def readout(c, settings, days=7, at=None):
     stamp = lambda t: t.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"     # noqa: E731 hubdb.now()'s format
     sets, versions = known_sets(getattr(settings, "registry_dir", None))
     by = {}
-    rows = c.execute("SELECT action, target, detail FROM events WHERE ts>=? AND ts<? "
+    rows = c.execute("SELECT action, target, detail FROM events WHERE created_at>=? AND created_at<? "
                      "AND action IN ('judge.call','judge.spend')", (stamp(start), stamp(end))).fetchall()
     for action, target, raw in rows:
         try:

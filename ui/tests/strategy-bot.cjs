@@ -18,9 +18,9 @@ const bots = (name, home, hidden, analyst) => [
   bot('goal-manager', name, 'p:ana', {reports_to: '', can_manage: true, ...(hidden ? {chart_hidden: true} : {})}),
   bot('cmo', 'Head of Marketing', hidden ? 'g:marketing' : 'b:goal-manager', {reports_to: '', team: 'marketing'}),
   bot('seo', 'SEO', 'b:cmo', {reports_to: 'cmo', team: 'marketing'}),
-  bot('scribe', 'Scribe', hidden ? '' : 'b:goal-manager', {reports_to: '', operator: 'ana', ...(home ? {team: 'home'} : {})}),
+  bot('scribe', 'Scribe', hidden ? '' : 'b:goal-manager', {reports_to: '', owner_id: 'ana', ...(home ? {team: 'home'} : {})}),
   // Reports to the Strategy Bot itself and runs on Bo's computer: it hangs from the next row up, the owner.
-  ...(analyst ? [bot('analyst', 'Analyst', 'b:goal-manager', {reports_to: 'goal-manager', operator: 'bo'})] : []),
+  ...(analyst ? [bot('analyst', 'Analyst', 'b:goal-manager', {reports_to: 'goal-manager', owner_id: 'bo'})] : []),
 ];
 // With `home`, the owner and Scribe are in a group of their own, which the server never hangs under the Strategy Bot.
 const groups = (home, hidden) => [{id: 'marketing', name: 'Marketing', reports_to: '', parent: '', org_parent: hidden ? '' : 'b:goal-manager', order: 0},
@@ -58,7 +58,7 @@ async function open(browser, server, width = 1440) {
   return {page, errors};
 }
 const goalLines = page => page.locator('#goal-tree > li').evaluateAll(els => els
-  .map(el => `${el.dataset.owner || (el.classList.contains('gt-group') ? 'group:' + el.textContent.trim() : '')}@${el.style.getPropertyValue('--d')}`)
+  .map(el => `${el.dataset.owner_id || (el.classList.contains('gt-group') ? 'group:' + el.textContent.trim() : '')}@${el.style.getPropertyValue('--d')}`)
   .filter(l => l.startsWith('bot:') || l.startsWith('group:')));
 // Every chart node above this one, nearest first.
 const above = (page, key) => page.locator(`#tree [data-org="${key}"]`).first().evaluate(el => {

@@ -112,7 +112,7 @@ def test_the_connectors_job_writes_group_writable_files_only_in_the_two_user_lay
 
 def previous_registration(tmp_path):
     import json
-    config = {"runner_id": "new", "operator": "ana", "url": "https://tico.example.com", "environment": "team"}
+    config = {"runner_id": "new", "owner_id": "ana", "url": "https://tico.example.com", "environment": "team"}
     stale = tmp_path / "runner.json.stale"
     stale.write_text(json.dumps({**config, "runner_id": "old"}))
     stale.chmod(0o600)

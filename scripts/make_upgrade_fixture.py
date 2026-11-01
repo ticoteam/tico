@@ -30,10 +30,10 @@ def seed(c, bots="INSERT"):
     c.execute("INSERT INTO conversations(id,kind,subject,participants,created_at,last_message_at) "
               "VALUES('c1','direct','Launch plan','[\"bot:coo\",\"human:ana\"]',?,?)", (TS, TS))
     for n in (1, 2):
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at) "
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
                   "VALUES(?,?,?,?,?,?,?)", (f"m{n}", "c1", "human:ana", "bot:coo", "message", f"hello {n}", TS))
     for n in (1, 2, 3):
-        c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created_at,updated_at) "
+        c.execute("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,conversation_id,created_at,updated_at) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (f"t{n}", f"Task {n}", "", "human:ana", "bot:coo", "open", "c1", TS, TS))
 
 

@@ -4,7 +4,7 @@
 
 // ----------------------------------------------------------------- shared fragments
 const issueLink = i => `<a href="${i.url}" target="_blank" rel="noopener" class="mono">#${i.number}</a>`;
-const statusPill = i => i.state === 'CLOSED' ? `<span class="pill">closed</span>` : `<span class="pill ${i.status || ''}">${esc(i.status || 'no status')}</span>${i.needs_human ? ` <span class="pill needs">${esc(needsLabel(i.owner))}</span>` : ''}`;
+const statusPill = i => i.state === 'CLOSED' ? `<span class="pill">closed</span>` : `<span class="pill ${i.status || ''}">${esc(i.status || 'no status')}</span>${i.needs_human ? ` <span class="pill needs">${esc(needsLabel(i.owner_id))}</span>` : ''}`;
 // "Needs you" only when the viewer is the one it waits on; otherwise "Needs <Name>".
 const needsLabel = owner => {
   const slug = String(owner || '').toLowerCase();
@@ -64,7 +64,7 @@ function botRepoHTML(e) {
 // the local part of their roster email.
 const isHuman = slug => !!slug && (S.people || []).some(p =>
   (p.email || '').split('@')[0].toLowerCase() === String(slug).toLowerCase());
-const requestText = i => (isHuman(i.owner) ? (i.body || i.last_comment) : (i.last_comment || i.body)) || '';
+const requestText = i => (isHuman(i.owner_id) ? (i.body || i.last_comment) : (i.last_comment || i.body)) || '';
 const requestContext = text => String(text || '').split('\n').filter(line => !/^\s*(?:Parent:|Inbox-request:|Requested by\s*$|Full proposal:\s*s3:\/\/\S+\s*$)/i.test(line)).join('\n').trim();
 const REQUEST_HEADS = ['Decision needed','Question','Decision','Why now','Why','If yes','If no or edit','If no','Needed by','By when','Deadline'];
 function requestParts(text) {
@@ -118,16 +118,16 @@ function needsYouBlock(items, limit = Infinity) {
 }
 function needsYouItem(i, folded, showName = true) {
   {
-    const mine = isHuman(i.owner);
+    const mine = isHuman(i.owner_id);
     // a request for the owner: the Issue body if it is their Issue, else the bot's latest comment
     const text = requestText(i);
     const asker = mine ? (text.match(/Requested by\s*\n+\s*([^\n]+)/i) || [])[1] : null;
     const parentNo = +((text.match(/Parent:?\**\s*#?(\d+)/i) || [])[1] || 0);
-    const parentOwner = parentNo ? S.issues.find(x => x.number === parentNo)?.owner : null;
+    const parentOwner = parentNo ? S.issues.find(x => x.number === parentNo)?.owner_id : null;
     const bucketOwner = mine ? (text.match(/s3:\/\/[^/]+\/([^/\s]+)/i) || [])[1] : null;
     const askerSlug = (asker && S.emps.find(e => String(e.display_name || '').toLowerCase() === asker.trim().toLowerCase())?.id)
       || (bucketOwner && botByRef(bucketOwner)?.id)
-      || (mine ? parentOwner : i.owner);
+      || (mine ? parentOwner : i.owner_id);
     // The title is the plain-English decision. Keep the useful context visible, fold away the
     // handoff boilerplate, and retain the authored request in full below it.
     const parts = requestParts(text);
@@ -280,7 +280,7 @@ document.addEventListener('toggle', async ev => {
     const issue = await get(`/issues/${n}`), listed = S.issues.find(i => i.number === n);
     const comments = Array.isArray(issue.comments) ? issue.comments : [];
     const last = comments.length ? String(comments[comments.length - 1]?.body || '') : '';
-    const text = isHuman(listed?.owner) ? String(issue.body || last) : String(last || issue.body || '');
+    const text = isHuman(listed?.owner_id) ? String(issue.body || last) : String(last || issue.body || '');
     if (original) original.innerHTML = safeMd(text);
     const body = $('.req-body', details), originalDetails = $('.req-original', details);
     const known = new Set([...details.querySelectorAll('[data-preview-key]')].map(el => el.dataset.previewKey));
@@ -308,7 +308,7 @@ function issuesTable(list, showOwner) {
   if (!list.length) return `<div class="empty">None.</div>`;
   return `<div class="scroll"><table><tr><th>#</th><th>Title</th>${showOwner ? '<th>Owner</th>' : ''}<th>Status</th><th>Priority</th><th>Updated</th></tr>
   ${list.map(i => `<tr><td>${issueLink(i)}</td><td>${esc(i.title)}${i.last_comment ? `<details><summary>last comment</summary><div class="q">${esc(i.last_comment)}</div></details>` : ''}</td>
-    ${showOwner ? `<td>${empChip(i.owner)}</td>` : ''}<td>${statusPill(i)}</td><td>${prioPill(i)}</td><td class="muted tnum">${ago(i.updatedAt)}</td></tr>`).join('')}</table></div>`;
+    ${showOwner ? `<td>${empChip(i.owner_id)}</td>` : ''}<td>${statusPill(i)}</td><td>${prioPill(i)}</td><td class="muted tnum">${ago(i.updatedAt)}</td></tr>`).join('')}</table></div>`;
 }
 // The models that did a run's work, each with its effort (not the bot's configured one); empty when nothing was counted.
 const ranOn = (made, effort = true) => [...new Set(((made || {}).segments || []).filter(s => s.model)

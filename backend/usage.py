@@ -81,8 +81,8 @@ def own_bots(c, auth, who):
         return slugs
     pid = H.actor_id(who.actor)
     mine = set()
-    for row in c.execute("SELECT bot, operator, bot_owners FROM bot_config"):
-        if row["operator"] == pid or pid in A.owner_ids(row["bot_owners"]):
+    for row in c.execute("SELECT bot, owner_id, bot_owners FROM bot_config"):
+        if row["owner_id"] == pid or pid in A.owner_ids(row["bot_owners"]):
             mine.add(row["bot"])
     return mine & slugs
 

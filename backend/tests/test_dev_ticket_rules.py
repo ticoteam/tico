@@ -87,15 +87,15 @@ def test_each_step_entry_reaches_only_the_bot_that_must_act(api):
         ticket = H.task_create(c, "bot:coo", "Improve messages", "Build.", "bot:cpo", type=typ["id"],
                                step="In Progress", lint=False)
         H.task_create(c, "bot:cpo", "QA: messages", "Test.", "bot:finance", parent_id=ticket["id"], lint=False)
-        release_flow.save(c, H.KEEPER, {"bot": "ops"})
+        release_flow.save(c, H.KEEPER, {"bot_id": "ops"})
 
         def moved(mover, step):
             c.execute("DELETE FROM jobs")
             c.execute("DELETE FROM messages WHERE json_extract(refs,'$.news')='step_entered'")
             H.task_update(c, mover, ticket["id"], step=step)
-            return ({r["bot"] for r in c.execute("SELECT bot FROM jobs WHERE state='queued'")},
-                    {r["to_actor"] for r in c.execute(
-                        "SELECT to_actor FROM messages WHERE json_extract(refs,'$.news')='step_entered'")})
+            return ({r["bot_id"] for r in c.execute("SELECT bot_id FROM jobs WHERE state='queued'")},
+                    {r["recipient_id"] for r in c.execute(
+                        "SELECT recipient_id FROM messages WHERE json_extract(refs,'$.news')='step_entered'")})
 
         # QA alone is woken for In QA: neither the Builder who moved it nor the requester hears of it.
         assert moved("bot:cpo", "In QA") == ({"finance"}, {"bot:finance"})
@@ -116,8 +116,8 @@ def test_a_type_without_step_rules_writes_no_message_on_a_step_move(api):
 
 
 def step_news(c):
-    return [(r["to_actor"], json.loads(r["refs"]).get("rule")) for r in c.execute(
-        "SELECT to_actor,refs FROM messages WHERE json_extract(refs,'$.news')='step_entered' ORDER BY rowid")]
+    return [(r["recipient_id"], json.loads(r["refs"]).get("rule")) for r in c.execute(
+        "SELECT recipient_id,refs FROM messages WHERE json_extract(refs,'$.news')='step_entered' ORDER BY rowid")]
 
 
 def leads(c):
@@ -132,8 +132,8 @@ def lead_moved(c, mover, task, step):
     c.execute("DELETE FROM jobs")
     c.execute("DELETE FROM messages WHERE json_extract(refs,'$.news')='step_entered'")
     H.task_update(c, mover, task["id"], step=step)
-    return ({r["bot"] for r in c.execute(
-        "SELECT j.bot FROM jobs j JOIN messages m ON m.id=j.message_id "
+    return ({r["bot_id"] for r in c.execute(
+        "SELECT j.bot_id FROM jobs j JOIN messages m ON m.id=j.message_id "
         "WHERE json_extract(m.refs,'$.news')='step_entered'")}, step_news(c))
 
 
@@ -186,12 +186,12 @@ def test_the_release_managers_held_step_notices_are_dropped_once_and_nothing_els
         # As a team's own step_entered row with outcome batch stamps it (rules.stamp).
         c.execute("UPDATE messages SET refs=json_set(refs,'$.rule','r-team-step-batch') WHERE body LIKE ?",
                   (other["title"] + "%",))
-        held = {r["id"]: (r["bot"], r["state"]) for r in c.execute("SELECT id,bot,state FROM jobs WHERE held=1")}
+        held = {r["id"]: (r["bot_id"], r["state"]) for r in c.execute("SELECT id,bot_id,state FROM jobs WHERE held=1")}
         assert sorted(b for b, _ in held.values()) == ["boss", "release-manager", "release-manager", "release-manager"]
         c.execute("DELETE FROM events WHERE action=?", (R.STEP_NOISE_DROPPED,))   # this database's startup ran it
         assert R.drop_step_noise(c) == 1
-        after = {r["id"]: (r["bot"], r["state"], json.loads(r["refs"])["news"]) for r in c.execute(
-            "SELECT j.id,j.bot,j.state,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id")}
+        after = {r["id"]: (r["bot_id"], r["state"], json.loads(r["refs"])["news"]) for r in c.execute(
+            "SELECT j.id,j.bot_id,j.state,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id")}
         assert sorted(after.values()) == [("boss", "queued", "step_entered"),
                                           ("release-manager", "canceled", "step_entered"),
                                           ("release-manager", "queued", "step_entered"),
@@ -199,4 +199,4 @@ def test_the_release_managers_held_step_notices_are_dropped_once_and_nothing_els
         # Once per install: a later start leaves a step notice a person's row batched since.
         H._wake(c, task, "bot:release-manager", f"{task['title']} entered Doing.", batched)
         assert R.drop_step_noise(c) == 0
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='release-manager' AND state='queued'").fetchone()[0] == 3
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='release-manager' AND state='queued'").fetchone()[0] == 3

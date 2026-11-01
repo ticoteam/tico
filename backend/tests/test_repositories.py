@@ -135,7 +135,7 @@ def test_modes_mixed_scopes_alias_and_default(api, gh):
     put(api, 'repositories/settings', {'new_bot_default': 'all'})
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,created_at) VALUES('new-test','new-test','Sam',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator,repo) VALUES('new-test','{}','t','ana','bot-new-test')")
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id,repo) VALUES('new-test','{}','t','ana','bot-new-test')")
         assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='new-test'").fetchone()[0])['repo_access_mode'] == 'all'
 
 
@@ -248,7 +248,7 @@ def test_member_manager_cannot_retick_team_repos_or_choose_bot_instructions(api,
     put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': []})
     with api.app_state.store.transaction() as c:
         person = api.app_state.store.settings.test_identities['person-test'].actor.split(':', 1)[1]
-        c.execute("UPDATE bot_config SET operator=? WHERE bot='cpo'", (person,))
+        c.execute("UPDATE bot_config SET owner_id=? WHERE bot='cpo'", (person,))
     assert api.get('/api/v2/bots/cpo/github-repos', headers=auth('person-test')).status_code == 200
     refused = put_extras(api, 'cpo', ['docs'], 'person-test')
     assert refused.status_code == 422 and 'tick it' in refused.text

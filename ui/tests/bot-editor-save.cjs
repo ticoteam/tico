@@ -32,12 +32,12 @@ const {unrouted} = require('./support/routes.cjs');
       harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex'}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude', capabilities: {compaction: true}}],
       default: {runtime: 'claude', model: 'opus-5-5'},
     };
-    const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', operator: 'ana', repo: 'bot-helper',
+    const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', owner_id: 'ana', repo: 'bot-helper',
       can_manage: true, users: [], bot_owners: [], revision: 4, model: 'opus-5-5', harness: 'claude', reasoning_effort: 'high',
-      thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7}};
+      thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7}};
     const bots = [helper];
     const SCOUT_ID = '01990000-0000-7000-8000-00000000a11c';
-    const scout = {id: SCOUT_ID, slug: 'scout', name: 'scout', display_name: 'Scout', description: '', status: 'active', operator: 'ana',
+    const scout = {id: SCOUT_ID, slug: 'scout', name: 'scout', display_name: 'Scout', description: '', status: 'active', owner_id: 'ana',
       repo: 'bot-scout', can_manage: true, users: [], bot_owners: [], revision: 1, model: 'opus-5-5', harness: 'claude',
       reasoning_effort: 'high', thread_mode: 'personal', bot_contact: 'open'};
     const botops = {...scout, id: 'botops', slug: 'botops', name: 'botops', display_name: 'BotOps', repo: 'bot-botops'};
@@ -88,7 +88,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', operator: 'ana', bots: ['helper']}], services: []});
+      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: ['helper']}], services: []});
       if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['openai', 'anthropic']});
       if (p === '/api/v2/providers') return json({enabled: ['openai', 'anthropic'], default: catalog.default, revision: 1,
         providers: [{id: 'openai', label: 'OpenAI'}, {id: 'anthropic', label: 'Anthropic'}]});

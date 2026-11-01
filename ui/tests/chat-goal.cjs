@@ -49,7 +49,7 @@ async function open(browser, viewport, touch = false, {empty = false, messages =
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', can_chat: true, schedules: [], goal_active: false, resolved_runtime: 'codex',
-      machine: {runner_id: 'r1', label: 'Acme box', operator: 'ana'}, readiness}]);
+      machine: {runner_id: 'r1', label: 'Acme box', owner_id: 'ana'}, readiness}]);
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (p === '/api/issues') return json([]);
     const room = {id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']};
@@ -58,7 +58,7 @@ async function open(browser, viewport, touch = false, {empty = false, messages =
     }
     if (p === '/api/v2/conversations')
       return json({conversations: url.searchParams.get('chat_with') && api.room ? [room] : []});
-    if (p.endsWith('/snapshot')) return json({messages: messages || (empty && !api.created_at.length ? [] : [{id: 'm0', from_actor: 'bot:ops', body: 'Ready when you are.', created_at: '2026-10-01T09:00:00Z'}]), execution: null});
+    if (p.endsWith('/snapshot')) return json({messages: messages || (empty && !api.created_at.length ? [] : [{id: 'm0', sender_id: 'bot:ops', body: 'Ready when you are.', created_at: '2026-10-01T09:00:00Z'}]), execution: null});
     // Live events (ui/app/live.js): held open; a goal the stream reports goes out as the change it is, on the newest one.
     if (p === '/api/v2/events') { api.held.push(route); return; }
     if (p === '/api/v2/conversations/c1/goal') {
@@ -79,11 +79,11 @@ async function open(browser, viewport, touch = false, {empty = false, messages =
     }
     if (p === '/api/v2/uploads/chat/ops') {
       api.uploads.push(req.postDataBuffer().toString());
-      return json({conversation: {id: 'c1'}, message: {id: 'u' + api.uploads.length, from_actor: 'human:ana', body: 'With a file', created_at: now()}});
+      return json({conversation: {id: 'c1'}, message: {id: 'u' + api.uploads.length, sender_id: 'human:ana', body: 'With a file', created_at: now()}});
     }
     if (p === '/api/v2/chat/ops') {
       const body = req.postDataJSON(); api.sends.push(body);
-      return json({conversation: {id: 'c1'}, message: {id: 'm' + api.sends.length, from_actor: 'human:ana', body: body.text, created_at: now()}});
+      return json({conversation: {id: 'c1'}, message: {id: 'm' + api.sends.length, sender_id: 'human:ana', body: body.text, created_at: now()}});
     }
     return json(unrouted(p));
   });
@@ -246,13 +246,13 @@ async function phone(browser) {
 async function serverNotice(browser) {
   const t = (m, s) => `2026-10-01T09:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}Z`;
   const messages = [
-    {id: 'm1', kind: 'say', from_actor: 'human:ana', body: '/goal Produce the revised Acme summary', created_at: t(1, 0),
+    {id: 'm1', kind: 'say', sender_id: 'human:ana', body: '/goal Produce the revised Acme summary', created_at: t(1, 0),
      refs: {command: true, goal_action: 'set', goal_id: 'g9', goal_revision: t(1, 0), goal_objective: 'Produce the revised Acme summary'}},
-    {id: 'm2', kind: 'say', from_actor: 'human:ana', body: '/goal clear', created_at: t(2, 0), refs: {command: true, goal_action: 'pause', goal_id: 'g9'}},
-    {id: 'm3', kind: 'say', from_actor: 'human:ana', body: '/goal Produce the revised Acme summary', created_at: t(3, 0), refs: {command: true, goal_action: 'resume', goal_id: 'g9'}},
-    {id: 'm4', kind: 'say', from_actor: 'bot:ops', body: 'Summary revised and posted.', created_at: t(9, 0), refs: {}},
+    {id: 'm2', kind: 'say', sender_id: 'human:ana', body: '/goal clear', created_at: t(2, 0), refs: {command: true, goal_action: 'pause', goal_id: 'g9'}},
+    {id: 'm3', kind: 'say', sender_id: 'human:ana', body: '/goal Produce the revised Acme summary', created_at: t(3, 0), refs: {command: true, goal_action: 'resume', goal_id: 'g9'}},
+    {id: 'm4', kind: 'say', sender_id: 'bot:ops', body: 'Summary revised and posted.', created_at: t(9, 0), refs: {}},
     // As backend/chat_goals.py writes it: refs {chat_goal, goal_status}; a two-line objective, then the note.
-    {id: 'm5', kind: 'notice', from_actor: 'bot:ops', body: 'Goal met: Produce the revised Acme summary\nwith the Q3 numbers\nThe condition holds.', created_at: t(9, 5),
+    {id: 'm5', kind: 'notice', sender_id: 'bot:ops', body: 'Goal met: Produce the revised Acme summary\nwith the Q3 numbers\nThe condition holds.', created_at: t(9, 5),
      refs: {chat_goal: 'g9', goal_status: 'met'}},
   ];
   const goal = {id: 'g9', conversation_id: 'c1', bot: 'ops', objective: 'Produce the revised Acme summary\nwith the Q3 numbers', status: 'met',

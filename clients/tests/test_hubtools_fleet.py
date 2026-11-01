@@ -138,8 +138,8 @@ def test_task_list_asks_for_the_callers_own_requests_with_requester_me():
             asked.append((path, query))
             return {"actor": "bot:botops"} if path == "me" else {"tasks": [{"id": "t1"}]}
 
-    assert hubtools.BY_NAME["hub_task_list"]["fn"](Api(), {"requester": "me", "status": ["open", "waiting"]}) == [{"id": "t1"}]
-    assert asked[-1] == ("tasks", {"owner": None, "requester": "bot:botops", "status": "open,waiting", "lane": None, "label": None})
+    assert hubtools.BY_NAME["hub_task_list"]["fn"](Api(), {"requester_id": "me", "status": ["open", "waiting"]}) == [{"id": "t1"}]
+    assert asked[-1] == ("tasks", {"owner_id": None, "requester_id": "bot:botops", "status": "open,waiting", "lane": None, "label": None})
 
 
 

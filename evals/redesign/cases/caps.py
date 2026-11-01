@@ -153,7 +153,7 @@ def s8_steps(org, f):
     org.step(f, "own_capped", send, org, CLAUDE, CLAUDE_ID, "Own work under a zero cap")
     org.step(f, "auto", automation, org, "Own work · builder-claude", CLAUDE_REF,
              steps=[{"id": "make", "type": "action", "enabled": True, "do": "create_task",
-                     "args": {"owner": CLAUDE_ID, "title": "Automation own work"}}])
+                     "args": {"owner_id": CLAUDE_ID, "title": "Automation own work"}}])
     org.step(f, "ran", run_now, org, f, "auto")
 
 
@@ -162,7 +162,7 @@ def s9_steps(org, f):
     org.step(f, "eng", make_group, org, "Engineering", bots=[LEAD_ID, CLAUDE_ID, OPENAI_ID])
     org.step(f, "release", make_group, org, "Release", bots=[RELEASE_ID])
     org.step(f, "cap", put_cap, org, OPENAI_REF, LEAD_REF, 0)
-    org.step(f, "goal", org.api, "post", "/api/v2/goals", {"title": "Ship the importer", "owner": OPENAI_REF})
+    org.step(f, "goal", org.api, "post", "/api/v2/goals", {"title": "Ship the importer", "owner_id": OPENAI_REF})
     org.step(f, "pool", lambda: put_pool(org, got(f, "release"), {"daily_usd": 50}))
     org.step(f, "auto", lambda: automation(org, "Inbox · builder-openai", OPENAI_REF,
                                            group=f"group:{got(f, 'eng')}"))
@@ -183,7 +183,7 @@ def goals_and_spend_follow(f):
     """The bot's goal keeps its owner (goals belong to the bot, not its group), and its limits row counts it against the
     new group's pool (GET /api/v2/usage/limits `pools`, redesign on)."""
     setup(f, "move", "goal", "pool", "goal_after", "limits_after")
-    owner = goal_of(body(f, "goal_after")).get("owner")
+    owner = goal_of(body(f, "goal_after")).get("owner_id")
     pools = ((body(f, "limits_after").get("bots") or {}).get(OPENAI_ID) or {}).get("pools")
     want = "group:" + got(f, "release")
     return owner == OPENAI_REF and pools == [want], f"goal owner {owner}, pools {pools}, want [{want}]"

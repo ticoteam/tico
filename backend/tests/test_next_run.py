@@ -14,7 +14,7 @@ def claim(api, r, next_run=True):
 
 
 def later(api, **more):
-    return post(api, "tasks", {"owner": "ops", "title": "Watch the new refund requests",
+    return post(api, "tasks", {"owner_id": "ops", "title": "Watch the new refund requests",
                                "body": "Released today; check the counts on your next run.",
                                "next_run": True, **more})
 
@@ -28,7 +28,7 @@ def setup(api):
 
 def jobs(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
 
 
 def listed(api, slug="ops"):
@@ -91,5 +91,5 @@ def test_run_now_starts_it_as_the_task_not_as_a_chat(api):
     assert attempt["task"]["id"] == task["id"], "the run is the task"
     assert attempt["task"]["body"].startswith("Released today"), "and carries its own text"
     assert attempt["message"]["body"].startswith("Run now: Watch the new refund requests")
-    assert attempt["message"]["from_actor"] != "human:ana", "no chat message in the person's name"
+    assert attempt["message"]["sender_id"] != "human:ana", "no chat message in the person's name"
     assert attempt["next_run"] == [], "and it is not carried a second time"

@@ -42,16 +42,16 @@ def populate(client):
     ids["direct_message"] = sent["id"]
     # Tasks: created for a person, handed to a bot, moved through done, then closed by the owner.
     made = api.call("post", "tasks", json={"title": "Draft the launch plan", "body": "Please draft it.",
-                                           "owner": "human:ana"})["task"]
+                                           "owner_id": "human:ana"})["task"]
     ids["task"] = made["id"]
-    assigned = api.call("post", "tasks/%s" % made["id"], json={"version": made["version"], "owner": "bot:ops"})
+    assigned = api.call("post", "tasks/%s" % made["id"], json={"version": made["version"], "owner_id": "bot:ops"})
     doing = api.call("post", "tasks/%s" % made["id"], json={"version": assigned["task"]["version"], "status": "doing"})
     done = api.call("post", "tasks/%s" % made["id"], json={"version": doing["task"]["version"], "status": "done",
                                                             "note": "Drafted."})
     api.call("post", "tasks/%s" % made["id"], json={"version": done["task"]["version"], "status": "closed",
                                                      "note": "Accepted."})
     open_task = api.call("post", "tasks", json={"title": "Check the vendor list", "body": "Compare the three.",
-                                                "owner": "bot:ops"})["task"]
+                                                "owner_id": "bot:ops"})["task"]
     ids["open_task"] = open_task["id"]
     # A bot's turn: a file, a page and a spend approval it asks a person to decide.
     machine, attempt = bot_turn(client)
@@ -76,7 +76,7 @@ def populate(client):
     ids["pending_approval"] = waiting["id"]          # still open: it shows in Needs you
     finish_turn(client, machine, attempt)
     # A goal with a measure, one reading, and a check-in.
-    goal = api.call("post", "goals", json={"title": "Raise activation", "owner": "me"})["goal"]
+    goal = api.call("post", "goals", json={"title": "Raise activation", "owner_id": "me"})["goal"]
     ids["goal"] = goal["id"]
     kpi = api.call("post", "kpis", json={"name": "Activation", "unit": "%", "cadence": "daily", "goal_id": goal["id"],
                                          "kind": "improve", "baseline": 40, "target": 70, "deadline": "2099-12-31"})["kpi"]
@@ -85,7 +85,7 @@ def populate(client):
     api.call("post", "goals/%s/checkins" % goal["id"], json={"body": "On plan.", "signal": "on_track"})
     # An automation a person owns: scheduled, one step that wakes the ops bot.
     auto = api.call("post", "automations", json={
-        "name": "Morning check", "owner": "person:ana",
+        "name": "Morning check", "owner_id": "person:ana",
         "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}, "steps": [NOTE_STEP]})
     ids["automation"] = auto["id"] if "id" in auto else auto["automation"]["id"]
     return ids
@@ -134,10 +134,10 @@ def populate_direct(path):
                   "VALUES('codex',12.5,300,'2026-11-01T05:00:00.000000Z','2026-11-01T00:00:00.000000Z')")
         c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) "
                   "VALUES('mail','2026-11-01T00:00:00.000000Z',NULL,'{\"checked\": 3}')")
-        c.execute("INSERT INTO perf_points(runner_id,span,ts,n,scope,cpu,cpu_max,load1,mem_used,mem_max,mem_total,"
+        c.execute("INSERT INTO perf_points(runner_id,span,created_at,n,scope,cpu,cpu_max,load1,mem_used,mem_max,mem_total,"
                   "swap_used,swap_total,disk_free,disk_total,active) "
                   "VALUES('runner-1',60,1793500000,4,'host',0.25,0.5,1.0,100,200,400,0,0,1000,2000,1)")
-        c.execute("INSERT INTO runner_load_samples(runner_id,ts,sampled_at,cpu_pct,mem_used,mem_total,swap_used,"
+        c.execute("INSERT INTO runner_load_samples(runner_id,created_at,sampled_at,cpu_pct,mem_used,mem_total,swap_used,"
                   "swap_total,running_turns) VALUES('runner-1',1793500000,1793500000,12.0,100,400,0,0,1)")
         c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started_at,finished_at,exit_code,timed_out,every,output,events) "
                   "VALUES('ops','inbox-check','runner-1','2026-11-01T00:00:00.000000Z','2026-11-01T00:00:01.000000Z',"
@@ -215,6 +215,6 @@ def viewer_sets(client):
     what was there before the turn (see e2e/tests/test_upgrade.py)."""
     api = Api(client)
     machine, attempt = bot_turn(client)
-    result = {"owner": _view(api, OWNER), "member": _view(api, MEMBER), "bot": _view(api, attempt["token"])}
+    result = {"owner_id": _view(api, OWNER), "member": _view(api, MEMBER), "bot": _view(api, attempt["token"])}
     finish_turn(client, machine, attempt)
     return result

@@ -37,7 +37,7 @@ def run_for(api, bot):
     assign(api, machine, bot)
     ready(api, machine, [bot])
     with api.app.state.store.read() as c:
-        waiting = c.execute("SELECT 1 FROM jobs WHERE bot=? AND state='queued'", (bot,)).fetchone()
+        waiting = c.execute("SELECT 1 FROM jobs WHERE bot_id=? AND state='queued'", (bot,)).fetchone()
     if not waiting:
         post(api, "chat/" + bot, {"text": "Please look at your queue."})
     return claim(api, machine, bot)
@@ -57,7 +57,7 @@ def test_the_owning_bots_run_hands_a_sealed_subtask_to_a_bot_that_reads_only_tha
     body = repair(row["id"])
     assert not [p for p in dry_run(api, body, attempt["token"]) if "rivate" in p]
     child = post(api, "tasks", body, attempt["token"])
-    assert child["private"] and child["owner"] == "bot:finance" and child["requester"] == "bot:ops"
+    assert child["private"] and child["owner_id"] == "bot:finance" and child["requester_id"] == "bot:ops"
 
     # The Builder reads its subtask, and nothing of the parent: no title, body, id or link.
     finance = bot_token(api, "finance")
@@ -73,7 +73,7 @@ def test_the_owning_bots_run_hands_a_sealed_subtask_to_a_bot_that_reads_only_tha
     # The wake notice it is sent says nothing of the parent either.
     with api.app.state.store.read() as c:
         notices = [dict(m) for m in c.execute(
-            "SELECT m.body,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='finance'")]
+            "SELECT m.body,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='finance'")]
     assert notices and all("Zip triage" not in m["body"] and row["id"] not in (m["body"] + (m["refs"] or ""))
                            for m in notices), notices
 
@@ -98,7 +98,7 @@ def test_the_builders_review_subtask_under_the_sealed_one_follows_the_same_rule(
     built = run_for(api, "finance")
     review = post(api, "tasks", repair(child["id"], "doc-updater", title="Review the upload refusal fix",
                                        body="Review the pull request for the upload order fix."), built["token"])
-    assert review["private"] and review["owner"] == "bot:doc-updater"
+    assert review["private"] and review["owner_id"] == "bot:doc-updater"
     reviewer = bot_token(api, "doc-updater")
     assert get(api, "tasks/" + review["id"], reviewer)["task"]["id"] == review["id"]
     for hidden in (row, child):
@@ -118,7 +118,7 @@ def test_a_review_subtask_may_name_the_exact_head_and_its_commit_links(api):
         "tico-session/3c5c9932-7767-49bb-99a5-fb346c21c624, notes in reports/2026-10-27-pr-1714-review-notes.md.\n"
         f"End with VERDICT: approve PR #1714 head {HEAD}"))
     assert not [p for p in dry_run(api, body, built["token"]) if "secret-shaped" in p]
-    assert post(api, "tasks", body, built["token"])["owner"] == "bot:doc-updater"
+    assert post(api, "tasks", body, built["token"])["owner_id"] == "bot:doc-updater"
 
 
 def test_done_wakes_the_parents_owner_and_no_words_reach_its_requester(api):
@@ -131,7 +131,7 @@ def test_done_wakes_the_parents_owner_and_no_words_reach_its_requester(api):
                                        "note": "Fixed: checked the setting first, test added."}, finance)
     with api.app.state.store.read() as c:
         jobs = {bot: [json.loads(r[1] or "{}") | {"body": r[0]} for r in c.execute(
-            "SELECT m.body,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=?", (bot,))]
+            "SELECT m.body,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=?", (bot,))]
             for bot in ("ops", "cpo")}
         assert not H.subtask_flows_up(c, H.task(c, child["id"]), H.task(c, row["id"]))
     assert any(r.get("wake") == "subtask_finished" and r["task"] == row["id"] and r.get("trigger_source") == child["id"]
@@ -153,7 +153,7 @@ def test_a_private_task_with_a_person_on_it_names_them_and_the_route(api, on):
     assert words == f"Cara is on this private task: {ROUTE}" or words.endswith(ROUTE) and "Cara" in words, words
     assert words in dry_run(api, body, attempt["token"])
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:finance'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:finance'").fetchone()
 
 
 def test_a_person_above_the_parent_is_named_only_to_a_filer_that_reads_that_task(api):
@@ -166,7 +166,7 @@ def test_a_person_above_the_parent_is_named_only_to_a_filer_that_reads_that_task
                     "subtask", words
     assert "Cara" not in words and words in dry_run(api, body, attempt["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:ops' WHERE id=?", (above["id"],))
+        c.execute("UPDATE tasks SET owner_id='bot:ops' WHERE id=?", (above["id"],))
     words = refused(api, body, attempt["token"])
     assert words == f"Cara is on a private task above this one: {ROUTE}", words
     assert words in dry_run(api, body, attempt["token"])
@@ -231,7 +231,7 @@ def test_the_sealed_subtasks_words_may_not_carry_the_private_work(api, words, ch
     assert any(check in p for p in dry_run(api, body, attempt["token"]))
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM refusals WHERE actor='bot:ops'").fetchone()
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:finance'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:finance'").fetchone()
 
 
 def test_a_bot_that_reads_the_parent_gets_a_subtask_kept_from_the_runs_other_person_free_work(api):
@@ -240,7 +240,7 @@ def test_a_bot_that_reads_the_parent_gets_a_subtask_kept_from_the_runs_other_per
     attempt = run_on(api)
     carry(api, attempt, other)
     child = post(api, "tasks", repair(row["id"], "cpo"), attempt["token"])
-    assert child["private"] and child["owner"] == "bot:cpo"
+    assert child["private"] and child["owner_id"] == "bot:cpo"
     assert not sees(api, bot_token(api, "cpo"), "Confidential: Ops lockfile scan.")
     events = get(api, "tasks/" + row["id"], attempt["token"])["events"]
     assert any(e["field"] == "handed" and e["new"] == "bot:cpo" for e in events)

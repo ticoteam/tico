@@ -83,15 +83,15 @@ function ticoReplayPlayer() {
       const task = it.task?.id ? st.tasks.get(it.task.id) : null;
       const bot = it.bot || (String(it.who || '').startsWith('bot:') ? it.who.slice(4) : '');
       if (it.kind === 'task.created') {
-        st.tasks.set(it.task.id, {id: it.task.id, title: it.task.title, owner: it.owner, status: it.status || 'open', touched: it.ms, fresh: true});
+        st.tasks.set(it.task.id, {id: it.task.id, title: it.task.title, owner: it.owner_id, status: it.status || 'open', touched: it.ms, fresh: true});
         st.flash.add(it.task.id); st.dirty.board = true;
-        say({kind: 'line', who: it.who, html: `added <b>${escape(it.task.title)}</b>${it.owner && it.owner !== it.who ? ` for ${escape(name(it.owner))}` : ''}`, ms: it.ms}, animate);
+        say({kind: 'line', who: it.who, html: `added <b>${escape(it.task.title)}</b>${it.owner_id && it.owner_id !== it.who ? ` for ${escape(name(it.owner_id))}` : ''}`, ms: it.ms}, animate);
       } else if (it.kind === 'task.status') {
         if (task) { task.status = it.new || task.status; touch(task.id); }
         else if (it.task) { st.tasks.set(it.task.id, {id: it.task.id, title: it.task.title, owner: it.who, status: it.new || 'open', touched: it.ms}); touch(it.task.id); }
         say({kind: 'line', who: it.who, html: `moved <b>${escape(it.task.title)}</b> to ${escape(STATUS_WORDS[it.new] || it.new || '')}`, text: it.text, ms: it.ms}, animate);
       } else if (it.kind === 'task.owner') {
-        if (task) { task.owner = it.new; touch(task.id); }
+        if (task) { task.owner_id = it.new; touch(task.id); }
         say({kind: 'line', who: it.who, html: `gave <b>${escape(it.task.title)}</b> to ${escape(name(it.new))}`, ms: it.ms}, animate);
       } else if (it.kind === 'chat.message' || it.kind === 'task.comment') {
         if (it.task) touch(it.task.id);
@@ -146,7 +146,7 @@ function ticoReplayPlayer() {
       els.board.innerHTML = COLUMNS.map(([k, label]) => `<section class="bcol" data-col="${k}"><header><h2>${label}</h2><span class="cnt tnum">${groups[k].length}</span></header>
         <div class="bcol-body">${groups[k].map(t => `<div class="bcard${st.flash.has(t.id) ? ' rp-flash' : ''}" data-rp-task="${escape(t.id)}">
           <div class="bcard-open"><span class="bcard-title">${escape(t.title)}</span></div>
-          <div class="bcard-foot"><span class="rp-owner">${escape(name(t.owner))}</span><span class="spacer"></span>${t.owner ? faceOf(t.owner, 16, st.bots.get(String(t.owner).replace(/^bot:/, ''))?.state ? live(st.bots.get(String(t.owner).replace(/^bot:/, '')).state) : '') : ''}</div></div>`).join('')}</div></section>`).join('');
+          <div class="bcard-foot"><span class="rp-owner">${escape(name(t.owner_id))}</span><span class="spacer"></span>${t.owner_id ? faceOf(t.owner_id, 16, st.bots.get(String(t.owner_id).replace(/^bot:/, ''))?.state ? live(st.bots.get(String(t.owner_id).replace(/^bot:/, '')).state) : '') : ''}</div></div>`).join('')}</div></section>`).join('');
       if (before.size) for (const el of els.board.querySelectorAll('[data-rp-task]')) {
         const was = before.get(el.dataset.rpTask), now = el.getBoundingClientRect();
         if (was && (was.left !== now.left || was.top !== now.top)) el.animate([{transform: `translate(${was.left - now.left}px,${was.top - now.top}px)`}, {transform: 'none'}], {duration: 420, easing: 'cubic-bezier(.2,0,0,1)'});

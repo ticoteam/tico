@@ -366,7 +366,7 @@ class Ids(_Case):
 
         self.assertEqual(H.resolve_bot(self.conn, "ops-lead")["id"], new_id)
         self.assertEqual(H.bot(self.conn, old_id)["slug"], "ops-renamed")
-        owner = self.conn.execute("SELECT owner FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
+        owner = self.conn.execute("SELECT owner_id FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
         self.assertEqual(owner, old_actor)
         self.assertEqual(H.bot(self.conn, H.actor_id(owner))["slug"], "ops-renamed")
         targets = [r[0] for r in self.conn.execute("SELECT target FROM events WHERE action='test.note'")]

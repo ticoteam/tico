@@ -19,10 +19,10 @@ def delta(api, query, cursor, token="ana-test"):
 
 
 def test_a_delta_returns_what_changed_and_what_left(api):
-    keep = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
-    finish = post(api, "tasks", {"owner": "ben", "title": "Book the room", "body": "Please."})
-    trash = post(api, "tasks", {"owner": "ben", "title": "Order lunch", "body": "Please."})
-    quiet = post(api, "tasks", {"owner": "ben", "title": "Print the badges", "body": "Please."})
+    keep = post(api, "tasks", {"owner_id": "ben", "title": "Draft the agenda", "body": "Please."})
+    finish = post(api, "tasks", {"owner_id": "ben", "title": "Book the room", "body": "Please."})
+    trash = post(api, "tasks", {"owner_id": "ben", "title": "Order lunch", "body": "Please."})
+    quiet = post(api, "tasks", {"owner_id": "ben", "title": "Print the badges", "body": "Please."})
     cursor = tasks(api, ACTIVE)["cursor"]
     assert delta(api, ACTIVE, cursor) == {"tasks": [], "gone": [], "cursor": cursor, "next_offset": None}
 
@@ -38,8 +38,8 @@ def test_a_delta_returns_what_changed_and_what_left(api):
 
 
 def test_a_task_made_private_is_gone_only_for_who_could_see_it(api):
-    shared = post(api, "tasks", {"owner": "ben", "title": "Review the launch copy", "body": "Please."})
-    secret = post(api, "tasks", {"owner": "ben", "title": "Review the salary bands", "body": "Please.", "private": True})
+    shared = post(api, "tasks", {"owner_id": "ben", "title": "Review the launch copy", "body": "Please."})
+    secret = post(api, "tasks", {"owner_id": "ben", "title": "Review the salary bands", "body": "Please.", "private": True})
     before = tasks(api, ACTIVE, token="cara-test")
     cara, ana = before["cursor"], tasks(api, ACTIVE)["cursor"]
     assert shared["id"] in str(before) and secret["id"] not in str(before)
@@ -56,9 +56,9 @@ def test_a_task_made_private_is_gone_only_for_who_could_see_it(api):
 
 def test_a_cursor_the_log_no_longer_covers_or_other_access_resets(api):
     old = tasks(api, ACTIVE, token="cara-test")["cursor"]
-    post(api, "tasks", {"owner": "ben", "title": "Clear the old work", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ben", "title": "Clear the old work", "body": "Please."})
     assert E.sweep(api.app.state.store, H.shift(H.now(), hours=E.KEEP_HOURS + 1)) > 0
-    post(api, "tasks", {"owner": "ben", "title": "Plan the new work", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ben", "title": "Plan the new work", "body": "Please."})
     got = delta(api, ACTIVE, old, token="cara-test")
     assert got["reset"] is True and got["tasks"] == [] and got["cursor"] != old
     assert delta(api, ACTIVE, "999999." + old.split(".")[1], token="cara-test")["reset"] is True
@@ -71,7 +71,7 @@ def test_a_cursor_the_log_no_longer_covers_or_other_access_resets(api):
 
 
 def test_an_unchanged_full_read_is_a_304_until_a_task_or_a_grant_changes(api):
-    task = post(api, "tasks", {"owner": "ops", "title": "Check the backups", "body": "Please."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Check the backups", "body": "Please."})
 
     def read(path, tag=None):
         return api.get("/api/v2/" + path, headers={**headers("cara-test"), **({"If-None-Match": tag} if tag else {})})
@@ -121,7 +121,7 @@ def test_saving_a_big_types_steps_is_a_few_bulk_changes_not_one_per_task(api):
     # Each step under FAN_CAP, the type over it: a save used to make a row per task per step write (TIDY, Oct 30).
     typ = post(api, "task-types", {"name": "Development", "steps": [
         {"name": "On Deck", "status": "open"}, {"name": "In Progress", "status": "doing"}]})["type"]
-    seed = post(api, "tasks", {"owner": "ben", "title": "Build the thing", "body": "Please.", "type": typ["id"],
+    seed = post(api, "tasks", {"owner_id": "ben", "title": "Build the thing", "body": "Please.", "type": typ["id"],
                                "step": typ["steps"][0]["id"]})
     store = api.app.state.store
     with store.transaction() as c:
@@ -146,8 +146,8 @@ def test_saving_a_big_types_steps_is_a_few_bulk_changes_not_one_per_task(api):
 
 
 def test_a_bot_list_stays_304_when_only_other_tasks_change(api):
-    mine = post(api, "tasks", {"owner": "ops", "title": "Check the backups", "body": "Please."})
-    other = post(api, "tasks", {"owner": "coo", "title": "Plan the offsite", "body": "Soon."})
+    mine = post(api, "tasks", {"owner_id": "ops", "title": "Check the backups", "body": "Please."})
+    other = post(api, "tasks", {"owner_id": "coo", "title": "Plan the offsite", "body": "Soon."})
 
     def read(tag=None):
         return api.get("/api/v2/tasks?owner=ops&status=open,doing,waiting,declined&brief=true",
@@ -163,8 +163,8 @@ def test_a_bot_list_stays_304_when_only_other_tasks_change(api):
 
 
 def test_a_batch_read_returns_only_readable_tasks_and_names_the_rest_missing(api):
-    seen = post(api, "tasks", {"owner": "coo", "title": "Plan the offsite", "body": "Soon."})
-    hidden = post(api, "tasks", {"owner": "ops", "title": "Check the backups", "body": "Please."})
+    seen = post(api, "tasks", {"owner_id": "coo", "title": "Plan the offsite", "body": "Soon."})
+    hidden = post(api, "tasks", {"owner_id": "ops", "title": "Check the backups", "body": "Please."})
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", people=["ana"])
     got = tasks(api, f"ids={seen['id']},{hidden['id']},nope&brief=true", token="cara-test")
@@ -188,14 +188,14 @@ def test_task_list_keeps_one_snapshot_and_next_read_sees_revocation(api, monkeyp
         if actor == "ben" and not changed:
             changed = True
             with store.transaction() as write:
-                write.execute("UPDATE tasks SET owner='human:ana' WHERE id=?", (private["id"],))
+                write.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (private["id"],))
         return resolved
 
     monkeypatch.setattr(H, "resolve_actor", revoke_after_owner_read)
     first = tasks(api, ACTIVE + "&owner=ben", token="ben-test")
     assert changed
     rows = [t for t in first["tasks"] if t["id"] == private["id"]]
-    assert len(rows) == 1 and rows[0]["owner"] == "human:ben"
+    assert len(rows) == 1 and rows[0]["owner_id"] == "human:ben"
     assert private["id"] not in str(tasks(api, ACTIVE, token="ben-test"))
     assert private["id"] in {t["id"] for t in tasks(api, ACTIVE, token="ana-test")["tasks"]}
 
@@ -244,7 +244,7 @@ def test_hot_read_helpers_do_not_write_to_their_snapshot(api, monkeypatch):
 def test_a_task_list_leaves_its_connection_to_the_pool(api, monkeypatch):
     # A changed connection (a SQL function, an authorizer) is closed after its read: a list that did that
     # made every list open a new connection and parse the whole schema again.
-    post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ben", "title": "Draft the agenda", "body": "Please."})
     store = api.app.state.store
     get(api, "tasks")
     opened = []

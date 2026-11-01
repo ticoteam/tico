@@ -13,7 +13,7 @@ WAKE = {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops",
 
 
 def make(api, trigger, steps=(WAKE,), **extra):
-    return post(api, "automations", {"name": "Test", "owner": "person:ana", "trigger": trigger, "steps": list(steps),
+    return post(api, "automations", {"name": "Test", "owner_id": "person:ana", "trigger": trigger, "steps": list(steps),
                                      **extra})["id"]
 
 
@@ -37,8 +37,8 @@ def mail(msg_id="m1", subject="Invoice 4471", sender="billing@acme.example"):
 # ---------------------------------------------------------------------------------------------- tasks and events
 def test_a_task_received_runs_its_owners_automation_only(api):
     aid = make(api, {"type": "task_received", "to": "bot:ops"})
-    post(api, "tasks", {"owner": "ops", "title": "Check the deploy", "body": "Please."})
-    post(api, "tasks", {"owner": "coo", "title": "Not for ops", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Check the deploy", "body": "Please."})
+    post(api, "tasks", {"owner_id": "coo", "title": "Not for ops", "body": "Please."})
     done = runs(api, aid)["runs"]
     assert len(done) == 1 and done[0]["status"] == "ok" and done[0]["trigger_ref"].startswith("task:")
 
@@ -46,17 +46,17 @@ def test_a_task_received_runs_its_owners_automation_only(api):
 def test_trigger_filters_drop_a_run_and_count_it_for_the_day(api):
     aid = make(api, {"type": "task_received", "to": "bot:ops",
                      "filters": [{"field": "task.title", "op": "contains", "value": "urgent"}]})
-    post(api, "tasks", {"owner": "ops", "title": "Routine check", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Routine check", "body": "Please."})
     seen = runs(api, aid)
     assert seen["runs"] == [] and seen["daily"][0]["dropped"] == 1 and seen["daily"][0]["runs"] == 0
-    post(api, "tasks", {"owner": "ops", "title": "An urgent check", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ops", "title": "An urgent check", "body": "Please."})
     assert len(runs(api, aid)["runs"]) == 1
 
 
 def test_an_event_trigger_and_the_chain_guard(api):
-    spawn = {"id": "spawn", "type": "action", "do": "create_task", "args": {"title": "Follow up", "owner": "coo"}}
+    spawn = {"id": "spawn", "type": "action", "do": "create_task", "args": {"title": "Follow up", "owner_id": "coo"}}
     aid = make(api, {"type": "event", "name": "task.created"}, [spawn])
-    post(api, "tasks", {"owner": "ops", "title": "Start", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Start", "body": "Please."})
     # Its own task.created never starts it again: one run, one follow-up.
     assert len(runs(api, aid)["runs"]) == 1
     with api.app.state.store.read() as c:
@@ -65,7 +65,7 @@ def test_an_event_trigger_and_the_chain_guard(api):
 
 def test_a_paused_automation_starts_nothing(api):
     aid = make(api, {"type": "task_received", "to": "bot:ops"}, enabled=False)
-    post(api, "tasks", {"owner": "ops", "title": "Paused", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Paused", "body": "Please."})
     assert runs(api, aid)["runs"] == []
 
 

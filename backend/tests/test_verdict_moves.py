@@ -31,7 +31,7 @@ def ticket(api, step="Review 1", labels=()):
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in STEPS])
         rules.seed_dev(c)
-    task = post(api, "tasks", {"owner": "cpo", "title": "Improve messages", "body": "Build messages.",
+    task = post(api, "tasks", {"owner_id": "cpo", "title": "Improve messages", "body": "Build messages.",
                                "type": typ["id"], "step": "In Progress", "links": [PR]})
     hook(api, "pull_request", pr_event("opened", head={"sha": HEAD}))
     receipt(api, task)
@@ -56,7 +56,7 @@ def check(api, task, title="Review 1: PR #412", owner="bot:cmo"):
 
 def verdict(api, row, value, head=HEAD):
     with api.app.state.store.transaction() as c:
-        H.task_update(c, row["owner"], row["id"], status="done", note="Reviewed.", verdict=value, verdict_head=head)
+        H.task_update(c, row["owner_id"], row["id"], status="done", note="Reviewed.", verdict=value, verdict_head=head)
         turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
                          (row["id"],)).fetchone()
         if turn:
@@ -86,7 +86,7 @@ def checks_of(api, task):
 def builder_jobs(api):
     with api.app.state.store.read() as c:
         return [H.message(c, r[0]) for r in c.execute(
-            "SELECT message_id FROM jobs WHERE bot='cpo' AND state='queued' ORDER BY rowid")]
+            "SELECT message_id FROM jobs WHERE bot_id='cpo' AND state='queued' ORDER BY rowid")]
 
 
 def step_events(api, task):
@@ -203,7 +203,7 @@ def test_verdict_waits_for_its_exact_attempt_capture_then_moves_once(api):
     with api.app.state.store.transaction() as c:
         turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
         c.execute("DELETE FROM check_head_provenance WHERE check_id=?", (review["id"],))
-        H.task_update(c, review["owner"], review["id"], status="done", note="Reviewed.",
+        H.task_update(c, review["owner_id"], review["id"], status="done", note="Reviewed.",
                       verdict="approve", verdict_head=HEAD)
         marker = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
                            "ORDER BY rowid DESC LIMIT 1", (task["id"],)).fetchone()
@@ -222,13 +222,13 @@ def test_post_capture_callback_ignores_a_different_or_obsolete_attempt(api):
     review = check(api, task)
     with api.app.state.store.transaction() as c:
         turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
-        H.task_update(c, review["owner"], review["id"], status="done", note="Reviewed.",
+        H.task_update(c, review["owner_id"], review["id"], status="done", note="Reviewed.",
                       verdict="approve", verdict_head=HEAD)
         assert V.after_capture(c, review["id"], "b" * 40, turn) is None
         assert V.after_capture(c, review["id"], HEAD, "obsolete-attempt") is None
         assert V.step_of(c, H.task(c, task["id"])) == "Review 1"
         # A new attempt supersedes the old callback even if it has the same owner and head.
-        usage(c, review["id"], H.actor_id(review["owner"]))
+        usage(c, review["id"], H.actor_id(review["owner_id"]))
         assert V.after_capture(c, review["id"], HEAD, turn) is None
         assert V.step_of(c, H.task(c, task["id"])) == "Review 1"
 
@@ -334,7 +334,7 @@ def test_a_check_finished_with_no_verdict_is_feedback_and_goes_to_on_fail(api):
     task = ticket(api, step="In QA")
     qa = check(api, task, "QA: PR #412")
     with api.app.state.store.transaction() as c:
-        H.task_update(c, qa["owner"], qa["id"], status="done", note="Looked at it; the login form is odd.")
+        H.task_update(c, qa["owner_id"], qa["id"], status="done", note="Looked at it; the login form is odd.")
         from backend import check_pools
         turn = c.execute("SELECT id FROM turns WHERE task_id=?", (qa["id"],)).fetchone()[0]
         check_pools.capture_attempt(c, turn)
@@ -401,7 +401,7 @@ def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api,
                       ("$." + key, value))
 
         assert task_allocator.allocate(c) == [(check["id"], "cpo") for check in checks]
-        assert all(H.task(c, check["id"])["owner"] == "bot:cpo" for check in checks)
+        assert all(H.task(c, check["id"])["owner_id"] == "bot:cpo" for check in checks)
         assert task_allocator.allocate(c) == [], "already assigned checks are not allocated twice"
 
 
@@ -418,9 +418,9 @@ def test_allocator_never_grants_a_pool_bot_access_to_an_unreadable_private_task(
         assert not H.task_private_readable(c, "bot:cmo", secret)
         assert task_allocator.allocate(c) == [(public["id"], "cmo")]
         secret = H.task(c, secret["id"])
-        assert secret["owner"] == "bot:cpo"
+        assert secret["owner_id"] == "bot:cpo"
         assert not H.task_private_readable(c, "bot:cmo", secret)
-        assert H.task(c, public["id"])["owner"] == "bot:cmo"
+        assert H.task(c, public["id"])["owner_id"] == "bot:cmo"
 
 
 def test_a_merge_outside_the_flow_moves_the_ticket_to_the_merged_step_from_any_earlier_step(api):
@@ -481,7 +481,7 @@ def test_a_verdict_given_while_the_ticket_was_held_moves_it_once_the_hold_clears
         if hold == "ask":
             H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="human:ana",
                           note="Is the vendor contract signed?")
-            ask = next(H.task(c, i) for i in H.TR.child_ids(c, task["id"]) if H.task(c, i)["owner"] == "human:ana")
+            ask = next(H.task(c, i) for i in H.TR.child_ids(c, task["id"]) if H.task(c, i)["owner_id"] == "human:ana")
         else:
             ask = H.task_create(c, "human:ana", "Security: confirm the vendor contract", "Confirm it.", "human:ana",
                                 parent_id=task["id"], lint=False)
@@ -513,12 +513,12 @@ def test_a_private_review_is_not_replayed_into_its_wider_parent_when_a_hold_clea
         turn = usage(c, review["id"], "cmo")
         capture_attempt(c, task["id"], review["id"], HEAD, turn)
         assert not H.task_private(c, H.task(c, task["id"]))
-        assert not H.task_private_readable(c, task["owner"], review)
+        assert not H.task_private_readable(c, task["owner_id"], review)
         assert H._subtask_result_parent(c, review) is None
         H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="human:ana",
                       note="Is the vendor contract signed?")
         ask = next(H.task(c, i) for i in H.TR.child_ids(c, task["id"])
-                   if H.task(c, i)["owner"] == "human:ana")
+                   if H.task(c, i)["owner_id"] == "human:ana")
     assert step(api, task) == "Review 1"
     verdict(api, review, "changes")
     assert step(api, task) == "Review 1"

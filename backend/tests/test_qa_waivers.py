@@ -58,7 +58,7 @@ def api(tmp_path, monkeypatch):
             H.sync_registry(c, bots, {'people': people})
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({'people': people}),))
             for slug, config in bots.items():
-                c.execute('INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)',
+                c.execute('INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)',
                           (slug, encode(config), 'product', 'ana'))
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({'completed': '2026-01-01T00:00:00Z'}),))
             H.type_create(c, H.KEEPER, 'Dev tickets', STEPS)
@@ -75,7 +75,7 @@ def call(api, method, path, token='ana-test', body=None):
 
 def child(api, ticket, title, status='done', verdict=None, head=None):
     """A review or QA subtask with a recorded verdict, written directly: the review gate is not under test here."""
-    r = call(api, 'POST', 'tasks', body={'owner': 'cmo', 'title': 'Check it', 'body': 'Check the change.',
+    r = call(api, 'POST', 'tasks', body={'owner_id': 'cmo', 'title': 'Check it', 'body': 'Check the change.',
                                         'relations': [{'task': ticket['id'], 'kind': 'parent'}]})
     assert r.status_code == 200, r.text
     with api.app.state.store.transaction() as c:
@@ -93,7 +93,7 @@ def ticket(api, owner='cpo', step='In QA', checks=None, reviews=(('approve', HEA
            title='Fix the checkout total'):
     with api.app.state.store.read() as c:
         typ = H.type_get(c, 'Dev tickets')
-    r = call(api, 'POST', 'tasks', body={'owner': owner, 'title': title, 'body': 'Fix it.',
+    r = call(api, 'POST', 'tasks', body={'owner_id': owner, 'title': title, 'body': 'Fix it.',
                                         'type': typ['id'], 'step': step, 'links': [PR]})
     assert r.status_code == 200, r.text
     row = r.json()['task']
@@ -140,9 +140,9 @@ def test_owner_or_manager_waives_the_current_qa_step_on_the_exact_head(api, owne
         qa = H.task(c, qa['id'])
     assert qa['verdict'] is None and qa['verdict_head'] is None and qa['status'] == 'doing'
     with api.app.state.store.read() as c:
-        told = c.execute("SELECT to_actor, body FROM messages WHERE json_extract(refs,'$.qa_waiver')=?", (HEAD,)).fetchall()
+        told = c.execute("SELECT recipient_id, body FROM messages WHERE json_extract(refs,'$.qa_waiver')=?", (HEAD,)).fetchall()
     # The owner hears once, unless the owner waived it.
-    assert [(m[0], 'not a QA pass' in m[1]) for m in told] == ([] if owner == actor else [(detail['task']['owner'], True)])
+    assert [(m[0], 'not a QA pass' in m[1]) for m in told] == ([] if owner == actor else [(detail['task']['owner_id'], True)])
 
 
 @pytest.mark.parametrize('owner,token,why', [('human:ben', 'cara-test', 'owner or a manager'),
@@ -337,7 +337,7 @@ def test_botops_in_the_owners_own_chat_cannot_waive_a_ticket_every_gate_allows(a
     from backend.tests.test_api import assign, claim, post, ready, runner
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('botops',?, 'ana')",
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
                   (encode({'name': 'botops', 'runtime': 'fake', 'status': 'active'}),))
     machine = runner(api)
     assign(api, machine, 'botops')

@@ -146,8 +146,8 @@ def _blocker_reason(c, row):
 
 
 def _snooze_reason(c, row, at):
-    ended = c.execute("SELECT ts FROM task_events WHERE task_id=? AND field='snoozed_until' AND note='snooze over' "
-                      "ORDER BY ts DESC LIMIT 1", (row["id"],)).fetchone()
+    ended = c.execute("SELECT created_at FROM task_events WHERE task_id=? AND field='snoozed_until' AND note='snooze over' "
+                      "ORDER BY created_at DESC LIMIT 1", (row["id"],)).fetchone()
     if not ended or ended[0] > H.shift(at, hours=-SNOOZE_GRACE_HOURS):
         return None
     # The wake itself writes `updated_at`; anything later is activity.
@@ -159,9 +159,9 @@ def _snooze_reason(c, row, at):
 def _twin_reason(c, row):
     marks = ",".join("?" * len(STATUSES))
     key = H.title_key(row["title"])
-    twin = next((r for r in c.execute(f"SELECT id,created_at,title FROM tasks WHERE owner=? AND id<>? AND status IN ({marks}) "
+    twin = next((r for r in c.execute(f"SELECT id,created_at,title FROM tasks WHERE owner_id=? AND id<>? AND status IN ({marks}) "
                                       "AND (created_at<? OR (created_at=? AND id<?)) ORDER BY created_at",
-                                      (row["owner"], row["id"], *STATUSES, row["created_at"] or "",
+                                      (row["owner_id"], row["id"], *STATUSES, row["created_at"] or "",
                                        row["created_at"] or "", row["id"]))
                  if H.title_key(r[2]) == key), None)
     return f"Same title as an older open task of the same owner (from {_day(twin[1])})" if twin else None
@@ -203,7 +203,7 @@ def candidates(c, at):
     out = []
     for row in H._rows(c.execute(f"SELECT * FROM tasks WHERE status IN ({marks}) AND private=0 ORDER BY created_at,id",
                                  STATUSES)):
-        if H.TS.snoozed(row, at) or not (H.is_bot(row["owner"]) or H.is_human(row["owner"])):
+        if H.TS.snoozed(row, at) or not (H.is_bot(row["owner_id"]) or H.is_human(row["owner_id"])):
             continue
         why = reason(c, row, at)
         if why and not _live(c, row["id"]):
@@ -226,7 +226,7 @@ def _comments(c, row):
     out = []
     for msg in H.task_comments(c, row["id"])[-COMMENTS:]:
         text = str(msg.get("body") or "").strip()
-        out.append({"from": "a person" if H.is_human(msg.get("from_actor")) else "a bot",
+        out.append({"from": "a person" if H.is_human(msg.get("sender_id")) else "a bot",
                     "at": str(msg.get("created_at") or "")[:16], "text": text[:COMMENT_CHARS]})
     return out
 
@@ -236,11 +236,11 @@ def state_of(c, row, why):
         if row.get("step_id") else None
     return {"task": {"title": row["title"] or "", "status": row["status"], "step": step[0] if step else "",
                      "created_at": row.get("created_at") or "", "updated_at": row.get("updated_at") or "",
-                     "due": row.get("due") or "", "reason": why, "comments": _comments(c, row)}}
+                     "due_at": row.get("due_at") or "", "reason": why, "comments": _comments(c, row)}}
 
 
 def calls_this_hour(c, at, label):
-    return c.execute("SELECT count(*) FROM events WHERE action='judge.call' AND target=? AND ts>?",
+    return c.execute("SELECT count(*) FROM events WHERE action='judge.call' AND target=? AND created_at>?",
                      (label, H.shift(at, seconds=-EVERY_SECONDS))).fetchone()[0]
 
 
@@ -295,7 +295,7 @@ def eligible(c, row, at):
     now = H.task(c, row["id"])
     if (not now or mark(now) != mark(row) or now["status"] not in STATUSES or H.task_private(c, now)
             or H.TS.snoozed(now, at)
-            or _live(c, now["id"]) or not _owner_reachable(c, now["owner"])):
+            or _live(c, now["id"]) or not _owner_reachable(c, now["owner_id"])):
         return None
     return now
 
@@ -494,7 +494,7 @@ def card(c, person):
         return None
     n = len(rows)
     return {"kind": "stale", "id": "stale:" + person, "title": TITLE.format(n=n, s="" if n == 1 else "s"),
-            "first_line": "", "created_at": rows[0][0]["created_at"], "requester": None, "origin_actor": None,
+            "first_line": "", "created_at": rows[0][0]["created_at"], "requester_id": None, "origin_actor": None,
             "from_person": None,
             "rows": [{"id": s["id"], "task": t["id"], "title": t["title"], "status": t["status"],
                       "reason": s["reason"], "suggest": s["suggest"], "action": s["action"],

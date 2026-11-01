@@ -77,16 +77,16 @@ def _task(c, task_id, requester=None):
     """A setup task's id and status: only ever a task to the Librarian, and the person's own when one is named."""
     if not isinstance(task_id, str) or not task_id:
         return None
-    row = c.execute("SELECT id,status,requester,created_at FROM tasks WHERE id=? AND owner=?",
+    row = c.execute("SELECT id,status,requester_id,created_at FROM tasks WHERE id=? AND owner_id=?",
                     (task_id, "bot:" + L.LIBRARIAN)).fetchone()
-    if not row or requester and row["requester"] != requester:
+    if not row or requester and row["requester_id"] != requester:
         return None
     return {"id": row["id"], "status": row["status"], "created_at": row["created_at"]}
 
 
 def _docs_task(c):
     """The newest "Set up Docs" task anyone filed: once there is one, Docs is past its first visit."""
-    row = c.execute("SELECT id FROM tasks WHERE owner=? AND (title=? OR title LIKE ?) ORDER BY created_at DESC LIMIT 1",
+    row = c.execute("SELECT id FROM tasks WHERE owner_id=? AND (title=? OR title LIKE ?) ORDER BY created_at DESC LIMIT 1",
                     ("bot:" + L.LIBRARIAN, DOCS_TASK, DOCS_TASK + " (%)")).fetchone()
     return _task(c, row["id"]) if row else None
 

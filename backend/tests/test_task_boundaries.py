@@ -6,7 +6,7 @@ from backend.tests.test_tasks_board import api, bot_token, get, headers, post  #
 
 
 def make_task(api, title, **fields):
-    return post(api, 'tasks', {'owner': 'ops', 'title': title, 'body': 'Review the packet.', **fields})
+    return post(api, 'tasks', {'owner_id': 'ops', 'title': title, 'body': 'Review the packet.', **fields})
 
 
 def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receipts(api):
@@ -78,7 +78,7 @@ def test_nested_answers_and_file_reviews_filter_each_source_message(api):
 def test_pipeline_cannot_remap_hidden_done_task_but_names_and_order_are_editable(api):
     typ = post(api, 'task-types', {'name': 'Reviews', 'steps': [{'name': 'Start', 'status': 'open'},
                 {'name': 'Finished', 'status': 'done'}]})['type']
-    row = post(api, 'tasks', {'owner': 'priya', 'title': 'Review private packet', 'body': 'Review it.',
+    row = post(api, 'tasks', {'owner_id': 'priya', 'title': 'Review private packet', 'body': 'Review it.',
                 'private': True, 'type': typ['id']}, 'ben-test')
     done = post(api, 'tasks/' + row['id'], {'version': row['version'], 'step': 'Finished'}, 'priya-test')
     get(api, 'tasks/' + row['id'], expected=404)
@@ -106,5 +106,5 @@ def test_comment_delegation_never_authorizes_bot_acceptance(api):
         for close in ({'close': True}, {'step': 'general-closed'}):
             post(api, 'tasks/' + row['id'], {'version': done['version'], **close}, token, expected=403)
     accepted = post(api, 'tasks/' + row['id'], {'version': done['version'], 'close': True})
-    assert accepted['status'] == 'closed' and accepted['closed_by'] == 'human:ana'
+    assert accepted['status'] == 'closed' and accepted['closed_by_id'] == 'human:ana'
     assert accepted['done_at'] == done['done_at']

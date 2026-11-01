@@ -836,9 +836,9 @@ class Onboarding:
         same call Settings makes, so generations, refusals and audit events are identical."""
         who = self.auth.owner_identity(c)
         placed = []
-        computer = c.execute("SELECT operator,accepts_member_bots FROM runners WHERE id=? AND revoked_at IS NULL",
+        computer = c.execute("SELECT owner_id,accepts_member_bots FROM runners WHERE id=? AND revoked_at IS NULL",
                              (runner_id,)).fetchone()
-        for row in c.execute("SELECT bc.bot,bc.config,bc.operator FROM bot_config bc "
+        for row in c.execute("SELECT bc.bot,bc.config,bc.owner_id FROM bot_config bc "
                              "LEFT JOIN bots b ON b.id=bc.bot WHERE COALESCE(b.state,'active')<>'archived' "
                              "ORDER BY bc.bot").fetchall():
             if not (_json(row["config"], {}) or {}).get("template"):
@@ -848,7 +848,7 @@ class Onboarding:
             if c.execute("SELECT 1 FROM cloud_machines WHERE bot=? AND mode='cloud'", (row["bot"],)).fetchone():
                 continue                     # it runs on a cloud machine (backend/cloud_machines.py)
             if self.auth.member_bot(c, row["bot"]) and not (
-                    computer and (computer["accepts_member_bots"] or computer["operator"] == row["operator"])):
+                    computer and (computer["accepts_member_bots"] or computer["owner_id"] == row["owner_id"])):
                 continue                     # a member's bot goes on its member's computer, or one open to members' bots
             try:
                 self.execution.assign(c, who, row["bot"], SimpleNamespace(
@@ -1096,7 +1096,7 @@ class Onboarding:
             row = c.execute("SELECT id,label FROM runners WHERE id=? AND revoked_at IS NULL",
                             (runner_id,)).fetchone()
         else:
-            row = c.execute("SELECT id,label FROM runners WHERE operator=? AND revoked_at IS NULL "
+            row = c.execute("SELECT id,label FROM runners WHERE owner_id=? AND revoked_at IS NULL "
                             "ORDER BY created_at DESC, rowid DESC LIMIT 1", (self.auth.owner_id(c),)).fetchone()
             if not row:
                 # The owner changed after the machine enrolled; a lone online machine is still
@@ -1106,8 +1106,8 @@ class Onboarding:
                 row = online[0] if len(online) == 1 else None
                 if row:
                     # Only the owner's machines may host every bot, so this one becomes the owner's.
-                    c.execute("UPDATE runners SET operator=? WHERE id=?", (self.auth.owner_id(c), row["id"]))
-                    H.event(c, actor, "runner.adopted", row["id"], {"operator": self.auth.owner_id(c)})
+                    c.execute("UPDATE runners SET owner_id=? WHERE id=?", (self.auth.owner_id(c), row["id"]))
+                    H.event(c, actor, "runner.adopted", row["id"], {"owner_id": self.auth.owner_id(c)})
         if not row:
             self._adopt_cloud(c, actor)
             return []

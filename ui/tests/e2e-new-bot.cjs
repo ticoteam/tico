@@ -45,7 +45,7 @@ journey('e2e-new-bot', async ({hub, browser, phone}) => {
   const row = page.locator('.tl-row', {hasText: TITLE}).first();
   await row.waitFor({timeout: t(20000)});
   const task = (await row.getAttribute('data-task-key')).slice(1);
-  assert.equal((await must(hub, 'dana', 'GET', 'tasks/' + task)).task.owner, 'bot:' + bot, `${where}: the task's owner is bot:<id>`);
+  assert.equal((await must(hub, 'dana', 'GET', 'tasks/' + task)).task.owner_id, 'bot:' + bot, `${where}: the task's owner is bot:<id>`);
   assertClean(page, `${where}: task made`);
 
   // Rename its slug in its settings.

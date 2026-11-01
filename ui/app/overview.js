@@ -37,7 +37,7 @@ function overviewModel() {
     group.members.push({id: 'bot:' + e.id, name: botDisplayName(e.id) + (e.shared_from || e.is_branch ? ' · Your branch' : ''),
       type: 'bot', state, detail: word, href: readable || e.can_chat ? '#/bot/' + encodeURIComponent(e.id) : '', face: overviewFace(e)});
     if (group === commons) continue;
-    const collaborators = new Set([actor(e.operator), ...(e.users || []).map(actor), ...(e.owners || []).map(actor), ...(e.bot_owners || []).map(actor)]);
+    const collaborators = new Set([actor(e.owner_id), ...(e.users || []).map(actor), ...(e.owners || []).map(actor), ...(e.bot_owners || []).map(actor)]);
     // Follow visible reporting chains too: a human may direct a bot through another bot.
     let parent = e.reports_to; const seen = new Set([e.id]);
     while (parent && !seen.has(parent)) {
@@ -122,10 +122,10 @@ async function overviewReplayLoad(state) {
   try { data = await get('/v2/replay?' + new URLSearchParams({from: from.toISOString(), to: to.toISOString()})); }
   catch { post({type: 'tico-overview-replay-error'}); return; }
   const nameOf = replayName(data), names = {};
-  const actors = (data.items || []).flatMap(it => [it.who, it.to, it.owner, it.kind === 'task.owner' ? it.new : null, it.bot ? 'bot:' + it.bot : null])
+  const actors = (data.items || []).flatMap(it => [it.who, it.to, it.owner_id, it.kind === 'task.owner' ? it.new : null, it.bot ? 'bot:' + it.bot : null])
     .concat(Object.keys(data.start?.bots || {}).map(slug => 'bot:' + slug));
   for (const a of actors) if (a && !(a in names)) names[a] = nameOf(a);
-  const slim = it => ({at: it.at, kind: it.kind, who: it.who, to: it.to, owner: it.owner, bot: it.bot, state: it.state, exit: it.exit,
+  const slim = it => ({at: it.at, kind: it.kind, who: it.who, to: it.to, owner: it.owner_id, bot: it.bot, state: it.state, exit: it.exit,
     new: it.new, task: it.task ? {title: it.task.title} : undefined, goal: it.goal ? {title: it.goal.title} : undefined,
     text: it.kind === 'chat.message' || it.kind === 'task.comment' ? String(it.text || '').slice(0, 160) : undefined});
   const start = {bots: Object.fromEntries(Object.entries(data.start?.bots || {}).map(([slug, b]) => [slug, {state: b.state}]))};

@@ -20,7 +20,7 @@ def board(api):
 
 def ticket(api, typ, step, owner="ops", private=False):
     ask = uuid.uuid4().hex[:8]
-    return post(api, "tasks", {"owner": owner, "title": f"Build {ask}", "body": f"Build {ask}.", "type": typ, "step": step,
+    return post(api, "tasks", {"owner_id": owner, "title": f"Build {ask}", "body": f"Build {ask}.", "type": typ, "step": step,
                                "private": private})
 
 
@@ -39,10 +39,10 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
     private = ticket(api, typ, steps["Review"], private=True)
     reviewed = ticket(api, typ, steps["Review"])
     done = ticket(api, typ, steps["Review"])
-    child = post(api, "tasks", {"owner": "cpo", "title": "Review it", "body": "Review it.",
+    child = post(api, "tasks", {"owner_id": "cpo", "title": "Review it", "body": "Review it.",
                                 "relations": [{"task": reviewed["id"], "kind": "parent"}]})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_events SET ts=? WHERE task_id=? AND field='step'", (H.shift(H.now(), hours=-30), old["id"]))
+        c.execute("UPDATE task_events SET created_at=? WHERE task_id=? AND field='step'", (H.shift(H.now(), hours=-30), old["id"]))
         c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), days=3), snoozed["id"]))
         c.execute("UPDATE tasks SET status='closed', step_id=? WHERE id=?", (steps["Done"], done["id"]))
         c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,created_at) VALUES(?,?,?,?,?,?,?)",
@@ -60,7 +60,7 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
     assert done["number"] not in review["ids"]
     # The reviewed ticket waits on its open child's owner; the private one on nothing but its own owner.
     assert review["waits_on"] == {"bot": 1, "person": 0, "external": 0, "nothing": 1}
-    assert review["waits_on_actor"] == {child["owner"]: 1}
+    assert review["waits_on_actor"] == {child["owner_id"]: 1}
     assert review["prs"]["open"] == 1 and 4.9 <= review["prs"]["oldest_hours"] <= 5.1
 
     # Cara is on none of them: the private ticket is not hers to count, or to see by number.
@@ -81,7 +81,7 @@ def test_a_queued_job_behind_an_unreviewed_interrupted_run_is_dead_not_queued(ap
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Ship the fix", "body": "Please ship it."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Ship the fix", "body": "Please ship it."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
         # The computer restarted mid-run: the run may have acted, so its task waits for a person's review.
@@ -90,7 +90,7 @@ def test_a_queued_job_behind_an_unreviewed_interrupted_run_is_dead_not_queued(ap
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
     post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
     with api.app.state.store.read() as c:
-        dead = [r[0] for r in c.execute("SELECT id FROM jobs WHERE bot='ops' AND state='queued'")]
+        dead = [r[0] for r in c.execute("SELECT id FROM jobs WHERE bot_id='ops' AND state='queued'")]
     assert len(dead) == 1
     assert claim(api, r) is None                      # never handed out while the interrupted run waits
 
@@ -117,7 +117,7 @@ def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Ship the fix", "body": "Please ship it."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Ship the fix", "body": "Please ship it."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='interrupted', finished_at=?, result=? WHERE id=?",
@@ -126,14 +126,14 @@ def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
     post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
     post(api, "chat/ops", {"text": "Separate question"})     # the one job that can start
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), hours=-2),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), hours=-2),))
     pipe = stats(api, query="bot=ops")["queues"]["ops"]
     assert pipe["queued"] == 1 and pipe["dead"] == 1
 
     # Health's row for the bot carries Pipeline's split, not the sum of both: 1 queued, 1 behind the interrupted run.
     with api.app.state.store.read() as c:
         _, slow, stuck = health._waiting(c, {r["runner_id"]})
-    rows = [row for row in slow + stuck if row["bot"] == "ops"]
+    rows = [row for row in slow + stuck if row["bot_id"] == "ops"]
     assert rows and all((row["queued"], row["dead"]) == (pipe["queued"], pipe["dead"]) for row in rows)
 
 
@@ -144,7 +144,7 @@ def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypat
     ready(api, r, ["ops"])
     failed = {}
     for name, private, age in (("open", False, 3), ("private", True, 1)):
-        post(api, "tasks", {"owner": "ops", "title": f"Fix {name}", "body": "Please fix it.", "private": private})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Fix {name}", "body": "Please fix it.", "private": private})
         attempt = claim(api, r)
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE attempts SET state='failed', finished_at=? WHERE id=?", (H.shift(H.now(), hours=-age), attempt["id"]))

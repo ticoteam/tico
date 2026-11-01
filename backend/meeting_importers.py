@@ -70,8 +70,8 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
         return [{"id": r["id"], "label": r["label"], "platform": r["platform"] or "",
                  "online": bool(r["last_seen_at"] and r["last_seen_at"] >= H.shift(now, minutes=-5)),
                  "last_seen_at": r["last_seen_at"]}
-                for r in c.execute("SELECT id,label,platform,last_seen_at,operator FROM runners "
-                                   "WHERE revoked_at IS NULL ORDER BY label") if r["operator"] in allowed]
+                for r in c.execute("SELECT id,label,platform,last_seen_at,owner_id FROM runners "
+                                   "WHERE revoked_at IS NULL ORDER BY label") if r["owner_id"] in allowed]
 
     def configured(c):
         return {r["source"]: dict(r) for r in c.execute("SELECT * FROM meeting_importers")}

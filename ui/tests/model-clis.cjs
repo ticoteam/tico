@@ -15,7 +15,7 @@ const {unrouted} = require('./support/routes.cjs');
     page.on('pageerror', e => errors.push(e.message));
     const chip = (name, runtime, installed) => ({name, runtime, installed, version: installed ? '1.0.0' : '', managed: true, state: 'idle',
       wanted: installed, pinned: false, update_available: false, detail: ''});
-    const computer = {id: 'computer-1', label: 'Build server', operator: 'ana', bots: ['helper'], platform: 'linux',
+    const computer = {id: 'computer-1', label: 'Build server', owner_id: 'ana', bots: ['helper'], platform: 'linux',
       last_seen_at: new Date().toISOString(), needed_runtimes: ['codex'], bot_runtimes: ['codex', 'gemini'], harness_choices: {},
       readiness: {runtimes: {codex: {installed: true, authenticated: 'ready'}},
         harnesses: {codex: chip('Codex', 'codex', true), antigravity: chip('Antigravity', 'gemini', true), grok: chip('Grok Build', 'grok', false)}}};
@@ -32,7 +32,7 @@ const {unrouted} = require('./support/routes.cjs');
       const config = {version: '0.1.0', app_name: 'Tico'};
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true, config});
       if (p === '/api/v2/config') return json(config);
-      if (p === '/api/employees') return json([{name: 'helper', display_name: 'Helper', status: 'active', operator: 'ana', can_manage: true, users: [], bot_owners: []}]);
+      if (p === '/api/employees') return json([{name: 'helper', display_name: 'Helper', status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});

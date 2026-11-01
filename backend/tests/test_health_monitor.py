@@ -65,7 +65,7 @@ def scan_with(api, settings):
 
 def monitor_tasks(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,title,body FROM tasks WHERE owner=? ORDER BY created_at",
+        return [dict(r) for r in c.execute("SELECT id,title,body FROM tasks WHERE owner_id=? ORDER BY created_at",
                                            ("bot:" + health_monitor.SLUG,))]
 
 
@@ -78,7 +78,7 @@ def notices(api, task_id, start="Seen again"):
 def wakes(api):
     """Runs queued for the Health Monitor: the jobs its messages started (the runs token saving 1/9 records)."""
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (health_monitor.SLUG,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (health_monitor.SLUG,)).fetchone()[0]
 
 
 def finding(api, key):
@@ -276,7 +276,7 @@ def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment,
     api, runner = built(environment)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), runner["runner_id"]))
-        c.execute("INSERT INTO runner_versions(runner_id,release,reported) VALUES(?,?,?) ON CONFLICT(runner_id) "
+        c.execute("INSERT INTO runner_versions(runner_id,release,reported_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
                   "DO UPDATE SET release=excluded.release,update_state='',update_error=''",
                   (runner["runner_id"], release, H.now()))
         found = {f["check_id"]: f for f in health_monitor.findings(c, api.app.state.store.settings)}
@@ -288,7 +288,7 @@ def test_event_stream_counts_drops_and_not_the_ones_a_server_restart_caused(envi
     api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
     monkeypatch.setattr(diagnostics.RING, "started", "2026-01-10T23:00:00Z")      # this process: far from the lines
     with api.app.state.store.transaction() as c:                                     # an earlier start: the update
-        c.execute("INSERT INTO flight_events(ts,kind,detail) VALUES(?,?,'{}')",
+        c.execute("INSERT INTO flight_events(created_at,kind,detail) VALUES(?,?,'{}')",
                   (calendar.timegm(time.strptime("2026-01-10T21:06:44Z", "%Y-%m-%dT%H:%M:%SZ")), "start"))
     lost = "%s Tico runner: event stream lost (TimeoutError: error decoding response body); polling until it is back"
     gone = "%s Tico runner: event stream unavailable (HTTP 502); polling"
@@ -365,7 +365,7 @@ def test_a_repeat_goes_on_the_ticket_of_the_person_who_approved_it(environment, 
     approval = api.post(url, json={}, headers=bot).json()["approval"]
     as_person(api, "riley")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE approvals SET decision='approved', decided_by='human:riley' WHERE id=?", (approval,))
+        c.execute("UPDATE approvals SET decision='approved', decided_by_id='human:riley' WHERE id=?", (approval,))
     api.app.state.support.file_approved(Identity("bot:" + health_monitor.SLUG, "bot"), approval)
     assert json.loads(hq.seen[-1].content)["source"] == "health_monitor"     # approved by a person, still the monitor's
     runner_errors(api, runner, [])
@@ -389,7 +389,7 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_hq(environment, hq):
         H.sync_registry(c, {SECRET_BOT: {"name": SECRET_BOT, "status": "active"}}, None)
         c.execute("INSERT OR REPLACE INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
                   (SECRET_BOT, runner["runner_id"], H.now()))
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES('m-silent','human:ana',?,'chat','hi',?)",
+        c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-silent','human:ana',?,'chat','hi',?)",
                   ("bot:" + SECRET_BOT, H.now()))
         c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-15), runner["runner_id"]))
     found = scan(api)
@@ -467,7 +467,7 @@ def limited(api, bot=SECRET_BOT, config=None):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {bot: {"name": bot, "status": "active"}}, None)
         if config is not None:
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,operator) VALUES(?,?,'ana')",
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
                       (bot, json.dumps(config)))
         H.event(c, H.KEEPER, "attempt.limited", "a-" + bot, {"bot": bot})
 
@@ -505,13 +505,13 @@ def turn(api, runner_id, result, minutes_ago, bot="coo", state=None):
     with api.app.state.store.transaction() as c:
         at = H.shift(H.now(), minutes=-minutes_ago)
         mid = "m-" + H.new_id()
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES(?,'human:ana',?,'chat','hi',?)",
+        c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES(?,'human:ana',?,'chat','hi',?)",
                   (mid, "bot:" + bot, at))
-        c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot,state,created_at) VALUES(?,?,?,'completed',?)",
+        c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,'completed',?)",
                   ("j-" + mid, mid, bot, at))
         job = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()["id"]
         aid = "a-" + mid
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,finished_at,"
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,finished_at,"
                   "result) VALUES(?,?,?,?,1,?,?,?,?,?,?)",
                   (aid, job, bot, runner_id, "hash-" + aid, state or result["outcome"], at, at, at, json.dumps(result)))
 
@@ -592,7 +592,7 @@ def test_a_bots_own_key_is_not_the_computers_login(environment):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {b: {"name": b, "status": "active"} for b in ("gem-a", "gem-b", "pi-a")}, None)
         for bot, harness in (("gem-a", "gemini-cli"), ("gem-b", "gemini-cli"), ("pi-a", "pi")):
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,operator) VALUES(?,?,'ana')",
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
                       (bot, json.dumps({"harness": harness})))
     # The Gemini CLI and pi sign in with each bot's own key (`api_keys = "bot"`): gem-a out of quota on its key, as a
     # turn of its own, a check and a fallback, says nothing about the computer, and gem-b working there clears nothing.

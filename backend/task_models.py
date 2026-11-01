@@ -197,7 +197,7 @@ def stakes(c, settings, bot):
     """What is at stake on `bot`, plain words per signal: each send, spend or publish approval it has asked for, and
     each tool grant that lets it write beyond its own repository (backend/bot_tools.py). Empty for a bot with none.
     Customer data and permission changes have no signal of their own beyond these."""
-    asked = {row[0] for row in c.execute("SELECT DISTINCT kind FROM approvals WHERE requested_by=?",
+    asked = {row[0] for row in c.execute("SELECT DISTINCT kind FROM approvals WHERE requested_by_id=?",
                                          (H.bot_actor(bot),))}
     found = [{"kind": kind, "does": STAKES[kind][0], "risk": STAKES[kind][1]} for kind in STAKES if kind in asked]
     from . import bot_tools

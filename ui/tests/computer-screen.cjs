@@ -15,7 +15,7 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
-    const computer = (id, label, more) => ({id, label, operator: 'ana', bots: [], platform: 'linux', last_seen_at: new Date().toISOString(),
+    const computer = (id, label, more) => ({id, label, owner_id: 'ana', bots: [], platform: 'linux', last_seen_at: new Date().toISOString(),
       readiness: {}, screen: 'off', screen_available: false, ...more});
     const machines = [computer('c1', 'Build server', {screen_available: true}), computer('c2', 'Old Mac')];
     const writes = [], sessions = [], heard = [];

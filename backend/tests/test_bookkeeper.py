@@ -45,7 +45,7 @@ def check(api):
 
 def checks(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,title,body,status,private FROM tasks WHERE owner=?", (BK.ACTOR,))]
+        return [dict(r) for r in c.execute("SELECT id,title,body,status,private FROM tasks WHERE owner_id=?", (BK.ACTOR,))]
 
 
 def rights(c):
@@ -61,8 +61,8 @@ def test_it_is_built_once_outside_the_org_chart_with_exactly_its_default_rights(
         assert H.bot(c, BK.SLUG)["state"] == "active" and BK.built(c)
         assert rights(c) == DEFAULT_RIGHTS
         assert c.execute("SELECT count(*) FROM events WHERE action='bookkeeper.view_asked'").fetchone()[0] == 1
-        asks = c.execute("SELECT owner FROM tasks WHERE title=?", (BK.VIEW_TITLE,)).fetchall()
-        assert len(asks) == 1 and asks[0]["owner"].startswith("human:")
+        asks = c.execute("SELECT owner_id FROM tasks WHERE title=?", (BK.VIEW_TITLE,)).fetchall()
+        assert len(asks) == 1 and asks[0]["owner_id"].startswith("human:")
     assert api.app.state.auth.system_bot(BK.SLUG) and BK.SLUG in groups.SYSTEM_BOTS
     assert "bookkeeper" in helper_templates(api.app.state.store.settings)
     store = api.app.state.store
@@ -81,7 +81,7 @@ def test_an_empty_queue_is_a_quiet_check_and_news_opens_one_private_task_once(en
     assert check(api)["words"] == "Nothing new"
     assert checks(api) == []
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot=?", (BK.SLUG,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (BK.SLUG,)).fetchone()[0] == 0
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bills_inbound(id,delivery,received_at,sender,subject,name,mime,sha256,state,file_id,"
                   "updated_at) VALUES('bil_1','d1','2026-10-30T10:00:00Z','ap@acme.example','Invoice 1042',"
@@ -128,7 +128,7 @@ def test_a_bill_emailed_to_the_address_lands_once_in_the_library_and_in_the_book
     with store.read() as c:
         (row,) = [dict(r) for r in c.execute("SELECT * FROM bills_inbound")]
         assert row["state"] == "filed" and row["file_id"], row
-        assert c.execute("SELECT bot FROM bot_files WHERE id=?", (row["file_id"],)).fetchone()["bot"] == BK.SLUG
+        assert c.execute("SELECT bot_id FROM bot_files WHERE id=?", (row["file_id"],)).fetchone()["bot_id"] == BK.SLUG
         queue = FR.inbox(c, BK.ACTOR)
         assert [i["file_id"] for i in queue["items"] if i["kind"] == "unmatched_receipt"] == [row["file_id"]]
     with store.transaction() as c:                                   # the hand-over's key replays: Finance acts once

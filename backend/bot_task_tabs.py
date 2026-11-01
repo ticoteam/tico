@@ -58,7 +58,7 @@ ITEM = re.compile(r"(page|card):[A-Za-z0-9_.-]{1,100}")
 # field -> what its value is. Lists are "any of"; every row of a tab must match.
 FIELDS = {"status": "statuses", "step": "steps", "type": "types", "assigned_to": "party", "asked_by": "party",
           "waiting_on": "waiting", "needs": "attention", "created_within": "days", "updated_within": "days", "done_within": "days",
-          "due": "due", "label": "label"}
+          "due_at": "due", "label": "label"}
 WAITING = ("any", "person", "bot", "me", "not_me")
 
 
@@ -301,23 +301,23 @@ def bot_wait_sql(visible_sql):
     Person waits/questions and gate/worktree holds keep their own meaning, even with a bot blocker.
     Never infer a bot from waiting_on: that column stores people only.
     """
-    blockers = ("SELECT b.owner FROM task_relations r JOIN tasks b ON b.id=r.from_task "
+    blockers = ("SELECT b.owner_id FROM task_relations r JOIN tasks b ON b.id=r.from_task "
                 "WHERE r.to_task=tasks.id AND r.kind='blocks' AND b.status NOT IN ('done','closed','declined') "
                 f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=b.id AND ({visible_sql}))")
     return ("status='waiting' AND coalesce(waiting_on,'') NOT LIKE 'human:%' "
             "AND coalesce(blocked_kind,'') NOT IN ('gate','worktree') "
             f"AND ({blockers} ORDER BY r.created_at,r.rowid LIMIT 1) LIKE 'bot:%' "
-            f"AND NOT EXISTS ({blockers} AND b.owner LIKE 'human:%') "
+            f"AND NOT EXISTS ({blockers} AND b.owner_id LIKE 'human:%') "
             "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
             f"WHERE m.conversation_id=tasks.conversation_id AND {H.MESSAGE_TASK_SQL}=tasks.id "
             f"AND m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL} "
-            "AND m.to_actor LIKE 'human:%' AND coalesce(m.body,'')!='')")
+            "AND m.recipient_id LIKE 'human:%' AND coalesce(m.body,'')!='')")
 
 
 def tab_sql(tab, bot, viewer, visible_sql="1"):
     """A filter's WHERE over the bot's tasks: every row, then finished tasks only for the window it names (two weeks
     when it names none) and never a routine's finished runs."""
-    where, args, window = ["id IN (SELECT id FROM tasks WHERE owner=? UNION SELECT id FROM tasks WHERE requester=?)"], \
+    where, args, window = ["id IN (SELECT id FROM tasks WHERE owner_id=? UNION SELECT id FROM tasks WHERE requester_id=?)"], \
         ["bot:" + bot, "bot:" + bot], RECENT_DAYS
     for row in tab["conditions"]:
         field, value = row["field"], row["value"]

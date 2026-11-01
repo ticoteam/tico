@@ -28,7 +28,7 @@ def test_pause_reason_batch_and_single_read_pick_the_same_newest_row_on_a_tied_t
     store = api.app.state.store
     with store.transaction() as c:
         for row_id, reason in (("older", "over limit"), ("newer", "manual")):
-            c.execute("INSERT INTO bot_status_history(id,bot,state,focus,task_id,since,until,reason,by) "
+            c.execute("INSERT INTO bot_status_history(id,bot,state,focus,task_id,started_at,ended_at,reason,by) "
                       "VALUES(?,?,?,?,?,?,?,?,?)", (row_id, "tied", "paused", "", "", "2026-11-01T10:00:00Z", None,
                                                    reason, "t"))
     with store.read_transaction() as c:

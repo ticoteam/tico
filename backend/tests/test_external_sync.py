@@ -33,7 +33,7 @@ def room_messages(api, slug):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute(
             "SELECT m.* FROM messages m JOIN conversations v ON v.id=m.conversation_id "
-            "WHERE v.scope='personal' AND v.owner_actor='human:ana' AND v.room_key=? ORDER BY m.created_at", (bid,))]
+            "WHERE v.scope='personal' AND v.owner_id='human:ana' AND v.room_key=? ORDER BY m.created_at", (bid,))]
 
 
 def test_a_new_grok_bot_lands_under_the_person_with_its_history_and_instructions(api):
@@ -43,7 +43,7 @@ def test_a_new_grok_bot_lands_under_the_person_with_its_history_and_instructions
     assert bot["created"] and bot["bot"] == bid and bot["messages_added"] == 2
     assert bot["synced_through"].startswith("2026-09-27T10:01:00")
     row = next(b for b in get(api, "bots") if b["slug"] == "grok-designer")
-    assert row["reports_to"] == "human:ana" and row["operator"] == "ana"
+    assert row["reports_to"] == "human:ana" and row["owner_id"] == "ana"
     assert row["display_name"] == "Grok Designer"          # "Tico Designer" in Grok
     with api.app.state.store.read() as c:
         config = H._json(c.execute("SELECT config FROM bot_config WHERE bot=?", (bid,)).fetchone()[0], {})
@@ -52,9 +52,9 @@ def test_a_new_grok_bot_lands_under_the_person_with_its_history_and_instructions
         assert config["grok"]["source"] == "Groky"
         assert config["grok"]["name"] == "Tico Designer"      # its name in Grok, for rebuilding it
         # Copied history is read and quiet: no job for a runner, nothing unread.
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bid,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bid,)).fetchone()[0] == 0
     messages = room_messages(api, "grok-designer")
-    assert [(m["from_actor"], m["body"]) for m in messages] == [
+    assert [(m["sender_id"], m["body"]) for m in messages] == [
         ("human:ana", "Make the org chart calmer."), ("bot:" + bid, "Softer lines, fewer badges.")]
     assert all(m["read_at"] for m in messages)
 
@@ -78,7 +78,7 @@ def test_a_member_links_their_own_dots_as_one_bot_under_them(api):
     again = post(api, "external/sync", {"provider": "dots", "bots": [{"name": "Dots"}]}, token="cara-test")
     assert again["bots"][0]["bot"] == bid and not again["bots"][0]["created"]     # one Dots per person
     row = next(b for b in get(api, "bots") if b["slug"] == "dots")
-    assert row["reports_to"] == "human:cara" and row["operator"] == "cara" and row["harness"] == "dots"
+    assert row["reports_to"] == "human:cara" and row["owner_id"] == "cara" and row["harness"] == "dots"
     post(api, "external/sync", {"provider": "dots", "bots": [{"name": "A"}, {"name": "B"}]},
          token="cara-test", expected=422)
 
@@ -155,7 +155,7 @@ def test_two_people_syncing_the_same_grok_bot_get_their_own_bot_and_chat(api):
     rows = {b["id"]: b for b in get(api, "bots")}
     assert rows[ana["bot"]]["reports_to"] == "human:ana" and rows[cara["bot"]]["reports_to"] == "human:cara"
     with api.app.state.store.read() as c:
-        rooms = c.execute("SELECT owner_actor, room_key FROM conversations WHERE scope='personal' AND room_key IN (?,?)",
+        rooms = c.execute("SELECT owner_id, room_key FROM conversations WHERE scope='personal' AND room_key IN (?,?)",
                           (ana["bot"], cara["bot"])).fetchall()
     assert sorted(map(tuple, rooms)) == sorted([("human:ana", ana["bot"]), ("human:cara", cara["bot"])])
     post(api, "chat/" + ana["bot"], {"text": "Only for Ana's."})
@@ -234,7 +234,7 @@ def test_stale_import_warns_without_claiming_a_runtime_failure_or_changing_histo
     with api.app.state.store.read() as c:
         config = H._json(c.execute("SELECT config FROM bot_config WHERE bot=?", (bid,)).fetchone()[0], {})
         assert issue['since'] == config['grok']['last_sync'] < later
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bid,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bid,)).fetchone()[0] == 0
     assert len(room_messages(api, 'grok-designer')) == 2
 
 
@@ -279,11 +279,11 @@ def test_muse_links_as_one_bot_beside_dots(api):
 
 def test_a_task_for_a_synced_bot_is_refused_with_what_to_do_instead(api):
     sync(api, designer())
-    r = api.post("/api/v2/tasks", json={"owner": "grok-designer", "title": "Redo the logo", "body": "x"},
+    r = api.post("/api/v2/tasks", json={"owner_id": "grok-designer", "title": "Redo the logo", "body": "x"},
                  headers=headers())
     assert r.status_code == 422 and "only syncs its chat here" in r.text
-    task = post(api, "tasks", {"owner": "ops", "title": "Redo the logo", "body": "x"})
-    post(api, "tasks/" + task["id"], {"version": task["version"], "owner": "grok-designer"}, expected=422)
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Redo the logo", "body": "x"})
+    post(api, "tasks/" + task["id"], {"version": task["version"], "owner_id": "grok-designer"}, expected=422)
     # Its routines would be tasks too: none can be set, and one left from before is passed over by an event.
     from backend import routines
     from backend.store import H
@@ -296,7 +296,7 @@ def test_a_task_for_a_synced_bot_is_refused_with_what_to_do_instead(api):
             assert exc.rule == "external-bot"
         c.execute("INSERT INTO schedules(id,bot,event_name,title,playbook) VALUES('old',?,'meeting.ready','Notes','x')", (bid,))
         H.hook(c, "meeting.ready", "m1", lambda: {}, "human:ana")
-        assert c.execute("SELECT count(*) FROM tasks WHERE owner LIKE ?", ("%" + bid,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner_id LIKE ?", ("%" + bid,)).fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM automation_runs").fetchone()[0] == 0
 
 
@@ -328,7 +328,7 @@ def deliver(api, computer, token="cara-test", expected=200, slug="grok-designer"
 def jobs(api, slug="grok-designer"):
     bid = bot_id(api, slug)
     with api.app.state.store.read() as c:
-        return {r["message_id"]: r["state"] for r in c.execute("SELECT message_id,state FROM jobs WHERE bot=?", (bid,))}
+        return {r["message_id"]: r["state"] for r in c.execute("SELECT message_id,state FROM jobs WHERE bot_id=?", (bid,))}
 
 
 def inbox(api, token="cara-test"):
@@ -400,7 +400,7 @@ def test_what_the_app_shows_is_posted_once_without_echoes_and_a_question_reaches
             {"key": "k4", "role": "bot", "text": "Logo: keep it."}]               # the bot on its own
     assert report(*page) == {"after": "k4", "posted": 2}
     assert report(*page) == {"after": "k4", "posted": 0}                          # each key once
-    bodies = [(m["from_actor"], m["body"], bool(m["read_at"])) for m in room_messages_of(api, "cara", "grok-designer")]
+    bodies = [(m["sender_id"], m["body"], bool(m["read_at"])) for m in room_messages_of(api, "cara", "grok-designer")]
     assert bodies == [("human:cara", asked["body"], False), ("bot:" + bid, "Warmer: sand and rust.", False),
                       ("human:cara", "And the logo?", True), ("bot:" + bid, "Logo: keep it.", False)]
     assert get(api, "runners/me/app-delivery", token=computer["token"])["bots"][0]["after"] == "k4"
@@ -433,7 +433,7 @@ def room_messages_of(api, person, slug):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute(
             "SELECT m.* FROM messages m JOIN conversations v ON v.id=m.conversation_id "
-            "WHERE v.scope='personal' AND v.owner_actor=? AND v.room_key=? ORDER BY m.created_at,m.rowid",
+            "WHERE v.scope='personal' AND v.owner_id=? AND v.room_key=? ORDER BY m.created_at,m.rowid",
             ("human:" + person, bid))]
 
 
@@ -495,7 +495,7 @@ def test_a_question_the_app_needs_its_person_for_is_one_ask_whichever_arrives_fi
                   {"key": "q2", "role": "bot", "text": "Email or paper?"})["posted"] == 0
     for question in ("Which account should I bill?", "Email or paper?"):
         rows = [m for m in room_messages_of(api, "cara", "grok-designer") if m["body"] == question]
-        assert [(m["from_actor"], m["kind"]) for m in rows] == [("bot:" + bot_id(api), "ask")], question
+        assert [(m["sender_id"], m["kind"]) for m in rows] == [("bot:" + bot_id(api), "ask")], question
         assert len(asks_in_needs_you(api, question)) == 1, question
 
 
@@ -544,4 +544,4 @@ def test_a_thousand_and_one_keys_roll_over_and_a_resent_old_key_still_posts_noth
     # A computer that lost its cursor sends from the start: the key no longer in the list, and a recent one.
     assert report({"key": "k0", "role": "bot", "text": "Message 0."},
                   {"key": "k999", "role": "bot", "text": "Message 999."}) == {"after": "k999", "posted": 0}
-    assert len([m for m in room_messages_of(api, "cara", "grok-designer") if m["from_actor"] == "bot:" + bid]) == 1001
+    assert len([m for m in room_messages_of(api, "cara", "grok-designer") if m["sender_id"] == "bot:" + bid]) == 1001

@@ -17,7 +17,7 @@ class Withdrawn(HubCase):
         after = H.approval(self.conn, appr["id"])
         self.assertEqual((after["decision"], after["decided_by"]), ("withdrawn", H.KEEPER))
         self.assertEqual(self.pending(), [])
-        told = self.conn.execute("SELECT body, refs FROM messages WHERE to_actor=? AND body LIKE 'Withdrawn:%'",
+        told = self.conn.execute("SELECT body, refs FROM messages WHERE recipient_id=? AND body LIKE 'Withdrawn:%'",
                                  (CMO,)).fetchall()
         self.assertEqual(len(told), 1)
         self.assertIn('"quiet": true', told[0]["refs"])
@@ -65,7 +65,7 @@ class Withdrawn(HubCase):
         old = H.approval_request(self.conn, CMO, "merge", MERGE)
         self.conn.execute("UPDATE approvals SET ready_since=NULL, decision_owner=NULL WHERE id=?", (old["id"],))
         (legacy,) = H.approvals(self.conn, pending=True)
-        to = H.message(self.conn, old["message_id"])["to_actor"]
+        to = H.message(self.conn, old["message_id"])["recipient_id"]
         self.assertEqual((legacy["ready_since"], legacy["decision_owner"]), (old["created_at"], to))
 
     def test_an_approval_undecided_for_fourteen_days_is_withdrawn_and_may_be_asked_again(self):

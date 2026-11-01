@@ -33,7 +33,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="tico-owner-link-"))
     registry = tmp / "registry"
     registry.mkdir()
-    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": OWNER}))
+    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner_id": OWNER}))
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]

@@ -89,7 +89,7 @@ def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_val
     assert [k["kind"] for k in body["kinds"]] == ["claude_token", "codex_login", "anthropic_key", "openai_key"]
     assert TOKEN not in json.dumps(body) and "r-1" not in json.dumps(body)
     with api.app.state.store.read() as c:
-        assert TOKEN not in c.execute("SELECT sealed FROM model_subscriptions WHERE id=?", (saved["id"],)).fetchone()[0]
+        assert TOKEN not in c.execute("SELECT sealed_at FROM model_subscriptions WHERE id=?", (saved["id"],)).fetchone()[0]
         assert not c.execute("SELECT 1 FROM idempotency WHERE response LIKE ? OR request_hash LIKE ?",
                              (f"%{TOKEN}%", f"%{TOKEN}%")).fetchone()
         assert not c.execute("SELECT 1 FROM events WHERE detail LIKE ?", (f"%{TOKEN}%",)).fetchone()
@@ -519,10 +519,10 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
         assert can_run(c, "ops", "codex")["can_run"] is True
         # ... but not on a runner too old to take one.
         assert can_run(c, "cpo", "codex")["can_run"] is False
-    parent = post(api, "tasks", {"owner": "ops", "title": "Ship the import fix", "body": "Open the PR."})
+    parent = post(api, "tasks", {"owner_id": "ops", "title": "Ship the import fix", "body": "Open the PR."})
     turn = claim(api, m)
     assert turn["task"]["id"] == parent["id"]
-    sub = post(api, "tasks", {"owner": "ops", "title": "Review it on Codex", "body": "Read it.", "check_model": "codex",
+    sub = post(api, "tasks", {"owner_id": "ops", "title": "Review it on Codex", "body": "Read it.", "check_model": "codex",
                               "check_role": "review", "relations": [{"task": parent["id"], "kind": "parent"}]},
                turn["token"])
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-parent"}, m["token"])

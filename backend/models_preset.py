@@ -205,5 +205,5 @@ def card(c, settings=None):
         return None
     lines = [SIGN_IN_LINE] + ([] if any(runs_gateway(d) for d in documents) else [NOT_ISOLATED_LINE])
     return {"kind": "setup", "id": "setup:sign-in", "title": SIGN_IN_TITLE, "first_line": " ".join(lines),
-            "created_at": record.get("updated_at") or "", "requester": None, "origin_actor": None, "from_person": None,
+            "created_at": record.get("updated_at") or "", "requester_id": None, "origin_actor": None, "from_person": None,
             "link": "#/settings", "link_label": "Open Settings > Computers"}

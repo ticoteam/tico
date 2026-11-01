@@ -39,7 +39,7 @@ def _collect(node, found, notices):
                 found.update(v for v in value if _is_id(v))
             else:
                 _collect(value, found, notices)
-        if node.get("kind") == "notice" and isinstance(node.get("body"), str) and "from_actor" in node:
+        if node.get("kind") == "notice" and isinstance(node.get("body"), str) and "sender_id" in node:
             notices.append(node)
             found.update(m.group(0) for m in ID.finditer(node["body"]))
     elif isinstance(node, list):

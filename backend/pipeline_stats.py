@@ -69,7 +69,7 @@ def steps_report(c, typ, rows, now):
     if ids:
         listed = json.dumps(ids)
         for task_id, at in c.execute(
-                "SELECT e.task_id, max(e.ts) FROM task_events e JOIN tasks t ON t.id=e.task_id "
+                "SELECT e.task_id, max(e.created_at) FROM task_events e JOIN tasks t ON t.id=e.task_id "
                 "WHERE e.task_id IN (SELECT value FROM json_each(?)) AND e.field='step' AND e.new=t.step_id "
                 "GROUP BY e.task_id", (listed,)):
             entered[task_id] = at
@@ -96,7 +96,7 @@ def steps_report(c, typ, rows, now):
         owners, waits, on = {}, {"bot": 0, "person": 0, "external": 0, "nothing": 0}, {}
         open_prs = [at for r in items for at in prs.get(r["id"], [])]
         for r in items:
-            owners[r["owner"]] = owners.get(r["owner"], 0) + 1
+            owners[r["owner_id"]] = owners.get(r["owner_id"], 0) + 1
             target = (H.wait_detail(c, r) or {}).get("on")
             waits[waits_kind(target)] += 1
             if target:
@@ -158,10 +158,10 @@ def _queue_job_rows(c, bots):
     for part in H.chunks(list(bots)):
         marks = ",".join("?" * len(part))
         rows.extend(c.execute(
-            f"SELECT m.*, j.id AS job_id, j.bot AS job_bot, j.state AS job_state, j.created_at AS job_created, "
+            f"SELECT m.*, j.id AS job_id, j.bot_id AS job_bot, j.state AS job_state, j.created_at AS job_created, "
             f"j.held AS job_held, j.attempt_id AS job_attempt, {unfenced_sql()} AS free FROM jobs j "
             "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE j.state IN ('queued','uncertain') AND j.bot IN ({marks}) ORDER BY j.created_at, j.id", part))
+            f"WHERE j.state IN ('queued','uncertain') AND j.bot_id IN ({marks}) ORDER BY j.created_at, j.id", part))
     return rows
 
 
@@ -203,11 +203,11 @@ def queues_report(c, who, bots, now):
                "oldest_queued_hours": None, "dead_ids": [], **jobs[b]} for b in bots}
     for part in H.chunks(list(out)):
         marks = ",".join("?" * len(part))
-        for row in c.execute(f"SELECT a.id, a.bot, d.stalled_at FROM attempts a LEFT JOIN attempt_diagnostics d "
-                             f"ON d.attempt_id=a.id WHERE a.state IN ('leased','running') AND a.bot IN ({marks})", part):
+        for row in c.execute(f"SELECT a.id, a.bot_id, d.stalled_at FROM attempts a LEFT JOIN attempt_diagnostics d "
+                             f"ON d.attempt_id=a.id WHERE a.state IN ('leased','running') AND a.bot_id IN ({marks})", part):
             if privacy.attempt_readable(c, actor, row["id"], memo):
-                out[row["bot"]]["running"] += 1
-                out[row["bot"]]["stalled"] += bool(row["stalled_at"])
+                out[row["bot_id"]]["running"] += 1
+                out[row["bot_id"]]["stalled"] += bool(row["stalled_at"])
     return out
 
 
@@ -234,9 +234,9 @@ def decisions_report(c, auth, who, bots, since):
     for part in H.chunks(list(out)):
         marks = ",".join("?" * len(part))
         rows = c.execute(
-            "SELECT m.*, j.id AS job_id, j.bot AS job_bot, j.state AS job_state, r.attempt_id AS decided_attempt "
+            "SELECT m.*, j.id AS job_id, j.bot_id AS job_bot, j.state AS job_state, r.attempt_id AS decided_attempt "
             "FROM job_recovery r JOIN jobs j ON j.id=r.job_id JOIN messages m ON m.id=j.message_id "
-            f"WHERE j.bot IN ({marks}) AND ((j.state='uncertain' AND r.attempt_id=j.attempt_id) OR r.created_at>=?) "
+            f"WHERE j.bot_id IN ({marks}) AND ((j.state='uncertain' AND r.attempt_id=j.attempt_id) OR r.created_at>=?) "
             "ORDER BY r.created_at DESC, j.id",
             (*part, since)).fetchall()
         kept, listed = [], {}
@@ -293,9 +293,9 @@ def failures_report(c, who, bots, since):
         before = None
         while True:
             page = c.execute(
-                f"SELECT a.id, a.bot, a.state, a.result, a.stop_requested_at, {at} AS at, d.end_reason "
+                f"SELECT a.id, a.bot_id, a.state, a.result, a.stop_requested_at, {at} AS at, d.end_reason "
                 "FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
-                f"WHERE a.state IN ('failed','interrupted','expired') AND a.bot IN ({marks}) AND {at}>=? "
+                f"WHERE a.state IN ('failed','interrupted','expired') AND a.bot_id IN ({marks}) AND {at}>=? "
                 + (f"AND ({at}<? OR ({at}=? AND a.id<?)) " if before else "")
                 + f"ORDER BY {at} DESC, a.id DESC LIMIT ?",
                 (*part, since, *((before[0], before[0], before[1]) if before else ()), ATTEMPT_PAGE)).fetchall()
@@ -313,8 +313,8 @@ def failures_report(c, who, bots, since):
                 seen = causes.setdefault(cause, {"n": 0, "first": row["at"], "last": row["at"]})
                 seen["n"] += 1
                 seen["first"], seen["last"] = min(seen["first"], row["at"]), max(seen["last"], row["at"])
-                per_bot.setdefault(row["bot"], {}).setdefault(cause, 0)
-                per_bot[row["bot"]][cause] += 1
+                per_bot.setdefault(row["bot_id"], {}).setdefault(cause, 0)
+                per_bot[row["bot_id"]][cause] += 1
             if stop or len(page) < ATTEMPT_PAGE:
                 break
     return {"since": since, "total": total, "truncated": complete_after is not None, "complete_after": complete_after,
@@ -359,7 +359,7 @@ def report(c, auth, who, *, type=None, owner=None, label=None, updated_since=Non
     # Only the type's manager reads its exceptions list (backend/pipeline_exceptions.py); everyone else has no key.
     exceptions = pipeline_exceptions.report(c, auth, who, typ, at=now)
     return {"now": now, "type": {"id": typ["id"], "name": typ["name"]},
-            "filters": {"owner": owner_actor, "label": label, "updated_since": changed, "snoozed": snoozed,
+            "filters": {"owner_id": owner_actor, "label": label, "updated_since": changed, "snoozed": snoozed,
                         "bot": bot, "since": window},
             "total": len(rows), "truncated": truncated, "steps": steps, **loose,
             "queues": {b: queues[b] for b in sorted(busy)}, "failures": failures,

@@ -80,13 +80,13 @@ def import_text_archives(store, runtime):
 
 def install_archives(app, store):
     def authorized(who, row):
-        return who.role == "owner" or who.role == "human" and row["owner"] == who.actor
+        return who.role == "owner" or who.role == "human" and row["owner_id"] == who.actor
 
     @app.get("/api/v2/archives")
     def listing(request: Request):
         who = request.state.identity
         with store.read() as c:
-            return {"archives": [dict(row) for row in c.execute("SELECT source,digest,imported,owner,kind FROM archives ORDER BY imported,source")
+            return {"archives": [dict(row) for row in c.execute("SELECT source,digest,imported_at,owner,kind FROM archives ORDER BY imported_at,source")
                                  if authorized(who, row)]}
 
     @app.get("/api/v2/archive")

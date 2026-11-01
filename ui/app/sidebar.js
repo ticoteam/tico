@@ -31,7 +31,7 @@ const shownEmps = () => (S.emps || []).filter(e => !isHiddenBot(e.id));
 // Outside groups it hangs under whoever it reports to, when that one is outside groups too. `reports_to` itself is not
 // touched by any of this.
 // Branches are personal workspaces, not additional teammates. Admin access still belongs in the branch picker.
-const orgBranchVisible = e => !(e.shared_from || e.is_branch) || (!!S.me?.id && e.operator === S.me.id);
+const orgBranchVisible = e => !(e.shared_from || e.is_branch) || (!!S.me?.id && e.owner_id === S.me.id);
 const orgBranchMark = e => (e.shared_from || e.is_branch) ? '<span class="org-branch">Your branch</span>' : '';
 const orgGroupIds = () => new Set((S.orgGroups || []).map(g => g.id));
 const orgCanGroups = () => S.me?.role === 'owner' || !!S.me?.bot_admin;
@@ -92,7 +92,7 @@ function orgTreeByParent() {
   for (const e of bots) {
     let boss = orgBossKey({kind: 'bot', ...e});
     if (boss.startsWith('b:') && !empIds.has(boss.slice(2))) {
-      const owner = e.operator || e.users?.[0]?.id;
+      const owner = e.owner_id || e.users?.[0]?.id;
       boss = owner ? 'p:' + owner : '';
     }
     (byParent[orgHang('b:' + e.id, boss, groupOf)] ||= []).push({kind: 'bot', ...e});
@@ -271,7 +271,7 @@ const orgBot = key => key.startsWith('b:') ? botRow(key.slice(2)) : null;
 const orgName = key => key.startsWith('p:') ? ((S.people || []).find(p => p.id === key.slice(2))?.name || key.slice(2))
   : (orgBot(key)?.display_name || key.slice(2));
 const orgMayOrder = manager => /^[pb]:/.test(manager) &&
-  (S.me?.role === 'owner' || orgMayMove(manager) || (!!orgMeId() && orgBot(manager)?.operator === orgMeId()));
+  (S.me?.role === 'owner' || orgMayMove(manager) || (!!orgMeId() && orgBot(manager)?.owner_id === orgMeId()));
 // Dropping onto another human or bot changes whom it reports to, under the reports_to rules (app.person_update,
 // SettingsAdmin.update_bot): a human is moved by someone they report up to, and only under that person or their
 // reports; a bot by whoever may manage it, under any human, or a bot they manage or run. The reason when not.
@@ -280,7 +280,7 @@ function orgMoveRefusal(from, to) {
   const mayChange = from.startsWith('p:') ? orgMayMove(from) : S.me?.role === 'owner' || !!orgBot(from)?.can_manage || orgMayMove(from);
   if (!mayChange) return `You can't change who ${orgName(from)} reports to.`;
   const mayPut = S.me?.role === 'owner' || (to.startsWith('p:') ? from.startsWith('b:') || orgMayMove(to)
-    : orgMayMove(to) || (!!orgMeId() && orgBot(to)?.operator === orgMeId()));
+    : orgMayMove(to) || (!!orgMeId() && orgBot(to)?.owner_id === orgMeId()));
   return mayPut ? '' : `You can't put ${orgName(from)} under ${orgName(to)}: only under yourself or someone who reports up to you.`;
 }
 const orgOrderId = key => (key.startsWith('p:') ? 'human:' : 'bot:') + key.slice(2);

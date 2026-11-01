@@ -36,7 +36,7 @@ def test_a_changed_value_a_lost_row_and_a_moved_value_are_each_reported(tmp_path
 
 def test_a_new_column_is_the_new_schema_and_is_not_compared(tmp_path):
     before = table_state(make(tmp_path / "a.sqlite", [(1, "Plan")]))
-    after = table_state(make(tmp_path / "b.sqlite", [(1, "Plan")], ["ALTER TABLE tasks ADD COLUMN owner TEXT"]))
+    after = table_state(make(tmp_path / "b.sqlite", [(1, "Plan")], ["ALTER TABLE tasks ADD COLUMN owner_id TEXT"]))
     assert compare(before, after, NO_RENAMES) == []
 
 

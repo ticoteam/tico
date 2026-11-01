@@ -289,12 +289,12 @@ def out_of_quota_logins(c, settings=None):
     that failed for another reason says nothing either way. [{runner_id, runtime, limits, since, resets_at}]"""
     now = H.now()
     seen, configs, out = {}, {}, []
-    for r in c.execute("SELECT bot,runner_id,state,finished_at,result FROM attempts WHERE finished_at>? "
+    for r in c.execute("SELECT bot_id,runner_id,state,finished_at,result FROM attempts WHERE finished_at>? "
                        "AND state IN ('completed','failed','interrupted') AND result IS NOT NULL "
                        "AND json_extract(result,'$.profile_used') IS NULL ORDER BY finished_at DESC",
                        (H.shift(now, hours=-24),)):
         result = json.loads(r["result"])
-        runtime, harness = _login(c, settings, r["bot"], result, configs)
+        runtime, harness = _login(c, settings, r["bot_id"], result, configs)
         if not _computer_login(runtime, harness):
             continue
         login = seen.setdefault((r["runner_id"], runtime), {"runner_id": r["runner_id"], "runtime": runtime,
@@ -362,18 +362,18 @@ def _check_hold_checks(c):
     now = H.now()
     out = []
     limited = "(coalesce(json_extract(result,'$.limited'),0) AND state<>'completed')"
-    for t in c.execute("SELECT t.id,t.title,t.private,t.owner FROM registry_metadata r "
+    for t in c.execute("SELECT t.id,t.title,t.private,t.owner_id FROM registry_metadata r "
                        "JOIN tasks t ON t.id=substr(r.key,15) WHERE r.key>='check-limited:' AND r.key<'check-limited;' "
-                       f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND t.owner LIKE 'bot:%'",
+                       f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND t.owner_id LIKE 'bot:%'",
                        H.ACTIVE_STATUSES).fetchall():
-        bot = H.actor_id(t["owner"])
+        bot = H.actor_id(t["owner_id"])
         check = check_models.of(c, t["id"], bot)
         if not check:
             continue
         # The limits on its queued jobs since the last turn on any of them that ended another way. One pool, not the
         # oldest job: the claim hands out a person's message before an older notice, and one turn takes several.
         queued = ("SELECT j.id FROM jobs j CROSS JOIN messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                  f"WHERE j.bot=? AND j.state='queued' AND m.id=j.message_id AND {H.MESSAGE_TASK_SQL}=?")
+                  f"WHERE j.bot_id=? AND j.state='queued' AND m.id=j.message_id AND {H.MESSAGE_TASK_SQL}=?")
         since, tries = c.execute(
             f"WITH a AS (SELECT finished_at,{limited} AS hit FROM attempts WHERE job_id IN ({queued}) "
             "AND finished_at IS NOT NULL) SELECT min(finished_at),count(*) FROM a WHERE hit "
@@ -441,7 +441,7 @@ def _brief_drops(lines):
 
 def _server_starts(c):
     """When this server started, as epoch seconds: the flight recorder's start events, and this process."""
-    starts = [r[0] for r in c.execute("SELECT ts FROM flight_events WHERE kind='start'")]
+    starts = [r[0] for r in c.execute("SELECT created_at FROM flight_events WHERE kind='start'")]
     return starts + [calendar.timegm(time.strptime(diagnostics.RING.started, "%Y-%m-%dT%H:%M:%SZ"))]
 
 
@@ -476,7 +476,7 @@ def _bot_checks(c, settings=None):
     out = []
     since = H.shift(H.now(), hours=-24)
     limited = {}
-    for r in c.execute("SELECT detail FROM events WHERE action='attempt.limited' AND ts>?", (since,)):
+    for r in c.execute("SELECT detail FROM events WHERE action='attempt.limited' AND created_at>?", (since,)):
         detail = json.loads(r["detail"] or "{}")
         if (detail.get("source") or {}).get("kind") == login_holds.CAPACITY_KIND:
             continue                    # a busy model for two minutes, not a spent subscription or spend limit
@@ -531,11 +531,11 @@ def _bot_checks(c, settings=None):
                                 BUG_FIX["queue_idle"]))
     from .worktrees import current_error, supported
     if supported(c):
-        for r in c.execute("SELECT t.owner,l.state,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id "
+        for r in c.execute("SELECT t.owner_id,l.state,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id "
                            "WHERE l.kind='worktree' AND l.state<>'removed'"):
             error = current_error(r["state"], json.loads(r["detail"] or "{}"))
             if error:
-                bot = H.actor_id(r["owner"])
+                bot = H.actor_id(r["owner_id"])
                 label = (H.bot(c, bot) or {}).get("slug", bot)
                 digest = hashlib.sha256(error.encode()).hexdigest()[:8]
                 out.append(_finding(f"worktree_error:{bot}:{digest}", "worktree_error", SETUP,
@@ -581,7 +581,7 @@ def _stop_checks(c):
     from . import claim_holds, run_backoff, turn_budgets
     out = []
     for hold in run_backoff.held(c):
-        bot, kind = hold["bot"], hold["error_class"] or run_backoff.OTHER
+        bot, kind = hold["bot_id"], hold["error_class"] or run_backoff.OTHER
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"run_hold:{bot}", "run_hold", SETUP,
@@ -593,7 +593,7 @@ def _stop_checks(c):
                             "Tico also tries one run on its own at growing intervals and releases it when one completes. "
                             "Its queued work is kept.", subject=kind, severity=BAD))
     for hold in turn_budgets.held(c):
-        bot = hold["bot"]
+        bot = hold["bot_id"]
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"turn_budget:{bot}", "turn_budget", SETUP,
@@ -605,7 +605,7 @@ def _stop_checks(c):
                             f"(hub bot release {row.get('slug', bot)}) or raise its budget (hub bot budget {row.get('slug', bot)} --{hold['window']} N).",
                             subject=hold["window"], severity=BAD))
     for hold in claim_holds.held(c):
-        bot = hold["bot"]
+        bot = hold["bot_id"]
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"claim_failed:{bot}", "claim_failed", SETUP,
@@ -621,7 +621,7 @@ def _stop_checks(c):
                             "wait.",
                             severity=BAD))
     for failure in claim_holds.check_failures(c):
-        bot, error = failure["bot"], failure["error"]
+        bot, error = failure["bot_id"], failure["error"]
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"claim_check:{bot}", "claim_check", SETUP,

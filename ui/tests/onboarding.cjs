@@ -201,7 +201,7 @@ function recruitFor({department, briefing, share}) {
     const me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true,
                 email: 'ana@acme.example', credential_access: false, config: CONFIG};
     const v2bots = () => BOTS_AFTER.map((bot, i) => ({id: bot.id, slug: bot.slug, display_name: bot.display_name, state: bot.status,
-      status: bot.status, revision: i + 1, team: null, operator: 'ana', repo: 'emp-' + bot.slug, onboarding_state: bot.onboarding_state}));
+      status: bot.status, revision: i + 1, team: null, owner_id: 'ana', repo: 'emp-' + bot.slug, onboarding_state: bot.onboarding_state}));
 
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname;
@@ -277,7 +277,7 @@ function recruitFor({department, briefing, share}) {
         chats.push([bot, request.postDataJSON()]);
         const conversation = {id: 'chat-' + bot, kind: 'chat', scope: 'personal', task_id: null, closed_at: null,
                               participants: ['human:ana', 'bot:' + bot]};
-        const message = {id: 'msg-' + bot, conversation_id: conversation.id, from_actor: 'human:ana', to_actor: 'bot:' + bot,
+        const message = {id: 'msg-' + bot, conversation_id: conversation.id, sender_id: 'human:ana', recipient_id: 'bot:' + bot,
                          kind: 'say', body: text, refs: {}, created_at: '2026-09-16T10:05:00Z'};
         opened[bot] = {conversation, messages: [message]};
         return json({message, conversation});
@@ -302,8 +302,8 @@ function recruitFor({department, briefing, share}) {
       if (/^\/api\/v2\/tasks\/[^/]+\/chat$/.test(p)) return json({recipient: {slug: 'botops', name: 'BotOps', can_chat: true}, messages: [], conversation: null});
       if (p === '/api/v2/tasks' || p === '/api/v2/tasks/task-content') {
         const task = {id: 'task-content', title: 'Set up Content Marketer',
-          owner: 'bot:botops', status: 'doing', version: 1, updated_at: '2026-09-16T10:01:00Z',
-          created_at: '2026-09-16T10:00:30Z', requester: 'human:ana',
+          owner_id: 'bot:botops', status: 'doing', version: 1, updated_at: '2026-09-16T10:01:00Z',
+          created_at: '2026-09-16T10:00:30Z', requester_id: 'human:ana',
           body: 'Create the repository and the first routine.'};
         return json(p === '/api/v2/tasks' ? {tasks: [task]} : {task, events: [], children: []});
       }
@@ -700,7 +700,7 @@ function recruitFor({department, briefing, share}) {
     assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico -e <slug> install bot/);
     await page.locator('#onb-enroll').click();
     await page.waitForFunction(() => !/<setup-file>/.test(document.querySelector('#onb-step').textContent));
-    assert.deepEqual(enrollments, [{operator: 'ana'}]);
+    assert.deepEqual(enrollments, [{owner_id: 'ana'}]);
     assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico -e <slug> enroll --code-file "\$HOME\/Downloads\/tico-enrollment-ana-[a-z0-9]+\.json" --label "Ana's Mac"/);
     // A Linux or cloud server gets the installer line (compose, with the updater) with the real URL and code, and no setup file.
     await page.locator('[data-onb-kind][value=linux]').check();

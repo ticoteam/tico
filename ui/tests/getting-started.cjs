@@ -47,7 +47,7 @@ const checklist = () => [
   item('first_update', 'Your first update arrived', false, {why: 'Each active bot posts a short update every day.', href: '#/updates'}),
 ];
 const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =>
-  ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: '', operator: 'ana'}));
+  ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: '', owner_id: 'ana'}));
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -63,7 +63,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
       const rows = items.map(row => ({...row, skipped: row.optional && !row.done && dismissed.skipped.includes(row.id)}));
       const done = rows.filter(row => row.done || row.skipped).length;
       return {items: rows, done, total: rows.length, complete: done === rows.length, dismissed: dismissed.checklist,
-              tour_seen: dismissed.tour, can_build: canBuild, owner: role === 'owner'};
+              tour_seen: dismissed.tour, can_build: canBuild, owner_id: role === 'owner'};
     };
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;

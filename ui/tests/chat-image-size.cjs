@@ -33,10 +33,10 @@ const A = (id, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1', titl
     : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
   const now = new Date().toISOString();
   const messages = [
-    {id: 'm1', from_actor: 'bot:designer', body: 'Three screenshots, and the words about them that must stay readable.', created_at: now,
+    {id: 'm1', sender_id: 'bot:designer', body: 'Three screenshots, and the words about them that must stay readable.', created_at: now,
       refs: {attachments: [A('f-wide'), A('f-tall'), A('f-square')]}},
-    {id: 'm2', from_actor: 'human:ana', body: 'My upload', created_at: now, refs: {attachments: [A('f-mine')]}},
-    {id: 'm3', from_actor: 'bot:designer', body: 'Inline serving off.', created_at: now, refs: {attachments: [A('f-thumb', {src: null})]}},
+    {id: 'm2', sender_id: 'human:ana', body: 'My upload', created_at: now, refs: {attachments: [A('f-mine')]}},
+    {id: 'm3', sender_id: 'bot:designer', body: 'Inline serving off.', created_at: now, refs: {attachments: [A('f-thumb', {src: null})]}},
   ];
   const run = async ({viewport, hasTouch = false, label}) => {
     const context = await browser.newContext({viewport, hasTouch, isMobile: hasTouch, serviceWorkers: 'block'});

@@ -69,12 +69,12 @@ def _links_for(c, url):
 def _due(c, task, burst):
     # Under a wake preset the preset is the one timer: the burst goes out on the next flush, and the hold coalesces it
     # from then (backend/wake_presets.py). Current behaviour keeps the three-minute burst.
-    return H.now() if _preset_owner(c, task) else burst.get("due") or H.shift(H.now(), seconds=170)
+    return H.now() if _preset_owner(c, task) else burst.get("due_at") or H.shift(H.now(), seconds=170)
 
 
 def _save_burst(c, task, burst, **parts):
     from .repositories import save_metadata
-    kept = {k: v for k, v in {**burst, **parts, "due": _due(c, task, burst)}.items() if v or k == "due"}
+    kept = {k: v for k, v in {**burst, **parts, "due_at": _due(c, task, burst)}.items() if v or k == "due"}
     save_metadata(c, "github-task-wake:" + task["id"], kept)
 
 
@@ -122,7 +122,7 @@ def queue_checks_done(c, task, head, result, item, armed):
 
 def _preset_owner(c, task):
     from . import wake_presets
-    owner = str(task.get("owner") or "")
+    owner = str(task.get("owner_id") or "")
     if not owner.startswith("bot:"):
         return False
     row = c.execute("SELECT config FROM bot_config WHERE bot=?", (owner[4:],)).fetchone()
@@ -148,22 +148,22 @@ def flush_wakes(c):
     for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'github-task-wake:%'").fetchall():
         with isolated(c, "github_wake", row["key"]):
             burst = metadata(c, row["key"])
-            if burst.get("due", "") > H.now():
+            if burst.get("due_at", "") > H.now():
                 continue
             task = H.task(c, row["key"].split(":", 1)[1])
             live = bool(task and task["status"] in (*H.ACTIVE_STATUSES, "blocked"))
             if live:
                 if burst.get("items"):
-                    H._wake(c, task, task["owner"], "\n".join(burst["items"]),
+                    H._wake(c, task, task["owner_id"], "\n".join(burst["items"]),
                             {verdict_moves.HANDOFF: burst["handoff"]} if burst.get("handoff") else
                             {"wake_batch": burst["batch"]} if burst.get("batch") else None, trigger="pr_checks")
                 if burst.get("notes"):
-                    H._wake(c, task, task["owner"], "\n".join(burst["notes"]), {"wake": "pr_review"}, trigger="pr_checks")
+                    H._wake(c, task, task["owner_id"], "\n".join(burst["notes"]), {"wake": "pr_review"}, trigger="pr_checks")
                 for done in burst.get("done", []):
                     # A failed check on a bot's ticket on a board with a flow is its builder's hand-off, at any step.
-                    failed = done["result"] == "fail" and H.is_bot(task["owner"]) and (
+                    failed = done["result"] == "fail" and H.is_bot(task["owner_id"]) and (
                         engineering(c, task) or step_flow.has_flow(c, task.get("type_id")))
-                    H._wake(c, task, task["owner"], done["item"],
+                    H._wake(c, task, task["owner_id"], done["item"],
                             {"wake": "pr_checks_done", "pr_head": done["head"], "pr_result": done["result"],
                              **({"pr_armed": True} if done.get("armed") else {}),
                              **({verdict_moves.HANDOFF: "failed_check"} if failed else {})}, trigger="pr_checks")
@@ -408,7 +408,7 @@ def _own_comment(c, task, payload, key, detail):
     author = author or str(detail.get("author_login") or "").lower()
     head_login = str(detail.get("head_login") or "").lower()
     app = c.execute("SELECT slug FROM github_app LIMIT 1").fetchone()
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(task["owner"]),)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(task["owner_id"]),)).fetchone()
     bot_login = (H._json(config[0], {}) or {}).get("github_login", "") if config else ""
     via_app = (payload.get(key) or {}).get("performed_via_github_app") or {}
     return (app and str(via_app.get("slug") or "").lower() == str(app[0]).lower()

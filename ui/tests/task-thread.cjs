@@ -11,25 +11,25 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 
 const now = Date.now(), at = m => new Date(now - m * 60000).toISOString();
-const asked = {id: 't-key', title: 'Pick the API key for staging', owner: 'bot:botops', requester: 'human:ana', status: 'waiting',
-  lane: 'company', version: 3, created_at: at(90), updated_at: at(5), ask: {to_actor: 'human:ana', body: 'Which key should staging use?'}};
-const docs = {id: 't-docs', title: 'Ship the docs refresh', owner: 'bot:botops', requester: 'human:ana', status: 'doing',
+const asked = {id: 't-key', title: 'Pick the API key for staging', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'waiting',
+  lane: 'company', version: 3, created_at: at(90), updated_at: at(5), ask: {recipient_id: 'human:ana', body: 'Which key should staging use?'}};
+const docs = {id: 't-docs', title: 'Ship the docs refresh', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'doing',
   lane: 'company', version: 2, created_at: at(60), updated_at: at(10)};
 const tasks = {[asked.id]: asked, [docs.id]: docs};
 const messages = [
-  {id: 'm1', conversation_id: 'c1', from_actor: 'human:ana', to_actor: 'bot:botops', kind: 'say', body: 'Refresh the docs please', created_at: at(61)},
-  {id: 'm2', conversation_id: 'c1', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', in_reply_to: 'm1', body: 'On it.', created_at: at(60)},
-  {id: 'm3', conversation_id: 'c1', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Started task: Ship the docs refresh',
+  {id: 'm1', conversation_id: 'c1', sender_id: 'human:ana', recipient_id: 'bot:botops', kind: 'say', body: 'Refresh the docs please', created_at: at(61)},
+  {id: 'm2', conversation_id: 'c1', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', in_reply_to: 'm1', body: 'On it.', created_at: at(60)},
+  {id: 'm3', conversation_id: 'c1', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Started task: Ship the docs refresh',
     refs: {task: 't-docs', task_started: true}, created_at: at(59)},
-  {id: 'm4', conversation_id: 'c1', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Blocked: the docs build needs a staging key.',
+  {id: 'm4', conversation_id: 'c1', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Blocked: the docs build needs a staging key.',
     refs: {task: 't-docs', task_report: 'blocked'}, ref_tasks: {'t-docs': {title: 'Ship the docs refresh'}}, created_at: at(10)},
 ];
 const comments = {
-  't-key': [{id: 'k1', conversation_id: 'r-key', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'ask', body: 'Which key should staging use?', created_at: at(5)}],
+  't-key': [{id: 'k1', conversation_id: 'r-key', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'ask', body: 'Which key should staging use?', created_at: at(5)}],
   // A long thread: it opens at its newest line, like the chat.
-  't-docs': [...Array.from({length: 30}, (_, i) => ({id: 'e' + i, conversation_id: 'r-docs', from_actor: 'bot:botops', kind: 'say',
+  't-docs': [...Array.from({length: 30}, (_, i) => ({id: 'e' + i, conversation_id: 'r-docs', sender_id: 'bot:botops', kind: 'say',
     body: `Build step ${i + 1} of the docs refresh ran.`, created_at: at(50 - i)})),
-    {id: 'd1', conversation_id: 'r-docs', from_actor: 'bot:botops', kind: 'say', body: 'Docs build fails without a staging key.', created_at: at(10)}],
+    {id: 'd1', conversation_id: 'r-docs', sender_id: 'bot:botops', kind: 'say', body: 'Docs build fails without a staging key.', created_at: at(10)}],
 };
 
 async function run(viewport, shot) {
@@ -64,7 +64,7 @@ async function run(viewport, shot) {
         if (one[2] && req.method() === 'POST') {
           const text = req.postDataJSON().text;
           taskSends.push({id, text});
-          const msg = {id: 'c' + taskSends.length, conversation_id: 'r-' + id, from_actor: 'human:ana', kind: 'say', body: text, created_at: new Date().toISOString()};
+          const msg = {id: 'c' + taskSends.length, conversation_id: 'r-' + id, sender_id: 'human:ana', kind: 'say', body: text, created_at: new Date().toISOString()};
           comments[id].push(msg);
           return json({comment: msg, comments: comments[id], woke: true});
         }
@@ -87,9 +87,9 @@ async function run(viewport, shot) {
 
     // Four or more task rows in a row fold to the oldest, "...N more..." and the newest; a real message starts a new run.
     const folded = await page.evaluate(() => {
-      const row = (n, state = 'done') => ({id: 'r' + n, from_actor: 'keeper', to_actor: 'human:ana', kind: 'notice', body: `Review ${n}: ${state}.`,
+      const row = (n, state = 'done') => ({id: 'r' + n, sender_id: 'keeper', recipient_id: 'human:ana', kind: 'notice', body: `Review ${n}: ${state}.`,
         refs: {task: 't' + n, task_report: state}, ref_tasks: {['t' + n]: {title: `Review ${n}`}}, created_at: new Date(Date.now() - (60 - n) * 60000).toISOString()});
-      const say = {id: 'say', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Halfway there.', created_at: new Date().toISOString()};
+      const say = {id: 'say', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Halfway there.', created_at: new Date().toISOString()};
       const lines = list => { const el = document.createElement('div'); el.innerHTML = v2MessagesHTML(list, null, 'botops');
         return [...el.querySelectorAll('.chat-task-row, .conv-run')].map(r => r.matches('.chat-task-more') ? r.textContent.trim()
           : r.querySelector('.ct-title')?.textContent || 'message'); };

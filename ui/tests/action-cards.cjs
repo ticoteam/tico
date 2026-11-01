@@ -16,10 +16,10 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const at = n => new Date(Date.UTC(2026, 9, 17, 9, n)).toISOString();
-const say = (id, from, body, n, refs = {}) => ({id, from_actor: from, body, refs, created_at: at(n), kind: 'say'});
+const say = (id, from, body, n, refs = {}) => ({id, sender_id: from, body, refs, created_at: at(n), kind: 'say'});
 
 function fixture() {
-  const card = (id, extra) => ({id, owner: 'human:ana', status: 'pending', result: null, proposed_via: 'botops', proposer: 'botops',
+  const card = (id, extra) => ({id, owner_id: 'human:ana', status: 'pending', result: null, proposed_via: 'botops', proposer: 'botops',
     diff: [], body: {}, ...extra});
   const actions = {
     act1: card('act1', {method: 'PUT', path: '/api/v2/bots/security-engineer-2/repositories',

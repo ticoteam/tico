@@ -27,8 +27,8 @@ def late_events(c, tid):
 
 def at_checkpoint(c, row):
     """The owner's last turn settled here, so the plain stall and status checks are held (wake_rules.same_state)."""
-    c.execute("UPDATE tasks SET checkpoint_state=?,checkpoint_by=?,checkpoint_at=updated_at WHERE id=?",
-              (W.state_of(c, row), row["owner"], row["id"]))
+    c.execute("UPDATE tasks SET checkpoint_state=?,checkpoint_by_id=?,checkpoint_at=updated_at WHERE id=?",
+              (W.state_of(c, row), row["owner_id"], row["id"]))
 
 
 def later(hours):
@@ -37,7 +37,7 @@ def later(hours):
 
 def wakes(c, tid, to, kind):
     return [m for m in c.execute(
-        "SELECT * FROM messages WHERE to_actor=? AND json_extract(refs,'$.task')=? "
+        "SELECT * FROM messages WHERE recipient_id=? AND json_extract(refs,'$.task')=? "
         "AND json_extract(refs,'$.wake')=?", (to, tid, kind)).fetchall()]
 
 
@@ -82,7 +82,7 @@ def test_time_away_from_work_restarts_the_clock(api):
     with api.app.state.store.transaction() as c:
         row = ticket(c)
         for ts in c.execute("SELECT id FROM task_events WHERE task_id=?", (row["id"],)).fetchall():
-            c.execute("UPDATE task_events SET ts=? WHERE id=?", (later(-6), ts[0]))
+            c.execute("UPDATE task_events SET created_at=? WHERE id=?", (later(-6), ts[0]))
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (later(-6), row["id"]))
         H.task_update(c, "bot:cpo", row["id"], status="waiting", note="Held at the gate")
         H.task_update(c, "bot:cpo", row["id"], status="doing")
@@ -273,7 +273,7 @@ def test_a_manager_who_has_just_been_at_a_late_ticket_is_told_only_if_it_stays_l
     with api.app.state.store.transaction() as c:
         row = ticket(c)
         # The manager's own sweep asked the owner about it just before it turned late.
-        c.execute("INSERT INTO task_events(id,task_id,ts,actor,field,old,new,note) VALUES('m1',?,?,'bot:coo','note','','',"
+        c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new,note) VALUES('m1',?,?,'bot:coo','note','','',"
                   "'What does this wait on?')", (row["id"], later(3.8)))
         assert SA.sweep(c, later(4.2))["late"] == [], "they know: no notice now"
         assert SA.sweep(c, later(5))["late"] == [row["id"]], "an hour on and still late: now they hear"

@@ -173,7 +173,7 @@ class Builder:
     def computers(self):
         self.at(days=6.9)
         for label, platform, runtimes in RUNNERS:
-            code = self.call("POST", "enrollments", {"operator": "ana"})["code"]
+            code = self.call("POST", "enrollments", {"owner_id": "ana"})["code"]
             runner = self.call("POST", "runners/enroll", {"code": code, "label": label, "platform": platform})
             if platform == "darwin":
                 self.mac = runner
@@ -302,7 +302,7 @@ class Builder:
             # The Librarian's market routines were made with the wall clock; every routine is next due after `now`.
             for row in c.execute("SELECT s.id,s.cron,coalesce(sc.timezone,'America/Los_Angeles') zone FROM schedules s "
                                  "LEFT JOIN schedule_config sc ON sc.schedule_id=s.id WHERE s.event_name IS NULL AND s.cron<>''").fetchall():
-                c.execute("UPDATE schedules SET next_due=?,updated_at=? WHERE id=?",
+                c.execute("UPDATE schedules SET next_due_at=?,updated_at=? WHERE id=?",
                           (stamp(next_due(row["cron"], self.now, row["zone"])), stamp(self.now), row["id"]))
             c.execute("UPDATE schedules SET updated_at=? WHERE event_name IS NOT NULL", (stamp(self.now),))
         self.write(work)
@@ -348,7 +348,7 @@ class Builder:
                 if sender.startswith("human:"):
                     last = self.call("POST", f"chat/{bot}", {"text": text}, token=TOKENS[sender])["message"]
                 else:
-                    last = self.write(lambda c: hubdb.say(c, sender, last["from_actor"], text,
+                    last = self.write(lambda c: hubdb.say(c, sender, last["sender_id"], text,
                                                           conversation_id=last["conversation_id"], in_reply_to=last["id"]))
 
     def meetings(self):
@@ -486,7 +486,7 @@ class Builder:
             timestamp = str(int(self.ago(hours=1).timestamp())) + ".000001"
             for index, text in enumerate(["A customer needs the CSV export steps.", "Draft reply: Open Projects > Export > CSV."]):
                 ts = str(int(self.ago(hours=1 - index / 4).timestamp())) + ".000001"
-                c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,text,received,state,author,author_name,updated_at) "
+                c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,text,received_at,state,author,author_name,updated_at) "
                           "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                           (f"demo-slack-{index}", "TDEMOTEAM1", "CDEMOTEAM1", "channel", timestamp, ts,
                            "UDEMOTEAM1", "message", text, H.now(), "stored", "human" if index == 0 else "bot", "Sam" if index == 0 else "Support", H.now()))
@@ -522,7 +522,7 @@ class Builder:
     def finish(self):
         """Nothing is left waiting for a bot: every message reads as delivered and no job is queued."""
         def work(c):
-            c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND to_actor LIKE 'bot:%'")
+            c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND recipient_id LIKE 'bot:%'")
             c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running','input')")
             c.execute("DELETE FROM update_queue")
         self.write(work)

@@ -128,7 +128,7 @@ def roster(c, settings, now=None):
     """
     skip = {*HELPERS, settings.assistant_bot}
     since = utc(H.parse_ts(now or H.now()) - timedelta(hours=LOOKBACK_HOURS))
-    ran = {r[0] for r in c.execute("SELECT DISTINCT bot FROM attempts WHERE started_at>=?", (since,))}
+    ran = {r[0] for r in c.execute("SELECT DISTINCT bot_id FROM attempts WHERE started_at>=?", (since,))}
     out = {}
     for row in c.execute("SELECT b.id,b.slug,b.display_name,coalesce(bc.description,'') AS description,"
                          "coalesce(bc.config,'{}') AS config FROM bots b "
@@ -173,16 +173,16 @@ def collect(c, settings, now, team):
             if not row:
                 task_audience[tid] = set()
             elif H.task_private(c, row):
-                task_audience[tid] = {a[4:] for a in (row["owner"], row["requester"]) if a and a.startswith("bot:")}
+                task_audience[tid] = {a[4:] for a in (row["owner_id"], row["requester_id"]) if a and a.startswith("bot:")}
             else:
                 task_audience[tid] = None
         return task_audience[tid]
 
     delivered = {r[0] for r in c.execute("SELECT task_id FROM learning_deliveries")}
     for m in c.execute(
-            "SELECT m.id,m.conversation_id,m.from_actor,m.body,m.created_at,m.refs,cv.task_id AS conv_task,"
+            "SELECT m.id,m.conversation_id,m.sender_id,m.body,m.created_at,m.refs,cv.task_id AS conv_task,"
             "cv.participants,cv.subject FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            "WHERE m.from_actor LIKE 'human:%' AND m.deleted_at IS NULL AND coalesce(m.kind,'')<>'notice' "
+            "WHERE m.sender_id LIKE 'human:%' AND m.deleted_at IS NULL AND coalesce(m.kind,'')<>'notice' "
             "AND coalesce(cv.scope,'direct')<>'personal' AND m.created_at>? AND m.created_at<=? ORDER BY m.created_at",
             (min(since["chat"], since["task"]), now)).fetchall():
         text = clip(m["body"])
@@ -208,26 +208,26 @@ def collect(c, settings, now, team):
                       "ref": {"message": m["id"], "conversation": m["conversation_id"],
                               **({"bot": next(iter(bots))} if len(bots) == 1 else {})},
                       "label": f"{place} · {author}", "text": text, "audience": bots or None})
-    for t in c.execute("SELECT id,title,note,owner,coalesce(done_at,closed_at) AS at FROM tasks "
+    for t in c.execute("SELECT id,title,note,owner_id,coalesce(done_at,closed_at) AS at FROM tasks "
                        "WHERE status IN ('done','closed') AND trim(coalesce(note,''))<>'' "
                        "AND coalesce(done_at,closed_at)>? AND coalesce(done_at,closed_at)<=? ORDER BY at",
                        (since["task"], now)).fetchall():
         if t["id"] in delivered:
             continue              # a packet's own "Nothing new" is not tomorrow's activity
-        items.append({"key": "task:" + t["id"], "source": "task", "author": t["owner"] or "", "created_at": t["at"],
+        items.append({"key": "task:" + t["id"], "source": "task", "author": t["owner_id"] or "", "created_at": t["at"],
                       "ref": {"task": t["id"]}, "label": f"{t['title']} · done",
                       "text": clip(t["note"]), "audience": task_parties(t["id"])})
     channels = {r["channel_id"]: r["name"] for r in c.execute("SELECT channel_id,name FROM slack_channels")} \
         if c.execute("SELECT 1 FROM sqlite_master WHERE name='slack_channels'").fetchone() else {}
-    for s in c.execute("SELECT event_id,channel,channel_kind,thread_ts,ts,text,author_name,user_id,received "
-                       "FROM slack_events WHERE author='human' AND deleted IS NULL AND channel_kind<>'im' "
-                       "AND received>? AND received<=? ORDER BY received", (since["slack"], now)).fetchall():
+    for s in c.execute("SELECT event_id,channel,channel_kind,thread_ts,ts,text,author_name,user_id,received_at "
+                       "FROM slack_events WHERE author='human' AND deleted_at IS NULL AND channel_kind<>'im' "
+                       "AND received_at>? AND received_at<=? ORDER BY received_at", (since["slack"], now)).fetchall():
         text = clip(s["text"])
         if not text:
             continue
         place = "#" + (channels.get(s["channel"]) or s["channel"])
         items.append({"key": "slack:" + s["event_id"], "source": "slack", "author": s["author_name"] or s["user_id"],
-                      "created_at": s["received"],
+                      "created_at": s["received_at"],
                       "ref": {"channel": s["channel"], "ts": s["ts"], "thread_ts": s["thread_ts"]},
                       "label": f"{place} · {s['author_name'] or 'Slack'}", "text": text, "audience": None})
     people = {}
@@ -659,7 +659,7 @@ def bot_entries(c, slug, task_id):
     if not ids:
         return []
     rows = c.execute(f"SELECT * FROM bot_memory_updates WHERE attempt_id IN ({','.join('?' * len(ids))}) "
-                     "ORDER BY committed", ids).fetchall()
+                     "ORDER BY committed_at", ids).fetchall()
     return [{"title": r["subject"], "sources": sources_of(r["diff"]),
              "change": {"where": ", ".join(json.loads(r["files"])), "diff": r["diff"]}} for r in rows]
 
@@ -683,8 +683,8 @@ def market_subjects(c, delivery, saw_text):
     from . import market
     begin, end = window(c, delivery)
     out = {}
-    for e in c.execute("SELECT * FROM market_events WHERE actor=? AND ts>=? AND ts<=? "
-                       "AND subject_kind IN ('entity','edge') ORDER BY ts", ("bot:" + LIBRARIAN, begin, end)).fetchall():
+    for e in c.execute("SELECT * FROM market_events WHERE actor=? AND created_at>=? AND created_at<=? "
+                       "AND subject_kind IN ('entity','edge') ORDER BY created_at", ("bot:" + LIBRARIAN, begin, end)).fetchall():
         entity_id = e["subject_id"] if e["subject_kind"] == "entity" else (market.edge(c, e["subject_id"]) or {}).get("src")
         entity = market.entity(c, entity_id) if entity_id else None
         if not entity:
@@ -735,7 +735,7 @@ def readable(c, auth, who, item, mailboxes):
             media.authorized(c, who, ref["meeting"])
             return True
         if item["source"] == "slack":
-            return not c.execute("SELECT 1 FROM slack_events WHERE channel=? AND ts=? AND deleted IS NOT NULL",
+            return not c.execute("SELECT 1 FROM slack_events WHERE channel=? AND ts=? AND deleted_at IS NOT NULL",
                                  (ref.get("channel"), ref.get("ts"))).fetchone()
     except Problem:
         return False

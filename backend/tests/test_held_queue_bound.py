@@ -16,7 +16,7 @@ def queue(api, monkeypatch):
         monkeypatch.setattr(H, name, 100000)
     tokens = {slug: setup_attempt(api, slug, 'ben' if slug == 'cpo' else 'ana')[2]['token']
               for slug in ('ops', 'cpo', 'doc-updater')}
-    tasks = [post(api, 'tasks', {'owner': 'finance', 'title': 'Check fixture invoices', 'body': 'Synthetic work'},
+    tasks = [post(api, 'tasks', {'owner_id': 'finance', 'title': 'Check fixture invoices', 'body': 'Synthetic work'},
                   token=tokens[sender]) for sender in ('ops', 'cpo')]
     return api, tokens, tasks
 
@@ -37,8 +37,8 @@ def send(queue, sender='ops', text='A fixture message', expected=200, **fields):
 
 def pending(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM messages WHERE to_actor='bot:finance' "
-                    "AND from_actor LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL ORDER BY created_at,id")]
+        return [dict(r) for r in c.execute("SELECT * FROM messages WHERE recipient_id='bot:finance' "
+                    "AND sender_id LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL ORDER BY created_at,id")]
 
 
 def retained(rows):

@@ -14,12 +14,12 @@ const {unrouted} = require('./support/routes.cjs');
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     const exit = (more) => ({sharing: false, bots: [], daily_cap_bytes: 5e9, may_change: true, may_turn_off: true, used_today_bytes: 0, ...more});
-    const computer = (id, label, operator, more) => ({id, label, operator, bots: [], platform: 'darwin', last_seen_at: new Date().toISOString(),
+    const computer = (id, label, operator, more) => ({id, label, owner_id: operator, bots: [], platform: 'darwin', last_seen_at: new Date().toISOString(),
       readiness: {}, screen: 'off', screen_available: false, ...more});
     const machines = [computer('c1', 'Ana MacBook', 'ana', {browser_exit: exit()}),
       computer('c2', 'Ben laptop', 'ben', {browser_exit: exit({sharing: true, bots: ['ops'], may_change: false})})];
-    const emps = [{name: 'ops', display_name: 'Ops', status: 'active', operator: 'ana', revision: 1},
-      {name: 'web', display_name: 'Web', status: 'active', operator: 'ana', revision: 1}];
+    const emps = [{name: 'ops', display_name: 'Ops', status: 'active', owner_id: 'ana', revision: 1},
+      {name: 'web', display_name: 'Web', status: 'active', owner_id: 'ana', revision: 1}];
     const writes = [], botWrites = [], usage = [];
     let refuse = false;
     await page.route('**/*', route => {

@@ -17,7 +17,7 @@ def task_notice(api, task, refs, *, quiet=False, body="Check the runtime notice.
 
 
 def quiet_task(api, title='Check the weekly runtime report'):
-    return post(api, 'tasks', {'owner': 'ops', 'title': title,
+    return post(api, 'tasks', {'owner_id': 'ops', 'title': title,
                                'body': 'Check the weekly runtime report.', 'next_run': True})
 
 
@@ -146,12 +146,12 @@ def test_health_groups_only_jobs_with_the_same_actual_reason(api, ready):
                       (json.dumps({'kind': 'time', 'until': H.shift(H.now(), days=1)}), tasks[0]['id']))
         for task in tasks[1:]:
             c.execute("UPDATE tasks SET next_run=0,waiting_on='human:ben' WHERE id=?", (task['id'],))
-        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), hours=-3),))
-        rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2] if r['bot'] == 'ops']
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), hours=-3),))
+        rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2] if r['bot_id'] == 'ops']
         assert len(rows) == 1
         expected = {'slow' if ready else 'task_next_run': 1, 'task_wait': 2}
         assert {item['reason']: item['queued'] for item in rows[0]['queue_reasons']} == expected
-    row = next(r for r in get(api, 'health')['stuck'] if r['bot'] == 'ops')
+    row = next(r for r in get(api, 'health')['stuck'] if r['bot_id'] == 'ops')
     assert {item['reason']: item['queued'] for item in row['queue_reasons']} == expected
     assert '2 jobs: waiting' in row['why']
     assert ('1 job: ready to start' if ready else '1 job: deferred') in row['why']

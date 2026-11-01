@@ -171,7 +171,7 @@ def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", usern
         raise Problem("not_found", "Bot not found", 404)
     subject = "bot:" + bot
     grants = {}
-    for g in c.execute("SELECT credential_id,subject FROM credential_grants WHERE revoked IS NULL"):
+    for g in c.execute("SELECT credential_id,subject FROM credential_grants WHERE revoked_at IS NULL"):
         grants.setdefault(g["credential_id"], set()).add(g["subject"])
     # A member replaces only a credential they stored themselves; anyone else's stays, and theirs is a new one.
     mine = set() if admin else owned(c, who)
@@ -190,7 +190,7 @@ def store_for_bot(c, vault, who, env, bot, value, name="", kind="api_key", usern
     # A shared credential that already carried this variable to the bot is replaced by its own.
     for r in rows:
         if r["id"] != saved["id"] and subject in grants.get(r["id"], set()):
-            c.execute("UPDATE credential_grants SET revoked=?,revoked_by=? WHERE credential_id=? AND subject=? AND revoked IS NULL",
+            c.execute("UPDATE credential_grants SET revoked_at=?,revoked_by=? WHERE credential_id=? AND subject=? AND revoked_at IS NULL",
                       (H.now(), who.actor, r["id"], subject))
     H.event(c, who.actor, "credential.set_for_bot", saved["id"], {"env": env, "bot": bot, "replaced": bool(existing)})
     # A replaced value keeps its grant, so the grant's own hook did not run: the waiting tasks go on here.
@@ -209,11 +209,11 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
     if message_id:
         ids.add(message_id)
     if conversation_id:
-        ids.update(r["id"] for r in c.execute("SELECT id FROM messages WHERE conversation_id=? AND from_actor=?",
+        ids.update(r["id"] for r in c.execute("SELECT id FROM messages WHERE conversation_id=? AND sender_id=?",
                                               (conversation_id, person.actor)))
     for mid in ids:
-        row = c.execute("SELECT body,from_actor FROM messages WHERE id=?", (mid,)).fetchone()
-        if row and row["from_actor"] == person.actor and value in (row["body"] or ""):
+        row = c.execute("SELECT body,sender_id FROM messages WHERE id=?", (mid,)).fetchone()
+        if row and row["sender_id"] == person.actor and value in (row["body"] or ""):
             c.execute("UPDATE messages SET body=? WHERE id=?", ((row["body"] or "").replace(value, label), mid))
             count += 1
     if attempt_id:
@@ -277,20 +277,20 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             return person, msg, None
         msg = turn
         refs = (msg or {}).get("refs") or {}
-        plain = bool(msg and str(msg["from_actor"]).startswith("human:") and msg["to_actor"] == who.actor
+        plain = bool(msg and str(msg["sender_id"]).startswith("human:") and msg["recipient_id"] == who.actor
                      and not (refs.get("via") or refs.get("assistant") or refs.get("slack")))
         task = task_of(c, who.actor, msg)
         if task:
             # A turn on a task: the card goes in the task's thread, for the person who wrote to the bot there, else
             # whoever fixes the bot's accounts and can read the task (backend/reconnects.py), and the task waits on it.
-            person = msg["from_actor"] if plain else reconnects.person_for(c, store.settings, H.actor_id(who.actor), task)
+            person = msg["sender_id"] if plain else reconnects.person_for(c, store.settings, H.actor_id(who.actor), task)
             if not person:
                 raise Problem("no_person", "Nobody can store a credential for this bot on this task: neither its operator "
                               "nor the company owner can read it", 409)
             return auth.identity_for_actor(c, person), {**msg, "conversation_id": task["conversation_id"]}, task
         if not plain:
             raise Problem("no_person", "A credential card needs a person's own chat message to answer", 409)
-        return auth.identity_for_actor(c, msg["from_actor"]), msg, None
+        return auth.identity_for_actor(c, msg["sender_id"]), msg, None
 
     def task_of(c, owner, msg, strict=True):
         """The live task `owner` (the bot in the turn) works on, from the turn's message (its thread, or its `task`
@@ -298,9 +298,9 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         if not msg:
             return None
         conversation = H.conversation(c, msg["conversation_id"]) or {}
-        task_id = conversation.get("task_id") or ((msg.get("refs") or {}).get("task") if msg["to_actor"] == owner else None)
+        task_id = conversation.get("task_id") or ((msg.get("refs") or {}).get("task") if msg["recipient_id"] == owner else None)
         task = H.task(c, task_id) if task_id else None
-        if task and task["owner"] == owner and task["status"] in H.ACTIVE_STATUSES:
+        if task and task["owner_id"] == owner and task["status"] in H.ACTIVE_STATUSES:
             return task
         if strict and (conversation.get("task_id") or conversation.get("scope") == "task" or (msg.get("refs") or {}).get("task")):
             raise Problem("no_person", "A credential card in a task needs a live task the bot owns", 409)
@@ -366,7 +366,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             c.execute("UPDATE credential_requests SET message_id=? WHERE id=?", (card["id"], rid))
             if task and not reconnects.open(c, task["id"], target, key, "secret", body.label.strip() or body.env,
                                             person.actor, {"kind": "secret", "request": rid}, message_id=card["id"],
-                                            owner=task["owner"]):
+                                            owner=task["owner_id"]):
                 # The task could not wait on it: no card is better than one nobody is told was not made.
                 raise Problem("no_card", "This task cannot wait on a credential card now", 409)
             H.event(c, who.actor, "credential.requested", rid, {"env": body.env, "bot": target, "for": person.actor})
@@ -445,7 +445,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             if not msg:
                 raise Problem("not_found", "Message not found", 404)
             auth.conversation(c, person, msg["conversation_id"])
-            if msg["from_actor"] != person.actor and not administrator(c, person, vault.admins):
+            if msg["sender_id"] != person.actor and not administrator(c, person, vault.admins):
                 raise Problem("forbidden", "Only the person who wrote it, or a credential admin, takes a secret out of a message", 403)
             span, label = body.span.get_secret_value(), body.label.strip() or "saved"
             if not span or span not in (msg["body"] or ""):

@@ -54,10 +54,10 @@ def statuses(monkeypatch):
 
 def seeded(api):
     """A task, a chat with its bot, an incoming trigger and an automation: what the arguments below name."""
-    task = post(api, "tasks", {"owner": "ops", "title": "Acme smoke task", "body": "Seeded for the MCP smoke test."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Acme smoke task", "body": "Seeded for the MCP smoke test."})
     message = post(api, "chat/ops", {"text": "Acme smoke message"})
     trigger = post(api, "triggers", {"name": "Acme smoke hook"})["trigger"]
-    automation = post(api, "automations", {"name": "Acme smoke automation", "owner": "person:ana", "steps": [NOTE_STEP],
+    automation = post(api, "automations", {"name": "Acme smoke automation", "owner_id": "person:ana", "steps": [NOTE_STEP],
                                            "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}})
     return {"task": task["id"], "conversation": message["conversation_id"], "message": message["id"],
             "trigger": trigger["id"], "automation": automation["id"]}
@@ -74,7 +74,7 @@ def seeds_for(tool, seeds):
     if tool.startswith(("hub_message_", "hub_conversation_")):
         return {"id": seeds["conversation"], "conversation_id": seeds["conversation"], "in_reply_to": seeds["message"],
                 "to": "ops", "bot": "ops"}
-    return {"to": "ops", "owner": "ops", "bot": "ops", "slug": "ops", "name": SMOKE, "title": SMOKE, "text": SMOKE,
+    return {"to": "ops", "owner_id": "ops", "bot": "ops", "slug": "ops", "name": SMOKE, "title": SMOKE, "text": SMOKE,
             "body": SMOKE, "note": SMOKE, "subject": SMOKE}
 
 
@@ -162,7 +162,7 @@ def test_every_remote_tool_answers_a_generated_call_as_its_recorded_refusal_or_s
 
 def test_a_scripted_task_runs_over_mcp_from_create_to_done(api):
     """A multi-step task as an external agent would run it: create, comment, assign, complete, then read it back."""
-    is_error, made = call(api, "hub_task_create", {"owner": "ben", "title": "Smoke: scripted MCP task",
+    is_error, made = call(api, "hub_task_create", {"owner_id": "ben", "title": "Smoke: scripted MCP task",
                                                    "body": "Check the release notes and say what changed."})
     assert not is_error, made
     task_id = made["task"]["id"]
@@ -170,9 +170,9 @@ def test_a_scripted_task_runs_over_mcp_from_create_to_done(api):
     is_error, comment = call(api, "hub_task_comment", {"id": task_id, "text": "Started on the release notes."})
     assert not is_error, comment
 
-    is_error, moved = call(api, "hub_task_update", {"id": task_id, "owner": "ana", "status": "doing"})
+    is_error, moved = call(api, "hub_task_update", {"id": task_id, "owner_id": "ana", "status": "doing"})
     assert not is_error, moved
-    assert moved["task"]["owner"] == "human:ana" and moved["task"]["status"] == "doing"
+    assert moved["task"]["owner_id"] == "human:ana" and moved["task"]["status"] == "doing"
 
     is_error, done = call(api, "hub_task_done", {"id": task_id, "note": "Release notes checked."})
     assert not is_error, done

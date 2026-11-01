@@ -89,14 +89,14 @@ def linked_tickets(slug, number):
 
 def source(task, message):
     return {"task": task["id"], "message": message.get("id"),
-            "actor": message.get("from_actor"), "created_at": message.get("created_at"),
+            "actor": message.get("sender_id"), "created_at": message.get("created_at"),
             "text": message.get("body", "")}
 
 
 def owner_messages(task):
-    if not task.get("owner"):
+    if not task.get("owner_id"):
         return []
-    return sorted((m for m in task.get("messages", []) if m.get("from_actor") == task.get("owner")
+    return sorted((m for m in task.get("messages", []) if m.get("sender_id") == task.get("owner_id")
                    and not any(m.get(k) for k in ("deleted_at", "hidden_at", "superseded_at"))),
                   key=lambda m: (m.get("created_at") or "", m.get("id") or ""))
 

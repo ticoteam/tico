@@ -216,7 +216,7 @@ def sample_for(kind, n, row, mails):
     if kind == "slack":
         return {"message": {"channel": "dm", "from": "omar@acme.example", "text": text, "ts": f"1700000000.{n:06d}"}}
     if kind == "task":
-        return {"task": {"title": text, "body": "Matrix task.", "owner": DANA_REF, "requester": CLAUDE_REF,
+        return {"task": {"title": text, "body": "Matrix task.", "owner_id": DANA_REF, "requester_id": CLAUDE_REF,
                          "session": SENDER_SESSION}}
     if kind == "webhook":
         return {"body": {"title": text}}
@@ -239,8 +239,8 @@ def queue_of(org, slug, task):
     report only)."""
     with org.store.read() as c:
         bot = c.execute("SELECT state FROM bots WHERE slug=?", (slug,)).fetchone()
-        states = c.execute("SELECT state, count(*) FROM jobs WHERE bot=? GROUP BY state", (slug,)).fetchall()
-        own = c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
+        states = c.execute("SELECT state, count(*) FROM jobs WHERE bot_id=? GROUP BY state", (slug,)).fetchall()
+        own = c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
                         "AND json_extract(m.refs,'$.task')=?", (slug, task)).fetchall()
     return (f"bot {bot[0] if bot else None}, its jobs {dict((k, v) for k, v in states)}, "
             f"the turn's job {[row[0] for row in own]}")
@@ -548,7 +548,7 @@ def combo_floor(rows_):
 
 
 def probe_payload(name, steps):
-    return {"name": name, "owner": DANA_REF, "enabled": True, "builtin": False,
+    return {"name": name, "owner_id": DANA_REF, "enabled": True, "builtin": False,
             "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}, "steps": steps}
 
 

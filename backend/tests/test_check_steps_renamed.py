@@ -46,7 +46,7 @@ def test_renamed_review_steps_file_pooled_checks_and_keep_review_2_off_review_1s
     r = pools.move(api, task, "First look")
     assert r.status_code == 200, r.text
     [first] = pools.checks(api, task)
-    assert first["title"] == "First look: PR #412" and first["owner"] == "bot:rev-a"
+    assert first["title"] == "First look: PR #412" and first["owner_id"] == "bot:rev-a"
     with api.app.state.store.read() as c:
         assert check_pools.open_checks(c, "rev-a") == 1, "a renamed step's check counts toward the limit"
         assert step_flow.check_kind(step_flow.child_check(c, first)) == "review"
@@ -60,7 +60,7 @@ def test_renamed_review_steps_file_pooled_checks_and_keep_review_2_off_review_1s
     assert pools.move(api, task, "Second look").status_code == 200
     [second] = pools.checks(api, task)
     assert second["title"] == "Second look: PR #412"
-    assert second["owner"] == "bot:rev-b", "rev-a has fewer open checks but did the first review"
+    assert second["owner_id"] == "bot:rev-b", "rev-a has fewer open checks but did the first review"
 
 
 def test_a_renamed_review_step_still_passes_the_review_gate(api):
@@ -138,8 +138,8 @@ def test_a_receipt_in_a_keeper_notice_naming_a_renamed_review_step_counts(api):
     receipt as one about Review 1 was."""
     from backend import test_receipts
     sha = "d" * 40
-    notice = {"id": "m1", "from_actor": "keeper", "created_at": "2026-01-01", "body": f"First look asked.\nTests: head {sha}: 3 passed, 0 failed"}
-    task = {"id": "t", "owner": "bot:cpo", "note": "", "messages": [notice], "children": []}
+    notice = {"id": "m1", "sender_id": "keeper", "created_at": "2026-01-01", "body": f"First look asked.\nTests: head {sha}: 3 passed, 0 failed"}
+    task = {"id": "t", "owner_id": "bot:cpo", "note": "", "messages": [notice], "children": []}
     assert test_receipts.at_head({**task, "review_steps": ["First look"]}, sha)[0] == "passed"
     assert test_receipts.at_head(task, sha)[0] != "passed", "a keeper line that names no review step is not evidence"
 

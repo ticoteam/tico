@@ -26,7 +26,7 @@ def seed(api):
     with store.transaction() as c:
         H.sync_registry(c, {s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs}, [])
         for s in slugs:
-            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,'ana')",
+            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
                       (s, encode({"name": s, "runtime": "fake"})))
     computers = [runner(api, label=f"Synthetic {n}") for n in range(COMPUTERS)]
     places = {}
@@ -40,7 +40,7 @@ def seed(api):
     now = H.now()
     with store.transaction() as c:
         for n in range(ROUTINES):
-            c.execute("INSERT INTO schedules(id,bot,routine_key,cron,event_name,title,playbook,next_due,source,updated_at) "
+            c.execute("INSERT INTO schedules(id,bot,routine_key,cron,event_name,title,playbook,next_due_at,source,updated_at) "
                       "VALUES(?,?,?,?,NULL,?,'',?,'synthetic',?)",
                       (f"routine-{n}", slugs[n % BOTS], f"routine-{n}", "0 9 * * *", f"Routine {n}",
                        H.shift(now, hours=6), now))
@@ -50,7 +50,7 @@ def seed(api):
             c.execute("INSERT INTO conversations(id,kind,participants,created_at) VALUES(?,'chat',?,?)",
                       (room, encode(["human:ana", "bot:" + s]), now))
             for k in range(3):
-                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at,refs) "
+                c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                           "VALUES(?,?,'human:ana',?,'say','Synthetic work',?,'{}')",
                           (f"work-{s}-{k}", room, "bot:" + s, now))
         # Room for many turns on each computer, and up long enough to be trusted with a lease.

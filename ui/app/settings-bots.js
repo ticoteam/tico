@@ -98,7 +98,7 @@ function settingsRuntimeBlock(e, harness) {
     computer: answer.computer, move: answer.move,
     signIn: answer.sign_in && (settingsIsAdmin() || settingsMachineOperator(answer.computer?.id) === S.me?.id) ? answer.sign_in : null};
 }
-const settingsMachineOperator = id => (SETTINGS_DATA.machines || []).find(row => row.id === id)?.operator;
+const settingsMachineOperator = id => (SETTINGS_DATA.machines || []).find(row => row.id === id)?.owner_id;
 // One line per harness this computer cannot run that has a way out: sign in here, or move the bot.
 function settingsBlockedNote(e, harnesses) {
   return harnesses.map(id => [id, settingsRuntimeBlock(e, id)]).filter(([, block]) => block && (block.move || block.signIn))
@@ -490,15 +490,15 @@ function settingsMachineSelect(e) {
   // On Tico Cloud the shared and the bot's own cloud machine are two choices; no cloud machine is offered as a computer.
   const cloud = e.cloud_machine, current = cloudMachineValue(e) || e.machine?.runner_id || '';
   const machines = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && !machine.cloud_machine &&
-    (S.me?.role === 'owner' || machine.operator === S.me?.id));
-  const unassigned = `Not assigned · ${settingsPersonName(e.operator)}`;
-  const currentLabel = e.machine ? `${e.machine.label} · ${settingsPersonName(e.machine.operator)}` : unassigned;
+    (S.me?.role === 'owner' || machine.owner_id === S.me?.id));
+  const unassigned = `Not assigned · ${settingsPersonName(e.owner_id)}`;
+  const currentLabel = e.machine ? `${e.machine.label} · ${settingsPersonName(e.machine.owner_id)}` : unassigned;
   const seen = e.machine?.last_seen_at ? `last seen ${ago(e.machine.last_seen_at)}` : e.machine ? 'waiting for its first heartbeat' : 'register a computer first';
   return `<select class="settings-inline-select" data-bot-machine="${esc(e.id)}" data-current="${esc(current)}"
     aria-label="Computer for ${esc(e.display_name)}" title="${esc(`${currentLabel} · ${seen}`)}" ${settingsCanManageBot(e) && (machines.length || cloud) ? '' : 'disabled'}>
       ${current ? '' : `<option value="" selected disabled>${esc(unassigned)}</option>`}
       ${cloud ? cloudMachineOptionsHTML(current) : ''}
-      ${machines.map(machine => `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : ''}>${esc(machine.label)} · ${esc(settingsPersonName(machine.operator))}</option>`).join('')}
+      ${machines.map(machine => `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : ''}>${esc(machine.label)} · ${esc(settingsPersonName(machine.owner_id))}</option>`).join('')}
     </select>`;
 }
 // A problem worth a badge on the bot's row; a bot that is fine shows nothing.
@@ -689,7 +689,7 @@ async function settingsBulkApplyKind(slug, choice, kind) {
 }
 // Archived bots the person may bring back (Restore), listed under the bots table. One read is kept for a while.
 let SETTINGS_ARCHIVED = null;
-const settingsMayRestore = b => settingsIsAdmin() || b.operator === S.me?.id || (b.bot_owners || []).some(o => o.id === S.me?.id);
+const settingsMayRestore = b => settingsIsAdmin() || b.owner_id === S.me?.id || (b.bot_owners || []).some(o => o.id === S.me?.id);
 async function settingsArchivedBots(el) {
   if (!SETTINGS_ARCHIVED || Date.now() - SETTINGS_ARCHIVED.at > 30000) {
     try { SETTINGS_ARCHIVED = {at: Date.now(), bots: (await get('/v2/bots?include_archived=1')).filter(b => b.state === 'archived' && settingsMayRestore(b))}; }

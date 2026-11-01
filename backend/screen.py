@@ -39,7 +39,7 @@ def listing(row):
 
 def may_change(auth, who, runner):
     """The same rule as restart and inbox sharing: an admin, or the person whose computer it is."""
-    return bool(runner) and (auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["operator"])
+    return bool(runner) and (auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["owner_id"])
 
 
 def _allows(mode, control):
@@ -116,7 +116,7 @@ def install(app, store, auth, mutate, execution, settings):
                     {"session_id": session.id, "control": body.control,
                      "relay_lease": session.relay_lease})
             # A `runner` change row is the runner's `screen_open` event (backend/events.py runner_read).
-            c.execute("INSERT INTO changes(topic,kind,subject_id,ref,at) VALUES('runner','screen_open',?,?,?)",
+            c.execute("INSERT INTO changes(topic,kind,subject_id,ref,created_at) VALUES('runner','screen_open',?,?,?)",
                       (rid, session.id, H.now()))
             return {"session_id": session.id, "ticket": ticket, "control": body.control,
                     "ws_path": f"/api/v2/runners/{rid}/screen/ws?ticket={ticket}",

@@ -27,60 +27,60 @@ const inDays = days => new Date(NOW + days * 86400000).toISOString();
 // The mock server keeps each task's parent (`_parent`) and blockers (`_blocked`) and answers with `relations`, as the
 // hub does: by kind, each {id, title, status, owner, direction}; a task's subtasks are its children, not relations.
 function withRelations(task, tasks) {
-  const brief = (x, direction) => ({id: x.id, title: x.title, status: x.status, owner: x.owner, direction});
+  const brief = (x, direction) => ({id: x.id, title: x.title, status: x.status, owner_id: x.owner_id, direction});
   const byId = id => tasks.find(x => x.id === id);
   const relations = {};
   const add = (kind, row) => { if (row) (relations[kind] ||= []).push(row); };
   if (task._parent && byId(task._parent)) add('parent', brief(byId(task._parent), 'out'));
   // A private parent this reader cannot open, as the hub sends it for a task filed from private work.
-  if (task._privateParent) add('parent', {id: null, title: 'a private task', status: null, owner: null, direction: 'out', private: true});
+  if (task._privateParent) add('parent', {id: null, title: 'a private task', status: null, owner_id: null, direction: 'out', private: true});
   for (const id of task._blocked || []) if (byId(id)) add('blocks', brief(byId(id), 'in'));
   for (const x of tasks) if ((x._blocked || []).includes(task.id)) add('blocks', brief(x, 'out'));
   const {_parent, _blocked, _privateParent, ...rest} = task;
   return {...rest, relations};
 }
 function fixtures() {
-  const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bot:engineer', requester: 'human:ana', status: 'doing',
+  const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:engineer', requester_id: 'human:ana', status: 'doing',
     lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,
     created_at: at(60 * 30), updated_at: at(30), ...over});
-  const ask = (from, body) => ({ask: {id: 'q-' + from, body, from_actor: from, to_actor: 'human:ana'}});
+  const ask = (from, body) => ({ask: {id: 'q-' + from, body, sender_id: from, recipient_id: 'human:ana'}});
   const pr = (repo, n, title, state = 'open') => ({id: `pr-${repo}-${n}`, kind: 'pr', repo, number: n, url: `https://github.com/${repo}/pull/${n}`, title, state,
     checks: state === 'merged' ? 'passing' : 'pending'});
   return [
     // Needs you
-    t('t-copy', 'Approve the Q4 pricing page copy', {owner: 'human:ana', requester: 'bot:writer', status: 'open', updated_at: at(120), labels: ['pricing'],
+    t('t-copy', 'Approve the Q4 pricing page copy', {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', updated_at: at(120), labels: ['pricing'],
       ...ask('bot:writer', 'Two headline options are in the doc. Pick one so the page can ship Friday.')}),
-    t('t-refund', 'Choose a refund policy for annual plans', {owner: 'human:ana', requester: 'bot:support', status: 'open', updated_at: at(300), labels: ['billing'],
+    t('t-refund', 'Choose a refund policy for annual plans', {owner_id: 'human:ana', requester_id: 'bot:support', status: 'open', updated_at: at(300), labels: ['billing'],
       ...ask('bot:support', 'Three customers asked this week: a full refund within 30 days, or prorated?')}),
-    t('t-access', 'Review Engineer access to the billing repo', {owner: 'human:ana', requester: 'bot:botops', status: 'open', updated_at: at(60 * 26)}),
-    t('t-terms', 'Approve the new checkout terms', {owner: 'human:ana', requester: 'bot:engineer', status: 'open', _parent: 't-checkout', updated_at: at(150)}),
-    t('t-onboard', 'Sign off the onboarding email sequence', {owner: 'human:ana', requester: 'bot:writer', status: 'open', updated_at: at(200), labels: ['email'], due: inDays(1)}),
-    t('t-deck', 'Review the launch deck', {owner: 'human:ana', requester: 'human:sam', status: 'open', updated_at: at(400), labels: ['launch']}),
+    t('t-access', 'Review Engineer access to the billing repo', {owner_id: 'human:ana', requester_id: 'bot:botops', status: 'open', updated_at: at(60 * 26)}),
+    t('t-terms', 'Approve the new checkout terms', {owner_id: 'human:ana', requester_id: 'bot:engineer', status: 'open', _parent: 't-checkout', updated_at: at(150)}),
+    t('t-onboard', 'Sign off the onboarding email sequence', {owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open', updated_at: at(200), labels: ['email'], due_at: inDays(1)}),
+    t('t-deck', 'Review the launch deck', {owner_id: 'human:ana', requester_id: 'human:sam', status: 'open', updated_at: at(400), labels: ['launch']}),
     // Needs Sam
-    t('t-demo', 'Record the product demo video', {owner: 'human:sam', requester: 'human:ana', status: 'open', updated_at: at(60 * 50), due: inDays(-1), labels: ['launch']}),
+    t('t-demo', 'Record the product demo video', {owner_id: 'human:sam', requester_id: 'human:ana', status: 'open', updated_at: at(60 * 50), due_at: inDays(-1), labels: ['launch']}),
     // Waits on a person this install does not know: Needs someone
-    t('t-vendor', 'Sign the vendor security questionnaire', {owner: 'human:jo', requester: 'bot:botops', status: 'open', updated_at: at(60 * 6)}),
+    t('t-vendor', 'Sign the vendor security questionnaire', {owner_id: 'human:jo', requester_id: 'bot:botops', status: 'open', updated_at: at(60 * 6)}),
     // Waiting
-    t('t-inbox', 'Migrate the support inbox to the new helpdesk', {owner: 'bot:support', requester: 'bot:botops', status: 'waiting', updated_at: at(480), labels: ['support'],
+    t('t-inbox', 'Migrate the support inbox to the new helpdesk', {owner_id: 'bot:support', requester_id: 'bot:botops', status: 'waiting', updated_at: at(480), labels: ['support'],
       note: 'Waiting on Sam to export the old ticket archive (about 12k tickets) before the import can start.'}),
-    t('t-checkout', 'Ship the checkout redesign', {owner: 'bot:engineer', requester: 'human:ana', status: 'waiting', updated_at: at(60 * 22), labels: ['checkout'],
+    t('t-checkout', 'Ship the checkout redesign', {owner_id: 'bot:engineer', requester_id: 'human:ana', status: 'waiting', updated_at: at(60 * 22), labels: ['checkout'],
       _blocked: ['t-idem'], pr_state: 'changes_requested',
       children_summary: {total: 4, done: 1, direct_total: 4, direct_done: 1}, parts: {total: 4, done: 1}, links: [pr('acme/web', 412, 'Checkout redesign behind a flag')]}),
     // a bot's parked task: its date is when it looks again, not a deadline
-    t('t-changelog', 'Publish the September changelog', {owner: 'bot:writer', requester: 'bot:botops', status: 'waiting', updated_at: at(900), note: 'Waiting for the 0.3 release tag.', due: inDays(2)}),
+    t('t-changelog', 'Publish the September changelog', {owner_id: 'bot:writer', requester_id: 'bot:botops', status: 'waiting', updated_at: at(900), note: 'Waiting for the 0.3 release tag.', due_at: inDays(2)}),
     // Doing (two are subtasks of the waiting checkout; one is a subtask of the newsletter)
     t('t-idem', 'Add idempotency keys to the payments API', {_parent: 't-checkout', updated_at: at(40), labels: ['payments', 'backend', 'api'], pr_state: 'failing', links: [pr('acme/api', 88, 'Idempotency keys for charges')]}),
     t('t-summary', 'Checkout summary step', {_parent: 't-checkout', status: 'review', updated_at: at(180), pr_state: 'open', links: [pr('acme/web', 415, 'Summary step')]}),
-    t('t-triage', 'Triage new bug reports from the widget', {owner: 'bot:support', requester: 'bot:botops', updated_at: at(20), labels: ['bugs']}),
-    t('t-digest', 'Weekly metrics digest', {owner: 'bot:analyst', requester: 'human:sam', status: 'open', updated_at: at(10)}),
-    t('t-rotate', 'Rotate the staging database credentials', {owner: 'bot:botops', requester: 'bot:botops', updated_at: at(70), labels: ['security']}),
-    t('t-news', 'Draft the October newsletter', {owner: 'bot:writer', requester: 'human:ana', updated_at: at(360), labels: ['newsletter'], parts: {total: 1, done: 0}}),
-    t('t-img', 'Pick the newsletter header image', {owner: 'bot:writer', requester: 'human:ana', _parent: 't-news', updated_at: at(380)}),
-    t('t-flaky', 'Fix the flaky login test on CI', {requester: 'bot:botops', updated_at: at(60 * 47), pr_state: 'merged', labels: ['ci'], links: [pr('acme/web', 409, 'Stabilise the login test', 'merged')]}),
+    t('t-triage', 'Triage new bug reports from the widget', {owner_id: 'bot:support', requester_id: 'bot:botops', updated_at: at(20), labels: ['bugs']}),
+    t('t-digest', 'Weekly metrics digest', {owner_id: 'bot:analyst', requester_id: 'human:sam', status: 'open', updated_at: at(10)}),
+    t('t-rotate', 'Rotate the staging database credentials', {owner_id: 'bot:botops', requester_id: 'bot:botops', updated_at: at(70), labels: ['security']}),
+    t('t-news', 'Draft the October newsletter', {owner_id: 'bot:writer', requester_id: 'human:ana', updated_at: at(360), labels: ['newsletter'], parts: {total: 1, done: 0}}),
+    t('t-img', 'Pick the newsletter header image', {owner_id: 'bot:writer', requester_id: 'human:ana', _parent: 't-news', updated_at: at(380)}),
+    t('t-flaky', 'Fix the flaky login test on CI', {requester_id: 'bot:botops', updated_at: at(60 * 47), pr_state: 'merged', labels: ['ci'], links: [pr('acme/web', 409, 'Stabilise the login test', 'merged')]}),
     // Done
-    t('t-receipt', 'Checkout receipt email copy', {_parent: 't-checkout', owner: 'bot:writer', status: 'done', done_at: at(240), updated_at: at(240)}),
+    t('t-receipt', 'Checkout receipt email copy', {_parent: 't-checkout', owner_id: 'bot:writer', status: 'done', done_at: at(240), updated_at: at(240)}),
     t('t-sso', 'Turn on SSO for the admin console', {status: 'done', done_at: at(60 * 30), updated_at: at(60 * 30), pr_state: 'merged'}),
-    t('t-faq', 'Refresh the billing FAQ', {owner: 'bot:support', status: 'closed', closed_at: at(60 * 70), updated_at: at(60 * 70)}),
+    t('t-faq', 'Refresh the billing FAQ', {owner_id: 'bot:support', status: 'closed', closed_at: at(60 * 70), updated_at: at(60 * 70)}),
   ];
 }
 const OPEN_COUNT = 19, NEEDS_YOU = 6;
@@ -170,16 +170,16 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
         if (failIds.includes(id) || conflictNextUpdate.delete(id) || body.version !== task.version)
           return json({error: {code: 'version_conflict', detail: 'Task changed; fetch it and retry your update'}}, 409);
         const {version, close, note, ...fields} = body;
-        if (fields.owner && !fields.owner.includes(':')) fields.owner = 'bot:' + fields.owner;   // as the server resolves a bot's name
+        if (fields.owner_id && !fields.owner_id.includes(':')) fields.owner_id = 'bot:' + fields.owner_id;   // as the server resolves a bot's name
         Object.assign(task, fields, {version: task.version + 1});
         if (close) task.status = 'closed';
-        if (fields.due === '') delete task.due;
+        if (fields.due_at === '') delete task.due_at;
         if (fields.type) { const type = types.find(x => x.id === fields.type); task.type_id = fields.type; task.type = type ? {id: type.id, name: type.name} : null; }
         if ('step' in fields) { const step = types.flatMap(x => x.steps).find(s => s.id === fields.step); task.step_id = fields.step || null; task.step = step || null; if (step) task.status = step.status; }
         return json({task: withRelations(task, tasks)});
       }
       return json({task: withRelations(task, tasks), children: tasks.filter(x => x._parent === id).map(x => withRelations(x, tasks)),
-        comments: [{id: 'm1', kind: 'say', from_actor: 'human:ana', body: 'Keep the old flow behind a flag for a week.', created_at: at(90), refs: {}}],
+        comments: [{id: 'm1', kind: 'say', sender_id: 'human:ana', body: 'Keep the old flow behind a flag for a week.', created_at: at(90), refs: {}}],
         events: [{id: 'e1', ts: at(60), actor: 'bot:engineer', field: 'status', old: 'open', new: 'doing'}], messages: []});
     }
     if (p === '/api/v2/conversations') return json({conversations: []});
@@ -671,15 +671,15 @@ async function properties(browser) {
   await page.keyboard.type('supp');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="owner"]')?.textContent.includes('Support'));
-  assert.deepEqual(taskWrites(posts).at(-1).body, {version: 4, owner: 'bot:support'});
+  assert.deepEqual(taskWrites(posts).at(-1).body, {version: 4, owner_id: 'bot:support'});
   // Due: a date picker; × clears it.
   await props.locator('[data-prop-date]').fill('2026-10-09');
   await page.waitForFunction(() => /Oct 9/.test(document.querySelector('#task-peek [data-prop="due"]')?.textContent || ''));
-  assert.match(taskWrites(posts).at(-1).body.due, /^2026-10-\d\dT\d\d:00:00\.000Z$/);
+  assert.match(taskWrites(posts).at(-1).body.due_at, /^2026-10-\d\dT\d\d:00:00\.000Z$/);
   await props.locator('[data-prop-row="due"]').hover();
   await props.locator('[data-prop-clear="due"]').click();
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="due"]')?.textContent.includes('Add due date'));
-  assert.equal(taskWrites(posts).at(-1).body.due, '');
+  assert.equal(taskWrites(posts).at(-1).body.due_at, '');
   // Tags: chips and a small + that opens an input with suggestions.
   await props.locator('[data-prop="tags"]').click();
   await page.keyboard.type('Urgent');
@@ -1030,7 +1030,7 @@ async function views(browser) {
 async function plates(browser) {
   // The people picker: a teammate's plate with a count each, kept in the address through a reload; a task blocked by
   // an open one folds under Blocked; an unknown person is Me again; a row's status chip moves the task.
-  const held = {...fixtures().find(x => x.id === 't-demo'), id: 't-cut', title: 'Cut the demo trailer', _blocked: ['t-idem'], due: undefined};
+  const held = {...fixtures().find(x => x.id === 't-demo'), id: 't-cut', title: 'Cut the demo trailer', _blocked: ['t-idem'], due_at: undefined};
   const {page, errors, posts} = await open(browser, {hash: '#/tasks', extraTasks: [held]});
   await page.click('#task-who');
   const sam = page.locator('#task-filter-pop [data-who="human:sam"]');
@@ -1059,12 +1059,12 @@ async function plates(browser) {
 async function waitingOnYou(browser) {
   // A bot's task set waiting on you (`--on`) is in Needs you under that bot, whoever filed it, with a short "Waiting" chip
   // and no buttons other rows lack.
-  const host = {...fixtures().find(x => x.id === 't-inbox'), id: 't-host', title: 'Restart the build host', owner: 'bot:engineer',
-    requester: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', updated_at: at(5)};
+  const host = {...fixtures().find(x => x.id === 't-inbox'), id: 't-host', title: 'Restart the build host', owner_id: 'bot:engineer',
+    requester_id: 'bot:botops', waiting_on: 'human:ana', note: 'It refuses SSH since the update.', updated_at: at(5)};
   const sams = {...host, id: 't-sams', title: 'Rotate the deploy key', waiting_on: 'human:sam'};
   // A question nobody answered in three days (the server marks it `older`) folds into Older questions, uncounted.
   const stale = {...host, id: 't-stale', title: 'Pick the build host region', waiting_on: null,
-    ask: {id: 'q-stale', body: 'East or west?', from_actor: 'bot:engineer', to_actor: 'human:ana', older: true}};
+    ask: {id: 'q-stale', body: 'East or west?', sender_id: 'bot:engineer', recipient_id: 'human:ana', older: true}};
   const {page, errors} = await open(browser, {hash: '#/tasks', extraTasks: [host, sams, stale]});
   assert.equal((await groupNames(page)).at(-1).toLowerCase(), 'older questions');
   assert.equal(await page.locator('.tl-group[data-group="older"] .tl-rows').isHidden(), true, 'folded until opened');
@@ -1227,8 +1227,8 @@ async function recheckSaves(browser) {
   await peek.locator('.prop-pop [data-prop-pick="writer"]').click();
   await page.waitForFunction(() => /Writer/.test(document.querySelector('#task-peek [data-prop="owner"]')?.textContent || ''));
   const writes = () => taskWrites(posts).filter(x => x.p.endsWith('/t-triage')).map(x => x.body);
-  assert.deepEqual(writes(), [{version: 3, status: 'waiting'}, {version: 4, owner: 'bot:writer'}], 'one at a time, each with the newest version');
-  assert.equal(tasks.find(x => x.id === 't-triage').owner, 'bot:writer');
+  assert.deepEqual(writes(), [{version: 3, status: 'waiting'}, {version: 4, owner_id: 'bot:writer'}], 'one at a time, each with the newest version');
+  assert.equal(tasks.find(x => x.id === 't-triage').owner_id, 'bot:writer');
   releaseLists();
   // the last reload has drawn the list (the row shows the new owner)
   await page.waitForFunction(() => document.querySelector('[data-task-key="tt-triage"] .tl-face')?.title === 'Writer');
@@ -1326,7 +1326,7 @@ async function recheckLists(browser) {
   await second.page.close();
   // N5: two people with one first name get two different group names.
   const third = await open(browser, {people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam Ortiz'}, {id: 'sam2', name: 'Sam Lee'}],
-    extraTasks: [{...fixtures().find(x => x.id === 't-demo'), id: 't-demo2', title: 'Record the onboarding walkthrough', owner: 'human:sam2'}]});
+    extraTasks: [{...fixtures().find(x => x.id === 't-demo'), id: 't-demo2', title: 'Record the onboarding walkthrough', owner_id: 'human:sam2'}]});
   const names = await groupNames(third.page);
   assert.ok(names.includes('NEEDS SAM O.') && names.includes('NEEDS SAM L.'), 'distinct: ' + names);
   assert.deepEqual(third.errors, []);
@@ -1419,7 +1419,7 @@ async function recheckFinal(browser) {
   // R2-5: as much of the last name as tells people apart.
   const third = await open(browser, {people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam Ortiz'}, {id: 'sam2', name: 'Sam Lee'}, {id: 'sam3', name: 'Sam Long'},
     {id: 'sam4', name: 'Sam', email: 'sam.k@acme.example'}],
-    extraTasks: ['sam2', 'sam3', 'sam4'].map((who, i) => ({...fixtures().find(x => x.id === 't-demo'), id: 't-demo-' + i, title: 'Demo ' + i, owner: 'human:' + who}))});
+    extraTasks: ['sam2', 'sam3', 'sam4'].map((who, i) => ({...fixtures().find(x => x.id === 't-demo'), id: 't-demo-' + i, title: 'Demo ' + i, owner_id: 'human:' + who}))});
   const names = await groupNames(third.page);
   for (const want of ['NEEDS SAM O.', 'NEEDS SAM LE.', 'NEEDS SAM LO.', 'NEEDS SAM.K']) assert.ok(names.includes(want), `${want} in ${names}`);
   assert.deepEqual(third.errors, []);
@@ -1432,9 +1432,9 @@ async function recheckFinal(browser) {
 async function renamedBot(browser) {
   const id = '0192f0c4-7b1e-7cc2-9d1a-3f5e8a6b2c10';
   const helper = {id, slug: 'sales-helper', name: 'sales-helper', display_name: 'Sales Helper', team: 'support', host: 'keeper', status: 'active', state: 'active', can_chat: true};
-  const call = {...fixtures().find(x => x.id === 't-demo'), id: 't-call', title: 'Call the Acme lead', owner: 'bot:' + id};
+  const call = {...fixtures().find(x => x.id === 't-demo'), id: 't-call', title: 'Call the Acme lead', owner_id: 'bot:' + id};
   const {page, errors, posts} = await open(browser, {bots: [...BOTS, helper], extraTasks: [call], hash: '#/tasks?owner=bot:sales-helper&view=list'});
-  assert.deepEqual(await page.evaluate(() => TASKS_ST.filters.owner), ['bot:' + id], 'an old link\'s slug becomes the id');
+  assert.deepEqual(await page.evaluate(() => TASKS_ST.filters.owner_id), ['bot:' + id], 'an old link\'s slug becomes the id');
   assert.deepEqual(await rowKeys(page), ['tt-call']);
   assert.equal(await page.locator('[data-task-key="tt-call"] .tl-face').getAttribute('title'), 'Sales Helper');
   assert.equal(await page.locator('[data-task-key="tt-call"] .tl-face [data-av]').getAttribute('data-av'), id);
@@ -1445,7 +1445,7 @@ async function renamedBot(browser) {
   await page.locator('#task-peek [data-prop="owner"]').click();
   await page.locator(`#task-peek .prop-pop [data-prop-pick="${id}"]`).click();
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="owner"]')?.textContent.includes('Sales Helper'));
-  assert.equal(posts.filter(x => x.p === '/api/v2/tasks/t-checkout').at(-1).body.owner, 'bot:' + id);
+  assert.equal(posts.filter(x => x.p === '/api/v2/tasks/t-checkout').at(-1).body.owner_id, 'bot:' + id);
   assert.deepEqual(errors, []);
   await page.close();
   console.log('a bot whose id is not its slug: ok');

@@ -20,7 +20,7 @@ def setup(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
         for slug in ("mail", "helper", "mail2"):
-            c.execute("INSERT OR IGNORE INTO bot_config(bot,config,operator,repo) VALUES(?,?,?,?)",
+            c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
                       (slug, "{}", "morgan", "emp-" + slug))
     return enrolled(api)
 

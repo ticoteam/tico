@@ -61,7 +61,7 @@ def matched(api, author, recipients=()):
 
 def audit(api, rule_id):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM audit_log WHERE object=? ORDER BY at, id", ("org_rule:" + rule_id,))]
+        return [dict(r) for r in c.execute("SELECT * FROM audit_log WHERE object=? ORDER BY created_at, id", ("org_rule:" + rule_id,))]
 
 
 def test_who_matches_a_group_a_nested_group_a_person_all_bots_and_a_later_bot(api):
@@ -76,7 +76,7 @@ def test_who_matches_a_group_a_nested_group_a_person_all_bots_and_a_later_bot(ap
     # A bot made after the rule is covered by all_bots, with no edit to the rule.
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('late-bot', 'late-bot', 'Late', 'active')")
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('late-bot','{}','', 'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('late-bot','{}','', 'ana')")
     as_bot(api, "late-bot", "late-test")
     assert everyone_bots in matched(api, "bot:late-bot")
     assert support not in matched(api, "bot:late-bot")
@@ -188,10 +188,10 @@ def test_mine_reads_the_bots_rules_and_settings_without_writing(api):
 def test_retire_returns_the_due_dates_and_leaves_the_history(api):
     org(api)
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
-    due = post(api, f"rules/{r['id']}/due", {"first_due": "2026-01-15", "repeats": "monthly", "owner": "ops"})
+    due = post(api, f"rules/{r['id']}/due", {"first_due": "2026-01-15", "repeats": "monthly", "owner_id": "ops"})
     retired = post(api, f"rules/{r['id']}/retire", {"version": 1})
     assert retired["rule"]["status"] == "retired"
-    assert [d["id"] for d in retired["due"]] == [due["id"]]
+    assert [d["id"] for d in retired["due_at"]] == [due["id"]]
     assert any(row["action"] == "org_rule.retired" for row in _events(api))
 
 
@@ -204,7 +204,7 @@ def test_two_open_occurrences_need_a_day_to_satisfy(api):
     org(api)
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
     start = (D.local_today("America/Los_Angeles") - timedelta(days=30)).isoformat()
-    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "weekly", "owner": "ops"})
+    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "weekly", "owner_id": "ops"})
     post(api, f"rule-due/{due['id']}/satisfied", {}, expected=422)
     marked = post(api, f"rule-due/{due['id']}/satisfied", {"due_on": start})
     assert marked["satisfied"] == start
@@ -214,7 +214,7 @@ def test_editing_a_due_date_keeps_its_history(api):
     org(api)
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
     start = (D.local_today("America/Los_Angeles") - timedelta(days=1)).isoformat()
-    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner": "ops"})
+    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner_id": "ops"})
     post(api, f"rule-due/{due['id']}/satisfied", {})
     edited = post(api, f"rule-due/{due['id']}", {"first_due": "2027-03-01"})
     assert edited["replaces"] == due["id"]
@@ -247,7 +247,7 @@ def test_a_bot_with_no_team_of_its_own_is_in_its_managers_group(api):
     support = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})["id"]
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('intern', 'intern', 'Intern', 'active')")
-        c.execute("INSERT INTO bot_config(bot,config,team,operator,reports_to) VALUES('intern','{}','','ana','finance')")
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id,reports_to) VALUES('intern','{}','','ana','finance')")
     assert support in matched(api, "bot:intern")
 
 
@@ -303,7 +303,7 @@ def test_a_replayed_write_checks_the_quote_again_once_file_access_is_revoked(api
     _lead(api, "support", "person:cara")
     _access(api, "ops", True, [])
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,locator,first_activity_at,last_activity_at)"
+        c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,first_activity_at,last_activity_at)"
                   " VALUES('receipt-file','ops','bot','ops','Receipts','document','receipts','2026','2026')")
     r = rule(api, {"kind": "external", "text": "Keep receipts for seven years.", "who": {"groups": ["support"]},
                    "source_id": _source(api)})
@@ -328,19 +328,19 @@ def test_a_due_date_keeps_its_edit_chain_and_is_readable_by_id(api):
     org(api)
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
     start = (D.local_today("America/Los_Angeles") - timedelta(days=1)).isoformat()
-    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner": "ops"})
+    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner_id": "ops"})
     post(api, f"rule-due/{due['id']}/satisfied", {})
     second = post(api, f"rule-due/{due['id']}", {"first_due": "2027-03-01"})["id"]
     listed = get(api, f"rules/{r['id']}")
-    assert listed["due"] and all("chain" not in d for d in listed["due"])
+    assert listed["due_at"] and all("chain" not in d for d in listed["due_at"])
     third = post(api, f"rule-due/{second}", {"first_due": "2027-06-01"})["id"]
     old = get(api, f"rule-due/{due['id']}")
-    assert old["replaced_by"] == second and old["replaces"] is None
+    assert old["replaced_by_id"] == second and old["replaces"] is None
     assert old["chain"][0]["ended_on"] is not None
     assert [link["id"] for link in old["chain"]] == [due["id"], second, third]
     assert old["chain"][0]["satisfied"][0]["due_on"] == start
     mid = get(api, f"rule-due/{second}")
-    assert mid["replaces"] == due["id"] and mid["replaced_by"] == third
+    assert mid["replaces"] == due["id"] and mid["replaced_by_id"] == third
     assert [link["id"] for link in mid["chain"]] == [due["id"], second, third]
     assert not old["can_edit"] and not old["can_satisfy"]
     live = get(api, f"rule-due/{third}")
@@ -447,7 +447,7 @@ def test_spend_sentences_cover_the_company_default_and_the_pools_with_edit_links
 def _routine_due(api):
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
     start = (D.local_today("America/Los_Angeles") - timedelta(days=1)).isoformat()
-    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner": "ops"})
+    due = post(api, f"rules/{r['id']}/due", {"first_due_on": start, "repeats": "once", "owner": "ops"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE rule_due_dates SET routine_id='routine-1' WHERE id=?", (due["id"],))
     return r, due, start

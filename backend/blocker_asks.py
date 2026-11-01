@@ -60,15 +60,15 @@ def open_ask(c, blocker_key, owner, parent_id=None):
     above = {parent_id, *H.TR.ancestors(c, parent_id)} if parent_id else set()
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     devops = _devops(c)
-    for row in H._rows(c.execute(f"SELECT id,owner FROM tasks WHERE blocker_key=? AND status IN ({marks}) "
+    for row in H._rows(c.execute(f"SELECT id,owner_id FROM tasks WHERE blocker_key=? AND status IN ({marks}) "
                                  "AND coalesce(private,0)=0 ORDER BY created_at,id", (blocker_key, *H.ACTIVE_STATUSES))):
         if row["id"] in above:
             continue
-        if H.is_human(row["owner"]):
+        if H.is_human(row["owner_id"]):
             return H.task(c, row["id"])
     if H.is_human(owner) or not devops:
         return None
-    for row in H._rows(c.execute(f"SELECT id FROM tasks WHERE blocker_key=? AND owner=? AND status IN ({marks}) "
+    for row in H._rows(c.execute(f"SELECT id FROM tasks WHERE blocker_key=? AND owner_id=? AND status IN ({marks}) "
                                  "AND coalesce(private,0)=0 ORDER BY created_at,id", (blocker_key, devops, *H.ACTIVE_STATUSES))):
         if row["id"] not in above:
             return H.task(c, row["id"])
@@ -86,7 +86,7 @@ def _loops(c, task_id, blocker_id):
 
 
 def joined_text(c, ask, blocker_key, task_id):
-    owner = ask["owner"]
+    owner = ask["owner_id"]
     who = H.person_name(c, owner) if H.is_human(owner) else H.actor_id(owner)
     return (f"Same blocker as open task {ask['id']} ({ask['title'][:120]}), already asked of {who}: {blocker_key}. "
             "This task is yours, blocked by that ask instead of a second ask, and wakes when it is done. "
@@ -104,12 +104,12 @@ def record(c, actor, row, blocker_key, ask=None, owner=None):
         H.event(c, actor, "blocker.joined", row["id"], {"ask": ask["id"], "owner": owner})
         return text
     devops = _devops(c)
-    if row.get("private") or not (H.is_human(row["owner"]) and devops and actor == devops):
+    if row.get("private") or not (H.is_human(row["owner_id"]) and devops and actor == devops):
         return None
     # DevOps's own tasks for this blocker wait on the one person ask, rather than going back to their checkers.
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     waiting = []
-    for other in H._rows(c.execute(f"SELECT id FROM tasks WHERE blocker_key=? AND owner=? AND id<>? AND status IN ({marks}) "
+    for other in H._rows(c.execute(f"SELECT id FROM tasks WHERE blocker_key=? AND owner_id=? AND id<>? AND status IN ({marks}) "
                                    "AND coalesce(private,0)=0 ORDER BY created_at,id",
                                    (blocker_key, devops, row["id"], *H.ACTIVE_STATUSES))):
         if not _loops(c, other["id"], row["id"]):
@@ -127,12 +127,12 @@ def unjoined(c, actor, task_id, blocker_id):
     if actor == H.KEEPER:
         return
     row = H.task(c, task_id)
-    if not row or row["status"] not in H.ACTIVE_STATUSES or actor != row["owner"]:
+    if not row or row["status"] not in H.ACTIVE_STATUSES or actor != row["owner_id"]:
         return
     found = H._one(c, "SELECT detail FROM events WHERE action='blocker.joined' AND target=? "
                       "ORDER BY rowid DESC LIMIT 1", (task_id,))
     detail = H._json(found["detail"], {}) if found else {}
-    if not detail or detail.get("ask") != blocker_id or not detail.get("owner") or detail["owner"] == row["owner"]:
+    if not detail or detail.get("ask") != blocker_id or not detail.get("owner") or detail["owner"] == row["owner_id"]:
         return
     if H._one(c, "SELECT 1 FROM events WHERE action='blocker.unjoined' AND target=? LIMIT 1", (task_id,)):
         return

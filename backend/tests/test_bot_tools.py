@@ -125,7 +125,7 @@ def register(api, bot="ops", who="ana-test", entry=None, expected=200):
 
 
 def botops_tasks(api):
-    return api.get("/api/v2/tasks", params={"owner": "botops"}, headers=headers()).json()["tasks"]
+    return api.get("/api/v2/tasks", params={"owner_id": "botops"}, headers=headers()).json()["tasks"]
 
 
 def test_a_manager_registers_a_tool_and_botops_gets_the_exact_entry(api):

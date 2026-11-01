@@ -45,7 +45,7 @@ def correction(api, body, token, check):
     assert any(check in p for p in dry_run(api, body, token))
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM refusals WHERE actor='bot:ops'").fetchone()
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:finance'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:finance'").fetchone()
 
 
 @pytest.mark.parametrize("under", [True, False])
@@ -55,7 +55,7 @@ def test_the_owning_bots_run_files_a_company_visible_task_the_builder_reads_and_
     body = filed(row["id"] if under else None)
     assert not dry_run(api, body, attempt["token"])
     made = post(api, "tasks", body, attempt["token"])
-    assert not made["private"] and made["owner"] == "bot:finance" and made["requester"] == "bot:ops"
+    assert not made["private"] and made["owner_id"] == "bot:finance" and made["requester_id"] == "bot:ops"
     with api.app.state.store.read() as c:
         assert H.task_private(c, H.task(c, row["id"]))
 
@@ -70,7 +70,7 @@ def test_the_owning_bots_run_files_a_company_visible_task_the_builder_reads_and_
     assert "Zip triage" not in text and "Confidential" not in text
     with api.app.state.store.read() as c:
         notices = [m["body"] for m in c.execute(
-            "SELECT m.body FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='finance'")]
+            "SELECT m.body FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='finance'")]
     assert notices and not any("Zip triage" in n for n in notices), notices
     # The private run writes nothing more to it: a comment would skip the words check.
     r = api.post(f"/api/v2/tasks/{made['id']}/comments", json={"text": "Also see the triage notes."},
@@ -85,7 +85,7 @@ def test_a_reader_of_the_new_task_sees_its_parent_only_as_a_private_task(api):
     for bot in ("finance", "doc-updater"):
         token = bot_token(api, bot)
         shown = get(api, "tasks/" + made["id"], token)["task"]
-        assert shown["relations"]["parent"] == [{"id": None, "title": "a private task", "status": None, "owner": None,
+        assert shown["relations"]["parent"] == [{"id": None, "title": "a private task", "status": None, "owner_id": None,
                                                  "direction": "out", "private": True}]
         assert row["id"] not in json.dumps(shown["relations"])
         listed = get(api, "tasks?owner=bot:finance", token)
@@ -123,7 +123,7 @@ def test_done_tells_the_private_tasks_owner_and_its_wait_clears(api):
     with api.app.state.store.read() as c:
         assert H.wait_detail(c, H.task(c, row["id"])) is None
         jobs = [json.loads(r[0] or "{}") for r in c.execute(
-            "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='ops'")]
+            "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops'")]
     # The company task's result reaches the private task's owner on it, as any awaited subtask's does.
     assert any(r.get("rule") == "awaited_subtask" and r["task"] == row["id"] and r.get("subtask") == made["id"]
                for r in jobs), jobs
@@ -168,7 +168,7 @@ def test_a_file_or_link_from_the_private_task_is_a_correction_naming_that_check(
         c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
                   "VALUES(?,'bot:ops','d',1,'intake.pdf','application/pdf','2026')", (blob,))
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (row["id"], blob))
-        c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,locator,first_activity_at,last_activity_at,"
+        c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,first_activity_at,last_activity_at,"
                   "task_id) VALUES(?,'ops',?,'intake','Intake notes','document','intake','2026','2026',?)",
                   (FILE, "task:" + row["id"], row["id"]))
         H.task_link(c, "bot:ops", row["id"], url)
@@ -188,7 +188,7 @@ def test_a_bot_that_only_reads_the_private_task_is_refused(api):
         assert words == "Only a private task's owning bot, or its manager, files a task from its work", words
         assert words in dry_run(api, filed(parent), attempt["token"])
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:finance'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:finance'").fetchone()
 
 
 def test_a_person_on_the_private_task_keeps_todays_refusal_naming_them_and_the_route(api):
@@ -213,7 +213,7 @@ def test_with_the_route_switched_off_it_is_refused_as_before(api, monkeypatch):
     for parent in (row["id"], None):
         assert refused(api, filed(parent), attempt["token"]) == privacy.COMPANY_REFUSAL
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:finance'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:finance'").fetchone()
 
 
 def test_outside_a_private_run_the_route_is_refused(api):
@@ -224,7 +224,7 @@ def test_outside_a_private_run_the_route_is_refused(api):
 
 @pytest.mark.parametrize("change,status,words", [
     ({"private": True}, 422, "A task from private work is company-visible: leave out --private"),
-    ({"owner": "human:cara"}, 403, "A task from private work is for a bot: ask a person with `hub task question`"),
+    ({"owner_id": "human:cara"}, 403, "A task from private work is for a bot: ask a person with `hub task question`"),
     ("company parent", 403, "File a task from private work under the private task it comes from, or with no parent"),
     ("related", 403, "A task from private work is related to no private task but its parent"),
 ])
@@ -244,7 +244,7 @@ def test_the_route_refuses_a_private_task_a_person_a_company_parent_and_a_privat
     assert r.status_code == status and r.json()["error"]["detail"] == words, r.text
     assert words in dry_run(api, body, attempt["token"])
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE requester='bot:ops' AND title=?", (REPAIR["title"],)).fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE requester_id='bot:ops' AND title=?", (REPAIR["title"],)).fetchone()
 
 
 SECRET = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"

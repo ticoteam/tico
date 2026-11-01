@@ -97,7 +97,7 @@ def computer(api, tmp_path, monkeypatch):
 
 
 def automate(api, *steps):
-    return post(api, "automations", {"name": "Invoices", "owner": "person:ana",
+    return post(api, "automations", {"name": "Invoices", "owner_id": "person:ana",
                                      "trigger": {"type": "message", "inbox": BOX}, "steps": list(steps)})["id"]
 
 
@@ -326,10 +326,10 @@ def test_a_slack_reply_delivered_after_the_switch_went_off_is_held_as_a_draft_ta
     slack_msg = {"message": {"source": "slack", "inbox": "slack:#general", "channel": "C1", "ts": "1.1", "text": "Help?"}}
     auto = {"id": automate(api, NOTE), "flow": {"owner": "person:ana"}, "assistant_bot": "coo"}
     with store.transaction() as c:
-        c.execute("INSERT INTO automation_runs(id,automation_id,version,started_at,status,state) "
+        c.execute("INSERT INTO automation_runs(id,automation_id,version,started_at,status,saved_state) "
                   "VALUES('run_s',?,1,?,'ok',?)", (auto["id"], "2026-10-28T09:00:00Z", json.dumps({"status": "ok", "steps": []})))
         done = A.run(c, auto, "run_s", "send_reply", {"body": "On it", "bot": "ops"}, slack_msg)
-        c.execute("UPDATE automation_runs SET state=? WHERE id='run_s'", (json.dumps(
+        c.execute("UPDATE automation_runs SET saved_state=? WHERE id='run_s'", (json.dumps(
             {"status": "ok", "threads": [], "steps": [{"id": "reply", "type": "action", "status": "ok",
                                                          "outputs": {"do": "send_reply", **done}, "cost": 0}]}),))
         c.execute("INSERT INTO automation_inboxes VALUES('slack:#general',0,?,'human:ana')", ("2026-10-28T09:01:00Z",))
@@ -338,9 +338,9 @@ def test_a_slack_reply_delivered_after_the_switch_went_off_is_held_as_a_draft_ta
     assert slack.posts == []
     with store.read() as c:
         held = dict(c.execute("SELECT state, error FROM slack_posts").fetchone())
-        task = c.execute("SELECT owner, title FROM tasks WHERE title LIKE 'Draft reply:%'").fetchone()
-        state = json.loads(c.execute("SELECT state FROM automation_runs WHERE id='run_s'").fetchone()[0])
-    assert held == {"state": "cancelled", "error": "send_off"} and dict(task) == {"owner": "human:ana",
+        task = c.execute("SELECT owner_id, title FROM tasks WHERE title LIKE 'Draft reply:%'").fetchone()
+        state = json.loads(c.execute("SELECT saved_state FROM automation_runs WHERE id='run_s'").fetchone()[0])
+    assert held == {"state": "cancelled", "error": "send_off"} and dict(task) == {"owner_id": "human:ana",
                                                                                    "title": "Draft reply: On it"}
     assert state["steps"][0]["outputs"]["detail"] == "send_off"
 
@@ -377,7 +377,7 @@ def test_a_late_mail_report_after_its_held_run_was_dropped_is_recorded_and_the_r
     assert post(api, f"automations/{aid}/held", {"action": "drop"})["moved"] == 1
     late = post(api, f"automations/mail-actions/{action['id']}/result",
                 {"ok": ok, "detail": "sent" if ok else "no such thread", "retry": False}, computer.token)
-    assert late["state"] == ("done" if ok else "failed")
+    assert late["saved_state"] == ("done" if ok else "failed")
     run = last_run(api, aid)
     assert run["status"] == "skipped" and run["finished_at"]
     step = run["steps"][0]

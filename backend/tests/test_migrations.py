@@ -118,8 +118,8 @@ def test_an_existing_database_loses_the_redundant_task_indexes_once(tmp_path):
     leaves the database as it is."""
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
-        c.execute("CREATE INDEX tasks_owner_status ON tasks(owner, status)")
-        c.execute("CREATE INDEX tasks_requester_status ON tasks(requester, status)")
+        c.execute("CREATE INDEX tasks_owner_status ON tasks(owner_id, status)")
+        c.execute("CREATE INDEX tasks_requester_status ON tasks(requester_id, status)")
         c.execute("CREATE INDEX tasks_private ON tasks(id) WHERE private IS NOT 0")
         # 0011 and every file after it run again (each is safe to repeat), as on a file that never had them
         c.execute("DELETE FROM schema_migrations WHERE version>='0011' AND version NOT LIKE 'legacy_%'")

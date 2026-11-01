@@ -110,20 +110,20 @@ def snooze(conn, actor, task_id, until, mover=False, note=None):
     note = clean_note(conn, actor, note)
     if (stamp, note) == (row.get("snoozed_until"), row.get("snoozed_note")):
         return row          # the same date and note again: nothing changes, nobody is told again
-    conn.execute("UPDATE tasks SET snoozed_until=?, snoozed_by=?, snoozed_note=?, updated_at=?, version=version+1 "
+    conn.execute("UPDATE tasks SET snoozed_until=?, snoozed_by_id=?, snoozed_note=?, updated_at=?, version=version+1 "
                  "WHERE id=?", (stamp, actor, note, at, task_id))
     H._task_event(conn, task_id, actor, "snoozed_until", row.get("snoozed_until"), stamp, note or "")
     after = H.task(conn, task_id)
     # The owner learns nobody expects it before then; a bot reads it on its next real run, not now.
-    if after["owner"] != actor:
-        H._wake(conn, after, after["owner"], f"Snoozed until {_label(stamp)}: {after['title']}",
+    if after["owner_id"] != actor:
+        H._wake(conn, after, after["owner_id"], f"Snoozed until {_label(stamp)}: {after['title']}",
                 {"snooze": stamp}, quiet_bots=True, quiet=True)
     # Whoever asked for it is told too, so nobody parks a request without the requester knowing.
-    if after["requester"] not in (actor, after["owner"]):
+    if after["requester_id"] not in (actor, after["owner_id"]):
         who = ((H.bot(conn, H.actor_id(actor)) if H.is_bot(actor) else None) or {}).get("name") or H.actor_id(actor)
-        H._wake(conn, after, after["requester"], f"Snoozed until {_label(stamp)} by {who}: {after['title']}",
+        H._wake(conn, after, after["requester_id"], f"Snoozed until {_label(stamp)} by {who}: {after['title']}",
                 {"snooze": stamp}, quiet_bots=True, quiet=True)
-    H.recount(conn, [after["owner"], after["requester"]])
+    H.recount(conn, [after["owner_id"], after["requester_id"]])
     return after
 
 
@@ -135,8 +135,8 @@ def unsnooze(conn, actor, task_id, mover=False):
         return row
     left = row.get("snoozed_note")
     after = _clear(conn, actor, row, "unsnoozed")
-    if after["owner"] != actor and after["status"] in H.ACTIVE_STATUSES:
-        H._wake(conn, after, after["owner"], f"Unsnoozed: {after['title']}" + _note_line(left),
+    if after["owner_id"] != actor and after["status"] in H.ACTIVE_STATUSES:
+        H._wake(conn, after, after["owner_id"], f"Unsnoozed: {after['title']}" + _note_line(left),
                 _wake_refs({"wake": "snooze"}, left))
     return after
 
@@ -151,10 +151,10 @@ def _wake_refs(refs, note):
 
 def _clear(conn, actor, row, note):
     H = _H()
-    conn.execute("UPDATE tasks SET snoozed_until=NULL, snoozed_by=NULL, snoozed_note=NULL, updated_at=?, "
+    conn.execute("UPDATE tasks SET snoozed_until=NULL, snoozed_by_id=NULL, snoozed_note=NULL, updated_at=?, "
                  "version=version+1 WHERE id=?", (H.now(), row["id"]))
     H._task_event(conn, row["id"], actor, "snoozed_until", row["snoozed_until"], None, note)
-    H.recount(conn, [row["owner"], row["requester"]])
+    H.recount(conn, [row["owner_id"], row["requester_id"]])
     return H.task(conn, row["id"])
 
 
@@ -182,15 +182,15 @@ def wake_ended(conn, at, failures=None):
             after = _clear(conn, H.KEEPER, row, "snooze over")
             if after["status"] not in H.ACTIVE_STATUSES:
                 continue
-            if not H.is_bot(after["owner"]) or (H.bot(conn, H.actor_id(after["owner"])) or {}).get("state") != "active":
+            if not H.is_bot(after["owner_id"]) or (H.bot(conn, H.actor_id(after["owner_id"])) or {}).get("state") != "active":
                 # No wake: the note stays visible on the task, where a person or a paused bot reads it next.
                 if left:
                     H.task_comment(conn, H.KEEPER, after["id"], f"Snooze over. Note: {left}", wake=False)
                 continue
-            if after.get("due") and H._has_table(conn, "task_reminders") and not H.not_yet_due(after, at):
+            if after.get("due_at") and H._has_table(conn, "task_reminders") and not H.not_yet_due(after, at):
                 # This notice is the due date's reminder too; the Due pass would only repeat it.
-                conn.execute("INSERT OR IGNORE INTO task_reminders VALUES(?,?,?)", (after["id"], after["due"], at))
-            H._wake(conn, after, after["owner"], f"Snooze over: {after['title']}" + _note_line(left),
+                conn.execute("INSERT OR IGNORE INTO task_reminders VALUES(?,?,?)", (after["id"], after["due_at"], at))
+            H._wake(conn, after, after["owner_id"], f"Snooze over: {after['title']}" + _note_line(left),
                     _wake_refs({"wake": "snooze"}, left), trigger="schedule")
             woken.append(after["id"])
     return woken

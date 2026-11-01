@@ -96,7 +96,7 @@ def _record(c, row, stand, cls, confidence, outcome, at, detail=None):
               "judged_at=excluded.judged_at,woke_at=NULL",
               (row["id"], stand, cls, round(float(confidence or 0), 3), outcome, detail, at))
     H.event(c, H.KEEPER, "stall_triage.decided", row["id"],
-            {"bot": H.actor_id(row["owner"]), "class": cls, "confidence": round(float(confidence or 0), 3),
+            {"bot": H.actor_id(row["owner_id"]), "class": cls, "confidence": round(float(confidence or 0), 3),
              "outcome": outcome, **({"detail": detail} if detail else {})})
 
 
@@ -104,7 +104,7 @@ def _record(c, row, stand, cls, confidence, outcome, at, detail=None):
 def _wake_open(c, row, at):
     """Whether the stall check could send a wake for this task now: not within the repeat gap of the last one and not
     past the day's cap (the two limits H.wake_stalled keeps)."""
-    last, count = c.execute("SELECT max(ts), count(CASE WHEN ts>? THEN 1 END) FROM events "
+    last, count = c.execute("SELECT max(created_at), count(CASE WHEN created_at>? THEN 1 END) FROM events "
                             "WHERE action='task.stall_wake' AND target=?",
                             (H.shift(at, seconds=-86400), row["id"])).fetchone()
     return not (last and last > H.shift(at, seconds=-H.STALL_REPEAT_MINUTES * 60)) and (count or 0) < H.STALL_WAKES_PER_DAY
@@ -118,12 +118,12 @@ def inputs(c, at, rows):
         return []
     parked, out, seen = H.parked_bots(c), [], set()
     for row in rows:
-        if row["id"] in seen or row.get("held") or row.get("own_blockers") or H.actor_id(row["owner"]) in parked:
+        if row["id"] in seen or row.get("held") or row.get("own_blockers") or H.actor_id(row["owner_id"]) in parked:
             continue
         if H.task_private(c, row):
             continue                # its messages stay with its parties: Decide never reads them
         seen.add(row["id"])
-        if not wake_rules.at_checkpoint(c, row, row["owner"]) or not _wake_open(c, row, at):
+        if not wake_rules.at_checkpoint(c, row, row["owner_id"]) or not _wake_open(c, row, at):
             continue
         stand = H._stall_stand(c, row)
         found = verdict_of(c, row["id"])
@@ -139,7 +139,7 @@ def inputs(c, at, rows):
 def _who(c, row, actor):
     if actor == H.KEEPER:
         return "Tico"
-    if actor == row["owner"]:
+    if actor == row["owner_id"]:
         return "the bot that owns it"
     if H.is_human(actor):
         return "person: " + H.person_name(c, actor)
@@ -151,7 +151,7 @@ def _messages(c, row):
     out = []
     for msg in H.task_comments(c, row["id"])[-MESSAGES:]:
         text = " ".join(str(msg.get("body") or "").split())
-        out.append({"from": _who(c, row, msg.get("from_actor")), "at": str(msg.get("created_at") or "")[:16],
+        out.append({"from": _who(c, row, msg.get("sender_id")), "at": str(msg.get("created_at") or "")[:16],
                     "text": text[:MESSAGE_CHARS]})
     return out
 
@@ -163,7 +163,7 @@ def _options(c, row, at):
     found = {}
     messages = H.task_comments(c, row["id"])[-MESSAGES:]
     people = []
-    for actor in [m.get("from_actor") for m in reversed(messages)] + [row["requester"]]:
+    for actor in [m.get("sender_id") for m in reversed(messages)] + [row["requester_id"]]:
         if actor and H.is_human(actor) and actor not in people and H._actor_exists(c, actor):
             people.append(actor)
     for n, actor in enumerate(people[:OPTIONS_EACH], 1):
@@ -197,7 +197,7 @@ def state_of(c, row, at):
 
 
 def calls_this_hour(c, at, label):
-    return c.execute("SELECT count(*) FROM events WHERE action='judge.call' AND target=? AND ts>?",
+    return c.execute("SELECT count(*) FROM events WHERE action='judge.call' AND target=? AND created_at>?",
                      (label, H.shift(at, seconds=-3600))).fetchone()[0]
 
 
@@ -205,14 +205,14 @@ def calls_this_hour(c, at, label):
 def _last_speaker(c, row):
     """Who spoke last on the task, in words, for the note on a close: a person, a bot, never Tico."""
     for msg in reversed(H.task_comments(c, row["id"])):
-        actor = msg.get("from_actor")
+        actor = msg.get("sender_id")
         if actor and actor != H.KEEPER:
             if H.is_human(actor):
                 return H.person_name(c, actor)
             found = H.bot(c, H.actor_id(actor)) or {}
             return found.get("display_name") or found.get("slug") or H.actor_id(actor)
-    found = H.bot(c, H.actor_id(row["owner"])) or {}
-    return found.get("display_name") or found.get("slug") or H.actor_id(row["owner"])
+    found = H.bot(c, H.actor_id(row["owner_id"])) or {}
+    return found.get("display_name") or found.get("slug") or H.actor_id(row["owner_id"])
 
 
 def _set_wait(c, row, kind, ref):
@@ -226,7 +226,7 @@ def _set_wait(c, row, kind, ref):
         why = f"it waits until {ref}"
     else:
         name = H.person_name(c, ref)
-        H.task_update(c, row["owner"], row["id"], status="waiting", waiting_on=ref,
+        H.task_update(c, row["owner_id"], row["id"], status="waiting", waiting_on=ref,
                       note="Can you reply on this task when you can?")
         why = f"it waits on {name}"
     H.task_comment(c, H.KEEPER, row["id"], f"Waiting: the stall check read the latest messages and {why}. "
@@ -274,8 +274,8 @@ def _still(c, row, stand, at):
     wait on, still the bot's own checkpoint. Else None."""
     now = H.task(c, row["id"])
     if (not now or now["status"] not in ("open", "doing") or not enabled(c) or H.stall_skip(c, now, at)
-            or not H.is_bot(now["owner"]) or H._stall_stand(c, now) != stand
-            or not wake_rules.at_checkpoint(c, now, now["owner"])):
+            or not H.is_bot(now["owner_id"]) or H._stall_stand(c, now) != stand
+            or not wake_rules.at_checkpoint(c, now, now["owner_id"])):
         return None
     return now
 

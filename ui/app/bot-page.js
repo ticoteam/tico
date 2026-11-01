@@ -46,7 +46,7 @@ function botPauseHTML(slug, state, error = '') {
   const tasks = paused && state.open_tasks ? ` <a href="#/bot/${encodeURIComponent(slug)}/tasks">${state.open_tasks} open task${state.open_tasks === 1 ? ' is' : 's are'} waiting on it</a>` : '';
   return `<div class="bot-pause-row">
     <div class="bot-pause-copy"><div class="bot-pause-title${paused ? ' bot-pause-record' : ''}" role="status" aria-live="polite" aria-atomic="true">${paused ? (stamp ? `Paused by ${esc(record.name)} on ${esc(stamp)}` : 'Paused') : 'Pause this bot'}</div>
-      <p class="muted">${paused ? `${esc(name)} is paused: no tasks, messages or routines until it is unpaused.${tasks}${!state.can_control ? ` Ask ${esc(state.operator || 'its operator')} to unpause.` : ''}`
+      <p class="muted">${paused ? `${esc(name)} is paused: no tasks, messages or routines until it is unpaused.${tasks}${!state.can_control ? ` Ask ${esc(state.owner_id || 'its operator')} to unpause.` : ''}`
         : 'Stops new tasks, messages and routines; a turn in progress is interrupted.'}</p>
       ${state.company_paused ? '<p class="muted">Company is paused for billing. <a href="#/settings/billing">Add credit</a></p>' : ''}
       ${error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : ''}</div>
@@ -421,7 +421,7 @@ async function pageBot(slug, tab) {
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
       <dl class="bot-setup">
         ${role ? `<dt>Role</dt><dd>${botRoleHTML(role)}</dd>` : ''}
-        <dt>Owner</dt><dd>${esc(botPersonName(e.operator))}</dd>
+        <dt>Owner</dt><dd>${esc(botPersonName(e.owner_id))}</dd>
         <dt>Works for</dt><dd>${userChips(e) || '<span class="muted">Nobody assigned</span>'}</dd>
         ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${encodeURIComponent(boss.id)}">${esc(boss.display_name)}</a></dd>`
           : String(e.reports_to || '').startsWith('human:') ? `<dt>Reports to</dt><dd>${esc(botPersonName(e.reports_to.slice(6)))}</dd>` : ''}

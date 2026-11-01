@@ -22,7 +22,7 @@ def page(api, bot, title="Weekly numbers", task=None):
     """A page straight into the database: a bot-wide file, or a task's."""
     fid = "file-" + uuid.uuid4().hex[:24]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,mime,locator,task_id,first_activity_at,"
+        c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,first_activity_at,"
                   "last_activity_at) VALUES(?,?,?,?,?,'file','text/html','tico_blob',?,?,?)",
                   (fid, bot, "task:" + task if task else "bot", fid, title, task, H.now(), H.now()))
         c.execute("INSERT INTO pages(file_id,created_at,updated_at) VALUES(?,?,?)", (fid, H.now(), H.now()))
@@ -154,7 +154,7 @@ def test_sidebar_pages_and_cards_follow_the_saved_widgets(api):
     assert [w["id"] for w in seen["widgets"]] == ["page:" + ops, "tasks", "updates", "files"]
     assert mail not in str(place(api, "bot:ops", "cara-test"))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     put(api, "bots/ops/task-tabs", {"tabs": seen["tabs"], "widgets": [{"id": "tasks"}]}, "cara-test")
     assert [p["item"] for p in place(api, "bot:ops")["pins"]] == ["page:" + mail]
     # The Assistant's sidebar is each person's own: no pages there.

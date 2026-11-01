@@ -61,10 +61,10 @@ def _catalog(c, who, auth, settings):
     reads = {(row["channel"], row["reader"]): dict(row) for row in c.execute("SELECT * FROM slack_reads")}
     # Each bot's own automations (a mail bot's checks and schedules): when one last ran and when the next is due.
     schedules = {}
-    for row in c.execute("SELECT a.id, a.owner, a.enabled, a.next_due, (SELECT max(started_at) FROM automation_runs r "
+    for row in c.execute("SELECT a.id, a.owner_id, a.enabled, a.next_due_at, (SELECT max(started_at) FROM automation_runs r "
                          "WHERE r.automation_id=a.id) AS last_fired_at FROM automations a "
-                         "WHERE a.deleted_at IS NULL AND a.owner LIKE 'bot:%'"):
-        schedules.setdefault(row["owner"][4:], []).append(dict(row))
+                         "WHERE a.deleted_at IS NULL AND a.owner_id LIKE 'bot:%'"):
+        schedules.setdefault(row["owner_id"][4:], []).append(dict(row))
     latest_digest = {row["reader"]: row["last"] for row in c.execute(
         "SELECT reader,max(created_at) AS last FROM slack_digests GROUP BY reader")}
     bots = []
@@ -74,7 +74,7 @@ def _catalog(c, who, auth, settings):
         bot = row["id"]
         if row["state"] == "archived" or not readable.get(bot, auth.FULL)["read"]:
             continue
-        config_row = c.execute("SELECT config,description,operator,revision FROM bot_config WHERE bot=?",
+        config_row = c.execute("SELECT config,description,owner_id,revision FROM bot_config WHERE bot=?",
                                (bot,)).fetchone()
         config = _json(config_row["config"], {}) if config_row else {}
         sources = _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, reads)
@@ -84,7 +84,7 @@ def _catalog(c, who, auth, settings):
         covered_slack.update(s["id"][6:] for s in sources if s["kind"] == "slack")
         jobs = schedules.get(bot, [])
         fired = [r["last_fired_at"] for r in jobs if r["last_fired_at"]]
-        due = [r["next_due"] for r in jobs if r["enabled"] and r["next_due"]]
+        due = [r["next_due_at"] for r in jobs if r["enabled"] and r["next_due_at"]]
         turn = c.execute("SELECT max(coalesce(finished_at,started_at)) FROM turns WHERE bot=?", (bot,)).fetchone()[0]
         last = max(fired + ([latest_digest[bot]] if bot in latest_digest else []) + ([turn] if turn else []), default=None)
         status = H.status(c, bot) or {}
@@ -165,7 +165,7 @@ def install_messaging(app, store, auth):
                             "published": True} if instruction and instruction["content"].strip() else {
                                 "content": found["description"], "updated_at": None, "published": False}
             jobs = [dict(r) for r in c.execute(
-                "SELECT id, name, enabled, trigger_type, next_due FROM automations WHERE owner=? AND deleted_at IS NULL "
+                "SELECT id, name, enabled, trigger_type, next_due_at FROM automations WHERE owner_id=? AND deleted_at IS NULL "
                 "ORDER BY name, id LIMIT 50", ("bot:" + bot,))]
             mail = []
             if mailboxes:
@@ -182,7 +182,7 @@ def install_messaging(app, store, auth):
                 team_url = _workspace_url(c)
                 marks = ",".join("?" * len(slack_ids))
                 slack = [_slack_message(row, team_url) for row in c.execute(
-                    f"SELECT * FROM slack_events WHERE channel IN ({marks}) AND deleted IS NULL "
+                    f"SELECT * FROM slack_events WHERE channel IN ({marks}) AND deleted_at IS NULL "
                     "ORDER BY ts DESC LIMIT 40", tuple(slack_ids))]
                 for row in c.execute("SELECT * FROM slack_digests WHERE reader=? ORDER BY created_at DESC LIMIT 15",
                                      (bot,)):

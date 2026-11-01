@@ -58,7 +58,7 @@ def _tasks(c, auth, who, attrs, base):
                      "(" + auth.task_sql(c, who) + ")"], [who.actor, H.now()]
     if attrs.get("bot"):
         bot = (H.resolve_bot(c, attrs["bot"]) or {}).get("id", attrs["bot"])
-        clauses.append("owner=?")
+        clauses.append("owner_id=?")
         args.append("bot:" + bot)
     if attrs.get("parent"):
         clauses.append("parent_id=?")

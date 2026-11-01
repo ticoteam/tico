@@ -63,7 +63,7 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
                  {"id": "cara", "email": "cara@acme.example", "name": "Cara", "reports_to": "ana"}])
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('botops',?, 'ana')",
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     _, _, botops = setup_attempt(api, "botops")
     _, _, ops = setup_attempt(api, "ops")
@@ -83,7 +83,7 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
     theirs = post(api, "chat/botops", {"text": "Move ops under me"})     # rewritten as Cara's below
     theirs = theirs.get("message", theirs)["id"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET from_actor='human:cara' WHERE id=?", (theirs,))
+        c.execute("UPDATE messages SET sender_id='human:cara' WHERE id=?", (theirs,))
     post(api, "bots/ops/definition", body("ops", reports_to="human:cara", on_behalf_of=theirs),
          token=botops["token"], expected=403)
     # A message to another bot, or one older than a week, is not a request to BotOps.

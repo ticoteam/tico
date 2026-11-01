@@ -215,9 +215,9 @@ def test_github_refusing_a_review_403_files_one_devops_task_not_the_type_manager
     for key in ("first", "again"):
         assert submit(api, key=key).status_code == 409
     with api.app_state.store.read() as c:
-        filed = [dict(r) for r in c.execute("SELECT owner, title FROM tasks WHERE requester=? AND title LIKE 'GitHub refused%'",
+        filed = [dict(r) for r in c.execute("SELECT owner_id, title FROM tasks WHERE requester_id=? AND title LIKE 'GitHub refused%'",
                                              (H.KEEPER,))]
-    assert filed == [{"owner": "bot:devops-engineer", "title": f"GitHub refused cmo's review on {REPO} (403)"}]
+    assert filed == [{"owner_id": "bot:devops-engineer", "title": f"GitHub refused cmo's review on {REPO} (403)"}]
 
 
 def test_github_rate_limiting_a_review_403_files_no_task(api, gh, tmp_path, monkeypatch):
@@ -231,7 +231,7 @@ def test_github_rate_limiting_a_review_403_files_no_task(api, gh, tmp_path, monk
     seen["refusal_message"] = "Resource not accessible by integration"      # the permission twin still files
     assert submit(api, key="denied").status_code == 409
     with api.app_state.store.read() as c:
-        filed = [r[0] for r in c.execute("SELECT title FROM tasks WHERE requester=? AND title LIKE 'GitHub refused%'",
+        filed = [r[0] for r in c.execute("SELECT title FROM tasks WHERE requester_id=? AND title LIKE 'GitHub refused%'",
                                          (H.KEEPER,))]
     assert filed == [f"GitHub refused cmo's review on {REPO} (403)"]
 
@@ -248,6 +248,6 @@ def test_github_refusing_a_review_403_goes_to_the_tickets_type_manager_without_d
     seen["refusal"] = 403
     assert submit(api, key="only").status_code == 409
     with api.app_state.store.read() as c:
-        owners = [r[0] for r in c.execute("SELECT owner FROM tasks WHERE requester=? AND title LIKE 'GitHub refused%'",
+        owners = [r[0] for r in c.execute("SELECT owner_id FROM tasks WHERE requester_id=? AND title LIKE 'GitHub refused%'",
                                           (H.KEEPER,))]
     assert owners == ["bot:cpo"]

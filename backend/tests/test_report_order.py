@@ -72,7 +72,7 @@ def test_only_someone_who_may_put_reports_there_orders_them(api):
     from backend.tests.test_api import as_member
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='ben' WHERE bot='coo'")
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='coo'")
     put(api, "org/order/coo", {"reports": ["finance", "ops"]}, token="ben-test")
     put(api, "org/order/coo", {"reports": ["ops", "finance"]}, token="cara-test", expected=403)
     assert order(api, "coo") == ["finance", "ops", "doc-updater"]

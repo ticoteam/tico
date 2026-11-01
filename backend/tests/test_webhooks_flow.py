@@ -32,9 +32,9 @@ def test_a_direct_call_wakes_the_bot_a_rule_names_and_that_bot_may_read_the_call
     assert got.status_code == 202 and got.json()["rules"] == 1 and got.json()["type"] == "order.created"
     with api.app.state.store.read() as c:
         assert jobs(c, "cpo") == 1
-        message = c.execute("SELECT * FROM messages WHERE to_actor='bot:cpo' ORDER BY rowid DESC LIMIT 1").fetchone()
+        message = c.execute("SELECT * FROM messages WHERE recipient_id='bot:cpo' ORDER BY rowid DESC LIMIT 1").fetchone()
     refs = json.loads(message["refs"])
-    assert message["from_actor"] == H.KEEPER and "Order 42 (order.created)" in message["body"]
+    assert message["sender_id"] == H.KEEPER and "Order 42 (order.created)" in message["body"]
     assert refs["delivery"] == "w1" and refs["rule_id"] == rule["id"] and refs["via"] == "direct"
     as_bot(api, "cpo")
     read = get(api, "triggers/shop/deliveries/w1", token="cpo-test")
@@ -66,7 +66,7 @@ def test_a_call_through_the_gateway_relay_runs_the_same_rule(api):
     assert relay.take({**item, "hq_seq": 2}, 1) == 2                   # HQ sending it twice wakes once
     with api.app.state.store.read() as c:
         assert jobs(c, "cpo") == 1
-        refs = json.loads(c.execute("SELECT refs FROM messages WHERE to_actor='bot:cpo' ORDER BY rowid DESC "
+        refs = json.loads(c.execute("SELECT refs FROM messages WHERE recipient_id='bot:cpo' ORDER BY rowid DESC "
                                     "LIMIT 1").fetchone()[0])
         logged = c.execute("SELECT via, received_at FROM trigger_deliveries WHERE delivery='g1'").fetchone()
     assert refs["via"] == "gateway" and refs["delivery"] == "g1"

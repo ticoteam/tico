@@ -36,9 +36,9 @@ def clarify(conn, actor, ask_id):
     asked = H.message(conn, ask_id)
     if not asked or asked["kind"] != "ask":
         raise Problem("not_found", "Question not found", 404)
-    if asked["to_actor"] != actor:
+    if asked["recipient_id"] != actor:
         raise Problem("forbidden", "Only the person it asked can ask for a clearer question", 403)
-    asker = asked["from_actor"]
+    asker = asked["sender_id"]
     if not H.is_bot(asker):
         raise Problem("kind", "Only a bot's question can be clarified", 422)
     if not conn.execute(f"SELECT 1 FROM messages m WHERE m.id=? AND {H.OPEN_ASK_SQL}",
@@ -48,7 +48,7 @@ def clarify(conn, actor, ask_id):
         raise Problem("not_stale", "This question is still fresh; answer it, or wait until it goes stale", 422)
     if already_asked(conn, ask_id):
         raise Problem("already_requested", "The bot was already asked to clarify this question", 409)
-    person = (H.human(conn, H.actor_id(asked["to_actor"])) or {}).get("name") or H.actor_id(asked["to_actor"])
+    person = (H.human(conn, H.actor_id(asked["recipient_id"])) or {}).get("name") or H.actor_id(asked["recipient_id"])
     text = message(asker, person, asked.get("body"))
     task_id = H.message_task_id(asked, H.conversation(conn, asked["conversation_id"]))
     task = H.task(conn, task_id) if task_id else None

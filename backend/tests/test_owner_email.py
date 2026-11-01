@@ -30,7 +30,7 @@ def state(api):
                 "roster": {p["id"]: p["email"] for p in Access._load_json(c, "people")["people"]},
                 "owner": Access._load_json(c, Access.OWNER), "access": Access._load_json(c, Access.ACCESS),
                 "events": [dict(r) for r in c.execute(
-                    "SELECT ts,actor,target,detail FROM events WHERE action='owner.email_changed'")],
+                    "SELECT created_at,actor,target,detail FROM events WHERE action='owner.email_changed'")],
                 "joined": c.execute("SELECT count(*) FROM events WHERE action='person.joined'").fetchone()[0]}
 
 
@@ -49,19 +49,19 @@ def test_the_owner_changes_their_email_in_place_and_every_copy_moves_at_once(env
     before = state(api)
     result = change(api, " Morgan@New.example ")
     after = state(api)
-    assert result == {"owner": NEW, "revision": before["owner"]["revision"] + 1, "person": "morgan"}
+    assert result == {"owner_id": NEW, "revision": before["owner_id"]["revision"] + 1, "person": "morgan"}
     assert after["humans"] == {**before["humans"], "morgan": NEW}             # same id, no second human
     assert after["roster"] == {**before["roster"], "morgan": NEW}
-    assert after["owner"]["email"] == NEW and after["owner"]["revision"] == before["owner"]["revision"] + 1
-    assert after["owner"]["history"][-1]["email"] == OWNER_EMAIL and after["owner"]["retired"] == [OWNER_EMAIL]
+    assert after["owner_id"]["email"] == NEW and after["owner_id"]["revision"] == before["owner_id"]["revision"] + 1
+    assert after["owner_id"]["history"][-1]["email"] == OWNER_EMAIL and after["owner_id"]["retired"] == [OWNER_EMAIL]
     assert after["access"]["allowed"] == [NEW, "sam@partner.example"]
     assert after["access"]["admins"] == after["access"]["bot_admins"] == ["riley@acme.example", NEW]
     assert after["access"]["revision"] == before["access"]["revision"] + 1
     [event] = after["events"]
-    assert event["actor"] == "human:morgan" and event["target"] == "morgan" and event["ts"]
+    assert event["actor"] == "human:morgan" and event["target"] == "morgan" and event["created_at"]
     assert json.loads(event["detail"]) == {"from": OWNER_EMAIL, "to": NEW, "revision": result["revision"],
                                                 "via": "app"}
-    assert view(api)["owner"]["email"] == NEW and api.app.state.auth.owner_email == NEW
+    assert view(api)["owner_id"]["email"] == NEW and api.app.state.auth.owner_email == NEW
 
 
 def test_the_new_address_signs_in_as_the_same_owner_and_the_old_one_joins_no_one(environment):
@@ -115,7 +115,7 @@ def test_only_the_signed_in_owner_changes_it_and_only_typed_twice(environment):
     api = environment()
     riley, quinn, morgan_token = person_headers(api, "riley"), person_headers(api, "quinn"), person_headers(api, "morgan")
     before = state(api)
-    revision = view(api)["owner"]["revision"]
+    revision = view(api)["owner_id"]["revision"]
     for who in (riley, quinn):                                             # an admin, a member
         assert "Only the owner" in change(api, NEW, who, expected=403, revision=revision)["error"]["detail"]
     assert "signed-in browser" in change(api, NEW, morgan_token, expected=403, revision=revision)["error"]["detail"]
@@ -129,7 +129,7 @@ def test_only_the_signed_in_owner_changes_it_and_only_typed_twice(environment):
 def test_botops_and_the_assistant_acting_as_the_owner_are_refused_even_after_a_click(environment):
     api = environment()
     before = state(api)
-    revision = view(api)["owner"]["revision"]
+    revision = view(api)["owner_id"]["revision"]
     for token, via, confirmed in (("as-botops", "botops", False), ("as-assistant", "assistant", False),
                                   ("as-click", "assistant", True), ("as-botops-click", "botops", True)):
         api.app.state.store.settings.test_identities[token] = Identity(
@@ -153,7 +153,7 @@ def test_an_owner_role_read_before_a_transfer_cannot_change_the_new_owner_s_emai
             assert go.wait(10)
         return mutate(identity, operation, *args, **kwargs)
     store.mutate = paused
-    revision = view(api)["owner"]["revision"]
+    revision = view(api)["owner_id"]["revision"]
     # The held request names the revision the transfer will make, so the revision check alone cannot stop it.
     request = threading.Thread(target=lambda: answer.update(r=api.post(
         "/api/v2/access/owner/email", headers=signed_in(),
@@ -167,7 +167,7 @@ def test_an_owner_role_read_before_a_transfer_cannot_change_the_new_owner_s_emai
     store.mutate = mutate
     refused = answer["r"]
     assert refused.status_code == 403 and "no longer the owner" in refused.text, refused.text
-    assert state(api) == transferred and transferred["owner"]["email"] == "riley@acme.example"
+    assert state(api) == transferred and transferred["owner_id"]["email"] == "riley@acme.example"
     assert transferred["humans"]["riley"] == "riley@acme.example" and transferred["events"] == []
 
 
@@ -209,7 +209,7 @@ def test_a_sign_in_that_read_the_lists_before_the_change_does_not_join_the_old_a
     before = state(api)
     refused = sign_in_while(api, OWNER_EMAIL, lambda c: Access.change_owner_email(
         c, "human:morgan", views.roster(c), Access.load_owner(c, store.settings), NEW,
-        expected_revision=before["owner"]["revision"], now=H.now(), settings=store.settings))
+        expected_revision=before["owner_id"]["revision"], now=H.now(), settings=store.settings))
     assert refused.status_code == 403 and "no longer signs in" in refused.text, refused.text
     after = state(api)
     assert set(after["humans"]) == set(before["humans"]) and after["joined"] == 0
@@ -257,20 +257,20 @@ def test_changing_it_back_lets_the_old_address_in_again_as_the_same_person(envir
     api.app.state.auth.proxy = HeaderProxy()
     change(api, NEW)
     back = change(api, OWNER_EMAIL)
-    assert back["owner"] == OWNER_EMAIL
+    assert back["owner_id"] == OWNER_EMAIL
     me = api.get("/api/v2/me", headers={"x-test-email": OWNER_EMAIL}).json()
     assert me["actor"] == "human:morgan" and me["role"] == "owner"
     assert api.get("/api/v2/me", headers={"x-test-email": NEW}).status_code == 403
     after = state(api)
-    assert after["owner"]["retired"] == [NEW] and [h["email"] for h in after["owner"]["history"]][-2:] == [OWNER_EMAIL, NEW]
+    assert after["owner_id"]["retired"] == [NEW] and [h["email"] for h in after["owner_id"]["history"]][-2:] == [OWNER_EMAIL, NEW]
     assert len(after["events"]) == 2 and after["joined"] == 0
 
 
 def test_a_transfer_keeps_the_owner_history_and_the_retired_addresses(environment):
     api = environment()
     change(api, NEW)
-    call(api, "POST", "/owner", {"person": "riley", "confirm": True, "expected_revision": view(api)["owner"]["revision"]})
-    owner = state(api)["owner"]
+    call(api, "POST", "/owner", {"person": "riley", "confirm": True, "expected_revision": view(api)["owner_id"]["revision"]})
+    owner = state(api)["owner_id"]
     assert owner["email"] == "riley@acme.example" and owner["retired"] == [OWNER_EMAIL]
     assert [h["email"] for h in owner["history"]][-2:] == [OWNER_EMAIL, NEW]
 
@@ -282,7 +282,7 @@ def test_the_host_command_shows_the_change_then_applies_it_without_a_sign_in(env
     before = state(api)
     manage.main(["owner-email", str(settings.db_path), "--to", NEW])
     shown = json.loads(capsys.readouterr().out)
-    assert shown["applied"] is False and shown["owner"] == OWNER_EMAIL and shown["to"] == NEW
+    assert shown["applied"] is False and shown["owner_id"] == OWNER_EMAIL and shown["to"] == NEW
     assert state(api) == before
     with pytest.raises(SystemExit, match="already belongs to someone else"):
         manage.main(["owner-email", str(settings.db_path), "--to", "quinn@acme.example", "--apply"])
@@ -290,25 +290,25 @@ def test_the_host_command_shows_the_change_then_applies_it_without_a_sign_in(env
     manage.main(["owner-email", str(settings.db_path), "--to", NEW, "--apply"])
     assert json.loads(capsys.readouterr().out)["applied"] is True
     after = state(api)
-    assert after["humans"]["morgan"] == NEW and after["owner"]["email"] == NEW
+    assert after["humans"]["morgan"] == NEW and after["owner_id"]["email"] == NEW
     assert json.loads(after["events"][0]["detail"])["via"] == "host" and after["events"][0]["actor"] == "host"
     # The running server adopts it on its next request, with no restart.
-    assert view(api)["owner"]["email"] == NEW
+    assert view(api)["owner_id"]["email"] == NEW
 
 
 def test_meetings_and_a_granola_link_filed_under_the_old_address_follow_the_owner(environment):
     api = environment()
     with api.app.state.store.transaction() as c:
         for mid, owner, review in (("m-mine", "Morgan@acme.example", "pending"), ("m-riley", "riley@acme.example", "live")):
-            c.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO meetings(id,title,owner_id,metadata,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?)",
                       (mid, "Sync", owner, json.dumps({"owner": owner, "title": "Sync"}), H.now(), H.now(), review))
         c.execute("INSERT INTO meeting_deliveries(meeting_id,requested_by,sender_name,destination,instructions,requested_at) "
                   "VALUES('m-mine',?,'Morgan','bot:support','',?)", (OWNER_EMAIL, H.now()))
         c.execute("INSERT INTO granola_connections VALUES('human:morgan','granola:x',?,X'00',X'00','{}')", (OWNER_EMAIL,))
     change(api, NEW)
     with api.app.state.store.read() as c:
-        rows = {r["id"]: (r["owner"], json.loads(r["metadata"])["owner"])
-                for r in c.execute("SELECT id,owner,metadata FROM meetings")}
+        rows = {r["id"]: (r["owner_id"], json.loads(r["metadata"])["owner"])
+                for r in c.execute("SELECT id,owner_id,metadata FROM meetings")}
         assert rows == {"m-mine": (NEW, NEW), "m-riley": ("riley@acme.example", "riley@acme.example")}
         assert c.execute("SELECT requested_by FROM meeting_deliveries").fetchone()[0] == NEW
         assert c.execute("SELECT email FROM granola_connections").fetchone()[0] == NEW

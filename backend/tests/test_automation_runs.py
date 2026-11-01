@@ -22,7 +22,7 @@ class Stop(BaseException):
 
 
 def make(api, steps, trigger=EVENT, owner="person:ana", **extra):
-    return post(api, "automations", {"name": "Test", "owner": owner, "trigger": trigger, "steps": steps, **extra})["id"]
+    return post(api, "automations", {"name": "Test", "owner_id": owner, "trigger": trigger, "steps": steps, **extra})["id"]
 
 
 def queued(api, aid, payload=None):
@@ -34,7 +34,7 @@ def queued(api, aid, payload=None):
 def run_row(api, rid):
     with api.app.state.store.read() as c:
         row = dict(c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone())
-    return {**row, "state": json.loads(row["state"] or "{}")}
+    return {**row, "saved_state": json.loads(row["saved_state"] or "{}")}
 
 
 def sql(api, query, args=()):
@@ -49,7 +49,7 @@ def hub(api):
 # ---------------------------------------------------------------------------------------------- saved and resumed
 def test_a_run_cut_off_after_an_effect_goes_on_from_its_save_and_does_not_do_it_twice(api, monkeypatch):
     aid = make(api, [{"id": "spawn", "type": "action", "do": "create_task", "args": {"title": "Acme follow up",
-                                                                                     "owner": "coo"}},
+                                                                                     "owner_id": "coo"}},
                      {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "coo", "text": "Done"}}])
     rid = queued(api, aid)
     save = automations.HubServices.checkpoint
@@ -114,7 +114,7 @@ def test_a_bots_turn_started_by_an_automation_cannot_start_it_again(api):
     attempt = claim(api, r)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=r["token"])
     # In its turn the bot hands coo a task: a task coo received, the automation's own trigger.
-    post(api, "tasks", {"owner": "coo", "title": "Acme hand-off", "body": "Please."}, token=attempt["token"])
+    post(api, "tasks", {"owner_id": "coo", "title": "Acme hand-off", "body": "Please."}, token=attempt["token"])
     assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1
 
 
@@ -124,7 +124,7 @@ def backdate(api, aid, count, *, seconds_ago):
     with api.app.state.store.transaction() as c:
         version = c.execute("SELECT version FROM automations WHERE id=?", (aid,)).fetchone()[0]
         for _ in range(count):
-            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,state,chain) "
+            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,saved_state,chain) "
                       "VALUES(?,?,?,?,?,'ok','{}','[]')", ("run_" + H.new_id(), aid, version, "", started))
 
 
@@ -159,7 +159,7 @@ def statuses(api, aid):
 
 
 def hold_tasks(api):
-    return sql(api, "SELECT id, status, owner FROM tasks WHERE title='Automation Test on hold' ORDER BY created_at")
+    return sql(api, "SELECT id, status, owner_id FROM tasks WHERE title='Automation Test on hold' ORDER BY created_at")
 
 
 def slow_drain(api, aid, minutes=16, per=8, start=datetime(2030, 1, 1, 9, 0, 5, tzinfo=timezone.utc), tag="d"):
@@ -179,14 +179,14 @@ def test_a_slow_drain_is_held_not_lost_and_release_queues_every_run(api):
     assert shown["enabled"] is True and shown["hold"]["held"] == 128 and shown["hold"]["rule"] == "sustained"
     trip = sql(api, "SELECT detail FROM events WHERE action='automation.run_guard' AND target=?", (aid,))
     assert len(trip) == 1 and '"rule": "sustained"' in trip[0]["detail"]
-    assert [t["owner"] for t in hold_tasks(api)] == ["human:ana"]   # one task a hold, not one a run
+    assert [t["owner_id"] for t in hold_tasks(api)] == ["human:ana"]   # one task a hold, not one a run
     assert hub(api).claim() is None                                  # the drain never takes a held run
     out = post(api, f"automations/{aid}/held", {"action": "release"})
     assert out["moved"] == 128 and "hold" not in out
     assert sum(statuses(api, aid).get(s, 0) for s in ("queued", "running", "ok", "failed")) == 128
     assert [t["status"] for t in hold_tasks(api)] == ["closed"]
     assert sql(api, "SELECT id FROM events WHERE action='automation.hold_released' AND target=?", (aid,))
-    audit = sql(api, "SELECT after FROM audit_log WHERE object=? ORDER BY at DESC LIMIT 1", ("automation:" + aid,))
+    audit = sql(api, "SELECT after FROM audit_log WHERE object=? ORDER BY created_at DESC LIMIT 1", ("automation:" + aid,))
     assert json.loads(audit[0]["after"]) == {"hold": None, "release": 128}
 
 
@@ -325,7 +325,7 @@ def test_a_run_cut_off_during_a_hold_resumes_held_not_queued(api):
     put_on_hold(api, aid)
     automations.tick(api.app.state.store)
     held = run_row(api, rid)
-    assert held["status"] == "held" and held["claimed_at"] is None and held["state"]["resumes"] == 1
+    assert held["status"] == "held" and held["claimed_at"] is None and held["saved_state"]["resumes"] == 1
     assert release(api, aid) == 1 and run_row(api, rid)["status"] == "queued"
 
 
@@ -560,7 +560,7 @@ FIND = {"id": "look", "type": "find", "source": "tasks", "query": "Acme batch", 
 
 def test_items_with_the_same_time_are_all_found_one_page_at_a_time(api):
     aid = make(api, [FIND])
-    ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {n}", "body": "x"})["id"] for n in range(3)]
+    ids = [post(api, "tasks", {"owner_id": "ops", "title": f"Acme batch {n}", "body": "x"})["id"] for n in range(3)]
     with api.app.state.store.transaction() as c:
         c.execute(f"UPDATE tasks SET created_at=? WHERE id IN ({','.join('?' * len(ids))})", (H.now(), *ids))
     counts = [post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["count"] for _ in range(4)]
@@ -578,7 +578,7 @@ def test_a_stale_pr_find_starts_before_its_creation_and_other_finds_do_not(api):
 
 def test_the_watermark_moves_only_once_an_item_is_finished(api, monkeypatch):
     aid = make(api, [FIND, {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "x"}}])
-    post(api, "tasks", {"owner": "ops", "title": "Acme batch one", "body": "x"})
+    post(api, "tasks", {"owner_id": "ops", "title": "Acme batch one", "body": "x"})
     before = sql(api, "SELECT found_since FROM automations WHERE id=?", (aid,))[0]["found_since"]
     queued(api, aid)
 
@@ -614,7 +614,7 @@ def test_a_turn_is_titled_with_exactly_its_automations_name(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    aid = post(api, "automations", {"name": "Morning check", "owner": "person:ana", "trigger": EVENT,
+    aid = post(api, "automations", {"name": "Morning check", "owner_id": "person:ana", "trigger": EVENT,
                                     "steps": [{"id": "brief", "type": "bot_turn", "bot": "ops", "prompt": "Brief"}]})["id"]
     post(api, f"automations/{aid}/run", {})
     assert sql(api, "SELECT title FROM tasks WHERE title LIKE 'Morning check%'") == [{"title": "Morning check"}]
@@ -625,7 +625,7 @@ def test_each_item_of_a_find_starts_its_own_turn(api):
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     aid = make(api, [{**FIND, "limit": 10}, {"id": "answer", "type": "bot_turn", "bot": "ops", "prompt": "Look"}])
-    ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
+    ids = [post(api, "tasks", {"owner_id": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
            for word in ("one", "two")]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET created_at=? WHERE id IN (?,?)", (H.now(), *ids))
@@ -641,7 +641,7 @@ def test_items_that_share_a_title_each_start_their_own_turn(api):
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     aid = make(api, [{**FIND, "limit": 10}, {"id": "answer", "type": "bot_turn", "bot": "ops", "prompt": "Look"}])
-    ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
+    ids = [post(api, "tasks", {"owner_id": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
            for word in ("one", "two")]
     with api.app.state.store.transaction() as c:
         # Both items now carry one title, so only the turns' own identity tells them apart.
@@ -677,7 +677,7 @@ def test_a_hold_counts_until_its_turn_is_priced_and_a_lost_one_is_swept_after_a_
     turn = {"id": "look", "type": "bot_turn", "bot": "ops", "prompt": "Look"}
     aid = make(api, [turn], spend_cap={"per_30m": 0.2})
     with api.app.state.store.transaction() as c:   # a turn started two hours ago and still going
-        c.execute("INSERT INTO automation_holds(ref,automation_id,run_id,amount,at) VALUES('t_old',?,'run_old',0.25,?)",
+        c.execute("INSERT INTO automation_holds(ref,automation_id,run_id,amount,created_at) VALUES('t_old',?,'run_old',0.25,?)",
                   (aid, H.shift(H.now(), hours=-2)))
     assert post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["status"] == "spend_cap"
     automations.tick(api.app.state.store, datetime.now(timezone.utc) + timedelta(hours=25))
@@ -690,7 +690,7 @@ def test_a_failed_item_is_tried_again_once_then_passed_over_and_counted(api):
     bad = {"id": "gate", "type": "filter", "rules": [
         {"when": [{"field": "item.title", "op": "contains", "value": "bad"}], "then": [{"do": "post_update"}]}]}
     aid = make(api, [{**FIND, "limit": 10}, bad])
-    ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
+    ids = [post(api, "tasks", {"owner_id": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
            for word in ("bad", "good")]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET created_at=? WHERE id IN (?,?)", (H.now(), *ids))
@@ -718,9 +718,9 @@ def test_a_schedule_absorbs_an_occurrence_while_its_last_task_is_open(api):
     hub(api).drain()
     assert queued(api, aid) is None
     assert get(api, f"automations/{aid}/runs")["daily"][0]["dropped"] == 1
-    told = sql(api, "SELECT body FROM messages WHERE to_actor='bot:ops' AND kind='notice' AND body LIKE 'Scheduled occurrence%'")
+    told = sql(api, "SELECT body FROM messages WHERE recipient_id='bot:ops' AND kind='notice' AND body LIKE 'Scheduled occurrence%'")
     assert len(told) == 1 and "absorbed into this open task" in told[0]["body"]
-    turn_tasks = sql(api, "SELECT id FROM tasks WHERE owner='bot:ops' AND title='Test'")
+    turn_tasks = sql(api, "SELECT id FROM tasks WHERE owner_id='bot:ops' AND title='Test'")
     assert len(turn_tasks) == 1
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='closed' WHERE id=?", (turn_tasks[0]["id"],))
@@ -741,12 +741,12 @@ def test_a_turn_has_a_day_to_answer_from_when_its_run_began_waiting(api):
     rid = queued(api, make(api, []))
     old, recent = H.shift(H.now(), days=-3), H.shift(H.now(), hours=-1)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE automation_runs SET status='waiting',wake_at=NULL,started_at=?,state=? WHERE id=?",
+        c.execute("UPDATE automation_runs SET status='waiting',wake_at=NULL,started_at=?,saved_state=? WHERE id=?",
                   (old, json.dumps({"threads": [], "waiting_since": recent}), rid))
     automations.tick(api.app.state.store)
     assert run_row(api, rid)["status"] == "waiting"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE automation_runs SET state=? WHERE id=?",
+        c.execute("UPDATE automation_runs SET saved_state=? WHERE id=?",
                   (json.dumps({"threads": [], "waiting_since": old}), rid))
     automations.tick(api.app.state.store)
     assert run_row(api, rid)["status"] == "failed"

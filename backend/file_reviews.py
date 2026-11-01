@@ -155,7 +155,7 @@ def spend_approval(c, who, asked, task_id, spend, previous):
             return answer["spend_approval"]
     if not H.is_human(who.actor):
         raise Problem("forbidden", "Only a person approves spending", 403)
-    made = H.approval_request(c, asked["from_actor"], "spend", spend_payload(spend), task_id=task_id, to=who.actor)
+    made = H.approval_request(c, asked["sender_id"], "spend", spend_payload(spend), task_id=task_id, to=who.actor)
     # The request's own notice to the person is answered by this pick: it never sits unread in their inbox.
     c.execute("UPDATE messages SET read_at=? WHERE id=? AND read_at IS NULL", (H.now(), made["message_id"]))
     H.approval_decide(c, who.actor, made["id"], "approved", note=f'Picked "{spend["label"]}".')
@@ -182,7 +182,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
         # The same bytes another bot published from the same path: the newest such version this reviewer can open.
         row = v = None
         for found in c.execute("SELECT v.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE "
-                               "v.repo_path=? AND v.digest=? AND NOT f.archived ORDER BY (f.bot=?), v.created_at DESC "
+                               "v.repo_path=? AND v.digest=? AND NOT f.archived ORDER BY (f.bot_id=?), v.created_at DESC "
                                "LIMIT 20", (path, digest, mine or "")).fetchall():
             candidate = c.execute("SELECT * FROM bot_files WHERE id=?", (found["file_id"],)).fetchone()
             if file_visible(c, auth, who, candidate, {}):
@@ -192,7 +192,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
             raise Problem("not_found", "No published file you can open has these bytes at this path", 404)
     else:
         raise Problem("validation", "Give a file id, or a path and its digest", 422)
-    if mine and row["bot"] == mine:
+    if mine and row["bot_id"] == mine:
         raise Problem("forbidden", "A bot never reviews its own file: ask a person or another bot", 403)
     entry = {"file": row["id"], "version": v["version"], "digest": v["source_digest"] or v["digest"]}
     c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created_at,"
@@ -225,7 +225,7 @@ def approved(c, auth, who, fid=None, version=None, path=None, digest=None, by="h
         if who.role != "bot":
             raise Problem("validation", "A path is a bot's own file: give a file id", 422)
         found = []
-        for v in c.execute("SELECT * FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE f.bot=? "
+        for v in c.execute("SELECT * FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE f.bot_id=? "
                            "AND v.repo_path=? AND v.digest=? ORDER BY v.created_at DESC LIMIT 20",
                            (H.actor_id(who.actor), path, digest)).fetchall():
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (v["file_id"],)).fetchone()

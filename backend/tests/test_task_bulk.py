@@ -10,7 +10,7 @@ def bulk(api, filter, action, token="ana-test", expected=200, **change):
 
 
 def task(api, title, token="ana-test", **fields):
-    return post(api, "tasks", {"owner": "cmo", "title": title, "body": "Please.", **fields}, token=token)
+    return post(api, "tasks", {"owner_id": "cmo", "title": title, "body": "Please.", **fields}, token=token)
 
 
 def label(api, t, *keys):
@@ -29,7 +29,7 @@ def test_the_filter_selects_exactly_what_the_task_list_shows(api):
     untagged = task(api, "Draft the footer", type=typ["id"])
     general = label(api, task(api, "Draft the general note"), "launch")
     elsewhere = label(api, task(api, "Draft the partner post", owner="ops", type=typ["id"]), "launch")
-    chosen = {"type": typ["id"], "step": "Draft", "label": "launch", "owner": "cmo"}
+    chosen = {"type": typ["id"], "step": "Draft", "label": "launch", "owner_id": "cmo"}
     listed = get(api, f"tasks?type={typ['id']}&step=Draft&label=launch&owner=cmo")["tasks"]
     assert {t["id"] for t in listed} == {t["id"] for t in launch}
 
@@ -50,7 +50,7 @@ def test_the_filter_selects_exactly_what_the_task_list_shows(api):
     assert (again["changed"], again["unchanged"]) == (0, 3)
     assert bulk(api, {}, "close", expected=422)["error"]["code"] == "filter"
     assert bulk(api, {"lane": "company"}, "close", expected=422)["error"]["code"] == "filter"
-    assert bulk(api, {"owner": "nobody-here"}, "close", expected=422)["error"]["code"] == "owner"
+    assert bulk(api, {"owner_id": "nobody-here"}, "close", expected=422)["error"]["code"] == "owner"
     assert get(api, "tasks/" + general["id"])["task"]["status"] == "open"
 
 
@@ -131,7 +131,7 @@ def test_nobody_bulk_changes_a_task_they_could_not_change_one_by_one(api):
     # A bot is held to its own rights too: it closes nothing it did not ask for, and each refusal is on record.
     token = bot_token(api, "ops")
     owned = task(api, "Ship the screen", owner="ops")
-    out = bulk(api, {"owner": "ops"}, "close", token=token)
+    out = bulk(api, {"owner_id": "ops"}, "close", token=token)
     assert out["changed"] == 0 and owned["id"] in {t["id"] for t in out["tasks"]["skipped"]}
     assert get(api, "tasks/" + owned["id"])["task"]["status"] == "open"
     with api.app.state.store.read() as c:
@@ -142,7 +142,7 @@ def test_more_tasks_than_the_cap_are_refused_whole(api):
     with api.app.state.store.transaction() as c:
         for i in range(201):
             H.task_create(c, "human:ana", f"Review the account {i}", "Please.", "bot:cmo", lint=False, deduplicate=False)
-    out = bulk(api, {"owner": "cmo"}, "status", status="doing", expected=422)
+    out = bulk(api, {"owner_id": "cmo"}, "status", status="doing", expected=422)
     assert out["error"]["code"] == "too_many" and "200" in out["error"]["detail"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE status='doing'").fetchone()[0] == 0
@@ -166,12 +166,12 @@ def test_the_cli_and_the_mcp_tool_send_the_bulk_change_the_route_takes(api):
                                        "--where-step", "Draft", "--where-owner", "me", "--where-status", "open",
                                        "--where-status", "doing", "--dry-run"])
     remotecli.via_tool(Client(), args)
-    assert sent == [("task-bulk", {"filter": {"type": "Marketing", "step": "Draft", "owner": "human:ana",
+    assert sent == [("task-bulk", {"filter": {"type": "Marketing", "step": "Draft", "owner_id": "human:ana",
                                               "status": "open,doing"},
                                    "action": "step", "step": "Legal review", "dry_run": True})]
 
     tasks = [label(api, task(api, f"Draft the brief {i}"), "brief") for i in range(2)]
-    err, out = call(api, "hub_task_bulk", {"filter": {"label": "brief", "owner": "cmo"}, "action": "close"})
+    err, out = call(api, "hub_task_bulk", {"filter": {"label": "brief", "owner_id": "cmo"}, "action": "close"})
     assert not err and out["changed"] == 2
     assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in tasks} == {"closed"}
 
@@ -193,9 +193,9 @@ def test_one_bulk_call_counts_once_toward_a_bots_quarantine(api):
             return H.bot(c, "ops")["state"]
 
     # A dry run still adds none.
-    out = bulk(api, {"owner": "ops"}, "close", token=token, dry_run=True)
+    out = bulk(api, {"owner_id": "ops"}, "close", token=token, dry_run=True)
     assert (out["changed"], out["skipped"]) == (0, 50) and refusals() == 0
-    out = bulk(api, {"owner": "ops"}, "close", token=token)
+    out = bulk(api, {"owner_id": "ops"}, "close", token=token)
     assert (out["changed"], out["skipped"]) == (0, 50)
     assert refusals() == 50 and state() == "active"
 

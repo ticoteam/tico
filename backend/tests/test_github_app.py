@@ -152,7 +152,7 @@ def api(tmp_path, gh):
             H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}, {"id": "ben", "email": "ben@acme.example", "team": "leadership"}, {"id": "riley", "email": "riley@acme.example", "team": "leadership"}]})
             repos = {"botops": "emp-botops", "newbie": "emp-newbie", "oldie": "emp-oldie", "cpo": "emp-cpo", "cmo": "https://github.com/Acme/emp-cmo.git", "cfo": "elsewhere/emp-cfo"}
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,operator,repo) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,owner_id,repo) VALUES(?,?,?,?,?)",
                           (slug, encode(config), "t", "ana", repos[slug]))
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
         client.app_state = app.state
@@ -201,7 +201,7 @@ def test_repository_delete_is_owner_only_scoped_audited_and_never_treats_404_as_
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)", (encode({"email": "ana@acme.example"}),))
         conversation = rooms.personal_room(c, "human:ana", "botops")
-        c.execute("UPDATE messages SET from_actor='human:ana',conversation_id=?,kind='say',body='Delete the QA repository' WHERE id='m-botops'",
+        c.execute("UPDATE messages SET sender_id='human:ana',conversation_id=?,kind='say',body='Delete the QA repository' WHERE id='m-botops'",
                   (conversation["id"],))
         c.execute("INSERT INTO attempt_conversations VALUES('a2',?)", (conversation["id"],))
     delegated = api.delete("/api/v2/github/repos/Acme/bot-qa-delegated", headers={**auth("botops-test"),
@@ -246,7 +246,7 @@ def test_missing_repo_permission_raises_one_needs_you_item_and_finishes_when_gra
         assert error["permissions_url"] == "https://github.com/organizations/Acme/settings/apps/acme-tico/permissions"
     assert first.json()["error"]["needs_you_task"] == again.json()["error"]["needs_you_task"]
     with api.app_state.store.read() as c:
-        tasks = c.execute("SELECT id,owner,status FROM tasks WHERE title LIKE 'Create Acme/bot-newbie%'").fetchall()
+        tasks = c.execute("SELECT id,owner_id,status FROM tasks WHERE title LIKE 'Create Acme/bot-newbie%'").fetchall()
         assert [tuple(t)[1:] for t in tasks] == [("human:ana", "open")]
         assert H.bot(c, "newbie")["state"] == "planned"
     needs = api.get("/api/v2/needs-you", headers=auth()).json()
@@ -354,16 +354,16 @@ def test_a_private_meetings_turn_gets_a_read_only_token_and_a_team_meetings_a_wr
                       "VALUES(?,'human:ana','Plan','live',30000,?,?,?,?)", (rid, H.now(), H.now(), H.now(), visibility))
         conv = H.open_conversation(c, H.KEEPER, ["bot:cmo"], room_key="live-meeting:m-private")
         H.feed(c, "bot:cmo", "A meeting turn", conv, refs={"live_meeting": {"meeting_id": "m-private", "turn_id": "t1"}})
-        job = c.execute("SELECT id FROM jobs WHERE bot='cmo'").fetchone()["id"]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
+        job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()["id"]
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
-    r = api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("bot-test"))
+    r = api.post("/api/v2/github/token", json={"bot_id": "cmo"}, headers=auth("bot-test"))
     assert r.status_code == 200, r.text
     assert gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "read"
     assert {t["access"] for t in r.json()["tokens"]} == {"read"}
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE live_meetings SET visibility='team' WHERE id='m-private'")
-    r = api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("bot-test"))
+    r = api.post("/api/v2/github/token", json={"bot_id": "cmo"}, headers=auth("bot-test"))
     assert r.status_code == 200 and gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "write"
 
 
@@ -407,7 +407,7 @@ def runner_token(api, bot):
     with api.app_state.store.transaction() as c:
         if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
             cols = [r[1] for r in c.execute("PRAGMA table_info(runners)")]
-            values = {"id": "r1", "operator": "ana", "label": "mac", "token_hash": "x", "created_at": H.now(), "created_by": "ana",
+            values = {"id": "r1", "owner_id": "ana", "label": "mac", "token_hash": "x", "created_at": H.now(), "created_by": "ana",
                       "last_seen_at": H.now(), "hostname": "h", "version": "1", "state": "active"}
             use = {k: v for k, v in values.items() if k in cols}
             c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))
@@ -586,10 +586,10 @@ def botops_turn(api):
     """An unattended BotOps turn: the runner, its assignment, and a leased attempt for `botops-test`."""
     runner_token(api, "botops")
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES('m-botops','keeper','bot:botops','request','hi',?)",
+        c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-botops','keeper','bot:botops','request','hi',?)",
                   (H.now(),))
-        job = c.execute("SELECT id FROM jobs WHERE bot='botops'").fetchone()["id"]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
+        job = c.execute("SELECT id FROM jobs WHERE bot_id='botops'").fetchone()["id"]
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a2',?,'botops','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
 
 
@@ -772,9 +772,9 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     connect(api, administration='true')
     runner_token(api, 'cmo')
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES('m-cmo','keeper','bot:cmo','request','Prepare the repository',?)", (H.now(),))
-        job = c.execute("SELECT id FROM jobs WHERE bot='cmo'").fetchone()['id']
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
+        c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-cmo','keeper','bot:cmo','request','Prepare the repository',?)", (H.now(),))
+        job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()['id']
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
     path = '/api/v2/bots/cmo/repositories'
     create = lambda body: api.post('/api/v2/github/repos', json=body, headers=auth('bot-test'))
@@ -810,7 +810,7 @@ def test_botops_token_writes_every_bot_in_its_own_run_the_persons_bots_for_them_
     connect(api)
     botops_turn(api)
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE jobs SET message_id='m-botops' WHERE bot='botops'")
+        c.execute("UPDATE jobs SET message_id='m-botops' WHERE bot_id='botops'")
         # The daily update: BotOps' own schedule.
         c.execute("UPDATE messages SET kind='notice',refs='{\"wake\": \"update\"}' WHERE id='m-botops'")
     wide = ["Acme/emp-botops", "Acme/emp-cmo", "Acme/emp-cpo", "Acme/emp-newbie"]
@@ -818,7 +818,7 @@ def test_botops_token_writes_every_bot_in_its_own_run_the_persons_bots_for_them_
     with api.app_state.store.read() as c:
         # The computer's git helper asked: the run in progress on it decided the scope.
         audit = json.loads(c.execute("SELECT detail FROM events WHERE action='github.token' AND target='botops' "
-                                     "ORDER BY ts DESC,rowid DESC LIMIT 1").fetchone()[0])
+                                     "ORDER BY created_at DESC,rowid DESC LIMIT 1").fetchone()[0])
     assert audit["runs"] == [{"attempt": "a2", "rights": "bot:botops", "own_run": True}]
     assert sorted(api.post("/api/v2/github/token", json={"bot": "botops"},
                            headers=auth("botops-test")).json()["repositories"]) == wide
@@ -827,15 +827,15 @@ def test_botops_token_writes_every_bot_in_its_own_run_the_persons_bots_for_them_
     assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-botops"]
     with api.app_state.store.transaction() as c:
         team_rules.save(c, "human:ana", {"botops_manages_bots": True})
-        c.execute("UPDATE messages SET from_actor='bot:cmo' WHERE id='m-botops'")
+        c.execute("UPDATE messages SET sender_id='bot:cmo' WHERE id='m-botops'")
     assert turn_token(api, "botops").json()["repositories"] == ["Acme/emp-botops"]
     # A person asking: the bots they manage (Riley runs cpo), whatever team rule; nothing once no run is in progress.
     from backend import rooms
     with api.app_state.store.transaction() as c:
         team_rules.save(c, "human:ana", {"botops_manages_bots": False})
-        c.execute("UPDATE bot_config SET operator='riley' WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET owner_id='riley' WHERE bot='cpo'")
         room = rooms.personal_room(c, "human:riley", "botops")
-        c.execute("UPDATE messages SET from_actor='human:riley',conversation_id=?,kind='say' WHERE id='m-botops'", (room["id"],))
+        c.execute("UPDATE messages SET sender_id='human:riley',conversation_id=?,kind='say' WHERE id='m-botops'", (room["id"],))
         c.execute("INSERT INTO attempt_conversations VALUES('a2',?)", (room["id"],))
     assert sorted(turn_token(api, "botops").json()["repositories"]) == ["Acme/emp-botops", "Acme/emp-cpo"]
     with api.app_state.store.transaction() as c:
@@ -978,7 +978,7 @@ def _box(api):
     """A second computer, "box", that never held newbie."""
     with api.app_state.store.transaction() as c:
         cols = [r[1] for r in c.execute("PRAGMA table_info(runners)")]
-        values = {"id": "r2", "operator": "ana", "label": "box", "token_hash": "y", "created_at": H.now(), "created_by": "ana",
+        values = {"id": "r2", "owner_id": "ana", "label": "box", "token_hash": "y", "created_at": H.now(), "created_by": "ana",
                   "last_seen_at": H.now(), "hostname": "box", "version": "1", "state": "active"}
         use = {k: v for k, v in values.items() if k in cols}
         c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))
@@ -1048,9 +1048,9 @@ def test_only_botops_records_where_a_bot_was_built_and_never_over_another_record
     runner_token(api, "cmo")
     with api.app_state.store.transaction() as c:
         save_metadata(c, "repository-creation-grants", {"cmo": True})
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES('m-cmo','keeper','bot:cmo','request','hi',?)", (H.now(),))
-        job = c.execute("SELECT id FROM jobs WHERE bot='cmo'").fetchone()["id"]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
+        c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-cmo','keeper','bot:cmo','request','hi',?)", (H.now(),))
+        job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()["id"]
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'cmo-turn','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
     made = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("bot-test"))
     assert made.status_code == 200, made.text

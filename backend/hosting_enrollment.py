@@ -28,7 +28,7 @@ def enrollment(store, auth, request_id, code_hash, label, owner, status=False):
             if status:
                 return {"online": False}
             c.execute("INSERT INTO hosting_enrollments VALUES(?,?,?)", (request_id, code_hash, label))
-            c.execute("INSERT INTO enrollments(code_hash,operator,expires_at) VALUES(?,?,?)",
+            c.execute("INSERT INTO enrollments(code_hash,owner_id,expires_at) VALUES(?,?,?)",
                       (code_hash, person['id'], H.shift(H.now(), minutes=15)))
             H.event(c, who.actor, 'runner.hosting_enrollment', request_id)
         e = c.execute("SELECT * FROM enrollments WHERE code_hash=?", (code_hash,)).fetchone()

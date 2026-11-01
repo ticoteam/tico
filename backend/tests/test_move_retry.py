@@ -24,7 +24,7 @@ def step(api, task):
 def retries(api, task):
     with api.app.state.store.read() as c:
         return [json.loads(r[0]) for r in c.execute(
-            "SELECT new FROM task_events WHERE task_id=? AND field='move_retry' ORDER BY ts, rowid", (task['id'],))]
+            "SELECT new FROM task_events WHERE task_id=? AND field='move_retry' ORDER BY created_at, rowid", (task['id'],))]
 
 
 def tick(api):
@@ -33,7 +33,7 @@ def tick(api):
 
 def owned_by(api, slug):
     with api.app.state.store.read() as c:
-        return [r[0] for r in c.execute("SELECT title FROM tasks WHERE owner=?", (H.bot_actor(slug),))]
+        return [r[0] for r in c.execute("SELECT title FROM tasks WHERE owner_id=?", (H.bot_actor(slug),))]
 
 
 def test_refused_for_missing_receipt_moves_itself_when_the_receipt_is_posted(api):
@@ -50,7 +50,7 @@ def test_refused_for_missing_receipt_moves_itself_when_the_receipt_is_posted(api
     assert tick(api) == [task['id']]
     assert step(api, task) == 'Review 1'
     with api.app.state.store.read() as c:
-        mover = c.execute("SELECT actor FROM task_events WHERE task_id=? AND field='step' ORDER BY ts DESC, rowid DESC",
+        mover = c.execute("SELECT actor FROM task_events WHERE task_id=? AND field='step' ORDER BY created_at DESC, rowid DESC",
                           (task['id'],)).fetchone()[0]
     assert mover == H.KEEPER
     assert owned_by(api, 'cmo') == []       # the type's manager heard nothing
@@ -155,9 +155,9 @@ def owner_woken(api, task):
     """Per gate notice to the ticket's owner, whether it queued a turn for them."""
     with api.app.state.store.read() as c:
         return [bool(r[0]) for r in c.execute(
-            "SELECT (SELECT count(*) FROM jobs j WHERE j.message_id=m.id) FROM messages m WHERE m.to_actor=? "
+            "SELECT (SELECT count(*) FROM jobs j WHERE j.message_id=m.id) FROM messages m WHERE m.recipient_id=? "
             "AND json_extract(m.refs,'$.task')=? AND json_extract(m.refs,'$.review_gate') IS NOT NULL",
-            (task['owner'], task['id']))]
+            (task['owner_id'], task['id']))]
 
 
 def test_temporary_github_failure_retries_on_the_timer_and_never_asks_devops(api, monkeypatch):
@@ -351,7 +351,7 @@ def test_retries_refused_again_expire_three_days_after_the_first_refusal(api):
     assert move(api, task).status_code == 422
     first = (datetime.now(timezone.utc) - timedelta(days=2, hours=12)).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
     with api.app.state.store.transaction() as c:    # the first refusal was two and a half days ago
-        c.execute('UPDATE task_events SET ts=? WHERE task_id=?', (first, task['id']))
+        c.execute('UPDATE task_events SET created_at=? WHERE task_id=?', (first, task['id']))
         c.execute("UPDATE task_events SET new=json_set(new,'$.at',?,'$.since',?) "
                   "WHERE task_id=? AND field='move_retry'", (first, first, task['id']))
         c.execute('UPDATE tasks SET note=? WHERE id=?', ('Still building the fix.', task['id']))
@@ -372,7 +372,7 @@ def test_a_private_tickets_outage_does_not_create_a_task_or_wake_a_manager(api, 
     assert move(api, task).status_code == 422
     with api.app.state.store.transaction() as c:
         source_outages.sync(c, api.app.state.store.settings)
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner=?", (H.bot_actor('devops-engineer'),)).fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id=?", (H.bot_actor('devops-engineer'),)).fetchone()
         assert not c.execute("SELECT 1 FROM events WHERE action='blocker.routed'").fetchone()
         for row in c.execute("SELECT body,refs FROM messages WHERE json_extract(refs,'$.source_outage') IS NOT NULL"):
             assert task['id'] not in row['body'] + row['refs']
@@ -386,7 +386,7 @@ def test_a_private_tickets_receipt_comment_moves_it(api):
         c.execute('UPDATE tasks SET private=1 WHERE id=?', (task['id'],))
     assert move(api, task).status_code == 422
     with api.app.state.store.transaction() as c:    # the builder's receipt, as a comment rather than the note
-        H._write_message(c, task['owner'], task['requester'], RECEIPT, H.conversation(c, task['conversation_id']), 'say',
+        H._write_message(c, task['owner_id'], task['requester_id'], RECEIPT, H.conversation(c, task['conversation_id']), 'say',
                          {'task': task['id'], 'comment': True}, None, None)
     assert tick(api) == [task['id']]
     assert step(api, task) == 'Review 1'

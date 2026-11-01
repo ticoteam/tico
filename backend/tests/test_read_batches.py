@@ -12,7 +12,7 @@ from backend.tests.test_task_privacy_reads import traced_get
 def privacy_parties(api):
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES('rn','Mac','ana','th',?)", (H.now(),))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('rn','Mac','ana','th',?)", (H.now(),))
 
 
 def blob(c, bid):
@@ -31,9 +31,9 @@ def seed(c, size):
         reply = H.task_comment(c, "human:ana", parent["id"], "Request " + key, wake=False,
                                extra_refs={"inputs": [input_["id"]], "answers": [input_["id"]]})
         aid = "run-" + key
-        c.execute("INSERT INTO jobs(id,message_id,bot,state,created_at,attempt_id) VALUES(?,?,'ops','completed',?,?)",
+        c.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,'ops','completed',?,?)",
                   ("job-" + key, reply["id"], H.now(), aid))
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
         c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, input_["id"]))
         H.event(c, "human:ana", privacy.INPUT_MOVED, aid,
@@ -49,7 +49,7 @@ def seed(c, size):
         c.execute("INSERT INTO blob_media(blob_id,poster_blob_id,media_state) VALUES(?,?,'ready')",
                   ("media-" + key, bid))
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (source["id"], "media-" + key))
-        c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,locator,current_version,task_id,"
+        c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,current_version,task_id,"
                   "first_activity_at,last_activity_at) VALUES(?,'ops',?,?,?,'document','tico_blob',1,?,?,?)",
                   (fid, "task:" + source["id"], fid, "File " + key, source["id"], H.now(), H.now()))
         c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,attempt_id,actor,created_at) "

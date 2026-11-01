@@ -34,7 +34,7 @@ def availability(c, who):
 
 
 def find_room(c, actor):
-    row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
+    row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=? "
                     "AND closed_at IS NULL ORDER BY created_at LIMIT 1", (actor, rooms.DOCS_ROOM)).fetchone()
     return H.conversation(c, row["id"]) if row else None
 
@@ -80,7 +80,7 @@ def free_title(c, actor, want):
     marks = ",".join("?" * len(H.LIVE_STATUSES))
     for n in range(1, 20):
         title = want if n == 1 else f"{want} ({n})"
-        if not c.execute(f"SELECT 1 FROM tasks WHERE requester=? AND owner=? AND title=? AND status IN ({marks})",
+        if not c.execute(f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
                          (actor, "bot:" + LIBRARIAN, title, *H.LIVE_STATUSES)).fetchone():
             return title
     raise Problem("busy", "The " + NAME + " already has many research requests from you for this page", 409)
@@ -152,8 +152,8 @@ def install(app, store, auth, mutate, onboarding):
             rows = c.execute(
                 "SELECT v.id,v.created_at,v.last_message_at,v.closed_at,"
                 "COALESCE((SELECT substr(m.body,1,160) FROM messages m WHERE m.conversation_id=v.id "
-                "AND m.from_actor=v.owner_actor ORDER BY m.rowid LIMIT 1),v.subject,'Docs') AS title "
-                "FROM conversations v WHERE v.scope='personal' AND v.owner_actor=? AND v.room_key=? "
+                "AND m.sender_id=v.owner_id ORDER BY m.rowid LIMIT 1),v.subject,'Docs') AS title "
+                "FROM conversations v WHERE v.scope='personal' AND v.owner_id=? AND v.room_key=? "
                 "ORDER BY COALESCE(v.last_message_at,v.created_at) DESC,v.id DESC LIMIT ? OFFSET ?",
                 (who.actor, rooms.DOCS_ROOM, limit + 1, offset)).fetchall()
             return {"conversations": [dict(row) for row in rows[:limit]],
@@ -165,7 +165,7 @@ def install(app, store, auth, mutate, onboarding):
         def work(c):
             room = auth.conversation(c, who, cid)
             if (room.get("scope") != rooms.PERSONAL or room.get("room_key") != rooms.DOCS_ROOM
-                    or room.get("owner_actor") != who.actor):
+                    or room.get("owner_id") != who.actor):
                 raise Problem("conversation", "That is not your docs conversation", 422)
             if room.get("closed_at"):
                 # Keep one current Docs room and the same busy guard as New chat.
@@ -186,7 +186,7 @@ def install(app, store, auth, mutate, onboarding):
                 room = ensure_room(c, who.actor)
             elif body.conversation_id:
                 room = auth.conversation(c, who, body.conversation_id)     # someone else's room is a 403
-                if (room.get("room_key") != rooms.DOCS_ROOM or room.get("owner_actor") != who.actor
+                if (room.get("room_key") != rooms.DOCS_ROOM or room.get("owner_id") != who.actor
                         or room.get("closed_at")):
                     raise Problem("conversation", "That is not your docs conversation", 422)
             else:

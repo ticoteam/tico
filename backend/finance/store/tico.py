@@ -180,7 +180,7 @@ def gateway_run_costs(c: sqlite3.Connection, after: str, through: str,
     """{(bot id, `ai` | `video`): USD as decimal text} for Gateway-billed runs that finished in (after, through]; a
     segment on an image model counts on `video`."""
     video, params = _video(video_models)
-    rows = c.execute(f"SELECT bot, CASE WHEN {video} THEN 'video' ELSE 'ai' END, "
+    rows = c.execute(f"SELECT bot_id, CASE WHEN {video} THEN 'video' ELSE 'ai' END, "
                      f"printf('%.9f', sum(coalesce(est_cost_usd, 0))) FROM {_runs()} WHERE {_GATEWAY} "
                      "AND finished_at > ? AND finished_at <= ? GROUP BY 1, 2", (*params, after, through)).fetchall()
     return {(str(r[0] or ""), str(r[1])): str(r[2]) for r in rows}
@@ -230,7 +230,7 @@ def gateway_decision_costs(c: sqlite3.Connection, after: str, through: str) -> d
     """{caller actor: USD as decimal text} for decision calls on the Gateway's model in (after, through], from the
     judge audit (`judge.call` rows name who asked)."""
     rows = c.execute("SELECT actor, printf('%.9f', sum(coalesce(json_extract(detail, '$.cost_usd'), 0))) "
-                     "FROM events WHERE action='judge.call' AND ts > ? AND ts <= ? "
+                     "FROM events WHERE action='judge.call' AND created_at > ? AND created_at <= ? "
                      "AND json_extract(detail, '$.model') LIKE 'tico-%' GROUP BY actor", (after, through)).fetchall()
     return {str(r[0] or ""): str(r[1]) for r in rows}
 
@@ -245,7 +245,7 @@ def run_gateway_cost(c: sqlite3.Connection, turn_id: str) -> str | None:
 def bot_average_run(c: sqlite3.Connection, bot: str, since: str, most: int) -> str | None:
     """A bot's average Gateway-billed cost per run over its last `most` such runs started since `since`, or None."""
     row = c.execute(f"SELECT count(*), printf('%.9f', avg(cost)) FROM (SELECT id, sum(coalesce(est_cost_usd, 0)) AS cost "
-                    f"FROM {_runs()} WHERE bot=? AND started_at >= ? AND finished_at IS NOT NULL AND {_GATEWAY} GROUP BY id "
+                    f"FROM {_runs()} WHERE bot_id=? AND started_at >= ? AND finished_at IS NOT NULL AND {_GATEWAY} GROUP BY id "
                     "ORDER BY max(started_at) DESC LIMIT ?)", (bot, since, most)).fetchone()
     return str(row[1]) if row and int(row[0]) else None
 

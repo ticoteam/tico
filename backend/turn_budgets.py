@@ -86,7 +86,7 @@ def counts(c, bot, floor="", now=None):
     out = {}
     for window, _, seconds, _ in WINDOWS:
         since = max(H.shift(now, seconds=-seconds), floor or "")
-        out[window] = c.execute("SELECT count(*) FROM attempts WHERE bot=? AND created_at>?", (bot, since)).fetchone()[0]
+        out[window] = c.execute("SELECT count(*) FROM attempts WHERE bot_id=? AND created_at>?", (bot, since)).fetchone()[0]
     return out
 
 
@@ -109,7 +109,7 @@ def held(c):
 def refusal(c, bot, message):
     """Why the claim passes over one queued job for the bot's budget: "budget" while the bot is held, for any job but a
     person's message, else None. Read only (execution.job_refusal)."""
-    if str(message.get("from_actor") or "").startswith("human:"):
+    if str(message.get("sender_id") or "").startswith("human:"):
         return None
     return "budget" if get(c, bot).get("held_at") else None
 
@@ -119,7 +119,7 @@ def enforce(c, settings, job, message, now=None):
     job over because the bot is over its budget. The first time it records the hold, files the operator's Needs-you
     item and tells the events; after that `refusal` keeps the other jobs from being chosen. A person's message is
     never refused."""
-    if str(message.get("from_actor") or "").startswith("human:"):
+    if str(message.get("sender_id") or "").startswith("human:"):
         return False
     bot = job["bot"]
     state = get(c, bot)

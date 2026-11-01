@@ -37,7 +37,7 @@ def needs_item(x, reader):
     kind = x["kind"]
     if kind in TASK_KINDS:
         ask = x.get("ask") or {}
-        answer = ("answer",) if ask.get("to_actor") == reader else ()
+        answer = ("answer",) if ask.get("recipient_id") == reader else ()
         return item(x, {"type": "task", "id": x["id"]}, answer + ("update",), x.get("body"))
     if kind == "ask":
         return item(x, {"type": "message", "id": x["message_id"]}, ("answer",), x.get("body"))

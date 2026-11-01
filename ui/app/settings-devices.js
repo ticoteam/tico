@@ -226,7 +226,7 @@ async function enrollmentDownload(operator, label) {
 // to Credentials. The account (email, plan) comes only from a provider's own status command (#610) and only to an
 // administrator or the computer's operator; anything not reported reads unavailable, never a guessed value.
 // The server's rule (model_login._operator): the owner, an admin, or the person whose computer it is.
-const machineCanSignIn = machine => settingsIsAdmin() || (!!S.me?.id && machine.operator === S.me.id);
+const machineCanSignIn = machine => settingsIsAdmin() || (!!S.me?.id && machine.owner_id === S.me.id);
 function machineLoginCommand(machine, name) {
   const command = harnessCaps(name).terminal_login;
   return command && machine.update?.kind === 'docker' ? `docker exec -it -u bot <container> ${command}` : command;
@@ -550,7 +550,7 @@ function renderSettingsMachines() {
   };
   const people = S.me?.role === 'owner' ? SETTINGS_DATA.people : SETTINGS_DATA.people.filter(person => person.id === S.me?.id);
   const agents = (SETTINGS_DATA.agents || []).map(agent => `<tr class="machine-card" data-agent-row="${esc(agent.bot)}"><td><strong><a href="#/bot/${esc(encodeURIComponent(agent.bot))}">${esc(agent.display_name || botSlug(agent.bot))}</a></strong><span class="settings-cell-note">${esc(agentKind(agent))}${agent.profile ? ` · profile ${esc(agent.profile)}` : ''}${agent.version ? ` · ${esc(agent.version)}` : ''}${agent.platform ? ` · ${esc(agent.platform)}` : ''}</span></td>
-      <td>${esc(settingsPersonName(botRow(agent.bot)?.operator))}</td>
+      <td>${esc(settingsPersonName(botRow(agent.bot)?.owner_id))}</td>
       <td>${agent.model ? `${esc(agent.model)}${agent.provider ? `<span class="settings-cell-note">${esc(agent.provider)}</span>` : ''}` : '<span class="muted">—</span>'}</td>
       <td><span class="machine-status"><span class="dot ${agent.revoked_at ? 'failed' : agent.online ? 'ok' : ''}" aria-hidden="true"></span>${agent.revoked_at ? 'revoked' : agent.online ? 'reporting in' : 'not reporting'}${agent.last_seen_at ? `<span class="muted"> · ${esc(ago(agent.last_seen_at))}</span>` : ''}</span></td></tr>`).join('');
   const empty = !SETTINGS_PRESENCE.at && SETTINGS_PRESENCE.failed ? 'Computer presence unavailable · checking…' : revoked ? 'No active computers.' : 'No computers yet.';
@@ -622,7 +622,7 @@ function renderSettingsMachines() {
 function settingsSetupPrompt(slug) {
   const rows = (slug ? S.emps.filter(e => e.id === slug) : S.emps).map(e => {
     const owners = (e.users || []).map(person => person.name || person.id).join(', ') || 'nobody';
-    const machine = e.machine?.label || `not assigned (reserved for ${settingsPersonName(e.operator)})`;
+    const machine = e.machine?.label || `not assigned (reserved for ${settingsPersonName(e.owner_id)})`;
     return `- ${e.display_name} [${e.slug}]: humans=${owners}; model=${e.model || 'not set'}; effort=${e.reasoning_effort || e.effort || 'not set'}; computer=${machine}`;
   });
   return `Help me update the ${appName()} bot setup.\n\nCurrent cloud state:\n${rows.join('\n')}\n\nAsk me what I want to change, then use the formal owner-admin API. Do not edit the production SQLite database directly. Bot definitions in the ${appName()} backend are authoritative after the one-time bootstrap: create a bot with POST /api/v2/bots and update its name, description, hierarchy, status, repository, or room type with POST /api/v2/bots/{bot}/definition. No ${appName()} application deploy or registry publish is required. Provision the bot's repository on any computer that will run it, and verify computer readiness. Preserve tasks and conversation history. Change a bot's model, reasoning effort, or registered computer through POST /api/v2/bots/{bot}/transitions so ${appName()} checkpoints every current session before applying it. If the transition is blocked because the old computer is unavailable, explain what continuity will be lost and ask me before calling apply-without-checkpoint. Use revision and assignment-generation checks. Humans are still managed separately from bot definitions.`;

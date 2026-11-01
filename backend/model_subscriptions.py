@@ -83,7 +83,7 @@ RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS model_subscriptions(
- id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT NOT NULL,
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed_at TEXT NOT NULL,
  preview TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'new',
  status_detail TEXT NOT NULL DEFAULT '', status_at TEXT, added_by TEXT NOT NULL, created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL);
@@ -492,7 +492,7 @@ def save(c, vault, settings, who, body, sid=None):
         if name is not None:
             c.execute("UPDATE model_subscriptions SET name=?,updated_at=? WHERE id=?", (name, now, sid))
         if body.secret is not None:
-            c.execute("UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,status='new',"
+            c.execute("UPDATE model_subscriptions SET sealed_at=?,preview=?,revision=revision+1,status='new',"
                       "status_detail='',status_at=?,updated_at=? WHERE id=?",
                       (vault.cipher.seal(c, _context(sid), value), preview, now, now, sid))
             # A new value may be another account: as for a change, every computer given it stops its live runs on
@@ -512,7 +512,7 @@ def save(c, vault, settings, who, body, sid=None):
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
     value, preview = checked(body.kind, body.secret.get_secret_value())
     sid = H.new_id()
-    c.execute("INSERT INTO model_subscriptions(id,name,kind,sealed,preview,added_by,created_at,updated_at) "
+    c.execute("INSERT INTO model_subscriptions(id,name,kind,sealed_at,preview,added_by,created_at,updated_at) "
               "VALUES(?,?,?,?,?,?,?,?)",
               (sid, name, body.kind, vault.cipher.seal(c, _context(sid), value), preview, who.actor, now, now))
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
@@ -618,9 +618,9 @@ def run_values(c, vault, who):
     agree."""
     if not who.attempt_id or not H._has_table(c, "attempt_subscriptions"):
         return []
-    attempt = c.execute("SELECT runner_id,state,bot,stop_requested_at FROM attempts WHERE id=?",
+    attempt = c.execute("SELECT runner_id,state,bot_id,stop_requested_at FROM attempts WHERE id=?",
                         (who.attempt_id,)).fetchone()
-    if not attempt or attempt["state"] not in ("leased", "running") or "bot:" + attempt["bot"] != who.actor:
+    if not attempt or attempt["state"] not in ("leased", "running") or "bot:" + attempt["bot_id"] != who.actor:
         return []
     out = []
     for given in c.execute("SELECT * FROM attempt_subscriptions WHERE attempt_id=? ORDER BY runtime",
@@ -665,13 +665,13 @@ def refreshed(c, vault, who, body):
     if sub["revision"] != body.revision or given["revision"] != body.revision:
         return {"stored": False}
     value, preview = checked("codex_login", body.value.get_secret_value())
-    old = json.loads(vault.cipher.unseal(c, _context(sub["id"]), sub["sealed"]) or "{}")
+    old = json.loads(vault.cipher.unseal(c, _context(sub["id"]), sub["sealed_at"]) or "{}")
     account = lambda v: ((v.get("tokens") or {}).get("account_id") or "")
     if account(old) and account(json.loads(value)) != account(old):
         return {"stored": False}
     if value == json.dumps(old, separators=(",", ":")):
         return {"stored": False}
-    c.execute("UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,updated_at=? WHERE id=?",
+    c.execute("UPDATE model_subscriptions SET sealed_at=?,preview=?,revision=revision+1,updated_at=? WHERE id=?",
               (vault.cipher.seal(c, _context(sub["id"]), value), preview, H.now(), sub["id"]))
     c.execute("UPDATE attempt_subscriptions SET revision=? WHERE attempt_id=? AND runtime=?",
               (sub["revision"] + 1, body.attempt, given["runtime"]))

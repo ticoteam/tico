@@ -78,7 +78,7 @@ function pageTasks(forced, openId = '') {
   // Go through: the Needs you cards from the first, one at a time (decide.js).
   for (const b of document.querySelectorAll('#tasks-pane [data-go-through]')) b.onclick = () => decideGoThrough();
   $('#task-stats')?.addEventListener('click', () => taskStatsOpen(state));
-  $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner, {labels: p.labels}); };
+  $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); };
   const search = $('#task-q');
   search.oninput = () => {
     state.q = search.value;
@@ -294,23 +294,23 @@ function openTaskCreate(owner = '', opts = {}) {
   let privateTouched = false;
   creation.elements.private.addEventListener('change', () => { privateTouched = true; });
   const privateDefault = () => {
-    const bot = botRow(creation.elements.owner.value);
+    const bot = botRow(creation.elements.owner_id.value);
     if (parent?.private || !privateTouched)
       creation.elements.private.checked = !!parent?.private || !!bot?.private_tasks_default;
     creation.elements.private.disabled = !!parent?.private;
   };
-  creation.elements.owner.addEventListener('change', privateDefault); privateDefault();
+  creation.elements.owner_id.addEventListener('change', privateDefault); privateDefault();
   goalOptions().then(goals => {
     const sel = $('#task-create-form select[name=goal]'); if (!sel || !goals.length) return;
     sel.innerHTML = '<option value="">No goal</option>' + goals.map(g =>
-      `<option value="${esc(g.id)}">${esc(g.title)} · ${esc(goalOwnerInfo(g.owner).name)}</option>`).join('');
+      `<option value="${esc(g.id)}">${esc(g.title)} · ${esc(goalOwnerInfo(g.owner_id).name)}</option>`).join('');
   });
   taskFormFiles(creation);
   void taskPipelineCreate($('#task-create-form'), opts.type || TASKS_ST?.type);
   $('#task-create-form').onsubmit = async ev => {
     ev.preventDefault();
     const form = ev.target, btn = form.querySelector('[type=submit]'), msg = $('#task-create-msg');
-    const title = form.title.value.trim(), owner = form.owner.value, body = form.body.value.trim();
+    const title = form.title.value.trim(), owner = form.owner_id.value, body = form.body.value.trim();
     if (!title || !owner) { msg.textContent = 'Choose who this is for.'; return; }
     if (!body) { msg.textContent = 'Add details.'; form.body.focus(); return; }
     btn.disabled = true; msg.textContent = 'Creating…';
@@ -514,8 +514,8 @@ async function tasksLoadAllDone(state) {
 function companyNeedActor(task, need) {
   const me = myActor();
   // A task waiting on me waits with the bot that owns it, whoever asked for it.
-  const candidates = taskWaitingOn(task) === me || taskWaitingOn(need) === me ? [task.owner]
-    : [need?.ask?.from_actor, task?.ask?.from_actor, taskRequester(task), task?.owner];
+  const candidates = taskWaitingOn(task) === me || taskWaitingOn(need) === me ? [task.owner_id]
+    : [need?.ask?.sender_id, task?.ask?.sender_id, taskRequester(task), task?.owner_id];
   return candidates.find(actor => actorSlug(actor) && actor !== me)
     || candidates.find(actor => actor && actor !== me)
     || me;

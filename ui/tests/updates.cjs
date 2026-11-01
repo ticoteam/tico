@@ -16,7 +16,7 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
 const now = Date.now(), iso = ms => new Date(now + ms).toISOString(), hour = 3600e3;
 const day = ms => new Date(now + ms).toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['game', 'Temp Game']].map(([name, display_name]) =>
-  ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: 'marketing', operator: name === 'game' ? 'ben' : 'ana'}));
+  ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: 'marketing', owner_id: name === 'game' ? 'ben' : 'ana'}));
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -40,8 +40,8 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
              done: ['Shipped four landing pages', 'Linked them from six older posts'], focus: ['Pitch the checklist to three newsletters'], blockers: []}},
     {id: 'w-cmo', bot: 'cmo', kind: 'weekly', day: day(-7 * 86400e3), headline: 'Old bullets', body: '- An older week, posted as bullets',
      created_at: iso(-170 * hour), updated_at: iso(-170 * hour), read: true, replies: 0}];
-  const threads = {'u-fin': [{id: 'm1', from_actor: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created_at: iso(-2 * hour)},
-                             {id: 'm2', from_actor: 'bot:finance', body: 'Will do.', created_at: iso(-hour)}]};
+  const threads = {'u-fin': [{id: 'm1', sender_id: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created_at: iso(-2 * hour)},
+                             {id: 'm2', sender_id: 'bot:finance', body: 'Will do.', created_at: iso(-hour)}]};
   // Older updates past the feed's page: only the one-update route has them (a From: link on an older card).
   const older = {'u-seo-old': {id: 'u-seo-old', bot: 'seo', kind: 'daily', day: day(-86400e3), headline: 'Outlined the checklist page',
                                body: '- Outlined the checklist page', created_at: iso(-27 * hour), updated_at: iso(-27 * hour), read: true, replies: 0},
@@ -112,7 +112,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
       if (reply) {
         const body = req.postDataJSON(); posted.push({path: p, body});
         if (holdReply) await holdReply;                 // held until the test has seen the pending reply
-        const msg = {id: 'm-new', from_actor: 'human:ana', body: `Re your update "x": ${body.text}`, created_at: new Date().toISOString(), conversation_id: 'c-seo'};
+        const msg = {id: 'm-new', sender_id: 'human:ana', body: `Re your update "x": ${body.text}`, created_at: new Date().toISOString(), conversation_id: 'c-seo'};
         threads[reply[1]] = [...(threads[reply[1]] || []), msg];
         return json({message: msg, thread: threads[reply[1]]});
       }

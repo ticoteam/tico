@@ -20,7 +20,7 @@ const {unrouted} = require('./support/routes.cjs');
     const now = Date.now(), at = ms => new Date(now + ms).toISOString();
     const chip = (name, runtime) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
-    const fixture = () => ({id: 'box', label: 'Team box', operator: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
+    const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
       readiness_at: at(-3000),
       needed_runtimes: ['claude', 'codex'], bot_runtimes: ['codex'], signed_out: {},
       readiness: {

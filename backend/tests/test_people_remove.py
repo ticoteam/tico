@@ -63,7 +63,7 @@ def test_a_person_with_history_stays_as_left(environment):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO conversations(id,kind,subject,participants,created_at) VALUES('cv1','dm','',?,?)",
                   (json.dumps(["human:" + wrote, "bot:coo"]), H.now()))
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at) "
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
                   "VALUES('m1','cv1',?,'bot:coo','message','hi',?)", ("human:" + wrote, H.now()))
     assert removable(api, wrote)
     remove(api, wrote, expected=409)

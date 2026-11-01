@@ -17,7 +17,7 @@ def _park_step(api, task):
 
 def test_a_ticket_parked_by_hand_in_a_teams_waiting_step_stays_and_holds_never_land_there(api):
     parked = ticket(api)
-    held = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve alerts', 'body': 'Build alerts.',
+    held = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Improve alerts', 'body': 'Build alerts.',
                                'type': parked['type_id'], 'step': 'In Progress'})
     step = _park_step(api, parked)
     assert move(api, parked, 'Waiting On Dependency').status_code == 200
@@ -113,7 +113,7 @@ def test_a_return_step_an_upgrade_made_resumes_at_on_deck_and_a_chosen_one_is_ke
 
 def _held_on_a_blocker(api, task):
     """The ticket is in Blocked, held on a blocker another bot owns: the hold the hourly sweep takes."""
-    blocker = post(api, 'tasks', {'owner': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
+    blocker = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
     with api.app.state.store.transaction() as c:
         TR.relate(c, H.KEEPER, task['id'], blocker['id'], 'blocked_by')
         task_blocked.sweep(c, H.now())
@@ -151,7 +151,7 @@ def test_an_upgrade_parks_a_bots_ticket_in_a_teams_waiting_step_on_any_board_and
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, 'Content', [{'name': 'Drafting', 'status': 'doing'},
                                                      {'name': 'Waiting On Review', 'status': 'waiting'}])
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Draft the guide', 'body': 'Write it.',
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Draft the guide', 'body': 'Write it.',
                                'type': typ['id'], 'step': 'Drafting'})
     with api.app.state.store.transaction() as c:
         step = next(s['id'] for s in H.type_get(c, typ['id'])['steps'] if s['name'] == 'Waiting On Review')
@@ -167,7 +167,7 @@ def test_a_person_parks_a_bots_own_ticket_in_a_teams_waiting_step_without_a_note
     parked = ticket(api)
     step = _park_step(api, parked)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE tasks SET requester=owner WHERE id=?', (parked['id'],))    # the bot asked for it itself
+        c.execute('UPDATE tasks SET requester_id=owner_id WHERE id=?', (parked['id'],))    # the bot asked for it itself
         # The bot's own move still says why: nobody else will answer a ticket it parks for itself.
         with pytest.raises(H.Refused) as refused:
             H.task_update(c, 'bot:cpo', parked['id'], step='Waiting On Dependency')
@@ -183,9 +183,9 @@ def test_a_person_moving_a_bots_ticket_into_a_teams_blocked_step_on_a_content_bo
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, 'Content', [{'name': 'Drafting', 'status': 'doing'},
                                                      {'name': 'Blocked', 'status': 'waiting'}])
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Draft the guide', 'body': 'Write it.',
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Draft the guide', 'body': 'Write it.',
                                'type': typ['id'], 'step': 'Drafting'})
-    blocker = post(api, 'tasks', {'owner': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
+    blocker = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
     with api.app.state.store.transaction() as c:
         TR.relate(c, H.KEEPER, task['id'], blocker['id'], 'blocked_by')
         step = next(s['id'] for s in H.type_get(c, typ['id'])['steps'] if s['name'] == 'Blocked')
@@ -204,7 +204,7 @@ def test_an_upgrade_holds_a_bots_ticket_already_in_a_teams_blocked_step_on_a_con
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, 'Content', [{'name': 'Drafting', 'status': 'doing'},
                                                      {'name': 'Blocked', 'status': 'waiting'}])
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Draft the guide', 'body': 'Write it.',
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Draft the guide', 'body': 'Write it.',
                                'type': typ['id'], 'step': 'Drafting'})
     with api.app.state.store.transaction() as c:
         step = next(s['id'] for s in H.type_get(c, typ['id'])['steps'] if s['name'] == 'Blocked')

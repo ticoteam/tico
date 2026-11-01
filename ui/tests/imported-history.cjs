@@ -16,15 +16,15 @@ const {unrouted} = require('./support/routes.cjs');
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => { window.EventSource = undefined; });
   const bots = () => [
-    {name:'history-copy',display_name:'Imported Designer',status:'active',host:'keeper',can_chat:true,operator:'ana',
+    {name:'history-copy',display_name:'Imported Designer',status:'active',host:'keeper',can_chat:true,owner_id:'ana',
       online:fresh,agent:{harness:'grokbot',credential:true,synced:true,last_seen_at:last}},
-    {name:'live-agent',display_name:'Live Agent',status:'active',host:'keeper',can_chat:true,operator:'ana',
+    {name:'live-agent',display_name:'Live Agent',status:'active',host:'keeper',can_chat:true,owner_id:'ana',
       online:false,agent:{harness:'hermes',credential:true,last_seen_at:last}},
     ...[['groky','Groky','Pinned'],['grok-scout','Grok Scout','Outreach'],['grok-poetry','Poetry Post','']].map(([name,display_name,section]) =>
-      ({name,display_name,status:'active',host:'keeper',harness:'grokbot',reports_to:'human:ana',org_parent:'p:ana',operator:'ana',online:true,
+      ({name,display_name,status:'active',host:'keeper',harness:'grokbot',reports_to:'human:ana',org_parent:'p:ana',owner_id:'ana',online:true,
         revision:1,...placements[name],
         agent:{harness:'grokbot',credential:true,synced:true,label:'Grok Bot',section,last_seen_at:last}})),
-    {name:'dots',display_name:'Dots',status:'active',host:'keeper',harness:'dots',reports_to:'human:ana',org_parent:'p:ana',operator:'ana',online:true,
+    {name:'dots',display_name:'Dots',status:'active',host:'keeper',harness:'dots',reports_to:'human:ana',org_parent:'p:ana',owner_id:'ana',online:true,
       agent:{harness:'dots',credential:true,synced:true,label:'Dots',section:'',last_seen_at:last}}
   ];
   await page.route('**/*', route => {

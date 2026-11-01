@@ -161,12 +161,12 @@ function taskSubSummary(t, kids) {
 // One line per child: the same status words as the list, the title, its PR badge, then the owner's face.
 function taskSubRowHTML(k, open) {
   const kids = k.children || [];
-  const who = k.owner ? actorFace(k.owner, 16) : '';
+  const who = k.owner_id ? actorFace(k.owner_id, 16) : '';
   const key = String(k.id);
   return `<li class="sub-row${['done', 'closed', 'declined'].includes(String(k.status)) ? ' finished' : ''}" data-sub="${esc(key)}">
     <div class="sub-line">${kids.length ? `<button type="button" class="sub-chev${open.has(key) ? ' open' : ''}" data-sub-toggle="${esc(key)}" aria-expanded="${open.has(key)}" aria-label="${open.has(key) ? 'Hide' : 'Show'} subtasks of ${esc(k.title || '')}">›</button>` : '<span class="sub-chev-pad"></span>'}
-      ${taskStatusText(k)}<button type="button" class="sub-open" data-sub-open="${esc(key)}" title="${esc(`${k.title || ''} · ${taskStatusLabel(k)} · ${actorLabel(k.owner)}`)}"><span class="sub-title">${esc(k.title || 'Untitled')}</span></button>
-      ${prStateBadge(k.pr_state)}${taskVerdictHTML(k)}<span class="sub-who" title="${esc(actorLabel(k.owner))}">${who}</span></div>
+      ${taskStatusText(k)}<button type="button" class="sub-open" data-sub-open="${esc(key)}" title="${esc(`${k.title || ''} · ${taskStatusLabel(k)} · ${actorLabel(k.owner_id)}`)}"><span class="sub-title">${esc(k.title || 'Untitled')}</span></button>
+      ${prStateBadge(k.pr_state)}${taskVerdictHTML(k)}<span class="sub-who" title="${esc(actorLabel(k.owner_id))}">${who}</span></div>
     ${kids.length && open.has(key) ? `<ul class="sub-list">${kids.map(c => taskSubRowHTML(c, open)).join('')}</ul>` : ''}</li>`;
 }
 const taskSubAdder = t => canMove() && !['done', 'closed'].includes(String(t.status || ''));
@@ -175,7 +175,7 @@ function taskSubtasksHTML(t, kids, open, adding, owner, refused = '') {
   const summary = taskSubSummary(t, kids), counts = taskSubCounts(t, kids);
   // The heading counts the children shown here; the roll-up of the whole tree sits on the same line, with a thin bar.
   const count = t.children_summary?.direct_total ?? kids.length;
-  const pick = owner || actorSlug(t.owner) || t.owner || '';
+  const pick = owner || actorSlug(t.owner_id) || t.owner_id || '';
   const actor = pick.includes(':') ? pick : 'bot:' + pick;
   return `<section class="rail-sec task-subs" aria-labelledby="task-subs-h"><h3 class="rail-h" id="task-subs-h">Subtasks${count ? ` <span class="cnt">${count}</span>` : ''}${
     summary ? `<span class="sub-sum tnum"><span>${esc(summary)}</span><span class="sub-bar" aria-hidden="true"><i style="width:${Math.round(100 * counts.done / counts.total)}%"></i></span></span>` : ''}</h3>
@@ -191,11 +191,11 @@ function taskRailPaint(d, t) {
   const st = d.taskRail ||= {open: new Set()};
   const kids = st.kids || [];
   const old = $('[data-sub-add]', rail);
-  if (old) st.owner = old.elements.owner.value;
+  if (old) st.owner_id = old.elements.owner_id.value;
   const typed = old?.elements.title.value || '', focused = !!old && old.contains(document.activeElement) ? document.activeElement.name : '';
   // Code is drawn from the full task only: list rows carry no worktree details (ahead, behind, files, errors).
   const code = st.full && String(st.full.id) === String(t.id) ? taskCodeHTML(st.full) : '';
-  const html = code + taskSubtasksHTML(t, kids, st.open, st.adding, st.owner, st.refused);
+  const html = code + taskSubtasksHTML(t, kids, st.open, st.adding, st.owner_id, st.refused);
   rail.innerHTML = html;
   rail.hidden = !html;
   d.classList.toggle('has-rail', !!html);
@@ -233,13 +233,13 @@ function taskRailBind(d, t) {
     const who = ev.target.closest('[data-sub-owner]');
     if (who) {
       const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll('option[value]:not([value=""])');
-      const st = d.taskRail, current = $('[data-sub-add]', rail)?.elements.owner.value;
+      const st = d.taskRail, current = $('[data-sub-add]', rail)?.elements.owner_id.value;
       propMenu(d, who, {label: 'For', find: 'Find a person or bot', items: [...opts].map(o => {
         const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
         return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: o.value === current};
       }), onPick: it => {
-        const form = $('[data-sub-add]', rail); if (form) form.elements.owner.value = it.value;
-        st.owner = it.value; taskRailPaint(d, t); $('[data-sub-owner]', rail)?.focus();
+        const form = $('[data-sub-add]', rail); if (form) form.elements.owner_id.value = it.value;
+        st.owner_id = it.value; taskRailPaint(d, t); $('[data-sub-owner]', rail)?.focus();
       }});
       return;
     }
@@ -274,11 +274,11 @@ function taskRailBind(d, t) {
   rail.onsubmit = async ev => {
     const form = ev.target.closest('[data-sub-add]'); if (!form) return;
     ev.preventDefault();
-    const input = form.elements.title, title = input.value.trim(), owner = form.elements.owner.value;
+    const input = form.elements.title, title = input.value.trim(), owner = form.elements.owner_id.value;
     if (!title || form.dataset.busy) return;
-    if (!owner) { form.elements.owner.focus(); return; }
+    if (!owner) { form.elements.owner_id.focus(); return; }
     form.dataset.busy = '1'; input.disabled = true;
-    d.taskRail.owner = owner; d.taskRail.refused = '';
+    d.taskRail.owner_id = owner; d.taskRail.refused = '';
     $('[data-sub-add-error]', rail)?.remove();
     try {
       // The details are required; the title stands in until someone writes more (the modal does not repeat it).

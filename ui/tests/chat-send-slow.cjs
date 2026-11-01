@@ -71,7 +71,7 @@ async function check(engine) {
       if (p === '/api/v2/bots/sales/stop') { await stopHold; return json({ok: true}); }
       if (p === '/api/v2/uploads/chat/sales') {
         uploads.push(body.toString());
-        return json({conversation: {id: 'c1'}, message: {id: 'u' + uploads.length, from_actor: 'human:ana', body: 'With a file', created_at: new Date().toISOString()}});
+        return json({conversation: {id: 'c1'}, message: {id: 'u' + uploads.length, sender_id: 'human:ana', body: 'With a file', created_at: new Date().toISOString()}});
       }
       if (p === '/api/v2/chat/sales') {
         const text = JSON.parse(body).text;
@@ -84,7 +84,7 @@ async function check(engine) {
         if (delivered.has(key)) return json(delivered.get(key));
         if (['stored-stall', 'stored-drop-refuse', 'stored-busy-refuse', 'stored-privacy-refused'].includes(answer)) {
           sends.push(text);
-          delivered.set(key, {conversation: {id: 'c1'}, message: {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created_at: new Date().toISOString()}});
+          delivered.set(key, {conversation: {id: 'c1'}, message: {id: 'm' + sends.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()}});
           if (answer === 'stored-privacy-refused') return json({error: {code: 'privacy', detail: 'Response access refused'}}, 403);
           if (answer === 'stored-drop-refuse') return response.destroy();
           if (answer === 'stored-busy-refuse') return json({error: {code: 'unavailable', detail: 'Proxy lost the answer'}}, 503);
@@ -97,7 +97,7 @@ async function check(engine) {
         if (busy > 0) { busy--; return json({error: {code: 'unavailable', detail: 'Busy'}}, 503); }
         if (hold) await hold;
         sends.push(text);
-        return json({conversation: {id: 'c1'}, message: {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created_at: new Date().toISOString()}});
+        return json({conversation: {id: 'c1'}, message: {id: 'm' + sends.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()}});
       }
       return json(unrouted(p));
       })().catch(error => { serverErrors.push(error.message); if (!response.headersSent) response.writeHead(500); response.end(); });

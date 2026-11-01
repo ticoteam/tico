@@ -321,9 +321,9 @@ def test_sweep_events_drops_noise_after_a_week_and_the_rest_after_thirty_in_boun
         rows += [(action, 40), (action, 2)]
     rows += [("sql.query", 40)] * 12                            # a backlog of noise that drains over passes
     with s.transaction() as c:
-        c.execute("CREATE TABLE events(id TEXT PRIMARY KEY, ts TEXT, actor TEXT, action TEXT, target TEXT, "
+        c.execute("CREATE TABLE events(id TEXT PRIMARY KEY, created_at TEXT, actor TEXT, action TEXT, target TEXT, "
                   "detail TEXT)")
-        c.execute("CREATE INDEX events_ts ON events(ts)")
+        c.execute("CREATE INDEX events_ts ON events(created_at)")
         c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         seen = {}
         for action, age in rows:

@@ -106,10 +106,10 @@ def test_a_bot_run_sees_the_relations_it_may_read_and_nothing_of_the_rest(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    secret = post(api, "tasks", {"owner": "cara", "title": "Secret salary review", "body": "x", "private": True},
+    secret = post(api, "tasks", {"owner_id": "cara", "title": "Secret salary review", "body": "x", "private": True},
                   token="ben-test")
-    blocker = post(api, "tasks", {"owner": "cpo", "title": "Write the refund copy", "body": "x"})
-    task = post(api, "tasks", {"owner": "ops", "title": "Ship the refund page", "body": "x",
+    blocker = post(api, "tasks", {"owner_id": "cpo", "title": "Write the refund copy", "body": "x"})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Ship the refund page", "body": "x",
                                "relations": [{"task": blocker["id"], "kind": "blocked_by"}]})
     post(api, "tasks/" + secret["id"] + "/relations", {"task": task["id"]}, token="ben-test")
     assert claim(api, r, "ops") is None, "an unfinished blocker prevents automatic pickup"
@@ -124,7 +124,7 @@ def test_a_bot_run_sees_the_relations_it_may_read_and_nothing_of_the_rest(api):
 def test_sparse_relations_on_a_large_page_do_not_probe_all_task_pairs():
     with sqlite3.connect(':memory:') as c:
         c.row_factory = sqlite3.Row
-        c.execute('CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT,status TEXT,owner TEXT,private INTEGER)')
+        c.execute('CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT,status TEXT,owner_id TEXT,private INTEGER)')
         ids = [f'task-{i:04}' for i in range(1000)]
         c.executemany('INSERT INTO tasks VALUES(?,?,?,?,?)',
                       [(tid, tid, 'open', 'bot:cmo', int(i == 999)) for i, tid in enumerate(ids)])

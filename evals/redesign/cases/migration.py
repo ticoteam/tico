@@ -174,19 +174,19 @@ def setup_cut(f):
 def scheduled(bot, routine):
     def want(auto):
         trig, turn = auto.get("trigger") or {}, step_of(auto, "bot_turn") or {}
-        ok = (auto.get("owner") == "bot:" + bot and trig.get("type") == "schedule"
+        ok = (auto.get("owner_id") == "bot:" + bot and trig.get("type") == "schedule"
               and trig.get("cron") == routine["cron"] and trig.get("tz") == routine["timezone"]
               and is_bot(turn.get("bot"), bot) and turn.get("prompt") == routine["text"])
-        return ok, f"owner {auto.get('owner')}, trigger {text(trig)}, bot turn {text(turn)[:100]}"
+        return ok, f"owner {auto.get('owner_id')}, trigger {text(trig)}, bot turn {text(turn)[:100]}"
     return want
 
 
 def triggered(bot, routine, trigger):
     def want(auto):
         trig, turn = auto.get("trigger") or {}, step_of(auto, "bot_turn") or {}
-        ok = (auto.get("owner") == "bot:" + bot and all(trig.get(k) == v for k, v in trigger.items())
+        ok = (auto.get("owner_id") == "bot:" + bot and all(trig.get(k) == v for k, v in trigger.items())
               and is_bot(turn.get("bot"), bot) and turn.get("prompt") == routine["text"])
-        return ok, f"owner {auto.get('owner')}, trigger {text(trig)}, bot turn {text(turn)[:100]}"
+        return ok, f"owner {auto.get('owner_id')}, trigger {text(trig)}, bot turn {text(turn)[:100]}"
     return want
 
 
@@ -244,9 +244,9 @@ def inbox_rows(f):
     for person, (_bot, mailbox) in INBOXES.items():
         def want(auto, person=person, mailbox=mailbox):
             trig, llm = auto.get("trigger") or {}, step_of(auto, "llm") or {}
-            ok = (auto.get("owner") == "person:" + person and trig.get("type") == "message"
+            ok = (auto.get("owner_id") == "person:" + person and trig.get("type") == "message"
                   and trig.get("inbox") == mailbox and llm.get("as") == "assistant:" + person)
-            return ok, f"owner {auto.get('owner')}, trigger {text(trig)}, llm as {llm.get('as')}"
+            return ok, f"owner {auto.get('owner_id')}, trigger {text(trig)}, llm as {llm.get('as')}"
         results.append(mapped(f, mailbox, mailbox, want))
     return all(ok for ok, _ in results), " | ".join(detail for _, detail in results)
 
@@ -290,7 +290,7 @@ def wake_rows(f):
     for name, (bot, _event, _outcome) in WAKE_RULES.items():
         hits = linked_to(f, fx(f)["rules"][name])
         hit = hits[0] if len(hits) == 1 else None
-        if hit and str(hit.get("name") or "").startswith(WAKES) and hit.get("owner") == "bot:" + bot \
+        if hit and str(hit.get("name") or "").startswith(WAKES) and hit.get("owner_id") == "bot:" + bot \
                 and hit.get("builtin") is not True and step_of(hit, "filter"):
             names.setdefault(bot, set()).add(hit.get("name"))
         else:
@@ -306,9 +306,9 @@ def told_once(f):
     task = body(f, "told")
     task = task.get("task", task)
     words = f"{task.get('title')} {task.get('body')}"
-    ok = not result["kept"] and not result["failed"] and task.get("owner") in ("human:dana", "person:dana", "dana") \
+    ok = not result["kept"] and not result["failed"] and task.get("owner_id") in ("human:dana", "person:dana", "dana") \
         and "$0.25 an hour" in words
-    return ok, f"told {result['told']}: {task.get('title')!r} to {task.get('owner')}; kept {result['kept']}, " \
+    return ok, f"told {result['told']}: {task.get('title')!r} to {task.get('owner_id')}; kept {result['kept']}, " \
         f"failed {result['failed']}"
 
 
@@ -334,7 +334,7 @@ def filter_rules(auto):
 
 
 def wakes_of(f, bot):
-    return [a for a in automations(f) if str(a.get("name") or "").startswith(WAKES) and a.get("owner") == "bot:" + bot
+    return [a for a in automations(f) if str(a.get("name") or "").startswith(WAKES) and a.get("owner_id") == "bot:" + bot
             and a.get("builtin") is not True]
 
 
@@ -357,7 +357,7 @@ def wake_automation(bot):
 def only_custom(f):
     installed(f, *("rule:" + n for n in WAKE_RULES))
     setup(f, "autos")
-    owners = sorted({a.get("owner") for a in automations(f) if str(a.get("name") or "").startswith(WAKES)
+    owners = sorted({a.get("owner_id") for a in automations(f) if str(a.get("name") or "").startswith(WAKES)
                      and a.get("builtin") is not True})
     want = sorted("bot:" + b for b in fx(f)["rule_bots"])   # the fixture's, and the Librarian's profile rows
     return owners == want and set(owners) >= {"bot:" + b for b, _e, _o in WAKE_RULES.values()}, \
@@ -390,7 +390,7 @@ def old_fired(org, f, at):
     from backend.scheduler import stamp
     installed(f, "routine:pr_sweep")
     with org.store.transaction() as c:
-        c.execute("UPDATE schedules SET last_fired_at=?, next_due=? WHERE id=?",
+        c.execute("UPDATE schedules SET last_fired_at=?, next_due_at=? WHERE id=?",
                   (stamp(at), stamp(at + dt.timedelta(hours=1)), fx(f)["routines"]["pr_sweep"]))
     return at
 
@@ -414,7 +414,7 @@ def s41_steps(org, f):
 
 def schedule_rows(org, f):
     with org.store.read() as c:
-        return {r["id"]: dict(r) for r in c.execute("SELECT id, deleted_at, next_due FROM schedules WHERE id IN (%s)" % (
+        return {r["id"]: dict(r) for r in c.execute("SELECT id, deleted_at, next_due_at FROM schedules WHERE id IN (%s)" % (
             ",".join("?" * len(ROUTINES))), tuple(fx(f)["routines"].values()))}
 
 
@@ -432,7 +432,7 @@ def routines_stopped(f):
     installed(f, *("routine:" + n for n in ROUTINES))
     found = got(f, "schedules")
     live = [n for n, sid in fx(f)["routines"].items()
-            if not (found.get(sid) or {}).get("deleted_at") or (found.get(sid) or {}).get("next_due")]
+            if not (found.get(sid) or {}).get("deleted_at") or (found.get(sid) or {}).get("next_due_at")]
     return not live, f"old routine rows still due or live: {live}"
 
 
@@ -471,7 +471,7 @@ def close_standup(org):
     that rule, so it closes the task the way the team would."""
     with org.store.read() as c:
         open_ids = [r["id"] for r in c.execute(
-            "SELECT id FROM tasks WHERE owner IN (?, ?) AND status NOT IN ('closed','done')",
+            "SELECT id FROM tasks WHERE owner_id IN (?, ?) AND status NOT IN ('closed','done')",
             (CLAUDE_ID, "bot:" + CLAUDE_ID))]
     closed = 0
     for tid in open_ids:
@@ -503,7 +503,7 @@ def next_run_kept(f):
     installed(f, "routine:standup")
     setup(f, "read")
     want = nine_london(21).astimezone(UTC)
-    old, new = fx(f)["due"].get("standup"), body(f, "read").get("next_run")
+    old, new = fx(f)["due_at"].get("standup"), body(f, "read").get("next_run")
     if not old or not new:
         return False, f"routine next_due {old}, automation next_run {new}"
     return when(old) == when(new) == want, f"routine next_due {old}, automation next_run {new}, want {want.isoformat()}"

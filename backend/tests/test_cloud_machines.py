@@ -332,7 +332,7 @@ def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
     assert cloud.tick(60) == ["heartbeat"]
     assert cloud.tick(10) == ["heartbeat"]                      # once a minute, not every look
     with cloud.store.transaction() as c:                        # the queued chat is not why it stays on
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
     cloud.hq.calls.clear()
     cloud.at[0] = cloud.row()["active_at"] + 299
     cloud.tick()
@@ -364,13 +364,13 @@ def test_work_its_machine_never_takes_does_not_start_it_again_but_new_work_does(
 def test_work_queued_as_it_goes_quiet_keeps_it_on_for_the_runner_to_take(cloud):
     enrolled(cloud)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
     start = cloud.row()["active_at"]
     cloud.at[0] = start + 290
     work(cloud, text="Another thing")                           # queued (real clock) just before the idle stop
     queued = cloud.at[0]
     with cloud.store.transaction() as c:                        # the hub's clock is the fake one's
-        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'", (stamp(cloud),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (stamp(cloud),))
     cloud.hq.calls.clear()
     cloud.at[0] = start + 300
     cloud.tick()
@@ -600,7 +600,7 @@ def test_a_create_hq_answers_as_failed_counts_too(cloud):
 def test_always_on_starts_with_no_work_and_never_idles(cloud):
     enrolled(cloud)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
     cloud.tick(400)
     assert cloud.row()["state"] == "stopped"
     post(cloud.api, "bots/ops/cloud-machine", {"always_on": True})
@@ -614,7 +614,7 @@ def test_always_on_starts_with_no_work_and_never_idles(cloud):
 def test_a_frequent_watcher_keeps_it_on_and_a_due_one_wakes_it(cloud):
     r = enrolled(cloud)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
 
     def ran(seconds_ago, every):
         when = H.shift(H.now(), seconds=-seconds_ago + (cloud.at[0] - time.time()))
@@ -709,7 +709,7 @@ def test_moving_to_another_computer_stops_it_and_the_machine_can_then_be_deleted
     enrolled(cloud)
     other = runner(cloud.api, label="Office Mac")
     with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
         generation = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()["generation"]
     post(cloud.api, "bots/ops/cloud-machine", {"size": "small"}, expected=200)
     delete = cloud.api.delete("/api/v2/bots/ops/cloud-machine", headers=headers())
@@ -839,7 +839,7 @@ def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     with cloud.store.read() as c:
         computer = dict(c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone())
         offered = {r["id"] for r in placement.candidates(c, cloud.api.app.state.auth, "cpo")}
-    assert computer["label"] == "Shared cloud machine" and computer["accepts_member_bots"] and computer["operator"] == "ana"
+    assert computer["label"] == "Shared cloud machine" and computer["accepts_member_bots"] and computer["owner_id"] == "ana"
     assert placed(cloud) == {"ops": rid, "finance": rid} and rid not in offered
     assert {m["id"]: m for m in get(cloud.api, "operations")["computers"]}[rid]["cloud_machine"] == {
         "bot": None, "shared": True, "size": "default", "state": "starting"}
@@ -1049,7 +1049,7 @@ def test_the_client_speaks_the_contract(monkeypatch):
 # ----------------------------------------------------------------------------- the stop's fence against the claim
 def leased(cloud, rid):
     with cloud.store.read() as c:
-        return [r["bot"] for r in c.execute("SELECT bot FROM attempts WHERE runner_id=? AND state IN "
+        return [r["bot_id"] for r in c.execute("SELECT bot_id FROM attempts WHERE runner_id=? AND state IN "
                                             "('leased','running')", (rid,))]
 
 

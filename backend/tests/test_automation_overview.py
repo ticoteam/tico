@@ -12,7 +12,7 @@ def _make(api, name, owner, kind="event"):
     aid = "auto_" + H.new_id()
     flow = {"name": name, "owner": owner, "enabled": True, "builtin": False, "trigger": trigger, "steps": []}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow,version,created_at,created_by,"
+        c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
                   "updated_at) VALUES(?,?,?,?,1,?,1,?,?,?)",
                   (aid, name, owner, trigger["type"], json.dumps(flow), H.now(), "human:ana", H.now()))
     return aid
@@ -24,7 +24,7 @@ def _run(api, aid, status, minutes_ago, payload=None, steps=None, cost=0.0):
     state = {"status": status, "steps": steps or [], "payload": payload or {}}
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,finished_at,status,cost,"
-                  "state) VALUES(?,?,1,'',?,?,?,?,?)", (rid, aid, started, started, status, cost, json.dumps(state)))
+                  "saved_state) VALUES(?,?,1,'',?,?,?,?,?)", (rid, aid, started, started, status, cost, json.dumps(state)))
     return rid
 
 
@@ -101,8 +101,8 @@ def test_system_job_runs_show_under_their_built_in(api):
             "trigger": {"type": "event", "name": "tico.builtin.job.still_wanted"}, "steps": [],
             "controls": {"on": True}, "source": {"kind": "system_job", "id": "job:still_wanted"}}
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,builtin,flow,version,created_at,"
-                  "created_by,updated_at) VALUES('auto_sys','Still wanted','person:ana','event',1,1,?,1,?,?,?)",
+        c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by_id,updated_at) VALUES('auto_sys','Still wanted','person:ana','event',1,1,?,1,?,?,?)",
                   (json.dumps(flow), H.now(), "human:ana", H.now()))
         for i, ok in enumerate((1, 0)):
             at = H.shift(H.now(), minutes=-(i + 1))
@@ -133,8 +133,8 @@ def test_folded_system_runs_count_each_repeat_where_it_happened(api):
             "source": {"kind": "system_job", "id": "job:health_monitor"}}
     now = H.now()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,builtin,flow,version,created_at,"
-                  "created_by,updated_at) VALUES('auto_hm','Health','person:ana','event',1,1,?,1,?,?,?)",
+        c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by_id,updated_at) VALUES('auto_hm','Health','person:ana','event',1,1,?,1,?,?,?)",
                   (json.dumps(flow), now, "human:ana", now))
         # Saved through the job registry: a fold keeps first_started and moves started.
         first = SR.save(c, SR.Run("health_monitor", started=H.shift(now, hours=-30)).did("All well", quiet=True),

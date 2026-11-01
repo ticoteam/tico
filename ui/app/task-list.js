@@ -160,7 +160,7 @@ function tasksMigrateOldFilters(state, saved) {
 }
 // the team a task's owner sits in (a group: backend/groups.py)
 function taskTeam(t) {
-  const slug = actorSlug(t?.owner), pid = actorPerson(t?.owner);
+  const slug = actorSlug(t?.owner_id), pid = actorPerson(t?.owner_id);
   if (slug) return teamOf(slug) || '';
   if (pid) return (S.people || []).find(p => p.id === pid)?.team || '';
   return '';
@@ -173,16 +173,16 @@ function taskRepos(t) {
 }
 const resolveMe = v => v === 'me' ? myActor() : v;
 function taskPassesFilters(t, f) {
-  if (f.owner?.length && !f.owner.some(v => resolveMe(v) === t.owner || (!v.includes(':') && t.owner === 'bot:' + v))) return false;
+  if (f.owner_id?.length && !f.owner_id.some(v => resolveMe(v) === t.owner_id || (!v.includes(':') && t.owner_id === 'bot:' + v))) return false;
   if (f.asked?.length && !f.asked.some(v => resolveMe(v) === taskRequester(t))) return false;
   if (f.team?.length && !f.team.includes(taskTeam(t) || 'none')) return false;
   if (f.tag?.length && !f.tag.some(v => (t.labels || []).includes(v))) return false;
   if (f.repo?.length && !f.repo.some(v => taskRepos(t).includes(v))) return false;
   if (f.pr?.length && !f.pr.includes(taskHasPR(t) ? 'yes' : 'no')) return false;
-  if (f.due?.length) {
+  if (f.due_at?.length) {
     const due = taskDueInfo(t), now = Date.now();
     const hit = {overdue: !!due?.late, week: !!due && due.at >= now && due.at < now + 7 * 86400000, any: !!due, none: !due};
-    if (!f.due.some(v => hit[v])) return false;
+    if (!f.due_at.some(v => hit[v])) return false;
   }
   return true;
 }
@@ -242,10 +242,10 @@ function taskOnPlate(t, actor) {
   if (!t || !actor || taskFinished(t)) return false;
   if (actor === myActor()) return taskNeedsViewer(t);
   const on = t.status === 'waiting' && t.waiting_on ? t.waiting_on : '';
-  return (on ? on === actor : t.owner === actor) || (t.ask?.to_actor === actor && !t.ask?.older)
-    || (t.status === 'declined' && taskRequester(t) === actor && !actorPerson(t.owner));
+  return (on ? on === actor : t.owner_id === actor) || (t.ask?.recipient_id === actor && !t.ask?.older)
+    || (t.status === 'declined' && taskRequester(t) === actor && !actorPerson(t.owner_id));
 }
-const taskAskedBy = (t, actor) => !!actor && taskRequester(t) === actor && t.owner !== actor;
+const taskAskedBy = (t, actor) => !!actor && taskRequester(t) === actor && t.owner_id !== actor;
 function tasksFirstTabHas(state, it) {
   const key = tasksWhoKey(state), t = it.task;
   if (state.side === 'asked') return taskAskedBy(t, tasksWhoActor(state));
@@ -359,7 +359,7 @@ function tasksFilterOptions(state, field) {
     return [...(withMe && me ? [{value: 'me', label: 'You', face: actorFace(me, 16)}] : []),
       ...list.map(a => ({value: a, label: actorLabel(a), face: actorFace(a, 16)}))];
   };
-  if (field === 'owner') return actorOpts(tasks.map(t => t.owner), true);
+  if (field === 'owner') return actorOpts(tasks.map(t => t.owner_id), true);
   if (field === 'asked') return actorOpts(tasks.map(taskRequester), true);
   if (field === 'team') {
     const ids = [...new Set([...tasks.map(t => taskTeam(t) || 'none'), ...selected])];
@@ -406,7 +406,7 @@ function tasksGroupsFor(items, by, state) {
   }
   if (by === 'status') {
     return taskStatusGroups(items).map(g => ({key: g.key, label: g.label, items: g.items, icon: '',
-      create: g.owner ? {owner: g.owner} : g.key === 'doing' ? {} : null}));
+      create: g.owner_id ? {owner: g.owner_id} : g.key === 'doing' ? {} : null}));
   }
   const byId = tasksById(state);
   for (const it of items) {
@@ -424,7 +424,7 @@ function tasksGroupsFor(items, by, state) {
       const pid = taskParentId(t);
       const parent = pid && (byId.get(pid) || (t.parent && String(t.parent.id) === pid ? t.parent : null));
       add('p:' + (pid || 'none'), () => pid ? {label: parent?.title || 'Parent task', icon: '',
-        create: parent ? {parent: {id: pid, title: parent.title, owner: parent.owner}} : null}
+        create: parent ? {parent: {id: pid, title: parent.title, owner: parent.owner_id}} : null}
         : {label: 'No parent', icon: '', last: true}, it);
     } else if (by === 'tag') {
       const labels = t.labels || [];
@@ -484,7 +484,7 @@ function taskListRowHTML(it, ctx, depth = 0) {
   // The amber "Waiting" chip already says the status, so the status word stays out (an empty pad keeps the columns).
   const waitsOnMe = !!taskWaitingOn(t) && taskWaitingOn(t) === me;
   // who asked: a tiny face beside the owner's when it is not you (and not already the group's heading)
-  const showAsker = ctx.by !== 'requester' && asker && asker !== me && asker !== t.owner && (t.owner === me || !!actorPerson(asker));
+  const showAsker = ctx.by !== 'requester' && asker && asker !== me && asker !== t.owner_id && (t.owner_id === me || !!actorPerson(asker));
   // a subtask shown away from its parent says whose it is
   const pid = taskParentId(t);
   const parent = pid && depth === 0 ? (tasksById(state).get(pid) || t.parent) : null;
@@ -507,7 +507,7 @@ function taskListRowHTML(it, ctx, depth = 0) {
     <span class="tl-chips">${need?.folded?.length ? `<span class="tl-folded" title="${esc(`Also waiting on this: ${need.folded.map(f => f.title).join('; ')}`)}">+${need.folded.length}</span>` : ''}${waitsOnMe ? '<span class="tl-waiting" title="Its bot is waiting on you">Waiting</span>' : taskStatusLabel(t) === 'Waiting' ? '' : taskWaitTag(t)}${taskChipsHTML(t)}</span>
     ${need?.recommend ? recommendButton(need.recommend, 'tl-rec', t.version) : ''}
     ${ctx.by === 'status' ? '' : waitsOnMe && taskStatusLabel(t) === 'Waiting' ? '<span class="tl-status-pad"></span>' : taskRowStatus(t, key)}
-    <span class="tl-people">${showAsker ? `<span class="tl-asker" title="Asked by ${esc(actorLabel(asker))}">${actorFace(asker, 14)}</span>` : ''}<span class="tl-face" title="${esc(actorLabel(t.owner))}">${actorFace(t.owner, 18)}</span></span>
+    <span class="tl-people">${showAsker ? `<span class="tl-asker" title="Asked by ${esc(actorLabel(asker))}">${actorFace(asker, 14)}</span>` : ''}<span class="tl-face" title="${esc(actorLabel(t.owner_id))}">${actorFace(t.owner_id, 18)}</span></span>
     <time class="tl-age tnum" datetime="${esc(when || '')}" title="${esc(ageTitle)}">${esc(ageText)}</time>
     ${failed ? `<span class="tl-failed" role="img" aria-label="Not changed: ${esc(failed)}" title="Not changed: ${esc(failed)}">!</span>` : ''}
   </div>`);
@@ -936,7 +936,7 @@ async function tasksBulkApply(state, describe, bodyFor, action) {
       try {
         await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body});
         changed++;
-        if (describe.close) closed.push({id: t.id, title: t.title, status: t.status, step_id: t.step_id || '', owner: t.owner, typed: pipelineTypeId(t) !== 'general',
+        if (describe.close) closed.push({id: t.id, title: t.title, status: t.status, step_id: t.step_id || '', owner: t.owner_id, typed: pipelineTypeId(t) !== 'general',
           told: !!actorSlug(taskRequester(t))});
         break;
       } catch (e) {
@@ -991,7 +991,7 @@ async function tasksBulkServer(state, describe, action, tasks) {
     out.skipped ? `${out.skipped} not changed: ${names.slice(0, 2).join(', ')}${names.length > 2 ? ` +${names.length - 2}` : ''}` : ''].filter(Boolean).join(', ');
   if (describe.close) {
     const closed = (out.tasks?.changed || []).map(c => byId.get(String(c.id))).filter(Boolean).map(t => ({id: t.id, title: t.title, status: t.status,
-      step_id: t.step_id || '', owner: t.owner, typed: pipelineTypeId(t) !== 'general', told: !!actorSlug(taskRequester(t))}));
+      step_id: t.step_id || '', owner: t.owner_id, typed: pipelineTypeId(t) !== 'general', told: !!actorSlug(taskRequester(t))}));
     if (closed.length) state.bulkUndo = {items: closed, until: Date.now() + 10000};
   }
   if (skipped.length) toast(`${skipped.length} not changed: ${skipped.map(s => `${s.title || '#' + s.number} (${s.reason})`).join('; ')}`, true);
@@ -1022,7 +1022,7 @@ async function tasksBulkUndo(state) {
     try {
       const fresh = (await get(`/v2/tasks/${encodeURIComponent(prev.id)}`)).task;
       const body = prev.typed && prev.step_id ? {step: prev.step_id} : {status: prev.status};
-      if (fresh.owner !== prev.owner) body.owner = actorSlug(prev.owner) || prev.owner;
+      if (fresh.owner_id !== prev.owner_id) body.owner_id = actorSlug(prev.owner_id) || prev.owner_id;
       await post(`/v2/tasks/${encodeURIComponent(prev.id)}`, {version: fresh.version, ...body});
       ok++;
     } catch (e) { failed.push({id: prev.id, title: prev.title, why: e.message}); }
@@ -1066,7 +1066,7 @@ function tasksBulkMenu(state, kind, anchor) {
       pop.onclick = ev => {
         const b = ev.target.closest('[data-bulk-owner]'); if (!b) return;
         const owner = b.dataset.bulkOwner, actor = owner.includes(':') ? owner : 'bot:' + owner;
-        void tasksBulkApply(state, {done: `handed to ${actorLabel(actor)}`, already: `with ${actorLabel(actor)}`}, t => t.owner === actor ? null : {owner: actor}, {action: 'owner', owner: actor});
+        void tasksBulkApply(state, {done: `handed to ${actorLabel(actor)}`, already: `with ${actorLabel(actor)}`}, t => t.owner_id === actor ? null : {owner: actor}, {action: 'owner', owner: actor});
       };
     });
   } else if (kind === 'tags') {
@@ -1199,7 +1199,7 @@ function tasksMove(state, step) {
   if (state.peek && next !== state.peek) taskPeekOpen(state, next, {quick: true});
 }
 function tasksCreatePrefill(state) {
-  const owners = state.filters.owner || [];
+  const owners = state.filters.owner_id || [];
   const owner = owners.length === 1 ? resolveMe(owners[0]) : '';
   return {owner: actorSlug(owner) || owner, labels: (state.filters.tag || []).slice(0, 1)};
 }
@@ -1236,7 +1236,7 @@ function tasksKeys(state, ev) {
     return;
   }
   if (key === '/') { ev.preventDefault(); $('#task-q')?.focus(); $('#task-q')?.select(); return; }
-  if (key === 'c' && !ev.shiftKey) { ev.preventDefault(); const p = tasksCreatePrefill(state); openTaskCreate(p.owner, {labels: p.labels}); return; }
+  if (key === 'c' && !ev.shiftKey) { ev.preventDefault(); const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); return; }
   if (key === 'x' && listy && state.cursor?.startsWith('t') && tasksCanSelect()) { ev.preventDefault(); tasksSelect(state, state.cursor); return; }
   if (key === 'Enter' && listy && state.cursor && (!el || el === document.body || el.closest?.('.tl-row,.bcard') && !el.matches('button,a,input'))) {
     ev.preventDefault();
@@ -1286,8 +1286,8 @@ function tasksBodyClick(state, ev) {
   if (addIn) {
     const g = tasksGroupsFor(taskItems(state), tasksGroupBy(state), state).find(x => x.key === addIn.dataset.groupAdd);
     const c = g?.create || {};
-    if (c.parent) openTaskCreate(c.parent.owner ? (actorSlug(c.parent.owner) || c.parent.owner) : '', {parent: c.parent});
-    else openTaskCreate(c.owner ? (actorSlug(c.owner) || c.owner) : '', {labels: c.labels || []});
+    if (c.parent) openTaskCreate(c.parent.owner_id ? (actorSlug(c.parent.owner_id) || c.parent.owner_id) : '', {parent: c.parent});
+    else openTaskCreate(c.owner_id ? (actorSlug(c.owner_id) || c.owner_id) : '', {labels: c.labels || []});
     return true;
   }
   if (ev.target.closest('[data-clear-filters]')) {

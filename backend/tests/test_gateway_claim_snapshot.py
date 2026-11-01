@@ -33,7 +33,7 @@ def test_the_key_follows_the_claims_fallback_and_check(api, monkeypatch, change)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     if change == "check_reassigned":
-        task = post(api, "tasks", {"owner": "ops", "title": "Synthetic check", "body": "Use only the synthetic fixture"})
+        task = post(api, "tasks", {"owner_id": "ops", "title": "Synthetic check", "body": "Use only the synthetic fixture"})
         task_id = (task.get("task") or task)["id"]
         with api.app.state.store.transaction() as c:
             check_models.record(c, "bot:ops", task_id, TICO_CHECK)
@@ -49,7 +49,7 @@ def test_the_key_follows_the_claims_fallback_and_check(api, monkeypatch, change)
         set_fallback(api, "ops", None)
     else:
         with api.app.state.store.transaction() as c:                         # the check is handed to another bot
-            c.execute("UPDATE tasks SET owner='bot:finance' WHERE id=?", (task_id,))
+            c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id=?", (task_id,))
             assert check_models.of(c, task_id, "ops") is None
     handed = handed_to(api, machine, attempt)
     assert ("TICOAI_GATEWAY_KEY" in handed) is on_tico, (change, list(handed))

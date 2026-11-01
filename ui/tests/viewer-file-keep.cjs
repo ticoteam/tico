@@ -43,7 +43,7 @@ const files = {
       if (known && file[2]) return json({id:file[1],name:known[0],size:known[1].length,content_type:'application/octet-stream'});
       if (known) return route.fulfill({contentType:'application/octet-stream',headers:{'content-disposition':`attachment; filename*=UTF-8''${known[0]}`},body:known[1]});
       if (p === '/api/v2/conversations') return json({conversations:url.searchParams.get('chat_with') ? [{id:'c-legal',kind:'chat',scope:'personal',participants:['human:ana','bot:legal']}] : []});
-      if (p === '/api/v2/conversations/c-legal/snapshot') return json({messages:[{id:'m-legal',from_actor:'bot:legal',
+      if (p === '/api/v2/conversations/c-legal/snapshot') return json({messages:[{id:'m-legal',sender_id:'bot:legal',
         body:'The [poster](https://tico-ui.test/api/v2/files/file-big-0001) and the [lease](https://tico-ui.test/api/v2/files/file-pdf-0001).',
         created_at:new Date().toISOString()}],execution:null});
       return json(unrouted(p));

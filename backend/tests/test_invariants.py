@@ -44,17 +44,17 @@ def alerts(api, check):
 
 
 def flight_event(c, at, site="backend/app.py:4100 in mutate", route="PATCH /api/v2/tasks/{tid}", hold_s=6.5):
-    c.execute("INSERT INTO flight_events(ts,kind,detail) VALUES(?,?,?)",
+    c.execute("INSERT INTO flight_events(created_at,kind,detail) VALUES(?,?,?)",
               (at, "long_hold", json.dumps({"route": route, "site": site, "hold_s": hold_s, "wait_ms": 10.0})))
 
 
 def flight_request(c, ts, route, n, errors, caller="runner"):
-    c.execute("INSERT INTO flight_requests(ts,span,route,caller,n,errors,bytes,total_ms,p50,p95,max_ms,hist) "
+    c.execute("INSERT INTO flight_requests(created_at,span,route,caller,n,errors,bytes,total_ms,p50,p95,max_ms,hist) "
               "VALUES(?,60,?,?,?,?,0,0,0,0,0,'{}')", (ts, route, caller, n, errors))
 
 
 def flight_minute(c, ts, requests, dropped):
-    c.execute("INSERT INTO flight_process(ts,cpu,rss,threads,fds,sockets,lag_p95,lag_max,requests,queries,sql_ms,txns,"
+    c.execute("INSERT INTO flight_process(created_at,cpu,rss,threads,fds,sockets,lag_p95,lag_max,requests,queries,sql_ms,txns,"
               "wait_max,hold_max,hold_p95,locked,dropped) VALUES(?,0,0,0,0,0,0,0,?,0,0,0,0,0,0,0,?)",
               (ts, requests, dropped))
 
@@ -74,8 +74,8 @@ def test_a_run_past_its_lease_by_ten_minutes_fires_and_a_recent_or_finished_one_
 
 
 def test_a_bot_task_in_progress_with_no_run_for_an_hour_fires_and_one_with_a_queued_run_does_not(api, monkeypatch):
-    stuck = post(api, "tasks", {"owner": "ops", "title": "Draft the notes", "body": "x"})["id"]
-    waiting = post(api, "tasks", {"owner": "ops", "title": "Pick a venue", "body": "x"})["id"]
+    stuck = post(api, "tasks", {"owner_id": "ops", "title": "Draft the notes", "body": "x"})["id"]
+    waiting = post(api, "tasks", {"owner_id": "ops", "title": "Pick a venue", "body": "x"})["id"]
     store = api.app.state.store
     # One example at most, and the busy task is the older: it must not use up the limit ahead of the stuck one.
     monkeypatch.setattr(I, "LIMIT", 1)
@@ -89,24 +89,24 @@ def test_a_bot_task_in_progress_with_no_run_for_an_hour_fires_and_one_with_a_que
 
 
 def test_a_question_to_a_person_who_has_since_left_fires_and_one_to_a_present_person_does_not(api):
-    tid = post(api, "tasks", {"owner": "ops", "title": "Pick a vendor", "body": "x"})["id"]
-    other = post(api, "tasks", {"owner": "ops", "title": "Set a budget", "body": "x"})["id"]
+    tid = post(api, "tasks", {"owner_id": "ops", "title": "Pick a vendor", "body": "x"})["id"]
+    other = post(api, "tasks", {"owner_id": "ops", "title": "Set a budget", "body": "x"})["id"]
     store = api.app.state.store
     with store.transaction() as c:
         task = H.task(c, tid)
         H.say(c, "bot:ops", "human:ana", "Which vendor?", kind="ask", conversation_id=task["conversation_id"],
               refs={"task": tid})
-        left = c.execute("SELECT id FROM messages WHERE kind='ask' AND to_actor='human:ana' "
+        left = c.execute("SELECT id FROM messages WHERE kind='ask' AND recipient_id='human:ana' "
                          "ORDER BY created_at DESC LIMIT 1").fetchone()[0]
         # A second open question, on another task so it does not supersede the first, to a person still present.
         H.say(c, "bot:ops", "human:ana", "Which budget?", kind="ask",
               conversation_id=H.task(c, other)["conversation_id"], refs={"task": other})
         # Ana left after the first question was asked: its recipient is now a person not on the roster.
-        c.execute("UPDATE messages SET to_actor='human:gone' WHERE id=?", (left,))
+        c.execute("UPDATE messages SET recipient_id='human:gone' WHERE id=?", (left,))
     assert sweep(api)["owner_unreachable"] == 1
     assert left in examples(api, "owner_unreachable"), "the example is the message id, never the person"
     with store.transaction() as c:
-        c.execute("UPDATE messages SET superseded_at=? WHERE to_actor='human:gone'", (ago(minutes=1),))
+        c.execute("UPDATE messages SET superseded_at=? WHERE recipient_id='human:gone'", (ago(minutes=1),))
     assert sweep(api)["owner_unreachable"] == 0, "a superseded question is no longer open"
 
 
@@ -114,13 +114,13 @@ def test_the_same_rule_refusing_one_bot_more_than_twenty_times_in_a_day_fires(ap
     store = api.app.state.store
     with store.transaction() as c:
         for n in range(I.REFUSALS_PER_DAY + 1):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
+            c.execute("INSERT INTO refusals(id,created_at,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
                       (f"ref-ops-{n}", ago(minutes=n + 1), "bot:ops", "lint"))
         for n in range(I.REFUSALS_PER_DAY):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
+            c.execute("INSERT INTO refusals(id,created_at,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
                       (f"ref-cpo-{n}", ago(minutes=n + 1), "bot:cpo", "lint"))
         for n in range(50):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
+            c.execute("INSERT INTO refusals(id,created_at,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
                       (f"ref-old-{n}", ago(days=2), "bot:finance", "lint"))
     assert sweep(api)["refused_again"] == 1, "twenty-one refusals fire; twenty and old refusals do not"
 
@@ -152,8 +152,8 @@ def test_a_scheduled_automation_thirty_minutes_past_due_fires_and_a_paused_one_d
     with store.transaction() as c:
         for aid, enabled, due in (("au_late", 1, ago(hours=1)), ("au_paused", 0, ago(hours=1)),
                                   ("au_next", 1, stamp(NOW + timedelta(hours=1)))):
-            c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow,version,created_at,created_by,"
-                      "updated_at,next_due) VALUES(?,?,?,?,?,?,1,?,?,?,?)",
+            c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
+                      "updated_at,next_due_at) VALUES(?,?,?,?,?,?,1,?,?,?,?)",
                       (aid, aid, "human:ana", "schedule", enabled, flow, ago(days=2), "human:ana", ago(days=2), due))
     assert sweep(api)["automation_overdue"] == 1
 
@@ -230,7 +230,7 @@ def test_a_rehearsal_or_demo_copy_checks_nothing_and_raises_nothing(api):
     store = api.app.state.store
     with store.transaction() as c:
         for n in range(I.REFUSALS_PER_DAY + 1):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
+            c.execute("INSERT INTO refusals(id,created_at,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
                       (f"ref-copy-{n}", ago(minutes=1), "bot:ops", "lint"))
     auth = api.app.state.execution.auth
     assert I.sweep(store, auth, SimpleNamespace(rehearsal=True, demo=False), NOW) == {}
@@ -328,7 +328,7 @@ def test_the_scheduler_runs_the_checks_every_fifteen_minutes_and_records_a_chang
     store = api.app.state.store
     with store.transaction() as c:
         for n in range(I.REFUSALS_PER_DAY + 1):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
+            c.execute("INSERT INTO refusals(id,created_at,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
                       (f"ref-tick-{n}", ago(minutes=1), "bot:ops", "lint"))
     scheduler = Scheduler(store, api.app.state.execution)
     scheduler.tick(NOW)

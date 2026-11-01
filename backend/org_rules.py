@@ -473,7 +473,7 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "if_broken": row["if_broken"], "reviewer": reviewer, "status": row["status"],
         "suggested_by": row["suggested_by"], "decided_by": row["decided_by"], "decided_at": row["decided_at"],
         "version": row["version"], "created_at": row["created_at"], "updated_at": row["updated_at"],
-        "due": [{"id": d["id"], "due_on": d["due_on"], "status": d["status"], "repeats": d["repeats"],
+        "due_at": [{"id": d["id"], "due_on": d["due_on"], "status": d["status"], "repeats": d["repeats"],
                  "task_days": d["task_days"]}
                 for d in dues[:DUE_PER_RULE]],
         "due_more": max(0, len(dues) - DUE_PER_RULE),
@@ -797,8 +797,8 @@ def add_due(c, auth, who, rule_id, body):
     if days is not RR.UNCHANGED and days is not None:
         RR.sync(c, who.actor, D.one(c, due_id), row["text"], days, _via(who))
     after = D.views(c, [D.one(c, due_id)])[0]
-    _audit(c, who.actor, rule_id, None, {"due": after}, who)
-    _event(c, who.actor, "due_added", rule_id, {"due": due_id})
+    _audit(c, who.actor, rule_id, None, {"due_at": after}, who)
+    _event(c, who.actor, "due_added", rule_id, {"due_at": due_id})
     return after
 
 
@@ -819,7 +819,7 @@ def edit_due(c, auth, who, due_text, body):
         changes["timezone"] = D.parse_zone(body["timezone"])
     if body.get("owner") is not None:
         changes["owner"] = owner_actor(c, body["owner"])
-        if changes["owner"] != row["owner"]:
+        if changes["owner"] != row["owner_id"]:
             # A changed owner passes the same test as a new one; an owner kept as it is is never asked again.
             _check_due_owner(c, auth, who, rule, changes["owner"])
     from . import rule_due_routine as RR
@@ -839,7 +839,7 @@ def edit_due(c, auth, who, due_text, body):
         RR.sync(c, who.actor, D.one(c, new_id), rule["text"], days, _via(who))
     after = D.views(c, [D.one(c, new_id)])[0]
     replaces = row["id"] if replaced else None
-    _audit(c, who.actor, rule["id"], {"due": before}, {"due": after}, who)
+    _audit(c, who.actor, rule["id"], {"due_at": before}, {"due_at": after}, who)
     _event(c, who.actor, "due_edited", rule["id"], {"due": new_id, "replaces": replaces})
     return {**after, "replaces": replaces}
 
@@ -856,14 +856,14 @@ def remove_due(c, auth, who, due_text):
         # An edit ended this row and started another (replaced_by), which now holds the routine: remove that one.
         later = c.execute("SELECT id FROM rule_due_dates WHERE replaces=?", (row["id"],)).fetchone()
         raise Problem("ended", f"Due date {row['id']} was replaced by an edit; remove the one in force", 409,
-                      extra={"replaced_by": later["id"] if later else None})
+                      extra={"replaced_by_id": later["id"] if later else None})
     before = D.views(c, [row])[0]
     D.remove(c, row["id"])
     from . import rule_due_routine as RR
     RR.off(c, who.actor, row, _via(who))
     stored = D.one(c, row["id"])
-    _audit(c, who.actor, rule["id"], {"due": before}, {"due": D.views(c, [stored])[0]}, who)
-    _event(c, who.actor, "due_removed", rule["id"], {"due": row["id"]})
+    _audit(c, who.actor, rule["id"], {"due_at": before}, {"due_at": D.views(c, [stored])[0]}, who)
+    _event(c, who.actor, "due_removed", rule["id"], {"due_at": row["id"]})
     return {"id": row["id"], "retired_at": stored["retired_at"]}
 
 
@@ -872,7 +872,7 @@ def satisfy_due(c, auth, who, due_text, due_on=None):
     if row["retired_at"] or row["ended_on"]:
         raise Problem("not_found", f"There is no due date {due_text}", 404)
     rule = _get(c, row["rule_id"])
-    if who.actor != row["owner"] and (who.role == "bot" or not may_manage(c, auth, who, rule["who"])):
+    if who.actor != row["owner_id"] and (who.role == "bot" or not may_manage(c, auth, who, rule["who"])):
         raise Problem("forbidden", "Only the due date's owner, or whoever can edit the rule, marks it satisfied", 403)
     day = D.satisfy(c, who.actor, row, due_on, via="person")
     _audit(c, who.actor, rule["id"], None, {"due": row["id"], "satisfied": day}, who)
@@ -1033,12 +1033,12 @@ def due_list(c, auth, who, args):
         manage = may_manage(c, auth, who, rule["who"], ctx)
         rows.append({"id": found["id"], "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"],
                                                  "source": ctx["sources"].get(rule["source_id"])},
-                     "due_on": found["due_on"], "repeats": found["repeats"], "owner": found["owner"],
+                     "due_on": found["due_on"], "repeats": found["repeats"], "owner_id": found["owner_id"],
                      "first_due": found["first_due"], "timezone": found["timezone"],
                      "routine_id": found["routine_id"], "task_days": found["task_days"],
                      "status": found["status"], "open": found["open"],
                      "history": found["history"],
-                     "can_edit": manage, "can_satisfy": manage or who.actor == found["owner"]})
+                     "can_edit": manage, "can_satisfy": manage or who.actor == found["owner_id"]})
     rows.sort(key=lambda r: (r["due_on"], r["id"]))
     page, nxt = _page(rows, args.get("cursor"), _limit(args.get("limit"), 100, DUE_LIST_MAX))
     return {"due": page, "next_cursor": nxt}
@@ -1056,7 +1056,7 @@ def due_show(c, auth, who, due_id):
     manage = live and may_manage(c, auth, who, rule["who"])
     return {**D.detail(c, row), "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"],
                                          "status": rule["status"]},
-            "can_edit": manage, "can_satisfy": manage or (live and who.actor == row["owner"])}
+            "can_edit": manage, "can_satisfy": manage or (live and who.actor == row["owner_id"])}
 
 
 def counts(c, auth, who):
@@ -1250,7 +1250,7 @@ def install(app, store, auth, mutate):
         def work(c):
             return decide_rule(c, auth, who, rule_id, data, "accept")
         result = mutate(request, body, work)
-        return {"rule": fresh(who, rule_id), "due": result["due"]}
+        return {"rule": fresh(who, rule_id), "due": result["due_at"]}
 
     @app.post("/api/v2/rules/{rule_id}/skip")
     def rules_skip(request: Request, rule_id: str, body: RuleDecide):
@@ -1260,7 +1260,7 @@ def install(app, store, auth, mutate):
         def work(c):
             return decide_rule(c, auth, who, rule_id, {"version": body.version}, "skip")
         result = mutate(request, body, work)
-        return {"rule": fresh(who, rule_id), "due": result["due"]}
+        return {"rule": fresh(who, rule_id), "due": result["due_at"]}
 
     @app.post("/api/v2/rules/{rule_id}/retire")
     def rules_retire(request: Request, rule_id: str, body: RuleDecide):
@@ -1270,7 +1270,7 @@ def install(app, store, auth, mutate):
         def work(c):
             return decide_rule(c, auth, who, rule_id, {"version": body.version}, "retire")
         result = mutate(request, body, work)
-        return {"rule": fresh(who, rule_id), "due": result["due"]}
+        return {"rule": fresh(who, rule_id), "due": result["due_at"]}
 
     @app.post("/api/v2/rules/{rule_id}/due")
     def rules_due_add(request: Request, rule_id: str, body: DueAdd):

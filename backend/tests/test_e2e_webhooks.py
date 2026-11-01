@@ -18,7 +18,7 @@ from backend.tests.test_webhooks import publish, verify
 
 # The "Start something" recipe of docs/webhooks-zapier-make-n8n.md, with the trigger's type taken from the body's `type`.
 RECIPE = {
-    "name": "Order paid", "owner": "bot:ops", "enabled": True,
+    "name": "Order paid", "owner_id": "bot:ops", "enabled": True,
     "trigger": {"type": "webhook", "id": "zapier-orders",
                 "filters": [{"field": "webhook.type", "op": "is", "value": "order.paid"}]},
     "steps": [{"id": "wake", "type": "action", "enabled": True, "do": "wake_bot",
@@ -62,7 +62,7 @@ def receiver():
 
 def messages_to(api, actor):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT body, refs FROM messages WHERE to_actor=? ORDER BY created_at", (actor,))]
+        return [dict(r) for r in c.execute("SELECT body, refs FROM messages WHERE recipient_id=? ORDER BY created_at", (actor,))]
 
 
 @pytest.mark.slow
@@ -93,7 +93,7 @@ def test_a_task_done_reaches_a_local_receiver_signed_for_an_independent_verifier
     url = f"http://127.0.0.1:{receiver.server_address[1]}/tico"
     made = post(api, "webhooks", {"name": "Acme receiver", "url": url, "events": ["task.done"], "allow_http": True})
     secret = made["webhook"]["secret"]
-    task = post(api, "tasks", {"owner": "ops", "title": "Acme outbound", "body": "Seeded for the webhook e2e test."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Acme outbound", "body": "Seeded for the webhook e2e test."})
     publish(api, "task.done", task["id"], {"id": task["id"], "title": "Acme outbound"}, "bot:ops", revision="r1")
 
     store, vault = api.app.state.store, api.app.state.vault

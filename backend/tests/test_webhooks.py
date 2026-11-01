@@ -283,7 +283,7 @@ def test_a_private_task_is_never_published_to_an_endpoint_whose_owner_cannot_rea
 
 def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sends_nothing_twice(api, net):
     made = make(api, events=["task.done", "task.state_changed", "task.assigned"])
-    task = _post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Ship it."})
+    task = _post(api, "tasks", {"owner_id": "ops", "title": "Ship it", "body": "Ship it."})
     doing = _post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"})
     _post(api, f"tasks/{task['id']}", {"version": doing["version"], "status": "done", "note": "Shipped."})
     kinds = [s["type"] for s in sends(api, made["id"])]
@@ -296,7 +296,7 @@ def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sen
 def test_catalog_examples_have_the_top_level_keys_their_producers_send(api, net):
     from backend import event_catalog as catalog
     made = make(api, events=["task.*", "approval.*"])
-    task = _post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Ship it."})
+    task = _post(api, "tasks", {"owner_id": "ops", "title": "Ship it", "body": "Ship it."})
     _post(api, f"tasks/{task['id']}/comments", {"text": "Soon."})
     doing = _post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"})
     _post(api, f"tasks/{task['id']}", {"version": doing["version"], "status": "done", "note": "Shipped."})
@@ -451,7 +451,7 @@ def test_the_hourly_cleanup_keeps_a_month_of_sends_and_two_hundred_attempts(api,
         c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('wait','e1',?,'custom.x','{}','ready',?,?)",
                   (made["id"], old, old))
         for n in range(250):
-            c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,at,timestamp_sent) VALUES('new',?,?,?,0)",
+            c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,created_at,timestamp_sent) VALUES('new',?,?,?,0)",
                       (made["id"], n + 1, H.shift(H.now(), seconds=n)))
         D.prune(c)
         assert [r[0] for r in c.execute("SELECT id FROM webhook_sends ORDER BY id")] == ["new", "wait"]

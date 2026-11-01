@@ -29,12 +29,12 @@ def finish(api, r, attempt):
 
 
 def jobs(c, bot):
-    return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
+    return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
 
 
 def skips(c):
     return [{**dict(row), "detail": json.loads(row["detail"])} for row in c.execute(
-        "SELECT * FROM events WHERE action=? ORDER BY ts, rowid", (W.SKIPPED,))]
+        "SELECT * FROM events WHERE action=? ORDER BY created_at, rowid", (W.SKIPPED,))]
 
 
 def parked_task(c, title="Build 2/9"):
@@ -60,7 +60,7 @@ def as_cause(actor):
 
 def news(c, task, body="Step moved: In Progress -> Review 1", refs=None):
     """A keeper notice about `task` to its owner, the kind a step move or relation change writes."""
-    return H._wake(c, task, task["owner"], body, refs=refs)
+    return H._wake(c, task, task["owner_id"], body, refs=refs)
 
 
 # ----------------------------------------------------------------------------- parked: waiting means asleep
@@ -120,7 +120,7 @@ def test_the_blocker_finishing_wakes_the_parked_task_and_that_run_carries_what_w
         assert jobs(c, "cpo") == 0
         H.task_update(c, "bot:ops", blocker["id"], status="done")
         woke = [dict(row) for row in c.execute(
-            "SELECT m.body, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='cpo'")]
+            "SELECT m.body, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='cpo'")]
     assert len(woke) == 1 and woke[0]["body"].startswith("Unblocked:")
     assert json.loads(woke[0]["refs"])["blocker_done"] == blocker["id"]
     attempt = claim(api, r, "cpo")
@@ -200,8 +200,8 @@ def test_t3_a_bots_own_comment_never_wakes_it_and_the_skip_is_logged(api):
         logged = skips(c)
     assert said[0]["woke"] is False
     assert [(s["target"], {k: s["detail"][k] for k in ("bot", "task", "rule", "trigger")}) for s in logged] == [
-        (said[0]["comment"]["id"], {"bot": "cpo", "task": task["id"], "rule": "own_write", "trigger": "comment"}),
-        (said[1]["comment"]["id"], {"bot": "cpo", "task": mine["id"], "rule": "own_write", "trigger": "comment"})]
+        (said[0]["comment"]["id"], {"bot_id": "cpo", "task": task["id"], "rule": "own_write", "trigger": "comment"}),
+        (said[1]["comment"]["id"], {"bot_id": "cpo", "task": mine["id"], "rule": "own_write", "trigger": "comment"})]
 
 
 def test_woke_means_a_bot_job_was_queued_and_delivered_means_a_person_got_it(api):
@@ -216,7 +216,7 @@ def test_woke_means_a_bot_job_was_queued_and_delivered_means_a_person_got_it(api
         before = jobs(c, "cpo")
     # a bot comments on a task whose recipient is a person: delivered, no bot turn
     told = post(api, f"tasks/{mine['id']}/comments", {"text": "Done, Ana."}, token=attempt["token"])
-    assert told["comment"]["to_actor"] == "human:ana" and told["woke"] is False and told["delivered"] is True
+    assert told["comment"]["recipient_id"] == "human:ana" and told["woke"] is False and told["delivered"] is True
     with api.app.state.store.read() as c:
         assert jobs(c, "cpo") == before
     # a person comments to a bot owner: one job

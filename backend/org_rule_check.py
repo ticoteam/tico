@@ -433,7 +433,7 @@ def reviewer_for(c, author, rules):
 
 def _repeats(c, author, rule_id):
     return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action IN "
-                     "('rules.blocked','rules.escalated') AND target=? AND ts>=?",
+                     "('rules.blocked','rules.escalated') AND target=? AND created_at>=?",
                      (author, "org_rule:" + rule_id, _day())).fetchone()[0]
 
 
@@ -1079,10 +1079,10 @@ def stats(c, settings):
     day = _day()
     label = J.load_set(QUESTION_SET)["label"]
     checks = c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action='judge.call' "
-                       "AND target=? AND ts>=?", (H.KEEPER, label, day)).fetchone()[0]
+                       "AND target=? AND created_at>=?", (H.KEEPER, label, day)).fetchone()[0]
 
     def count(*actions):
-        return c.execute(f"SELECT count(*) FROM events WHERE action IN ({','.join('?' * len(actions))}) AND ts>=?",
+        return c.execute(f"SELECT count(*) FROM events WHERE action IN ({','.join('?' * len(actions))}) AND created_at>=?",
                          (*actions, day)).fetchone()[0]
     hits = count("rules.blocked", "rules.escalated", "rules.warned")
     cap = float(settings.rules_monthly_usd or 0)
@@ -1140,7 +1140,7 @@ def record_misses(c, author, ids):
     c.execute("DELETE FROM org_rule_misses WHERE created_at<?", (cutoff,))
     counted = on(c) and bool(R.matching(c, author))
     room = MISSES_DAY_MAX - c.execute(
-        "SELECT count(*) FROM events WHERE action='rules.unchecked' AND actor=? AND ts>=? "
+        "SELECT count(*) FROM events WHERE action='rules.unchecked' AND actor=? AND created_at>=? "
         "AND json_extract(detail,'$.reason')='connector'", (author, _day())).fetchone()[0] if counted else 0
     known, recorded, over = [], 0, 0
     for miss in ids:

@@ -63,7 +63,7 @@ HINTS = {
 }
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bookkeeper_seen(
- key TEXT PRIMARY KEY, stamp TEXT NOT NULL, seen TEXT NOT NULL);
+ key TEXT PRIMARY KEY, stamp TEXT NOT NULL, seen_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS bookkeeper_watch_listed(
  task_id TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY (task_id, key));
 """
@@ -189,8 +189,8 @@ def _fresh(c, items, at, repeat=True):
     """Items to list: new ones, and ones whose facts changed. With `repeat`, also any listed more than REPEAT_HOURS
     ago; Watch findings pass repeat=False, so a reviewed finding is news again only when its facts change."""
     gap = H.shift(at, hours=-REPEAT_HOURS)
-    old = {r["key"]: (r["stamp"], r["seen"]) for r in c.execute(
-        "SELECT key, stamp, seen FROM bookkeeper_seen WHERE key IN (%s)" % ",".join("?" * len(items)),
+    old = {r["key"]: (r["stamp"], r["seen_at"]) for r in c.execute(
+        "SELECT key, stamp, seen_at FROM bookkeeper_seen WHERE key IN (%s)" % ",".join("?" * len(items)),
         [item["key"] for item in items])} if items else {}
     return [item for item in items if item["key"] not in old or old[item["key"]][0] != item["stamp"]
             or (repeat and old[item["key"]][1] < gap)]
@@ -231,7 +231,7 @@ def render_shown(items, counts):
 
 
 def _open_check(c, name=TITLE):
-    return H._one(c, "SELECT * FROM tasks WHERE owner=? AND requester=? AND title LIKE ? "
+    return H._one(c, "SELECT * FROM tasks WHERE owner_id=? AND requester_id=? AND title LIKE ? "
                      "AND status IN ('open','doing','waiting','review','ready') ORDER BY created_at DESC LIMIT 1",
                   (ACTOR, H.KEEPER, name + " (%"))
 
@@ -347,8 +347,8 @@ def watch(c, auth, at: str) -> dict[str, Any]:
             c.execute("DELETE FROM bookkeeper_seen WHERE key=?", (item["key"],))
             continue
         # Still standing, listed or reviewed: seen now, so the ledger forgets only what is gone for KEEP_DAYS.
-        c.execute("INSERT INTO bookkeeper_seen(key,stamp,seen) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET "
-                  "stamp=excluded.stamp, seen=excluded.seen", (item["key"], item["stamp"], at))
+        c.execute("INSERT INTO bookkeeper_seen(key,stamp,seen_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET "
+                  "stamp=excluded.stamp, seen_at=excluded.seen_at", (item["key"], item["stamp"], at))
     words = f"{len(fresh)} new to watch" if fresh else "Nothing new to watch"
     return {"items": len(fresh), "words": words, "task": task_id, "state": state}
 
@@ -402,9 +402,9 @@ def check(c, auth, at):
         task_id, state = deliver(c, body, sum(counts.values()))
         bills_address.listed(c, [item["id"] for item in shown if item["kind"] == "bill_email"])
         for item in fresh:
-            c.execute("INSERT INTO bookkeeper_seen(key,stamp,seen) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET "
-                      "stamp=excluded.stamp, seen=excluded.seen", (item["key"], item["stamp"], at))
+            c.execute("INSERT INTO bookkeeper_seen(key,stamp,seen_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET "
+                      "stamp=excluded.stamp, seen_at=excluded.seen_at", (item["key"], item["stamp"], at))
         H.event(c, H.KEEPER, "bookkeeper.check", SLUG, {"items": len(items), "new": len(fresh), "state": state})
-    c.execute("DELETE FROM bookkeeper_seen WHERE seen<?", (H.shift(at, days=-KEEP_DAYS),))
+    c.execute("DELETE FROM bookkeeper_seen WHERE seen_at<?", (H.shift(at, days=-KEEP_DAYS),))
     words = f"{len(fresh)} new, {len(items)} in the queue" if fresh else "Nothing new"
     return {"items": len(fresh), "words": words, "task": task_id, "state": state}

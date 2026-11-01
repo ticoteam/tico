@@ -34,8 +34,8 @@ RUN_EVENTS = task_privacy.RUN_TASK_EVENTS_SQL
 READS = [
     # Credentials last used (backend/credentials.py): one target, two actions, newest first.
     ("credential last used",
-     "SELECT ts,actor,detail FROM events WHERE target=? AND action IN (?,?) AND actor NOT LIKE 'human:%' "
-     "ORDER BY ts DESC LIMIT 1", ("cred-1", "credential.revealed", "credential.sent_to_computer"),
+     "SELECT created_at,actor,detail FROM events WHERE target=? AND action IN (?,?) AND actor NOT LIKE 'human:%' "
+     "ORDER BY created_at DESC LIMIT 1", ("cred-1", "credential.revealed", "credential.sent_to_computer"),
      "events_action_target"),
     # A judge's decision outcome (backend/judge.py): one action and target.
     ("decision outcome",
@@ -51,35 +51,35 @@ READS = [
      "COVERING INDEX events_run_detail"),
     # One action in a time window, no target (health_monitor, judge, app digest): a range, not the action's every row.
     ("limited runs today",
-     "SELECT detail FROM events WHERE action='attempt.limited' AND ts>?", ("2026-10-30",),
+     "SELECT detail FROM events WHERE action='attempt.limited' AND created_at>?", ("2026-10-30",),
      "events_action_ts (action=? AND ts>?)"),
     ("judge month",
-     "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events WHERE ts>=? AND action='judge.spend'",
+     "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events WHERE created_at>=? AND action='judge.spend'",
      ("2026-10-01",), "events_action_ts (action=? AND ts>?)"),
     # The rows since the month's running total was last counted (judge.spent_this_month): the rowid range, not the month.
     ("judge month since last count", B.NEW_SPEND_SQL, (0, "2026-10-01", "judge.spend"), "INTEGER PRIMARY KEY (rowid>?)"),
     ("asks expired",
-     "SELECT count(*) FROM events WHERE ts>=? AND action IN ('ask.expired','ask.went_ahead')", ("2026-10-01",),
+     "SELECT count(*) FROM events WHERE created_at>=? AND action IN ('ask.expired','ask.went_ahead')", ("2026-10-01",),
      "events_action_ts (action=? AND ts>?)"),
     # Actor-led reads stay where they were: by actor alone, with a parameter action, and the pinned counts.
     ("first action of a person",
-     "SELECT min(ts) FROM events WHERE actor=?", ("human:ana",), "events_task_origin (actor=?)"),
+     "SELECT min(created_at) FROM events WHERE actor=?", ("human:ana",), "events_task_origin (actor=?)"),
     ("anyone's history",
      "SELECT 1 FROM events WHERE actor IN (?,?) LIMIT 1", ("human:ana", "ana"), "events_task_origin (actor=?)"),
     ("ask card",
-     "SELECT detail FROM events WHERE actor=? AND action=? AND target=? ORDER BY ts LIMIT 1",
+     "SELECT detail FROM events WHERE actor=? AND action=? AND target=? ORDER BY created_at LIMIT 1",
      ("bot:ops", "task.ask_card", "task-1"), "events_task_origin (actor=? AND action=? AND target=?)"),
     ("judge calls today",
-     "SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND ts>=?",
+     "SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND created_at>=?",
      ("bot:ops", "judge.call", "2026-10-30"), "COVERING INDEX events_task_origin (actor=? AND action=?)"),
     # The task-origin reads (hubdb.TASK_ORIGIN_SQL): actor-led, must stay on events_task_origin.
     ("task origin",
      "SELECT target,detail FROM events WHERE actor=? AND action='task.origin' AND target IN (?,?) "
-     "ORDER BY target,ts DESC", ("bot:ops", "task-1", "task-2"),
+     "ORDER BY target,created_at DESC", ("bot:ops", "task-1", "task-2"),
      "events_task_origin"),
     # The event sweep walks events_ts forward (store.sweep_events).
     ("event sweep",
-     "SELECT rowid,ts FROM events INDEXED BY events_ts WHERE ts>=? AND ts<? AND action IN (?,?) ORDER BY ts LIMIT ?",
+     "SELECT rowid,created_at FROM events INDEXED BY events_ts WHERE created_at>=? AND created_at<? AND action IN (?,?) ORDER BY created_at LIMIT ?",
      ("2000-01-01", "2026-01-01", "sql.query", "status.set", 500), "events_ts"),
 ]
 

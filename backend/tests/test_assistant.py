@@ -54,9 +54,9 @@ def test_assistant_fetches_only_its_own_credentials_before_start(api, person="be
     get(api, "credential-runtime", person, expected=403)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "assistant-start"}, token=r["token"])
     assert [value["id"] for value in get(api, "credential-runtime", token)["credentials"]] == [own["id"]]
-    made = post(api, "tasks", {"owner": "human:" + person.removesuffix("-test"),
+    made = post(api, "tasks", {"owner_id": "human:" + person.removesuffix("-test"),
                                "title": "Draft my week", "body": "Monday first."}, token=token)
-    assert made["requester"] == "human:" + person.removesuffix("-test")
+    assert made["requester_id"] == "human:" + person.removesuffix("-test")
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=r["token"])
     get(api, "credential-runtime", token, expected=409)
 
@@ -94,13 +94,13 @@ def test_the_assistant_acts_as_the_person_and_never_more(api):
     post(api, "bots/ops/archive", {"expected_revision": 1}, token=token, expected=403)
     assert api.put("/api/v2/providers", json={}, headers=headers(token)).json()["error"]["code"] == "confirm_required"
     # Settling a task is deciding a Needs-you item: it is proposed, never done directly.
-    mine = post(api, "tasks", {"owner": "human:ben", "title": "Pick the launch date", "body": "Oct 1 or Oct 8?"}, token=token)
+    mine = post(api, "tasks", {"owner_id": "human:ben", "title": "Pick the launch date", "body": "Oct 1 or Oct 8?"}, token=token)
     post(api, "tasks/" + mine["id"], {"version": mine["version"], "status": "done"}, token=token, expected=403)
     # A low-risk write runs directly, as ben, and says so in the record.
-    made = post(api, "tasks", {"owner": "human:ben", "title": "Draft the launch post", "body": "For Oct 1."}, token=token)
-    assert made["requester"] == "human:ben"
+    made = post(api, "tasks", {"owner_id": "human:ben", "title": "Draft the launch post", "body": "For Oct 1."}, token=token)
+    assert made["requester_id"] == "human:ben"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY ts LIMIT 1", (made["id"],)).fetchone()[0] == "assistant"
+        assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY created_at LIMIT 1", (made["id"],)).fetchone()[0] == "assistant"
         assert c.execute("SELECT count(*) FROM events WHERE detail LIKE '%\"via\": \"assistant\"%'").fetchone()[0] > 0
     # The runner's own lease calls are still the runner's.
     post(api, f"attempts/{attempt['id']}/renew", {}, token=r["token"], expected=200)
@@ -116,7 +116,7 @@ def test_a_side_effect_runs_only_after_the_person_confirms(api):
     # The bot cannot do it itself, and only proposes.
     post(api, "bots/ops/archive", operation["body"], token=token, expected=403)
     action = post(api, "assistant/actions", operation, token=token)["action"]
-    assert action["status"] == "pending" and action["owner"] == "human:ana"
+    assert action["status"] == "pending" and action["owner_id"] == "human:ana"
     post(api, "assistant/actions", {**operation, "path": "/api/v2/me/tokens"}, token=token, expected=422)
 
     def archived():
@@ -164,7 +164,7 @@ def test_a_proposal_cannot_smuggle_a_route_and_never_stores_an_answer(api):
         post(api, "assistant/actions", {"summary": "Do it", "path": path}, token="ana-test", expected=422)
     # The stored path is exactly what runs; only the status and an error detail are kept, never the answer.
     action = post(api, "assistant/actions", {"summary": "File it", "path": "/api/v2/tasks",
-                                             "body": {"title": "Draft the launch plan", "body": "Two pages.", "owner": "human:ana"}})["action"]
+                                             "body": {"title": "Draft the launch plan", "body": "Two pages.", "owner_id": "human:ana"}})["action"]
     done = post(api, f"assistant/actions/{action['id']}/confirm", {})["action"]
     assert done["status"] == "done" and set(done["result"]) == {"status_code", "error"}
     assert "Draft the launch plan" not in str(get(api, f"assistant/actions/{action['id']}")["action"]["result"])
@@ -174,7 +174,7 @@ def test_an_assistant_message_never_lends_the_persons_authority_to_botops(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('botops','botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('botops','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('botops','{}',NULL,'ana')")
         H.VIA.set("assistant")
         via = H.say(c, "human:ana", "bot:botops", "Rename the Ops bot to Operations", kind="say")
         H.VIA.set("")
@@ -202,27 +202,27 @@ def test_direct_writes_stay_inside_the_team(api):
     post(api, "messages", {"to": "human:cara", "text": "Hello"}, token=token, expected=403)
     post(api, "messages", {"to": "cara", "text": "Hello"}, token=token, expected=403)                # a bare name may be a person
     post(api, f"tasks/{theirs['id']}/run-now", {}, token=token, expected=403)
-    post(api, f"tasks/{theirs['id']}", {"version": theirs["version"], "owner": "ops"}, token=token, expected=403)
+    post(api, f"tasks/{theirs['id']}", {"version": theirs["version"], "owner_id": "ops"}, token=token, expected=403)
     post(api, f"tasks/{anas['id']}", {"version": anas["version"], "note": "x"}, token=token, expected=403)   # not ben's
     post(api, f"tasks/{theirs['id']}/comments", {"text": "Started"}, token=token, expected=403)   # Ana is on it: it tells her
     post(api, "notes", {"to": "ops", "text": "Remember the launch"}, token=token, expected=403)      # no unmarked notes
-    post(api, "tasks", {"owner": "ben", "title": "Draft my week", "body": "Monday."}, token=token, expected=403)  # a bare name
+    post(api, "tasks", {"owner_id": "ben", "title": "Draft my week", "body": "Monday."}, token=token, expected=403)  # a bare name
     # Creating a task for another person runs directly too (reversible, unlike settling one).
-    for_cara = post(api, "tasks", {"owner": "human:cara", "title": "Review the plan", "body": "Please."}, token=token)
-    assert for_cara["owner"] == "human:cara" and for_cara["requester"] == "human:ben"
+    for_cara = post(api, "tasks", {"owner_id": "human:cara", "title": "Review the plan", "body": "Please."}, token=token)
+    assert for_cara["owner_id"] == "human:cara" and for_cara["requester_id"] == "human:ben"
     # A task for a bot, a comment on it and a message to a bot stay in the team: they run directly, as ben.
-    made = post(api, "tasks", {"owner": "ops", "title": "Draft the launch post", "body": "For Oct 1."}, token=token)
-    assert made["owner"] == "bot:ops" and made["requester"] == "human:ben"
+    made = post(api, "tasks", {"owner_id": "ops", "title": "Draft the launch post", "body": "For Oct 1."}, token=token)
+    assert made["owner_id"] == "bot:ops" and made["requester_id"] == "human:ben"
     post(api, f"tasks/{botwork['id']}/comments", {"text": "Please hurry"}, token=token)
     post(api, "messages", {"to": "ops", "text": "Hello"}, token=token)
     post(api, "chat/ops", {"text": "Hello again"}, token=token)
     # And what only touches them, as before.
-    post(api, "tasks", {"owner": "human:ben", "title": "Draft my week", "body": "Monday first."}, token=token)
+    post(api, "tasks", {"owner_id": "human:ben", "title": "Draft my week", "body": "Monday first."}, token=token)
     post(api, f"tasks/{theirs['id']}", {"version": theirs["version"], "note": "On it"}, token=token)
     post(api, "updates/read", {"all": True}, token=token)
     with api.app.state.store.read() as c:
         # What it wrote is marked, so BotOps ignores it.
-        assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND refs LIKE '%\"via\": \"assistant\"%'"
+        assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:ops' AND refs LIKE '%\"via\": \"assistant\"%'"
                          ).fetchone()[0] >= 2
 
 
@@ -231,10 +231,10 @@ def test_the_assistant_creates_a_task_for_another_person_without_a_card(api):
     token = attempt["token"]
     made = post(api, "tasks", {"owner": "human:cara", "title": "Review the plan", "body": "Please review the plan."},
                 token=token)
-    assert made["owner"] == "human:cara" and made["requester"] == "human:ben"
+    assert made["owner"] == "human:cara" and made["requester_id"] == "human:ben"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM assistant_actions WHERE status='pending'").fetchone()[0] == 0
-        assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY ts LIMIT 1",
+        assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY created_at LIMIT 1",
                          (made["id"],)).fetchone()[0] == "assistant"
     # The person is named by their full actor id, as for the person's own tasks: a bare name is not enough.
     post(api, "tasks", {"owner": "cara", "title": "Review it again", "body": "Please."}, token=token, expected=403)
@@ -248,7 +248,7 @@ def test_the_assistant_creates_a_task_for_another_person_without_a_card(api):
 
 def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation(api):
     from backend.store import Problem
-    private = post(api, 'tasks', {'owner': 'human:ben', 'title': 'Review the confidential packet',
+    private = post(api, 'tasks', {'owner_id': 'human:ben', 'title': 'Review the confidential packet',
                                  'body': 'Confidential packet.', 'private': True})
     attached = post(api, 'tasks/' + private['id'] + '/files', {'name': 'packet.md', 'text': 'Confidential attachment.'})
     r, attempt = assistant_turn(api, 'ben-test')
@@ -273,7 +273,7 @@ def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation
             assert run(conn, 'SELECT id,body FROM tasks WHERE id=?', [private['id']], 500, 5)['rows'] == []
         finally:
             conn.close()
-    own = post(api, 'tasks', {'owner': 'bot:coo', 'title': 'Review the assistant packet',
+    own = post(api, 'tasks', {'owner_id': 'bot:coo', 'title': 'Review the assistant packet',
                             'body': 'Review it.', 'private': True}, token='ben-test')
     assert get(api, 'tasks/' + own['id'], token)['task']['id'] == own['id']
     published = api.post('/api/v2/tasks/' + own['id'], json={'version': own['version'], 'private': False},
@@ -320,11 +320,11 @@ def test_the_assistant_does_the_task_actions_the_person_asked_for_in_their_chat(
     reopened = asked(api, f"tasks/{review['id']}", {"version": done["version"], "status": "open"}, token, "turn")["task"]
     assert reopened["status"] == "open"
     asked(api, f"tasks/{review['id']}/comments", {"text": "Reopened: one more pass"}, token, "turn")
-    handed = asked(api, f"tasks/{old['id']}", {"version": old["version"], "owner": "human:ana"}, token, "turn")["task"]
-    assert handed["owner"] == "human:ana"
+    handed = asked(api, f"tasks/{old['id']}", {"version": old["version"], "owner_id": "human:ana"}, token, "turn")["task"]
+    assert handed["owner_id"] == "human:ana"
     with api.app.state.store.read() as c:
         # Recorded as ben, via the assistant, for the message he sent.
-        row = c.execute("SELECT actor,via FROM task_events WHERE task_id=? AND field='status' ORDER BY ts DESC LIMIT 1",
+        row = c.execute("SELECT actor,via FROM task_events WHERE task_id=? AND field='status' ORDER BY created_at DESC LIMIT 1",
                         (launch["id"],)).fetchone()
         assert (row["actor"], row["via"]) == ("human:ben", "assistant")
         close = c.execute("SELECT actor,detail FROM events WHERE action='task.close' AND target=?",
@@ -379,7 +379,7 @@ def test_a_cited_message_must_be_the_persons_own_recent_words_in_their_assistant
     token, said = attempt["token"], turn_message(api, attempt)
     say(api, "Close Ben's launch task", "ana-test")
     other_person = room(api, "ana-test")["messages"][-1]
-    assert other_person["from_actor"] == "human:ana"
+    assert other_person["sender_id"] == "human:ana"
     other_person = other_person["id"]
     elsewhere = post(api, "chat/ops", {"text": "Close the launch task"}, token="ben-test")["id"]
     with api.app.state.store.transaction() as c:
@@ -542,7 +542,7 @@ def test_clear_my_queue_declines_and_answers_in_bulk_and_never_approves(api):
         row = c.execute("SELECT actor,detail FROM events WHERE action='approval.decide' AND target=?",
                         (q["spend"],)).fetchone()
         assert row["actor"] == "human:ben" and H._json(row["detail"], {})["via"] == "assistant"
-        answers = dict(c.execute("SELECT in_reply_to,from_actor FROM messages WHERE kind='answer'").fetchall())
+        answers = dict(c.execute("SELECT in_reply_to,sender_id FROM messages WHERE kind='answer'").fetchall())
         assert answers.get(q["ask"]) == "human:ben" and q["her_ask"] not in answers
     # Others' items stay as they were, whatever is cited.
     asked(api, "approvals/" + q["hers"], decline, token, "turn", expected=403)
@@ -607,7 +607,7 @@ def test_the_assistant_decides_approvals_in_bulk_once_the_person_turns_it_on(api
     assert get(api, "assistant", "ben-test")["pending"] == []
     # Recorded as decided by the Assistant for Ben, his words and the read-back quoted, in the approval's history.
     row = get(api, "approvals/" + q["old"][0], "ben-test")
-    assert row["decided_by"] == "human:ben" and row["decided_via"] == "assistant"
+    assert row["decided_by_id"] == "human:ben" and row["decided_via"] == "assistant"
     assert row["decided_for"] == {"for": "human:ben", "cited": turn_message(api, attempt), "run": "asked",
                                   "assistant": "bot:coo", "words": "yes",
                                   "read_back": back["text"], "approves": q["old"]}

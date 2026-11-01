@@ -219,10 +219,10 @@ def workspace(tmp_path):
 @pytest.fixture
 def seeded_ids(api, tmp_path):
     """Objects the commands name: a task, a bot chat, an automation and a trigger, made through the API."""
-    task = post(api, "tasks", {"owner": "ops", "title": "Acme smoke task", "body": "Seeded for the CLI sweep."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Acme smoke task", "body": "Seeded for the CLI sweep."})
     message = post(api, "chat/ops", {"text": "Acme smoke message"})
     trigger = post(api, "triggers", {"name": "Acme smoke hook"})["trigger"]
-    automation = post(api, "automations", {"name": "Acme smoke automation", "owner": "person:ana", "steps": [NOTE_STEP],
+    automation = post(api, "automations", {"name": "Acme smoke automation", "owner_id": "person:ana", "steps": [NOTE_STEP],
                                            "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}})
     SEEDS.update({"default": "acme-smoke-id", "task": task["id"], "automation": automation["id"],
                   "trigger": trigger["id"], "chat": message["conversation_id"], "conversation": message["conversation_id"],

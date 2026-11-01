@@ -40,7 +40,7 @@ SCHEMA = (
   PRIMARY KEY(task_id, kind, target))""",
     "CREATE INDEX IF NOT EXISTS task_milestone_waits_open ON task_milestone_waits(kind, target) WHERE woke_at IS NULL",
     """CREATE TABLE IF NOT EXISTS milestones(
-  kind TEXT NOT NULL, target TEXT NOT NULL, at TEXT NOT NULL, source TEXT, PRIMARY KEY(kind, target))""",
+  kind TEXT NOT NULL, target TEXT NOT NULL, reached_at TEXT NOT NULL, source TEXT, PRIMARY KEY(kind, target))""",
 )
 PR_URL = re.compile(r"^https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)/?$", re.IGNORECASE)
 TAG = re.compile(r"^v?\d+(\.\d+){1,3}([-+][\w.-]+)?$")
@@ -231,11 +231,11 @@ def _fire(c, wait, why):
         # Resume the retained working step without the generic assignment wake: the milestone tells it once.
         step = H._one(c, "SELECT status FROM task_steps WHERE id=?", (row.get("step_id"),))
         retained = row.get("step_id") if step and step["status"] in H.ACTIVE_STATUSES and step["status"] != "waiting" else None
-        H._set_status(c, H.KEEPER, row, "open", step=retained, note=why, skip_step_wake=(row["owner"],))
+        H._set_status(c, H.KEEPER, row, "open", step=retained, note=why, skip_step_wake=(row["owner_id"],))
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (row["id"],))
         row = H.task(c, row["id"])
     note = wait.get("note")
-    H._wake(c, row, row["owner"], f"Milestone: {row['title']}\n{why}" + (f"\nYour note: {note}" if note else ""),
+    H._wake(c, row, row["owner_id"], f"Milestone: {row['title']}\n{why}" + (f"\nYour note: {note}" if note else ""),
             refs={WAKE_REF: f"{wait['kind']}:{wait['target']}", **({"note": note} if note else {})},
             trigger="status_or_relation", source=f"{wait['kind']}:{wait['target']}")
     return row["id"]
@@ -251,7 +251,7 @@ def happened(c, kind, target, source="", release_repo=""):
     The first time a release is recorded it also follows up the Dev tickets it carries (backend/release_flow.py)."""
     H = _H()
     ensure(c)
-    new = c.execute("INSERT OR IGNORE INTO milestones(kind,target,at,source) VALUES(?,?,?,?)",
+    new = c.execute("INSERT OR IGNORE INTO milestones(kind,target,reached_at,source) VALUES(?,?,?,?)",
                     (kind, target, H.now(), source)).rowcount == 1
     if new and kind == "release_published":
         from . import release_flow

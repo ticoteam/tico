@@ -226,14 +226,14 @@ def is_check(c, row):
     holds, or a bot's own check run on another model (H.check_model). A builder's own child titled "QA: add fixtures"
     and other work handed out while its ticket sits in a review step are ordinary tasks, and so is a person's own
     child whatever its title: "Security: confirm the vendor contract" finishes when the person finishes it."""
-    owner = str(row.get("owner") or "")
+    owner = str(row.get("owner_id") or "")
     if H.is_bot(owner) and H.check_model(c, row["id"], owner[len("bot:"):]):
         return True
     if H.is_human(owner):
         return False
     parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
     title = str(row.get("title") or "").strip()
-    return bool(parent and parent["owner"] != owner and
+    return bool(parent and parent["owner_id"] != owner and
                 (_check_title(c, parent, title) or RELEASE_QA_TITLE.match(title)))
 
 
@@ -252,7 +252,7 @@ def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, o
     if actor == H.KEEPER or routine:
         return None
     if takes == "review":
-        if is_review_task(c, {"title": title, "owner": owner}, parent_id=parent):
+        if is_review_task(c, {"title": title, "owner_id": owner}, parent_id=parent):
             return None
         return ("profile", f"{name} is a reviewer: it takes review and QA requests only: explicit release QA, "
                 "or review, QA and acceptance subtasks under the ticket they check. File this that way, or give the task to a "
@@ -454,7 +454,7 @@ def default_for(c, slug, declared):
 
 def _owns_dev_tickets(c, slug):
     """Whether the bot owns a task of the engineering board's type (Dev tickets, found by role or name)."""
-    for (type_id,) in c.execute("SELECT DISTINCT type_id FROM tasks WHERE owner='bot:'||(SELECT id FROM bots WHERE slug=?)",
+    for (type_id,) in c.execute("SELECT DISTINCT type_id FROM tasks WHERE owner_id='bot:'||(SELECT id FROM bots WHERE slug=?)",
                                 (slug,)).fetchall():
         kind = H.type_get(c, type_id) or {}
         if kind.get("role") == "engineering" or kind.get("name") == "Dev tickets":
@@ -469,7 +469,7 @@ def migrate(c):
     from . import rules
     from .store import encode
     told = {}
-    for row in c.execute("SELECT bc.bot,bc.config,bc.operator,bc.bot_owners,b.state,b.slug,b.display_name FROM bot_config bc "
+    for row in c.execute("SELECT bc.bot,bc.config,bc.owner_id,bc.bot_owners,b.state,b.slug,b.display_name FROM bot_config bc "
                          "JOIN bots b ON b.id=bc.bot ORDER BY bc.bot").fetchall():
         declared = H._json(row["config"], {}) or {}
         if not isinstance(declared, dict) or name_of(declared):
@@ -486,7 +486,7 @@ def migrate(c):
         H.event(c, H.KEEPER, "bot.profile_migrated", row["bot"], {"profile": name, "options": options})
         if row["state"] == "archived":
             continue
-        owner = row["operator"] or next(iter(_owner_ids(row["bot_owners"])), "") or H.default_human(c)
+        owner = row["owner_id"] or next(iter(_owner_ids(row["bot_owners"])), "") or H.default_human(c)
         if owner and H.human(c, owner):
             told.setdefault(owner, []).append((row["display_name"] or slug, slug, name))
     for owner, bots in told.items():
@@ -519,13 +519,13 @@ def mismatches(c):
         declared = H._json(row["config"], {}) or {}
         name, bot = name_of(declared), row["bot"]
         if name == REVIEWER:
-            tasks = H._rows(c.execute(f"SELECT * FROM tasks WHERE owner=? AND status IN {OPEN} LIMIT 200",
+            tasks = H._rows(c.execute(f"SELECT * FROM tasks WHERE owner_id=? AND status IN {OPEN} LIMIT 200",
                                       ("bot:" + bot,)))
             other = sum(1 for t in tasks if not is_review_task(c, t))
             if other:
                 out.append(("reviewer_holds_tasks", bot, other))
         elif name == RESPONDER:
-            n = c.execute("SELECT count(*) FROM tasks WHERE owner=? AND status IN ('open','doing')",
+            n = c.execute("SELECT count(*) FROM tasks WHERE owner_id=? AND status IN ('open','doing')",
                           ("bot:" + bot,)).fetchone()[0]
             if n:
                 out.append(("responder_has_tasks", bot, n))

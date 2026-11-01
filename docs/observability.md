@@ -261,12 +261,12 @@ window's CPU and event-loop lag before attributing the remaining request time to
 ```sql
 -- Where the last hour went, by route
 SELECT route, sum(n) AS calls, round(sum(total_ms) / 1000) AS seconds, max(p95) AS worst_p95
-FROM flight_requests WHERE ts > strftime('%s','now') - 3600 GROUP BY route ORDER BY seconds DESC LIMIT 10;
+FROM flight_requests WHERE created_at > strftime('%s','now') - 3600 GROUP BY route ORDER BY seconds DESC LIMIT 10;
 -- CPU and loop lag around an incident
-SELECT datetime(ts,'unixepoch') AS minute, cpu, lag_max, wait_max, hold_max, locked FROM flight_process
-WHERE ts > strftime('%s','now') - 3 * 3600 ORDER BY ts;
+SELECT datetime(created_at,'unixepoch') AS minute, cpu, lag_max, wait_max, hold_max, locked FROM flight_process
+WHERE created_at > strftime('%s','now') - 3 * 3600 ORDER BY created_at;
 -- Stalls and what the event loop was doing
-SELECT datetime(ts,'unixepoch'), detail FROM flight_events WHERE kind='stall' ORDER BY id DESC LIMIT 5;
+SELECT datetime(created_at,'unixepoch'), detail FROM flight_events WHERE kind='stall' ORDER BY id DESC LIMIT 5;
 ```
 
 Runner polls and writer admission use the same lock accounting: `wait_ms` includes the FIFO queue for

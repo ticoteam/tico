@@ -67,7 +67,7 @@ def _cases():
 def _librarian(c):
     c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
               "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-    c.execute("INSERT OR IGNORE INTO bot_config(bot,config,operator) VALUES('librarian','{}','ana')")
+    c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id) VALUES('librarian','{}','ana')")
 
 
 @pytest.fixture
@@ -154,17 +154,17 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
         for path, original, want in cases:
             # An older Librarian cache, written before its words were repaired (librarian_fix33).
             doc_id = legacy(path.stem, original, "_librarian/old-" + path.name)
-            c.execute("UPDATE docs SET created_by='bot:librarian',updated_by='bot:librarian' WHERE id=?", (doc_id,))
+            c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,))
             rows[doc_id] = (path.name, "unrepaired", want, 1 if want == original else 2)
             # The same, last touched by Tico's keeper (a title fix): only librarian_wording35 picks it up.
             doc_id = legacy(path.stem, original, "_librarian/kept-by-keeper-" + path.name)
-            c.execute("UPDATE docs SET created_by='bot:librarian',updated_by='keeper' WHERE id=?", (doc_id,))
+            c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?", (doc_id,))
             rows[doc_id] = (path.name, "unrepaired, keeper", want, 1 if want == original else 2)
             # A doc the 0.2.35 repair broke (company -> team, machine -> Computer): redone from version 1
             # (librarian_wording36).
             doc_id = legacy(path.stem, original, "_librarian/broken-" + path.name)
             broken = original.replace("company", "team").replace("machine", "Computer") + "\nteam Computer"
-            c.execute("UPDATE docs SET body=?,version=2,created_by='bot:librarian',updated_by='keeper' WHERE id=?",
+            c.execute("UPDATE docs SET body=?,version=2,created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?",
                       (broken, doc_id))
             store.snapshot(c, store.get_row(c, doc_id), H.KEEPER, "Updated generated Tico wording")
             rows[doc_id] = (path.name, "broken", want, 3)
@@ -201,7 +201,7 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
         store = docs.Docs(None, None, None, None)
         for path, original, want in cases:
             doc_id = store.insert(c, "human:ana", path.stem, original, "_librarian/fix33-" + path.name)["id"]
-            c.execute("UPDATE docs SET created_by='bot:librarian',updated_by='bot:librarian' WHERE id=?", (doc_id,))
+            c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,))
             rows[doc_id] = (path.name, "fix33 only", want, 1 if want == original else 2)
         c.execute("DELETE FROM registry_metadata WHERE key='librarian_fix33'")
     api.app.state.store.initialize(seed_market=False)
@@ -211,7 +211,7 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
 def test_librarian_edits_of_docs_and_task_comments_change_only_ticos_terms(named):
     api = named
     _, attempt = turn(api, bot="librarian")            # the Librarian's own run, with its own credential
-    tid = post(api, "tasks", {"owner": "librarian", "title": "Brightwater FAQ", "body": "Tidy the FAQ."})["id"]
+    tid = post(api, "tasks", {"owner_id": "librarian", "title": "Brightwater FAQ", "body": "Tidy the FAQ."})["id"]
     for path, original, want in _cases():
         for token, body in ((attempt["token"], want), ("ana-test", original)):
             who = "person" if token == "ana-test" else "librarian"
@@ -288,7 +288,7 @@ def _files():
 @pytest.mark.parametrize("name,data", _files(), ids=[n for n, _ in _files()])
 def test_stored_files_come_back_byte_for_byte_from_every_read_path(named, name, data):
     api = named
-    tid = post(api, "tasks", {"owner": "ops", "title": "Brightwater files", "body": "The depot's files."})["id"]
+    tid = post(api, "tasks", {"owner_id": "ops", "title": "Brightwater files", "body": "The depot's files."})["id"]
     uploaded = api.post(f"/api/v2/tasks/{tid}/files", files={"file": (name, data)}, headers=headers())
     assert uploaded.status_code == 200, uploaded.text
     first = uploaded.json()["file"]["id"]

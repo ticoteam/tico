@@ -74,8 +74,8 @@ def ask_admin_detail(c, admins, what):
 def effective_grant(c, credential, subject):
     return c.execute('SELECT g.* FROM credential_grants g LEFT JOIN credential_grants p ON p.id=g.parent_id '
                      "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
-                     'WHERE g.credential_id=? AND g.subject=? AND g.revoked IS NULL '
-                     "AND (g.parent_id IS NULL OR (p.revoked IS NULL AND p.id IS NOT NULL AND p.subject='human:'||bc.operator))",
+                     'WHERE g.credential_id=? AND g.subject=? AND g.revoked_at IS NULL '
+                     "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL AND p.subject='human:'||bc.owner_id))",
                      (credential, subject)).fetchone()
 
 
@@ -95,9 +95,9 @@ def granted(c, subject):
         'SELECT g.credential_id FROM credential_grants g '
         'LEFT JOIN credential_grants p ON p.id=g.parent_id '
         "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
-        'WHERE g.subject=? AND g.revoked IS NULL '
-        "AND (g.parent_id IS NULL OR (p.revoked IS NULL AND p.id IS NOT NULL "
-        "AND p.subject='human:'||bc.operator))", (subject,)))
+        'WHERE g.subject=? AND g.revoked_at IS NULL '
+        "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
+        "AND p.subject='human:'||bc.owner_id))", (subject,)))
     if values is not None:
         values[key] = found
     return found
@@ -128,7 +128,7 @@ def creator(c, who, credential):
 def can_open(c, who, admins):
     return administrator(c, who, admins) or (who.role in ('human', 'owner') and (any(
         effective_grant(c, row[0], who.actor) for row in c.execute(
-            'SELECT credential_id FROM credential_grants WHERE subject=? AND revoked IS NULL', (who.actor,)))
+            'SELECT credential_id FROM credential_grants WHERE subject=? AND revoked_at IS NULL', (who.actor,)))
         or bool(owned(c, who))))
 
 
@@ -454,9 +454,9 @@ class Vault:
             raise Problem('forbidden', 'You can share a credential you added only with bots you own or manage. '
                           + ask_admin_detail(c, self.admins, f'give it to {(H.bot(c, H.actor_id(subject)) or {}).get("slug") or H.actor_id(subject)}'), 403)
         parent = effective_grant(c,cid,who.actor) if who.role in ('human','owner') else None
-        bot = c.execute('SELECT operator,bot_owners FROM bot_config WHERE bot=?', (H.actor_id(subject),)).fetchone() if subject.startswith('bot:') else None
+        bot = c.execute('SELECT owner_id,bot_owners FROM bot_config WHERE bot=?', (H.actor_id(subject),)).fetchone() if subject.startswith('bot:') else None
         # A bot's owners (its creator and co-owners, and its operator) attach credentials they hold themselves.
-        if not parent or not bot or (bot['operator'] != H.actor_id(who.actor)
+        if not parent or not bot or (bot['owner_id'] != H.actor_id(who.actor)
                                      and H.actor_id(who.actor) not in owner_ids(bot['bot_owners'])):
             raise Problem('forbidden', ask_admin_detail(c, self.admins, 'give a bot a credential')
                           + (', or give a bot you manage a credential you added or were granted' if not parent else ''), 403)
@@ -515,7 +515,7 @@ class Vault:
                                   f"takes one value per variable. Take {other['name']} away from {bot} in Tools > Credentials "
                                   'first, then try again.'+ask,409)
         # Replace expired delegated rows, or promote a delegated grant to direct admin authorization.
-        c.execute('UPDATE credential_grants SET revoked=?,revoked_by=? WHERE credential_id=? AND subject=? AND revoked IS NULL',
+        c.execute('UPDATE credential_grants SET revoked_at=?,revoked_by=? WHERE credential_id=? AND subject=? AND revoked_at IS NULL',
                   (H.now(),who.actor,cid,subject))
         gid=H.new_id()
         c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,parent_id,created_at) VALUES(?,?,?,?,?,?)',
@@ -556,22 +556,22 @@ def record_use(c,actor,action,cid,detail,windowed):
         return
     now=H.now()
     by=detail.get('bot') or (actor[4:] if actor.startswith('bot:') else '')
-    last=c.execute('SELECT logged FROM credential_uses WHERE credential_id=? AND actor=? AND bot=?',(cid,actor,by)).fetchone()
-    write=(not windowed) or last is None or (last['logged'] or '')<H.shift(now,seconds=-USE_WINDOW)
+    last=c.execute('SELECT logged_at FROM credential_uses WHERE credential_id=? AND actor=? AND bot=?',(cid,actor,by)).fetchone()
+    write=(not windowed) or last is None or (last['logged_at'] or '')<H.shift(now,seconds=-USE_WINDOW)
     if write:
         H.event(c,actor,action,cid,detail)
-    c.execute('INSERT INTO credential_uses(credential_id,actor,bot,at,logged) VALUES(?,?,?,?,?) '
-              'ON CONFLICT(credential_id,actor,bot) DO UPDATE SET at=excluded.at,logged=excluded.logged',
-              (cid,actor,by,now,now if write else last['logged']))
+    c.execute('INSERT INTO credential_uses(credential_id,actor,bot,used_at,logged_at) VALUES(?,?,?,?,?) '
+              'ON CONFLICT(credential_id,actor,bot) DO UPDATE SET used_at=excluded.used_at,logged_at=excluded.logged_at',
+              (cid,actor,by,now,now if write else last['logged_at']))
 
 
 def last_used(c,cid):
     """`last_used_at` (when) and `last_used_by` (the bot's slug; empty when a computer took it for no one bot, a model
     key) for Library › Tools: the newest use of the credential, from credential_uses."""
-    row=c.execute('SELECT at,bot FROM credential_uses WHERE credential_id=? ORDER BY at DESC LIMIT 1',(cid,)).fetchone()
+    row=c.execute('SELECT used_at,bot FROM credential_uses WHERE credential_id=? ORDER BY used_at DESC LIMIT 1',(cid,)).fetchone()
     if not row:
         return {'last_used_at':None,'last_used_by':''}
-    return {'last_used_at':row['at'],'last_used_by':(H.bot(c,row['bot']) or {}).get('slug') or row['bot'] or ''}
+    return {'last_used_at':row['used_at'],'last_used_by':(H.bot(c,row['bot']) or {}).get('slug') or row['bot'] or ''}
 
 
 def install_credentials(app,store,delegate=None,propose=None):
@@ -687,12 +687,12 @@ def install_credentials(app,store,delegate=None,propose=None):
                 added|=mine
                 item=vault.brief(row)|{'can_reveal':revealable}|last_used(c,row['id'])
                 item['grants']=[dict(g)|{'can_revoke':admin or ((mine or g['granted_by']==who.actor) and bool(vault.manages_bot(c,who,g['subject'])))}
-                                for g in c.execute('SELECT id,subject,granted_by,parent_id,created_at FROM credential_grants WHERE credential_id=? AND revoked IS NULL',(row['id'],))
+                                for g in c.execute('SELECT id,subject,granted_by,parent_id,created_at FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL',(row['id'],))
                                 if effective_grant(c,row['id'],g['subject']) and (admin or mine or g['subject']==who.actor or g['granted_by']==who.actor)]
                 rows.append(item)
             people=[dict(r) for r in c.execute('SELECT id,name,email FROM humans ORDER BY name')] if admin else []
-            bots=[dict(r) for r in c.execute('SELECT b.id AS id,b.slug AS slug,b.display_name AS name,bc.operator FROM bots b JOIN bot_config bc ON bc.bot=b.id ORDER BY b.display_name')
-                  if admin or r['operator']==H.actor_id(who.actor) or (added and vault.manages_bot(c,who,'bot:'+r['id']))]
+            bots=[dict(r) for r in c.execute('SELECT b.id AS id,b.slug AS slug,b.display_name AS name,bc.owner_id FROM bots b JOIN bot_config bc ON bc.bot=b.id ORDER BY b.display_name')
+                  if admin or r['owner_id']==H.actor_id(who.actor) or (added and vault.manages_bot(c,who,'bot:'+r['id']))]
             # The computers a model key is shared with by name (Settings > Computers, "Shared with"), named on its grants.
             computers=[dict(r) for r in c.execute("SELECT id,label FROM runners ORDER BY lower(label),id")] if admin else []
             return {'credentials':rows,'can_manage':admin,'people':people,'bots':bots,'computers':computers,'configured':vault.configured,'key_storage':vault.cipher.storage}
@@ -743,7 +743,7 @@ def install_credentials(app,store,delegate=None,propose=None):
                 require_admin(c,who,vault.admins)
                 raise Problem('not_found','Grant not found',404)
             vault.revoke_authority(c,who,cid,row)
-            c.execute('UPDATE credential_grants SET revoked=coalesce(revoked,?),revoked_by=? WHERE id=?',(H.now(),who.actor,gid))
+            c.execute('UPDATE credential_grants SET revoked_at=coalesce(revoked_at,?),revoked_by=? WHERE id=?',(H.now(),who.actor,gid))
             H.event(c,who.actor,'credential.revoked',cid,{'grant':gid,'subject':row['subject']})
             return {'ok':True}
 

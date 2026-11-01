@@ -12,9 +12,9 @@ def store(tmp_path):
     s = Store(Settings(db_path=tmp_path / "hub.sqlite"))
     s.initialize(seed_market=False)
     with s.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,requester,owner,status,private,created_at,updated_at) "
+        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
                   "VALUES('secret','S','human:ana','bot:ops','open',1,?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO tasks(id,title,requester,owner,status,private,created_at,updated_at) "
+        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
                   "VALUES('plain','P','human:ana','bot:ops','open',0,?,?)", (H.now(), H.now()))
     return s
 
@@ -53,18 +53,18 @@ def test_parties_are_read_once_until_a_private_party_changes(store, builds):
 
     with store.transaction() as c:
         c.execute("UPDATE tasks SET status='done' WHERE id='secret'")
-        c.execute("INSERT INTO tasks(id,title,requester,owner,status,private,created_at,updated_at) "
+        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
                   "VALUES('open-plain','O','human:ana','bot:ops','open',0,?,?)", (H.now(), H.now()))
     request(store, parties)
     assert builds["n"] == 1, "status changes and public tasks do not move the clock"
 
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:other' WHERE id='secret'")
+        c.execute("UPDATE tasks SET owner_id='bot:other' WHERE id='secret'")
     assert parties_owner(store, "secret") == "bot:other"
     assert builds["n"] == 2
 
     with store.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,requester,owner,status,private,created_at,updated_at) "
+        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
                   "VALUES('newly','N','human:ana','bot:ops','open',1,?,?)", (H.now(), H.now()))
     assert set(request(store, parties)) == {"secret", "newly"}
     with store.transaction() as c:
@@ -73,16 +73,16 @@ def test_parties_are_read_once_until_a_private_party_changes(store, builds):
 
 
 def parties_owner(s, tid):
-    return request(s, parties)[tid]["owner"]
+    return request(s, parties)[tid]["owner_id"]
 
 
 def test_an_uncommitted_write_shares_nothing(store, builds):
     request(store, parties)
     with pytest.raises(RuntimeError):
         with store.transaction() as writer:
-            writer.execute("UPDATE tasks SET owner='bot:ghost' WHERE id='secret'")
+            writer.execute("UPDATE tasks SET owner_id='bot:ghost' WHERE id='secret'")
             # The writer sees its own change, and the change reaches no other reader.
-            assert parties(writer)["secret"]["owner"] == "bot:ghost"
+            assert parties(writer)["secret"]["owner_id"] == "bot:ghost"
             raise RuntimeError("roll back")
     assert parties_owner(store, "secret") == "bot:ops"
 
@@ -130,7 +130,7 @@ def test_task_ids_and_room_tasks_are_read_once_until_a_task_or_room_moves(store)
     assert index_request(store) == ((ids, rooms), []), "a status change moves nothing"
 
     with store.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,requester,owner,status,private,created_at,updated_at) "
+        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
                   "VALUES('newly','N','human:ana','bot:ops','open',0,?,?)", (H.now(), H.now()))
         c.execute("INSERT INTO conversations(id,kind,task_id,participants,scope,room_key,created_at) "
                   "VALUES('room-new','task','newly','[]','direct',NULL,?)", (H.now(),))
@@ -155,13 +155,13 @@ def test_an_uncommitted_task_is_never_shared(store):
     index_request(store)
     with pytest.raises(RuntimeError):
         with store.transaction() as writer:
-            writer.execute("INSERT INTO tasks(id,title,requester,owner,status,private,created_at,updated_at) "
+            writer.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
                            "VALUES('ghost','G','human:ana','bot:ops','open',0,?,?)", (H.now(), H.now()))
             assert "ghost" in ReadIndex(writer, Identity("human:ana", "human")).task_ids
             raise RuntimeError("roll back")
     assert "ghost" not in index_request(store)[0][0]
     with store.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,requester,owner,status,private,created_at,updated_at) "
+        c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
                   "VALUES('real','R','human:ana','bot:ops','open',0,?,?)", (H.now(), H.now()))
     ids = index_request(store)[0][0]
     assert "real" in ids and "ghost" not in ids

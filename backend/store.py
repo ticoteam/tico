@@ -35,11 +35,11 @@ EXTERNAL_BOT_SQL = ("EXISTS (SELECT 1 FROM bot_config WHERE bot=substr(NEW.to_ac
                     "AND r.revoked_at IS NULL))")
 QUEUE_TRIGGER = (
     "CREATE TRIGGER IF NOT EXISTS queue_bot_message AFTER INSERT ON messages "
-    "WHEN NEW.to_actor LIKE 'bot:%' AND COALESCE(NEW.from_actor, '') != NEW.to_actor "
+    "WHEN NEW.recipient_id LIKE 'bot:%' AND COALESCE(NEW.sender_id, '') != NEW.recipient_id "
     "AND COALESCE(json_extract(NEW.refs,'$.live.kind'), '') NOT IN ('transcript','decision','tool') "
     "AND COALESCE(json_extract(NEW.refs,'$.quiet'), 0) = 0 "
     "AND NOT " + EXTERNAL_BOT_SQL + " BEGIN "
-    "INSERT INTO jobs(id,message_id,bot,created_at) "
+    "INSERT INTO jobs(id,message_id,bot_id,created_at) "
     "VALUES(NEW.id,NEW.id,substr(NEW.to_actor,5),NEW.created_at); END")
 
 SCHEMA = """
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT NO
 -- repo holds a bare name, owner/name, or a full https URL; see store.repo_url.
 CREATE TABLE IF NOT EXISTS bot_config(
  bot TEXT PRIMARY KEY REFERENCES bots(id), config TEXT NOT NULL, team TEXT,
- operator TEXT NOT NULL, owner_ids TEXT, revision INTEGER NOT NULL DEFAULT 1,
+ owner_id TEXT NOT NULL, owner_ids TEXT, revision INTEGER NOT NULL DEFAULT 1,
  description TEXT NOT NULL DEFAULT '', reports_to TEXT, repo TEXT NOT NULL DEFAULT '',
  thread_mode TEXT, definition_updated_at TEXT,
  definition_updated_by TEXT, goals TEXT NOT NULL DEFAULT '');
@@ -188,14 +188,14 @@ CREATE TABLE IF NOT EXISTS assignments(
  generation INTEGER NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS jobs(
  id TEXT PRIMARY KEY, message_id TEXT NOT NULL UNIQUE REFERENCES messages(id),
- bot TEXT NOT NULL REFERENCES bots(id), state TEXT NOT NULL DEFAULT 'queued',
+ bot_id TEXT NOT NULL REFERENCES bots(id), state TEXT NOT NULL DEFAULT 'queued',
  created_at TEXT NOT NULL, attempt_id TEXT);
-CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(bot,state,created_at);
+CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(bot_id,state,created_at);
 CREATE TABLE IF NOT EXISTS job_recovery(
  job_id TEXT PRIMARY KEY REFERENCES jobs(id), attempt_id TEXT NOT NULL REFERENCES attempts(id),
  decision TEXT NOT NULL, note TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS attempts(
- id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id), bot TEXT NOT NULL,
+ id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id), bot_id TEXT NOT NULL,
  runner_id TEXT NOT NULL REFERENCES runners(id), generation INTEGER NOT NULL,
  token_hash TEXT NOT NULL UNIQUE, state TEXT NOT NULL, lease_until TEXT NOT NULL,
  created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, thread_id TEXT,
@@ -207,7 +207,7 @@ CREATE INDEX IF NOT EXISTS attempt_diagnostics_stderr ON attempt_diagnostics(std
 CREATE INDEX IF NOT EXISTS attempt_diagnostics_stalled ON attempt_diagnostics(stalled_at) WHERE stalled_at IS NOT NULL;
 -- Bound history reads by time before evaluating their visibility gates.
 CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created_at);
-CREATE INDEX IF NOT EXISTS attempts_bot_state ON attempts(bot,state);
+CREATE INDEX IF NOT EXISTS attempts_bot_state ON attempts(bot_id,state);
 CREATE TABLE IF NOT EXISTS attempt_events(
  id INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT NOT NULL REFERENCES attempts(id),
  seq INTEGER NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -247,8 +247,8 @@ CREATE TABLE IF NOT EXISTS batches (
   message_id TEXT, report TEXT, scope TEXT);
 CREATE INDEX IF NOT EXISTS batches_open ON batches(person, state);
 CREATE TABLE IF NOT EXISTS task_reminders(
- task_id TEXT NOT NULL REFERENCES tasks(id), due TEXT NOT NULL, created_at TEXT NOT NULL,
- PRIMARY KEY(task_id,due));
+ task_id TEXT NOT NULL REFERENCES tasks(id), due_at TEXT NOT NULL, created_at TEXT NOT NULL,
+ PRIMARY KEY(task_id,due_at));
 CREATE TABLE IF NOT EXISTS service_health(
  service TEXT PRIMARY KEY, last_succeeded_at TEXT, last_error TEXT, detail TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS meeting_importers(
@@ -290,10 +290,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5(
 CREATE TABLE IF NOT EXISTS credential_keys(
  id TEXT PRIMARY KEY, kms_key TEXT NOT NULL, wrapped_key BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS credential_uses(
- credential_id TEXT NOT NULL, actor TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', at TEXT NOT NULL,
- logged TEXT NOT NULL DEFAULT '',
+ credential_id TEXT NOT NULL, actor TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', used_at TEXT NOT NULL,
+ logged_at TEXT NOT NULL DEFAULT '',
  PRIMARY KEY(credential_id, actor, bot));
-CREATE INDEX IF NOT EXISTS credential_uses_at ON credential_uses(credential_id, at);
+CREATE INDEX IF NOT EXISTS credential_uses_at ON credential_uses(credential_id, used_at);
 CREATE TABLE IF NOT EXISTS credentials(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL DEFAULT '',
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
@@ -307,10 +307,10 @@ CREATE TABLE IF NOT EXISTS granola_connections(
 CREATE TABLE IF NOT EXISTS credential_grants(
  id TEXT PRIMARY KEY, credential_id TEXT NOT NULL REFERENCES credentials(id),
  subject TEXT NOT NULL, granted_by TEXT NOT NULL, parent_id TEXT REFERENCES credential_grants(id),
- created_at TEXT NOT NULL, revoked TEXT, revoked_by TEXT);
-CREATE UNIQUE INDEX IF NOT EXISTS credential_grant_active ON credential_grants(credential_id,subject) WHERE revoked IS NULL;
+ created_at TEXT NOT NULL, revoked_at TEXT, revoked_by TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS credential_grant_active ON credential_grants(credential_id,subject) WHERE revoked_at IS NULL;
 CREATE TABLE IF NOT EXISTS archives(
- source TEXT PRIMARY KEY, digest TEXT NOT NULL, imported TEXT NOT NULL,
+ source TEXT PRIMARY KEY, digest TEXT NOT NULL, imported_at TEXT NOT NULL,
  owner TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS blobs(
  id TEXT PRIMARY KEY, owner TEXT NOT NULL, digest TEXT NOT NULL, size INTEGER NOT NULL,
@@ -366,15 +366,15 @@ CREATE TABLE IF NOT EXISTS slack_events(
  event_id TEXT PRIMARY KEY, team_id TEXT NOT NULL, channel TEXT NOT NULL,
  channel_kind TEXT NOT NULL, thread_ts TEXT NOT NULL, reply_ts TEXT NOT NULL DEFAULT '',
  ts TEXT NOT NULL, user_id TEXT NOT NULL,
- event_type TEXT NOT NULL, text TEXT NOT NULL, received TEXT NOT NULL,
+ event_type TEXT NOT NULL, text TEXT NOT NULL, received_at TEXT NOT NULL,
  state TEXT NOT NULL DEFAULT 'received', actor TEXT, reason TEXT, routing TEXT,
- processed TEXT, author TEXT NOT NULL DEFAULT 'human', author_name TEXT,
- edited TEXT, deleted TEXT, updated_at TEXT, UNIQUE(channel, ts));
+ processed_at TEXT, author TEXT NOT NULL DEFAULT 'human', author_name TEXT,
+ edited_at TEXT, deleted_at TEXT, updated_at TEXT, UNIQUE(channel, ts));
 CREATE INDEX IF NOT EXISTS slack_events_thread ON slack_events(channel, thread_ts, ts);
-CREATE INDEX IF NOT EXISTS slack_events_state ON slack_events(state, received);
+CREATE INDEX IF NOT EXISTS slack_events_state ON slack_events(state, received_at);
 CREATE TABLE IF NOT EXISTS slack_reads(
  channel TEXT NOT NULL, reader TEXT NOT NULL, last_ts TEXT NOT NULL DEFAULT '',
- last_run TEXT, digests INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(channel, reader));
+ last_run_at TEXT, digests INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(channel, reader));
 CREATE TABLE IF NOT EXISTS slack_digests(
  id TEXT PRIMARY KEY, reader TEXT NOT NULL, conversation_id TEXT NOT NULL REFERENCES conversations(id),
  message_id TEXT NOT NULL REFERENCES messages(id), channels TEXT NOT NULL,
@@ -649,8 +649,8 @@ def _sweep_event_tier(store, key, actions, cutoff, batch, most):
     deleted = 0
     while deleted < most:
         with store.read() as c:
-            rows = c.execute(f"SELECT rowid,ts FROM events INDEXED BY events_ts WHERE ts>=? AND ts<? "
-                             f"AND action IN ({marks}) ORDER BY ts LIMIT ?",
+            rows = c.execute(f"SELECT rowid,created_at FROM events INDEXED BY events_ts WHERE created_at>=? AND created_at<? "
+                             f"AND action IN ({marks}) ORDER BY created_at LIMIT ?",
                              (mark, cutoff, *actions, batch)).fetchall()
         if not rows:
             mark = cutoff
@@ -659,7 +659,7 @@ def _sweep_event_tier(store, key, actions, cutoff, batch, most):
             removed = c.execute(f"DELETE FROM events WHERE rowid IN ({','.join('?' * len(rows))})",
                                 [row["rowid"] for row in rows]).rowcount
         deleted += removed
-        mark = rows[-1]["ts"]
+        mark = rows[-1]["created_at"]
         if len(rows) < batch:
             mark = cutoff
             break
@@ -710,15 +710,15 @@ def _trim_stream(store, action, target, before, page):
     while True:
         limit = page + len(seen)
         with store.read() as c:
-            rows = c.execute("SELECT rowid,id,ts,actor,detail FROM events WHERE action=? AND target=? "
-                             "AND ts>=? AND ts<? ORDER BY ts LIMIT ?", (action, target, last, before, limit)).fetchall()
-        fresh = [row for row in rows if not (row["ts"] == last and row["id"] in seen)]
+            rows = c.execute("SELECT rowid,id,created_at,actor,detail FROM events WHERE action=? AND target=? "
+                             "AND created_at>=? AND created_at<? ORDER BY created_at LIMIT ?", (action, target, last, before, limit)).fetchall()
+        fresh = [row for row in rows if not (row["created_at"] == last and row["id"] in seen)]
         yield from fresh
         if len(rows) < limit or not fresh:
             return
         _sleep(TRIM_READ_PAUSE)
-        last = rows[-1]["ts"]
-        seen = {row["id"] for row in rows if row["ts"] == last}
+        last = rows[-1]["created_at"]
+        seen = {row["id"] for row in rows if row["created_at"] == last}
 
 
 def _trim_target(store, target, before, batch, budget, page):
@@ -1269,7 +1269,7 @@ class Store:
                     H.add_column(c, "credentials", "created_by", "TEXT")
                     c.executemany("UPDATE credentials SET created_by=? WHERE id=? AND created_by IS NULL",
                                   [(r[0], r[1]) for r in c.execute(
-                                      "SELECT actor,target FROM events WHERE action='credential.created' ORDER BY ts")])
+                                      "SELECT actor,target FROM events WHERE action='credential.created' ORDER BY created_at")])
                 # A credential a member stored for their own bot (`Vault.write`'s member path). Every row already here
                 # starts at 0: on a server that ran the backfill above, `created_by` named every admin who ever added a
                 # company credential as its owner, and nothing recorded which rows a member stored, so none stay theirs.
@@ -1299,8 +1299,8 @@ class Store:
                     columns = {row[1] for row in c.execute("PRAGMA table_info(conversations)")}
                     if "scope" not in columns:
                         c.execute("ALTER TABLE conversations ADD COLUMN scope TEXT NOT NULL DEFAULT 'direct'")
-                    if "owner_actor" not in columns:
-                        c.execute("ALTER TABLE conversations ADD COLUMN owner_actor TEXT")
+                    if "owner_id" not in columns:
+                        c.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT")
                     if "room_key" not in columns:
                         c.execute("ALTER TABLE conversations ADD COLUMN room_key TEXT")
                     # Existing one-human Tico threads are already private in practice. Mark
@@ -1313,22 +1313,22 @@ class Store:
                         if (conversation["kind"] == "chat" and not conversation["task_id"]
                                 and "bot:coo" in participants and len(humans) == 1):
                             scope, owner, room = "personal", humans[0], "coo"
-                        c.execute("UPDATE conversations SET scope=?,owner_actor=?,room_key=? WHERE id=?",
+                        c.execute("UPDATE conversations SET scope=?,owner_id=?,room_key=? WHERE id=?",
                                   (scope, owner, room, conversation["id"]))
                     # A person gets one current Tico control room. Older duplicates remain as
                     # readable archives and are never merged with another person's history.
                     duplicate_keys = c.execute(
-                        "SELECT owner_actor,room_key FROM conversations WHERE scope='personal' "
-                        "AND closed_at IS NULL GROUP BY owner_actor,room_key HAVING count(*)>1").fetchall()
+                        "SELECT owner_id,room_key FROM conversations WHERE scope='personal' "
+                        "AND closed_at IS NULL GROUP BY owner_id,room_key HAVING count(*)>1").fetchall()
                     for owner, room in duplicate_keys:
                         rows = c.execute(
-                            "SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? "
+                            "SELECT id FROM conversations WHERE scope='personal' AND owner_id=? "
                             "AND room_key=? AND closed_at IS NULL "
                             "ORDER BY COALESCE(last_message_at,created_at) DESC,id DESC", (owner, room)).fetchall()
                         for old in rows[1:]:
                             c.execute("UPDATE conversations SET closed_at=? WHERE id=?", (H.now(), old["id"]))
                     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_personal_room "
-                              "ON conversations(owner_actor,room_key) "
+                              "ON conversations(owner_id,room_key) "
                               "WHERE scope='personal' AND closed_at IS NULL")
                     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_shared_room "
                               "ON conversations(room_key) WHERE scope='shared' AND closed_at IS NULL")
@@ -1391,13 +1391,13 @@ class Store:
                     # not update a trigger already present in an existing cloud database.
                     c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
                     c.execute("CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
-                              "WHEN NEW.to_actor LIKE 'bot:%' "
-                              "AND COALESCE(NEW.from_actor, '') != NEW.to_actor BEGIN "
-                              "INSERT INTO jobs(id,message_id,bot,created_at) "
-                              "VALUES(NEW.id,NEW.id,substr(NEW.to_actor,5),NEW.created_at); END")
+                              "WHEN NEW.recipient_id LIKE 'bot:%' "
+                              "AND COALESCE(NEW.sender_id, '') != NEW.recipient_id BEGIN "
+                              "INSERT INTO jobs(id,message_id,bot_id,created_at) "
+                              "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
                     c.execute("UPDATE jobs SET state='completed' WHERE state='queued' AND EXISTS "
                               "(SELECT 1 FROM messages m WHERE m.id=jobs.message_id "
-                              "AND m.from_actor=m.to_actor)")
+                              "AND m.sender_id=m.recipient_id)")
                     c.execute("INSERT INTO cloud_migrations VALUES(8,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=9").fetchone():
                     # Routines a runner reads from a bot repository are marked 'repo' so the
@@ -1528,14 +1528,14 @@ class Store:
                         c.execute("ALTER TABLE tasks ADD COLUMN rank REAL")
                     if "labels" not in columns:
                         c.execute("ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
-                    c.execute("CREATE INDEX IF NOT EXISTS tasks_owner_rank ON tasks(owner, rank)")
+                    c.execute("CREATE INDEX IF NOT EXISTS tasks_owner_rank ON tasks(owner_id, rank)")
                     # day one looks like yesterday: every open task keeps its creation order
                     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-                    c.execute(f"UPDATE tasks SET rank=(SELECT COUNT(*) FROM tasks t2 WHERE t2.owner=tasks.owner "
+                    c.execute(f"UPDATE tasks SET rank=(SELECT COUNT(*) FROM tasks t2 WHERE t2.owner_id=tasks.owner_id "
                               f"AND t2.status IN ({marks}) AND t2.created_at<=tasks.created_at) "
                               f"WHERE rank IS NULL AND status IN ({marks})", (*H.ACTIVE_STATUSES, *H.ACTIVE_STATUSES))
                     # product and engineering bots' open work starts in the product lane
-                    c.execute(f"UPDATE tasks SET lane='product' WHERE status IN ({marks}) AND owner IN "
+                    c.execute(f"UPDATE tasks SET lane='product' WHERE status IN ({marks}) AND owner_id IN "
                               f"(SELECT 'bot:' || bot FROM bot_config WHERE team IN ({','.join('?' * len(H.LANE_TEAMS))}))",
                               (*H.ACTIVE_STATUSES, *H.LANE_TEAMS))
                     c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
@@ -1571,7 +1571,7 @@ class Store:
                               "lane,COALESCE(closed_at,done_at,updated_at,created_at) DESC,id DESC) "
                               "WHERE status IN ('done','closed')")
                     c.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
-                    c.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
+                    c.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,created_at DESC)")
                     c.execute("INSERT INTO cloud_migrations VALUES(33,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=34").fetchone():
                     # Personal API tokens (backend/personal_tokens.py): a person's own bearer for
@@ -1628,7 +1628,7 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=43").fetchone():
                     # A company goal is one owned by `company`, not just one with no parent. A
                     # person's goal with no parent and goals under it used to be the company goal.
-                    c.execute("UPDATE goals SET owner='company' WHERE parent_id IS NULL AND owner LIKE 'human:%' "
+                    c.execute("UPDATE goals SET owner_id='company' WHERE parent_id IS NULL AND owner_id LIKE 'human:%' "
                               "AND id IN (SELECT parent_id FROM goals WHERE parent_id IS NOT NULL)")
                     c.execute("INSERT INTO cloud_migrations VALUES(43,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=44").fetchone():
@@ -1899,7 +1899,7 @@ class Store:
                 # since its per-bot index cannot be built over two active attempts.
                 H.add_column(c, "attempts", "lane", "TEXT NOT NULL DEFAULT 'main'")
                 c.execute("DROP INDEX IF EXISTS one_active_attempt_per_bot")
-                c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt_per_lane ON attempts(bot,lane) "
+                c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt_per_lane ON attempts(bot_id,lane) "
                           "WHERE state IN ('leased','running')")
                 # A bot's wake preset holds its nonblocking notices and sweeps at enqueue time (backend/wake_presets.py).
                 # Unversioned like redirect: an older release never reads the columns and claims every queued job.
@@ -1928,27 +1928,27 @@ class Store:
                                    ("tasks_created", "tasks(created_at)"),
                                    ("task_links_repo_kind", "task_links(repo COLLATE NOCASE, kind)"),
                                    ("task_links_repo_url", "task_links(kind, state, url COLLATE NOCASE)"),
-                                   ("attempts_bot_created", "attempts(bot, created_at)"),
+                                   ("attempts_bot_created", "attempts(bot_id, created_at)"),
                                    # A bot's latest usage-limited attempt (execution.last_limit), read per Health render.
-                                   ("attempts_bot_finished", "attempts(bot, finished_at)"),
+                                   ("attempts_bot_finished", "attempts(bot_id, finished_at)"),
                                    ("attempts_job", "attempts(job_id)"),
                                    # Lease maintenance walks only active runs, never their history.
                                    ("attempts_live_lease", "attempts(lease_until,id) WHERE state IN ('leased','running')"),
-                                   ("jobs_queued", "jobs(id,bot,message_id) WHERE state='queued'"),
+                                   ("jobs_queued", "jobs(id,bot_id,message_id) WHERE state='queued'"),
                                    ("attempts_runner_state", "attempts(runner_id, state)"),
                                    # The turns a computer ran in a window, read under the write lock by an
                                    # open overload (backend/performance.py `_runs`).
                                    ("attempts_runner_finished", "attempts(runner_id, finished_at)"),
                                    # A computer asking after the tasks its session checkouts are kept for.
-                                   ("attempts_bot_lane", "attempts(bot, lane)"),
+                                   ("attempts_bot_lane", "attempts(bot_id, lane)"),
                                    # Recent failed and finished runs (Health, Fleet check, the census, /api/runs).
                                    # Partial, so the scheduler's live-lease read keeps attempts_live_lease.
                                    ("attempts_finished_state", "attempts(state, finished_at) WHERE finished_at IS NOT NULL"),
-                                   ("events_action_target", "events(action, target, ts)"),
+                                   ("events_action_target", "events(action, target, created_at)"),
                                    # One action's rows in a time window, with no target (Health's limited runs, the
                                    # judge's month, MCP calls): events_action_target walks every row of the action
                                    # (911 ms on TIDY), events_ts every action's rows in the window.
-                                   ("events_action_ts", "events(action, ts)"),
+                                   ("events_action_ts", "events(action, created_at)"),
                                    # Conversations newest first (hubdb.conversations_for, chats_with): the ORDER BY's
                                    # expression word for word, or SQLite sorts every conversation.
                                    ("conversations_recent", "conversations(COALESCE(last_message_at, created_at))"),
@@ -1958,7 +1958,7 @@ class Store:
                                    # Open approvals: a task's (auto_tasks.waiting on the claim path), a requester's
                                    # (status_counts, task_privacy), and the oldest first (expiry, Needs you).
                                    ("approvals_open", "approvals(task_id) WHERE decision IS NULL"),
-                                   ("approvals_open_requester", "approvals(requested_by) WHERE decision IS NULL"),
+                                   ("approvals_open_requester", "approvals(requested_by_id) WHERE decision IS NULL"),
                                    ("approvals_open_created", "approvals(created_at) WHERE decision IS NULL"),
                                    # Live jobs (/api/status), an attempt's jobs (lease expiry, finish) and uncertain
                                    # jobs (auto_reconcile). Partial, so the claim reads keep jobs_queue and jobs_queued.
@@ -1968,10 +1968,10 @@ class Store:
                                    # Open asks to someone, deleted or not (hubdb.tasks_asked_of); conversation_id too,
                                    # so Health's silent_waits keeps a good plan.
                                    ("messages_open_ask_to",
-                                    "messages(to_actor, conversation_id) WHERE kind='ask' AND answered_by IS NULL"),
+                                    "messages(recipient_id, conversation_id) WHERE kind='ask' AND answered_by_id IS NULL"),
                                    # Replaced asks to someone (views.went_away, on every Needs you read).
                                    ("messages_superseded_asks_to",
-                                    "messages(to_actor, superseded_at) WHERE kind='ask' AND superseded_at IS NOT NULL"),
+                                    "messages(recipient_id, superseded_at) WHERE kind='ask' AND superseded_at IS NOT NULL"),
                                    # PRs at a commit (github.pr_signal, on every check and status webhook): the
                                    # query's expression word for word.
                                    ("task_links_pr_head", "task_links(json_extract(detail,'$.head_sha')) WHERE kind='pr'"),
@@ -1998,15 +1998,15 @@ class Store:
                                    # privacy_index names these two with INDEXED BY. hubdb.migrate also makes them,
                                    # but runs before cloud migration 57 adds tasks.private on an upgraded database.
                                    ("tasks_private_parties",
-                                    "tasks(id, requester, owner, guest, private) WHERE private IS NOT 0"),
+                                    "tasks(id, requester_id, owner_id, guest, private) WHERE private IS NOT 0"),
                                    ("tasks_private_status",
-                                    "tasks(id, requester, owner, guest, private, status, waiting_on) WHERE private IS NOT 0"),
+                                    "tasks(id, requester_id, owner_id, guest, private, status, waiting_on) WHERE private IS NOT 0"),
                                    # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
-                                   ("tasks_queue_cover", "tasks(rank, created_at, id, owner, requester, private, guest)"),
+                                   ("tasks_queue_cover", "tasks(rank, created_at, id, owner_id, requester_id, private, guest)"),
                                    ("tasks_owner_status_cover",
-                                    "tasks(owner, status, id, requester, private, guest, waiting_on)"),
+                                    "tasks(owner_id, status, id, requester_id, private, guest, waiting_on)"),
                                    ("tasks_requester_status_cover",
-                                    "tasks(requester, status, id, owner, private, guest, waiting_on)"),
+                                    "tasks(requester_id, status, id, owner_id, private, guest, waiting_on)"),
                                    # A person's view of a bot's settings changes (settings_admin.history): the manager
                                    # bots' changes, found by seek and in id order within a timestamp. It needs the `via`
                                    # column, added above.
@@ -2276,7 +2276,7 @@ class Store:
                 mode = str(entry.get("thread_mode") or
                            ("personal" if slug == "coo" else "shared" if slug == "cpo" else "personal"))
                 c.execute(
-                    "INSERT INTO bot_config(bot,config,team,operator,description,reports_to,repo,"
+                    "INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to,repo,"
                     "thread_mode,definition_updated_at,definition_updated_by) VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (slug, encode(entry), team, operator, str(entry.get("description") or ""),
                      entry.get("reports_to"), str(entry.get("repo") or ("emp-" + slug)), mode,
@@ -2325,8 +2325,8 @@ class Store:
                     if aid:
                         # A finished attempt can replay its receipt without a live bot lease, but
                         # the computer must still own that generation and the bot must still see it.
-                        hosted = c.execute("SELECT a.bot FROM attempts a JOIN assignments x ON x.bot=a.bot "
-                                           "JOIN bots b ON b.id=a.bot WHERE a.id=? AND a.runner_id=? "
+                        hosted = c.execute("SELECT a.bot_id FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
+                                           "JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND a.runner_id=? "
                                            "AND x.runner_id=? AND x.generation=a.generation AND b.state='active'",
                                            (aid, identity.runner_id, identity.runner_id)).fetchone()
                         if not hosted:
@@ -2342,7 +2342,7 @@ class Store:
                         task_ids.add(part)
                 def referenced(value):
                     if isinstance(value, dict):
-                        if "requester" in value and "owner" in value and value.get("id"):
+                        if "requester_id" in value and "owner_id" in value and value.get("id"):
                             task_ids.add(value["id"])
                         for name, item in value.items():
                             if name in ("task", "task_id", "parent_id", "blocked_by") and isinstance(item, str) and H.task(c, item):
@@ -2414,7 +2414,7 @@ class Store:
 
     def enqueue_existing(self):
         with self.transaction() as c:
-            c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot,created_at) "
-                      "SELECT id,id,substr(to_actor,5),created_at FROM messages NEW "
-                      "WHERE to_actor LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL AND NOT "
+            c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot_id,created_at) "
+                      "SELECT id,id,substr(recipient_id,5),created_at FROM messages NEW "
+                      "WHERE recipient_id LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL AND NOT "
                       + EXTERNAL_BOT_SQL)

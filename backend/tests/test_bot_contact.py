@@ -20,7 +20,7 @@ def bot(api, slug, name, reports_to=None):
                               "reports_to": reports_to, "status": "active", "repo": "emp-" + slug,
                               "thread_mode": "personal", "model": "hermes-profile",
                               "effort": "as-configured", "harness": "hermes",
-                              "operator": "ana", "owners": ["ana"], "runner_id": None})
+                              "owner_id": "ana", "owners": ["ana"], "runner_id": None})
 
 
 def token(api, slug):
@@ -51,10 +51,10 @@ def test_an_unrelated_bot_cannot_chat_it_or_put_a_task_on_it(api):
                    token=stranger, expected=403)
     assert refused["error"]["code"] == "bot_contact"
     assert "manager or a person" in refused["error"]["detail"]
-    post(api, "tasks", {"owner": "analyst", "title": "Pull these numbers", "body": "Please."},
+    post(api, "tasks", {"owner_id": "analyst", "title": "Pull these numbers", "body": "Please."},
          token=stranger, expected=403)
     # And it is not a silent drop: nothing was written either way.
-    assert [t for t in get(api, "tasks")["tasks"] if t["owner"] == actor(api, "analyst")] == []
+    assert [t for t in get(api, "tasks")["tasks"] if t["owner_id"] == actor(api, "analyst")] == []
 
 
 # ---------- `tasks`: work arrives as a task and nothing else ----------
@@ -64,7 +64,7 @@ def notices_to(api, slug):
     the difference between news in the room and a whole run spent reading it."""
     import json
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT body,refs FROM messages WHERE to_actor=? ORDER BY created_at",
+        rows = c.execute("SELECT body,refs FROM messages WHERE recipient_id=? ORDER BY created_at",
                          (actor(api, slug),)).fetchall()
     return [(r["body"].split("\n")[0], bool((json.loads(r["refs"] or "{}")).get("quiet")))
             for r in rows]
@@ -80,9 +80,9 @@ def tasks_only(api):
 
 def test_another_bot_may_file_work_and_do_nothing_else(api):
     _, _, stranger = tasks_only(api)
-    filed = post(api, "tasks", {"owner": "analyst", "title": "Check the churned feeds",
+    filed = post(api, "tasks", {"owner_id": "analyst", "title": "Check the churned feeds",
                                 "body": "Two clients still syncing."}, token=stranger)
-    assert filed["owner"] == actor(api, "analyst")
+    assert filed["owner_id"] == actor(api, "analyst")
     refused = post(api, "chat/analyst", {"text": "Did you see my ticket?"}, token=stranger, expected=403)
     assert refused["error"]["code"] == "bot_contact"
     assert "takes work as a task and nothing else" in refused["error"]["detail"]

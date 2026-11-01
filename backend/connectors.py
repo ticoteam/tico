@@ -285,7 +285,7 @@ def human_of(c, address):
 def install_connectors(app, store, execution, mutate):
     def publisher(c, who):
         runner = execution.runner(c, who)
-        if runner["operator"] not in (store.settings.processing_operators
+        if runner["owner_id"] not in (store.settings.processing_operators
                                       or (execution.auth.owner_id(c),)):
             raise Problem("forbidden", "This machine is not assigned the private app-connector capability", 403)
         return runner
@@ -297,12 +297,12 @@ def install_connectors(app, store, execution, mutate):
         or where a person's Connect Google waits to be finished."""
         with store.read() as c:
             runner = execution.runner(c, request.state.identity)
-            named = runner["operator"] in store.settings.processing_operators
+            named = runner["owner_id"] in store.settings.processing_operators
             if named:
                 return {"connectors": ["mail", "calendar"]}
             # A person's Connect Google waits for a computer that has no key or grant yet: the one that may publish
             # mail (the owner's, when no operator is named) runs the job so it can take the grant.
-            eligible = not store.settings.processing_operators and runner["operator"] == execution.auth.owner_id(c)
+            eligible = not store.settings.processing_operators and runner["owner_id"] == execution.auth.owner_id(c)
             return {"connectors": ["mail"] if eligible and google_connect.pending(c, runner["id"]) else []}
 
     google_connect.install(app, store, publisher, mutate)
@@ -446,7 +446,7 @@ def install_connectors(app, store, execution, mutate):
             if address in visible_addresses(c, who):
                 return
         elif who.role == "bot":
-            row = c.execute("SELECT h.email FROM bot_config b JOIN humans h ON h.id=b.operator WHERE b.bot=?",
+            row = c.execute("SELECT h.email FROM bot_config b JOIN humans h ON h.id=b.owner_id WHERE b.bot=?",
                             (H.actor_id(who.actor),)).fetchone()
             named = {store.settings.owner_email, str(row["email"] if row else "").lower()} - {""}
             if address in named or (str(person["email"] or "").lower() if person else "") in named:

@@ -45,7 +45,7 @@ SCHEMA = (
   label TEXT NOT NULL, person TEXT NOT NULL, fix TEXT NOT NULL, message_id TEXT, created_at TEXT NOT NULL,
   fixed_at TEXT, ended TEXT, woke_at TEXT, PRIMARY KEY(task_id, key))""",
     "CREATE INDEX IF NOT EXISTS task_reconnects_open ON task_reconnects(key) WHERE fixed_at IS NULL",
-    "CREATE TABLE IF NOT EXISTS google_signin_refusals(account TEXT NOT NULL, service TEXT NOT NULL, at TEXT NOT NULL, "
+    "CREATE TABLE IF NOT EXISTS google_signin_refusals(account TEXT NOT NULL, service TEXT NOT NULL, created_at TEXT NOT NULL, "
     "PRIMARY KEY(account, service))",
 )
 WAKE_REF = "reconnected"
@@ -80,7 +80,7 @@ def _live(alias="r"):
     H = _H()
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     return (f"{alias}.fixed_at IS NULL AND EXISTS(SELECT 1 FROM tasks t WHERE t.id={alias}.task_id "
-            f"AND t.owner={alias}.owner AND t.status IN ({marks})) AND NOT EXISTS(SELECT 1 FROM bots b "
+            f"AND t.owner_id={alias}.owner AND t.status IN ({marks})) AND NOT EXISTS(SELECT 1 FROM bots b "
             f"WHERE b.id={alias}.bot AND b.state='archived')"), tuple(H.ACTIVE_STATUSES)
 
 
@@ -204,7 +204,7 @@ def _wait(c, row, note):
         task_holds.refresh(c, row["id"])
     # The status event already carries the note; the card says it in the thread.
     c.execute("UPDATE tasks SET note=?,version=version+1,updated_at=? WHERE id=?", (note, H.now(), row["id"]))
-    H._recount(c, row["owner"])
+    H._recount(c, row["owner_id"])
 
 
 def _reads(c, row):
@@ -272,10 +272,10 @@ def _standing(c, wait):
     take the wake now: the card stays open for a later fix or the task's next move)."""
     H = _H()
     row = H.task(c, wait["task_id"])
-    if (not row or row["status"] not in H.ACTIVE_STATUSES or row["owner"] != wait["owner"]
-            or any((H.bot(c, slug) or {}).get("state") in (None, "archived") for slug in {wait["bot"], H.actor_id(row["owner"])})):
+    if (not row or row["status"] not in H.ACTIVE_STATUSES or row["owner_id"] != wait["owner_id"]
+            or any((H.bot(c, slug) or {}).get("state") in (None, "archived") for slug in {wait["bot"], H.actor_id(row["owner_id"])})):
         return "gone"
-    if not H._actor_exists(c, row["owner"]) or not H.task_private_readable(c, row["owner"], row):
+    if not H._actor_exists(c, row["owner_id"]) or not H.task_private_readable(c, row["owner_id"], row):
         return "unreachable"
     return "live"
 
@@ -615,8 +615,8 @@ def google_report(c, service, refused, listed=()):
     refused = _accounts(refused)
     listed = set(_accounts(listed)) | set(refused)
     for account in refused:
-        c.execute("INSERT INTO google_signin_refusals(account,service,at) VALUES(?,?,?) "
-                  "ON CONFLICT(account,service) DO UPDATE SET at=excluded.at", (account, service, H.now()))
+        c.execute("INSERT INTO google_signin_refusals(account,service,created_at) VALUES(?,?,?) "
+                  "ON CONFLICT(account,service) DO UPDATE SET created_at=excluded.created_at", (account, service, H.now()))
     opened = google_failing(c, refused)
     good = [a for (a,) in c.execute("SELECT account FROM google_signin_refusals WHERE service=?", (service,)).fetchall()
             if a not in listed]
@@ -662,7 +662,7 @@ def google_failing(c, accounts):
             continue
         bot = box["bot"]
         for (task_id,) in c.execute(
-                "SELECT DISTINCT u.task_id FROM turns u JOIN tasks t ON t.id=u.task_id WHERE u.bot=? AND t.owner=? "
+                "SELECT DISTINCT u.task_id FROM turns u JOIN tasks t ON t.id=u.task_id WHERE u.bot=? AND t.owner_id=? "
                 "AND u.started_at>? AND (u.finished_at IS NULL OR u.finished_at>?)",
                 (bot, H.bot_actor(bot), H.shift(since, hours=-6), since)).fetchall():
             row = open(c, task_id, bot, "google:" + address, "google", f"Google ({address})",

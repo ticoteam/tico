@@ -9,7 +9,7 @@ const GOAL = 'Reach 100 paying teams';
 journey('e2e-strategy', async ({hub, browser, phone}) => {
   const where = phone ? 'phone' : 'desktop';
   await must(hub, 'dana', 'POST', 'strategy/bets', {statement: BET, why: 'Small teams close fastest.', status: 'active'}, 'make a bet');
-  await must(hub, 'dana', 'POST', 'goals', {title: GOAL, owner: 'dana', top: true}, 'make a goal');
+  await must(hub, 'dana', 'POST', 'goals', {title: GOAL, owner_id: 'dana', top: true}, 'make a goal');
 
   const page = await open(browser, hub, 'dana', {phone, hash: '#/strategy'});
   await page.locator('#main', {hasText: BET}).first().waitFor({timeout: t(20000)});

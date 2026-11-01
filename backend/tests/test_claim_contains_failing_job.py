@@ -29,7 +29,7 @@ def fresh_logs():
 def jobs_of(api, bot):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT id,state,held,hold_reason,hold_task_id,attempt_id FROM jobs "
-                                           "WHERE bot=? ORDER BY created_at,id", (bot,))]
+                                           "WHERE bot_id=? ORDER BY created_at,id", (bot,))]
 
 
 def task_jobs(api, task_id):
@@ -38,7 +38,7 @@ def task_jobs(api, task_id):
         return [dict(r) for r in c.execute(
             "SELECT j.id,j.state,j.held,j.hold_reason,j.hold_task_id FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE j.bot='ops' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at,j.id", (task_id,))]
+            f"WHERE j.bot_id='ops' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at,j.id", (task_id,))]
 
 
 def hold_of(api, job_id):
@@ -102,7 +102,7 @@ def two_bots_with_chats(api, machine):
     post(api, "chat/ops", {"text": "Look at the export."})
     post(api, "chat/cpo", {"text": "Look at the pricing."})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops'", (H.shift(H.now(), minutes=-5),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-5),))
 
 
 def test_a_job_whose_checks_raise_is_held_and_the_claim_hands_out_the_next_bots_job(api, monkeypatch, caplog):
@@ -148,7 +148,7 @@ def test_the_writes_a_failing_job_made_before_its_error_are_rolled_back(api, mon
     handed_out = gateway_connection.hand_out
 
     def failing(c, aid, config):
-        if c.execute("SELECT bot FROM attempts WHERE id=?", (aid,)).fetchone()[0] == "ops":
+        if c.execute("SELECT bot_id FROM attempts WHERE id=?", (aid,)).fetchone()[0] == "ops":
             raise RuntimeError("the runtime configuration cannot be built")
         return handed_out(c, aid, config)
     monkeypatch.setattr(gateway_connection, "hand_out", failing)
@@ -156,7 +156,7 @@ def test_the_writes_a_failing_job_made_before_its_error_are_rolled_back(api, mon
     turn = claim(api, machine)
     assert turn["bot"] == "cpo"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM turns WHERE bot='ops'").fetchone()[0] == 0
     [bad] = jobs_of(api, "ops")
     assert (bad["state"], bad["attempt_id"], bad["held"]) == ("queued", None, 1)
@@ -171,7 +171,7 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
     machine, attempt, task_id, _ = task_held(api)
     store = api.app.state.store
     with store.transaction() as c:
-        verdict = c.execute("SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='ops' "
+        verdict = c.execute("SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' "
                             "AND j.state='queued' AND m.body LIKE 'VERDICT:%'").fetchone()[0]
         c.execute("INSERT INTO attempt_inputs VALUES(?,?,?)", (attempt["id"], verdict, H.now()))
         cpo_task = H.task_create(c, H.KEEPER, "Price list", "Check the list.", H.bot_actor("cpo"), lint=False)["id"]
@@ -195,7 +195,7 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
     # it reaches cpo, whose work the held run never blocked.
     turn = claim(api, machine)
     assert turn is not None and turn["job_id"] != attempt["job_id"]
-    assert (claim(api, machine) or {}).get("bot") == "cpo"
+    assert (claim(api, machine) or {}).get("bot_id") == "cpo"
     [held] = [j for j in jobs_of(api, "ops") if j["id"] == attempt["job_id"]]
     assert (held["held"], held["hold_reason"], held["state"]) == (1, claim_holds.REASON, "queued")
     assert held["attempt_id"] == attempt["id"]
@@ -275,7 +275,7 @@ def test_release_frees_a_held_job_another_path_cancelled_and_closes_its_item(api
     machine, task_id = held_refresh(api, monkeypatch)
     held = task_jobs(api, task_id)[0]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops' AND state='queued'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued'")
     assert post(api, "bots/ops/release", {})["released"]["claim"] == 1
     assert item_status(api, held["hold_task_id"]) not in H.ACTIVE_STATUSES
     assert [(job["state"], job["held"]) for job in task_jobs(api, task_id)] == [("canceled", 0)]
@@ -289,18 +289,18 @@ def test_a_start_retry_never_hands_out_an_obsolete_notice(api, monkeypatch):
     post(api, "chat/ops", {"text": "Look at the export."})
     with store.read() as c:
         person_job = c.execute("SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                               "WHERE j.bot='ops' AND m.from_actor LIKE 'human:%'").fetchone()[0]
+                               "WHERE j.bot_id='ops' AND m.sender_id LIKE 'human:%'").fetchone()[0]
     with store.transaction() as c:
         done = H.task_create(c, H.KEEPER, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (done,))
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops' AND state='queued' AND id<>?", (person_job,))
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued' AND id<>?", (person_job,))
         conversation = H.task(c, done)["conversation_id"]
         # A claim's obsolete pass cancels a page of CLAIM_MAINTENANCE notices, so one is left queued for the retry.
         for n in range(execution.CLAIM_MAINTENANCE + 1):
             H.say(c, H.KEEPER, "bot:ops", f"PR #{n} checks passed", kind="notice", conversation_id=conversation,
                   refs={"task": done, "trigger": "other", "wake": "update"})
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued' AND held=0").fetchone()[0] == (
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued' AND held=0").fetchone()[0] == (
             execution.CLAIM_MAINTENANCE + 2)
     handed_out = gateway_connection.hand_out
 
@@ -314,7 +314,7 @@ def test_a_start_retry_never_hands_out_an_obsolete_notice(api, monkeypatch):
     # attempt starts for the bot.
     assert claim(api, machine) is None
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
         held, reason = c.execute("SELECT held,hold_reason FROM jobs WHERE id=?", (person_job,)).fetchone()
     assert (held, reason) == (1, claim_holds.REASON)
 
@@ -525,13 +525,13 @@ def test_a_claim_passes_over_at_most_claim_picks_obsolete_notices(api, monkeypat
     with store.transaction() as c:
         done = H.task_create(c, H.KEEPER, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (done,))
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops' AND state='queued'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued'")
         conversation = H.task(c, done)["conversation_id"]
         for n in range(execution.CLAIM_MAINTENANCE + obsolete_ahead):
             H.say(c, H.KEEPER, "bot:ops", f"PR #{n} checks passed", kind="notice", conversation_id=conversation,
                   refs={"task": done, "trigger": "other", "wake": "update"})
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued' AND held=0").fetchone()[0] == (
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued' AND held=0").fetchone()[0] == (
             execution.CLAIM_MAINTENANCE + obsolete_ahead)
     with store.transaction() as c:
         open_task = H.task_create(c, H.KEEPER, "Open export", "Do it.", H.bot_actor("ops"), lint=False)["id"]
@@ -664,7 +664,7 @@ def wake_notice(api, task_id, body):
     with api.app.state.store.transaction() as c:
         H._wake(c, H.task(c, task_id), "bot:ops", body, {"wake_batch": "completion"})
     with api.app.state.store.read() as c:
-        return c.execute("SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='ops' AND m.body=?",
+        return c.execute("SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' AND m.body=?",
                          (body,)).fetchone()[0]
 
 
@@ -735,13 +735,13 @@ def test_a_bot_check_that_raises_does_not_stop_another_bots_open_task_from_start
     for bot in ("ops", "cpo"):
         assign(api, machine, bot)
     ready(api, machine, ["ops", "cpo"])
-    tasks = {bot: post(api, "tasks", {"owner": bot, "title": f"Implement the {bot} report",
+    tasks = {bot: post(api, "tasks", {"owner_id": bot, "title": f"Implement the {bot} report",
                                       "body": "Build the requested feature."}) for bot in ("ops", "cpo")}
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")        # no notice queued: only the backfill starts them
     calls = bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
     turn = claim(api, machine)
-    assert (turn["bot"], turn["task"]["id"]) == ("cpo", tasks["cpo"]["id"])
+    assert (turn["bot_id"], turn["task"]["id"]) == ("cpo", tasks["cpo"]["id"])
     assert calls
     # Inside the back-off the next polls do not run ops's check again, and they answer.
     seen = len(calls)
@@ -757,7 +757,7 @@ def open_task_only(api, machine, bots):
     for bot in bots:
         assign(api, machine, bot)
     ready(api, machine, list(bots))
-    tasks = {bot: post(api, "tasks", {"owner": bot, "title": f"Implement the {bot} report",
+    tasks = {bot: post(api, "tasks", {"owner_id": bot, "title": f"Implement the {bot} report",
                                       "body": "Build the requested feature."}) for bot in bots}
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")
@@ -777,7 +777,7 @@ def test_a_task_whose_backfill_check_raises_does_not_stop_another_bots_task(api,
     real, raised = auto_tasks.refusal, []
 
     def raising(c, row, *args, **kwargs):
-        if row["owner"] == "bot:ops":
+        if row["owner_id"] == "bot:ops":
             raised.append(row["id"])
             raise RuntimeError("ops's open task cannot be read")
         return real(c, row, *args, **kwargs)
@@ -869,4 +869,4 @@ def test_health_lists_waiting_bots_while_a_claim_check_raises(api, monkeypatch, 
         c.execute("UPDATE jobs SET created_at=? WHERE state='queued'", (H.shift(H.now(), minutes=-30),))
         online = {r["id"] for r in health._online_runners(c)}
         waiting, slow, stuck = health._waiting(c, online, store.settings)
-    assert "ops" not in {r["bot"] for r in stuck}
+    assert "ops" not in {r["bot_id"] for r in stuck}

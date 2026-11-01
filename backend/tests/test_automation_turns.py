@@ -18,7 +18,7 @@ def finish(api, r, text="A draft"):
 
 
 def draft_then_tell(**extra):
-    return {"name": "Draft", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, **extra, "steps": [
+    return {"name": "Draft", "owner_id": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, **extra, "steps": [
         {"id": "draft", "type": "llm", "as": "bot:ops", "prompt": "Draft a reply", "out": "reply"},
         {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "coo", "text": "{{reply.text}}"}}]}
 
@@ -34,16 +34,16 @@ def test_an_llm_step_waits_for_the_bots_turn_in_its_own_room_and_goes_on(api):
     assert turn["bot"] == "ops" and turn["task"]
     with api.app.state.store.read() as c:
         room = c.execute("SELECT room_key, scope FROM conversations WHERE id=?", (turn["session"],)).fetchone()
-        task = c.execute("SELECT owner, requester FROM tasks WHERE id=?", (turn["task"],)).fetchone()
+        task = c.execute("SELECT owner_id, requester_id FROM tasks WHERE id=?", (turn["task"],)).fetchone()
     assert room is not None   # a task of its own, with its own room: never a person's chat or another task's session
-    assert task["owner"] == "bot:ops" and task["requester"] == "bot:ops"   # filed by the owner, bot:ops
+    assert task["owner_id"] == "bot:ops" and task["requester_id"] == "bot:ops"   # filed by the owner, bot:ops
     finish(api, r)
     done = get(api, f"automations/{aid}/runs")["runs"][0]
     assert done["status"] == "ok" and [s["status"] for s in done["steps"]] == ["ok", "ok"]
     assert done["steps"][0]["outputs"]["text"] == "A draft" and done["cost"] > 0
     assert done["steps"][0]["cost"] == done["cost"]
     with api.app.state.store.read() as c:
-        told = c.execute("SELECT body, refs FROM messages WHERE to_actor='bot:coo' ORDER BY created_at DESC").fetchone()
+        told = c.execute("SELECT body, refs FROM messages WHERE recipient_id='bot:coo' ORDER BY created_at DESC").fetchone()
     # The answer reaches coo as quoted data, never as the automation's own words.
     assert '<data n="1" field="reply.text">\nA draft\n</data n="1">' in told["body"]
     assert json.loads(told["refs"])["automation_run"] == run["id"]

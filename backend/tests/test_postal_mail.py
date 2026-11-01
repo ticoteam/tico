@@ -135,7 +135,7 @@ def test_a_letter_is_kept_once_and_legal_mail_asks_the_owner_with_its_deadline(a
     row = items(api)["101"]
     assert (row["status"], row["kind"], row["deadline"]) == ("filed", "legal", "2026-11-20")
     made = task(api, row["task_id"])
-    assert made["owner"] == "human:ana" and made["due"] == "2026-11-20"
+    assert made["owner_id"] == "human:ana" and made["due_at"] == "2026-11-20"
     assert "A summons from the county court" in made["body"] and "2026-11-20" in made["body"]
     assert "/api/v2/files/" + row["blob_id"] in made["body"]
     with api.app.state.store.read() as c:
@@ -177,7 +177,7 @@ def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
         if owner is None:
             assert (row["status"], row["task_id"], row["kind"]) == ("archived", None, "junk") and row["blob_id"]
         else:
-            assert row["status"] == "filed" and task(api, row["task_id"])["owner"] == owner, (ident, row)
+            assert row["status"] == "filed" and task(api, row["task_id"])["owner_id"] == owner, (ident, row)
     assert got["204"]["kind"] == "check" and task(api, got["204"]["task_id"])["title"].startswith("Check received: ")
     assert got["208"]["kind"] == "legal"
     # Bills, statements and tax letters are private like legal mail and checks; only `other` is the company's to read.
@@ -195,7 +195,7 @@ def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
     deliver(hq, "210")
     service(api).tick()
     drain(api)
-    assert task(api, items(api)["210"]["task_id"])["owner"] == "human:ana"
+    assert task(api, items(api)["210"]["task_id"])["owner_id"] == "human:ana"
 
 
 def test_a_check_is_the_owners_whatever_decide_says(api, hq, mail):
@@ -210,7 +210,7 @@ def test_a_check_is_the_owners_whatever_decide_says(api, hq, mail):
     for ident in ("401", "402"):
         row = got[ident]
         made = task(api, row["task_id"])
-        assert (row["kind"], row["status"], made["owner"]) == ("check", "filed", "human:ana"), ident
+        assert (row["kind"], row["status"], made["owner_id"]) == ("check", "filed", "human:ana"), ident
         assert made["title"].startswith("Check received: ") and "Tico doesn't deposit checks." in made["body"], ident
         get(api, "postal/items/" + row["id"], "ben-test", expected=404)          # private: not even an admin
     assert get(api, "postal/items/" + got["401"]["id"])["item"]["contains_checks"] is True
@@ -273,7 +273,7 @@ def test_a_failed_letter_is_marked_and_retried_without_a_second_task(api, hq, ma
     drain(api)
     drain(api)
     row = items(api)["301"]
-    assert row["status"] == "filed" and task(api, row["task_id"])["owner"] == "bot:finance"
+    assert row["status"] == "filed" and task(api, row["task_id"])["owner_id"] == "bot:finance"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Bill by mail:%'").fetchone()[0] == 1
 
@@ -314,7 +314,7 @@ def test_a_scan_emailed_to_the_intake_inbox_becomes_a_letter(api, hq, mail, monk
     svc.engine.answers["Water bill"] = ("bill", 0.9)
     drain(api)
     row = items(api)["msg_1:" + digest[:16]]
-    assert row["status"] == "filed" and task(api, row["task_id"])["owner"] == "bot:finance"
+    assert row["status"] == "filed" and task(api, row["task_id"])["owner_id"] == "bot:finance"
     assert ("GET", f"/v1/inbound/messages/msg_1/attachments/{digest}") in mail.calls
 
 
@@ -333,7 +333,7 @@ def test_reads_stop_at_the_daily_cap_and_wait_without_using_an_attempt(api, hq, 
     drain(api)
     assert items(api)[late]["status"] == "new"                           # waits its hour
     with api.app.state.store.transaction() as c:                          # a day later
-        c.execute("UPDATE mail_reads SET at=?", (H.shift(H.now(), days=-2),))
+        c.execute("UPDATE mail_reads SET read_at=?", (H.shift(H.now(), days=-2),))
         c.execute("UPDATE mail_items SET next_try_at=NULL")
     drain(api)
     assert items(api)[late]["status"] == "filed"

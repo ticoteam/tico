@@ -48,7 +48,7 @@ async function open(browser, viewport, w, scheme = 'dark') {
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/setup/getting-started') return json({items: [], done: 0, total: 0, complete: true, dismissed: true, tour_seen: true, cards_dismissed: [],
-      can_build: true, owner: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
+      can_build: true, owner_id: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
     if (p === '/api/meetings/sources') return json({sources: [{id: 'import', name: 'Import', status: 'available'}]});
     if (p === '/api/v2/meetings') { w.listed++; return json({meetings: w.meetings, pending_count: 0}); }
     if (p === '/api/v2/meeting-importers') return json({computers: [{id: 'mac', label: 'Test Mac', platform: 'macos', online: true}],

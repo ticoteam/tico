@@ -60,13 +60,13 @@ def test_a_follow_up_says_which_run_took_it_and_the_reply_lists_both(api):
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Both done.", "last_seq": 1}, token=r["token"])
     for messages in (get(api, f"conversations/{cid}/snapshot")["messages"], get(api, f"conversations/{cid}/messages")):
         shown = by_id(messages)
-        reply = next(m for m in messages if m["from_actor"] == "bot:ops")
+        reply = next(m for m in messages if m["sender_id"] == "bot:ops")
         assert reply["answers"] == [first["id"], follow["id"]]
         assert (reply["run"]["job_id"], reply["run"]["run_id"]) == (starter_job, aid)
         assert shown[first["id"]]["run"]["state"] == "started_run" and shown[follow["id"]]["run"]["state"] == "added_to_run"
     # What the reply says is stored with it, so it is still there after a restart.
     with api.app.state.store.read() as c:
-        stored = json.loads(c.execute("SELECT refs FROM messages WHERE from_actor='bot:ops'").fetchone()[0])
+        stored = json.loads(c.execute("SELECT refs FROM messages WHERE sender_id='bot:ops'").fetchone()[0])
     assert stored["answers"] == [first["id"], follow["id"]] and stored["run"] == {"job_id": starter_job, "attempt_id": aid}
 
 

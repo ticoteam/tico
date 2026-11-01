@@ -183,7 +183,7 @@ def _connector(c, auth, who, rid, *, states=None):
     human_only(who)
     auth.domain(who)
     row = _require_read(c, auth, who, rid)
-    if who.actor != row["owner_actor"]:
+    if who.actor != row["owner_id"]:
         raise Problem("forbidden", "Only the person who connected this meeting can control its transcript", 403)
     if states and row["state"] not in states:
         raise Problem("meeting_state", f"This operation requires a { ' or '.join(states) } meeting", 409)
@@ -240,7 +240,7 @@ def _view(c, auth, who, rid):
         person = H.human(c, H.actor_id(r["actor"]))
         access.append({"actor": r["actor"], "name": (person or {}).get("name") or H.actor_id(r["actor"])})
     return {
-        "id": row["id"], "title": row["title"], "state": row["state"], "owner_actor": row["owner_actor"],
+        "id": row["id"], "title": row["title"], "state": row["state"], "owner_id": row["owner_id"],
         "visibility": row["visibility"], "access": access, "client": row["client"],
         "seq": row["seq"], "event_id": row["next_event_id"], "window_ms": row["window_ms"],
         "cooldown_ms": row["cooldown_ms"], "reply_cap": row["reply_cap"], "threshold": row["threshold"],
@@ -498,7 +498,7 @@ def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None
                              "AND m.state='live' ORDER BY t.created_at,t.id LIMIT 1", (rid, slug)).fetchone()
         busy = None if replying else c.execute(
             "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-            f"WHERE j.bot=? AND j.state IN ('queued','leased','running','input') AND {H.unheld_sql()} "
+            f"WHERE j.bot_id=? AND j.state IN ('queued','leased','running','input') AND {H.unheld_sql()} "
             "AND json_extract(m.refs,'$.live_meeting.turn_id') IS NULL LIMIT 1", (slug,)).fetchone()
         if (replying or busy) and not named:
             skipped.append({"bot": slug, "reason": "busy"})
@@ -619,7 +619,7 @@ def complete_runner_turn(c, rid, turn_id, bot, text, outcome, *, requeued=False,
     retry can help (execution.PRIVATE_COPY_FAILURE) is said in the meeting once (`meeting.bot_turn_failed`)."""
     if attempt_id and not requeued:
         for row in c.execute("SELECT m.refs FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
-                             "WHERE i.attempt_id=? AND m.from_actor=? AND m.to_actor=? "
+                             "WHERE i.attempt_id=? AND m.sender_id=? AND m.recipient_id=? "
                              "AND json_extract(m.refs,'$.live_meeting.turn_id') IS NOT NULL",
                              (attempt_id, H.KEEPER, "bot:" + bot)).fetchall():
             ref = (H._json(row["refs"], {}) or {}).get("live_meeting") or {}
@@ -856,7 +856,7 @@ def _route_human_chat(app, rid, chat_id):
         c.execute("INSERT INTO live_meeting_chat_routes(meeting_id,chat_id,status,outcome,trace,started_at) "
                   "VALUES(?,?,'deciding','',?,?)",
                   (rid, chat_id, encode({"decision_input": decision_input}), stamp))
-        threshold, owner_actor = meeting["threshold"], meeting["owner_actor"]
+        threshold, owner_actor = meeting["threshold"], meeting["owner_id"]
     outcome = _decision(app, decision_input, decision_input["bots"], threshold, owner_actor)
     with store.transaction() as c:
         route = c.execute("SELECT status FROM live_meeting_chat_routes WHERE meeting_id=? AND chat_id=?",
@@ -1008,7 +1008,7 @@ def _run_windows(app, rid, *, final=False):
             decision_input = _decision_input(c, rid, source_key=f"window:{index}", source_kind="transcript",
                                              window_index=index, transcript=included, bots=bots)
         outcome = _decision(app, decision_input, decision_input["bots"],
-                            meeting["threshold"], meeting["owner_actor"])
+                            meeting["threshold"], meeting["owner_id"])
         with app.state.store.transaction() as c:
             current = c.execute("SELECT status FROM live_meeting_windows WHERE meeting_id=? AND window_index=?",
                                 (rid, index)).fetchone()
@@ -1028,7 +1028,7 @@ def _run_windows(app, rid, *, final=False):
             trace = {**outcome["trace"], "selected": [r["bot"] for r in selected], "skipped": skipped,
                      "chunk_range": _chunk_range(included)}
             if outcome["trace"].get("model"):
-                H.event(c, meeting["owner_actor"], "judge.call", "live-meeting-route@1", {
+                H.event(c, meeting["owner_id"], "judge.call", "live-meeting-route@1", {
                     "label": "live-meeting-route@1", "questions": len(bots), "types": ["noul"],
                     "ms": outcome["trace"].get("ms"), "model": outcome["trace"].get("model"),
                     **(outcome["trace"].get("audit") or {}),
@@ -1414,7 +1414,7 @@ def install_live_meetings(app, store, auth, write):
             human_only(who)
             auth.domain(who)
             meeting = _require_read(c, auth, who, rid)
-            if meeting["visibility"] == "private" and who.actor != meeting["owner_actor"]:
+            if meeting["visibility"] == "private" and who.actor != meeting["owner_id"]:
                 raise Problem("forbidden", "Only the person who connected a private meeting can attach bots", 403)
             if meeting["state"] not in ("live", "paused"):
                 raise Problem("meeting_state", "Bots can only be attached to a live or paused meeting", 409)

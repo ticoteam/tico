@@ -116,7 +116,7 @@ def leases_extended(run):
     """The outage was longer than a lease, so the restart found running leases lapsed and extended each one (the server's
     startup, grace_leases). An outage shorter than a lease would show nothing about recovery, so it must be longer."""
     lease = run.w.settings.lease_seconds
-    extended = run.w.sql("SELECT count(*) n FROM events WHERE action='attempt.lease-grace' AND ts>=? AND ts<?",
+    extended = run.w.sql("SELECT count(*) n FROM events WHERE action='attempt.lease-grace' AND created_at>=? AND created_at<?",
                          (stamp(BACK_AT), stamp(BACK_AT + at(0, 1))))[0]["n"]
     longer = OUTAGE_FOR.total_seconds() > lease
     return longer and extended > 0, (f"{extended} lapsed leases extended at the restart; the outage was "
@@ -130,21 +130,21 @@ def stale_bot_starts(run):
     if not stale or not stale["sent"] or stale["corrected_at"] is None:
         return False, "the runner's claims named no bot busy after the restart, so nothing was tested"
     since = stamp(stale["corrected_at"] - START)
-    first = run.w.sql("SELECT started_at FROM attempts WHERE bot=? AND started_at>=? ORDER BY started_at LIMIT 1",
-                      (stale["bot"], since))
+    first = run.w.sql("SELECT started_at FROM attempts WHERE bot_id=? AND started_at>=? ORDER BY started_at LIMIT 1",
+                      (stale["bot_id"], since))
     if not first:
-        return False, (f"{stale['bot']} was named busy for {stale['sent']} rounds after the restart and did not start "
+        return False, (f"{stale['bot_id']} was named busy for {stale['sent']} rounds after the restart and did not start "
                        f"once its list was right, from {since}")
-    return True, (f"{stale['bot']} was named busy for {stale['sent']} rounds after the restart; its list was right from "
+    return True, (f"{stale['bot_id']} was named busy for {stale['sent']} rounds after the restart; its list was right from "
                   f"{since}, and it started at {first[0]['started_at']}")
 
 
 def runner_rerun(run):
     """Each turn the runner's restart interrupted ran again to completion: a later attempt on its job completed."""
-    rows = run.w.sql("SELECT a.bot, (SELECT count(*) FROM attempts b WHERE b.job_id=a.job_id AND b.state='completed' "
+    rows = run.w.sql("SELECT a.bot_id, (SELECT count(*) FROM attempts b WHERE b.job_id=a.job_id AND b.state='completed' "
                      "AND b.started_at>=a.finished_at) AS reran FROM attempts a WHERE a.state='interrupted' AND a.finished_at>=?",
                      (stamp(RESTART_AT),))
-    missing = [r["bot"] for r in rows if not r["reran"]]
+    missing = [r["bot_id"] for r in rows if not r["reran"]]
     if not rows:
         return False, "the restart interrupted no turn, so nothing was tested"
     if missing:

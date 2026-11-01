@@ -27,14 +27,14 @@ def fleet(api, attempts=100, trees=50):
             tid, cid, mid = f"task-{i}", f"room-{i}", f"message-{i}"
             c.execute("INSERT INTO conversations(id,kind,participants,created_at,task_id) VALUES(?,'task',?,?,?)",
                       (cid, encode(["human:ana", "bot:ops"]), now, tid))
-            c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created_at,updated_at) "
+            c.execute("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,conversation_id,created_at,updated_at) "
                       "VALUES(?,?,'Synthetic workload','human:ana','bot:ops','doing',?,?,?)",
                       (tid, tid, cid, now, now))
             if i < attempts:
-                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at,refs) "
+                c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                           "VALUES(?,?,'human:ana','bot:ops','say','Synthetic work',?,?)",
                           (mid, cid, now, encode({"task": tid})))
-                c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
+                c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
                           "VALUES(?,?,'ops',?,?,?,'running',?,?,?)",
                           (f"attempt-{i}", mid, computer["runner_id"], generation, f"synthetic-{i}", until, now, "task:" + tid))
                 c.execute("UPDATE jobs SET state='running',attempt_id=? WHERE id=?", (f"attempt-{i}", mid))
@@ -128,7 +128,7 @@ def test_heartbeat_prepares_provenance_outside_write_and_discards_a_stale_snapsh
     assert "tree-4" not in {a["link_id"] for a in result["worktree_actions"]}
     monkeypatch.setattr(worktrees, "live_turn_cache", prepare)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:finance' WHERE id='task-4'")
+        c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id='task-4'")
     result = post(api, "runners/heartbeat", body, computer["token"])
     assert "tree-4" in {a["link_id"] for a in result["worktree_actions"]}
 
@@ -177,7 +177,7 @@ def test_idle_inputs_and_task_read_do_not_wait_on_unrelated_writers(api):
             release.set()
         background.result()
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,owner='bot:finance',requester='human:ben' WHERE id='task-0'")
+        c.execute("UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id='task-0'")
     assert api.post('/api/v2/attempts/attempt-0/inputs', json={},
                     headers=headers(computer['token'])).status_code == 409
 
@@ -197,7 +197,7 @@ def test_shared_provenance_rechecks_permissions_and_never_publishes_rolled_back_
         assert task_privacy.attempt_readable(c, 'bot:ops', 'attempt-0')
     count = len(builds)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,owner='bot:finance',requester='human:ben' WHERE id='task-0'")
+        c.execute("UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id='task-0'")
     with store.read_transaction() as c:
         assert not task_privacy.attempt_readable(c, 'bot:ops', 'attempt-0')
     assert len(builds) == count       # Only neutral provenance survives; permission never does.
@@ -222,7 +222,7 @@ def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
     with store.transaction() as c:
         c.execute("UPDATE tasks SET status='done'")
         for i in range(20):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at,refs) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                       "VALUES(?,?,?,'bot:ops','notice','Synthetic finished task',?,?)",
                       (f'obsolete-{i}', f'room-{i}', H.KEEPER, H.now(), encode({'task': f'task-{i}'})))
     assert post(api, 'jobs/claim', {}, computer['token'])['attempt'] is None

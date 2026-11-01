@@ -15,7 +15,7 @@ def _ask(api, token, question, **extra):
 def _to_ana(api):
     """Every message the bot has sent Ana, and every job queued for anyone: what a new ask would add."""
     with api.app.state.store.read() as c:
-        said = c.execute("SELECT count(*) FROM messages WHERE from_actor='bot:ops' AND to_actor='human:ana'").fetchone()[0]
+        said = c.execute("SELECT count(*) FROM messages WHERE sender_id='bot:ops' AND recipient_id='human:ana'").fetchone()[0]
         jobs = c.execute("SELECT count(*) FROM jobs").fetchone()[0]
     return said, jobs
 
@@ -29,7 +29,7 @@ def test_asked_again_on_the_same_task_it_updates_the_open_question(api):
     r = runner(api, "ana")
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    work = post(api, "tasks", {"owner": "ops", "title": "Assess the vendor agent", "body": "Is it worth a test?"})
+    work = post(api, "tasks", {"owner_id": "ops", "title": "Assess the vendor agent", "body": "Is it worth a test?"})
     attempt = claim(api, r)
     first = _ask(api, attempt["token"], "Run the vendor trial once?")
     before = _to_ana(api)
@@ -48,7 +48,7 @@ def test_asked_again_on_the_same_task_it_updates_the_open_question(api):
     assert [e["question"] for e in card["ask"]["refs"]["earlier"]] == ["Run the vendor trial once?"]
     with api.app.state.store.read() as c:
         assert TR.parent_of(c, first["task"]["id"]) == work["id"]
-        assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:ops' AND title LIKE 'Run the vendor trial%'"
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:ops' AND title LIKE 'Run the vendor trial%'"
                          ).fetchone()[0] == 1
         folded = c.execute("SELECT detail FROM events WHERE action=? AND target=?",
                            (H.QUESTION_FOLDED, first["task"]["id"])).fetchall()
@@ -63,8 +63,8 @@ def test_asked_again_on_the_same_task_it_updates_the_open_question(api):
 def test_one_topic_key_joins_questions_filed_under_different_tasks(api):
     """BotOps' case: a backup model for each bot, asked from each bot's own task, is one question for the person."""
     _, _, attempt = setup_attempt(api)
-    builder = post(api, "tasks", {"owner": "ops", "title": "Builder stops at the usage limit", "body": "No backup."})
-    analyst = post(api, "tasks", {"owner": "ops", "title": "Analyst stops at the usage limit", "body": "No backup."})
+    builder = post(api, "tasks", {"owner_id": "ops", "title": "Builder stops at the usage limit", "body": "No backup."})
+    analyst = post(api, "tasks", {"owner_id": "ops", "title": "Analyst stops at the usage limit", "body": "No backup."})
     first = _ask(api, attempt["token"], "Give Builder a backup model?", parent=builder["id"], topic="Backup model")
     second = _ask(api, attempt["token"], "Give Builder and Analyst a backup model?", parent=analyst["id"],
                   topic="backup-model")
@@ -82,7 +82,7 @@ def test_one_topic_key_joins_questions_filed_under_different_tasks(api):
 def test_a_second_decision_on_the_same_task_takes_its_own_topic(api):
     """Under one task, a keyed question and an unkeyed one are different topics; two different keys are too."""
     _, _, attempt = setup_attempt(api)
-    work = post(api, "tasks", {"owner": "ops", "title": "Launch the autumn page", "body": "Copy and banner."})
+    work = post(api, "tasks", {"owner_id": "ops", "title": "Launch the autumn page", "body": "Copy and banner."})
     ship = _ask(api, attempt["token"], "Ship the autumn page today?", parent=work["id"])
     banner = _ask(api, attempt["token"], "Which banner?", parent=work["id"], topic="banner",
                   options=[{"label": "A", "then": "Go with A"}, {"label": "B", "then": "Go with B"}])
@@ -111,7 +111,7 @@ def test_once_answered_or_closed_the_next_question_on_the_topic_opens_a_new_one(
 def test_a_private_question_never_joins_a_public_one(api):
     """Not across tasks, and not under the same task either: either way the private words would reach a public card."""
     _, _, attempt = setup_attempt(api)
-    work = post(api, "tasks", {"owner": "ops", "title": "Plan the Q3 bonus", "body": "Pool and split."})
+    work = post(api, "tasks", {"owner_id": "ops", "title": "Plan the Q3 bonus", "body": "Pool and split."})
     public = _ask(api, attempt["token"], "Approve the Q3 bonus pool?", topic="bonus", parent=work["id"])
     private = _ask(api, attempt["token"], "Approve the Q3 bonus pool for Ben?", topic="bonus", parent=work["id"],
                    private=True)
@@ -174,7 +174,7 @@ def test_an_answer_picked_on_the_earlier_wording_does_not_settle_the_new_one(api
 
 def test_a_topic_key_in_any_script_is_kept_and_an_empty_one_is_refused(api):
     _, _, attempt = setup_attempt(api)
-    work = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "Budget and date."})
+    work = post(api, "tasks", {"owner_id": "ops", "title": "Plan the launch", "body": "Budget and date."})
     budget = _ask(api, attempt["token"], "Raise the launch budget?", parent=work["id"], topic="预算")
     date = _ask(api, attempt["token"], "Move the launch date?", parent=work["id"], topic="发布")
     plain = _ask(api, attempt["token"], "Launch at all?", parent=work["id"])

@@ -77,7 +77,7 @@ def test_a_chat_note_keeps_a_pick_question_open_and_wakes_its_bot_once(api):
         asked = pick(c, work["id"])
         reply = H.say(c, ANA, OPS, "Use August, it has the full close.", conversation_id=work["conversation_id"],
                       refs={"task": work["id"]})
-        assert H.message(c, asked["id"])["answered_by"] is None
+        assert H.message(c, asked["id"])["answered_by_id"] is None
         assert listed(c, work["id"]) and wakes(c, reply["id"]) == 1
 
 
@@ -89,7 +89,7 @@ def test_a_question_closes_on_its_fallback_date_even_when_its_fallback_waits(api
         assert ask_deadlines.sweep(c)["expired"] == []                          # not yet
         assert ask_deadlines.sweep(c, H.shift(H.now(), days=2))["expired"] == [asked["id"]]
         answer = c.execute("SELECT * FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchall()
-        assert len(answer) == 1 and answer[0]["to_actor"] == OPS and "never goes ahead" in answer[0]["body"]
+        assert len(answer) == 1 and answer[0]["recipient_id"] == OPS and "never goes ahead" in answer[0]["body"]
         assert wakes(c, answer[0]["id"]) == 1 and not listed(c, work["id"])
 
 
@@ -107,7 +107,7 @@ def test_unanswered_questions_go_back_to_their_bot_in_one_weekday_morning_wake(a
         sent = still_needed.sweep(c, wednesday)
         assert list(sent) == [OPS] and set(sent[OPS]) == {a["id"] for a in asks}
         assert not any(listed(c, t["id"]) for t in tasks)
-        wake = c.execute("SELECT id, body FROM messages WHERE to_actor=? AND body LIKE 'Still needed?%'", (OPS,)).fetchall()
+        wake = c.execute("SELECT id, body FROM messages WHERE recipient_id=? AND body LIKE 'Still needed?%'", (OPS,)).fetchall()
         assert len(wake) == 1 and all(f"Which {t['title'][7:]}?" in wake[0]["body"] for t in tasks)
         assert wakes(c, wake[0]["id"]) == 1
         assert still_needed.sweep(c, "2026-10-21T18:00:00.000000Z") == {}      # once a morning
@@ -124,7 +124,7 @@ def test_ending_a_task_above_keeps_the_question_and_wait_on_a_task_below_and_its
         late = H.task_create(c, OPS, "Pick the launch venue", "x", OPS, parent_id=now_["id"])
         pick(c, now_["id"])
         waiting_on_ana(c, now_["id"])
-        c.execute("INSERT INTO bot_status (bot, state, since, updated_at) VALUES ('ops', 'idle', ?, ?)", (H.now(), H.now()))
+        c.execute("INSERT INTO bot_status (bot, state, changed_at, updated_at) VALUES ('ops', 'idle', ?, ?)", (H.now(), H.now()))
         H._recount(c, OPS)
         assert H.status_counts(c, OPS)[1] and cached_matches(c)
     before, count = needs(api)
@@ -168,12 +168,12 @@ def test_old_undated_questions_go_back_only_in_the_weekday_batch_of_the_hourly_s
         asks = [pick(c, t["id"], f"Which {t['title'][7:]}?") for t in tasks]
         old = "2026-09-24T17:00:00.000000Z"                                # weeks before, past the old 14-day expiry
         c.executemany("UPDATE messages SET created_at=? WHERE id=?", [(old, a["id"]) for a in asks])
-        c.execute("UPDATE task_events SET ts=?", (old,))
+        c.execute("UPDATE task_events SET created_at=?", (old,))
 
     def tick(at):
         Scheduler(store, execution).tick(datetime.fromisoformat(at).replace(tzinfo=timezone.utc))
         with store.read() as c:
-            return [r[0] for r in c.execute("SELECT body FROM messages WHERE to_actor=? AND from_actor=? AND "
+            return [r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id=? AND sender_id=? AND "
                                             "(kind='answer' OR body LIKE 'Still needed?%')", (OPS, H.KEEPER))]
 
     assert tick("2026-10-17T17:00:00") == []           # Saturday: no batch, and no ask expires on its own

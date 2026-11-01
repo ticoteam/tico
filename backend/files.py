@@ -48,13 +48,13 @@ def raw_media(request, imported=False):
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_files(
- id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), scope TEXT NOT NULL,
+ id TEXT PRIMARY KEY, bot_id TEXT NOT NULL REFERENCES bots(id), scope TEXT NOT NULL,
  identity TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, mime TEXT NOT NULL DEFAULT '',
  locator TEXT NOT NULL, url TEXT, provider TEXT, current_version INTEGER NOT NULL DEFAULT 0,
  state TEXT NOT NULL DEFAULT 'ready', task_id TEXT, conversation_id TEXT,
  first_activity_at TEXT NOT NULL, last_activity_at TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
- UNIQUE(bot, scope, identity));
-CREATE INDEX IF NOT EXISTS bot_files_recent ON bot_files(bot, archived, last_activity_at, id);
+ UNIQUE(bot_id, scope, identity));
+CREATE INDEX IF NOT EXISTS bot_files_recent ON bot_files(bot_id, archived, last_activity_at, id);
 CREATE INDEX IF NOT EXISTS bot_files_task ON bot_files(task_id, archived, locator);
 CREATE TABLE IF NOT EXISTS bot_file_versions(
  file_id TEXT NOT NULL REFERENCES bot_files(id), version INTEGER NOT NULL,
@@ -229,7 +229,7 @@ class Files:
             return None, None
         row = c.execute("SELECT a.runner_id,m.id AS mid,m.conversation_id FROM attempts a "
                         "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-                        "WHERE a.id=? AND a.bot=?", (attempt_id, bot)).fetchone()
+                        "WHERE a.id=? AND a.bot_id=?", (attempt_id, bot)).fetchone()
         if not row or (who.role == "runner" and row["runner_id"] != who.runner_id):
             raise Problem("forbidden", "That turn is not this computer's", 403)
         message, conversation = H.message(c, row["mid"]), H.conversation(c, row["conversation_id"])
@@ -272,7 +272,7 @@ class Files:
 
     # ------------------------------------------------------------------ writes
     def find(self, c, bot, scope, identity):
-        return c.execute("SELECT * FROM bot_files WHERE bot=? AND scope=? AND identity=?",
+        return c.execute("SELECT * FROM bot_files WHERE bot_id=? AND scope=? AND identity=?",
                          (bot, scope, identity)).fetchone()
 
     def activity(self, c, fid, actor, action, *, attempt="", task=None, version=None, digest=None, detail=None, now=None):
@@ -288,7 +288,7 @@ class Files:
         if row:
             return row, False
         fid = fid or new_id()
-        c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,mime,locator,url,provider,current_version,state,"
+        c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,url,provider,current_version,state,"
                   "task_id,conversation_id,first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,?,?,?,0,'ready',?,?,?,?)",
                   (fid, bot, scope, identity, title[:300], kind, mime, locator, url, provider, task, conversation, now, now))
         return c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone(), True
@@ -329,7 +329,7 @@ class Files:
         """Compatibility hook for attachment upload paths, including streaming uploads."""
         from .views import default_bot
         task = H.task(c, task_id)
-        actors = (who.actor, task["owner"], task["requester"])
+        actors = (who.actor, task["owner_id"], task["requester_id"])
         bot = next((H.actor_id(a) for a in actors if H.is_bot(a)), None) or default_bot(c, self.store.settings)
         if who.role == "bot":
             try:
@@ -353,7 +353,7 @@ class Files:
                                "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
                                "ORDER BY b.created_at DESC LIMIT 1", (task_id, item["name"], item["id"])).fetchone()
             fid, stamp = (legacy["id"] if legacy else new_id()), H.now()
-            c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,mime,locator,task_id,"
+            c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,"
                       "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,'tico_blob',?,?,?)",
                       (fid, bot, "task:" + task_id, "task-file:" + fid, item["name"], BF.kind_of(item["name"]),
                        item["content_type"], task_id, stamp, stamp))
@@ -450,7 +450,7 @@ class Files:
         staged = isinstance(data, Staged)
         size = data.size if staged else len(data)
         with self.store.read() as c:
-            bot = self.writer_bot(c, who, str(fields.get("bot") or ""))
+            bot = self.writer_bot(c, who, str(fields.get("bot_id") or ""))
         source = str(fields.get("source") or "")
         relative = str(fields.get("path") or "").replace("\\", "/").strip("/")
         if relative and (".." in relative.split("/") or relative.startswith("/")):
@@ -496,7 +496,7 @@ class Files:
                 digest=digest, size=size, source_digest=str(fields.get("etag") or "") or None,
                 commit=str(fields.get("commit") or "")[:64] if re.fullmatch(r"[0-9a-f]{7,64}", str(fields.get("commit") or "")) else "",
                 repo_path=relative, explicit_title=bool(fields.get("title")))
-            H.event(c, actor, "file.publish", row["id"], {"bot": bot, "version": row["current_version"], "size": size})
+            H.event(c, actor, "file.publish", row["id"], {"bot_id": bot, "version": row["current_version"], "size": size})
             if changed:
                 # Video and audio have no text to search; their bytes are never read back here.
                 file_library.index(c, row["id"], row["current_version"], row["title"],
@@ -587,7 +587,7 @@ class Files:
             now = H.now()
             if body.file and not body.url:
                 row = c.execute("SELECT * FROM bot_files WHERE id=?", (body.file,)).fetchone()
-                if (not row or row["bot"] != bot or row["locator"] != "remote_link" or row["state"] == "deleted"
+                if (not row or row["bot_id"] != bot or row["locator"] != "remote_link" or row["state"] == "deleted"
                         or not self.visible(c, who, row, {})):
                     raise Problem("not_found", "That link is not one of yours", 404)
                 scope, task, conversation = row["scope"], row["task_id"], row["conversation_id"]
@@ -610,7 +610,7 @@ class Files:
             c.execute("UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), row["id"]))
             file_library.index(c, row["id"], 0, fields.get("title") or row["title"], url)
             self.activity(c, row["id"], actor, "created" if created else "link_updated", attempt=attempt, task=task, now=now)
-            H.event(c, actor, "file.link", row["id"], {"bot": bot})
+            H.event(c, actor, "file.link", row["id"], {"bot_id": bot})
             return {"file": self.brief(c, c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone()),
                     "created": created}
         result = self.write(request, who, {**body.model_dump(), "actor": who.actor}, work)
@@ -627,7 +627,7 @@ class Files:
             stored = c.execute("SELECT * FROM bot_files WHERE id=? AND identity LIKE 'task-file:%'", (fid,)).fetchone()
             if stored and body.model_dump(exclude_none=True) == {"archived": True}:
                 task = self.auth.task(c, who, stored["task_id"])
-                if (who.actor not in (task["owner"], task["requester"])
+                if (who.actor not in (task["owner"], task["requester_id"])
                         and not (who.role == "owner" or who.role == "human" and H.can_move(c, who.actor))):
                     raise Problem("forbidden", "Only a task participant or someone who can move it archives its attachments", 403)
                 c.execute("UPDATE bot_files SET archived=1,last_activity_at=? WHERE id=?", (H.now(), fid))
@@ -646,7 +646,7 @@ class Files:
                     raise Problem("not_found", "File not found", 404)
                 for task in linked:
                     row = self.auth.task(c, who, task["task_id"])
-                    if (who.actor not in (row["owner"], row["requester"])
+                    if (who.actor not in (row["owner"], row["requester_id"])
                             and not (who.role == "owner" or who.role == "human" and H.can_move(c, who.actor))):
                         raise Problem("forbidden", "Only a task participant or someone who can move it archives its attachments", 403)
                 c.execute("DELETE FROM task_assets WHERE blob_id=?", (fid,))
@@ -669,7 +669,7 @@ class Files:
                 raise Problem("not_found", "File not found", 404)
             actor, now = who.actor, H.now()
             if who.role == "bot":
-                if H.actor_id(who.actor) != row["bot"]:
+                if H.actor_id(who.actor) != row["bot_id"]:
                     raise Problem("not_found", "File not found", 404)
                 if body.archived is not None or body.promote:
                     raise Problem("forbidden", "A bot cannot remove or promote files; an owner does", 403)
@@ -687,7 +687,7 @@ class Files:
                     raise Problem("privacy", "Private task files stay on their task", 403)
                 if row["scope"] == "bot":
                     raise Problem("conflict", "This file is already bot-wide", 409)
-                if self.find(c, row["bot"], "bot", row["identity"]):
+                if self.find(c, row["bot_id"], "bot", row["identity"]):
                     raise Problem("conflict", "A bot-wide file with the same identity already exists", 409)
                 fields["scope"] = "bot"
             if body.archived:
@@ -782,9 +782,9 @@ class Files:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             self.bot_row(c, who, bot)
             cache, caches = {}, {"task": {}, "repo": {}}
-            rows = c.execute("SELECT * FROM bot_files WHERE bot=? AND archived=0 "
+            rows = c.execute("SELECT * FROM bot_files WHERE bot_id=? AND archived=0 "
                              "AND (identity NOT LIKE 'task-file:%' OR EXISTS (SELECT 1 FROM bot_file_versions v "
-                             "WHERE v.file_id=bot_files.id AND v.actor='bot:' || bot_files.bot)) "
+                             "WHERE v.file_id=bot_files.id AND v.actor='bot:' || bot_files.bot_id)) "
                              "ORDER BY last_activity_at DESC, id DESC", (bot,)).fetchall()
             prime_visible(c, rows)
             rows = [r for r in rows if self.visible(c, who, r, cache)]
@@ -799,7 +799,7 @@ class Files:
             more = start + limit < len(rows)
             nxt = (base64.urlsafe_b64encode(f"{page[-1]['last_activity_at']}|{page[-1]['id']}".encode()).decode()
                    if more and page else None)
-            return {"bot": bot, "files": [self.view(c, who, r, caches) for r in page], "total": len(rows),
+            return {"bot_id": bot, "files": [self.view(c, who, r, caches) for r in page], "total": len(rows),
                     "next_cursor": nxt, "has_more": more,
                     "can_manage": who.role in ("owner", "human") and self.auth.bot_admin(who)}
 

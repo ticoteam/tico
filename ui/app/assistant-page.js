@@ -101,7 +101,7 @@ function assistantEarlier(earlier, load) {
   box.querySelector('summary').textContent = 'Earlier chats with ' + (earlier.name || 'Strategy Bot');
   let before = null, busy = false;
   const line = m => {
-    const mine = m.from_actor === 'human:' + (S.me?.id || '');
+    const mine = m.sender_id === 'human:' + (S.me?.id || '');
     return `<div class="asst-earlier-msg"><b>${esc(mine ? 'You' : earlier.name || 'Assistant')}</b>
       <span class="muted" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</span><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></div>`;
   };

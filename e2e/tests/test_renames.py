@@ -9,7 +9,7 @@ from e2e.preserve import _combine, _digest, compare
 def test_a_map_takes_the_three_sections_and_nothing_else(tmp_path):
     path = tmp_path / "map.yaml"
     path.write_text("fields: {task_id: work_id}\ncolumns: {\"tasks.owner\": owner_actor}\ntables: {bots: bot_rows}\n")
-    assert renames.load(path) == {"fields": {"task_id": "work_id"}, "columns": {"tasks.owner": "owner_actor"},
+    assert renames.load(path) == {"fields": {"task_id": "work_id"}, "columns": {"tasks.owner_id": "owner_actor"},
                                   "tables": {"bots": "bot_rows"}}
     empty = tmp_path / "empty.yaml"
     empty.write_text("")

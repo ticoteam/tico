@@ -9,7 +9,7 @@ from backend.tests.test_execution_review import aged, sweep
 
 
 def task_attempt(api, machine, title="Count the words"):
-    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Count them."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Count them."})
     attempt = claim(api, machine)
     assert attempt["task"]["id"] == task["id"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": title}, machine["token"])
@@ -72,7 +72,7 @@ def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api
     assert len(kept) == NODE_LIMIT and kept[0]["id"] == 0 and kept[-1]["id"] == NODE_LIMIT + 9
 
     # A run that also carried a private task is left out for whoever cannot read that task.
-    hidden = post(api, "tasks", {"owner": "ops", "title": "Private", "body": "Only Ana.", "private": True})
+    hidden = post(api, "tasks", {"owner_id": "ops", "title": "Private", "body": "Only Ana.", "private": True})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, hidden["id"]))
     assert get(api, f"tasks/{tid}/run-view", token="cara-test")["runs"] == []
@@ -100,7 +100,7 @@ def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     later, earlier = get(api, f"tasks/{tid}/run-view")["runs"]
     with api.app.state.store.read() as c:
         from backend.run_view import RECOVERY_SQL
-        plan = " ".join(r[-1] for r in c.execute(f"EXPLAIN QUERY PLAN SELECT ts FROM events WHERE {RECOVERY_SQL} "
+        plan = " ".join(r[-1] for r in c.execute(f"EXPLAIN QUERY PLAN SELECT created_at FROM events WHERE {RECOVERY_SQL} "
                                                  "AND target IN (?,?)", ("j", "a")))
     assert "events_action_target" in plan, plan
     assert (earlier["id"], earlier["try"], earlier["tries"], earlier["state"]) == (first["id"], 1, 2, "expired")
@@ -163,7 +163,7 @@ def test_a_run_from_a_conversation_the_reader_cannot_open_stays_out(api, monkeyp
                                  "revision": access["revision"]})
     # The task moved to a person: Cara still reads it, and still none of the bot's runs on it.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='human:ana', requester='human:ana' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET owner_id='human:ana', requester_id='human:ana' WHERE id=?", (tid,))
     assert get(api, f"tasks/{tid}/run-view", token="cara-test")["runs"] == []
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET checkpoint_blocked=1 WHERE id=?", (tid,))
@@ -187,7 +187,7 @@ def test_the_task_page_follows_its_session_live_and_each_reply_keeps_its_steps(a
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Counted: 42 words.", "last_seq": 3},
          machine["token"])
     page = get(api, f"tasks/{tid}")
-    reply = next(m for m in page["comments"] if m["from_actor"] == "bot:ops" and "42 words" in m["body"])
+    reply = next(m for m in page["comments"] if m["sender_id"] == "bot:ops" and "42 words" in m["body"])
     assert reply["refs"]["turn_id"] == aid and reply["run"]["steps"] >= 1
     assert page["execution"]["state"] == "completed"
     assert get(api, f"turns/{aid}/steps")["steps"], "the reply's steps open from the page"
@@ -226,23 +226,23 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
          machine["token"])
     with api.app.state.store.transaction() as c:
         cid = H.task(c, tid)["conversation_id"]
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                   "VALUES('msg-coo',?,'bot:ops','bot:coo','chat','Over to you','{}',?)", (cid, H.now()))
-        assert c.execute("SELECT bot FROM jobs WHERE message_id='msg-coo'").fetchone()["bot"] == "coo"
+        assert c.execute("SELECT bot_id FROM jobs WHERE message_id='msg-coo'").fetchone()["bot_id"] == "coo"
     assert get(api, f"tasks/{tid}")["execution"]["run_id"] == attempt["id"], "a bot's message to a bot is not it"
     # A person owns the task and the bot that asked it answers them. A plain comment there is deferred a day
     # (backend/delivery.py); one that names the bot wakes it.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='human:ana', requester='bot:ops' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET owner_id='human:ana', requester_id='bot:ops' WHERE id=?", (tid,))
     said = post(api, f"tasks/{tid}/comments", {"text": "@ops which app is still open?"})
-    assert said["woke"] and said["comment"]["to_actor"] == "bot:ops"
+    assert said["woke"] and said["comment"]["recipient_id"] == "bot:ops"
     queued = get(api, f"tasks/{tid}")["execution"] or {}
-    assert (queued["message_id"], queued["bot"], queued["state"], queued["from_person"]) == (
+    assert (queued["message_id"], queued["bot_id"], queued["state"], queued["from_person"]) == (
         said["comment"]["id"], "ops", "queued", True)
     turn = claim(api, machine)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "answer"}, machine["token"])
     working = get(api, f"tasks/{tid}")["execution"]
-    assert (working["run_id"], working["state"], working["bot"]) == (turn["id"], "running", "ops")
+    assert (working["run_id"], working["state"], working["bot_id"]) == (turn["id"], "running", "ops")
     # The next plain comment waits for the bot; the box offers @ops to wake it.
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": "ops", "wakes": False, "mention": ["ops"]}
     # Someone who neither owns, asked nor may move it is saved for the bot's next run, and no @mention changes that:
@@ -252,13 +252,13 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     # A mover who does not own it is saved too, unless they @mention the bot that asked: the composer offers it and
     # it wakes the bot.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='human:ben' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (tid,))
     to = get(api, f"tasks/{tid}")["comment_to"]
-    assert (to["bot"], to["wakes"], "ops" in to["mention"]) == ("ops", False, True)
+    assert (to["bot_id"], to["wakes"], "ops" in to["mention"]) == ("ops", False, True)
     assert post(api, f"tasks/{tid}/comments", {"text": "Noted."})["woke"] is False
     assert post(api, f"tasks/{tid}/comments", {"text": "@ops is it billing?"})["woke"] is True
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET requester='human:ben' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (tid,))
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}, "no bot gets it"
 
 

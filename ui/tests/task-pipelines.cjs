@@ -35,7 +35,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const tasks = ['draft', 'copy', 'complete', null].map((stepId, index) => {
       const step = types[1].steps.find(step => step.id === stepId) || null;
       return {id: 'task-' + index, title: ['Write the campaign', 'Review the campaign', 'Finished campaign', 'Unmapped campaign'][index],
-        body: 'Please review the campaign.', owner: 'bot:ops', requester: 'human:ana',
+        body: 'Please review the campaign.', owner_id: 'bot:ops', requester_id: 'human:ana',
         type_id: 'marketing', step_id: stepId, type: {id: 'marketing', name: 'Marketing'}, step,
         status: step?.status || 'doing', lane: 'company', version: 1, labels: [], links: [], parts: {total: 0, done: 0},
         rank: index, created_at: '2026-10-01T12:00:00Z', updated_at: '2026-10-01T12:00:00Z'};
@@ -94,7 +94,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
           const body = req.postDataJSON(); posted.push({path: p, body});
           if (refuseMove) { refuseMove = false; return json({error: {code: 'identity', detail: 'not yours to change'}}, 422); }
           if ('step_rank' in body) task.step_rank = body.step_rank;
-          if (body.owner) task.owner = body.owner.includes(':') ? body.owner : 'bot:' + body.owner;
+          if (body.owner_id) task.owner_id = body.owner_id.includes(':') ? body.owner_id : 'bot:' + body.owner_id;
           if (body.type) task.type_id = body.type;
           const type = types.find(type => type.id === task.type_id);
           const step = 'step' in body ? type.steps.find(step => step.id === body.step) : type.steps.find(step => step.status === (body.status || task.status));
@@ -210,7 +210,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const card = (stepId, n, title, over = {}) => ({...tasks[0], id: n, title, step_id: stepId, step: types[1].steps.find(s => s.id === stepId),
       status: 'review', version: 1, rank: 0, ...over});
     tasks.push(card('legal', 'plan', 'Plan the launch', {step_rank: 1}), card('legal', 'brief', 'Brief the agency', {step_rank: 2,
-      relations: {blocks: [{id: 'plan', title: 'Plan the launch', status: 'review', owner: 'bot:ops', direction: 'in'}]}}));
+      relations: {blocks: [{id: 'plan', title: 'Plan the launch', status: 'review', owner_id: 'bot:ops', direction: 'in'}]}}));
     tasks[0].step_rank = 1;
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.locator('#task-body [data-task-key="tbrief"]').waitFor();
@@ -258,13 +258,13 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     Object.assign(brief, {holds: []});
     // Only the first open blocker's owner is named: a person's task linked ahead of the bot's reads "Blocked by".
     const opsBlocker = brief.relations.blocks[0];
-    brief.relations = {blocks: [{id: 'legal-review', title: 'Legal review', status: 'doing', owner: 'human:ana', direction: 'in'}, opsBlocker]};
+    brief.relations = {blocks: [{id: 'legal-review', title: 'Legal review', status: 'doing', owner_id: 'human:ana', direction: 'in'}, opsBlocker]};
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Legal review');
     // A task that waits on a person keeps their ask: on them directly, or through the ask card a bot's task files,
     // which the server serves as a blocker the person owns, linked after the bot's.
     for (const held of [{waiting_on: 'human:ana'}, {relations: {blocks: [opsBlocker,
-      {id: 'ask-ana', title: 'Approve the launch post?', status: 'open', owner: 'human:ana', direction: 'in'}]}}]) {
+      {id: 'ask-ana', title: 'Approve the launch post?', status: 'open', owner_id: 'human:ana', direction: 'in'}]}}]) {
       Object.assign(brief, {relations: {blocks: [opsBlocker]}, waiting_on: null}, held);
       await page.evaluate(() => tasksLoad(TASKS_ST));
       await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Plan the launch');
@@ -288,7 +288,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('#task-body [data-task-key="tbrief"] [data-card-owner]').click();
     await page.locator('#task-card-pops .prop-pop .tl-mi', {hasText: 'Ana'}).click();
     await page.waitForFunction(() => document.querySelector('#task-body [data-task-key="tbrief"] [data-card-owner]')?.title === 'You');
-    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/brief', body: {version: 2, owner: 'human:ana'}});
+    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/brief', body: {version: 2, owner_id: 'human:ana'}});
     assert.equal(await page.evaluate(() => TASKS_ST.peek), '', 'picking an owner opens nothing');
     await page.locator('#task-body [data-task-key="tbrief"] [data-card-owner]').click();
     await page.locator('#task-card-pops .prop-pop .tl-mi', {hasText: 'Ops'}).click();
@@ -347,7 +347,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('#task-create [data-modal-close]').click();
     types[1].steps.push({id: 'verified', name: 'Verified', status: 'done', position: 5, type_id: 'marketing'},
       {id: 'filed', name: 'Filed', status: 'closed', position: 6, type_id: 'marketing'});
-    const decision = {...tasks[2], id: 'decision', owner: 'human:ana', requester: 'bot:ops'};
+    const decision = {...tasks[2], id: 'decision', owner_id: 'human:ana', requester_id: 'bot:ops'};
     tasks.push(decision);
     // A task opened uses the types already read; the page's next load reads the edited ones.
     await page.evaluate(async task => { await tasksLoad(TASKS_ST); taskModalShow(task); }, decision);

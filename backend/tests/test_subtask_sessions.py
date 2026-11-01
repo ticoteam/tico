@@ -54,7 +54,7 @@ def test_a_bot_finishing_its_last_self_filed_subtask_wakes_the_parent_but_not_on
         with api.app.state.store.read() as c:
             return [r[0] for r in c.execute(
                 "SELECT json_extract(m.refs,'$.task') FROM jobs j JOIN messages m ON m.id=j.message_id "
-                "WHERE j.bot='ops' AND j.state='queued' AND m.body='All subtasks done' AND m.rowid>?", (since,))]
+                "WHERE j.bot_id='ops' AND j.state='queued' AND m.body='All subtasks done' AND m.rowid>?", (since,))]
 
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:ops", asked, status="done", note="Column added.")
@@ -70,7 +70,7 @@ def test_a_private_subtask_shares_a_private_parents_session_only_when_both_have_
         # The bot's own private subtask: ana, on the parent, cannot read it.
         apart = H.task_create(c, "human:ana", "Check the private figures", "x", "bot:ops", parent_id=parent,
                               private=True, lint=False)["id"]
-        c.execute("UPDATE tasks SET requester='bot:ops' WHERE id=?", (apart,))
+        c.execute("UPDATE tasks SET requester_id='bot:ops' WHERE id=?", (apart,))
         public = H.task_create(c, "human:ana", "Draft the public copy", "x", "bot:ops", parent_id=parent,
                                lint=False)["id"]
         c.execute("UPDATE tasks SET private=0 WHERE id=?", (public,))    # made public later
@@ -155,7 +155,7 @@ def test_a_person_finishing_a_subtask_wakes_the_bot_once_on_the_parent(api):
         with api.app.state.store.read() as c:
             return [(json.loads(r[0]).get("task"), json.loads(r[0]).get("subtask")) for r in c.execute(
                 "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
-                "WHERE j.bot='ops' AND j.state='queued' AND m.kind='notice' AND m.rowid>? ORDER BY m.rowid", (since,))]
+                "WHERE j.bot_id='ops' AND j.state='queued' AND m.kind='notice' AND m.rowid>? ORDER BY m.rowid", (since,))]
 
     with api.app.state.store.read() as c:
         since = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]

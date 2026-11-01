@@ -29,7 +29,7 @@ def test_messages_include_readable_tasks_created_during_the_turn(api, reader):
     for path in ("messages", "snapshot"):
         result = get(api, f"conversations/{msg['conversation_id']}/{path}", token)
         messages = result["messages"] if path == "snapshot" else result
-        reply = next(m for m in messages if m["from_actor"] == "bot:ops")
+        reply = next(m for m in messages if m["sender_id"] == "bot:ops")
         created = {item["task_id"] for item in reply["run"]["did"] if item["kind"] == "task"}
         assert visible["id"] in created
         assert child["id"] in reply["ref_tasks"]

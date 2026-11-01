@@ -17,7 +17,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_rules(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, department TEXT NOT NULL,
  triggers TEXT NOT NULL, actions TEXT NOT NULL, enabled INTEGER NOT NULL,
- preset TEXT NOT NULL, at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+ preset TEXT NOT NULL, daily_at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 DROP INDEX IF EXISTS tasks_rule_due;
 CREATE INDEX IF NOT EXISTS tasks_rule_done_due ON tasks(updated_at,id) WHERE status='done' AND closed_at IS NULL;
 INSERT OR IGNORE INTO task_rules VALUES(
@@ -100,13 +100,13 @@ def save(c, settings, auth, who, body, key=None):
         raise Problem("invalid", "Give the rule a name", 422)
     on = body.on if body.on is not None else bool(before["enabled"]) if before else True
     preset = body.preset or (before["preset"] if before else SR.FIFTEEN)
-    at = body.at if body.at is not None else before["at"] if before else None
+    at = body.at if body.at is not None else before["daily_at"] if before else None
     if preset == SR.DAILY and (not at or not SR.AT_RE.fullmatch(at)):
         raise Problem("invalid", "Choose a daily time", 422)
     key, now = key or "task-rule-" + H.new_id(), H.now()
     c.execute("INSERT INTO task_rules VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
               "name=excluded.name,department=excluded.department,triggers=excluded.triggers,"
-              "actions=excluded.actions,enabled=excluded.enabled,preset=excluded.preset,at=excluded.at,updated_at=excluded.updated_at",
+              "actions=excluded.actions,enabled=excluded.enabled,preset=excluded.preset,daily_at=excluded.daily_at,updated_at=excluded.updated_at",
               (key, name, department, encode(triggers), encode(actions), int(on), preset, at,
                before["created_by"] if before else who.actor, before["created_at"] if before else now, now))
     H.event(c, who.actor, "task_rule.updated" if before else "task_rule.created", key,
@@ -134,9 +134,9 @@ def row(c, settings, rule, who=None, auth=None, now=None, last=None):
     return {"key": rule["id"], "kind": "task_rule", "name": rule["name"],
             "what": "Closes eligible done tasks across the company. Reopen a task to undo.",
             "when": when, "then": then, "department": {"id": department, "name": chart.get(department, department), "in_chart": department in chart},
-            "triggers": triggers, "actions": actions, "schedule": SR.PRESETS[cfg["preset"]][0].format(at=cfg["at"] or ""),
+            "triggers": triggers, "actions": actions, "schedule": SR.PRESETS[cfg["preset"]][0].format(at=cfg["daily_at"] or ""),
             "ai": False, "needed": False, "records": True, "controllable": False, "group": "task_rules",
-            "switch": True, "on": cfg["on"], "preset": cfg["preset"], "at": cfg["at"], "owner_only": False,
+            "switch": True, "on": cfg["on"], "preset": cfg["preset"], "daily_at": cfg["daily_at"], "owner_only": False,
             "presets": [{"key": p, "label": SR.PRESETS[p][0].format(at="a time")} for p in SR.EVERY_PRESET],
             "can_change": can_change(c, settings, auth, who, department),
             "last": {k: bool(last[k]) if k == "ok" else last[k] for k in ("started_at", "finished_at", "ok", "result", "runs")} if last else None,
@@ -149,7 +149,7 @@ def listing(c, settings, who=None, auth=None, now=None):
 
 
 HISTORY_ACTIVITY_SQL = "NOT (actor='keeper' AND field='github')"
-MESSAGE_ACTIVITY_SQL = "m.from_actor<>'keeper'"
+MESSAGE_ACTIVITY_SQL = "m.sender_id<>'keeper'"
 
 
 def untouched(c, task, hours, now):
@@ -157,7 +157,7 @@ def untouched(c, task, hours, now):
     # scoped messages in shared conversations; unrelated chat must not restart a task's wait.
     times = [task.get(k) for k in ("created_at", "updated_at", "done_at", "checkpoint_at")]
     # Observed GitHub facts have history, but viewing them and keeper notices are not work on the task.
-    times += [r[0] for r in c.execute(f"SELECT max(ts) FROM task_events WHERE task_id=? AND {HISTORY_ACTIVITY_SQL}", (task["id"],))]
+    times += [r[0] for r in c.execute(f"SELECT max(created_at) FROM task_events WHERE task_id=? AND {HISTORY_ACTIVITY_SQL}", (task["id"],))]
     message = c.execute("SELECT max(max(m.created_at,coalesce(m.edited_at,m.created_at),coalesce(m.deleted_at,m.created_at))) "
                         "FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
                         f"WHERE m.conversation_id=? AND {H.MESSAGE_TASK_SQL}=? AND {MESSAGE_ACTIVITY_SQL}",
@@ -203,7 +203,7 @@ DUE_SQL = (
     "WHERE tt.task_id=t.id AND lower(g.key) IN ('pin','pinned')) "
     "AND NOT EXISTS (SELECT 1 FROM json_each(t.labels) WHERE lower(value) IN ('pin','pinned')) "
     "AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.task_id=t.id AND a.decision IS NULL) "
-    f"AND NOT EXISTS (SELECT 1 FROM task_events WHERE task_id=t.id AND {HISTORY_ACTIVITY_SQL} AND ts>?) "
+    f"AND NOT EXISTS (SELECT 1 FROM task_events WHERE task_id=t.id AND {HISTORY_ACTIVITY_SQL} AND created_at>?) "
     "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
     f"WHERE m.conversation_id=t.conversation_id AND {H.MESSAGE_TASK_SQL}=t.id "
     f"AND ((m.kind='ask' AND {H.OPEN_ASK_SQL}) OR ({MESSAGE_ACTIVITY_SQL} AND "

@@ -48,7 +48,7 @@ def test_a_bot_over_its_limit_takes_no_new_job_a_running_turn_finishes_and_raisi
     assert claim(api, r) is None                                                  # over the limit: nothing new starts
     assert paused(api)["state"] == "paused" and paused(api)["focus"] == "Paused: over its daily limit"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] == 1   # parked, not lost
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] == 1   # parked, not lost
     put(api, "usage/limits/ops", {"daily_usd": 50})
     assert claim(api, r) is not None                                              # raising the limit resumes it
     assert paused(api)["state"] != "paused"
@@ -106,7 +106,7 @@ def test_a_message_or_task_for_a_bot_over_its_limit_is_saved_and_the_sender_is_t
     assert not err and sent["id"]                                                 # saved: it runs once the limit allows
     assert sent["warning"] == ("ops is over its daily limit ($5.00 of $1.00); it starts again at 00:00 UTC "
                                "or when a person raises the limit.")
-    err, made = call(api, "hub_task_create", {"owner": "ops", "title": "Review the Acme invoice", "body": "Please."})
+    err, made = call(api, "hub_task_create", {"owner_id": "ops", "title": "Review the Acme invoice", "body": "Please."})
     assert not err and made["task"]["id"] and "over its daily limit" in made["warning"]
     assert paused(api)["limit"] == {**paused(api)["limit"], "period": "daily", "spent": 5, "limit": 1}
     put(api, "usage/limits/ops", {"daily_usd": 50})

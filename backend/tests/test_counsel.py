@@ -29,7 +29,7 @@ def counsel_on(api):
     """Counsel is built in and active, as onboarding makes it: a bot row, a config, and its own token."""
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,operator) VALUES('tico-counsel','{}','','ana')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('tico-counsel','{}','','ana')")
     as_bot(api, "tico-counsel", "counsel-test")
 
 
@@ -130,7 +130,7 @@ def test_accepting_a_suggestion_writes_an_audit_row(api):
     accepted = post(api, f"rules/{r['id']}/accept", {"version": r["version"]})
     assert accepted["rule"]["status"] == "active"
     with api.app.state.store.read() as c:
-        rows = [dict(x) for x in c.execute("SELECT * FROM audit_log WHERE object=? ORDER BY at, id",
+        rows = [dict(x) for x in c.execute("SELECT * FROM audit_log WHERE object=? ORDER BY created_at, id",
                                            ("org_rule:" + r["id"],))]
     assert rows[-1]["actor"] == "human:ana"
 
@@ -166,8 +166,8 @@ def test_the_document_is_fenced_as_data_in_counsels_task(api):
     file_id, _ = store_file(api, CONTRACT + "\n" + hostile)
     read = post(api, "rules/read", {"file_id": file_id, "source_id": source(api)})
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body, owner FROM tasks WHERE id=?", (read["task_id"],)).fetchone()
-    assert body["owner"] == "bot:tico-counsel"
+        body = c.execute("SELECT body, owner_id FROM tasks WHERE id=?", (read["task_id"],)).fetchone()
+    assert body["owner_id"] == "bot:tico-counsel"
     text = body["body"]
     start = text.index("<<UNTRUSTED DOCUMENT ")
     end = text.index("<<END UNTRUSTED DOCUMENT ")
@@ -570,7 +570,7 @@ def test_another_bot_cannot_cite_a_file_it_cannot_read(api):
     read_document(api, file_id)
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('scout', 'scout', 'Scout', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,operator) VALUES('scout','{}','','ana')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('scout','{}','','ana')")
     as_bot(api, "scout", "scout-test")
     r = api.post("/api/v2/rules", headers=headers("scout-test"), json={
         "kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}, "source_id": source(api),
@@ -1113,7 +1113,7 @@ def test_the_server_refuses_counsel_outward_routes_and_comments_only_on_its_own_
         assert r.status_code == 403, (path, r.text)
         assert "not its to make" in r.text
     # A comment on a task that is not Counsel's own is refused; on its own read task, from its run, it is not.
-    other = post(api, "tasks", {"owner": "ops", "title": "Ops work", "body": "Ordinary work."})
+    other = post(api, "tasks", {"owner_id": "ops", "title": "Ops work", "body": "Ordinary work."})
     assert api.post(f"/api/v2/tasks/{other['id']}/comments", headers=token, json={"body": "hi"}).status_code == 403
     read = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     token = read_run(api)
@@ -1234,12 +1234,12 @@ def test_a_leftover_counsel_task_does_not_block_a_read_and_the_read_sees_only_it
     asked = post(api, "rules/ask", {"question": "Can I text customers on Sunday about the secret Globex launch?"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='declined' WHERE id=?", (asked["task_id"],))
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot='tico-counsel'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='tico-counsel'")
     file_id, version = store_file(api, CONTRACT)
     other_file, _ = store_file(api, "Globex launch plan: secret.", title="Globex Plan")
     read_document(api, other_file)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot='tico-counsel'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='tico-counsel'")
     read = read_document(api, file_id)
     r, attempt = counsel_run(api)
     with api.app.state.store.read() as c:
@@ -1301,7 +1301,7 @@ def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on
     from backend.tests.test_api import assign, claim, runner
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,operator) VALUES('tico-counsel', ?, '', 'ana')",
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('tico-counsel', ?, '', 'ana')",
                   (json.dumps({"template": "tico-counsel", "session": "bot"}),))
         task = H.task_create(c, "human:ana", "Read the synthetic contract", "Use only fixture text.",
                              "bot:tico-counsel", lint=False)["id"]

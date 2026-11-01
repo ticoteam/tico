@@ -39,7 +39,7 @@ def api(tmp_path):
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
                 {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]},
                 {"id": "ben", "email": "ben@acme.example"}]}),))
-            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('ops',?,'ana')",
+            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('ops',?,'ana')",
                       (encode({"name": "ops", "runtime": "fake", "status": "active"}),))
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
         yield client

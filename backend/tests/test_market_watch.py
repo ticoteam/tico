@@ -168,7 +168,7 @@ def test_a_page_change_trips_a_cited_bet_only_once_the_insight_is_applied(seeded
 
     def bet_tasks():
         with seeded.app.state.store.read() as c:
-            return [(t["title"], t["owner"]) for t in H._rows(c.execute("SELECT title, owner FROM tasks WHERE title LIKE 'Bet %'"))]
+            return [(t["title"], t["owner_id"]) for t in H._rows(c.execute("SELECT title, owner_id FROM tasks WHERE title LIKE 'Bet %'"))]
     assert bet_tasks() == []                       # a raw diff may be layout or wording: no fit check yet
     with seeded.app.state.store.read() as c:
         insight_id = c.execute("SELECT id FROM market_insights WHERE source_ref LIKE 'watch:%'").fetchone()[0]

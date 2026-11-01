@@ -222,7 +222,7 @@ def computer(api, live, tmp_path, harness, setup, rust_binary):
 
 def reply_to(api, conversation, token="ana-test", bot="ops"):
     messages = get(api, f"conversations/{conversation}/messages", token)
-    return next((m for m in reversed(messages) if m["from_actor"] == "bot:" + bot), None)
+    return next((m for m in reversed(messages) if m["sender_id"] == "bot:" + bot), None)
 
 
 def add_bot(api, computer, tmp_path, slug, bot=None):
@@ -253,7 +253,7 @@ def terminal_result(raw):
 
 def bot_attempts(api, computer, bot):
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT id, result FROM attempts WHERE runner_id=? AND bot=? ORDER BY created_at",
+        rows = c.execute("SELECT id, result FROM attempts WHERE runner_id=? AND bot_id=? ORDER BY created_at",
                          (computer.registration["runner_id"], bot)).fetchall()
     return [{"id": r[0], "result": terminal_result(r[1])} for r in rows]
 
@@ -265,7 +265,7 @@ def test_task_model_fallback_runs_in_a_side_session_from_the_checkpoint_and_keep
 
     company(api, "anthropic", "xai")
     computer.start()
-    task = post(api, "tasks", {"owner": "ops", "title": "Follow the Acme release", "body": "Keep the release ready."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Follow the Acme release", "body": "Keep the release ready."})
 
     def completed(count):
         turns = until(lambda: (a if len(a := [t for t in computer.attempts() if t["state"] == "completed"]) >= count
@@ -325,7 +325,7 @@ def test_returning_task_model_receives_the_completed_fallback_checkpoint(api, co
 
     company(api, "anthropic", "xai")
     computer.start()
-    task = post(api, "tasks", {"owner": "ops", "title": "Continue the Acme release", "body": "Keep the release ready."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Continue the Acme release", "body": "Keep the release ready."})
 
     def completed(count):
         turns = until(lambda: (a if len(a := [t for t in computer.attempts() if t["state"] == "completed"]) >= count
@@ -532,7 +532,7 @@ def test_a_second_message_reuses_the_warm_process_or_resumes_the_session(api, co
     second = post(api, "chat/ops", {"text": "and once more"})
     assert second["conversation_id"] == first["conversation_id"]
     until(lambda: len([m for m in get(api, f"conversations/{first['conversation_id']}/messages")
-                       if m["from_actor"] == "bot:ops"]) == 2, "the second reply")
+                       if m["sender_id"] == "bot:ops"]) == 2, "the second reply")
     calls = computer.prompts()
     tokens = {a["id"]: a for a in computer.attempts()}
     assert [a["result"]["outcome"] for a in tokens.values()] == ["completed", "completed"]
@@ -907,7 +907,7 @@ def test_an_api_key_codex_login_is_never_asked_for_plan_usage(api, computer):
 def test_two_tasks_of_one_bot_run_side_by_side_in_their_own_lanes(api, computer, setup):
     computer.start()
     for title in ("SLOW first", "SLOW second"):
-        post(api, "tasks", {"owner": "ops", "title": title, "body": "Please do " + title + "."})
+        post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Please do " + title + "."})
     until(lambda: len([c for c in computer.calls() if c.get("method") == "turn/completed"]) == 2, "both task turns", timeout=60)
     turns = codex_turns(computer)
     waits = [e for a in computer.attempts() for e in computer.events(a["id"]) if e["kind"] == "status" and e["payload"].get("waiting")]
@@ -1092,7 +1092,7 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
                            "status": "active", "session": "task"}),))
     computer.start()
 
-    task = post(api, "tasks", {"owner": "ops", "title": "Build product", "body": "Please build the product."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Build product", "body": "Please build the product."})
     until(lambda: any(a["state"] == "completed" for a in computer.attempts()), "the task's first turn")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (task["id"],))  # a started task gets a worktree
@@ -1165,7 +1165,7 @@ def test_a_completed_turn_publishes_the_bots_report_as_a_tico_file(api, computer
 
     def published():
         with api.app.state.store.read() as c:
-            return [tuple(r) for r in c.execute("SELECT title, kind FROM bot_files WHERE bot='ops'")]
+            return [tuple(r) for r in c.execute("SELECT title, kind FROM bot_files WHERE bot_id='ops'")]
     assert until(published, "the published file") == [("acme.md", "document")]
 
 

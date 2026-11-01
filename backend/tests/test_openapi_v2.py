@@ -104,7 +104,7 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("getMessage", "get", "/api/v2/messages/" + chat["message"]["id"])
     call("sendMessage", "post", "/api/v2/messages", json={"to": "bot:ops", "text": "third"})
     task = call("createTask", "post", "/api/v2/tasks",
-                json={"title": "Draft the launch plan", "body": "Please draft it.", "owner": "human:ana"})["task"]
+                json={"title": "Draft the launch plan", "body": "Please draft it.", "owner_id": "human:ana"})["task"]
     call("listTasks", "get", "/api/v2/tasks")
     detail = call("getTask", "get", "/api/v2/tasks/" + task["id"])
     call("updateTask", "post", "/api/v2/tasks/" + task["id"], json={"version": detail["task"]["version"], "status": "doing"})
@@ -134,7 +134,7 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("listLinkedDocs", "get", "/api/v2/linked-docs")
     call("updateLinkedDoc", "patch", "/api/v2/linked-docs/" + link["id"], json={"description": "Public refunds page"})
     call("searchInternalAndLinkedDocs", "get", "/api/v2/docs/search", params={"q": "refund"})
-    goal = call("createGoal", "post", "/api/v2/goals", json={"title": "Raise activation", "owner": "me"})["goal"]
+    goal = call("createGoal", "post", "/api/v2/goals", json={"title": "Raise activation", "owner_id": "me"})["goal"]
     kpi = call("createKpi", "post", "/api/v2/kpis", json={
         "name": "Activation", "unit": "%", "cadence": "daily", "goal_id": goal["id"], "kind": "improve",
         "baseline": 40, "target": 70, "deadline": "2099-12-31"})["kpi"]
@@ -191,7 +191,7 @@ def test_closed_status_uses_close_permissions_and_rejects_combined_edits(api):
     from backend.tests.test_task_lanes import task_bot
     from backend.tests.test_subtask_results import start
     machine = task_bot(api, lanes=True)
-    task = post(api, "tasks", {"title": "Check closure alias", "body": "Check it.", "owner": "bot:ops"})
+    task = post(api, "tasks", {"title": "Check closure alias", "body": "Check it.", "owner_id": "bot:ops"})
     checking = start(api, machine, task["id"], "closure-task")
     task = checking["task"]
     path = f"tasks/{task['id']}"
@@ -202,6 +202,6 @@ def test_closed_status_uses_close_permissions_and_rejects_combined_edits(api):
         row = H.task(c, task["id"])
         assert (row["status"], row["title"], row["version"]) == ("doing", task["title"], task["version"])
     closed = post(api, path, {"version": task["version"], "status": "closed", "note": "Accepted."})
-    assert closed["status"] == "closed" and closed["closed_by"] == "human:ana"
+    assert closed["status"] == "closed" and closed["closed_by_id"] == "human:ana"
     assert closed["version"] == task["version"] + 1
     post(api, path, {"version": task["version"], "status": "closed"}, expected=409)

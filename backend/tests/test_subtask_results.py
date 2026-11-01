@@ -24,7 +24,7 @@ def queued(api, bot):
 
 def queued_in(c, bot):
     return [H.message(c, r[0]) for r in c.execute(
-        "SELECT message_id FROM jobs WHERE bot=? AND state='queued' ORDER BY rowid", (bot,))]
+        "SELECT message_id FROM jobs WHERE bot_id=? AND state='queued' ORDER BY rowid", (bot,))]
 
 
 def test_nested_reviews_return_once_to_the_live_builder_then_builder_returns_to_the_lead(api):
@@ -132,4 +132,4 @@ def test_private_child_results_stay_off_a_wider_parent_and_closed_parents_do_not
         since = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
         H.task_update(c, "bot:finance", closed["id"], status="done", note="Late result.")
         assert not c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-                             "WHERE j.bot='ops' AND j.state='queued' AND m.rowid>?", (since,)).fetchone()
+                             "WHERE j.bot_id='ops' AND j.state='queued' AND m.rowid>?", (since,)).fetchone()

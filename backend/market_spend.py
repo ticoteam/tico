@@ -589,8 +589,8 @@ def add_segment(conn, actor, name, parent_id=None, summary=""):
         # A segment removed earlier comes back under the parent named now, keeping its id and its history.
         MK.update_entity(conn, actor, seg_id, status="active")
         day = _today()
-        held = conn.execute("SELECT 1 FROM market_edges WHERE src=? AND rel='member_of' AND (since IS NULL OR "
-                            "substr(since,1,10)<=?) AND (until IS NULL OR substr(until,1,10)>=?)", (seg_id, day, day)).fetchone()
+        held = conn.execute("SELECT 1 FROM market_edges WHERE src=? AND rel='member_of' AND (valid_from_on IS NULL OR "
+                            "substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)", (seg_id, day, day)).fetchone()
         if not held:
             MK.create_edge(conn, actor, src=seg_id, rel="member_of", dst=parent["id"], since=day,
                            evidence_ids=[definition_evidence(conn, actor)])
@@ -609,8 +609,8 @@ def _tree(conn, root):
     rows = {r["id"]: r for r in H._rows(conn.execute(
         "SELECT id, name, summary, properties FROM market_entities WHERE type='segment' AND status='active'"))}
     children = {}
-    for edge in conn.execute("SELECT src, dst FROM market_edges WHERE rel='member_of' AND (since IS NULL OR substr(since,1,10)<=?) "
-                             "AND (until IS NULL OR substr(until,1,10)>=?)", (day, day)):
+    for edge in conn.execute("SELECT src, dst FROM market_edges WHERE rel='member_of' AND (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) "
+                             "AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)", (day, day)):
         if edge["src"] in rows and edge["dst"] in rows and edge["src"] != edge["dst"]:
             children.setdefault(edge["dst"], []).append(edge["src"])
     order, depth, parent = [], {}, {}
@@ -739,7 +739,7 @@ def _players(conn, ids, figures):
     members = {s: set() for s in ids}
     own = set()
     day = _today()
-    current = "(since IS NULL OR substr(since,1,10)<=?) AND (until IS NULL OR substr(until,1,10)>=?)"
+    current = "(valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)"
     for edge in conn.execute(
             f"SELECT src, dst, rel, CASE WHEN json_valid(properties) THEN json_extract(properties,'$.segment') END AS segment "
             f"FROM market_edges WHERE {current} AND ((rel='operates_in' AND dst IN (SELECT value FROM json_each(?))) "
@@ -844,7 +844,7 @@ def value_chain(conn):
     empty = {"layers": [{"key": k, "title": t, "nodes": []} for k, t in LAYERS], "edges": []}
     if not conn.execute("SELECT 1 FROM market_entities WHERE id=? AND status='active'", (me,)).fetchone():
         return empty
-    current = "(since IS NULL OR substr(since,1,10)<=?) AND (until IS NULL OR substr(until,1,10)>=?)"
+    current = "(valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)"
     rivals = {e["dst"] if e["src"] == me else e["src"] for e in H._rows(conn.execute(
         f"SELECT src, dst FROM market_edges WHERE rel='competes_with' AND (src=? OR dst=?) AND {current}", (me, me, day, day)))}
     rivals.discard(me)
@@ -897,7 +897,7 @@ def value_chain(conn):
 # ----------------------------------------------------------------------------- the research task
 def _open_task(conn):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-    row = conn.execute(f"SELECT id FROM tasks WHERE owner=? AND (title=? OR title LIKE ?) AND status IN ({marks}) "
+    row = conn.execute(f"SELECT id FROM tasks WHERE owner_id=? AND (title=? OR title LIKE ?) AND status IN ({marks}) "
                        "ORDER BY created_at DESC LIMIT 1", ("bot:librarian", SIZE_TASK, SIZE_TASK + " (%)", *H.ACTIVE_STATUSES)).fetchone()
     return row["id"] if row else None
 
@@ -906,7 +906,7 @@ def _free_title(conn, actor):
     marks = ",".join("?" * len(H.LIVE_STATUSES))
     for n in range(1, 40):
         title = SIZE_TASK if n == 1 else f"{SIZE_TASK} ({n})"
-        if not conn.execute(f"SELECT 1 FROM tasks WHERE requester=? AND owner=? AND title=? AND status IN ({marks})",
+        if not conn.execute(f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
                             (actor, "bot:librarian", title, *H.LIVE_STATUSES)).fetchone():
             return title
     return f"{SIZE_TASK} (40)"

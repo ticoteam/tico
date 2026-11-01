@@ -24,7 +24,7 @@ def seed(api, computers, first, last):
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for i, s in enumerate(slugs, first):
             harness = HARNESSES[i % len(HARNESSES)]
-            c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
                       (s, encode({"name": s, "runtime": harness, "harness": harness}), None, "ana"))
     for k, r in enumerate(computers):
         mine = slugs[k::len(computers)]
@@ -42,7 +42,7 @@ def counted(api, token="ana-test"):
     shapes = collections.Counter(shape(s) for s in statements)
     return page, {
         "computer rows": sum(n for s, n in shapes.items() if s.startswith("SELECT id,label,last_seen_at,revoked_at")),
-        "placement reads": sum(n for s, n in shapes.items() if "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?" in s),
+        "placement reads": sum(n for s, n in shapes.items() if "JOIN runners r ON r.id=a.runner_id WHERE a.bot_id=?" in s),
         "credential reads": sum(n for s, n in shapes.items() if s.startswith("SELECT id,env FROM credentials")),
         "statements": len(statements),
     }

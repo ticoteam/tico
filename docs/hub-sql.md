@@ -136,21 +136,21 @@ Tool names in the MCP totals and a granted bot's `hub mcp stats` are registered 
 Queued work, oldest first:
 
 ```sql
-SELECT bot, count(*) AS queued, min(created_at) AS oldest
-FROM jobs WHERE state='queued' GROUP BY bot ORDER BY queued DESC
+SELECT bot_id, count(*) AS queued, min(created_at) AS oldest
+FROM jobs WHERE state='queued' GROUP BY bot_id ORDER BY queued DESC
 ```
 
 My open tasks (a bot's own; a human swaps in `human:<id>`):
 
 ```sql
-SELECT id, status, title, requester, due, updated_at
-FROM tasks WHERE owner=:me AND status IN ('open','doing','waiting') ORDER BY due, updated_at
+SELECT id, status, title, requester_id, due_at, updated_at
+FROM tasks WHERE owner_id=:me AND status IN ('open','doing','waiting') ORDER BY due_at, updated_at
 ```
 
 What is waiting on a human, and for how long:
 
 ```sql
-SELECT t.owner, t.title, t.updated_at, substr(m.body, 1, 100) AS question
+SELECT t.owner_id, t.title, t.updated_at, substr(m.body, 1, 100) AS question
 FROM tasks t JOIN messages m ON m.conversation_id=t.conversation_id AND m.kind='ask'
 WHERE t.status='waiting' ORDER BY t.updated_at
 ```
@@ -253,25 +253,25 @@ same bot leave no settled comparison state because their writes cannot be attrib
 from last week for the audit:
 
 ```sql
-SELECT ts, json_extract(detail, '$.bot') AS bot, json_extract(detail, '$.task') AS task,
+SELECT created_at, json_extract(detail, '$.bot') AS bot, json_extract(detail, '$.task') AS task,
        json_extract(detail, '$.rule') AS rule, json_extract(detail, '$.trigger') AS trigger, target AS message
-FROM events WHERE action = 'wake.skipped' AND ts >= date('now', '-13 days', 'weekday 1')
-  AND ts < date('now', '-6 days', 'weekday 1') ORDER BY random() LIMIT 50
+FROM events WHERE action = 'wake.skipped' AND created_at >= date('now', '-13 days', 'weekday 1')
+  AND created_at < date('now', '-6 days', 'weekday 1') ORDER BY random() LIMIT 50
 ```
 
 Replies Tico did not post: a turn woken by Tico on a task already finished that changed nothing leaves one
 `reply.withheld` event (`target` is the run; `bot`, `task`, `to`); its text stays on the run (`attempts.final_text`):
 
 ```sql
-SELECT ts, json_extract(detail, '$.bot') AS bot, json_extract(detail, '$.task') AS task,
+SELECT created_at, json_extract(detail, '$.bot') AS bot, json_extract(detail, '$.task') AS task,
        json_extract(detail, '$.to') AS to_person, target AS run
-FROM events WHERE action = 'reply.withheld' ORDER BY ts DESC LIMIT 50
+FROM events WHERE action = 'reply.withheld' ORDER BY created_at DESC LIMIT 50
 ```
 
 Who asked what today:
 
 ```sql
-SELECT created_at, from_actor, to_actor, substr(body, 1, 90) AS ask
+SELECT created_at, sender_id, recipient_id, substr(body, 1, 90) AS ask
 FROM messages WHERE kind='ask' AND created_at >= strftime('%Y-%m-%d', 'now') ORDER BY created_at DESC
 ```
 
@@ -286,7 +286,7 @@ LEFT JOIN tasks t ON t.id=o.task_id ORDER BY o.occurrence DESC LIMIT 50
 A task's history in order:
 
 ```sql
-SELECT ts, actor, field, old, new, note FROM task_events WHERE task_id=:task ORDER BY ts
+SELECT created_at, actor, field, old, new, note FROM task_events WHERE task_id=:task ORDER BY created_at
 ```
 
 What a run said (its streamed output, in order):
@@ -309,14 +309,14 @@ Refusals by rule this week:
 
 ```sql
 SELECT actor, rule, count(*) AS n FROM refusals
-WHERE ts > strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 days') GROUP BY actor, rule ORDER BY n DESC
+WHERE created_at > strftime('%Y-%m-%dT%H:%M:%S', 'now', '-7 days') GROUP BY actor, rule ORDER BY n DESC
 ```
 
 Who queried what (the audit of this very feature):
 
 ```sql
-SELECT ts, actor, json_extract(detail, '$.rows') AS rows, json_extract(detail, '$.sql') AS sql
-FROM events WHERE action='sql.query' ORDER BY ts DESC LIMIT 20
+SELECT created_at, actor, json_extract(detail, '$.rows') AS rows, json_extract(detail, '$.sql') AS sql
+FROM events WHERE action='sql.query' ORDER BY created_at DESC LIMIT 20
 ```
 
 From a bot: `hub sql "SELECT ..." --param me=bot:seo`. From Ana's Mac: `scripts/hub sql "SELECT ..."`.

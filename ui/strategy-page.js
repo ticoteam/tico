@@ -161,7 +161,7 @@ function strategyWrongIfHtml(w) {
 }
 
 function strategyStatusText(data, view) {
-  if (!view.owner) return '';
+  if (!view.owner_id) return '';
   if (data.current && strategyDiffers(data)) return `Draft differs from v${data.current.n}`;
   if (!data.current && !strategyBlank(data.draft, data.bets || [])) return 'Not published';
   return '';
@@ -176,7 +176,7 @@ function strategyMetaHtml(data, view) {
 
 function strategyActionsHtml(data, view) {
   const versions = data.current ? '<button class="ghost" type="button" data-strat-versions>Versions</button>' : '';
-  if (!view.owner) return versions;
+  if (!view.owner_id) return versions;
   const refusal = strategyPublishRefusal(data, view), fresh = strategyDiffers(data);
   const why = refusal || (fresh ? '' : 'Nothing new to publish');
   // Why Publish is off sits in a (?) beside it, not a line of its own.
@@ -258,36 +258,36 @@ const stratRoom = data => (data.bets || []).filter(c => c.status === 'active').l
 function strategyBetHtml(c, n, view, data) {
   const status = c.status || 'proposed', health = (data.health_by_bet || {})[c.id], goals = (data.goals_by_bet || {})[c.id];
   const one = esc(view.one);
-  const statement = view.owner
+  const statement = view.owner_id
     ? `<textarea class="strat-ed strat-bet-st" data-bet-st rows="1" maxlength="300" placeholder="A ${one.toLowerCase()}" aria-label="${one} ${n + 1}">${esc(c.statement)}</textarea>`
     : `<span class="strat-bet-st">${esc(c.statement)}</span>`;
-  const num = view.owner
+  const num = view.owner_id
     ? `<button type="button" class="strat-bet-n tnum" data-bet-drag aria-label="Move ${one.toLowerCase()} ${n + 1}" title="Drag to move">${n + 1}</button>`
     : `<span class="strat-bet-n tnum" aria-hidden="true">${n + 1}</span>`;
-  const pill = status === 'active' ? '' : view.owner
+  const pill = status === 'active' ? '' : view.owner_id
     ? `<button type="button" class="pill strat-pill ${esc(status)}" data-bet-activate title="Make it active">${STRAT_STATUS[status] || status}</button>`
     : `<span class="pill strat-pill ${esc(status)}">${STRAT_STATUS[status] || status}</span>`;
   return `<li class="strat-bet strat-${esc(status)}" data-bet="${esc(c.id)}">${num}
       <div class="strat-bet-main">${statement}${strategyGoalsHtml(goals)}</div>
       <span class="strat-bet-side">${health ? `<span class="strat-health" data-bet-health="${esc(health)}">${gdot(health, 'Health, from its KPI goals')}</span>` : ''}${pill}
-        ${view.owner ? `<button type="button" class="strat-x" data-bet-x aria-label="Remove ${one.toLowerCase()} ${n + 1}">${STRAT_X}</button>` : ''}</span></li>`;
+        ${view.owner_id ? `<button type="button" class="strat-x" data-bet-x aria-label="Remove ${one.toLowerCase()} ${n + 1}">${STRAT_X}</button>` : ''}</span></li>`;
 }
 function strategyNewBetHtml(view, n) {
   return `<li class="strat-bet strat-bet-new" data-bet-new><span class="strat-bet-n tnum" aria-hidden="true">${n + 1}</span>
       <div class="strat-bet-main"><textarea class="strat-ed strat-bet-st" data-bet-st rows="1" maxlength="300" placeholder="A ${esc(view.one.toLowerCase())}" aria-label="New ${esc(view.one.toLowerCase())}"></textarea></div></li>`;
 }
 function strategyBetsHead(view, live) {
-  const add = view.owner && !STRAT?.adding && live.length < 30
+  const add = view.owner_id && !STRAT?.adding && live.length < 30
     ? `<button type="button" class="strat-add" data-bet-add aria-label="Add ${esc(view.one)}">+ ${esc(view.one)}</button>` : '';
   return `<div class="strat-card-head"><h2 class="strat-k" id="strat-bets-h">${esc(view.label)}</h2>${add}</div>`;
 }
 function strategyBetRowsHtml(data, view) {
   const live = view.bets.filter(c => c.status !== 'retired');
-  return live.map((c, n) => strategyBetHtml(c, n, view, data)).join('') + (view.owner && STRAT?.adding ? strategyNewBetHtml(view, live.length) : '');
+  return live.map((c, n) => strategyBetHtml(c, n, view, data)).join('') + (view.owner_id && STRAT?.adding ? strategyNewBetHtml(view, live.length) : '');
 }
 function strategyRetiredHtml(view) {
   const retired = view.bets.filter(c => c.status === 'retired');
-  if (!view.owner || !retired.length) return '';
+  if (!view.owner_id || !retired.length) return '';
   return `<details class="strat-retired"${STRAT?.retiredOpen ? ' open' : ''}><summary>Retired <span class="cnt tnum">${retired.length}</span></summary>
       <ul class="strat-retired-list">${retired.map(c => `<li data-bet="${esc(c.id)}"><span>${esc(c.statement)}</span>
         <button type="button" class="ghost strat-mini" data-bet-restore>Restore</button></li>`).join('')}</ul></details>`;
@@ -398,7 +398,7 @@ async function strategyMarketRead(key, load, fresh = false) {
 }
 function strategyPaintMarket(key) {
   if (!STRAT) return;
-  const owner = strategyView(STRAT.data).owner;
+  const owner = strategyView(STRAT.data).owner_id;
   if (key === 'growth') {
     const g = STRAT_MKT.growth;
     if ($('#strat-setup')) patchHTML($('#strat-setup'), g ? brandSetupHtml(g.brand) : '');
@@ -420,7 +420,7 @@ function strategySectionList(version) {
     ...Object.entries(stratExtra(version)).filter(([, x]) => x).map(([key, x]) => ({key, title: x.title || key, prompt: '', text: x.body || '', extra: true}))];
 }
 function strategySectionsHtml(view) {
-  const owner = view.owner;
+  const owner = view.owner_id;
   const rows = strategySectionList(view.version).map(sec => {
     const editing = owner && STRAT?.editSection === sec.key;
     if (!owner && !stratText(sec.text)) return '';
@@ -463,26 +463,26 @@ function strategyRender() {
   if (!body || !STRAT) return;
   const data = STRAT.data, view = strategyView(data);
   patchHTML($('#strat-actions'), strategyActionsHtml(data, view));
-  if (!view.owner && !data.current) { body.innerHTML = '<p class="strat-none">No strategy yet.</p>'; strategyBind(); return; }
+  if (!view.owner_id && !data.current) { body.innerHTML = '<p class="strat-none">No strategy yet.</p>'; strategyBind(); return; }
   if (!$('#strat-doc')) body.innerHTML = STRAT_FRAME;
   const v = view.version || {};
   // Words typed and not yet saved survive a redraw (their save is on its way).
   const key = f => f.dataset.stratField || f.closest('[data-bet]')?.dataset.bet || 'new';
   const typed = [...body.querySelectorAll('[data-strat-field], [data-bet-st]')].filter(f => f.value !== f.defaultValue).map(f => [key(f), f.value]);
   patchHTML($('#strat-pub'), `${STRAT.publishing ? strategyPublishHtml() : ''}${strategyMetaHtml(data, view)}`);
-  patchHTML($('#strat-top'), view.owner
+  patchHTML($('#strat-top'), view.owner_id
     ? `<textarea class="strat-ed strat-big" data-strat-field="summary" rows="1" maxlength="400" placeholder="Your strategy in one sentence" aria-label="Summary">${esc(v.summary || '')}</textarea>`
     : `<p class="strat-text strat-big">${esc(v.summary || '')}</p>`);
-  $('#strat-top').hidden = !view.owner && !stratText(v.summary);
+  $('#strat-top').hidden = !view.owner_id && !stratText(v.summary);
   const bets = $('#strat-sec-bets'), live = view.bets.filter(c => c.status !== 'retired');
-  bets.hidden = !view.owner && !live.length;
+  bets.hidden = !view.owner_id && !live.length;
   patchHTML(bets, `${strategyBetsHead(view, live)}<ol class="strat-bets" id="strat-bets-ol"></ol>${strategyRetiredHtml(view)}`);
   const ol = $('#strat-bets-ol');
   patchHTML(ol, strategyBetRowsHtml(data, view));
   if (!ol.children.length) patchHTML(ol, `<li class="strat-bet strat-none-row"><span class="muted strat-empty">None yet</span></li>`);
   for (const k of ['spend', 'rivals', 'news', 'growth']) strategyPaintMarket(k);
   patchHTML($('#strat-secs'), strategySectionsHtml(view));
-  patchHTML($('#strat-add-sec'), view.owner && !STRAT.addSection ? '<button class="ghost strat-mini" type="button" data-section-add>Add a section</button>' : '');
+  patchHTML($('#strat-add-sec'), view.owner_id && !STRAT.addSection ? '<button class="ghost strat-mini" type="button" data-section-add>Add a section</button>' : '');
   for (const [k, value] of typed) {
     const f = k === 'summary' ? body.querySelector('[data-strat-field="summary"]')
       : k === 'new' ? body.querySelector('[data-bet-new] [data-bet-st]') : body.querySelector(`[data-bet="${CSS.escape(k)}"] [data-bet-st]`);
@@ -566,7 +566,7 @@ function strategyBind() {
       else form.querySelectorAll('button').forEach(b => { b.disabled = false; });
     };
   }
-  if (!view.owner) return;
+  if (!view.owner_id) return;
 
   const summary = body.querySelector('[data-strat-field="summary"]');
   if (summary) {

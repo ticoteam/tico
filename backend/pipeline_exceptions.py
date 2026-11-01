@@ -66,7 +66,7 @@ def _finished_check(c, ticket, step, since):
     None: the check was filed, and what stands is the ticket not moving on."""
     from . import step_flow
     for row in c.execute(
-            "SELECT t.id, t.title, t.owner, coalesce(t.done_at, t.closed_at, t.updated_at) AS ended FROM task_relations r "
+            "SELECT t.id, t.title, t.owner_id, coalesce(t.done_at, t.closed_at, t.updated_at) AS ended FROM task_relations r "
             "JOIN tasks t ON t.id=r.from_task WHERE r.kind='parent' AND r.to_task=? AND t.created_at>=? "
             f"AND t.status NOT IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) ORDER BY ended DESC, t.id",
             (ticket["id"], since, *H.ACTIVE_STATUSES)):
@@ -81,7 +81,7 @@ def _entered(c, ids):
     out = {}
     for part in H.chunks(sorted(ids)):
         out.update(dict(c.execute(
-            f"SELECT task_id, max(ts) FROM task_events WHERE task_id IN ({','.join('?' * len(part))}) "
+            f"SELECT task_id, max(created_at) FROM task_events WHERE task_id IN ({','.join('?' * len(part))}) "
             "AND field IN ('step','status') GROUP BY task_id", part).fetchall()))
     return out
 
@@ -89,17 +89,17 @@ def _entered(c, ids):
 def _runs(c, row):
     """(live, newest finished attempts newest first, held or queued job states) for the owner's work on one task: its
     attempts in the task's lanes, and the jobs written into its room or naming it."""
-    slug = H.actor_id(row.get("owner") or "")
-    if not H.is_bot(row.get("owner") or "") or not H._has_table(c, "attempts"):
+    slug = H.actor_id(row.get("owner_id") or "")
+    if not H.is_bot(row.get("owner_id") or "") or not H._has_table(c, "attempts"):
         return False, [], []
     lanes, _root = H._session_lanes(c, row)
     attempts = H._rows(c.execute(
         "SELECT a.id, a.job_id, a.state, a.created_at, a.finished_at, a.result, a.stop_requested_at, d.end_reason "
-        "FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id WHERE a.bot=? AND a.lane IN (?,?) "
+        "FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id WHERE a.bot_id=? AND a.lane IN (?,?) "
         "ORDER BY coalesce(a.finished_at,a.created_at) DESC, a.id DESC LIMIT 20", (slug, *lanes)))
     live = any(a["state"] in ("leased", "running") for a in attempts)
     jobs = [r[0] for r in c.execute(
-        "SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
+        "SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
         "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR json_extract(m.refs,'$.task')=?)",
         (slug, row.get("conversation_id") or "", row["id"]))]
     return live, [a for a in attempts if a["state"] not in ("leased", "running")], jobs
@@ -113,7 +113,7 @@ def _waits(c, row, at):
 def _label(c, row):
     step = c.execute("SELECT name FROM task_steps WHERE id=?", (row.get("step_id") or "",)).fetchone()
     return {"id": row["id"], "number": row.get("number"), "title": str(row.get("title") or "")[:150],
-            "step": step[0] if step else None, "owner": H.actor_id(row.get("owner") or "") or None}
+            "step": step[0] if step else None, "owner_id": H.actor_id(row.get("owner_id") or "") or None}
 
 
 class _List:
@@ -155,7 +155,7 @@ def _stuck(c, out, rows, children, at, reader):
         live, finished, jobs = _runs(c, item)
         label = _label(c, ticket)
         check = None if item["id"] == ticket["id"] else {"id": item["id"], "title": str(item["title"] or "")[:150],
-                                                         "owner": H.actor_id(item.get("owner") or "") or None}
+                                                         "owner_id": H.actor_id(item.get("owner_id") or "") or None}
         subject = "ticket:" + ticket["id"]
         extra = {"ticket": label, **({"check": check} if check else {})}
         start = entered.get(item["id"]) or item.get("created_at")
@@ -174,7 +174,7 @@ def _stuck(c, out, rows, children, at, reader):
             out.add(subject, "run", f"the last run {word} ({cause_of(newest)})"
                     + (f", {len(streak)} in a row" if len(streak) > 1 else ""),
                     first["finished_at"] or first["created_at"], **extra)
-        if live or jobs or not H.is_bot(item.get("owner") or ""):
+        if live or jobs or not H.is_bot(item.get("owner_id") or ""):
             continue
         if item["id"] == ticket["id"] and by_ticket.get(item["id"]):
             continue            # its open check is the work: that check is what is looked at
@@ -187,14 +187,14 @@ def _stuck(c, out, rows, children, at, reader):
             if not done:
                 out.add(subject, "stuck", f"no check filed at {label['step']} and none waiting", start, **extra)
             elif done["ended"] <= cutoff:
-                owner = (H.bot(c, label["owner"]) or {}).get("slug") or label["owner"]
+                owner = (H.bot(c, label["owner_id"]) or {}).get("slug") or label["owner_id"]
                 out.add(subject, "stuck", f"{done['title']} finished and the ticket has not moved on "
                         f"(owner {owner})", done["ended"], **extra)
             continue
         last = max(x for x in (start, (newest or {}).get("finished_at") or (newest or {}).get("created_at")) if x)
         if last > cutoff or _waits(c, item, at):
             continue
-        who = (check or label)["owner"]
+        who = (check or label)["owner_id"]
         who = (H.bot(c, who) or {}).get("slug") or who
         out.add(subject, "stuck", f"no run for {STUCK_MINUTES} minutes" + (f" on {check['title']}" if check else "")
                 + f" (owner {who})", last, **extra)
@@ -236,7 +236,7 @@ def _slots(c, out, typ, rows):
         slots = int(assign.get("slots") or task_allocator.DEFAULT_SLOTS)
         after, before = task_allocator.held_between(c, typ["id"], step) if assign.get("pool") else (0, 0)
         for slug in assign.get("pool") or []:
-            mine = sorted((r for r in rows if r.get("owner") == "bot:" + slug
+            mine = sorted((r for r in rows if r.get("owner_id") == "bot:" + slug
                            and after < position.get(r.get("step_id"), after) < before),
                           key=lambda r: r.get("updated_at") or "")
             if len(mine) > slots:
@@ -273,7 +273,7 @@ def _outages(c, out, typ, rows, at):
         found = move_retry.remembered(c, row, H.parse_ts(at))
         if found and found[1].get("outage"):
             held.append(row.get("number") or row["id"])
-            first = found[1].get("since") or found[0]["ts"]
+            first = found[1].get("changed_at") or found[0]["ts"]
             since = min(since, first) if since else first
     if held:
         out.add("service:github", "outage", f"GitHub cannot be read at a review move; Tico retries {len(held)} "
@@ -310,14 +310,14 @@ def _refusals(c, out, rows, at):
             continue
         if detail.get("state") == "waiting":
             out.add("ticket:" + row["id"], "refusal", f"the move to {detail.get('step')} was refused "
-                    f"({detail.get('kind') or 'gate'}) and Tico stopped retrying it", detail.get("since") or last["ts"],
+                    f"({detail.get('kind') or 'gate'}) and Tico stopped retrying it", detail.get("since") or last["created_at"],
                     ticket=_label(c, row))
     counted = {}
     since = H.shift(at, hours=-REFUSAL_HOURS)
-    for event in c.execute("SELECT ts, rule, detail FROM refusals WHERE ts>=? ORDER BY ts, id", (since,)):
+    for event in c.execute("SELECT created_at, rule, detail FROM refusals WHERE created_at>=? ORDER BY created_at, id", (since,)):
         task_id = (H._json(event["detail"], {}) or {}).get("task")
         if task_id in tickets and task_id not in retried:
-            counted.setdefault((task_id, str(event["rule"] or "a rule")), []).append(event["ts"])
+            counted.setdefault((task_id, str(event["rule"] or "a rule")), []).append(event["created_at"])
     for (task_id, rule), times in counted.items():
         if len(times) >= 2:
             out.add("ticket:" + task_id, "refusal", f"refused {len(times)} times by {rule}", times[0],

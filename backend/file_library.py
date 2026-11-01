@@ -35,13 +35,13 @@ LOG = logging.getLogger("tico.files")
 SCHEMA = [
     # Which version of each file the index holds; `doc` is the file's row id in file_text.
     "CREATE TABLE IF NOT EXISTS file_text_state(doc INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL UNIQUE, "
-    "version INTEGER NOT NULL, indexed TEXT NOT NULL)",
+    "version INTEGER NOT NULL, indexed_at TEXT NOT NULL)",
     # One row per hard-deleted file: who and when, never what it held.
     "CREATE TABLE IF NOT EXISTS file_deletions(file_id TEXT PRIMARY KEY, actor TEXT NOT NULL, versions INTEGER NOT NULL, "
     "created_at TEXT NOT NULL)",
     # Bytes a deletion left unused, removed from storage after the write commits and retried until gone.
     "CREATE TABLE IF NOT EXISTS blob_purges(digest TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT '', "
-    "queued TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '')",
+    "queued_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '')",
     # Versions are immutable, except that a hard delete (a file_deletions row, written first) removes them.
     "DROP TRIGGER IF EXISTS bot_file_versions_no_delete",
     "CREATE TRIGGER bot_file_versions_no_delete BEFORE DELETE ON bot_file_versions "
@@ -203,10 +203,10 @@ def index(c, fid, version, title, text):
     now = H.now()
     row = c.execute("SELECT doc FROM file_text_state WHERE file_id=?", (fid,)).fetchone()
     if row:
-        c.execute("UPDATE file_text_state SET version=?,indexed=? WHERE file_id=?", (version, now, fid))
+        c.execute("UPDATE file_text_state SET version=?,indexed_at=? WHERE file_id=?", (version, now, fid))
         doc = row["doc"]
     else:
-        doc = c.execute("INSERT INTO file_text_state(file_id,version,indexed) VALUES(?,?,?)", (fid, version, now)).lastrowid
+        doc = c.execute("INSERT INTO file_text_state(file_id,version,indexed_at) VALUES(?,?,?)", (fid, version, now)).lastrowid
     if has_fts(c):
         c.execute("DELETE FROM file_text WHERE rowid=?", (doc,))
         c.execute("INSERT INTO file_text(rowid,title,text) VALUES(?,?,?)", (doc, title or "", text or ""))
@@ -240,11 +240,11 @@ def adopt_attachments(c, settings, limit=BACKFILL_BATCH):
         task = H.task(c, b["task_id"])
         if not task:
             continue
-        bot = next((H.actor_id(a) for a in (b["owner"], task["owner"], task["requester"]) if H.is_bot(a)
+        bot = next((H.actor_id(a) for a in (b["owner"], task["owner"], task["requester_id"]) if H.is_bot(a)
                     and H.bot(c, H.actor_id(a))), None) or default_bot(c, settings)
         if not H.bot(c, bot):
             continue
-        c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,mime,locator,task_id,current_version,"
+        c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,current_version,"
                   "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,'tico_blob',?,1,?,?)",
                   (b["id"], bot, "task:" + b["task_id"], "task-file:" + b["id"], b["name"], BF.kind_of(b["name"]),
                    b["content_type"], b["task_id"], b["created_at"], b["created_at"]))
@@ -302,7 +302,7 @@ class Library:
         actors = sorted(ctx.team_actors(gid))
         bots = [a[4:] for a in actors if a.startswith("bot:")]
         return ("(f.bot IN (SELECT value FROM json_each(?)) OR f.task_id IN "
-                "(SELECT id FROM tasks WHERE owner IN (SELECT value FROM json_each(?))))"), [json.dumps(bots),
+                "(SELECT id FROM tasks WHERE owner_id IN (SELECT value FROM json_each(?))))"), [json.dumps(bots),
                                                                                          json.dumps(actors)]
 
     def _pins(self, c, who, fid, cache):
@@ -351,7 +351,7 @@ class Library:
         if bot:
             with self.store.read() as c:
                 bot = (H.resolve_bot(c, bot) or {}).get("id", H.actor_id(bot))
-            where.append("f.bot=?")
+            where.append("f.bot_id=?")
             params.append(bot)
         if task:
             where.append("f.task_id=?")
@@ -379,7 +379,7 @@ class Library:
             rows, nxt = scan(c, "SELECT f.*,p.cadence AS page_cadence,p.archived AS page_archived FROM bot_files f "
                                 "LEFT JOIN pages p ON p.file_id=f.id", where, params, limit, cursor,
                              lambda r: self.files.visible(c, who, r, cache), budget)
-            known = names.lookup(c, {"bot:" + r["bot"] for r in rows})
+            known = names.lookup(c, {"bot:" + r["bot_id"] for r in rows})
             files = [self.row_view(c, who, r, caches, known) for r in rows]
             known.update(names.lookup(c, {f["actor"] for f in files if f.get("actor")}))
             for f in files:
@@ -547,10 +547,10 @@ def purge_rows(c, actor, row):
         digests[blob["digest"]] = visuals.kind_of(mime, blob["size"]) if mime else ""
     for digest, kind in digests.items():
         if not still_used(c, digest):
-            c.execute("INSERT INTO blob_purges(digest,kind,queued) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
+            c.execute("INSERT INTO blob_purges(digest,kind,queued_at) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
                       "attempts=0,error=''", (digest, kind if kind in ("page", "svg") else "", now))
     unindex(c, fid)
-    c.execute("UPDATE pages SET replaced_by=NULL WHERE replaced_by=?", (fid,))
+    c.execute("UPDATE pages SET replaced_by_id=NULL WHERE replaced_by_id=?", (fid,))
     c.execute("DELETE FROM pages WHERE file_id=?", (fid,))
     if has_pins(c):
         c.execute("DELETE FROM pins WHERE item=?", ("page:" + fid,))
@@ -566,7 +566,7 @@ def drain(store, blobs, limit=50):
     for a later pass. A place that fails is tried again on the next pass, up to PURGE_ATTEMPTS times. How many were
     removed."""
     with store.read() as c:
-        queued = c.execute("SELECT * FROM blob_purges WHERE attempts<? ORDER BY queued LIMIT ?",
+        queued = c.execute("SELECT * FROM blob_purges WHERE attempts<? ORDER BY queued_at LIMIT ?",
                            (PURGE_ATTEMPTS, limit)).fetchall()
     removed = 0
     for q in queued:

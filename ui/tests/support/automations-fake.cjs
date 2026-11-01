@@ -13,7 +13,7 @@ const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 const clone = x => JSON.parse(JSON.stringify(x));
 
 // A bot's draft (`draft: true` in openAutomations): off, its version 1 pending until Turn on (CONTRACT §2).
-const DRAFT = {id: 'au_draft', name: 'Receipts to archive', owner: 'person:dana', enabled: false, builtin: false, version: 1,
+const DRAFT = {id: 'au_draft', name: 'Receipts to archive', owner_id: 'person:dana', enabled: false, builtin: false, version: 1,
   trigger: {type: 'message', inbox: 'dana@acme.example', filters: []},
   steps: [{id: 'f1', type: 'filter', enabled: true, rules: [
     {when: [{field: 'message.subject', op: 'contains', value: 'receipt'}], match: 'all', then: ['archive'], stop: true}]}]};
@@ -21,7 +21,7 @@ const DRAFT_VERSIONS = [{n: 1, actor: 'bot:support', at: '2026-10-28T09:00:00Z',
   summary: 'Archive receipts from billing'}];
 
 // A system job's mirror (`system: true`): Tico runs it from its own code, so it reads only; the top of the org may pause it.
-const SYSTEM = {id: 'au_sys_still', name: 'Still wanted check', owner: 'person:dana', enabled: true, builtin: true, readonly: true,
+const SYSTEM = {id: 'au_sys_still', name: 'Still wanted check', owner_id: 'person:dana', enabled: true, builtin: true, readonly: true,
   kind: 'system', version: 1, schedule: 'Daily at 07:00', can_edit: false, can_pause: true,
   description: 'Asks each owner whether tasks open for 30 days are still wanted.',
   trigger: {type: 'event', name: 'tico.builtin.job.still_wanted'}, steps: [], controls: {on: true},
@@ -69,7 +69,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     held: {},   // id → {release, fail}: that automation's GET waits for release(), then answers (or fails)
   };
   for (const a of db.list) {
-    const old = fx.versions[a.id] || [{n: a.version, actor: a.owner, at: '2026-10-27T15:00:00Z'}];
+    const old = fx.versions[a.id] || [{n: a.version, actor: a.owner_id, at: '2026-10-27T15:00:00Z'}];
     db.versions[a.id] = old.map(v => ({...v, status: v.status || 'active', flow: {trigger: clone(a.trigger), steps: clone(a.steps)}}));
   }
   if (proposal) {
@@ -149,7 +149,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
       const from = q.get('before') ? all.findIndex(r => r.id === q.get('before')) + 1 : 0, limit = Number(q.get('limit') || 50);
       const rows = all.slice(from, from + limit).map(r => {
         const a = find(r.automation_id);
-        return {...r, steps: undefined, automation_name: a.name, trigger: a.kind || a.trigger.type, owner: a.owner,
+        return {...r, steps: undefined, automation_name: a.name, trigger: a.kind || a.trigger.type, owner_id: a.owner_id,
           started_by: r.started_by || 'From Sam Lee · Thursday?', outcome: r.outcome || (r.status === 'failed' ? 'LLM failed: model timed out' : 'Draft reply'),
           step_count: (r.steps || []).length, count: 1};
       });
@@ -238,7 +238,7 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
     if (p === '/api/v2/chat/botops' && method === 'POST') {
       db.conv ||= {id: 'conv_au', kind: 'chat', title: 'BotOps'};
       const n = db.messages.length, at = new Date().toISOString();
-      const mine = {id: 'msg' + n, from_actor: 'human:' + me.id, body: body.text, refs: body.refs || {}, created_at: at, kind: 'say'};
+      const mine = {id: 'msg' + n, sender_id: 'human:' + me.id, body: body.text, refs: body.refs || {}, created_at: at, kind: 'say'};
       db.messages.push(mine);
       const a = find(body.refs?.automation);
       let reply = 'Which inbox?';
@@ -248,13 +248,13 @@ async function openAutomations(browser, {viewport = PHONE, hash = '#/automations
         reply = `Saved v${a.version}: receipts are archived first.`;
       } else if (!/\?/.test(body.text)) {
         const on = /turn it on/i.test(body.text);
-        db.list.push({id: 'au_new', name: 'Sales leads', owner: 'person:' + me.id, enabled: on, builtin: false, version: 1, can_edit: true,
+        db.list.push({id: 'au_new', name: 'Sales leads', owner_id: 'person:' + me.id, enabled: on, builtin: false, version: 1, can_edit: true,
           trigger: {type: 'message', inbox: 'sales@acme.example', filters: []},
           steps: [{id: 'f1', type: 'filter', enabled: true, rules: [{when: [{field: 'message.subject', op: 'contains', value: 'demo'}], match: 'all', then: [{do: 'label', args: {name: 'Lead'}}], stop: false}]}]});
         db.versions.au_new = [{n: 1, actor: 'person:' + me.id, at, status: 'active', flow: {trigger: clone(db.list.at(-1).trigger), steps: clone(db.list.at(-1).steps)}}];
         reply = `Saved Sales leads: mail to sales@acme.example about a demo gets the Lead label. It is ${on ? 'on' : 'off'}.`;
       }
-      db.messages.push({id: 'msg' + (n + 1), from_actor: 'bot:botops', body: reply, refs: {}, created_at: at, kind: 'say'});
+      db.messages.push({id: 'msg' + (n + 1), sender_id: 'bot:botops', body: reply, refs: {}, created_at: at, kind: 'say'});
       return json({conversation: db.conv, message: mine});
     }
     return json(unrouted(p));

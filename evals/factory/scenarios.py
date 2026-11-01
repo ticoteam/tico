@@ -104,8 +104,8 @@ def peak_doing(cap):
 def no_uncertain_runs(run):
     """No run is left 'uncertain' (its computer stopped answering partway): such a job waits for a person, and its
     ticket waits with it."""
-    rows = run.w.sql("SELECT bot, count(*) n FROM jobs WHERE state='uncertain' GROUP BY bot")
-    return not rows, ", ".join(f"{r['bot']} {r['n']}" for r in rows)
+    rows = run.w.sql("SELECT bot_id, count(*) n FROM jobs WHERE state='uncertain' GROUP BY bot_id")
+    return not rows, ", ".join(f"{r['bot_id']} {r['n']}" for r in rows)
 
 
 def no_server_error(run):
@@ -173,7 +173,7 @@ def _round_line(m):
 def lead_heard_of(word):
     """Head of Engineering was told (a note or a wake) of something matching `word`."""
     def check(run):
-        rows = run.w.sql("SELECT body FROM messages WHERE to_actor='bot:engineering-lead' AND body LIKE ?",
+        rows = run.w.sql("SELECT body FROM messages WHERE recipient_id='bot:engineering-lead' AND body LIKE ?",
                          (f"%{word}%",))
         return bool(rows), f"{len(rows)} messages mention {word!r}"
     return check
@@ -184,7 +184,7 @@ def late_told(run):
     a working step, backend/step_age.LATE_HOURS) and one scheduler pass more. Sooner, a quiet ticket is its owner's
     to hear of (a status check), and a check that runs long is its timeout's."""
     from backend.step_age import LATE_HOURS
-    rows = run.w.sql("SELECT body, refs FROM messages WHERE to_actor='bot:engineering-lead'")
+    rows = run.w.sql("SELECT body, refs FROM messages WHERE recipient_id='bot:engineering-lead'")
     told = " ".join((r["body"] or "") + (r["refs"] or "") for r in rows)
     named = {tid for _, tid in run.w.stuck_told}
     slack = 2 * run.scenario.tick_minutes / 60
@@ -312,7 +312,7 @@ def stale_blocker(run, w, team, i):
     if first["id"] not in run.merged_at or getattr(run, "blocker_added", False):
         return
     run.blocker_added = True
-    old = w.post("tasks", {"owner": "engineering-lead", "title": "Restore an old check", "body": "Old."})
+    old = w.post("tasks", {"owner_id": "engineering-lead", "title": "Restore an old check", "body": "Old."})
     old = old.get("task", old)
     w.post(f"tasks/{first['id']}/relations", {"task": old["id"], "kind": "blocked_by"})
 

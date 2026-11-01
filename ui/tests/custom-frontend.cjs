@@ -102,7 +102,7 @@ async function python(){
         {headers:{Authorization:'Bearer '+chatBearer}});
       assert.equal(messages.status(),200);
       const finalMessages=(await messages.json()).messages;
-      const replies=finalMessages.filter(m=>m.from_actor==='bot:ops'&&(m.in_reply_to===sent.message.id||(m.answers||[]).includes(sent.message.id)));
+      const replies=finalMessages.filter(m=>m.sender_id==='bot:ops'&&(m.in_reply_to===sent.message.id||(m.answers||[]).includes(sent.message.id)));
       assert.equal(replies.length,1,'exactly one final answer belongs to the submitted Hello ops input');
       assert.equal(replies[0].body,'Hello from ops. The reply is streaming to your own frontend, one word at a time.');
       assert.equal(await page.locator('.msg.live').count(),0,'no live duplicate remains after the linked final answer');

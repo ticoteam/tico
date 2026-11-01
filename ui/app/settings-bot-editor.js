@@ -55,7 +55,7 @@ function settingsBrowserExitRow(e) {
   return `<div class="sb-row"><span>Browse through</span><select class="settings-inline-select" data-bot-browser-exit="${esc(e.id)}" data-current="${esc(current)}"
       aria-label="Browse through for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
       <option value=""${current ? '' : ' selected'}>None</option>
-      ${choices.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.label)} · ${esc(settingsPersonName(m.operator))}</option>`).join('')}
+      ${choices.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.label)} · ${esc(settingsPersonName(m.owner_id))}</option>`).join('')}
     </select><span></span></div>`;
 }
 function settingsBrowserExitRun(select) {
@@ -121,12 +121,12 @@ function settingsAppDeliveryRow(e) {
   if (!app) return '';
   const current = e.app_delivery?.computer || '', name = machineAppName(app);
   const label = id => SETTINGS_DATA.machines.find(machine => machine.id === id)?.label || e.app_delivery?.computer_label || 'a computer';
-  const mine = !!S.me?.id && e.operator === S.me.id;
+  const mine = !!S.me?.id && e.owner_id === S.me.id;
   const off = 'Off (daily sync)';
   if (!mine && !(current && settingsIsAdmin())) {
     return `<div class="sb-row"><span>Deliver through the app on</span><span data-app-delivery-value="${esc(e.id)}">${current ? `${esc(label(current))} <span class="muted">· ${esc(name)} app</span>` : `<span class="muted">${off}</span>`}</span><span></span></div>`;
   }
-  const own = mine ? SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && machine.operator === S.me.id) : [];
+  const own = mine ? SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && machine.owner_id === S.me.id) : [];
   const options = own.map(machine => {
     const report = machine.readiness?.appdriver?.apps?.[app];
     const why = report?.ready === true ? '' : report ? [machineAppState(report), report.detail].filter(Boolean).join(': ') : `${name} not reported`;
@@ -193,11 +193,11 @@ function settingsEditBot(slug = '', inline = false) {
   const parentOptions = S.emps.filter(row => row.id !== slug &&
     (S.me?.role === 'owner' || settingsCanManageBot(row))).map(row =>
     `<option value="${esc(row.id)}" ${e?.reports_to === row.id ? 'selected' : ''}>${esc(row.display_name || row.slug)}</option>`).join('');
-  const operator = e?.operator || S.me?.id || SETTINGS_DATA.people[0]?.id || '';
+  const operator = e?.owner_id || S.me?.id || SETTINGS_DATA.people[0]?.id || '';
   // A member's bot goes on a computer an admin has opened to members' bots (the server refuses the rest).
   const machineOptions = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at &&
     (settingsIsAdmin() || machine.accepts_member_bots)).map(machine =>
-    `<option value="${esc(machine.id)}" data-operator="${esc(machine.operator)}">${esc(machine.label)} · ${esc(settingsPersonName(machine.operator))}</option>`).join('');
+    `<option value="${esc(machine.id)}" data-operator="${esc(machine.owner_id)}">${esc(machine.label)} · ${esc(settingsPersonName(machine.owner_id))}</option>`).join('');
   // The Strategy Bot's name is the owner's alone, as the whole built-in bot is (backend/auth.py `bot_manager`).
   const ownerNamesIt = editing && e.id === 'goal-manager' && S.me?.role !== 'owner';
   // A built-in bot's slug is fixed (the server refuses its rename); any other bot's slug is renamed with its definition.
@@ -233,7 +233,7 @@ function settingsEditBot(slug = '', inline = false) {
       </div>
     </div>
     ${editing ? '<p class="bot-editor-pending" data-bot-pending role="status" hidden></p>' : ''}
-    <div class="bot-editor-foot"><button class="primary" type="submit">${editing ? 'Save bot' : 'Add bot'}</button><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span>${editing && !isBuiltInBot(e.id) ? `<span class="spacer"></span><select name="successor" aria-label="Hand its work to"><option value="">Hand its work to ${esc(settingsPersonName(e.operator))}</option>${S.emps.filter(row => row.id !== slug).map(row => `<option value="${esc(row.id)}">Hand its work to ${esc(row.display_name || row.slug)}</option>`).join('')}</select>${['hermes', 'openclaw'].includes(e.agent?.harness) ? `<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>` : ''}<button class="ghost danger" type="button" data-bot-remove>Archive bot</button>` : ''}</div></form>`;
+    <div class="bot-editor-foot"><button class="primary" type="submit">${editing ? 'Save bot' : 'Add bot'}</button><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span>${editing && !isBuiltInBot(e.id) ? `<span class="spacer"></span><select name="successor" aria-label="Hand its work to"><option value="">Hand its work to ${esc(settingsPersonName(e.owner_id))}</option>${S.emps.filter(row => row.id !== slug).map(row => `<option value="${esc(row.id)}">Hand its work to ${esc(row.display_name || row.slug)}</option>`).join('')}</select>${['hermes', 'openclaw'].includes(e.agent?.harness) ? `<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>` : ''}<button class="ghost danger" type="button" data-bot-remove>Archive bot</button>` : ''}</div></form>`;
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-bot-status]');
   dialog.querySelectorAll('[data-bot-close]').forEach(button => button.onclick = closeEditor);
   // Every row is held until Save bot (`pending`, and the model pickers' own pick), so a reload elsewhere redraws the
@@ -351,7 +351,7 @@ function settingsEditBot(slug = '', inline = false) {
     // Archive (#535): off the chart, no automations or new work; open tasks go to the picked heir. It asks first.
     const successor = form.elements.successor.value;
     const hermes = ['hermes', 'openclaw'].includes(e.agent?.harness);
-    const heir = successor ? settingsBotName(successor) : settingsPersonName(e.operator);
+    const heir = successor ? settingsBotName(successor) : settingsPersonName(e.owner_id);
     if (!await settingsConfirm({title: `Archive ${e.display_name}?`, ok: 'Archive bot',
       text: `Its open tasks go to ${heir}. It leaves the team chart and its automations stop. You can restore it later from Archived bots.`})) return;
     remove.disabled = true; status.textContent = 'Archiving…';
@@ -379,14 +379,14 @@ function settingsEditBot(slug = '', inline = false) {
       slugInput.value = slugFromName(name.value);
       if (!repoEdited) repo.value = slugInput.value ? `bot-${slugInput.value}` : '';
     });
-    form.elements.operator.addEventListener('change', () => { operatorEdited = true; });
+    form.elements.owner_id.addEventListener('change', () => { operatorEdited = true; });
     form.elements.reports_to.addEventListener('change', event => {
       const parent = S.emps.find(row => row.id === event.target.value);
-      if (!operatorEdited && !form.elements.runner_id.value && parent?.operator) form.elements.operator.value = parent.operator;
+      if (!operatorEdited && !form.elements.runner_id.value && parent?.owner_id) form.elements.owner_id.value = parent.owner_id;
     });
     form.elements.runner_id.addEventListener('change', event => {
-      const selected = event.target.selectedOptions[0]?.dataset.operator;
-      if (selected) form.elements.operator.value = selected;
+      const selected = event.target.selectedOptions[0]?.dataset.owner_id;
+      if (selected) form.elements.owner_id.value = selected;
     });
     const combo = dialog.querySelector('[data-add-choice]');
     if (combo) {
@@ -478,7 +478,7 @@ function settingsEditBot(slug = '', inline = false) {
           status: form.elements.status.value, ...(slugChosen || form.elements.repo.dataset.edited ? {repo: form.elements.repo.value} : {}),
           private_tasks_default: form.elements.private_tasks_default.checked,
           thread_mode: form.elements.thread_mode.value, shared: form.elements.shared.checked, model: choice.model, effort: choice.effort,
-          harness: choice.harness, operator: form.elements.operator.value || S.me?.id,
+          harness: choice.harness, operator: form.elements.owner_id.value || S.me?.id,
           runner_id: form.elements.runner_id.value || null});
       }
       if (!inline) dialog.close();

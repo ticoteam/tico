@@ -67,7 +67,7 @@ def seed(api, rows):
     server = Server(api)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM assignments WHERE bot IN ('coo','ops','cpo','product-design','finance','inbox','doc-updater')")
-    live.seed(server, TOKENS["owner"], rows)
+    live.seed(server, TOKENS["owner_id"], rows)
 
 
 def replay(api, botops_machine, scenario):
@@ -76,7 +76,7 @@ def replay(api, botops_machine, scenario):
     computer = runner(api, label="Team Mac")
     ready(api, computer, [])
     seed(api, scenario.get("seed"))
-    server, owner = Server(api), TOKENS["owner"]
+    server, owner = Server(api), TOKENS["owner_id"]
     before = score.before_state(server, owner)
     # Before BotOps does anything the job is not done: the checks are not vacuous.
     assert not score.score(scenario, server, owner, [("person", scenario["prompt"])], before, 0)["done"], scenario["id"]

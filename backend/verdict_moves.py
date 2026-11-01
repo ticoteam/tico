@@ -37,7 +37,7 @@ NO_VERDICT = "comments"     # a check finished with no verdict: what it said is 
 HANDOFF = "handoff"
 HANDOFFS = ("verdict", "failed_check", "merge_conflict", "merge")
 # The claim's order key: a keeper hand-off before the bot's other queued jobs (backend/execution.py).
-HANDOFF_FIRST_SQL = (f"CASE WHEN m.from_actor='{H.KEEPER}' AND json_extract(m.refs,'$.{HANDOFF}') "
+HANDOFF_FIRST_SQL = (f"CASE WHEN m.sender_id='{H.KEEPER}' AND json_extract(m.refs,'$.{HANDOFF}') "
                      "IS NOT NULL THEN 0 ELSE 1 END")
 
 
@@ -51,7 +51,7 @@ def at_step(c, task_id, refs):
 def _ticket(c, row):
     """The ticket a bot builds, or None: an open ticket owned by a bot, on a type whose steps have a flow, and not
     held: a hold keeps the ticket at its check step, where a verdict must wait for it to clear (`resumed`)."""
-    return row if (row and H.is_bot(row.get("owner")) and row.get("status") in H.ACTIVE_STATUSES
+    return row if (row and H.is_bot(row.get("owner_id")) and row.get("status") in H.ACTIVE_STATUSES
                    and not row.get("blocked_since") and F.has_flow(c, row.get("type_id"))) else None
 
 
@@ -91,7 +91,7 @@ def _checks(c, row, step):
     """The ticket's checks filed at check step `step`, newest last. A person's own subtask filed there is ordinary
     work, never a check, whatever its title: finished with no verdict, it is not a check's comments."""
     out = [H.task(c, cid) for cid in TR.child_ids(c, row["id"])]
-    out = [t for t in out if t and H.is_bot(t.get("owner")) and (F.check_step(c, t, row) or {}).get("id") == step["id"]]
+    out = [t for t in out if t and H.is_bot(t.get("owner_id")) and (F.check_step(c, t, row) or {}).get("id") == step["id"]]
     return sorted(out, key=lambda t: (t.get("created_at") or "", t["id"]))
 
 
@@ -111,7 +111,7 @@ def move(c, row, target, why):
     c.execute("SAVEPOINT verdict_move")
     try:
         # The owner hears of the move on the hand-off that caused it, not again from a step rule.
-        H.task_update(c, H.KEEPER, row["id"], step=target["id"], skip_step_wake=(row["owner"],))
+        H.task_update(c, H.KEEPER, row["id"], step=target["id"], skip_step_wake=(row["owner_id"],))
         H._task_event(c, row["id"], H.KEEPER, "verdict_move", None, target["name"], why)
     except H.Refused as exc:
         c.execute("ROLLBACK TO verdict_move")
@@ -165,7 +165,7 @@ def after_verdict(c, check):
 def _judged_head(c, check):
     """The head a check was filed for (its review_head), for a check finished with no verdict line."""
     found = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
-                      "ORDER BY ts DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
+                      "ORDER BY created_at DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
     return str(found[0] if found else "").split(",")[0]
 
 
@@ -179,7 +179,7 @@ def after_capture(c, check_id, head, attempt_id):
     latest = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1", (check_id,)).fetchone()
     if (not attempt or attempt["task_id"] != check_id or not attempt["finished_at"] or
             not latest or latest["id"] != attempt_id or check.get("status") != "done" or
-            H.actor_id(attempt["bot"]) != H.actor_id(check.get("owner"))):
+            H.actor_id(attempt["bot"]) != H.actor_id(check.get("owner_id"))):
         return None
     ticket = _ticket(c, H.task(c, TR.parent_of(c, check_id) or ""))
     step = ticket and F.check_step(c, check, ticket)
@@ -197,7 +197,7 @@ def after_capture(c, check_id, head, attempt_id):
     if prior and prior.get("consumed"):
         return None
     name = step["name"]
-    eligible = assess_independence(c, ticket, H.actor_id(check.get("owner") or ""), head=head,
+    eligible = assess_independence(c, ticket, H.actor_id(check.get("owner_id") or ""), head=head,
                                    check_id=check["id"], attempt_id=attempt_id)
     # Model company is a routing preference, never a verdict gate. Keep actual builder/checker families
     # alongside the verdict for audit, including fallback runs and unknown provenance.
@@ -216,7 +216,7 @@ def after_capture(c, check_id, head, attempt_id):
         refs = {"verdict": verdict, "verdict_head": head, HANDOFF: out["handoff"]}
         if out["handoff"] == "merge":
             refs["pr_head"] = head
-        H._wake(c, ticket, ticket["owner"], out["say"], at_step(c, ticket["id"], refs), source=check_id)
+        H._wake(c, ticket, ticket["owner_id"], out["say"], at_step(c, ticket["id"], refs), source=check_id)
     return out
 
 
@@ -280,7 +280,7 @@ def _passed(c, ticket, step, why):
 def delivery(c, check):
     """What the verdict's delivery to the builder carries (hubdb._deliver_subtask_result): the outcome
     `after_verdict` kept for the check's current verdict and head, or None."""
-    row = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_move' ORDER BY ts DESC, rowid DESC "
+    row = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_move' ORDER BY created_at DESC, rowid DESC "
                     "LIMIT 1", (check["id"],)).fetchone()
     out = H._json(row[0], {}) if row else None
     marker = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
@@ -376,7 +376,7 @@ def merge_wake(c, row):
     row = _ticket(c, row)
     ready = row and merge_ready(c, row)
     if ready and _merge_woken(c, row, ready[1]):
-        H._wake(c, row, row["owner"], merge_text(c, row, *ready), {HANDOFF: "merge", "pr_head": ready[1]},
+        H._wake(c, row, row["owner_id"], merge_text(c, row, *ready), {HANDOFF: "merge", "pr_head": ready[1]},
                 trigger="pr_checks")
         return True
     return False
@@ -436,7 +436,7 @@ def skip(c, row):
     H._task_event(c, row["id"], H.KEEPER, "step_skipped", None, step["name"], f"tagged {tag}")
     out = _passed(c, row, step, f"{step['name']} skipped: the ticket is tagged {tag}")
     if out.get("handoff"):
-        H._wake(c, row, row["owner"], out["say"], at_step(c, row["id"], {HANDOFF: out["handoff"]}))
+        H._wake(c, row, row["owner_id"], out["say"], at_step(c, row["id"], {HANDOFF: out["handoff"]}))
     return out
 
 
@@ -456,12 +456,12 @@ def timeouts(c, at=None):
                                       f"({','.join('?' * len(H.ACTIVE_STATUSES))})",
                                       (step["id"], *H.ACTIVE_STATUSES)).fetchall():
             ticket = _ticket(c, H.task(c, ticket_id))
-            entered = c.execute("SELECT ts FROM task_events WHERE task_id=? AND field='step' AND new=? "
-                                "ORDER BY ts DESC,rowid DESC LIMIT 1", (ticket_id, step["id"])).fetchone()
+            entered = c.execute("SELECT created_at FROM task_events WHERE task_id=? AND field='step' AND new=? "
+                                "ORDER BY created_at DESC,rowid DESC LIMIT 1", (ticket_id, step["id"])).fetchone()
             if not ticket or not entered or (at - H.parse_ts(entered[0])).total_seconds() < hours * 3600:
                 continue
             if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('round_skipped','step_skipped') "
-                         "AND ts>=? LIMIT 1", (ticket_id, entered[0])).fetchone():
+                         "AND created_at>=? LIMIT 1", (ticket_id, entered[0])).fetchone():
                 continue        # skipped already: the merge, its builder's to do, is what it waits for
             head = next((_head(p) for p in _prs(c, ticket) if _head(p)), "")
             # A verdict at the head is usable whichever way it went. A pass ends the round on it, waiting only for what
@@ -486,6 +486,6 @@ def timeouts(c, at=None):
                 out = _passed(c, H.task(c, ticket_id), step, why)
                 refs = {HANDOFF: out["handoff"]}
             if out.get("handoff"):
-                H._wake(c, ticket, ticket["owner"], out["say"], at_step(c, ticket_id, refs))
+                H._wake(c, ticket, ticket["owner_id"], out["say"], at_step(c, ticket_id, refs))
             skipped.append(ticket_id)
     return skipped

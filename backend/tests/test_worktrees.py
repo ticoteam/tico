@@ -32,9 +32,9 @@ def prepared(api, gh):
         other = H.task_create(c, 'human:ana', 'Other work', 'Implement docs', 'bot:cpo')
         c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         until = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES('m1','human:ana','bot:cmo','say','Work',?)", (H.now(),))
+        c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m1','human:ana','bot:cmo','say','Work',?)", (H.now(),))
         job = c.execute("SELECT id FROM jobs WHERE message_id='m1'").fetchone()[0]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) VALUES('a1',?,'cmo','r1',1,'synthetic','running',?,?)", (job, until, H.now()))
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) VALUES('a1',?,'cmo','r1',1,'synthetic','running',?,?)", (job, until, H.now()))
     return api, task['id'], other['id']
 
 
@@ -217,7 +217,7 @@ def test_unlink_retries_exhausted_cleanup_with_move_rights_and_keeps_work_until_
         H.task_unlink(c, 'human:ana', tid, link['link_id'], mover=True)
         H.task_update(c, 'human:ana', tid, owner='human:ana', mover=True)
         rows = W.inventory(c, 'r1')
-        assert len(rows) == 1 and rows[0]['owner'] == 'bot:cmo'
+        assert len(rows) == 1 and rows[0]['owner_id'] == 'bot:cmo'
         assert rows[0]['state'] == 'present' and rows[0]['path'] == link['path']
         saved = json.loads(rows[0]['detail'])
         assert not any(key in saved for key in ('cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up'))
@@ -225,7 +225,7 @@ def test_unlink_retries_exhausted_cleanup_with_move_rights_and_keeps_work_until_
         generation = saved['cleanup_retry_generation']
         assert generation != 'previous-request' and uuid.UUID(generation)
     actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
-    assert len(actions) == 1 and actions[0]['action'] == 'remove' and actions[0]['owner'] == 'cmo'
+    assert len(actions) == 1 and actions[0]['action'] == 'remove' and actions[0]['owner_id'] == 'cmo'
     assert actions[0]['cleanup_retry_generation'] == generation
     # A fresh refusal keeps the files/link and resumes bounded retries; requesting removal does not bypass it.
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
@@ -817,7 +817,7 @@ def test_a_computer_reads_the_status_only_of_tasks_it_ran_that_bots_session_for(
                   "FROM runners WHERE id='r1'", [fresh[col] for col in cols if col in fresh])
         job = c.execute("SELECT job_id FROM attempts WHERE id='a1'").fetchone()[0]
         for aid, runner, lane in (('a2', 'r1', 'task:' + tid), ('a3', 'r2', 'task:' + other)):
-            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
+            c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
                       "VALUES(?,?,'cmo',?,1,?,'completed',?,?,?)", (aid, job, runner, 'synthetic-' + aid, H.now(), H.now(), lane))
         c.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (tid, other))
     asked = {'sessions': [{'bot': 'cmo', 'task': tid}, {'bot': 'cpo', 'task': tid},
@@ -825,7 +825,7 @@ def test_a_computer_reads_the_status_only_of_tasks_it_ran_that_bots_session_for(
     response = post(api, path, asked, 'runner-test')
     assert response.status_code == 200, response.text
     # Another bot's lane, another computer's turn and an unknown task are left out, not refused.
-    assert response.json() == {'sessions': [{'bot': 'cmo', 'task': tid, 'status': 'done'}]}
+    assert response.json() == {'sessions': [{'bot_id': 'cmo', 'task': tid, 'status': 'done'}]}
     assert post(api, path, asked, 'bot-test').status_code == 403
     assert post(api, path, {'sessions': [{'bot': 'cmo', 'task': tid}] * 501}, 'runner-test').status_code == 422
 
@@ -844,7 +844,7 @@ def test_readiness_skips_a_private_worktree_it_cannot_read_and_keeps_the_ones_it
     assert 'worktree_actions_skipped' not in beat.json()
     # Owned by a bot this computer does not host: readiness still passes, counts the skip and says nothing of it.
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:cpo' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tid,))
         c.execute("UPDATE task_links SET detail=json_set(detail,'$.owner','bot:cpo') WHERE id=?", (link['link_id'],))
     beat = post(api, 'runners/heartbeat', quiet, 'runner-test')
     assert beat.status_code == 200, beat.text
@@ -852,12 +852,12 @@ def test_readiness_skips_a_private_worktree_it_cannot_read_and_keeps_the_ones_it
     assert tid not in beat.text and tid[:8] not in beat.text and 'Secret plan' not in beat.text
     # Back with the hosted bot, the computer's report on its own worktree is answered, not refused.
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:cmo' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET owner_id='bot:cmo' WHERE id=?", (tid,))
         c.execute("UPDATE task_links SET detail=json_set(detail,'$.owner','bot:cmo') WHERE id=?", (link['link_id'],))
     assert mark_ready(api, tid, link['link_id']).status_code == 200
     # A removal always reaches the computer holding the worktree, even once nobody it hosts can read the task.
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed',owner='human:bea' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET status='closed',owner_id='human:bea' WHERE id=?", (tid,))
     present = {**quiet, 'worktrees': [{'link_id': link['link_id'], 'state': 'present', 'checkout_state': 'ready',
                                        'branch': link['branch']}]}
     beat = post(api, 'runners/heartbeat', present, 'runner-test')
@@ -868,7 +868,7 @@ def test_readiness_skips_a_private_worktree_it_cannot_read_and_keeps_the_ones_it
     from backend.auth import Identity
     computer = Identity('runner:r1', 'runner', runner_id='r1')
     with api.app_state.store.read() as c, pytest.raises(task_privacy.Problem):
-        task_privacy.require_payload(c, computer, {'worktree_actions': [{'task_id': tid, 'owner': 'cmo', 'action': 'restore'}]})
+        task_privacy.require_payload(c, computer, {'worktree_actions': [{'task_id': tid, 'owner_id': 'cmo', 'action': 'restore'}]})
 
 
 
@@ -899,7 +899,7 @@ HEARTBEAT = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_vers
 def released_events(api, tid):
     with api.app_state.store.read() as c:
         return [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='worktree.released' "
-                                                     "AND target=? ORDER BY ts", (tid,))]
+                                                     "AND target=? ORDER BY created_at", (tid,))]
 
 
 def test_a_new_worktree_starts_only_for_work_a_coding_step_can_run_on(prepared):
@@ -1082,7 +1082,7 @@ def test_a_checkout_stuck_past_the_deadline_fails_once_owned_and_retries_on_the_
 
     def told():
         with api.app_state.store.read() as c:
-            return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cmo' AND body LIKE '%Setup did not finish%'"
+            return c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cmo' AND body LIKE '%Setup did not finish%'"
                              ).fetchone()[0]
     for _ in range(2):
         assert post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test').json()['worktree_actions'] == []
@@ -1118,7 +1118,7 @@ def test_a_retry_after_the_deadline_keeps_the_setup_phase_and_names_the_register
                   (H.shift(H.now(), hours=-(W.PENDING_HOURS + 1)), link['link_id']))
     post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test')
     with api.app_state.store.read() as c:
-        told = c.execute("SELECT body FROM messages WHERE to_actor='bot:cmo' AND body LIKE '%Setup did not finish%'"
+        told = c.execute("SELECT body FROM messages WHERE recipient_id='bot:cmo' AND body LIKE '%Setup did not finish%'"
                          ).fetchone()[0]
     assert '`hub task worktree setup Acme/product`' in told        # the folder exists: setup resumes it in place
     again = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
@@ -1193,7 +1193,7 @@ def test_a_delayed_old_push_clears_on_the_next_clean_report_and_a_real_fix_forwa
     def held():
         with api.app_state.store.read() as c:
             row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
-            return W.held_reason(c, {**row, 'owner': 'bot:cmo'}, json.loads(row['detail']))
+            return W.held_reason(c, {**row, 'owner_id': 'bot:cmo'}, json.loads(row['detail']))
     # A real fix-forward: C pushed, and the computer is at C too. Held until C's pull request finishes.
     deliver('c' * 40)
     report['last_commit'] = 'c' * 40
@@ -1230,7 +1230,7 @@ def test_a_stale_pending_tree_whose_pull_requests_finished_is_released_without_a
     actions = post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test').json()['worktree_actions']
     assert [(a['action'], a.get('release')) for a in actions] == [('remove', True)]
     with api.app_state.store.read() as c:
-        assert not c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cmo' AND body LIKE '%Setup did not finish%'"
+        assert not c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cmo' AND body LIKE '%Setup did not finish%'"
                              ).fetchone()[0]
         assert 'pending_expired' not in json.loads(c.execute('SELECT detail FROM task_links WHERE id=?',
                                                              (link['link_id'],)).fetchone()[0])
@@ -1242,9 +1242,9 @@ def test_only_the_task_owners_own_turn_holds_its_tree(prepared):
         c.execute("UPDATE tasks SET carried_by='a1' WHERE id=?", (tid,))        # cmo's turn on the task is running
         assert W.live_turn(c, tid, 'bot:cmo')
         assert not W.live_turn(c, tid, 'bot:cpo')                               # a reviewer's or other bot's view
-        c.execute("UPDATE tasks SET owner='bot:cpo' WHERE id=?", (tid,))        # the task moved to another bot
+        c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tid,))        # the task moved to another bot
         assert not W.live_turn(c, tid, 'bot:cmo')                               # the former owner's turn holds nothing
-        row = {'task_id': tid, 'owner': 'bot:cmo', 'repo': 'Acme/product', 'branch': None}
+        row = {'task_id': tid, 'owner_id': 'bot:cmo', 'repo': 'Acme/product', 'branch': None}
         assert W.held_reason(c, row, {}) == ''
 
 
@@ -1363,9 +1363,9 @@ def test_owner_managers_provision_reports_worktrees_without_granting_repo_access
         _box(api)
         with api.app_state.store.transaction() as c:
             c.execute("INSERT OR REPLACE INTO assignments VALUES('cpo','r2',1,?,'ana')", (H.now(),))
-            c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES('manager-message','human:ana','bot:cpo','say','Manage work',?)", (H.now(),))
+            c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('manager-message','human:ana','bot:cpo','say','Manage work',?)", (H.now(),))
             job = c.execute("SELECT id FROM jobs WHERE message_id='manager-message'").fetchone()[0]
-            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) VALUES('manager-attempt',?,'cpo','r2',1,'synthetic-manager','running',?,?)",
+            c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) VALUES('manager-attempt',?,'cpo','r2',1,'synthetic-manager','running',?,?)",
                       (job, H.shift(H.now(), hours=1), H.now()))
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='cmo'")

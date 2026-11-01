@@ -18,7 +18,7 @@ from backend.tests.test_sql import query
 
 def newest(c, bot, words):
     """The newest message to `bot` whose text starts with `words`."""
-    row = c.execute("SELECT id FROM messages WHERE to_actor=? AND body LIKE ? ORDER BY rowid DESC LIMIT 1",
+    row = c.execute("SELECT id FROM messages WHERE recipient_id=? AND body LIKE ? ORDER BY rowid DESC LIMIT 1",
                     ("bot:" + bot, words + "%")).fetchone()
     assert row, f"no message to {bot} starting {words!r}"
     return H.message(c, row[0])
@@ -26,7 +26,7 @@ def newest(c, bot, words):
 
 def quiet(c, bot="ops"):
     """The wakes so far ran: only what a test writes next is queued."""
-    c.execute("UPDATE jobs SET state='completed' WHERE bot=? AND state='queued'", (bot,))
+    c.execute("UPDATE jobs SET state='completed' WHERE bot_id=? AND state='queued'", (bot,))
 
 
 def turn(api, attempt):
@@ -78,7 +78,7 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
         quiet(c)
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), seconds=-600), task["id"]))
         assert task["id"] in H.wake_stalled(c)["woke"] + H.wake_stalled(c)["checked"]
-        stall = c.execute("SELECT id FROM messages WHERE to_actor='bot:ops' AND json_extract(refs,'$.wake') "
+        stall = c.execute("SELECT id FROM messages WHERE recipient_id='bot:ops' AND json_extract(refs,'$.wake') "
                           "IN ('stalled','status_check') ORDER BY rowid DESC LIMIT 1").fetchone()
         assert RT.of_message(H.message(c, stall[0]))[0] == "stall_check"
         # other: a keeper message nothing stamped (a Slack digest).
@@ -114,9 +114,9 @@ def test_a_routines_new_task_is_woken_by_its_automation(api, fired_by):
             H.hook(c, "meeting.ready", "rec-1", lambda: {"title": "Planning"}, "human:ana")
         store.automations.drain()
     with store.read() as c:
-        task = c.execute("SELECT id FROM tasks WHERE owner='bot:ops' AND title='Review the day'").fetchall()
+        task = c.execute("SELECT id FROM tasks WHERE owner_id='bot:ops' AND title='Review the day'").fetchall()
         assert len(task) == 1
-        wake = c.execute("SELECT id FROM messages WHERE to_actor='bot:ops' AND json_extract(refs,'$.task')=? "
+        wake = c.execute("SELECT id FROM messages WHERE recipient_id='bot:ops' AND json_extract(refs,'$.task')=? "
                          "ORDER BY rowid LIMIT 1", (task[0]["id"],)).fetchone()
         assert RT.of_message(H.message(c, wake[0])) == ("other", "automation:" + aid)
 
@@ -183,7 +183,7 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     if case == "reply_to_person":
         post(api, "chat/ops", {"text": "Anything new?"})
     else:
-        task = post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
+        task = post(api, "tasks", {"owner_id": "ops", "title": "Check the bank feed", "body": "Daily."})
     attempt = claim(api, r)
     start(api, r, attempt)
     token = attempt["token"]
@@ -226,7 +226,7 @@ def test_an_answer_to_a_bots_ask_in_the_final_text_counts_once(api):
     row = turn(api, attempt)
     assert (row["writes"], row["outcome"], row["did_nothing"]) == (1, "acted", 0)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE from_actor='bot:ops' AND to_actor='bot:finance'"
+        assert c.execute("SELECT count(*) FROM messages WHERE sender_id='bot:ops' AND recipient_id='bot:finance'"
                          ).fetchone()[0] == 1
     # The runner sends its completion again: the answer is not written or counted twice.
     api.post(f"/api/v2/attempts/{attempt['id']}/complete", headers=headers(r["token"]),
@@ -247,8 +247,8 @@ def worktree(api, task_id, attempt, path):
 def test_a_push_from_the_runs_own_task_worktree_is_acting(api, case):
     """Tico never sees a git push; the runner reports the ones from the run's task worktrees with its result."""
     r = machine(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Fix the export", "body": "Push the fix."})
-    other = post(api, "tasks", {"owner": "ops", "title": "Tidy the docs", "body": "Later."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Fix the export", "body": "Push the fix."})
+    other = post(api, "tasks", {"owner_id": "ops", "title": "Tidy the docs", "body": "Later."})
     attempt = claim(api, r)
     start(api, r, attempt)
     worktree(api, task["id"], attempt, "tasks/fix/app")
@@ -268,18 +268,18 @@ def test_a_push_from_the_runs_own_task_worktree_is_acting(api, case):
 def test_a_run_that_started_a_fresh_session_says_why_and_the_week_counts_it(api, case):
     """The runner reports a session left behind for its size (runner-rs/src/rotate.rs); the token table counts it."""
     r = machine(api)
-    post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Watch the release", "body": "Each hour."})
     attempt = claim(api, r)
     start(api, r, attempt)
     body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
     if case == "rotated":
-        body["rotated"] = {"reason": "tokens", "tokens": 612_000, "turns": 4, "limit": 400_000}
+        body["rotated_at"] = {"reason": "tokens", "tokens": 612_000, "turns": 4, "limit": 400_000}
     post(api, f"attempts/{attempt['id']}/complete", body, r["token"])
     row = turn(api, attempt)
-    assert row["rotated"] == ("tokens" if case == "rotated" else None)
+    assert row["rotated_at"] == ("tokens" if case == "rotated" else None)
     rows = weekly(api, where="bot='ops'")
     assert {bucket["purpose"] for bucket in rows} == {row["purpose"]}
-    assert sum(bucket["rotated"] for bucket in rows) == (1 if case == "rotated" else 0)
+    assert sum(bucket["rotated_at"] for bucket in rows) == (1 if case == "rotated" else 0)
 
 
 @pytest.mark.parametrize("session,said", [
@@ -295,7 +295,7 @@ def test_a_run_that_started_a_fresh_session_says_why_and_the_week_counts_it(api,
 ])
 def test_a_run_says_whether_it_resumed_its_session_and_a_new_one_is_in_the_tasks_history(api, session, said):
     r = machine(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Watch the release", "body": "Each hour."})
     attempt = claim(api, r)
     start(api, r, attempt)
     post(api, f"attempts/{attempt['id']}/complete",
@@ -311,7 +311,7 @@ def test_a_run_says_whether_it_resumed_its_session_and_a_new_one_is_in_the_tasks
 
 def test_a_completion_from_an_older_runner_has_no_session_and_a_session_that_is_too_long_is_refused(api):
     r = machine(api)
-    post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Watch the release", "body": "Each hour."})
     attempt = claim(api, r)
     start(api, r, attempt)
     body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
@@ -320,13 +320,13 @@ def test_a_completion_from_an_older_runner_has_no_session_and_a_session_that_is_
     post(api, f"attempts/{attempt['id']}/complete",
          {**body, "rotated": {"reason": "turns", "tokens": 10, "turns": 9, "limit": 8}}, r["token"])
     row = turn(api, attempt)
-    assert (row["rotated"], row["session_kind"], row["session_why"]) == ("turns", None, None)
+    assert (row["rotated_at"], row["session_kind"], row["session_why"]) == ("turns", None, None)
 
 
 def test_a_persons_clear_and_a_topic_change_in_a_task_room_are_in_the_tasks_history(api):
     from backend import views
     machine(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Watch the release", "body": "Each hour."})
     with api.app.state.store.transaction() as c:
         room = c.execute("SELECT id FROM conversations WHERE task_id=?", (task["id"],)).fetchone()[0]
         views.clear_chat_session(c, api.app.state.store.settings, "human:ana", "ops", room)
@@ -376,7 +376,7 @@ def test_health_does_not_count_a_first_session_a_cleared_one_or_a_topic_change(a
 
 def test_a_restore_ends_open_runs_with_an_outcome(api):
     r = machine(api)
-    post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Check the bank feed", "body": "Daily."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
         c.execute(f"UPDATE turns SET finished_at=?,exit='interrupted',{RT.SETTLE_SQL} WHERE id=?",
@@ -462,15 +462,15 @@ def test_the_weekly_table_adds_up_only_runs_the_reader_may_read(api):
         return attempt
 
     ran(lambda: post(api, "chat/ops", {"text": "My own numbers, please."}))      # Ana's room: its message and inputs
-    shared = post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
+    shared = post(api, "tasks", {"owner_id": "ops", "title": "Check the bank feed", "body": "Daily."})
     ran(lambda: None)                                                             # Ben may read this task, for now
-    secret = post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Ana only."})
+    secret = post(api, "tasks", {"owner_id": "ops", "title": "Plan the reorg", "body": "Ana only."})
     with store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
     ran(lambda: None)                                                             # a run on Ana's private task
     # A run Ben may read the attempt of, but not its turn (the turn names Ana's private task): not a turnless
     # attempt, so not counted at all.
-    post(api, "tasks", {"owner": "ops", "title": "Check the card feed", "body": "Daily."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Check the card feed", "body": "Daily."})
     hidden_turn = ran(lambda: None)
     with store.transaction() as c:
         c.execute("UPDATE turns SET task_id=? WHERE id=?", (secret["id"], hidden_turn["id"]))
@@ -501,15 +501,15 @@ def test_a_run_whose_inputs_came_from_a_private_task_leaves_the_weekly_table(api
     as_member(api, "ben@acme.example")
     r = machine(api)
     store = api.app.state.store
-    private = post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Ana only.", "private": True})
+    private = post(api, "tasks", {"owner_id": "ops", "title": "Plan the reorg", "body": "Ana only.", "private": True})
     secret = claim(api, r)
     start(api, r, secret)
     finish(api, r, secret)
-    post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Check the bank feed", "body": "Daily."})
     tainted = claim(api, r)
     start(api, r, tainted)
     finish(api, r, tainted)
-    post(api, "tasks", {"owner": "ops", "title": "Check the card feed", "body": "Daily."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Check the card feed", "body": "Daily."})
     lost = claim(api, r)
     with store.transaction() as c:
         c.execute("DELETE FROM turns WHERE id=?", (lost["id"],))

@@ -115,9 +115,9 @@ def world(api):
     attempt = claim(api, machine)
     with api.app.state.store.transaction() as c:   # a person's Mac: its credential reads as them
         c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (machine["runner_id"],))
-    private = post(api, "tasks", {"owner": "inbox", "title": "Sort the inbox", "body": "Private to Ana."})
-    coo_task = post(api, "tasks", {"owner": "ops", "title": "Summarize the week", "body": "For ops."})
-    finance_task = post(api, "tasks", {"owner": "finance", "title": "Close the books", "body": "For finance."})
+    private = post(api, "tasks", {"owner_id": "inbox", "title": "Sort the inbox", "body": "Private to Ana."})
+    coo_task = post(api, "tasks", {"owner_id": "ops", "title": "Summarize the week", "body": "For ops."})
+    finance_task = post(api, "tasks", {"owner_id": "finance", "title": "Close the books", "body": "For finance."})
     return {"ana_room": ana_room, "steven_room": steven_room, "machine": machine, "attempt": attempt,
             "private": private, "coo_task": coo_task, "finance_task": finance_task}
 
@@ -258,7 +258,7 @@ def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_da
     assert "inbox" not in column(api, "SELECT slug FROM bots", token)
     assert column(api, "SELECT id FROM attempts", token) == [world["attempt"]["id"]]
     # Its running job, the queued one behind its own task, and the one behind a public task it may read.
-    jobs = query(api, "SELECT id, bot FROM jobs", token)["rows"]
+    jobs = query(api, "SELECT id, bot_id FROM jobs", token)["rows"]
     assert len(jobs) == 3 and [world["attempt"]["job_id"], "ops"] in jobs and {row[1] for row in jobs} == {"ops", "finance"}
     assert column(api, "SELECT key FROM registry_metadata", token) == []
     assert column(api, "SELECT DISTINCT actor FROM events", token) in ([], ["bot:ops"])
@@ -297,7 +297,7 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
             'deleted': {'deleted_at': H.now()},
             'unknown-task': {'refs': json.dumps({'task': 'unknown-fixture-task'})},
         }.items():
-            clone('messages', mid, id='message-' + name, to_actor='human:ana', **patch)
+            clone('messages', mid, id='message-' + name, recipient_id='human:ana', **patch)
             clone('jobs', original['job_id'], id='job-' + name, message_id='message-' + name)
             clone('attempts', original['id'], id='attempt-' + name, job_id='job-' + name,
                   token_hash='fixture-' + name, state='completed', lane='fixture-' + name)
@@ -419,7 +419,7 @@ def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, worl
 
     # A fresh request must rebuild decisions after a task becomes private.
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,owner='bot:finance',requester='human:ben' WHERE id=?", (public,))
+        c.execute("UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id=?", (public,))
     with store.read() as c:
         assert not ReadIndex(c, who).message('progress-after-revocation', room, json.dumps({'task': public}), None)
 
@@ -608,8 +608,8 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
         clone('attempts', world['attempt']['id'], id=aid, job_id=job, token_hash='fixture-reply', state='completed',
               lane='fixture-reply')
         clone('turns', world['attempt']['id'], id=aid, message_id='message-asked-fixture', task_id=None)
-        clone('messages', asked, id='message-reply-fixture', conversation_id=room, from_actor='bot:ops',
-              to_actor='human:ana', in_reply_to='message-asked-fixture',
+        clone('messages', asked, id='message-reply-fixture', conversation_id=room, sender_id='bot:ops',
+              recipient_id='human:ana', in_reply_to='message-asked-fixture',
               refs=json.dumps({'turn_id': aid, 'task': world['coo_task']['id'],
                                     'run': {'job_id': job, 'attempt_id': aid}, 'answers': ['message-asked-fixture']}))
     callers = (world['attempt']['token'], 'ben-test')
@@ -733,7 +733,7 @@ def test_current_docs_and_files_follow_api_visibility(api, world):
         for fid, scope in (("public-file", "bot"), ("ana-file", "conversation:" + world["ana_room"]),
                            ("ben-file", "conversation:" + world["steven_room"]),
                            ("task-file", "task:" + world["coo_task"]["id"])):
-            c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,locator,first_activity_at,last_activity_at) "
+            c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,first_activity_at,last_activity_at) "
                       "VALUES(?,'ops',?,?,'Release notes','document','remote_link',?,?)", (fid, scope, fid, H.now(), H.now()))
     assert column(api, "SELECT id FROM docs") == [doc["id"]]
     assert column(api, "SELECT doc_id FROM doc_versions") == [doc["id"]]
@@ -775,7 +775,7 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
             ('bot:finance', 'human:cara', 1), ('bot:inbox', 'human:ana', 0),
             ('human:ben', 'human:ana', 1), ('bot:ops', 'human:cara', 0),
         ]):
-            c.execute('INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+            c.execute('INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
                       (f'tree-{i}', 'Synthetic tree', owner, requester, private, 'open', H.now(), H.now()))
         for child, parent in [(1, 0), (2, 1), (3, 0), (4, 2), (0, 4)]:
             c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at,created_by) VALUES(?,?,'parent',?,?)",
@@ -803,7 +803,7 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
     for who in callers:
         compare(who)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='bot:finance',requester='human:ben',private=1 WHERE id='tree-5'")
+        c.execute("UPDATE tasks SET owner_id='bot:finance',requester_id='human:ben',private=1 WHERE id='tree-5'")
         c.execute("UPDATE bot_config SET access=? WHERE bot='ops'", (json.dumps({
             level: {'everyone': False, 'people': [], 'teams': [], 'bots': []} for level in ('see','read','write')}),))
     for who in callers:
@@ -997,7 +997,7 @@ def test_private_task_parties_are_built_once_per_clock_not_once_per_request(api)
     store, auth = api.app.state.store, api.app.state.auth
     who = Identity("human:ben", "human")
     with store.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) "
+        c.execute("INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) "
                   "VALUES('priv-share','Private','bot:ops','human:ana',1,'open',?,?)", (H.now(), H.now()))
     builds = []
     original = row_clock._rows
@@ -1035,7 +1035,7 @@ def test_a_person_read_checks_the_org_chart_table_once_not_once_per_private_task
 
     def add(count, start):
         with store.transaction() as c:
-            c.executemany("INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) "
+            c.executemany("INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) "
                           "VALUES(?,?,?,?,?,?,?,?)",
                           [(f"priv-{i}", "Private", "bot:ops", "human:ana", 1, "open", H.now(), H.now())
                            for i in range(start, start + count)])
@@ -1068,7 +1068,7 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
                         {"people": people})
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": people}),))
         for slug in fleet:
-            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,?)", (slug, "{}", "ana"))
+            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,?)", (slug, "{}", "ana"))
         for i, slug in enumerate(fleet):
             if i % 3 == 0:
                 restrict(c, slug, people=[f"p{i % 37}"])

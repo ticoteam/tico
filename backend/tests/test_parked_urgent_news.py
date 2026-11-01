@@ -153,7 +153,7 @@ def test_parked_incident_keeps_silence_and_duplicate_controls(api, control):
             msg, job = sent_job(c, task, 'bot:cpo', 'Step moved: On Deck -> In Progress', refs)
         if control == 'duplicate':
             assert job and job['state'] == 'canceled' and job['wake_class'] == 'duplicate'
-            assert c.execute("SELECT count(*) FROM jobs WHERE bot='cpo' AND state='queued'").fetchone()[0] == 1
+            assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo' AND state='queued'").fetchone()[0] == 1
         else:
             assert job is None and msg['refs']['quiet']
         still_blocked(c, task, blocker)
@@ -175,7 +175,7 @@ def test_real_step_notice_writer_keeps_the_hold(api):
         task, blocker = parked(c, incident=True)
         R.step_entered(c, H.KEEPER, task)
         found = c.execute("SELECT j.held,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
-                          "WHERE j.bot='cpo'").fetchone()
+                          "WHERE j.bot_id='cpo'").fetchone()
         assert found and found['held'] == 0
         assert json.loads(found['refs'])['rule'] == 'incident_news'
         still_blocked(c, task, blocker)

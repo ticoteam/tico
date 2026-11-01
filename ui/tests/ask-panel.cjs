@@ -15,7 +15,7 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const now = new Date().toISOString(), ago = min => new Date(Date.now() - min * 60000).toISOString();
-const msg = (id, from, body, created = now) => ({id, from_actor: from, body, refs: {}, created_at: created, kind: 'say'});
+const msg = (id, from, body, created = now) => ({id, sender_id: from, body, refs: {}, created_at: created, kind: 'say'});
 
 async function open(browser, viewport, state) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760});
@@ -110,8 +110,8 @@ const words = text => text.trim().split(/\s+/).length;
                  messages: [{body: 'Try a hard reload.', from: 'staff', created_at: ago(20)}]}],
       card: {id: 'act9', summary: 'Add Cara as an admin', method: 'POST', path: '/api/v2/people', status: 'pending', result: null,
              description: 'Add Cara as an admin', diff: [], body: {}, proposed_via: 'botops', created_at: ago(13)},
-      needs: [{kind: 'ask', id: 'm9', created_at: ago(12), ask: {id: 'm9', from_actor: 'bot:botops', to_actor: 'human:ben', body: 'Which inbox should the bot answer?', created_at: ago(12), refs: {}}},
-              {kind: 'question', id: 't4', created_at: now, ask: {id: 'q4', from_actor: 'bot:coo', to_actor: 'human:ben', body: 'Two launch questions', created_at: now,
+      needs: [{kind: 'ask', id: 'm9', created_at: ago(12), ask: {id: 'm9', sender_id: 'bot:botops', recipient_id: 'human:ben', body: 'Which inbox should the bot answer?', created_at: ago(12), refs: {}}},
+              {kind: 'question', id: 't4', created_at: now, ask: {id: 'q4', sender_id: 'bot:coo', recipient_id: 'human:ben', body: 'Two launch questions', created_at: now,
                refs: {questions: [{question: 'Launch day?', options: [{label: 'Mon'}, {label: 'Tue'}]}, {question: 'Price?', options: [{label: '$9'}, {label: '$19'}]}]}}}]};
     let {page, errors} = await open(browser, {width: 1280, height: 900}, state);
     assert.equal(await page.locator('#nav-assistant, #nav-botops, #help-open, #mobile-support').count(), 0, 'no BotOps, Assistant or ? in the rail');
@@ -214,7 +214,7 @@ const words = text => text.trim().split(/\s+/).length;
     await question.waitFor({state: 'detached'});
     assert.deepEqual(state.answers, ['support@acme.test']);
     // Three picks or more are a list and Send, and the one chosen survives the thread being drawn again.
-    const need = (id, extra) => ({kind: 'question', id, created_at: now, ask: {id: 'q' + id, from_actor: 'bot:botops', to_actor: 'human:ben', created_at: now, ...extra}});
+    const need = (id, extra) => ({kind: 'question', id, created_at: now, ask: {id: 'q' + id, sender_id: 'bot:botops', recipient_id: 'human:ben', created_at: now, ...extra}});
     state.picked = [];
     state.needs = [need('t7', {body: 'Tone?', refs: {questions: [{id: 'tone', question: 'Which tone?', options: [{label: 'Plain'}, {label: 'Friendly'}, {label: 'Formal'}]}]}})];
     await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
@@ -313,7 +313,7 @@ const words = text => text.trim().split(/\s+/).length;
     await page.close();
 
     // A phone: the dot in the middle of the tab bar opens a sheet over the page, above the tab bar, and closes it.
-    const ask = (id, who, body) => ({kind: 'ask', id, created_at: now, ask: {id, from_actor: who, to_actor: 'human:ben', body, created_at: now, refs: {}}});
+    const ask = (id, who, body) => ({kind: 'ask', id, created_at: now, ask: {id, sender_id: who, recipient_id: 'human:ben', body, created_at: now, refs: {}}});
     state = {messages: [msg('p1', 'human:ben', 'Our key is sk-live1234567890abcdef, board blank', ago(5)), msg('p2', 'bot:coo', 'Try a reload.', ago(4))],
       sent: [], read: [], decided: [], answers: [], tickets: [], card: null,
       needs: [ask('m8', 'bot:botops', 'Which inbox should the bot answer?'), ask('m7', 'bot:coo', 'Ship the launch post today?')]};

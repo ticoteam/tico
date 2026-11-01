@@ -7,7 +7,7 @@ from backend.store import H
 
 def _reassign(api, task_id, token):
     version = get(api, f"tasks/{task_id}", "ana-test")["task"]["version"]
-    post(api, f"tasks/{task_id}", {"owner": "botops", "version": version}, token=token)
+    post(api, f"tasks/{task_id}", {"owner_id": "botops", "version": version}, token=token)
 
 
 def _write_everywhere(api, token):
@@ -28,7 +28,7 @@ def test_a_bot_reassigning_a_persons_task_to_botops_lends_only_its_own_rights(ap
     assert tried.json()["needs_confirm"] is True
     assert get(api, "bots/ops/repositories", "ana-test") == before
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["requester"] == "human:ana"
+        assert H.task(c, task["id"])["requester_id"] == "human:ana"
         card = c.execute("SELECT owner FROM assistant_actions WHERE id=?", (tried.json()["action"]["id"],)).fetchone()
         assert card["owner"] == "human:ana"
     # Citing the task as a follow-through lends nothing either.
@@ -41,7 +41,7 @@ def test_a_bot_reassigning_a_persons_task_to_botops_lends_only_its_own_rights(ap
 def test_a_person_who_gives_their_own_task_to_botops_lends_their_rights(api, botops):
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Give Ops write access", "body": "x"}, token="ana-test")
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Give Ops write access", "body": "x"}, token="ana-test")
     _reassign(api, task["id"], "ana-test")
     attempt = claim(api, botops, "botops")
     tried = _write_everywhere(api, attempt["token"])
@@ -55,12 +55,12 @@ def test_botops_moving_a_persons_task_to_itself_with_lent_rights_lends_nothing_l
     BotOps', not Ana's: the moved task's own run never acts as her."""
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
-    other = post(api, "tasks", {"owner": "ops", "title": "Tidy the backlog", "body": "x"}, token="ana-test")
-    post(api, "tasks", {"owner": "botops", "title": "Rename the Ops bot", "body": "x"}, token="ana-test")
+    other = post(api, "tasks", {"owner_id": "ops", "title": "Tidy the backlog", "body": "x"}, token="ana-test")
+    post(api, "tasks", {"owner_id": "botops", "title": "Rename the Ops bot", "body": "x"}, token="ana-test")
     first = claim(api, botops, "botops")
     _reassign(api, other["id"], first["token"])
     with api.app.state.store.read() as c:
-        moved = c.execute("SELECT actor FROM task_events WHERE task_id=? AND field='owner' ORDER BY ts DESC LIMIT 1",
+        moved = c.execute("SELECT actor FROM task_events WHERE task_id=? AND field='owner' ORDER BY created_at DESC LIMIT 1",
                           (other["id"],)).fetchone()
         assert moved["actor"] == "human:ana"         # made with her rights, through BotOps
     finish(api, botops, first)
@@ -80,7 +80,7 @@ def test_a_later_wake_run_citing_a_task_a_bot_moved_to_botops_lends_nothing(api,
     rights as a follow-through on her request would."""
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Write the release notes", "body": "For 0.4"}, token="ana-test")
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Write the release notes", "body": "For 0.4"}, token="ana-test")
     ops = claim(api, botops, "ops")
     _reassign(api, task["id"], ops["token"])
     finish(api, botops, ops)
@@ -99,7 +99,7 @@ def test_a_later_wake_run_citing_a_task_a_bot_moved_to_botops_lends_nothing(api,
 def test_the_persons_comment_on_a_task_a_bot_moved_says_why_it_lends_nothing(api, botops):
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Write the release notes", "body": "For 0.4"}, token="ana-test")
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Write the release notes", "body": "For 0.4"}, token="ana-test")
     ops = claim(api, botops, "ops")
     _reassign(api, task["id"], ops["token"])
     finish(api, botops, ops)

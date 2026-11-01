@@ -15,13 +15,13 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     page.on('pageerror', error => errors.push(error.message));
     const base = {host: 'keeper', status: 'active', state: 'active', can_chat: true, can_manage: true,
       my_access: {see: true, read: true, write: true}, schedules: [], revision: 1, thread_mode: 'personal', users: []};
-    const original = {...base, name: 'architect', slug: 'architect', display_name: 'Architect', operator: 'sam', shared: true, repo: 'bot-architect', reports_to: 'bot:lead'};
+    const original = {...base, name: 'architect', slug: 'architect', display_name: 'Architect', owner_id: 'sam', shared: true, repo: 'bot-architect', reports_to: 'bot:lead'};
     const bots = [original];
     const people = [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}];
     let computers = [
-      {id: 'ana-mac', label: 'My Mac', operator: 'ana'},
-      {id: 'sam-mac', label: 'Other Mac', operator: 'sam'},
-      {id: 'old-mac', label: 'Old Mac', operator: 'ana', revoked_at: '2026-01-01'}];
+      {id: 'ana-mac', label: 'My Mac', owner_id: 'ana'},
+      {id: 'sam-mac', label: 'Other Mac', owner_id: 'sam'},
+      {id: 'old-mac', label: 'Old Mac', owner_id: 'ana', revoked_at: '2026-01-01'}];
     let collision = true, stale = true;
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname;
@@ -45,7 +45,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p.endsWith('/copies')) {
         writes.push([p, JSON.parse(request.postData())]);
         if (collision) return route.fulfill({status: 409, contentType: 'application/json', body: JSON.stringify({error: {detail: 'That computer already runs the original or a branch of it. Choose another computer.'}})});
-        const branch = {...base, id: 'architect-ana', name: 'architect-ana', slug: 'architect-ana', display_name: 'Architect', operator: 'ana', shared_from: 'architect',
+        const branch = {...base, id: 'architect-ana', name: 'architect-ana', slug: 'architect-ana', display_name: 'Architect', owner_id: 'ana', shared_from: 'architect',
           status: JSON.parse(request.postData()).runner_id ? 'active' : 'planned'};
         bots.push(branch); return json(branch);
       }
@@ -149,8 +149,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.ok(!('slug' in added[1]) && !('repo' in added[1]));
     // Eligibility comes from both the current computer assignments and the roster's family.
     original.shared = true;
-    computers = [{id: 'ana-mac', label: 'My Mac', operator: 'ana', bots: ['architect']},
-      {id: 'ana-other', label: 'Second Mac', operator: 'ana', bots: []}];
+    computers = [{id: 'ana-mac', label: 'My Mac', owner_id: 'ana', bots: ['architect']},
+      {id: 'ana-other', label: 'Second Mac', owner_id: 'ana', bots: []}];
     await page.evaluate(() => botBranchCreate('architect'));
     dialog = page.locator('#branch-editor');
     assert.deepEqual(await dialog.locator('[name=runner_id] option').allTextContents(), ['Second Mac']);
@@ -165,9 +165,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // The submit refreshes the roster (S.emps) and then opens the branch: wait for that, so it cannot replace the row added below.
     await page.waitForFunction(() => !document.querySelector('#branch-editor') && location.hash === '#/bot/architect-ana' && BOT?.slug === 'architect-ana');
     assert.deepEqual(writes.at(-1)[1], {});
-    computers = [{id: 'ana-mac', label: 'My Mac', operator: 'ana', bots: ['architect-sam']}];
+    computers = [{id: 'ana-mac', label: 'My Mac', owner_id: 'ana', bots: ['architect-sam']}];
     await page.evaluate(() => {
-      S.emps.push({name: 'architect-sam', shared_from: 'architect', operator: 'sam', machine: {runner_id: 'ana-mac'}});
+      S.emps.push({name: 'architect-sam', shared_from: 'architect', owner_id: 'sam', machine: {runner_id: 'ana-mac'}});
       return botBranchCreate('architect');
     });
     await dialog.locator('.bot-editor-body > p').filter({hasText: /Your computers already run/}).waitFor();

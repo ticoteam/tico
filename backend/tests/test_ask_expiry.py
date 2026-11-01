@@ -17,8 +17,8 @@ def bot_ask(c, tid, text, refs=None, to="human:ana"):
 
 
 def test_a_newer_ask_or_the_tasks_end_supersedes_and_old_asks_fold_out(api):
-    tid = post(api, "tasks", {"owner": "ops", "title": "Pick a vendor", "body": "x"})["id"]
-    other = post(api, "tasks", {"owner": "ops", "title": "Pick a venue", "body": "x"})["id"]
+    tid = post(api, "tasks", {"owner_id": "ops", "title": "Pick a vendor", "body": "x"})["id"]
+    other = post(api, "tasks", {"owner_id": "ops", "title": "Pick a venue", "body": "x"})["id"]
     with api.app.state.store.transaction() as c:
         first = bot_ask(c, tid, "Which vendor, A or B?")
         budget = bot_ask(c, tid, "What is the budget?", to="human:ben")
@@ -33,7 +33,7 @@ def test_a_newer_ask_or_the_tasks_end_supersedes_and_old_asks_fold_out(api):
         # done ends every question asked about the work, picks too; the acceptance question asked of its requester
         # once it is done stays until closing ends it
         assert H.open_task_asks(c, H.task(c, tid)) == []
-        c.execute("UPDATE tasks SET requester='human:ana' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET requester_id='human:ana' WHERE id=?", (tid,))
         review = bot_ask(c, tid, "Accept the order?", {"questions": [{"id": "ok", "question": "Accept?"}]})
         assert [a["id"] for a in H.open_task_asks(c, H.task(c, tid))] == [review["id"]]
         assert tid in [t["id"] for t in H.tasks_asked_of(c, "human:ana")]

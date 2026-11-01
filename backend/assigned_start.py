@@ -28,11 +28,11 @@ def page_ledger(c, rows):
     for part in H.chunks(row['id'] for row in rows):
         marks = ','.join('?' * len(part))
         for task_id, event_id, ts in c.execute(
-                f"SELECT task_id,id,ts FROM task_events WHERE field='owner' AND task_id IN ({marks}) "
-                "ORDER BY task_id,ts DESC,rowid DESC", part):
+                f"SELECT task_id,id,created_at FROM task_events WHERE field='owner' AND task_id IN ({marks}) "
+                "ORDER BY task_id,created_at DESC,rowid DESC", part):
             owners.setdefault(task_id, (event_id, ts))
         for target, detail in c.execute(
-                f"SELECT target,detail FROM events WHERE action=? AND target IN ({marks}) ORDER BY target,ts DESC",
+                f"SELECT target,detail FROM events WHERE action=? AND target IN ({marks}) ORDER BY target,created_at DESC",
                 (EVENT, *part)):
             ledger.setdefault(target, []).append(H._json(detail, {}))
     return owners, ledger
@@ -58,7 +58,7 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     scope = f" AND t.id IN ({','.join('?' for _ in task_ids)})" if task_ids else ''
     params.extend(task_ids or ())
     # Select the current assignment's ledger entry before reading task bodies or provenance.
-    assignment_key = "coalesce((SELECT id FROM task_events WHERE task_id=t.id AND field='owner' ORDER BY ts DESC,rowid DESC LIMIT 1),t.owner||':'||t.created_at)"
+    assignment_key = "coalesce((SELECT id FROM task_events WHERE task_id=t.id AND field='owner' ORDER BY created_at DESC,rowid DESC LIMIT 1),t.owner_id||':'||t.created_at)"
     ledger = ("SELECT 1 FROM events e WHERE e.target=t.id AND e.action='task.assignment-rewake' "
               f"AND json_extract(e.detail,'$.assignment')={assignment_key}")
     if recorded is not None:
@@ -79,7 +79,7 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     # Checked per candidate task (a key lookup), so the reader's rule keeps its own column names. As
     # `t.id IN (SELECT id FROM tasks WHERE ...)` SQLite listed every task the rule allows first: 55 ms a call on TIDY.
     visibility = f" AND EXISTS(SELECT 1 FROM tasks v WHERE v.id=t.id AND ({visible}))" if visible != "1" else ""
-    rows = H._rows(c.execute("SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.id "
+    rows = H._rows(c.execute("SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id "
                                  "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created_at<=? "
                                  + scope + visibility + " ORDER BY t.id LIMIT ?",
                                  (*params, SCAN_LIMIT)))
@@ -96,7 +96,7 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
             scanned[:] = [row['id']]
         try:
             owned = owners.get(row['id'])
-            key, since = (owned[0], owned[1]) if owned else (row['owner'] + ':' + row['created_at'], row['created_at'])
+            key, since = (owned[0], owned[1]) if owned else (row['owner_id'] + ':' + row['created_at'], row['created_at'])
             if since > cutoff:
                 continue
             saved = next((entry for entry in ledger.get(row['id'], ()) if entry.get('assignment') == key), None)
@@ -111,11 +111,11 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
             memo = (memo_scope, row['id'], key) if memo_scope else None
             if memo in ATTEMPTED:
                 continue
-            bot = H.actor_id(row['owner'])
+            bot = H.actor_id(row['owner_id'])
             floor, touched = attempts.get(bot, ("9999", {}))
             # Only runs since this assignment can count, so the bot's attempts are read from `since`, not the page's oldest row.
             if since < floor:
-                found = c.execute("SELECT id,created_at FROM attempts WHERE bot=? AND created_at>=? AND created_at<? ORDER BY created_at DESC",
+                found = c.execute("SELECT id,created_at FROM attempts WHERE bot_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC",
                                   (bot, since, floor)).fetchall()
                 # Every run's task set in a fixed number of statements; attempt_tasks then reads each from that snapshot.
                 privacy.prime_attempts(c, [attempt['id'] for attempt in found])
@@ -149,7 +149,7 @@ def due(c, at, limit=50, cursor=None, failures=None):
             failures.append({'assigned_start': row['id'], 'error': type(exc).__name__})
 
     for row, _, _, saved in candidates(c, at, recorded=False, after=after, scanned=cursor, on_error=failed):
-        if not saved and H.bot(c, H.actor_id(row['owner']))['state'] == 'active':
+        if not saved and H.bot(c, H.actor_id(row['owner_id']))['state'] == 'active':
             out.append(row['id'])
             if len(out) >= limit:
                 break
@@ -162,7 +162,7 @@ def sweep(c, at=None, task_ids=None):
     for row, key, since, saved in candidates(c, at, task_ids):
         if saved:
             continue
-        if H.bot(c, H.actor_id(row['owner']))['state'] != 'active':
+        if H.bot(c, H.actor_id(row['owner_id']))['state'] != 'active':
             continue
         # A delivery refusal is also one try, recorded durably; never repeat it every tick.
         c.execute('SAVEPOINT assignment_rewake')
@@ -170,7 +170,7 @@ def sweep(c, at=None, task_ids=None):
         try:
             if not c.execute('SELECT 1 FROM conversations WHERE id=?', (row['conversation_id'],)).fetchone():
                 raise H.Refused('missing_conversation', 'The assignment has no task conversation.')
-            message = H._wake(c, row, row['owner'], 'Assigned, not started: ' + row['title'],
+            message = H._wake(c, row, row['owner_id'], 'Assigned, not started: ' + row['title'],
                               {'assignment_rewake': True, 'needs_action': True}, trigger='other')
         except H.Refused as exc:
             c.execute('ROLLBACK TO assignment_rewake')
@@ -216,7 +216,7 @@ def overdue(c, at=None, *, visible="1", manager_actor=None, limit=200):
 
 
 def manager(c, row):
-    config = c.execute('SELECT reports_to FROM bot_config WHERE bot=?', (H.actor_id(row['owner']),)).fetchone()
+    config = c.execute('SELECT reports_to FROM bot_config WHERE bot=?', (H.actor_id(row['owner_id']),)).fetchone()
     target = config['reports_to'] if config else ''
     return target if H.actor_kind(target) else H.bot_actor(target) if target else None
 
@@ -254,7 +254,7 @@ def reason(c, row, settings, shared=None, suspect=None):
     `shared`: a dict the caller keeps across its tasks, so each bot's shared checks are read once for all of them.
     `suspect`: auto_tasks.maybe_waiting over those tasks."""
     from . import execution as E
-    bot = H.actor_id(row['owner'])
+    bot = H.actor_id(row['owner_id'])
     if shared is None:
         why, state = _bot_state(c, bot, settings)
     else:
@@ -266,7 +266,7 @@ def reason(c, row, settings, shared=None, suspect=None):
     runner, ready, followed, busy = state['runner'], state['ready'], state['followed'], state['busy']
     jobs = c.execute(f"SELECT j.*,{E.unfenced_sql()} free,{E.scoped_sql()} in_scope "
                      "FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-                     f"WHERE j.bot=? AND j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at,j.id",
+                     f"WHERE j.bot_id=? AND j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at,j.id",
                      (bot, row['id'])).fetchall()
     if jobs:
         job = jobs[0]

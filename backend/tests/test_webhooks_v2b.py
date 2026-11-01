@@ -30,7 +30,7 @@ SLACK_HEADERS = {"x-slack-signature": SLACK_V0, "x-slack-request-timestamp": str
 def listener(api, trigger, steps=None, name="Order"):
     """An automation on the incoming webhook `trigger` (what a routine on `webhook.<id>` became)."""
     steps = steps or [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Ship it."}}]
-    return post(api, "automations", {"name": name, "owner": "person:ana", "trigger": {"type": "webhook", "id": trigger},
+    return post(api, "automations", {"name": name, "owner_id": "person:ana", "trigger": {"type": "webhook", "id": trigger},
                                      "steps": steps})["id"]
 
 
@@ -99,7 +99,7 @@ def test_recover_runs_refused_calls_again_once_and_the_senders_retry_is_a_duplic
     assert len(runs(api, aid)) == 1
     again = post(api, "triggers/shop/recover", {"since_hours": 24})["recover"]
     assert (again["found"], again["recovered"], again["still_refused"]) == (1, 0, 1)      # only w2 is left, and still bad
-    assert stored_rows(api, "SELECT detail FROM events WHERE action='trigger.recovered' ORDER BY ts")[0][0].count("recovered") == 1
+    assert stored_rows(api, "SELECT detail FROM events WHERE action='trigger.recovered' ORDER BY created_at")[0][0].count("recovered") == 1
     post(api, "triggers/_tico/recover", {}, expected=422)                                   # the built-in trigger takes no edits
 
 
@@ -112,7 +112,7 @@ def test_a_webhook_turn_reads_the_call_as_data_and_one_without_braces_is_left_al
              name="Filled")
     hook(api, made["url"], b'{"kind": "order.created", "order": 42, "note": "{{webhook.name}}"}', {"Webhook-Id": "t1"})
     with api.app.state.store.read() as c:
-        bodies = {r["title"]: r["body"] for r in c.execute("SELECT title, body FROM tasks WHERE owner='bot:ops'")}
+        bodies = {r["title"]: r["body"] for r in c.execute("SELECT title, body FROM tasks WHERE owner_id='bot:ops'")}
     assert bodies["Plain"] == "Ship it."
     filled = bodies["Filled"]
     # The author's words point at quoted data blocks; the call's own braces stay text and are never filled in.
@@ -143,7 +143,7 @@ def test_forward_sends_the_incoming_payload_on_untouched_and_signed(api, net):
 
 def test_create_task_files_a_templated_task_once_in_the_rule_makers_name(api):
     setup(api)
-    params = {"action": "create_task", "owner": "cpo", "title": "Order {{data.order}} for {{data.customer.name}}",
+    params = {"action": "create_task", "owner_id": "cpo", "title": "Order {{data.order}} for {{data.customer.name}}",
               "body": "Look at {{type}}."}
     made = rule(api, then="action", params=params)["rule"]
     done = judge(api)
@@ -153,7 +153,7 @@ def test_create_task_files_a_templated_task_once_in_the_rule_makers_name(api):
     assert len(tasks) == 1 and tasks[0]["title"] == "Order 42 for Buyer"
     body = get(api, "tasks/" + tasks[0]["id"])["task"]["body"]
     assert body == "Look at order.created."                     # nothing was cut: no line about the rest
-    assert get(api, "tasks/" + tasks[0]["id"])["task"]["requester"] == "human:ben"          # in the rule maker's name
+    assert get(api, "tasks/" + tasks[0]["id"])["task"]["requester_id"] == "human:ben"          # in the rule maker's name
 
 
 
@@ -241,7 +241,7 @@ def test_five_days_of_failing_turn_an_endpoint_off_but_thirteen_hours_after_a_qu
             c.execute("DELETE FROM webhook_attempts")
             c.execute("UPDATE webhooks SET failing_since=? WHERE id=?", (since, hook_["id"]))
             c.execute("UPDATE webhook_sends SET state='failed', next_attempt_at=? WHERE id=?", (since, send["id"]))
-            c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,at,timestamp_sent,status,ms) VALUES(?,?,1,?,0,500,0)",
+            c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,created_at,timestamp_sent,status,ms) VALUES(?,?,1,?,0,500,0)",
                       (send["id"], hook_["id"], last))
             return W.auto_disable(c)
     now = H.now()
@@ -255,7 +255,7 @@ def test_five_days_of_failing_turn_an_endpoint_off_but_thirteen_hours_after_a_qu
         assert W.auto_disable(c) == []                          # said once
         assert W.health_summary(c)["disabled"] == ["Acme hook"]
         notes = [t for t in c.execute("SELECT * FROM tasks WHERE title LIKE 'Webhook % was turned off'")]
-    assert len(notes) == 1 and notes[0]["owner"] == "human:ana"
+    assert len(notes) == 1 and notes[0]["owner_id"] == "human:ana"
     assert sends(api, hook_["id"])[0]["state"] == "failed"
     post_w(api, f"webhooks/{hook_['id']}/recover", {"since": "2020-01-01"}, expected=409)          # on first
     enabled = post_w(api, f"webhooks/{hook_['id']}/enable", {})

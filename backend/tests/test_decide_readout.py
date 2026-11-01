@@ -22,7 +22,7 @@ def at(days_ago):
 def audit(api, action, label, detail, days_ago=1, actor="bot:ops"):
     with api.app.state.store.transaction() as c:
         row = H.event(c, actor, action, label, detail)
-        c.execute("UPDATE events SET ts=? WHERE id=?", (at(days_ago), row["id"]))
+        c.execute("UPDATE events SET created_at=? WHERE id=?", (at(days_ago), row["id"]))
 
 
 def answered(label, model, cost, answers, fallback=None):

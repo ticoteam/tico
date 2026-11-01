@@ -62,7 +62,7 @@ def test_engine_only_leaves_people_its_feed_created_and_never_the_owner():
 # ------------------------------------------------------------------------------------- the routes
 def events(api, action):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM events WHERE action=? ORDER BY ts, id", (action,))]
+        return [dict(r) for r in c.execute("SELECT * FROM events WHERE action=? ORDER BY created_at, id", (action,))]
 
 
 def put_config(api, revision=0, **more):

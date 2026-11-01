@@ -45,8 +45,8 @@ const BODY = ['Two drafts for review.', '',
       if(p==='/api/issues')return json([]);
       if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:': fixture\n\n'});
       if(p==='/api/v2/conversations')return json({conversations:url.searchParams.get('chat_with')?[{id:'c-finance',kind:'chat',scope:'personal',participants:['human:ana','bot:finance']}]:[]});
-      if(p==='/api/v2/conversations/c-finance/snapshot')return json({messages:[{id:'m1',from_actor:'bot:finance',body:`Please review [the drafts](https://tico-ui.test/tasks/${TASK}).`,created_at:new Date().toISOString()}],execution:null});
-      if(p===`/api/v2/tasks/${TASK}`)return json({task:{id:TASK,title:'Review the launch drafts',body:BODY,owner:'human:ana',requester:'bot:finance',status:'open',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated_at:new Date().toISOString()},children:[]});
+      if(p==='/api/v2/conversations/c-finance/snapshot')return json({messages:[{id:'m1',sender_id:'bot:finance',body:`Please review [the drafts](https://tico-ui.test/tasks/${TASK}).`,created_at:new Date().toISOString()}],execution:null});
+      if(p===`/api/v2/tasks/${TASK}`)return json({task:{id:TASK,title:'Review the launch drafts',body:BODY,owner_id:'human:ana',requester_id:'bot:finance',status:'open',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated_at:new Date().toISOString()},children:[]});
       if(p==='/api/v2/tasks')return json({tasks:[]});
       return json(unrouted(p));
     });

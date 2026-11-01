@@ -41,7 +41,7 @@ def sql(api, query, token):
 
 
 # ------------------------------------------------------------------ delegation through BotOps
-SLACK_DM = {"slack": {"channel": "D1", "kind": "im", "ts": "1.0", "sender": "cara@acme.example"}, "routing": {}}
+SLACK_DM = {"slack": {"channel": "D1", "kind": "im", "created_at": "1.0", "sender": "cara@acme.example"}, "routing": {}}
 
 
 def test_a_slack_routed_message_is_no_request_to_botops(api, botops):
@@ -66,7 +66,7 @@ def test_a_cited_message_must_be_the_requesters_own_recent_one_in_their_own_room
     add_dee(api)
     finish(api, botops, turn(api, botops, "dee-test", "hello"))        # Dee's own request, sent earlier
     with api.app.state.store.read() as c:
-        theirs = c.execute("SELECT id FROM messages WHERE from_actor='human:dee' AND to_actor='bot:botops'").fetchone()[0]
+        theirs = c.execute("SELECT id FROM messages WHERE sender_id='human:dee' AND recipient_id='bot:botops'").fetchone()[0]
     attempt = turn(api, botops)
     cite = lambda mid, slug: call(api, "post", "bots/register", attempt["token"], {"slug": slug, "on_behalf_of": mid})  # noqa: E731
     assert cite(theirs, "borrowed").status_code == 403                  # another person's message
@@ -96,7 +96,7 @@ def weekly(api, bot):
     """A bot's weekly report: what a routine was, as an automation the bot owns. Automations name a bot by its id."""
     with api.app.state.store.read() as c:
         bot = H.resolve_bot(c, bot)["id"]
-    return {"name": "Report", "owner": H.bot_actor(bot), "trigger": {"type": "schedule", "cron": "0 9 * * 1"},
+    return {"name": "Report", "owner_id": H.bot_actor(bot), "trigger": {"type": "schedule", "cron": "0 9 * * 1"},
             "steps": [{"id": "report", "type": "bot_turn", "bot": bot, "prompt": "Weekly"}]}
 
 
@@ -127,7 +127,7 @@ def test_botops_changes_automations_and_quarantines_only_as_a_person_who_manages
 # ------------------------------------------------------------------ members' bots and computers
 def test_a_members_bot_runs_on_their_own_or_an_admin_opened_computer_and_stays_theirs(api, botops):
     add_dee(api)
-    code = post(api, "enrollments", {"operator": "cara"}, token="cara-test")["code"]
+    code = post(api, "enrollments", {"owner_id": "cara"}, token="cara-test")["code"]
     caras = close_computer(api, post(api, "runners/enroll", {"code": code, "label": "Cara Mac", "platform": "test"}))
     assert call(api, "post", "bots/register", "dee-test", {"slug": "dees"}).status_code == 200
     place = {"runner_id": caras["runner_id"], "expected_generation": 0}
@@ -138,7 +138,7 @@ def test_a_members_bot_runs_on_their_own_or_an_admin_opened_computer_and_stays_t
         revision = c.execute("SELECT revision FROM bot_config WHERE bot=?", (H.resolve_bot(c, "dees")["id"],)).fetchone()[0]
     moved = call(api, "post", "bots/dees/placement", "dee-test",
                  {"runner_id": opened["runner_id"], "expected_generation": 0, "expected_revision": revision})
-    assert moved.status_code == 200 and moved.json()["operator"] == "dee"                   # not the computer's operator
+    assert moved.status_code == 200 and moved.json()["owner_id"] == "dee"                   # not the computer's operator
 
 
 # ------------------------------------------------------------------ what a member can read
@@ -153,8 +153,8 @@ def test_a_member_reads_no_hidden_bots_activity_and_no_registry_through_sql_or_g
     assert {"bot.note", "cara.did"} <= seen and "bot.secret_change" not in seen
     assert sql(api, "SELECT key FROM registry_metadata", "cara-test") == []
     assert "people" in sql(api, "SELECT key FROM registry_metadata", "ben-test")           # an Admin reads it
-    goal = post(api, "goals", {"title": "Close all NDAs by Q4", "owner": "bot:" + restricted, "top": True})["goal"]
-    open_goal = post(api, "goals", {"title": "Ship it", "owner": "bot:ops", "top": True})["goal"]
+    goal = post(api, "goals", {"title": "Close all NDAs by Q4", "owner_id": "bot:" + restricted, "top": True})["goal"]
+    open_goal = post(api, "goals", {"title": "Ship it", "owner_id": "bot:ops", "top": True})["goal"]
     tree = get(api, "goals/tree", "cara-test")
     assert [g["id"] for g in tree["goals"]] == [open_goal["id"]] and "bot:" + restricted not in tree["owners"]
     assert goal["id"] in [g["id"] for g in get(api, "goals/tree")["goals"]]

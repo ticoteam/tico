@@ -32,27 +32,27 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         runtime: {cpo: 'codex', cmo: 'claude'}[name], private_tasks_default: name === 'cpo',
         update_subscriptions: name === 'cpo' ? ['templates'] : []}));
     const now = new Date().toISOString();
-    const task = (id, over) => ({id, title: id, body: 'Details.', owner: 'bot:cmo', requester: 'human:reviewer', status: 'open',
+    const task = (id, over) => ({id, title: id, body: 'Details.', owner_id: 'bot:cmo', requester_id: 'human:reviewer', status: 'open',
       lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
     let me = {id: 'reviewer', name: 'Test Reviewer', email: 'reviewer@example.test', role: 'owner', mover: true, cloud: true};
     const tags = [
       {id: 'tag-newsletter', key: 'newsletter', label: 'release', metadata: {date: '2026-10-02'},
         markdown: '# Release\n\n- [ ] Smoke checks\n- [x] Tell the team\n\n```md\n- [ ] Literal example\n```\n\n<script>window.tagUnsafe = true</script>',
-        is_template: false, template_id: null, owner: 'human:reviewer', version: 1},
+        is_template: false, template_id: null, owner_id: 'human:reviewer', version: 1},
       {id: 'tag-template', key: 'release-checklist', label: 'release', metadata: {channel: 'stable'},
-        markdown: '- [ ] Migrations / scripts to run', is_template: true, template_id: null, owner: 'human:reviewer', version: 1},
+        markdown: '- [ ] Migrations / scripts to run', is_template: true, template_id: null, owner_id: 'human:reviewer', version: 1},
     ];
     let staleTag = false, raceStarter = false;
     let tasks = [
       task('Draft the newsletter', {private: true, rank: 2, labels: ['newsletter'], tags: [tags[0]], body: 'Review [packet](http://tico-ui.test/api/v2/files/doc).',
         attachments: [{id: 'doc', name: 'review-packet.md'}, {id: 'clip', name: 'first-cut.mp4'}, {id: 'archive', name: 'source.zip'}]}),
-      task('Approve the budget', {owner: 'human:reviewer', requester: 'bot:coo', rank: 1, labels: ['finance'], note: 'Waiting on finance approval'}),
+      task('Approve the budget', {owner_id: 'human:reviewer', requester_id: 'bot:coo', rank: 1, labels: ['finance'], note: 'Waiting on finance approval'}),
       task('Write the copy', {rank: 1, labels: ['newsletter', 'copy']}),
-      task('Ship the pricing page', {owner: 'bot:cpo', lane: 'product', status: 'review', rank: 1,
+      task('Ship the pricing page', {owner_id: 'bot:cpo', lane: 'product', status: 'review', rank: 1,
         links: [{id: 'l1', kind: 'pr', url: 'https://github.com/ticoteam/tico/pull/412', title: 'tico#412', state: 'open'}], parts: {total: 2, done: 1}}),
-      task('Fix the checkout bug', {owner: 'bot:cpo', lane: 'product', status: 'open', rank: 2, labels: ['bug']}),
+      task('Fix the checkout bug', {owner_id: 'bot:cpo', lane: 'product', status: 'open', rank: 2, labels: ['bug']}),
     ];
-    const comments = [{id: 'm1', kind: 'say', from_actor: 'human:ben', to_actor: 'bot:cmo', body: 'Use the September numbers.', created_at: now, edited_at: now, refs: {task: 'Draft the newsletter', comment: true, attachments: [{id: 'doc', name: 'review-packet.md'}]}}];
+    const comments = [{id: 'm1', kind: 'say', sender_id: 'human:ben', recipient_id: 'bot:cmo', body: 'Use the September numbers.', created_at: now, edited_at: now, refs: {task: 'Draft the newsletter', comment: true, attachments: [{id: 'doc', name: 'review-packet.md'}]}}];
     const events = [{id: 'e1', task_id: 'Draft the newsletter', ts: now, actor: 'human:reviewer', field: 'status', old: null, new: 'open', note: ''},
                     {id: 'e2', task_id: 'Draft the newsletter', ts: now, actor: 'bot:cmo', field: 'status', old: 'open', new: 'doing', note: 'Drafting from the brief'},
                     {id: 'e3', task_id: 'Draft the newsletter', ts: now, actor: 'bot:cmo', field: 'note', old: '', new: 'Drafting from the brief', note: 'Drafting from the brief'},
@@ -81,7 +81,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       if (p === '/api/v2/tags' && req.method() === 'GET') return json({tags});
       if (p === '/api/v2/tags' && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
-        const tag = {...body, id: 'tag-starter', metadata: {}, owner: 'human:reviewer', version: 1};
+        const tag = {...body, id: 'tag-starter', metadata: {}, owner_id: 'human:reviewer', version: 1};
         tags.push(tag);
         if (raceStarter) {
           Object.assign(tag, {is_template: false, label: 'Existing release', markdown: '- [x] Keep our notes'});
@@ -132,7 +132,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
         const lane = url.searchParams.get('lane');
         if (lane) rows = rows.filter(task => (task.lane || 'company') === lane);
         const owner = url.searchParams.get('owner');
-        if (owner) rows = rows.filter(task => task.owner === owner || task.owner === 'bot:' + owner);
+        if (owner) rows = rows.filter(task => task.owner_id === owner || task.owner_id === 'bot:' + owner);
         if (url.searchParams.get('sort') === 'finished') rows.sort((a, b) => String(b.closed_at || b.updated_at).localeCompare(String(a.closed_at || a.updated_at)));
         const offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || 500);
         return json({tasks: rows.slice(offset, offset + limit), next_offset: rows.length > offset + limit ? offset + limit : null});
@@ -155,7 +155,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       const cm = p.match(/^\/api\/v2\/tasks\/([^/]+)\/comments$/);
       if (cm && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
-        comments.push({id: 'm' + comments.length, kind: 'say', from_actor: 'human:reviewer', to_actor: 'bot:cmo', body: body.text, created_at: new Date().toISOString(), refs: {task: decodeURIComponent(cm[1]), comment: true}});
+        comments.push({id: 'm' + comments.length, kind: 'say', sender_id: 'human:reviewer', recipient_id: 'bot:cmo', body: body.text, created_at: new Date().toISOString(), refs: {task: decodeURIComponent(cm[1]), comment: true}});
         return json({comment: comments.at(-1), comments, woke: true});
       }
       if (/^\/api\/v2\/bots\/[^/]+\/definition$/.test(p) && req.method() === 'POST') {

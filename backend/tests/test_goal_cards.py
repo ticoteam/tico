@@ -34,7 +34,7 @@ def test_an_add_a_kpi_card_names_the_measure_says_what_it_counts_and_that_it_has
                                "unit": "", "direction": "up", "existing": False}
     assert card["target_label"] == ""                       # the card reads "No target yet"
     # One that reuses a measure names it and says what it counts, never "existing KPI".
-    other = post(api, "goals", {"title": "Keep customers", "owner": "ana"})["goal"]
+    other = post(api, "goals", {"title": "Keep customers", "owner_id": "ana"})["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": activation["id"], "target": IMPROVE}, other["id"])
     card = tree_card(api, reuse["id"])
     assert (card["measure"]["name"], card["measure"]["definition"], card["measure"]["existing"]) == (
@@ -104,7 +104,7 @@ def test_a_flag_confirmed_changes_nothing_else(api):
 def test_the_strategy_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_once(api):
     goal_manager(api, level=2)
     goal, kpi = goal_with_kpi(api)
-    other = post(api, "goals", {"title": "Keep customers", "owner": "ana"})["goal"]
+    other = post(api, "goals", {"title": "Keep customers", "owner_id": "ana"})["goal"]
     made = {
         propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos"}}, goal["id"])["id"]: "Add the measure Weekly demos to Raise activation?",
         propose(api, "goal_kpi", {"kpi_id": kpi["id"]}, other["id"])["id"]: "Add the measure Activation to Keep customers?",
@@ -152,7 +152,7 @@ def test_a_persons_target_replaces_the_one_proposed_and_none_clears_it(api):
     link = links(api, goal["id"])["Weekly demos"]
     assert (link["target"], link["deadline"]) == (25, "2099-12-31")
     # Reusing a measure, the person's "no target" clears the one the Strategy Bot proposed.
-    other = post(api, "goals", {"title": "Keep customers", "owner": "ana"})["goal"]
+    other = post(api, "goals", {"title": "Keep customers", "owner_id": "ana"})["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": kpi["id"], "target": IMPROVE}, other["id"])
     post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "confirm", "target": {"kind": "none"}})
     assert links(api, other["id"])["Activation"]["kind"] == "none"
@@ -176,7 +176,7 @@ SECRETS = ("NDAs waiting", "Unsigned NDAs in the mail", "Mailbox count", "Close 
 
 
 def inbox_measure(api):
-    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner": "bot:inbox", "top": True})["goal"]
+    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner_id": "bot:inbox", "top": True})["goal"]
     kpi = post(api, "kpis", {"name": "NDAs waiting", "unit": "docs", "direction": "down", "cadence": "daily",
                              "definition": "Unsigned NDAs in the mail", "source_note": "Mailbox count",
                              "goal_id": hidden["id"]})["kpi"]
@@ -206,7 +206,7 @@ def test_a_suggestion_about_a_hidden_bots_measure_or_goal_shows_none_of_it(api):
 def test_needs_you_does_not_name_a_hidden_goal_when_the_reader_can_edit_its_kpi(api):
     goal_manager(api, level=2)  # Above Passive, where unfiled proposals are shown in Needs you.
     visible, kpi = goal_with_kpi(api, owner="cara", token="cara-test")
-    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner": "bot:inbox", "top": True})["goal"]
+    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner_id": "bot:inbox", "top": True})["goal"]
     post(api, f"goals/{hidden['id']}/kpis", {"kpi_id": kpi["id"], "kind": "maintain", "min": 30})
     secret = propose(api, "kpi_target", {"kind": "maintain", "min": 50}, hidden["id"], kpi["id"])
     visible_proposal = propose(api, "kpi_target", {"kind": "maintain", "min": 60}, visible["id"], kpi["id"])
@@ -219,7 +219,7 @@ def test_needs_you_does_not_name_a_hidden_goal_when_the_reader_can_edit_its_kpi(
 
 def test_task_filing_skips_a_hidden_goal_when_its_decider_cannot_read_the_owner_bot(api):
     goal_manager(api, level=2)
-    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner": "bot:cpo", "top": True})["goal"]
+    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner_id": "bot:cpo", "top": True})["goal"]
     proposal = propose(api, "goal_wording", {"title": "Close all NDAs this month"}, hidden["id"])
     # CPO's nearest person is Ben. He is a regular member and cannot read CPO's records.
     with api.app.state.store.transaction() as c:
@@ -243,14 +243,14 @@ def sync_reading(api):
 def test_reusing_a_hidden_bots_measure_on_her_goal_neither_names_nor_describes_it(api):
     goal_manager(api, level=2)
     _, secret = inbox_measure(api)
-    hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]
+    hers = post(api, "goals", {"title": "Keep customers", "owner_id": "cara"}, token="cara-test")["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": secret["id"], "target": {"kind": "maintain", "max": 3}}, hers["id"])
     [item] = [i for i in get(api, "goals/needs-you", "cara-test")["items"] if i.get("proposal", {}).get("id") == reuse["id"]]
     measure = item["proposal"]["card"]["measure"]
     assert measure["hidden"] and (measure["unit"], measure["definition"], measure["source_note"]) == ("", "", "")
     assert leaks(item) == [] and "docs" not in str(item["proposal"]["card"])
     # Her task says a measure is to be added, not which; Ana's, for her own goal, names it and is hers alone.
-    anas = post(api, "goals", {"title": "Sign faster", "owner": "ana"})["goal"]
+    anas = post(api, "goals", {"title": "Sign faster", "owner_id": "ana"})["goal"]
     named = propose(api, "goal_kpi", {"kpi_id": secret["id"]}, anas["id"])
     sync_reading(api)
     tasks = {a["ref"]: a for a in asks(api)}
@@ -264,7 +264,7 @@ def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is
     goal_manager(api, level=2)          # Needs you lists suggestions and the Strategy Bot's tasks
     hidden, secret = inbox_measure(api)
     post(api, f"goals/{hidden['id']}/kpis/{secret['id']}", {"kind": "maintain", "max": 3})
-    hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]
+    hers = post(api, "goals", {"title": "Keep customers", "owner_id": "cara"}, token="cara-test")["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": secret["id"], "target": {"kind": "maintain", "max": 3}}, hers["id"])
     # She may not add a measure she may not read, as she may not link it by hand.
     post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "confirm"}, token="cara-test", expected=403)
@@ -272,8 +272,8 @@ def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is
     # Nor may the owner, who reads it: everyone reads her goal, its KPI lines and its colour's reason with them.
     post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "confirm"}, expected=403)
     post(api, f"goals/{hers['id']}/kpis", {"kpi_id": secret["id"], "kind": "maintain", "max": 3}, expected=403)
-    post(api, "kpis", {"name": "Inbox depth", "owner": "inbox", "goal_id": hers["id"]}, expected=403)
-    anas = post(api, "goals", {"title": "Sign faster", "owner": "ana"})["goal"]
+    post(api, "kpis", {"name": "Inbox depth", "owner_id": "inbox", "goal_id": hers["id"]}, expected=403)
+    anas = post(api, "goals", {"title": "Sign faster", "owner_id": "ana"})["goal"]
     post(api, f"goals/{anas['id']}/kpis", {"kpi_id": secret["id"], "kind": "none"}, expected=403)
     assert "NDAs waiting" not in links(api, hers["id"])
     assert reuse["id"] in {p["id"] for p in get(api, "goals/tree")["proposals"]}      # still waiting, undecided
@@ -287,10 +287,10 @@ def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is
     sync(api)
     for path in ("goals", "goals?all=true", "goals/tree", f"goals/{hers['id']}", "goals/needs-you"):
         assert leaks(get(api, path, "cara-test")) == [], path
-    assert [a for a in asks(api) if a.get("owner") == "human:cara" and leaks(a)] == []
+    assert [a for a in asks(api) if a.get("owner_id") == "human:cara" and leaks(a)] == []
     # A link made before links were checked shows no line of the KPI to her either.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, created_at, created_by, updated_at, updated_by) "
+        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, created_at, created_by_id, updated_at, updated_by_id) "
                   "VALUES ('old-link', ?, ?, 'none', ?, 'human:ana', ?, 'human:ana')",
                   (hers["id"], secret["id"], today, today))
     [mine] = [g for g in get(api, "goals/tree", "cara-test")["goals"] if g["id"] == hers["id"]]
@@ -302,13 +302,13 @@ def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is
 def test_a_bots_measure_goes_on_its_own_goal_and_not_with_a_goal_handed_to_a_person(api):
     hidden, secret = inbox_measure(api)                     # made on the inbox bot's goal: allowed
     assert "NDAs waiting" in links(api, hidden["id"])
-    post(api, f"goals/{hidden['id']}", {"owner": "cara"}, expected=403)
-    assert get(api, f"goals/{hidden['id']}")["goal"]["owner"] == "bot:inbox"
+    post(api, f"goals/{hidden['id']}", {"owner_id": "cara"}, expected=403)
+    assert get(api, f"goals/{hidden['id']}")["goal"]["owner_id"] == "bot:inbox"
 
 
 def test_a_target_suggestion_does_not_link_a_hidden_bots_measure_to_her_goal(api):
     _, secret = inbox_measure(api)
-    hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]
+    hers = post(api, "goals", {"title": "Keep customers", "owner_id": "cara"}, token="cara-test")["goal"]
     target = propose(api, "kpi_target", {"kind": "maintain", "max": 3}, hers["id"], secret["id"])
     post(api, f"goal-proposals/{target['id']}/decide", {"decision": "confirm"}, expected=403)
     assert "NDAs waiting" not in links(api, hers["id"])
@@ -320,15 +320,15 @@ def old_link(api, goal_id, kpi_id, **target):
     import datetime
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, max, created_at, created_by, updated_at, updated_by) "
+        c.execute("INSERT INTO goal_kpis (id, goal_id, kpi_id, kind, max, created_at, created_by_id, updated_at, updated_by_id) "
                   "VALUES (?, ?, ?, 'maintain', ?, ?, 'human:ana', ?, 'human:ana')",
                   ("old-" + goal_id, goal_id, kpi_id, target.get("max"), now, now))
 
 
 def test_an_old_link_to_a_hidden_measure_names_it_in_no_colour_reason_or_suggestion_she_reads(api):
     _, secret = inbox_measure(api)
-    auto = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]
-    manual = post(api, "goals", {"title": "Grow referrals", "owner": "cara"}, token="cara-test")["goal"]
+    auto = post(api, "goals", {"title": "Keep customers", "owner_id": "cara"}, token="cara-test")["goal"]
+    manual = post(api, "goals", {"title": "Grow referrals", "owner_id": "cara"}, token="cara-test")["goal"]
     post(api, f"goals/{manual['id']}/status", {"status": "green", "note": "On track"}, token="cara-test")
     for goal in (auto, manual):
         old_link(api, goal["id"], secret["id"], max=3)

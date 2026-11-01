@@ -31,7 +31,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS docs(
  id TEXT PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
  locked INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
- created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL,
+ created_by_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_by_id TEXT NOT NULL, updated_at TEXT NOT NULL,
  archived INTEGER NOT NULL DEFAULT 0);
 CREATE UNIQUE INDEX IF NOT EXISTS docs_path_live ON docs(path COLLATE NOCASE) WHERE archived=0;
 CREATE INDEX IF NOT EXISTS docs_updated ON docs(updated_at);
@@ -249,14 +249,14 @@ def refresh_generated_wording(c):
     docs = Docs(None, None, None, None)
     rows = c.execute("SELECT rowid AS rid,* FROM docs WHERE archived=0 "
                      "AND (path GLOB '_librarian/*' OR path='FAQ.md') "
-                     "AND (updated_by='bot:librarian' OR (updated_by='keeper' AND (created_by='bot:librarian' OR id IN "
+                     "AND (updated_by_id='bot:librarian' OR (updated_by_id='keeper' AND (created_by_id='bot:librarian' OR id IN "
                      "(SELECT doc_id FROM doc_versions WHERE actor='bot:librarian' "
                      "OR note='Updated generated Tico wording'))))").fetchall()
     for row in rows:
         text = H.librarian_text(row["body"])
         if text == row["body"]:
             continue
-        c.execute("UPDATE docs SET body=?,version=version+1,updated_by='keeper',updated_at=? WHERE id=?",
+        c.execute("UPDATE docs SET body=?,version=version+1,updated_by_id='keeper',updated_at=? WHERE id=?",
                   (text, H.now(), row["id"]))
         fresh = docs.get_row(c, row["id"])
         docs.snapshot(c, fresh, H.KEEPER, "Updated generated Tico wording")
@@ -279,7 +279,7 @@ def redo_generated_wording(c):
         text = H.librarian_text(row["before"])
         if text == row["body"]:
             continue
-        c.execute("UPDATE docs SET body=?,version=version+1,updated_by='keeper',updated_at=? WHERE id=?",
+        c.execute("UPDATE docs SET body=?,version=version+1,updated_by_id='keeper',updated_at=? WHERE id=?",
                   (text, H.now(), row["id"]))
         fresh = docs.get_row(c, row["id"])
         docs.snapshot(c, fresh, H.KEEPER, "Redid generated Tico wording")
@@ -305,10 +305,10 @@ def refresh_generated_docs(c):
     for row in c.execute("SELECT rowid AS rid,* FROM docs WHERE archived=0 AND "
                          "(path GLOB '_librarian/*' OR path='FAQ.md')").fetchall():
         title = titles.get(row["path"], {}).get(row["title"], row["title"])
-        text = H.librarian_text(row["body"]) if row["updated_by"] == "bot:librarian" else row["body"]
+        text = H.librarian_text(row["body"]) if row["updated_by_id"] == "bot:librarian" else row["body"]
         if (title, text) == (row["title"], row["body"]):
             continue
-        c.execute("UPDATE docs SET title=?,body=?,version=version+1,updated_by='keeper',updated_at=? WHERE id=?",
+        c.execute("UPDATE docs SET title=?,body=?,version=version+1,updated_by_id='keeper',updated_at=? WHERE id=?",
                   (title, text, H.now(), row["id"]))
         fresh = docs.get_row(c, row["id"])
         docs.snapshot(c, fresh, H.KEEPER, "Updated generated Tico wording")
@@ -318,7 +318,7 @@ def refresh_generated_docs(c):
         docs.remove_index_source(c, source, H.KEEPER)
     bot = H.bot(c, "librarian")
     if bot and bot["state"] in ("active", "planned"):
-        pending = c.execute("SELECT 1 FROM tasks WHERE requester=? AND owner='bot:librarian' "
+        pending = c.execute("SELECT 1 FROM tasks WHERE requester_id=? AND owner_id='bot:librarian' "
                             "AND title='Refresh the map' AND status IN ('open','doing','ready','waiting','review')",
                             (H.KEEPER,)).fetchone()
         if not pending:
@@ -471,7 +471,7 @@ class Docs:
             rows = c.execute("SELECT * FROM docs WHERE " + " AND ".join(marks)
                              + " ORDER BY path COLLATE NOCASE LIMIT ?", (*args, limit + 1)).fetchall()
             page = rows[:limit]
-            names = label_names(c, [r["updated_by"] for r in page])
+            names = label_names(c, [r["updated_by_id"] for r in page])
             more = len(rows) > limit
             return {"docs": [self.doc_view(c, r, body=False, names=names) for r in page],
                     "next_cursor": base64.urlsafe_b64encode(page[-1]["path"].casefold().encode()).decode()
@@ -505,7 +505,7 @@ class Docs:
         if actor == "bot:librarian":
             body = H.librarian_text(body)
         now, doc_id = H.now(), "doc-" + secrets.token_hex(6)
-        c.execute("INSERT INTO docs(id,path,title,body,version,created_by,created_at,updated_by,updated_at) "
+        c.execute("INSERT INTO docs(id,path,title,body,version,created_by_id,created_at,updated_by_id,updated_at) "
                   "VALUES(?,?,?,?,1,?,?,?,?)", (doc_id, path, title, body, actor, now, actor, now))
         row = self.get_row(c, doc_id)
         self.snapshot(c, row, actor, note or "Created")
@@ -537,11 +537,11 @@ class Docs:
             if row["locked"] and not self.admin(who):
                 raise Problem("locked", "This doc is locked: only an owner or bot administrator can change it", 403)
             if body.version != row["version"]:
-                names = label_names(c, [row["updated_by"]])
+                names = label_names(c, [row["updated_by_id"]])
                 raise Problem("version_conflict", "Someone changed this doc after you opened it. Reload to see their "
                               "version, then apply your change to it.", 409,
-                              extra={"version": row["version"], "updated_at": row["updated_at"], "updated_by": row["updated_by"],
-                                     "updated_by_name": name_of(row["updated_by"], names)})
+                              extra={"version": row["version"], "updated_at": row["updated_at"], "updated_by_id": row["updated_by_id"],
+                                     "updated_by_name": name_of(row["updated_by_id"], names)})
             title = body.title if body.title is not None else row["title"]
             text = body.body if body.body is not None else row["body"]
             if who.actor == "bot:librarian" and body.body is not None:
@@ -556,7 +556,7 @@ class Docs:
                 c.execute("UPDATE docs SET locked=? WHERE id=?", (int(body.locked), row["id"]))
                 H.event(c, who.actor, "docs.locked" if body.locked else "docs.unlocked", row["id"], {"path": row["path"]})
             if changed:
-                c.execute("UPDATE docs SET title=?,body=?,path=?,archived=?,version=version+1,updated_by=?,updated_at=? WHERE id=?",
+                c.execute("UPDATE docs SET title=?,body=?,path=?,archived=?,version=version+1,updated_by_id=?,updated_at=? WHERE id=?",
                           (title, text, path, archived, who.actor, now, row["id"]))
                 fresh = self.get_row(c, row["id"])
                 note = body.note or ("Archived" if archived and not row["archived"] else "Unarchived" if row["archived"] and not archived else "")
@@ -584,7 +584,7 @@ class Docs:
         text = "".join(line for line in row["body"].splitlines(keepends=True) if not refs.search(line))
         if text == row["body"]:
             return
-        c.execute("UPDATE docs SET body=?,version=version+1,updated_by=?,updated_at=? WHERE id=?",
+        c.execute("UPDATE docs SET body=?,version=version+1,updated_by_id=?,updated_at=? WHERE id=?",
                   (text, actor, H.now(), row["id"]))
         fresh = self.get_row(c, row["id"])
         self.snapshot(c, fresh, actor, "Removed archived source " + source["path"])
@@ -633,7 +633,7 @@ class Docs:
                 path = self.free_path(c, path, own=doc_id, unique=True)
             if (old["title"], old["body"], path, 0) == (row["title"], row["body"], row["path"], row["archived"]):
                 return {"doc": self.doc_view(c, row)}
-            c.execute("UPDATE docs SET title=?,body=?,path=?,archived=0,version=version+1,updated_by=?,updated_at=? WHERE id=?",
+            c.execute("UPDATE docs SET title=?,body=?,path=?,archived=0,version=version+1,updated_by_id=?,updated_at=? WHERE id=?",
                       (old["title"], old["body"], path, who.actor, H.now(), doc_id))
             fresh = self.get_row(c, doc_id)
             self.snapshot(c, fresh, who.actor, f"Restored version {body.version}")

@@ -71,8 +71,8 @@ MAX_FILTER = 20           # conversation=, bot=, task= and party= values per str
 _NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
 TABLE = [
     "CREATE TABLE IF NOT EXISTS changes(seq INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, "
-    "kind TEXT, subject_id TEXT, ref TEXT, conversation_id TEXT, bot TEXT, actor TEXT, at TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS changes_at ON changes(at)",
+    "kind TEXT, subject_id TEXT, ref TEXT, conversation_id TEXT, bot TEXT, actor TEXT, created_at TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS changes_at ON changes(created_at)",
     # A task list's version and its delta read only the tasks rows (backend/task_reads.py), among
     # far more run output.
     "CREATE INDEX IF NOT EXISTS changes_topic ON changes(topic, seq)",
@@ -80,7 +80,7 @@ TABLE = [
 
 
 def _row(topic, kind, subject, ref="NULL", conversation="NULL", bot="NULL", where=None):
-    return (f"INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,at) "
+    return (f"INSERT INTO changes(topic,kind,subject_id,ref,conversation_id,bot,created_at) "
             f"SELECT '{topic}','{kind}',{subject},{ref},{conversation},{bot},{_NOW}"
             + (f" WHERE {where}" if where else "") + ";")
 
@@ -88,7 +88,7 @@ def _row(topic, kind, subject, ref="NULL", conversation="NULL", bot="NULL", wher
 def _needs(kind, *actors, where=None):
     """A `needs` row for each person among `actors`: their Needs-you list may have moved."""
     people = " UNION ".join(f"SELECT {actor} AS who" for actor in actors)
-    return (f"INSERT INTO changes(topic,kind,subject_id,at) SELECT 'needs','{kind}',who,{_NOW} "
+    return (f"INSERT INTO changes(topic,kind,subject_id,created_at) SELECT 'needs','{kind}',who,{_NOW} "
             f"FROM ({people}) WHERE who LIKE 'human:%'" + (f" AND {where}" if where else "") + ";")
 
 
@@ -119,7 +119,7 @@ def _fan(kind, ids, whole=None):
         many += f" AND EXISTS(SELECT 1 FROM {found})"
     return (f"INSERT INTO changes(topic,kind,subject_id,at) SELECT 'tasks','{kind}',id,{_NOW} FROM {found} "
             f"WHERE NOT {many};"
-            f"INSERT INTO changes(topic,kind,at) SELECT 'tasks','bulk',{_NOW} WHERE {many};")
+            f"INSERT INTO changes(topic,kind,created_at) SELECT 'tasks','bulk',{_NOW} WHERE {many};")
 
 
 # Who could read a task before this write: its parties and privacy, kept on the row when they
@@ -216,11 +216,11 @@ TRIGGERS = [
     ("changes_attempt_events_insert", "INSERT", "attempt_events", None,
      _row("runs", "output", "NEW.attempt_id", ref="NEW.id",
           conversation=_RUN_CONVERSATION.format(aid="NEW.attempt_id"),
-          bot="(SELECT bot FROM attempts WHERE id=NEW.attempt_id)")
+          bot="(SELECT bot_id FROM attempts WHERE id=NEW.attempt_id)")
      # Status projections also change before the bot has written a stored status. They are global
      # bot changes, independent of which conversation the viewer currently follows.
-     + _row("bots", "status", "(SELECT bot FROM attempts WHERE id=NEW.attempt_id)",
-            bot="(SELECT bot FROM attempts WHERE id=NEW.attempt_id)",
+     + _row("bots", "status", "(SELECT bot_id FROM attempts WHERE id=NEW.attempt_id)",
+            bot="(SELECT bot_id FROM attempts WHERE id=NEW.attempt_id)",
             where="NEW.kind='status' AND json_type(NEW.payload,'$.waiting') IS NOT NULL")),
     ("changes_attempts_insert", "INSERT", "attempts", None,
      _row("runs", "attempt", "NEW.id", conversation=_RUN_CONVERSATION.format(aid="NEW.id"), bot="NEW.bot")),
@@ -246,9 +246,9 @@ TRIGGERS = [
     ("changes_bot_control_delete", "DELETE", "bot_control", None, _row("bots", "control", "OLD.bot", bot="OLD.bot")),
     # An approval is on the Needs-you list of the person its message went to.
     ("changes_approvals_insert", "INSERT", "approvals", None,
-     _needs("approval", "(SELECT to_actor FROM messages WHERE id=NEW.message_id)")),
+     _needs("approval", "(SELECT recipient_id FROM messages WHERE id=NEW.message_id)")),
     ("changes_approvals_update", "UPDATE", "approvals", _changed("decision", "consumed_at"),
-     _needs("approval", "(SELECT to_actor FROM messages WHERE id=NEW.message_id)")),
+     _needs("approval", "(SELECT recipient_id FROM messages WHERE id=NEW.message_id)")),
     # Standalone tidy cards notify the human reviewer’s inbox, never a parent task.
     ("changes_memory_tidy_cards_insert", "INSERT", "memory_tidy_cards", None,
      _needs("memory_tidy", "NEW.reviewer")),
@@ -282,7 +282,7 @@ _WORKTREE_LINK = "{row}.kind IN ('worktree','pr')"
 
 def _tell(kind, runners, bot="NULL"):
     """A `runner` row of `kind` for each computer `runners` (a SELECT of one column, `rid`) yields."""
-    return (f"INSERT INTO changes(topic,kind,subject_id,bot,at) SELECT DISTINCT 'runner','{kind}',rid,{bot},{_NOW} "
+    return (f"INSERT INTO changes(topic,kind,subject_id,bot,created_at) SELECT DISTINCT 'runner','{kind}',rid,{bot},{_NOW} "
             f"FROM ({runners}) WHERE rid IS NOT NULL AND rid<>'';")
 
 
@@ -522,7 +522,7 @@ def sweep(store, now=None, batch=5000):
     while True:
         with store.transaction() as c:
             removed = c.execute("DELETE FROM changes WHERE seq IN "
-                                "(SELECT seq FROM changes WHERE at<? LIMIT ?)", (cutoff, batch)).rowcount
+                                "(SELECT seq FROM changes WHERE created_at<? LIMIT ?)", (cutoff, batch)).rowcount
         deleted += removed
         if removed < batch:
             return deleted
@@ -637,7 +637,7 @@ def runner_bell(store):
 
 # ---------------------------------------------------------------- what a viewer is sent
 
-LIVE_SQL = ("SELECT id,created_at FROM attempts WHERE bot=? AND state IN ('leased','running') "
+LIVE_SQL = ("SELECT id,created_at FROM attempts WHERE bot_id=? AND state IN ('leased','running') "
             "ORDER BY created_at DESC,rowid DESC LIMIT 1")
 
 
@@ -673,9 +673,9 @@ def prime_status_lines(c, slugs):
     for part in H.chunks(sorted({H.actor_id(s) for s in slugs if s})):
         marks = ",".join("?" * len(part))
         live = {}
-        for row in c.execute(f"SELECT bot,id,created_at FROM attempts WHERE state IN ('leased','running') AND bot IN ({marks}) "
+        for row in c.execute(f"SELECT bot_id,id,created_at FROM attempts WHERE state IN ('leased','running') AND bot_id IN ({marks}) "
                              "ORDER BY created_at,rowid", part):
-            live[row["bot"]] = row        # the newest run, as LIMIT 1 picks it
+            live[row["bot_id"]] = row        # the newest run, as LIMIT 1 picks it
         prime(c, LIVE_SQL, {(s,): live.get(s) for s in part})
         keys = [LAST_STOP + s for s in part]
         found = {row["key"]: row for row in c.execute(
@@ -694,10 +694,10 @@ def prime_status_lines(c, slugs):
         jobs = _rows_by_id(c, STOP_JOB_SQL.replace("SELECT state", "SELECT state,id"), job_ids)
         prime(c, STOP_JOB_SQL, {(jid,): jobs.get(jid) for jid in job_ids})
         newest, newest_of = {}, {}
-        for row in c.execute(f"SELECT id,attempt_id,bot FROM jobs WHERE state='uncertain' AND bot IN ({marks}) "
+        for row in c.execute(f"SELECT id,attempt_id,bot_id FROM jobs WHERE state='uncertain' AND bot_id IN ({marks}) "
                              "ORDER BY created_at,rowid", part):
-            newest[row["bot"]] = row                         # the newest, as ORDER BY created DESC LIMIT 1 picks it
-            newest_of[(row["bot"], row["attempt_id"])] = row
+            newest[row["bot_id"]] = row                         # the newest, as ORDER BY created DESC LIMIT 1 picks it
+            newest_of[(row["bot_id"], row["attempt_id"])] = row
         prime(c, HELD_SQL, {(s,): newest.get(s) for s in part})
         prime(c, HELD_RUN_SQL, {(s, aid): newest_of.get((s, aid)) for s, aid in stops.items()})
         held = {row["attempt_id"] for row in (*newest.values(), *newest_of.values()) if row["attempt_id"]}
@@ -827,7 +827,7 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
 
         def wanted(task_id, task):
             return task_id in tasks or bool(parties) and any(
-                actor in parties for actor in (*had.get(task_id, ()), *((task["owner"], task["requester"]) if task else ())))
+                actor in parties for actor in (*had.get(task_id, ()), *((task["owner_id"], task["requester_id"]) if task else ())))
         by_id = {task["id"]: task for task in found}
         last = {task_id: row for task_id, row in last.items() if wanted(task_id, by_id.get(task_id))}
         found = [task for task in found if task["id"] in last]
@@ -902,7 +902,7 @@ def _runs(view, rows):
     outputs = {str(e["id"]): e for e in c.execute(
         "SELECT * FROM attempt_events WHERE id IN (" + ",".join("?" * len(refs)) + ")", refs)} if refs else {}
     for row in picked:
-        cid, bot, aid = row["conversation_id"], row["bot"], row["subject_id"]
+        cid, bot, aid = row["conversation_id"], row["bot_id"], row["subject_id"]
         if cid and not view.conversation(cid):
             continue
         # A run's output is its bot's activity (Read), as on the bot's page.
@@ -913,7 +913,7 @@ def _runs(view, rows):
                 readable[aid] = privacy.attempt_readable(c, view.principal, aid)
             if not readable[aid]:
                 continue
-        entry = {"run_id": aid, "conversation_id": cid, "bot": bot}
+        entry = {"run_id": aid, "conversation_id": cid, "bot_id": bot}
         if row["kind"] == "output":
             event = outputs.get(str(row["ref"]))
             if event is None:
@@ -1043,7 +1043,7 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
         events = []
         for topic, row, entry in sorted(picked, key=lambda item: item[1]["seq"]):
             actor = None if view.hidden_actor(row["actor"]) else row["actor"]
-            events.append((row["seq"], topic, {"seq": row["seq"], "actor": actor, "at": row["at"], **entry}))
+            events.append((row["seq"], topic, {"seq": row["seq"], "actor": actor, "created_at": row["created_at"], **entry}))
         return events, cursor, False, more
     finally:
         if c.in_transaction:

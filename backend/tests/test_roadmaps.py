@@ -11,14 +11,14 @@ from backend.tests.test_tasks_board import api, get, headers, post, relate
 
 
 def test_engineering_children_drive_approved_roadmap_and_reopen(api):
-    roadmap = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve exports', 'body': 'Research exports.',
+    roadmap = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Improve exports', 'body': 'Research exports.',
                                  'type': 'Product roadmap', 'step': 'Approved'})
-    child = post(api, 'tasks', {'owner': 'ops', 'title': 'Build exports', 'body': 'Implement exports.',
+    child = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Build exports', 'body': 'Implement exports.',
                                'type': 'Engineering', 'relations': [{'task': roadmap['id'], 'kind': 'parent'}]})
     assert get(api, 'tasks/' + roadmap['id'])['task']['step']['name'] == 'Approved'     # linking alone moves nothing
     child = post(api, 'tasks/' + child['id'], {'version': child['version'], 'step': 'Doing'})
     assert get(api, 'tasks/' + roadmap['id'])['task']['step']['name'] == 'Building'
-    second = post(api, 'tasks', {'owner': 'ops', 'title': 'Check exports', 'body': 'Check the changes.',
+    second = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check exports', 'body': 'Check the changes.',
                                 'type': 'Engineering', 'relations': [{'task': roadmap['id'], 'kind': 'parent'}]})
     child = post(api, 'tasks/' + child['id'], {'version': child['version'], 'status': 'done'})
     assert get(api, 'tasks/' + roadmap['id'])['task']['step']['name'] == 'Building'
@@ -42,9 +42,9 @@ def _dev_tickets(api):
 
 
 def _building(api, dev, title, tickets=2):
-    item = post(api, 'tasks', {'owner': 'cpo', 'title': title, 'body': 'Spec.', 'type': 'Product roadmap',
+    item = post(api, 'tasks', {'owner_id': 'cpo', 'title': title, 'body': 'Spec.', 'type': 'Product roadmap',
                                'step': 'Approved'})
-    children = [post(api, 'tasks', {'owner': 'ops', 'title': f'{title} part {n}', 'body': 'Build it.',
+    children = [post(api, 'tasks', {'owner_id': 'ops', 'title': f'{title} part {n}', 'body': 'Build it.',
                                     'type': dev['id'], 'relations': [{'task': item['id'], 'kind': 'parent'}]})
                 for n in range(tickets)]
     assert _roadmap_step(api, item) == 'Approved'
@@ -121,9 +121,9 @@ def test_a_shipped_dev_ticket_its_requester_closes_still_counts_as_shipped(api):
 
 
 def test_a_default_engineering_ticket_at_done_closed_ships_the_roadmap_item(api):
-    item = post(api, 'tasks', {'owner': 'cpo', 'title': 'Search', 'body': 'Spec.', 'type': 'Product roadmap',
+    item = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Search', 'body': 'Spec.', 'type': 'Product roadmap',
                                'step': 'Approved'})
-    child = post(api, 'tasks', {'owner': 'ops', 'title': 'Build search', 'body': 'Build it.',
+    child = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Build search', 'body': 'Build it.',
                                 'type': 'Engineering', 'relations': [{'task': item['id'], 'kind': 'parent'}]})
     assert _roadmap_step(api, item) == 'Approved'
     child = _step(api, child, 'Doing')
@@ -134,14 +134,14 @@ def test_a_default_engineering_ticket_at_done_closed_ships_the_roadmap_item(api)
 
 
 def _ticket(api, dev, title, item=None, kind='parent', token='ana-test'):
-    body = {'owner': 'ops', 'title': title, 'body': 'Build it.', 'type': dev['id']}
+    body = {'owner_id': 'ops', 'title': title, 'body': 'Build it.', 'type': dev['id']}
     if item:
         body['relations'] = [{'task': item['id'], 'kind': kind}]
     return post(api, 'tasks', body, token=token)
 
 
 def _item(api, title, step='Approved'):
-    return post(api, 'tasks', {'owner': 'cpo', 'title': title, 'body': 'Spec.', 'type': 'Product roadmap',
+    return post(api, 'tasks', {'owner_id': 'cpo', 'title': title, 'body': 'Spec.', 'type': 'Product roadmap',
                                'step': step})
 
 
@@ -178,20 +178,20 @@ def test_an_item_whose_only_engineering_link_is_blocked_by_moves_when_that_ticke
         _step(api, probe, step)
     assert _roadmap_step(api, spec) == 'Spec'
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cpo' AND body LIKE 'Unblocked: %' "
+        assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cpo' AND body LIKE 'Unblocked: %' "
                          "AND json_extract(refs,'$.task')=?", (spec['id'],)).fetchone()[0] == 1
 
     # A Dev ticket finished first stays linked but blocks nothing: the item's owner hears once its last open blocker,
     # a General task, finishes.
     mixed = _item(api, 'Exports UI', step='Spec')
     first = _ticket(api, dev, 'Build exports UI')
-    last = post(api, 'tasks', {'owner': 'ops', 'title': 'Check exports UI copy', 'body': 'Read it.'})
+    last = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check exports UI copy', 'body': 'Read it.'})
     for blocker in (first, last):
         relate(api, mixed['id'], blocker['id'], 'blocked_by')
     _step(api, first, 'Done')
     post(api, 'tasks/' + last['id'], {'version': get(api, 'tasks/' + last['id'])['task']['version'], 'status': 'done'})
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cpo' AND body LIKE 'Unblocked: %' "
+        assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cpo' AND body LIKE 'Unblocked: %' "
                          "AND json_extract(refs,'$.task')=?", (mixed['id'],)).fetchone()[0] == 1
 
     # A blocker an item gains or loses moves it too: here a second, unstarted ticket.
@@ -330,7 +330,7 @@ def test_the_ready_to_ship_step_is_added_once_right_after_building(api):
 
 
 def _notices(c, task_id):
-    return [(m['from_actor'], m['to_actor'], m['body'], json.loads(m['refs'])) for m in c.execute(
+    return [(m['sender_id'], m['recipient_id'], m['body'], json.loads(m['refs'])) for m in c.execute(
         "SELECT * FROM messages WHERE json_extract(refs,'$.task_notice') IS NOT NULL "
         "AND json_extract(refs,'$.task')=? ORDER BY created_at,rowid", (task_id,))]
 
@@ -399,7 +399,7 @@ def test_a_ticket_with_no_roadmap_item_tells_its_requester_on_the_ticket(api):
         assert not _notices(c, mine['id'])
     # A private ticket under a roadmap item stays on itself.
     item = _item(api, 'Private work')
-    secret = post(api, 'tasks', {'owner': 'ops', 'title': 'Quiet fix', 'body': 'Build it.', 'type': dev['id'],
+    secret = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Quiet fix', 'body': 'Build it.', 'type': dev['id'],
                                  'private': True, 'relations': [{'task': item['id'], 'kind': 'parent'}]},
                   token='ben-test')
     with api.app.state.store.transaction() as c:     # Ana cannot read it; the keeper moves it here
@@ -454,18 +454,18 @@ def test_a_blocked_notice_is_read_only_by_who_may_read_the_blocker_it_names(api)
 
 
 def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(api):
-    draft = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research search', 'body': 'Internal draft',
+    draft = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Research search', 'body': 'Internal draft',
                                'type': 'Product roadmap'})
     assert draft['visibility'] == 'private' and draft['public_title'] == '' and draft['public_summary'] == ''
-    refused = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research filters', 'body': 'Internal draft',
+    refused = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Research filters', 'body': 'Internal draft',
                                  'type': 'Product roadmap', 'visibility': 'public'}, expected=422)
     assert 'public title' in refused['error']['detail']
     post(api, 'tasks/' + draft['id'], {'version': draft['version'], 'visibility': 'public'}, expected=422)
     post(api, 'task-types/product-roadmap', {'default_visibility': 'public'})
-    unwritten = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research sorting', 'body': 'Internal draft',
+    unwritten = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Research sorting', 'body': 'Internal draft',
                                    'type': 'Product roadmap'})
     assert unwritten['visibility'] == 'private' and unwritten['public_summary'] == ''
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Research search again', 'body': 'Internal draft',
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Research search again', 'body': 'Internal draft',
                               'type': 'Product roadmap', 'public_title': 'Better search', 'public_summary': 'Find more'})
     assert (task['visibility'], task['public_title'], task['public_summary']) == ('public', 'Better search', 'Find more')
     post(api, 'task-types/product-roadmap', {'default_visibility': 'private'})
@@ -473,10 +473,10 @@ def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(ap
     assert task['visibility'] == 'public'
     changed = post(api, 'tasks/' + task['id'], {'version': task['version'], 'body': 'Internal revision'})
     assert changed['public_summary'] == 'Find more'
-    private = post(api, 'tasks', {'owner': 'cpo', 'title': 'Sensitive research', 'body': 'Secret',
+    private = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Sensitive research', 'body': 'Secret',
                                  'type': 'Product roadmap', 'private': True})
     post(api, 'tasks/' + private['id'], {'version': private['version'], 'visibility': 'public'}, expected=422)
-    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review a part', 'body': 'Part', 'visibility': 'public',
+    child = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Review a part', 'body': 'Part', 'visibility': 'public',
                                'public_title': 'A part', 'relations': [{'task': task['id'], 'kind': 'parent'}]})
     post(api, 'tasks/' + child['id'] + '/relations', {'task': private['id'], 'kind': 'parent'})
     assert get(api, 'tasks/' + task['id'])['task']['visibility'] == 'public'
@@ -487,7 +487,7 @@ def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(ap
 def test_bot_public_text_and_comment_need_exact_single_use_approval(api):
     from backend.tests.test_tasks_board import bot_token
     token = bot_token(api, 'cpo')
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve search', 'body': 'Draft', 'type': 'Product roadmap'})
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Improve search', 'body': 'Draft', 'type': 'Product roadmap'})
     changes = {'visibility': 'public', 'public_title': 'Search', 'public_summary': 'Search improvements'}
     post(api, 'tasks/' + task['id'], {'version': task['version'], **changes}, token=token, expected=422)
     preview = post(api, 'tasks/' + task['id'] + '/publication-preview', changes, token=token)
@@ -574,7 +574,7 @@ def test_public_projection_moderation_and_no_label_enumeration(api):
     post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Internal discussion'})
     public = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Team update', 'public': True})['comment']
     post(api, 'tasks/' + task['id'] + '/requesters', {'email': 'private@acme.example', 'name': 'Private Name'})
-    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Secret child', 'body': 'Internal work',
+    child = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Secret child', 'body': 'Internal work',
                               'visibility': 'public', 'public_title': 'Child part', 'labels': ['roadmap'],
                               'relations': [{'task': task['id'], 'kind': 'parent'}]})
     with api.app.state.store.transaction() as c:
@@ -615,7 +615,7 @@ def test_cors_and_ip_limit_shared_across_actions_and_tokens_are_task_bound(api):
     assert preflight.status_code == 204 and preflight.headers['access-control-allow-origin'] == ORIGIN['Origin']
     assert 'access-control-allow-credentials' not in preflight.headers
     token = api.post(base + '/requesters', json={'email': 'customer@acme.example'}, headers=ORIGIN).json()['requester_token']
-    other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Other', 'body': 'Research it', 'type': 'Product roadmap', 'labels': ['roadmap']})
+    other = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Other', 'body': 'Research it', 'type': 'Product roadmap', 'labels': ['roadmap']})
     assert api.delete('/public/roadmaps/roadmap/tasks/' + other['id'] + '/requesters/' + token, headers=ORIGIN).status_code == 404
     with api.app.state.store.read() as c:
         assert c.execute('SELECT token_hash FROM task_requesters').fetchone()[0] != token
@@ -634,14 +634,14 @@ def test_cors_and_ip_limit_shared_across_actions_and_tokens_are_task_bound(api):
 
 
 def test_requester_contacts_follow_task_privacy_and_teammates_can_remove_themselves(api):
-    private = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review private feedback', 'body': 'Sensitive', 'private': True})
+    private = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Review private feedback', 'body': 'Sensitive', 'private': True})
     post(api, 'tasks/' + private['id'] + '/requesters', {'email': 'sensitive@acme.example'})
     get(api, 'tasks/' + private['id'] + '/requesters', token='ben-test', expected=404)
     result = post(api, 'sql', {'sql': 'SELECT * FROM task_requesters'}, token='ben-test')
     assert 'sensitive@acme.example' not in str(result)
     result = post(api, 'sql', {'sql': 'SELECT * FROM task_requesters'})
     assert 'token_hash' not in str(result)
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve editing', 'body': 'Feedback', 'type': 'Product roadmap'})
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Improve editing', 'body': 'Feedback', 'type': 'Product roadmap'})
     external = post(api, 'tasks/' + task['id'] + '/requesters',
                     {'email': 'customer@acme.example', 'name': 'Customer', 'source': 'meeting'})
     from backend.tests.test_mcp import call
@@ -670,7 +670,7 @@ def test_bot_creation_and_label_publication_require_review(api):
     task = public_setup(api)
     token = bot_token(api, 'cpo')
     for identity in (token, 'ben-via-botops'):
-        task_body = {'owner': 'cpo', 'title': 'Research requested exports', 'body': 'customer@acme.example',
+        task_body = {'owner_id': 'cpo', 'title': 'Research requested exports', 'body': 'customer@acme.example',
                      'type': 'Product roadmap', 'labels': ['roadmap']}
         # Public text from a bot is refused, not silently dropped: it goes through an approved publication.
         for extra in ({'visibility': 'public'}, {'public_title': 'Exports'}, {'public_summary': 'Soon'}):
@@ -706,7 +706,7 @@ def test_bot_creation_and_label_publication_require_review(api):
 
 def test_manual_graduation_all_declined_and_existing_dev_type(api):
     from backend import roadmap_flow as F
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship a small change', 'body': 'Ready to ship',
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Ship a small change', 'body': 'Ready to ship',
                                'type': 'Product roadmap', 'step': 'Building'})
     assert task['step']['name'] == 'Building'
     task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'step': 'Shipped', 'status': 'done'})
@@ -719,9 +719,9 @@ def test_manual_graduation_all_declined_and_existing_dev_type(api):
         F.ensure(c)
         assert not c.execute("SELECT 1 FROM task_types WHERE id='engineering'").fetchone()
         assert H.type_get(c, dev['id'])['manager'] == 'engineering-lead'
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Explore another change', 'body': 'Review first',
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Explore another change', 'body': 'Review first',
                                'type': 'Product roadmap', 'step': 'Approved'})
-    child = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the change', 'body': 'Implementation',
+    child = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Build the change', 'body': 'Implementation',
                                 'type': dev['id'], 'relations': [{'task': task['id'], 'kind': 'parent'}]})
     assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Approved'
     post(api, 'tasks/' + child['id'], {'version': child['version'], 'status': 'declined'})
@@ -741,9 +741,9 @@ def test_roadmap_types_go_by_role_after_their_managers_change(api):
     dev = post(api, 'task-types', {'name': 'Dev tickets', 'steps': [{'name': 'On Deck', 'status': 'open'},
                                                                     {'name': 'Done', 'status': 'done'}]})['type']
     assert (dev['role'], dev['manager']) == ('engineering', None)
-    roadmap = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve imports', 'body': 'Research imports.',
+    roadmap = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Improve imports', 'body': 'Research imports.',
                                  'type': 'Product roadmap', 'step': 'Approved'})
-    child = post(api, 'tasks', {'owner': 'ops', 'title': 'Build imports', 'body': 'Implement imports.',
+    child = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Build imports', 'body': 'Implement imports.',
                                'type': dev['id'], 'relations': [{'task': roadmap['id'], 'kind': 'parent'}]})
     assert get(api, 'tasks/' + roadmap['id'])['task']['step']['name'] == 'Approved'
     post(api, 'tasks/' + child['id'], {'version': child['version'], 'status': 'done'})
@@ -824,8 +824,8 @@ def test_internal_text_never_becomes_public_text(api):
 
 def test_first_version_copies_leave_private_tasks_and_the_product_type_turns_private(api):
     from backend import roadmaps as R
-    hidden = post(api, 'tasks', {'owner': 'cpo', 'title': 'Old idea', 'body': 'Internal notes', 'type': 'Product roadmap'})
-    shown = post(api, 'tasks', {'owner': 'cpo', 'title': 'Shown idea', 'body': 'Shown notes', 'type': 'Product roadmap',
+    hidden = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Old idea', 'body': 'Internal notes', 'type': 'Product roadmap'})
+    shown = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Shown idea', 'body': 'Shown notes', 'type': 'Product roadmap',
                                'visibility': 'public', 'public_title': 'Shown idea', 'public_summary': 'Shown notes'})
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key='roadmaps_explicit_public_text'")
@@ -842,13 +842,13 @@ def test_first_version_copies_leave_private_tasks_and_the_product_type_turns_pri
 
 def test_first_version_copies_edited_since_or_published_at_creation_are_cleared(api):
     from backend import roadmaps as R
-    edited = post(api, 'tasks', {'owner': 'cpo', 'title': 'Old title', 'body': 'Old notes', 'type': 'Product roadmap'})
-    copied = post(api, 'tasks', {'owner': 'cpo', 'title': 'Acme churn', 'body': 'jane@acme.example', 'type': 'Product roadmap'})
-    draft = post(api, 'tasks', {'owner': 'cpo', 'title': 'Draft', 'body': 'Internal', 'type': 'Product roadmap'})
+    edited = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Old title', 'body': 'Old notes', 'type': 'Product roadmap'})
+    copied = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Acme churn', 'body': 'jane@acme.example', 'type': 'Product roadmap'})
+    draft = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Draft', 'body': 'Internal', 'type': 'Product roadmap'})
     draft = post(api, 'tasks/' + draft['id'], {'version': draft['version'], 'public_title': 'Written draft'})
-    shown = post(api, 'tasks', {'owner': 'cpo', 'title': 'Shown idea', 'body': 'Shown notes', 'type': 'Product roadmap',
+    shown = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Shown idea', 'body': 'Shown notes', 'type': 'Product roadmap',
                                'visibility': 'public', 'public_title': 'Shown idea', 'public_summary': 'Shown notes'})
-    kept = post(api, 'tasks', {'owner': 'cpo', 'title': 'Kept internal', 'body': 'Kept internal notes',
+    kept = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Kept internal', 'body': 'Kept internal notes',
                                'type': 'Product roadmap'})
     with api.app.state.store.transaction() as c:
         # A fresh database is marked on its first start, so its second start clears nothing.
@@ -882,9 +882,9 @@ def test_first_version_copies_edited_since_or_published_at_creation_are_cleared(
 
 def test_first_version_copies_are_cleared_per_field_when_only_the_public_title_was_rewritten(api):
     from backend import roadmaps as R
-    shown = post(api, 'tasks', {'owner': 'cpo', 'title': 'D', 'body': 'secret internal body', 'type': 'Product roadmap'})
-    hidden = post(api, 'tasks', {'owner': 'cpo', 'title': 'E', 'body': 'other internal body', 'type': 'Product roadmap'})
-    retitled = post(api, 'tasks', {'owner': 'cpo', 'title': 'F', 'body': 'Written summary', 'type': 'Product roadmap'})
+    shown = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'D', 'body': 'secret internal body', 'type': 'Product roadmap'})
+    hidden = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'E', 'body': 'other internal body', 'type': 'Product roadmap'})
+    retitled = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'F', 'body': 'Written summary', 'type': 'Product roadmap'})
     with api.app.state.store.transaction() as c:
         # The first version made each a copy at creation; then the owner rewrote only one field through publication().
         c.execute("UPDATE tasks SET public_title=title,public_summary=body WHERE id IN (?,?,?)",
@@ -977,9 +977,9 @@ def test_suggestions_have_an_overall_cap_and_spam_checks(api):
     assert capped.status_code == 429 and 'waiting' in capped.json()['error']['detail']
     assert suggest({'title': 'Webhooks'}).status_code == 429
     with api.app.state.store.read() as c:
-        assert c.execute('SELECT count(*) FROM tasks WHERE requester=?', (H.KEEPER,)).fetchone()[0] == 2
+        assert c.execute('SELECT count(*) FROM tasks WHERE requester_id=?', (H.KEEPER,)).fetchone()[0] == 2
         # The Product Manager hears once a day that the form is refusing, not once per refusal.
-        told = c.execute("SELECT body FROM messages WHERE to_actor='bot:cpo' AND kind='notice' "
+        told = c.execute("SELECT body FROM messages WHERE recipient_id='bot:cpo' AND kind='notice' "
                          "AND body LIKE '%refusing new suggestions%'").fetchall()
     assert len(told) == 1 and '2 are waiting' in told[0][0] and 'limit is 2' in told[0][0]
     waiting = get(api, 'tasks/' + first.json()['id'])['task']
@@ -1014,7 +1014,7 @@ def test_suggestions_go_to_the_chosen_then_automatic_bot_and_never_an_archived_o
             c.execute("UPDATE bot_config SET config=json_set(config,'$.template',?) WHERE bot=?", (name, bot))
     def owner(response):
         assert response.status_code == 200, response.text
-        return get(api, 'tasks/' + response.json()['id'])['task']['owner']
+        return get(api, 'tasks/' + response.json()['id'])['task']['owner_id']
     def actions():
         with api.app.state.store.read() as c:
             return c.execute('SELECT coalesce(sum(actions),0) FROM roadmap_actions').fetchone()[0]
@@ -1037,7 +1037,7 @@ def test_suggestions_go_to_the_chosen_then_automatic_bot_and_never_an_archived_o
     assert refused.status_code == 409 and refused.json()['error']['detail'] == "Suggestions aren't being accepted right now."
     assert 'Product Manager' not in refused.text and actions() == spent
     with api.app.state.store.read() as c:
-        assert not c.execute('SELECT count(*) FROM tasks WHERE requester=?', (H.KEEPER,)).fetchone()[0]
+        assert not c.execute('SELECT count(*) FROM tasks WHERE requester_id=?', (H.KEEPER,)).fetchone()[0]
     receiver = get(api, 'roadmaps/settings')['suggestions_receiver']
     assert receiver == {'bot': None, 'name': None, 'source': 'automatic'}
     # Automatic: a Head of Product when there is no Product Manager, the Product Manager when there is, and the
@@ -1055,7 +1055,7 @@ def test_suggestions_go_to_the_chosen_then_automatic_bot_and_never_an_archived_o
     post(api, 'roadmaps/settings', {'suggestion_limit': 3})
     assert suggest('Billing').status_code == 429
     with api.app.state.store.read() as c:
-        assert [r[0] for r in c.execute("SELECT to_actor FROM messages WHERE kind='notice' "
+        assert [r[0] for r in c.execute("SELECT recipient_id FROM messages WHERE kind='notice' "
                                         "AND body LIKE '%refusing new suggestions%'")] == ['bot:ops']
     post(api, 'roadmaps/settings', {'suggestion_limit': 100})
     # Archived, the chosen bot is passed over for Automatic, and the settings say so.

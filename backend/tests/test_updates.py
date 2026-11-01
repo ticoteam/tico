@@ -42,7 +42,7 @@ def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
         request = c.execute("SELECT m.body, m.refs FROM update_queue q JOIN messages m ON m.id=q.message_id "
                             "WHERE q.state='sent'").fetchone()
         assert "hub_update_create" in request["body"] and "Finished since your last update" in request["body"]
-        assert c.execute("SELECT 1 FROM jobs WHERE bot=?", (first,)).fetchone(), "the request wakes the bot"
+        assert c.execute("SELECT 1 FROM jobs WHERE bot_id=?", (first,)).fetchone(), "the request wakes the bot"
         updates.post(c, first, "- Shipped the pricing page", day="2026-09-29")
         second = updates.dispatch(c, MORNING)
         assert second and second != first
@@ -104,7 +104,7 @@ def test_a_week_in_review_is_five_slides_and_an_owner_can_have_last_week_redone(
     assert asked["bots"] == ["ops"]
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed' WHERE bot='ops'")      # its run is over, so it is free
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")      # its run is over, so it is free
         assert updates.dispatch(c, BEFORE_FIVE) == "ops", "a redo of a past day is sent like today's requests"
         request = c.execute("SELECT m.body FROM update_queue q JOIN messages m ON m.id=q.message_id "
                             "WHERE q.state='sent' AND q.redo=1").fetchone()["body"]
@@ -238,7 +238,7 @@ def test_a_report_on_retry_and_a_stacked_manager_keep_the_90_minute_wait(api, mo
     with store.transaction() as c:
         assert c.execute("SELECT held_at FROM update_queue WHERE bot='cpo'").fetchone()[0], \
             "a report whose own wait is over counts as released: the clock above starts, not a day's wait"
-        c.execute("UPDATE jobs SET state='completed' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
     assert tick() == "ops", "91 minutes after it was held, the manager writes with what is in"
     with store.transaction() as c:
         assert "No update from: " + updates._label(c, other) in c.execute(
@@ -265,12 +265,12 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     post(api, "humans/ben", {"reports_to": "ana"})
     post(api, "humans/cara", {"update_draft": False})
-    post(api, "tasks", {"owner": "human:ana", "title": "Ship the pricing page", "body": "x"})
-    raise_plan = post(api, "tasks", {"owner": "human:ana", "title": "Secret raise plan", "body": "x", "private": True})
-    done = post(api, "tasks", {"owner": "human:ana", "title": "Secret finished offer", "body": "x", "private": True})
-    post(api, "tasks", {"owner": "human:ben", "title": "Secret ask of Ben", "body": "x", "private": True})
-    audit = post(api, "tasks", {"owner": "bot:finance", "title": "Restricted audit", "body": "x"})
-    budget = post(api, "tasks", {"owner": "bot:ops", "title": "Approve the ad budget", "body": "x"})
+    post(api, "tasks", {"owner_id": "human:ana", "title": "Ship the pricing page", "body": "x"})
+    raise_plan = post(api, "tasks", {"owner_id": "human:ana", "title": "Secret raise plan", "body": "x", "private": True})
+    done = post(api, "tasks", {"owner_id": "human:ana", "title": "Secret finished offer", "body": "x", "private": True})
+    post(api, "tasks", {"owner_id": "human:ben", "title": "Secret ask of Ben", "body": "x", "private": True})
+    audit = post(api, "tasks", {"owner_id": "bot:finance", "title": "Restricted audit", "body": "x"})
+    budget = post(api, "tasks", {"owner_id": "bot:ops", "title": "Approve the ad budget", "body": "x"})
     say(api, "My salary talks are next week")             # her private Assistant chat
     store = api.app.state.store
     with store.transaction() as c:
@@ -286,7 +286,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         post(api, f"tasks/{task['id']}/comments", {"text": "Comment on " + task["title"]})
         post(api, f"tasks/{task['id']}", {"version": get(api, f"tasks/{task['id']}")["task"]["version"], "status": "done"})
     meeting = lambda mid, notes, review="live", **meta: c.execute(
-        "INSERT INTO meetings(id,title,owner,metadata,notes,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO meetings(id,title,owner_id,metadata,notes,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?,?)",
         (mid, mid, "ben@acme.example", json.dumps({"kind": "meeting", **meta}), notes, H.now(), H.now(), review))
     with store.transaction() as c:
         c.execute("UPDATE tasks SET status='done', updated_at=? WHERE id=?", (H.now(), done["id"]))
@@ -299,7 +299,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         meeting("Old sync", "Deleted meeting notes", **attended)
         c.execute("INSERT INTO media_control(meeting_id,deleted_at) VALUES('Old sync',?)", (H.now(),))
         meeting("Ben's one-to-one", "Not her meeting notes", participants=[{"email": "cara@acme.example"}])
-        c.execute("INSERT INTO approvals(id,kind,task_id,payload,requested_by,decided_by,decision,decided_at,created_at) "
+        c.execute("INSERT INTO approvals(id,kind,task_id,payload,requested_by_id,decided_by_id,decision,decided_at,created_at) "
                   "VALUES('ap1','send',?,?,'bot:ops','human:ana','approved',?,?)",
                   (budget["id"], json.dumps({"text": "Approval payload to the vendor"}), H.now(), H.now()))
         c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot IN ('finance','ops')")

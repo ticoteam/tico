@@ -15,9 +15,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       await page.emulateMedia({reducedMotion: 'reduce'});
       const errors = [], writes = [];
       page.on('pageerror', error => errors.push(error.message));
-      const base = {host: 'keeper', status: 'active', state: 'active', can_chat: true, can_manage: true, operator: 'sam',
+      const base = {host: 'keeper', status: 'active', state: 'active', can_chat: true, can_manage: true, owner_id: 'sam',
         my_access: {see: true, read: true, write: true}, schedules: [], revision: 1, thread_mode: 'personal', users: []};
-      const computer = (id, more) => ({runner_id: id, generation: 1, label: id, operator: 'sam', last_seen_at: new Date().toISOString(),
+      const computer = (id, more) => ({runner_id: id, generation: 1, label: id, owner_id: 'sam', last_seen_at: new Date().toISOString(),
         platform: 'linux', version: '0.3.52', screen: 'off', screen_available: false, ...more});
       const bot = (name, online, machine) => ({...base, name, slug: name, display_name: name, online, machine});
       const bots = [
@@ -27,10 +27,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         bot('mac', true, computer('c-mac', {platform: 'darwin'})),
         bot('offline', false, computer('c-offline', {screen: 'view', screen_available: true})),
         bot('none', false, null),
-        bot('unowned', true, computer('c-unowned', {operator: null, screen: 'view', screen_available: true})),
-        bot('flip', true, computer('c-flip', {operator: 'ana', screen: 'view'})),
+        bot('unowned', true, computer('c-unowned', {owner_id: null, screen: 'view', screen_available: true})),
+        bot('flip', true, computer('c-flip', {owner_id: 'ana', screen: 'view'})),
         // Seen, not read: the server leaves out the computer, online and agent (backend/views.py).
-        {name: 'seen', display_name: 'seen', state: 'active', status: 'active', description: '', reports_to: '', operator: 'sam',
+        {name: 'seen', display_name: 'seen', state: 'active', status: 'active', description: '', reports_to: '', owner_id: 'sam',
          my_access: {see: true, read: false, write: false}, can_manage: false, bot_owners: [], private_tasks_default: false,
          team: '', org_parent: '', is_branch: false, users: [], icon: '', helper: false, can_chat: false}];
       await page.route('**/*', route => {
@@ -50,7 +50,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, today: {}});
         if (p === '/api/v2/tasks') return json({tasks: []});
         if (p === '/api/v2/operations') return json({machines: bots.filter(b => b.machine).map(b => ({id: b.machine.runner_id, label: b.machine.label,
-          operator: b.machine.operator, online: b.online, platform: b.machine.platform, screen: b.machine.screen, screen_available: b.machine.screen_available})), services: []});
+          owner_id: b.machine.owner_id, online: b.online, platform: b.machine.platform, screen: b.machine.screen, screen_available: b.machine.screen_available})), services: []});
         if (p === '/api/v2/conversations') return json({conversations: []});
         if (/^\/api\/v2\/computers\/[^/]+\/screen$/.test(p)) {
           const body = JSON.parse(request.postData()); writes.push(body);

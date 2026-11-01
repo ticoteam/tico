@@ -86,10 +86,10 @@ def start_turn(c, task_id):
     row itself stays as it was."""
     other = H.task_create(c, "human:ana", "Elsewhere " + H.new_id(), "x", "bot:ops")
     H.task_comment(c, "human:ana", other["id"], "Please look at this")
-    job = c.execute("SELECT id FROM jobs WHERE bot='ops' ORDER BY created_at DESC LIMIT 1").fetchone()[0]
-    c.execute("INSERT OR IGNORE INTO runners(id,label,operator,token_hash,created_at) VALUES('r1','r','ana','h','t')")
+    job = c.execute("SELECT id FROM jobs WHERE bot_id='ops' ORDER BY created_at DESC LIMIT 1").fetchone()[0]
+    c.execute("INSERT OR IGNORE INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','r','ana','h','t')")
     aid = H.new_id()
-    c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
+    c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
               "VALUES(?,?,'ops','r1',1,?,'running',?,?)", (aid, job, aid, H.shift(H.now(), seconds=600), H.now()))
     c.execute("INSERT INTO turns(id,bot,started_at,task_id) VALUES(?,'ops',?,?)", (aid, H.now(), task_id))
 
@@ -97,7 +97,7 @@ def start_turn(c, task_id):
 def an_hour_on(store):
     """The next hour, as the pass sees it: the last pass and this hour's calls are an hour old."""
     with store.transaction() as c:
-        c.execute("UPDATE events SET ts=? WHERE action='judge.call'", (hours(-1.01),))
+        c.execute("UPDATE events SET created_at=? WHERE action='judge.call'", (hours(-1.01),))
         SR._set_watermark(c, hours(-1.01))
 
 
@@ -115,7 +115,7 @@ def test_a_review_task_with_a_merged_pr_gets_one_stale_check_comment_to_its_bot(
     assert done["calls"] == 1 and done["suggested"] == 1
     assert comments(store, tid) == ["Stale check: PR #12 merged Oct 16. Suggest: mark done."]
     with store.read() as c:
-        said = c.execute("SELECT to_actor FROM messages WHERE body LIKE 'Stale check:%'").fetchone()[0]
+        said = c.execute("SELECT recipient_id FROM messages WHERE body LIKE 'Stale check:%'").fetchone()[0]
     assert said == "bot:ops", "addressed to the bot that owns the task, so it is woken on it"
     # Decide saw only the title, status, step, dates, the reason and the last comments.
     state = model.calls[0]["state"]["task"]
@@ -237,7 +237,7 @@ def test_accept_all_cannot_change_a_task_the_person_could_not_change_by_hand(sta
     SR.run_pass(store, engine=FakeDecide("update"))
     # Handed to Ben after the suggestion: marking it done is his now, and Priya's team moves no one's tasks.
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='human:ben' WHERE id=?", (moved,))
+        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (moved,))
         version = H.task(c, moved)["version"]
     card = stale_card(api, "priya-test")
     by_hand = api.post(f"/api/v2/tasks/{moved}", json={"status": "done", "version": version},
@@ -289,7 +289,7 @@ def test_a_close_suggestion_is_closed_by_the_person_as_by_hand(stale):
          token="ben-test")
     with store.read() as c:
         row = H.task(c, tid)
-    assert row["status"] == "closed" and row["closed_by"] == "human:ben"
+    assert row["status"] == "closed" and row["closed_by_id"] == "human:ben"
 
 
 def test_recent_activity_and_an_open_pr_is_not_a_candidate(stale):
@@ -501,7 +501,7 @@ def test_other_reasons_parent_blockers_snooze_and_twin_titles(stale):
         c.execute("INSERT INTO task_relations VALUES(?,?,'blocks','bot:ops',?)", (blocker, blocked, H.now()))
         c.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (parent, blocker))
         ended = H.shift(H.now(), hours=-30)
-        c.execute("INSERT INTO task_events(id,task_id,ts,actor,field,old,new,note) VALUES(?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new,note) VALUES(?,?,?,?,?,?,?,?)",
                   (H.new_id(), snoozed, ended, H.KEEPER, "snoozed_until", ended, None, "snooze over"))
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ended, snoozed))
         found = {row["id"]: why for row, why in SR.candidates(c, H.now())}

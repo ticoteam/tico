@@ -16,7 +16,7 @@ def queued_fleet(api, machine, start, stop):
         for i in range(start, stop):
             bot = f"queued-{i}"
             c.execute("INSERT INTO bots(id,slug,runtime,state,created_at) VALUES(?,?,'fake','active',?)", (bot, bot, H.now()))
-            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,'ana')",
+            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
                       (bot, encode({'name': bot, 'runtime': 'fake'})))
             c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (bot, machine['runner_id'], H.now()))
             H.say(c, 'human:ana', 'bot:' + bot, 'Synthetic unrelated work')
@@ -93,7 +93,7 @@ def test_selected_claim_rechecks_changes_after_read_and_takes_the_next_job(api, 
                 else:
                     # A currently active turn fences the bot even when it was
                     # absent from the earlier read's global active-attempt set.
-                    writer.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
+                    writer.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
                                    "VALUES('other-turn',?,'ops',?,1,'synthetic','running',?,?,'main')",
                                    (row['id'], machine['runner_id'], H.shift(H.now(), minutes=2), H.now()))
         return row

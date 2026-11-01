@@ -13,7 +13,7 @@ def test_one_task_per_piece_of_work_whatever_order_the_calls_come_in(api):
     secret = post(api, "service-keys", {"label": "Billing backend"})["key"]
     # Done over there before any task existed: nothing is filed.
     assert inbound(api, secret, key="report-40", close=True) == {"task": None, "created": False, "changed": False}
-    work = {"key": "report-41", "owner": "ben@acme.example", "title": "Review the weekly report for Acme",
+    work = {"key": "report-41", "owner_id": "ben@acme.example", "title": "Review the weekly report for Acme",
             "body": "The report is ready."}
     first = inbound(api, secret, **work)
     assert set(first["task"]) == {"id"}
@@ -36,7 +36,7 @@ def test_one_task_per_piece_of_work_whatever_order_the_calls_come_in(api):
     reopened = inbound(api, secret, key="report-41", owner="human:cara")
     assert reopened["changed"] and reopened["task"] == {"id": task["id"]}
     updated = get(api, "tasks/" + task["id"])["task"]
-    assert (updated["status"], updated["owner"]) == ("open", "human:cara")
+    assert (updated["status"], updated["owner_id"]) == ("open", "human:cara")
     inbound(api, secret, 422, key="report-43", owner="nobody@acme.example", title="Review the report", body="x")
     with api.app.state.store.read() as c:
         used = c.execute("SELECT COUNT(*) FROM events WHERE action='service_key.use'").fetchone()[0]
@@ -70,7 +70,7 @@ def test_private_work_is_neither_returned_nor_changed_by_its_service_key(api):
             c.execute("ALTER TABLE tasks ADD COLUMN private INTEGER NOT NULL DEFAULT 0")
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (task["id"],))
         before = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone())
-    for body in ({}, {"body": "Overwrite", "owner": "human:cara"}, {"close": True}, {"step": "open"}):
+    for body in ({}, {"body": "Overwrite", "owner_id": "human:cara"}, {"close": True}, {"step": "open"}):
         refused = inbound(api, secret, 403, key="report", **body)
         assert "Please review" not in str(refused)
     with api.app.state.store.read() as c:

@@ -148,8 +148,8 @@ async function taskPipelineCreate(form, selected = '') {
     + '<label>Public summary<textarea name="publicSummary" aria-label="Public summary" rows="2" maxlength="8000" placeholder="Optional"></textarea></label>';
   const showPublicText = () => { publicText.hidden = visibility.hidden || !flag.checked; publicText.querySelector('input').required = !publicText.hidden; };
   flag.addEventListener('change', showPublicText);
-  let ownerTouched = !!form.elements.owner.value && !TASK_TYPES.find(t => t.id === select.value)?.manager;
-  form.elements.owner.addEventListener('change', () => { ownerTouched = true; });
+  let ownerTouched = !!form.elements.owner_id.value && !TASK_TYPES.find(t => t.id === select.value)?.manager;
+  form.elements.owner_id.addEventListener('change', () => { ownerTouched = true; });
   const defaults = () => {
     const type = TASK_TYPES.find(t => t.id === select.value);
     visibility.hidden = type?.role !== 'product-roadmap';
@@ -157,8 +157,8 @@ async function taskPipelineCreate(form, selected = '') {
     flag.disabled = !!form.elements.private?.checked;
     showPublicText();
     const manager = botByRef(type?.manager) || S.emps.find(e => type?.manager && e.template === type.manager);
-    const value = manager && [...form.elements.owner.options].find(o => o.value === manager.id || o.value === 'bot:' + manager.id)?.value;
-    if (value && !ownerTouched) form.elements.owner.value = value;
+    const value = manager && [...form.elements.owner_id.options].find(o => o.value === manager.id || o.value === 'bot:' + manager.id)?.value;
+    if (value && !ownerTouched) form.elements.owner_id.value = value;
   };
   select.addEventListener('change', defaults); form.elements.private?.addEventListener('change', defaults); defaults(); row.after(visibility); visibility.after(publicText);
 }

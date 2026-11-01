@@ -39,11 +39,11 @@ def sweep(conn, at=None):
     # walked here rather than in SQL.
     rows = H._rows(conn.execute(
         f"SELECT m.id, t.id AS task_id, t.status, ({H.ACCEPTANCE_ASK_SQL}) AS acceptance, "
-        "json_extract(m.refs,'$.stuck') AS stuck, m.from_actor FROM messages m "
+        "json_extract(m.refs,'$.stuck') AS stuck, m.sender_id FROM messages m "
         f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
-        f"WHERE m.kind='ask' AND m.to_actor LIKE 'human:%' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}"))
+        f"WHERE m.kind='ask' AND m.recipient_id LIKE 'human:%' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}"))
     gone = [r for r in rows if (r["status"] in ENDED and not r["acceptance"])
-            or (r["stuck"] and r["from_actor"] == H.KEEPER)]
+            or (r["stuck"] and r["sender_id"] == H.KEEPER)]
     asks = []
     for r in gone:
         # One row at a time, like the approvals: a row that fails stays open for the next sweep without undoing the rest.
@@ -54,6 +54,6 @@ def sweep(conn, at=None):
             from . import task_holds
             task_holds.withdrawn(conn, r["task_id"], [r["id"]], f"its task was {H.TASK_ENDED.get(r['status'], 'ended')}"
                                  if r["status"] in ENDED else "an old no-progress question")
-            H._recount(conn, r["from_actor"])
+            H._recount(conn, r["sender_id"])
             asks.append(r["id"])
     return {"stale": stale, "ended": ended, "asks": asks}

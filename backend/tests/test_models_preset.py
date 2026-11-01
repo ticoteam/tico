@@ -68,7 +68,7 @@ def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_o
         # A Mac (or a runner that does not say): no Gateway turn is handed out; the work waits, it never fails.
         assert got is None
         with api.app.state.store.read() as c:
-            assert c.execute("SELECT state FROM jobs WHERE bot='ops'").fetchone()[0] == "queued"
+            assert c.execute("SELECT state FROM jobs WHERE bot_id='ops'").fetchone()[0] == "queued"
         return
     assert (got["config"]["model"], got["config"]["runtime"]) == ("tico-general-medium-1.0", "pi")
     assert got["config"]["waiting_for_sign_in"] == "claude" and got["gateway"] is True
@@ -305,8 +305,8 @@ def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bot
     reason = "not_isolated" if isolated is False else "isolation_unknown"
     assert [r["reason"] for r in rows] == [reason] and "queue_idle" not in found
     with api.app.state.store.read() as c:
-        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot='ops'")} == {"queued"}
-        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 0
+        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot_id='ops'")} == {"queued"}
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
         [row] = health._stuck(c, rows, set(), health_admin(api), True)
     assert "Tico Gateway work" in row["why"], row
     # Once the computer says it can, the same work starts.
@@ -352,7 +352,7 @@ def test_waiting_for_a_sign_in_lets_through_only_the_missing_sign_in(api, monkey
     assert [r["reason"] for r in rows] == ["readiness_unknown" if change == "no report" else "not_ready"], rows
     assert "queue_idle" not in found
     with api.app.state.store.read() as c:
-        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot='ops'")} == {"queued"}
+        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot_id='ops'")} == {"queued"}
 
 
 @pytest.mark.parametrize("preset", models_preset.PRESETS)

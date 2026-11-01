@@ -19,7 +19,7 @@ def offered(api, token):
 def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
     hermes_bot(api)
     lists = {
-        "owner": offered(api, "ana-test"),
+        "owner_id": offered(api, "ana-test"),
         "admin": offered(api, "ben-test"),
         "member": offered(api, "cara-test"),
         "bot": offered(api, setup_attempt(api, "ops")[2]["token"]),
@@ -46,7 +46,7 @@ def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
     assert all("hub_credential_request" in lists[who] for who in ("bot", "botops"))
     assert all("hub_credential_request" not in lists[who] for who in ("owner", "admin", "member", "agent"))
     assert BOTOPS_ONLY <= lists["botops"] and BOTS_ONLY <= lists["botops"] and not HUMANS_ONLY & lists["botops"]
-    assert lists["bot"] < lists["owner"] | lists["bot"] and len(lists["bot"]) < len(lists["botops"])
+    assert lists["bot"] < lists["owner_id"] | lists["bot"] and len(lists["bot"]) < len(lists["botops"])
 
 
 def test_a_tool_that_is_not_offered_is_refused_when_it_is_called(api, botops):

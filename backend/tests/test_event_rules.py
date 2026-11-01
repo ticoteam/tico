@@ -36,7 +36,7 @@ def judge(api, ctx=None, **more):
 
 
 def last_message(c, bot):
-    return c.execute("SELECT * FROM messages WHERE to_actor=? ORDER BY rowid DESC LIMIT 1", (H.bot_actor(bot),)).fetchone()
+    return c.execute("SELECT * FROM messages WHERE recipient_id=? ORDER BY rowid DESC LIMIT 1", (H.bot_actor(bot),)).fetchone()
 
 
 def test_a_team_wake_rule_queues_a_job_with_the_rendered_text_and_the_call_in_its_refs(api):
@@ -114,8 +114,8 @@ def test_an_error_does_nothing_and_leaves_a_rule_event_error(api, monkeypatch):
 
 def test_a_note_row_leaves_a_quiet_note_and_a_missing_bot_is_reported_not_raised(api):
     setup(api)
-    rule(api, then="note", params={"bot": "cpo"})
-    rule(api, then="wake", params={"bot": "ops"}, when={"type": "order.created"})
+    rule(api, then="note", params={"bot_id": "cpo"})
+    rule(api, then="wake", params={"bot_id": "ops"}, when={"type": "order.created"})
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs")
     done = judge(api)
@@ -182,7 +182,7 @@ def test_a_woken_bot_is_told_where_to_read_the_rest_only_when_the_body_was_cut()
 def test_wake_bot_also_runs_as_the_action_of_a_message_event_rule(api):
     setup(api)
     made = rule(api, event="status_or_relation", then="action",
-                params={"action": "wake_bot", "bot": "ops", "text": "{{task.title}} moved: {{event}}"})["rule"]
+                params={"action": "wake_bot", "bot_id": "ops", "text": "{{task.title}} moved: {{event}}"})["rule"]
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Plain work", "Do it", "bot:cpo")
         c.execute("DELETE FROM jobs")

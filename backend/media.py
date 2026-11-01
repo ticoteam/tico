@@ -232,7 +232,7 @@ def may_write(who, record):
     if record.get("review_state", "live") != "live":
         return MS.filed_for(record, who)
     return who.role == "owner" or (who.role == "human" and bool(who.email)
-                                   and record["owner"].lower() == who.email.lower())
+                                   and record["owner_id"].lower() == who.email.lower())
 
 
 def shared_meeting(record, who):
@@ -559,7 +559,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             raise question_unreadable(person)
         try:
             auth.task_row(c, auth.identity_for_actor(c, person),
-                          {"id": "", "owner": who.actor, "requester": person if private else who.actor,
+                          {"id": "", "owner_id": who.actor, "requester_id": person if private else who.actor,
                            "private": int(private)})
         except Problem as exc:
             raise question_unreadable(person) from exc
@@ -779,7 +779,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             # which stays the bot's, rather than as a second task of its own.
             with store.read() as c:
                 own = {t["id"] for t in (H.task(c, tid) for tid in privacy.attempt_tasks(c, who.attempt_id))
-                       if t and t["owner"] == who.actor and t["status"] in H.ACTIVE_STATUSES}
+                       if t and t["owner_id"] == who.actor and t["status"] in H.ACTIVE_STATUSES}
             if len(own) == 1:
                 body = body.model_copy(update={"parent": own.pop()})
 
@@ -957,7 +957,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         def work(c):
             task = comment_rights(c, auth, who, tid)
             item = register(c, who, digest, size, body.name, content_type)
-            bot_actor = next((a for a in (who.actor, task["owner"], task["requester"]) if H.is_bot(a)), None)
+            bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
             fid, number = files.attach_task(c, who, tid, item, digest,
                                            H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings))
             c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, item["id"]))

@@ -87,7 +87,7 @@ def add_routine(api, due, key="r1"):
     with api.app.state.store.transaction() as c:
         aid = routines.create(c, H.KEEPER, "ops", {"title": "Morning check", "cron": "0 9 * * *", "timezone": "UTC",
                                                     "text": "Look around"}, key=key)["automation"]
-        c.execute("UPDATE automations SET next_due=? WHERE id=?",
+        c.execute("UPDATE automations SET next_due_at=? WHERE id=?",
                   (scheduler.stamp(sleep_idle.datetime.fromtimestamp(due, sleep_idle.timezone.utc)), aid))
 
 
@@ -95,7 +95,7 @@ def quiet_routines(api):
     """Switch off every schedule automation. Setting up a runner seeds the Librarian's built-in schedules, due at the
     next :00 or :30, so a test that expects busy() to be "" would fail within fifteen minutes of either."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE automations SET enabled=0 WHERE enabled=1 AND deleted_at IS NULL AND next_due IS NOT NULL")
+        c.execute("UPDATE automations SET enabled=0 WHERE enabled=1 AND deleted_at IS NULL AND next_due_at IS NOT NULL")
 
 
 def quiet(api, minutes=60):
@@ -398,7 +398,7 @@ def test_a_cell_sleeps_after_fifteen_minutes_and_waits_only_for_a_routine_within
     tick(api)
     assert cell.sleeps == [] and quiet(api, 15)["blocker"] == "routine_due"
     with api.app.state.store.transaction() as c:         # moved to sixteen minutes: beyond the fifteen
-        c.execute("UPDATE automations SET next_due=?", (scheduler.stamp(
+        c.execute("UPDATE automations SET next_due_at=?", (scheduler.stamp(
             sleep_idle.datetime.fromtimestamp(base + 16 * 60, sleep_idle.timezone.utc)),))
     tick(api)
     assert cell.sleeps == [{"wake_at": sleep_idle.iso(base + 16 * 60), "reason": "idle"}]

@@ -77,7 +77,7 @@ def _load(c, who):
 def _joined(c, actor):
     path = next((r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main"), "")
     if (path, actor) not in JOINED:
-        found = c.execute("SELECT min(ts) FROM events WHERE actor=?", (actor,)).fetchone()[0]
+        found = c.execute("SELECT min(created_at) FROM events WHERE actor=?", (actor,)).fetchone()[0]
         if not found:
             return None
         if len(JOINED) >= 10000:

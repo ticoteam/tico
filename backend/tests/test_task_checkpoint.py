@@ -9,7 +9,7 @@ def test_a_completed_task_turn_leaves_its_checkpoint_on_the_task(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Draft the price page", "body": "First pass."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Draft the price page", "body": "First pass."})
     attempt = claim(api, r)
     assert attempt["task"]["id"] == task["id"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t1"}, r["token"])
@@ -17,7 +17,7 @@ def test_a_completed_task_turn_leaves_its_checkpoint_on_the_task(api):
          {"outcome": "completed", "last_seq": 0, "text": "Drafted sections 1-2; pricing table next."}, r["token"])
     shown = get(api, "tasks/" + task["id"])["task"]
     assert shown["checkpoint"] == "Drafted sections 1-2; pricing table next."
-    assert shown["checkpoint_by"] == "bot:ops" and shown["checkpoint_at"]
+    assert shown["checkpoint_by_id"] == "bot:ops" and shown["checkpoint_at"]
 
 
 def test_once_a_task_session_takes_in_another_private_task_it_never_checkpoints_again(api, monkeypatch):
@@ -25,7 +25,7 @@ def test_once_a_task_session_takes_in_another_private_task_it_never_checkpoints_
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Draft the price page", "body": "First pass."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Draft the price page", "body": "First pass."})
 
     def turn(text):
         attempt = claim(api, r)
@@ -44,7 +44,7 @@ def test_once_a_task_session_takes_in_another_private_task_it_never_checkpoints_
 
 
 def idle(api, title, days=8):
-    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Someday."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Someday."})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-days), task["id"]))
     return task
@@ -62,10 +62,10 @@ def asks_on(api, task_id):
 
 def test_an_idle_task_gets_one_still_wanted_ask_and_an_active_one_none(api):
     stale = idle(api, "Old idea")
-    fresh = post(api, "tasks", {"owner": "ops", "title": "Current work", "body": "Now."})
+    fresh = post(api, "tasks", {"owner_id": "ops", "title": "Current work", "body": "Now."})
     assert ask_idle(api) == [stale["id"]]
     [ask] = asks_on(api, stale["id"])
-    assert ask["to_actor"] == "human:ana" and ask["from_actor"] == H.KEEPER
+    assert ask["recipient_id"] == "human:ana" and ask["sender_id"] == H.KEEPER
     assert asks_on(api, fresh["id"]) == []
     # Another week passes with nobody answering: still the one ask for this stretch.
     with api.app.state.store.transaction() as c:
@@ -85,13 +85,13 @@ def test_keep_restarts_the_clock_and_close_closes(api):
     with api.app.state.store.read() as c:
         kept_row, closed_row = H.task(c, kept["id"]), H.task(c, closed["id"])
         assert kept_row["status"] == "open" and kept_row["updated_at"] > kept_row["stale_asked_at"]
-        assert closed_row["status"] == "closed" and closed_row["closed_by"] == "human:ana"
+        assert closed_row["status"] == "closed" and closed_row["closed_by_id"] == "human:ana"
         assert still_wanted.idle_tasks(c) == []
 
 
 def test_only_the_person_asked_decides_still_wanted():
     from types import SimpleNamespace
-    ask = {"from_actor": H.KEEPER, "to_actor": "human:ana", "refs": {"still_wanted": True}}
+    ask = {"sender_id": H.KEEPER, "recipient_id": "human:ana", "refs": {"still_wanted": True}}
     close = SimpleNamespace(dismiss=False, answers={"still_wanted": ["Close"]})
     assert still_wanted.choice(ask, close, "human:ana") == "Close"
     # The bot on the task, or another person who may comment, answers without closing it.

@@ -497,8 +497,8 @@ class PostalMail:
         now = H.now()
         since = H.shift(now, days=-1)
         with self.store.transaction() as c:
-            c.execute("DELETE FROM mail_reads WHERE at<=?", (since,))
-            read = c.execute("SELECT count(*) FROM mail_reads WHERE at>?", (since,)).fetchone()[0]
+            c.execute("DELETE FROM mail_reads WHERE read_at<=?", (since,))
+            read = c.execute("SELECT count(*) FROM mail_reads WHERE read_at>?", (since,)).fetchone()[0]
             if read >= READS_PER_DAY:
                 c.execute("UPDATE mail_items SET next_try_at=?,error='daily_cap',updated_at=? WHERE id=?",
                           (H.shift(now, hours=1), now, row["id"]))

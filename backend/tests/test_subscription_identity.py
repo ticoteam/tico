@@ -38,11 +38,11 @@ def usage_turn(c, tid, computer=None, bot='ops'):
             'runtime': 'codex', 'harness': 'codex', 'effort': 'high', 'profile': 'engineering'}
     H.turn_finish(c, H.KEEPER, tid, usage={**part, 'segments': [part]})
     if computer:
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) VALUES(?,'keeper',?,'notice','Fixture',?)",
+        c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES(?,'keeper',?,'notice','Fixture',?)",
                   ('message-' + tid, 'bot:' + bot, now))
         job = c.execute('SELECT id FROM jobs WHERE message_id=?', ('message-' + tid,)).fetchone()[0]
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
-        c.execute('INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) '
+        c.execute('INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) '
                   "VALUES(?,?,?, ?,1,?,'completed',?,?)", (tid, job, bot, computer['runner_id'], tid, now, now))
 
 

@@ -530,7 +530,7 @@ def reconcile(c, start, end):
     `no_call` counts item rows the gate wrote with no call (busy, breaker, no decision model). By construction
     calls == landed + sum(reasons) + unexplained."""
     found = H._rows(c.execute("SELECT id, detail FROM events WHERE action='judge.call' AND target LIKE ? "
-                              "AND ts>=? AND ts<?", (f"{QUESTION_SET}@%", start, end)))
+                              "AND created_at>=? AND created_at<?", (f"{QUESTION_SET}@%", start, end)))
     modes = {}
     for row in found:
         try:
@@ -623,7 +623,7 @@ def filtered(c, person, since):
             "ORDER BY created_at DESC LIMIT 200", (person, since, *OFF_PLATE))):
         if row["kind"] == "loose":
             said = H.message(c, row["ref"])
-            if not said or said.get("to_actor") != person or said.get("deleted_at"):
+            if not said or said.get("recipient_id") != person or said.get("deleted_at"):
                 continue
             task, title = None, (said.get("body") or "").strip().split("\n")[0][:300]
         else:
@@ -708,17 +708,17 @@ def replay_items(c, person, start, end, assistant_bot=None):
     """What bots put on this person between `start` and `end`, oldest first, as the gate would have seen each: tasks
     filed for them and questions asked of them (on a task or loose). Today's owner stands in for the owner then."""
     skip = H.bot_actor(assistant_bot) if assistant_bot else ""
-    out = [{"kind": "task", "ref": r["id"], "asker": r["requester"], "title": r["title"] or "", "text": r["body"] or "",
+    out = [{"kind": "task", "ref": r["id"], "asker": r["requester_id"], "title": r["title"] or "", "text": r["body"] or "",
             "created_at": r["created_at"]}
-           for r in c.execute("SELECT id,title,body,requester,created_at FROM tasks WHERE owner=? AND created_at>=? AND "
-                              "created_at<? AND requester LIKE 'bot:%' AND requester<>?", (person, start, end, skip))]
-    for m in H._rows(c.execute("SELECT * FROM messages WHERE to_actor=? AND kind='ask' AND created_at>=? AND created_at<? "
-                               "AND from_actor LIKE 'bot:%' AND from_actor<>?", (person, start, end, skip))):
+           for r in c.execute("SELECT id,title,body,requester_id,created_at FROM tasks WHERE owner_id=? AND created_at>=? AND "
+                              "created_at<? AND requester_id LIKE 'bot:%' AND requester_id<>?", (person, start, end, skip))]
+    for m in H._rows(c.execute("SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
+                               "AND sender_id LIKE 'bot:%' AND sender_id<>?", (person, start, end, skip))):
         msg = H.message(c, m["id"]) or m
         tid = H.message_task_id(msg)
         title = (H.task(c, tid) or {}).get("title", "") if tid else ""
         body = str(m.get("body") or "")
-        out.append({"kind": "question" if tid else "loose", "ref": tid or m["id"], "asker": m["from_actor"],
+        out.append({"kind": "question" if tid else "loose", "ref": tid or m["id"], "asker": m["sender_id"],
                     "title": title or body.strip().split("\n")[0][:300], "text": body, "created_at": m["created_at"]})
     return sorted(out, key=lambda it: it["created_at"])
 

@@ -12,7 +12,7 @@ const V2_GROUPS = [['doing', 'Doing'], ['waiting', 'Waiting'],
 function taskStateLabel(t) {
   if (taskNeedsMe(t) || t.status === 'declined') return 'Needs you';
   if (t.status === 'waiting') return 'Waiting';
-  if (t.status === 'doing' || (t.status === 'open' && !actorPerson(t.owner))) return 'Doing';
+  if (t.status === 'doing' || (t.status === 'open' && !actorPerson(t.owner_id))) return 'Doing';
   return 'To do';
 }
 function actorAvatarOnly(a) {
@@ -26,12 +26,12 @@ function actorAvatarOnly(a) {
 // opens instead of the task (decide.js), when it is answered on a card.
 function v2TaskRow(t, slug, showStatus = true, below = '', card = '') {
   // On a bot's page the other party is whoever is not the bot; on a person's page (no slug) it is the requester.
-  const other = slug && actorSlug(taskRequester(t)) === slug ? t.owner : taskRequester(t);
+  const other = slug && actorSlug(taskRequester(t)) === slug ? t.owner_id : taskRequester(t);
   const age = taskAge(t);
   return `<div class="trow${showStatus ? '' : ' status-in-heading'}" data-task-detail="${esc(t.id)}" data-task-version="${esc(t.version || '')}"${card ? ` data-need-card="${esc(card)}"` : ''}><div class="trow-head">
-      ${showStatus ? `<span class="pill ${V2_PILL[t.status] ?? ''}">${esc({open: !actorPerson(t.owner) ? 'Doing · starting' : actorPerson(t.owner) === S.me?.id ? 'Needs you' : 'To do', waiting: taskBlockedHold(t) ? 'Blocked' : 'Waiting', doing: 'Doing'}[t.status] || t.status || '')}</span>${taskStatusText(t)}` : ''}
+      ${showStatus ? `<span class="pill ${V2_PILL[t.status] ?? ''}">${esc({open: !actorPerson(t.owner_id) ? 'Doing · starting' : actorPerson(t.owner_id) === S.me?.id ? 'Needs you' : 'To do', waiting: taskBlockedHold(t) ? 'Blocked' : 'Waiting', doing: 'Doing'}[t.status] || t.status || '')}</span>${taskStatusText(t)}` : ''}
       <a class="ttl" data-task-detail-open href="#/task/${encodeURIComponent(t.id)}" title="${esc(`${t.title || ''} · ${taskStateLabel(t)} · ${age}`)}">${esc(t.title || '')}</a>${prStateBadge(t.pr_state)}
-      <span class="tags">${actorChip(other)}</span>${actorAvatarOnly(t.owner)}
+      <span class="tags">${actorChip(other)}</span>${actorAvatarOnly(t.owner_id)}
       <span class="muted tnum" title="${esc(taskAgeTitle(t))}">${esc(age)}</span></div>${below ? `<div class="trow-waits muted">${esc(below)}</div>` : ''}</div>`;
 }
 // The rail and person rows open the same complete task as the manager; actor links keep their own destination.
@@ -58,7 +58,7 @@ const BOT_CHAT_ACTIVE = new Set(['open', 'doing', 'waiting', 'declined']);
 let BOT_CHAT_TASKS = new Map(), BOT_CHAT_TASK_LOAD = 0;
 function taskNeedsMe(task) {
   const me = myActor();
-  return !!me && (task?.owner === me || (task?.ask?.to_actor === me && !task?.ask?.older) || taskWaitingOn(task) === me);
+  return !!me && (task?.owner_id === me || (task?.ask?.recipient_id === me && !task?.ask?.older) || taskWaitingOn(task) === me);
 }
 function botChatTasksRender(slug, rows) {
   const host = $('#bot-chat-tasks');
@@ -350,11 +350,11 @@ function botTaskWaitsOn(t) {
 }
 // Questions and approvals remain in Needs You even when its task filter is changed.
 function botNeedsExtras(slug) {
-  return botNeeds(slug).filter(it => ['question', 'ask', 'approval'].includes(it.kind) || it.ask?.to_actor === myActor());
+  return botNeeds(slug).filter(it => ['question', 'ask', 'approval'].includes(it.kind) || it.ask?.recipient_id === myActor());
 }
 // An approval or a question asked outside any task, one line in the rail: a tap opens its card (decide.js).
 function botNeedRow(it) {
-  const from = it.requester || '', title = approvalTitle(it) || it.first_line || it.title || '';
+  const from = it.requester_id || '', title = approvalTitle(it) || it.first_line || it.title || '';
   return `<div class="trow" data-need-card="${esc(decideItemKey(it))}"><div class="trow-head">
       <span class="pill needs">${it.kind === 'approval' ? 'Approval' : 'Question'}</span>
       <a class="ttl" href="${esc(NEEDS_YOU)}" aria-haspopup="dialog" title="${esc(plainActors(title))}">${esc(plainActors(title))}</a>

@@ -114,7 +114,7 @@ def of_message(msg):
     kind = refs.get("trigger")
     if kind in TRIGGERS:
         return kind, refs.get("trigger_source")
-    author = str(msg.get("from_actor") or "")
+    author = str(msg.get("sender_id") or "")
     if author.startswith("human:"):
         return "person_message", msg.get("id")
     if author.startswith("bot:"):
@@ -159,7 +159,7 @@ def rotation(conn, turn_id, rotated):
     older one, or a run that resumed) leaves `rotated` NULL."""
     if rotated is None:
         return 0
-    return conn.execute("UPDATE turns SET rotated=? WHERE id=? AND finished_at IS NULL", (rotated.reason, turn_id)).rowcount
+    return conn.execute("UPDATE turns SET rotated_at=? WHERE id=? AND finished_at IS NULL", (rotated.reason, turn_id)).rowcount
 
 
 # Why a run started a new session, in the words a task's history uses ("Started a new session: ..."). The first six are
@@ -222,11 +222,11 @@ def turn_result(conn, actor, row, outcome, event, to=None):
     """Write the one `turn.outcome` event for the run that delivered `row`'s result (the task as it was before this
     change), when `actor` is neither its owner bot nor the keeper. `event` is H.event (this module is below hubdb).
     Returns the event row, or None when there is no result, no run, or the run already has its outcome."""
-    owner = str(row.get("owner") or "")
+    owner = str(row.get("owner_id") or "")
     if (outcome not in TASK_OUTCOMES or row.get("status") not in RESULT_STATES or not owner.startswith("bot:")
             or actor in (owner, "keeper")):
         return None
-    reached = conn.execute("SELECT max(ts) FROM task_events WHERE task_id=? AND field='status' AND new=?",
+    reached = conn.execute("SELECT max(created_at) FROM task_events WHERE task_id=? AND field='status' AND new=?",
                            (row["id"], row["status"])).fetchone()[0]
     turn = conn.execute("SELECT id FROM turns WHERE bot=? AND task_id=? AND (? IS NULL OR started_at<=?) "
                         "ORDER BY started_at DESC LIMIT 1", (owner[4:], row["id"], reached, reached)).fetchone()

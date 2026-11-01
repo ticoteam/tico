@@ -118,7 +118,7 @@ def test_review_children_seek_the_parent_instead_of_scanning_every_task(api):
     from backend.health import review_children_sql
     store = api.app.state.store
     with store.transaction() as c:
-        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,created_at,updated_at,private) "
+        c.executemany("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), "Task", "Done.", "human:ana", "bot:ops", "done", H.now(), H.now(), 0)
                        for _ in range(2000)])
@@ -143,7 +143,7 @@ def stuck_company(api, monkeypatch, count):
     with api.app.state.store.transaction() as c:
         for k in range(count):
             slug, other = f"busy-{k}", f"busy-{(k + 1) % count}"
-            tasks = [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner=? ORDER BY rowid", ("bot:" + slug,))]
+            tasks = [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner_id=? ORDER BY rowid", ("bot:" + slug,))]
             H.task_create(c, "bot:" + slug, f"Part of {slug}", "Part.", "bot:" + other, parent_id=tasks[0])
             c.execute("UPDATE tasks SET status='waiting',blocked_since=?,blocked_kind='dependency' WHERE id=?",
                       (H.now(), tasks[0]))

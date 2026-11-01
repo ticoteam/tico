@@ -16,7 +16,7 @@ function settingsValue(field, value) {
   if (field === 'manages_reports') return value ? 'On' : 'Off';
   if (field === 'lifecycle') return value?.state ? `${value.state[0].toUpperCase()}${value.state.slice(1)}` : 'Not made';
   if (field === 'compact_at') return SETTINGS_COMPACT_AT.find(([size]) => size === value)?.[1] || String(value);
-  if (field === 'placement') return value?.label ? `${value.label} · ${settingsPersonName(value.operator)}` : 'not assigned';
+  if (field === 'placement') return value?.label ? `${value.label} · ${settingsPersonName(value.owner_id)}` : 'not assigned';
   if (field === 'definition') return [value?.display_name, value?.status,
     value?.reports_to ? `reports to ${settingsBotName(value.reports_to)}` : 'top level'].filter(Boolean).join(' · ');
   return JSON.stringify(value);

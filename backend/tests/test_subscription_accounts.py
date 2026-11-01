@@ -189,7 +189,7 @@ def test_a_bot_a_member_may_not_see_is_left_off_another_persons_computer(world):
         assign(api, r, slug)
     with api.app.state.store.transaction() as c:
         restrict(c, 'finance', people=['ben'])
-        c.execute("UPDATE runners SET operator='cara' WHERE id=?", (r['runner_id'],))
+        c.execute("UPDATE runners SET owner_id='cara' WHERE id=?", (r['runner_id'],))
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'schema_version': 1, 'runtimes': {},
          'bots': {slug: {'ready': True, 'runtime': 'fake'} for slug in ('finance', 'ops')}}}, token=r['token'])
 

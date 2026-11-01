@@ -26,11 +26,11 @@ CREATE INDEX IF NOT EXISTS webhook_sends_due ON webhook_sends(state, next_attemp
 CREATE INDEX IF NOT EXISTS webhook_sends_endpoint ON webhook_sends(webhook_id, created_at);
 
 CREATE TABLE IF NOT EXISTS webhook_attempts (
-  send_id TEXT NOT NULL, webhook_id TEXT NOT NULL, n INTEGER NOT NULL, at TEXT NOT NULL,
+  send_id TEXT NOT NULL, webhook_id TEXT NOT NULL, n INTEGER NOT NULL, created_at TEXT NOT NULL,
   timestamp_sent INTEGER NOT NULL, status INTEGER, ms INTEGER NOT NULL DEFAULT 0,
   response_head TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
   PRIMARY KEY(send_id, n));
-CREATE INDEX IF NOT EXISTS webhook_attempts_endpoint ON webhook_attempts(webhook_id, at);
+CREATE INDEX IF NOT EXISTS webhook_attempts_endpoint ON webhook_attempts(webhook_id, created_at);
 """
 
 # An endpoint is a person's: `created_by` is always a person, and `requested_by` the bot whose request a person

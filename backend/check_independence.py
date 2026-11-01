@@ -70,7 +70,7 @@ def capture_attempt(c, ticket_id, check_id, head, turn_id):
     checker_known = bool(segments) and all(s.get("family") for s in segments) and bool(checker)
     known = builder_known and checker_known
     check = H.task(c, check_id)
-    configured_families = configured(c, check_id, check.get("owner") if check else None)
+    configured_families = configured(c, check_id, check.get("owner_id") if check else None)
     c.execute("INSERT OR REPLACE INTO check_head_provenance(check_id,ticket_id,head,turn_id,builder_families,"
               "configured_families,checker_families,known,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
               (check_id, ticket_id, str(head or "").lower(), turn_id, json.dumps(sorted(builder)),

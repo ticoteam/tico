@@ -129,8 +129,8 @@ def test_go_live_keeps_the_placement_and_the_readiness_report_finishes_it(api, m
     ready(api, machine, ["cpo"])
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM bots WHERE slug='cpo'").fetchone()[0] == "active"
-        said = c.execute("SELECT from_actor,body FROM messages WHERE to_actor='bot:cpo'").fetchall()
-        assert [(m["from_actor"], m["body"]) for m in said] == [("human:ana", "Let's set you up.")]
+        said = c.execute("SELECT sender_id,body FROM messages WHERE recipient_id='bot:cpo'").fetchall()
+        assert [(m["sender_id"], m["body"]) for m in said] == [("human:ana", "Let's set you up.")]
         assert c.execute("SELECT count(*) FROM events WHERE action='bot.go_live_finished' AND target='cpo'").fetchone()[0] == 1
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key='go-live-pending:cpo'").fetchone()
 
@@ -147,7 +147,7 @@ def test_go_live_that_cannot_finish_tells_the_person_once(api, monkeypatch):
     assert _record(api)["failed"]["code"] == "quarantined"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM bots WHERE slug='cpo'").fetchone()[0] == "quarantined"
-        told = c.execute("SELECT body FROM messages WHERE to_actor='human:ana' AND body LIKE '%going live could not finish%'").fetchall()
+        told = c.execute("SELECT body FROM messages WHERE recipient_id='human:ana' AND body LIKE '%going live could not finish%'").fetchall()
         assert len(told) == 1 and "hub bot go-live cpo" in told[0]["body"]
 
 
@@ -183,7 +183,7 @@ def _record(api):
 
 def _notices(api):
     with api.app.state.store.read() as c:
-        return [r["body"] for r in c.execute("SELECT body FROM messages WHERE to_actor='human:ana' AND body LIKE '%Going live for cpo%'")]
+        return [r["body"] for r in c.execute("SELECT body FROM messages WHERE recipient_id='human:ana' AND body LIKE '%Going live for cpo%'")]
 
 
 def test_a_go_live_that_breaks_while_finishing_never_fails_the_heartbeat(api, monkeypatch):

@@ -136,7 +136,7 @@ def _slack(c, auto, run_id, do, args, message):
         if not bot:
             return _fail("send_reply in Slack needs a bot to post as")
         conv = R._bot_room(c, bot)
-        msg = H._write_message(c, H.bot_actor(bot), conv.get("owner_actor") or H.KEEPER, text, conv, "say",
+        msg = H._write_message(c, H.bot_actor(bot), conv.get("owner_id") or H.KEEPER, text, conv, "say",
                                {"automation": auto["id"], "automation_run": run_id,
                                 "automation_inbox": _inbox(message), **_chain_refs(auto)}, None, None)
         now = H.now()
@@ -222,7 +222,7 @@ def _occurrence(c, auto, args, values):
 
     The rule due date the task stands for (`rule_due_id`) is never the run's input, a manual run's sample included: it
     is the automation's own trigger's, and only while the automation is that due date's routine (rule_due.links)."""
-    occurrence = values.get("due") if isinstance(values.get("due"), dict) else {}
+    occurrence = values.get("due_at") if isinstance(values.get("due_at"), dict) else {}
     if not occurrence.get("due_on"):
         return str(args.get("due") or "") or None, None, {"automation": auto["id"]}
     from . import automation_due as D
@@ -443,7 +443,7 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
     name = str(auto["flow"].get("name") or auto["id"])
     title = f"{name} · {label}"[:300] if label else name[:300]
     # A due-date run's turn is that occurrence's task, due and marked the same way as a create_task's (`_occurrence`).
-    due, marker, occ_refs = _occurrence(c, auto, {}, {"due": occurrence} if occurrence else {})
+    due, marker, occ_refs = _occurrence(c, auto, {}, {"due_at": occurrence} if occurrence else {})
     task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), due=due, lint=False, deduplicate=False,
                          routine=True, trigger="other", trigger_source="automation:" + auto["id"], occurrence=marker,
                          occurrence_step=str(step_id) if marker else None, rule_due_id=occ_refs.get("rule_due_id"),
@@ -465,7 +465,7 @@ FIND = {
     "mail": ("SELECT mailbox, msg_id AS id, thread_id AS thread, from_addr AS 'from', subject, snippet, date, "
              "updated_at AS at FROM mail_messages WHERE deleted_at IS NULL AND {after} AND lower(mailbox) IN ({mine}) "
              "AND (subject LIKE ? OR from_addr LIKE ? OR snippet LIKE ?)", "updated_at", "msg_id", 3),
-    "tasks": ("SELECT id, title, status, owner, requester, created_at AS at FROM tasks WHERE {after} "
+    "tasks": ("SELECT id, title, status, owner_id, requester_id, created_at AS at FROM tasks WHERE {after} "
               "AND coalesce(private,0)=0 AND title LIKE ?", "created_at", "id", 1),
     "prs": ("SELECT id, task_id AS task, url, title, state, repo, number, created_at AS at FROM task_links "
             "WHERE kind='pr' AND {after} AND (coalesce(title,'') LIKE ? OR url LIKE ?)", "created_at", "id", 2),

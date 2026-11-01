@@ -35,7 +35,7 @@ def setup_sources(api, tmp_path):
         c.execute("INSERT INTO mail_agent_instructions VALUES(?,?,?,?)",
                   ("inbox", "# Ana Inbox\n\nTriage incoming mail.", "runner-1", H.now()))
         c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,"
-                  "user_id,event_type,text,received,state,author,author_name,updated_at) "
+                  "user_id,event_type,text,received_at,state,author,author_name,updated_at) "
                   "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   ("E1", "T1", "CCHANNEL1", "channel", "1789800000.000001", "",
                    "1789800000.000001", "U1", "message", "Feature shipped for customers",

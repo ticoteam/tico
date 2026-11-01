@@ -26,9 +26,9 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages(
  file_id TEXT PRIMARY KEY REFERENCES bot_files(id),
  cadence TEXT NOT NULL DEFAULT 'none' CHECK(cadence IN ('none','daily','weekly','monthly')),
- as_of TEXT, replaced_by TEXT, archived INTEGER NOT NULL DEFAULT 0,
+ as_of TEXT, replaced_by_id TEXT, archived INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS pages_replaced ON pages(replaced_by) WHERE replaced_by IS NOT NULL;
+CREATE INDEX IF NOT EXISTS pages_replaced ON pages(replaced_by_id) WHERE replaced_by_id IS NOT NULL;
 """
 
 CADENCES = {"none": 0, "daily": 1, "weekly": 7, "monthly": 30}
@@ -103,7 +103,7 @@ class Pages:
         v = c.execute("SELECT version,actor,created_at FROM bot_file_versions WHERE file_id=? AND version=?",
                       (row["id"], row["current_version"])).fetchone()
         updated = v["created_at"] if v else row["last_activity_at"]
-        replaced, replaced_title = page["replaced_by"], None
+        replaced, replaced_title = page["replaced_by_id"], None
         if replaced:
             other = c.execute("SELECT * FROM bot_files WHERE id=?", (replaced,)).fetchone()
             if other and other["state"] != "deleted" and self.files.visible(c, who, other, cache):
@@ -111,13 +111,13 @@ class Pages:
             else:
                 replaced = None             # a replacement the reader may not see is not named
         by = v["actor"] if v else None
-        names_ = names_ if names_ is not None else names.lookup(c, {"bot:" + row["bot"], *([by] if by else [])})
-        return {"file_id": row["id"], "title": row["title"], "bot": row["bot"],
-                "bot_name": names_.get("bot:" + row["bot"], row["bot"]), "version": row["current_version"],
+        names_ = names_ if names_ is not None else names.lookup(c, {"bot:" + row["bot_id"], *([by] if by else [])})
+        return {"file_id": row["id"], "title": row["title"], "bot_id": row["bot_id"],
+                "bot_name": names_.get("bot:" + row["bot_id"], row["bot_id"]), "version": row["current_version"],
                 "updated_at": updated, "updated_by": by, "updated_by_name": names_.get(by, "") if by else "",
                 "cadence": page["cadence"], "as_of": page["as_of"],
                 "stale_days": stale_days(updated, page["cadence"]),
-                "replaced_by": replaced, "replaced_by_title": replaced_title,
+                "replaced_by_id": replaced, "replaced_by_title": replaced_title,
                 "archived": bool(page["archived"] or row["archived"]),
                 "task_id": row["task_id"] if row["task_id"] and self.files.task_info(c, who, row["task_id"], {}) else None,
                 "src": self.src(c, who, row, row["current_version"]) if v else None}
@@ -126,7 +126,7 @@ class Pages:
         found = {}
         for part in H.chunks(ids):
             marks = ",".join("?" * len(part))
-            for r in c.execute(f"SELECT f.*,p.cadence,p.as_of,p.replaced_by,p.archived AS page_archived "
+            for r in c.execute(f"SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.archived AS page_archived "
                                f"FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id IN ({marks}) "
                                f"AND f.state<>'deleted'", part):
                 found[r["id"]] = r
@@ -134,7 +134,7 @@ class Pages:
 
     @staticmethod
     def page_of(r):
-        return {"cadence": r["cadence"], "as_of": r["as_of"], "replaced_by": r["replaced_by"],
+        return {"cadence": r["cadence"], "as_of": r["as_of"], "replaced_by_id": r["replaced_by_id"],
                 "archived": r["page_archived"]}
 
     def read(self, who, fid):
@@ -178,17 +178,17 @@ class Pages:
         if bot:
             with self.store.read() as c:
                 bot = (H.resolve_bot(c, H.actor_id(bot)) or {}).get("id", H.actor_id(bot))
-            where.append("f.bot=?")
+            where.append("f.bot_id=?")
             params.append(bot)
         if task:
             where.append("f.task_id=?")
             params.append(task)
         with self.store.read() as c:
             cache = {}
-            found, nxt = scan(c, "SELECT f.*,p.cadence,p.as_of,p.replaced_by,p.archived AS page_archived FROM pages p "
+            found, nxt = scan(c, "SELECT f.*,p.cadence,p.as_of,p.replaced_by_id,p.archived AS page_archived FROM pages p "
                               "JOIN bot_files f ON f.id=p.file_id", where, params, limit, cursor,
                               lambda r: self.files.visible(c, who, r, cache))
-            known = names.lookup(c, {"bot:" + r["bot"] for r in found} | self._authors(c, found))
+            known = names.lookup(c, {"bot:" + r["bot_id"] for r in found} | self._authors(c, found))
             return {"pages": [self.view(c, who, r, self.page_of(r), cache, known) for r in found],
                     "has_more": nxt is not None, "next_cursor": nxt}
 
@@ -223,12 +223,12 @@ class Pages:
             if replaces:
                 old = c.execute("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=?",
                                 (replaces,)).fetchone()
-                if not old or old["bot"] != row["bot"] or old["state"] == "deleted":
+                if not old or old["bot_id"] != row["bot_id"] or old["state"] == "deleted":
                     raise Problem("not_found", "replaces names a page of this bot's", 404)
                 if old["id"] == row["id"]:
                     raise Problem("validation", "A page cannot replace itself", 422)
-                c.execute("UPDATE pages SET replaced_by=?,updated_at=? WHERE file_id=?", (row["id"], now, old["id"]))
-                self.files.activity(c, old["id"], "bot:" + row["bot"], "modified", now=now,
+                c.execute("UPDATE pages SET replaced_by_id=?,updated_at=? WHERE file_id=?", (row["id"], now, old["id"]))
+                self.files.activity(c, old["id"], "bot:" + row["bot_id"], "modified", now=now,
                                     detail={"replaced_by": row["id"]})
             if task and row["task_id"] == task:
                 self.pin_to_task(c, row, task)
@@ -281,7 +281,7 @@ class Pages:
                     other = self.rows(c, [target]).get(target)
                     if not other or other["id"] == fid or not self.files.visible(c, who, other, {}):
                         raise Problem("not_found", "replaced_by names a page you can see", 404)
-                fields["replaced_by"] = target or None
+                fields["replaced_by_id"] = target or None
             if body.archived is not None:
                 fields["archived"] = int(body.archived)
             if fields:

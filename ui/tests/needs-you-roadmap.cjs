@@ -5,7 +5,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
 const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
-const card = (id, title, extra = {}) => ({id, kind: 'task', title, body: '', owner: 'human:ana', requester: 'bot:writer', status: 'open',
+const card = (id, title, extra = {}) => ({id, kind: 'task', title, body: '', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
   version: 1, labels: [], tags: [], links: [], lane: 'company', rank: null, parts: {total: 0, done: 0}, created_at: at(60), updated_at: at(60),
   conversation_id: 'c-' + id, ask: null, open_asks: 0, ...extra});
 const roadmap = {type_id: 'product-roadmap', type: {id: 'product-roadmap', name: 'Product roadmap'}, steps_only: true};
@@ -19,7 +19,7 @@ const items = [card('t-idea', 'Dark mode for the roadmap', {...roadmap, recommen
     assert.equal(await page.evaluate(() => { TASK_TYPES.push({id: 'product-roadmap', name: 'Product roadmap', steps_only: true, steps: []});
       return decideStepsOnly({type: 'task', it: {type_id: 'product-roadmap'}}); }), true);
     const said = await page.evaluate(items => {
-      const me = myActor(), [idea, plain] = items.map(it => ({type: 'task', it: {...it, owner: me}}));
+      const me = myActor(), [idea, plain] = items.map(it => ({type: 'task', it: {...it, owner_id: me}}));
       return Object.fromEntries([['idea', idea], ['plain', plain]].flatMap(([k, c]) => [['yes', ''], ['no', 'not this quarter']]
         .map(([what, note]) => [`${k}-${what}`, decideWriteBody(c, what, 0, note).writes.map(w => [w.path, w.body.text ?? w.body.status])])));
     }, items);

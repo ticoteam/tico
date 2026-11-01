@@ -11,7 +11,7 @@ QUESTIONS = {"bucket": {"type": "choice", "instructions": "Where does it go?",
 
 
 def flow(*steps, **extra):
-    return {"name": "Inbox · ana", "owner": "person:ana", "trigger": {"type": "message", "inbox": "ana@acme.example"},
+    return {"name": "Inbox · ana", "owner_id": "person:ana", "trigger": {"type": "message", "inbox": "ana@acme.example"},
             "steps": list(steps), **extra}
 
 
@@ -46,7 +46,7 @@ def test_every_step_type_saves_and_defaults_fill():
         act("note"),
         fork("route", 2, [act("inner")], otherwise=[act("other")]),
         owner="human:ana", spend_cap={"per_30m": 2}, batch={"times": ["08:00", "17:30"], "tz": "Europe/Paris"}))
-    assert saved["owner"] == "person:ana" and saved["enabled"] is True and saved["builtin"] is False
+    assert saved["owner_id"] == "person:ana" and saved["enabled"] is True and saved["builtin"] is False
 
 
 @pytest.mark.parametrize("trigger", [
@@ -135,7 +135,7 @@ def test_bad_steps_are_refused(step, words):
 
 
 @pytest.mark.parametrize("extra, words", [
-    ({"owner": "team:x"}, "owner"),
+    ({"owner_id": "team:x"}, "owner"),
     ({"group": "engineering"}, "group"),
     ({"spend_cap": {"per_30m": -1}}, "spend_cap"),
     ({"spend_cap": {"per_hour": 1}}, "spend_cap"),

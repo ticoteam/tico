@@ -55,7 +55,7 @@ def test_a_verified_assertion_without_an_email_is_not_a_person(api):
 def test_botops_borrows_only_the_rights_of_the_request_it_is_working_on(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('botops',?, 'ana')",
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     # The run is handling the owner's room; the owner's request in another thread is not its to cite.
     _, _, botops = setup_attempt(api, "botops")

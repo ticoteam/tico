@@ -58,7 +58,7 @@ def test_explicit_human_grants_delegate_only_to_owned_bots_and_revoke_cascades(a
     post(api,f'credentials/{cid}/grants',{'subject':'human:ben'},'cara-test',expected=403)
     post(api,f'credentials/{cid}/grants',{'subject':'bot:ops'},'cara-test',expected=403)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='finance'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='finance'")
     child=post(api,f'credentials/{cid}/grants',{'subject':'bot:finance'},'cara-test')
     machine=runner(api);assign(api,machine,'finance');ready(api,machine,['finance'])
     post(api,'chat/finance',{'text':'Use only the synthetic fixture'})
@@ -81,7 +81,7 @@ def member_stores(api,bot,env,value,token='cara-test',expected=200):
 def test_the_person_who_stored_a_credential_shares_it_only_with_their_own_bots(api):
     setup(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot IN ('finance','cpo')")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot IN ('finance','cpo')")
     mine=member_stores(api,'cpo','POSTHOG_API_KEY','phx-synthetic-private-987654')['id']
     theirs=create(api,name='Other',env='OTHER_KEY')['id']
     listing=get(api,'credentials','cara-test')
@@ -107,7 +107,7 @@ def test_a_company_credential_is_never_its_adders_and_a_members_own_ends_when_ro
     setup(api)
     settings,store=api.app.state.store.settings,api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot IN ('finance','cpo')")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot IN ('finance','cpo')")
     # Cara adds company credentials while she is an Admin, by hand and through a card for a bot she runs, then is demoted.
     settings.credential_admins=('ana@acme.example','ben@acme.example','cara@acme.example')
     company=post(api,'credentials',{'name':'Company GitHub','secret':'ghp-company-secret-123456','env':'GITHUB_TOKEN'},'cara-test')['id']
@@ -128,7 +128,7 @@ def test_a_company_credential_is_never_its_adders_and_a_members_own_ends_when_ro
     assert 'from the credential Company GitHub' in busy['error']['detail'] and 'Ask Ana' in busy['error']['detail']
     with store.read() as c:                       # the refusal leaves the grant it named in place
         assert c.execute("SELECT count(*) FROM credential_grants WHERE credential_id=? AND subject='bot:finance' "
-                         'AND revoked IS NULL',(company,)).fetchone()[0]==1
+                         'AND revoked_at IS NULL',(company,)).fetchone()[0]==1
 
     # A server that ran the old backfill: no row already there stays anyone's, even one a member stored.
     with store.transaction() as c:
@@ -149,7 +149,7 @@ def test_a_company_credential_is_never_its_adders_and_a_members_own_ends_when_ro
     assert 'Take Posthog_Api_Key away from finance' in busy['error']['detail'] and 'Ask' not in busy['error']['detail']
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM credential_grants WHERE credential_id=? AND subject='bot:finance' "
-                         'AND revoked IS NULL',(mine,)).fetchone()[0]==1
+                         'AND revoked_at IS NULL',(mine,)).fetchone()[0]==1
     assert post(api,f'credentials/{mine}/reveal',{})['value']=='phx-rotated-by-admin-987' and row['revision']==2
 
     # The owner turning the rule off ends what is hers too.
@@ -165,7 +165,7 @@ def test_admin_deletes_the_value_and_all_grants_with_metadata_only_history(api):
     row=create(api)
     parent=post(api,f"credentials/{row['id']}/grants",{'subject':'human:cara'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='finance'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='finance'")
     post(api,f"credentials/{row['id']}/grants",{'subject':'bot:finance'},'cara-test')
     assert api.delete('/api/v2/credentials/'+row['id'],headers=headers('cara-test')).status_code==403
     token=post(api,'me/tokens',{'label':'QA cleanup'},'ben-test')['token']
@@ -280,11 +280,11 @@ def test_repeats_by_the_same_actor_and_bot_within_the_hour_write_no_row_and_last
     use('2026-10-29T10:12:00Z','bot:cpo','att-4')              # cpo again, though finance was newest: none
     use('2026-10-29T11:30:00Z','bot:finance','att-5')          # quiet for over an hour: a row
     with store.read() as c:
-        rows=c.execute("SELECT actor,ts FROM events WHERE target=? AND action='credential.revealed' ORDER BY ts",(cid,)).fetchall()
-        assert [(r['actor'],r['ts']) for r in rows]==[('bot:finance','2026-10-29T10:00:00Z'),('bot:cpo','2026-10-29T10:10:00Z'),
+        rows=c.execute("SELECT actor,created_at FROM events WHERE target=? AND action='credential.revealed' ORDER BY created_at",(cid,)).fetchall()
+        assert [(r['actor'],r['created_at']) for r in rows]==[('bot:finance','2026-10-29T10:00:00Z'),('bot:cpo','2026-10-29T10:10:00Z'),
                                                     ('bot:finance','2026-10-29T11:30:00Z')]
-        pairs=c.execute('SELECT actor,bot,at FROM credential_uses WHERE credential_id=? ORDER BY actor',(cid,)).fetchall()
-        assert [(p['actor'],p['bot'],p['at']) for p in pairs]==[('bot:cpo','cpo','2026-10-29T10:12:00Z'),
+        pairs=c.execute('SELECT actor,bot,used_at FROM credential_uses WHERE credential_id=? ORDER BY actor',(cid,)).fetchall()
+        assert [(p['actor'],p['bot'],p['used_at']) for p in pairs]==[('bot:cpo','cpo','2026-10-29T10:12:00Z'),
                                                               ('bot:finance','finance','2026-10-29T11:30:00Z')]
     listed=get(api,'credentials')['credentials'][0]
     assert (listed['last_used_at'],listed['last_used_by'])==('2026-10-29T11:30:00Z','finance')
@@ -302,9 +302,9 @@ def test_a_pair_in_use_writes_one_row_an_hour_while_last_used_stays_exact(api, m
             C.record_use(c,'bot:finance','credential.sent_to_computer',cid,{'bot':'finance','use':'watcher'},windowed=True)
         minute+=5
     with store.read() as c:
-        rows=[r[0] for r in c.execute("SELECT ts FROM events WHERE target=? AND action='credential.sent_to_computer' ORDER BY ts",(cid,))]
+        rows=[r[0] for r in c.execute("SELECT created_at FROM events WHERE target=? AND action='credential.sent_to_computer' ORDER BY created_at",(cid,))]
         assert rows==['2026-10-29T10:00:00Z','2026-10-29T11:05:00Z','2026-10-29T12:10:00Z']
-        assert c.execute('SELECT at FROM credential_uses WHERE credential_id=?',(cid,)).fetchone()[0]=='2026-10-29T12:30:00Z'
+        assert c.execute('SELECT used_at FROM credential_uses WHERE credential_id=?',(cid,)).fetchone()[0]=='2026-10-29T12:30:00Z'
     assert get(api,'credentials')['credentials'][0]['last_used_at']=='2026-10-29T12:30:00Z'
 
 
@@ -335,11 +335,11 @@ def test_the_backfill_copies_each_actor_and_bots_newest_use_once(api):
                                        ('2026-10-21T10:00:00Z','runner:r1','credential.sent_to_computer','{"bot": "ops", "use": "watcher"}'),
                                        ('2026-10-22T10:00:00Z','runner:r1','credential.sent_to_computer','{"bot": "ops", "use": "watcher"}'),
                                        ('2026-10-23T10:00:00Z','human:ana','credential.revealed','{"attempt": null}')]:
-            c.execute('INSERT INTO events(id,ts,actor,action,target,detail) VALUES(?,?,?,?,?,?)',
+            c.execute('INSERT INTO events(id,created_at,actor,action,target,detail) VALUES(?,?,?,?,?,?)',
                       (H.new_id(),ts,actor,action,cid,detail))
         H.backfill_credential_uses(c)
     with store.read() as c:
-        rows=[tuple(r) for r in c.execute('SELECT actor,bot,at FROM credential_uses WHERE credential_id=? ORDER BY actor,bot',(cid,))]
+        rows=[tuple(r) for r in c.execute('SELECT actor,bot,used_at FROM credential_uses WHERE credential_id=? ORDER BY actor,bot',(cid,))]
         assert rows==[('bot:finance','finance','2026-10-20T11:00:00Z'),('runner:r1','ops','2026-10-22T10:00:00Z')]
 
 

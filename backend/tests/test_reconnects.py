@@ -27,7 +27,7 @@ def codex_bot(api):
 
 
 def task(api, title="Send the Acme renewal quote"):
-    return post(api, "tasks", {"owner": "ops", "title": title, "body": "Draft and send it."})
+    return post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Draft and send it."})
 
 
 def shown(api, t, token="ana-test"):
@@ -39,7 +39,7 @@ def wakes(api, t):
     with api.app.state.store.read() as c:
         return [r["body"] for r in c.execute(
             "SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor='bot:ops' "
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.recipient_id='bot:ops' "
             "AND json_extract(m.refs,'$.reconnected') IS NOT NULL", (t["id"],))]
 
 
@@ -201,7 +201,7 @@ def test_only_the_person_who_can_fix_it_has_the_item(api):
 def test_the_connector_cards_the_mailbox_bots_recent_task_and_only_every_refusing_service_fixes_it(api, monkeypatch):
     from backend import routines
     t = task(api)
-    other = post(api, "tasks", {"owner": "cpo", "title": "Plan Q4", "body": "x"})
+    other = post(api, "tasks", {"owner_id": "cpo", "title": "Plan Q4", "body": "x"})
     monkeypatch.setattr(routines, "message_bot_mailboxes",
                         lambda c, roster=None: [{"address": "ana@acme.example", "person_id": "ana", "bot": "ops", "declared": False}])
     box = "Ana@acme.example"
@@ -283,12 +283,12 @@ def botops_turn(api, title="Connect the Acme CRM for ops"):
     from backend.tests.test_api import ready
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('botops',?, 'ana')",
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     machine = runner(api)
     assign(api, machine, "botops")
     ready(api, machine, ["botops"])
-    t = post(api, "tasks", {"owner": "botops", "title": title, "body": "Get it working."})
+    t = post(api, "tasks", {"owner_id": "botops", "title": title, "body": "Get it working."})
     return t, claim(api, machine, "botops")
 
 
@@ -304,7 +304,7 @@ def botops_wakes(api, t):
     with api.app.state.store.read() as c:
         return [r["body"] for r in c.execute(
             "SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor='bot:botops' AND json_extract(m.refs,'$.reconnected') IS NOT NULL",
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.recipient_id='bot:botops' AND json_extract(m.refs,'$.reconnected') IS NOT NULL",
             (t["id"],))]
 
 
@@ -339,7 +339,7 @@ def test_another_person_asked_on_the_same_task_gets_a_card_that_replaces_the_fir
     attempt = claim(api, machine)
     first = ask_secret(api, attempt)                                    # for the bot's operator, Ana
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='ben' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='ops'")
     second = ask_secret(api, attempt)                                   # Ben runs the bot now: his card
     assert second["id"] != first["id"] and request_status(api, first["id"]) == "cancelled"
     assert sorted((c["person"], c["status"]) for c in cards(api, t)) == [("human:ana", "retired"), ("human:ben", "open")]
@@ -356,7 +356,7 @@ def test_a_fix_owed_when_the_task_changes_hands_never_reaches_the_next_owner(api
         assert R.google_connected(c, "ana@acme.example") == []           # owed: the child still holds it
         H.task_update(c, "human:ana", t["id"], owner="bot:finance")
         H.task_update(c, "bot:cpo", child, status="done", note="Sent")
-        told = [r["body"] for r in c.execute("SELECT body FROM messages WHERE to_actor='bot:finance'")]
+        told = [r["body"] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:finance'")]
     assert told and not any("reconnected" in b for b in told)
 
 
@@ -392,8 +392,8 @@ def test_a_credential_card_whose_task_finishes_or_changes_hands_can_no_longer_be
 def test_a_private_task_cards_a_fixer_who_can_read_it_and_never_one_who_cannot(api, monkeypatch):
     machine = codex_bot(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")           # cara cannot read it
-    t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x", "private": True}, "ben-test")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")           # cara cannot read it
+    t = post(api, "tasks", {"owner_id": "ops", "title": "Price the Acme deal", "body": "x", "private": True}, "ben-test")
     attempt = claim(api, machine)
     # Its turn may not ask for a credential at all: refused, not a card nobody can see.
     asked = api.post("/api/v2/credential-requests", json={"env": "ACME_CRM_TOKEN", "label": "the Acme CRM token"},
@@ -416,7 +416,7 @@ def make_private(api, t):
 
 
 def test_a_task_made_private_retires_a_card_nobody_else_can_fix_and_stops_waiting_on_it(api):
-    t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
+    t = post(api, "tasks", {"owner_id": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
     open_card(api, t, "google:cara@acme.example", "human:cara")              # only Cara connects her mailbox
     assert [i["id"] for i in needs(api, "cara-test") if i.get("reconnect")] == [t["id"]]
     make_private(api, t)                                                     # Cara cannot read it now
@@ -428,8 +428,8 @@ def test_a_task_made_private_retires_a_card_nobody_else_can_fix_and_stops_waitin
 def test_a_task_made_private_moves_a_login_card_to_a_fixer_who_can_read_it(api):
     machine = codex_bot(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
-    t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
+    t = post(api, "tasks", {"owner_id": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
     refused(api, machine, claim(api, machine))
     [first] = cards(api, t)
     assert first["person"] == "human:cara"
@@ -444,8 +444,8 @@ def test_a_task_made_private_moves_a_login_card_to_a_fixer_who_can_read_it(api):
 def test_a_former_reader_cannot_load_or_save_the_credential_card_by_id(api):
     machine = ops_machine(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
-    t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
+    t = post(api, "tasks", {"owner_id": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
     asked = ask_secret(api, claim(api, machine))
     get(api, f"credential-requests/{asked['id']}", "cara-test")
     make_private(api, t)
@@ -527,7 +527,7 @@ def test_a_fix_while_several_holds_stand_is_told_with_the_wake_the_last_one_clea
 
     def told():
         with api.app.state.store.read() as c:
-            return [r[0] for r in c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND body LIKE '%is reconnected%'")]
+            return [r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:ops' AND body LIKE '%is reconnected%'")]
     with api.app.state.store.transaction() as c:
         assert R.google_connected(c, "ana@acme.example") == []
         H.task_update(c, "bot:cpo", first, status="done", note="Sent")
@@ -554,7 +554,7 @@ def hold_item(api, bot="ops"):
 
 def login_card(api, t, runner_id="r1"):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO runners(id,label,token_hash,operator,created_at) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING",
+        c.execute("INSERT INTO runners(id,label,token_hash,owner_id,created_at) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING",
                   (runner_id, "Acme Mac", "x-" + runner_id, "ana", H.now()))
         return R.login_refused(c, api.app.state.store.settings, "ops", runner_id, "codex", t["id"])
 

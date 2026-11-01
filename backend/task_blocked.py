@@ -32,7 +32,7 @@ def stamp_builds(c):
         unstamped = ("FROM tasks WHERE type_id=? AND status='doing' AND building_started_at IS NULL "
                      "AND building_seconds=0 AND created_at LIKE '____-__-__T%'")
         if c.execute("SELECT 1 " + unstamped + " LIMIT 1", (typ[0],)).fetchone():
-            c.execute("UPDATE tasks SET building_started_at=coalesce((SELECT max(ts) FROM task_events e WHERE "
+            c.execute("UPDATE tasks SET building_started_at=coalesce((SELECT max(created_at) FROM task_events e WHERE "
                       "e.task_id=tasks.id AND e.field='step' AND e.new=tasks.step_id),created_at) "
                       "WHERE id IN (SELECT id " + unstamped + ")", (typ[0],))
 
@@ -69,7 +69,7 @@ def forget_retired_resumes(c):
             "WHERE ty.role='engineering' AND t.blocked_since IS NOT NULL "
             "AND t.blocked_from_step IS NOT NULL").fetchall():
         moves = c.execute("SELECT new,note FROM task_events WHERE task_id=? AND field='step' "
-                          "ORDER BY ts DESC,rowid DESC LIMIT 2", (task_id,)).fetchall()
+                          "ORDER BY created_at DESC,rowid DESC LIMIT 2", (task_id,)).fetchall()
         retired_here = bool(moves) and moves[0][0] == saved and moves[0][1] == H.RETIRED_WAITING
         held_in_blocked = (len(moves) == 2 and moves[0][0] == step and moves[1][0] == saved
                            and moves[1][1] == H.RETIRED_WAITING)
@@ -93,7 +93,7 @@ def leave_retired_blocked(c):
         steps = {s[0]: (s[1], s[2]) for s in c.execute(
             "SELECT id,name,status FROM task_steps WHERE type_id=?", (type_id,)).fetchall()}
         came_from = c.execute("SELECT old FROM task_events WHERE task_id=? AND field='step' AND new=? "
-                              "ORDER BY ts DESC,rowid DESC LIMIT 1", (task_id, step_id)).fetchone()
+                              "ORDER BY created_at DESC,rowid DESC LIMIT 1", (task_id, step_id)).fetchone()
         target = next((sid for sid in (saved, came_from and came_from[0])
                        if sid in steps and steps[sid][1] in H.ACTIVE_STATUSES and steps[sid][1] != 'waiting'), None)
         if not target:
@@ -233,7 +233,7 @@ def reconciliation(c, row, snapshots=None):
             if ((gate.get('kind') == 'ci' or detail.get('head_sha') != gate.get('head'))
                     and seen <= gate.get('at', '')):
                 return None
-        if review_gate.problem(c, row, row['owner'], snapshots=snapshots, require_pr=True):
+        if review_gate.problem(c, row, row['owner_id'], snapshots=snapshots, require_pr=True):
             return None
         if waiting:
             return 'dependency'
@@ -265,7 +265,7 @@ def reconcile(c, task_id, snapshots=None):
     if row.get('blocked_kind') == 'worktree' and not review_gate.engineering(c, row):
         # General tasks have no Engineering step rule to wake their owner when the hold clears.
         resumed = H.task(c, task_id)
-        H._wake(c, resumed, resumed['owner'], f"Worktree hold cleared: {resumed['title']}",
+        H._wake(c, resumed, resumed['owner_id'], f"Worktree hold cleared: {resumed['title']}",
                 refs={'news': 'assignment'})
 
 
@@ -335,8 +335,8 @@ def alert_target(c, row, at):
     if row.get('blocked_kind') != 'gate' and not review_gate.engineering(c, row):
         return None
     manager = H.type_manager(c, row)
-    target = H.bot_actor(manager) if manager else row['requester']
-    if target == row['owner'] or not H.task_private_readable(c, target, row):
+    target = H.bot_actor(manager) if manager else row['requester_id']
+    if target == row['owner_id'] or not H.task_private_readable(c, target, row):
         return None
     if H.is_bot(target) and (H.bot(c, H.actor_id(target)) or {}).get('state') != 'active':
         return None

@@ -39,7 +39,7 @@ def test_a_draft_that_drew_on_meetings_is_read_only_by_meeting_readers(api, monk
     with store.transaction() as c:
         restrict(c, "finance", people=["ana"])
         c.execute("INSERT INTO humans(id,name,email) VALUES('dan','Dan',NULL)")
-        c.execute("INSERT INTO meetings(id,title,owner,metadata,notes,created_at,updated_at,review_state) "
+        c.execute("INSERT INTO meetings(id,title,owner_id,metadata,notes,created_at,updated_at,review_state) "
                   "VALUES('m1','Synthetic sync','zed@acme.example',?,?,?,?,'live')",
                   (json.dumps({"kind": "meeting", "calendar": {"attendees": ["ben@acme.example"]}}), NOTE, H.now(), H.now()))
     ben, facts = draft(store, "human:ben", "- Synthetic draft bullet one")

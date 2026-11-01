@@ -12,7 +12,7 @@ const {open} = require('./tasks-page.cjs');
 const SHOTS = process.env.TICO_SHOTS || '';
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
-const REVIEW = {id: 't-review', title: 'Review: Support Bot broke a rule', owner: 'human:ana', requester: 'tico', status: 'open',
+const REVIEW = {id: 't-review', title: 'Review: Support Bot broke a rule', owner_id: 'human:ana', requester_id: 'tico', status: 'open',
   body: "Support Bot's output was held: it broke a rule. Keep it blocked, send it anyway, or edit the rule.\n\nHold: h-1",
   lane: 'company', rank: null, labels: ['rule-review'], tags: [], links: [], parts: {total: 0, done: 0}, version: 1,
   created_at: ago(30), updated_at: ago(5)};
@@ -34,7 +34,7 @@ const SECOND = {...HOLD, id: 'h-2', outcome: 'blocked', text: 'Sent the Acme ros
 const scope = (bots = []) => ({everyone: false, all_bots: false, groups: [], bots, people: []});
 const RULE = {id: 'r-eu', kind: 'internal', text: HOLD.rules[0].text, description: '', who: scope([{id: 'support', name: 'Support Bot'}]),
   with: {groups: [], bots: [], people: []}, source: null, if_broken: 'escalate', reviewer: null, status: 'active', version: 2,
-  created_at: ago(900), updated_at: ago(60), due: [], due_more: 0, can_edit: true};
+  created_at: ago(900), updated_at: ago(60), due_at: [], due_more: 0, can_edit: true};
 const summary = h => { const {text, why, nonce, ...rest} = h; return {...rest, appealed: !!why}; };
 
 async function review(browser, {viewport, theme, paged = false}) {
@@ -69,7 +69,7 @@ async function review(browser, {viewport, theme, paged = false}) {
   await page.route(url => url.pathname.startsWith('/api/v2/rules') || url.pathname.startsWith('/api/v2/rule-sources'), route => {
     const p = new URL(route.request().url()).pathname;
     const body = p === '/api/v2/rules/stats' ? {checks_today: 12, unchecked_today: 0, blocked_today: 1, hits_today: 2, usd_left: 48.2, on: true}
-      : p === '/api/v2/rules/counts' ? {internal: 1, external: 0, due: 0, suggested: 0}
+      : p === '/api/v2/rules/counts' ? {internal: 1, external: 0, due_at: 0, suggested: 0}
       : p === '/api/v2/rules/r-eu' ? RULE : p === '/api/v2/rules' ? {rules: [RULE], next_cursor: null} : {sources: [], rules: [], next_cursor: null};
     return route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
   });
@@ -130,7 +130,7 @@ async function review(browser, {viewport, theme, paged = false}) {
         await page.evaluate(() => {
           const host = document.createElement('div');
           host.id = 'rh-sample'; host.style.cssText = 'padding:24px;max-width:720px';
-          host.innerHTML = `<div class="conv-thread">${v2MessageHTML({id: 'm-1', kind: 'notice', from_actor: 'tico', to_actor: 'human:ana', created_at: new Date().toISOString(),
+          host.innerHTML = `<div class="conv-thread">${v2MessageHTML({id: 'm-1', kind: 'notice', sender_id: 'tico', recipient_id: 'human:ana', created_at: new Date().toISOString(),
               body: "Support Bot's reply was held: it broke the rule 'Acme data stays in the EU.'", refs: {org_rule: {hold: 'h-2', bot: 'support'}}})}</div>`;
           document.querySelector('#main').replaceChildren(host);
         });

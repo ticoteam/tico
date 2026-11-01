@@ -25,8 +25,8 @@ def tickets(c, typ, owner, n):
 
 
 def told(c):
-    return sorted((m["to_actor"], m["body"].split(" (")[0]) for m in c.execute(
-        "SELECT to_actor, body FROM messages WHERE body LIKE 'Backlog:%'"))
+    return sorted((m["recipient_id"], m["body"].split(" (")[0]) for m in c.execute(
+        "SELECT recipient_id, body FROM messages WHERE body LIKE 'Backlog:%'"))
 
 
 def later(hours):
@@ -95,7 +95,7 @@ def test_a_ticket_a_restricted_bot_asked_for_is_not_counted(api):
         restrict(c, "cpo", people=["human:ana"])
         typ = board(c, {"over": 3, "per": "step", "notify": ["manager"]})
         [asked] = tickets(c, typ, "bot:ops", 1)
-        c.execute("UPDATE tasks SET requester='bot:cpo' WHERE id=?", (asked["id"],))
+        c.execute("UPDATE tasks SET requester_id='bot:cpo' WHERE id=?", (asked["id"],))
         H.task_create(c, "human:ana", "Ticket bot:ops 1", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
         H.task_create(c, "human:ana", "Ticket bot:ops 2", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
         H.task_create(c, "human:ana", "Ticket bot:ops 3", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)

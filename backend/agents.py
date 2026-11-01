@@ -329,7 +329,7 @@ def listing(c, who, auth):
     slugs = [r["bot"] for r in rows]
     # One access pass and one config read for the whole list (operations embeds this on every load).
     access = auth.bot_accesses(c, who, slugs) if slugs else {}
-    operators = {r["bot"]: r["operator"] for r in read_cache.configs(c, slugs)}
+    operators = {r["bot"]: r["owner_id"] for r in read_cache.configs(c, slugs)}
     out = []
     for record in rows:
         # bot_accesses answers every slug asked for; a missing one denies rather than allows.

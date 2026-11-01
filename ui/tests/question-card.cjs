@@ -14,18 +14,18 @@ const PICKS = [
   {label: 'Pages', then: 'Home, pricing and docs get the chat'},
   {label: 'Spend cap', then: 'Chat stops for the day at $10', recommended: true},
 ];
-const question = (id, over = {}) => ({id, kind: 'question', title: 'Website sales chat picks', body: BODY, owner: 'bot:writer',
-  requester: 'bot:writer', status: 'waiting', waiting_on: 'human:ana', version: 2, created_at: at(80), updated_at: at(72), open_asks: 1,
+const question = (id, over = {}) => ({id, kind: 'question', title: 'Website sales chat picks', body: BODY, owner_id: 'bot:writer',
+  requester_id: 'bot:writer', status: 'waiting', waiting_on: 'human:ana', version: 2, created_at: at(80), updated_at: at(72), open_asks: 1,
   labels: [], tags: [], links: [], lane: 'company', rank: null, parts: {total: 0, done: 0}, why: "Engineering can't start until these are set.",
   holds_up: {id: 'r-chat', title: 'Website sales chat build', kind: 'roadmap', step: 'Building'}, tier: 1,
-  ask: {id: 'q-' + id, from_actor: 'bot:writer', to_actor: 'human:ana', body: 'Website sales chat: go with these picks?', created_at: at(72),
+  ask: {id: 'q-' + id, sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Website sales chat: go with these picks?', created_at: at(72),
     goes_ahead_at: '2026-10-23T16:00:00.000000Z',
     refs: {task: id, questions: [{id: 'decision', header: '', question: 'Website sales chat: go with these picks?', multi: true, other: true,
       why: "Engineering can't start until these are set.", options: PICKS}], if_no_answer: {do: 'It stays a draft', kind: 'reversible'}}},
   ...over});
-const stuck = {id: 't-stuck', kind: 'question', title: 'Is this still moving?', body: '', owner: 'bot:writer', requester: 'bot:writer',
+const stuck = {id: 't-stuck', kind: 'question', title: 'Is this still moving?', body: '', owner_id: 'bot:writer', requester_id: 'bot:writer',
   status: 'waiting', version: 1, created_at: at(2), updated_at: at(2), open_asks: 1, from_person: 'human:ana', tier: 2,
-  ask: {id: 'q-stuck', from_actor: 'keeper', to_actor: 'human:ana', body: 'No progress for 60 min after a status check.', created_at: at(2),
+  ask: {id: 'q-stuck', sender_id: 'keeper', recipient_id: 'human:ana', body: 'No progress for 60 min after a status check.', created_at: at(2),
     refs: {questions: [{id: 'stuck', header: 'Stuck', question: 'Keep going or stop?', multi: false, other: true,
       options: [{label: 'Keep going', then: 'The bot is woken again'}, {label: 'Stop', then: 'The task is closed'}]}]}}};
 

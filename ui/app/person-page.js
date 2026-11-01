@@ -317,8 +317,8 @@ async function personSlackLoad(p) {
       return `<div class="conv-bots-one"><div class="conv-run-head">${avatar(t.bot, 20, stateOf(t.bot))}
           <a href="#/bot/${encodeURIComponent(t.bot)}">${esc(t.display_name || botDisplayName(t.bot))}</a>
           <span class="spacer" style="flex:1"></span><span class="tnum">${esc(ago(t.last_message_at))}</span></div>
-        ${msgs.map(m => `<div class="bubble ${String(m.from_actor || '').startsWith('bot:') ? 'bot reply' : 'you'}">
-            <span class="who">${esc(actorLabel(m.from_actor))}</span>
+        ${msgs.map(m => `<div class="bubble ${String(m.sender_id || '').startsWith('bot:') ? 'bot reply' : 'you'}">
+            <span class="who">${esc(actorLabel(m.sender_id))}</span>
             ${m.refs?.read_back ? `<div class="read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`
               : `<div class="md">${safeMd(m.body || '')}</div>`}${chatCopyHTML(m.body)}</div>`).join('') || '<div class="empty">No messages yet.</div>'}
         </div>`;

@@ -32,7 +32,7 @@ def stuck(c, at=None):
                      "AND b.created_at<? ORDER BY b.created_at", (cutoff,)).fetchall()
     out = []
     for row in rows:
-        queued = c.execute("SELECT count(*) n, min(created_at) oldest FROM jobs WHERE bot=? AND state='queued'",
+        queued = c.execute("SELECT count(*) n, min(created_at) oldest FROM jobs WHERE bot_id=? AND state='queued'",
                            (row["id"],)).fetchone()
         where = c.execute("SELECT r.label FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
                           (row["id"],)).fetchone()

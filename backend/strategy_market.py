@@ -57,8 +57,8 @@ def _days():
 def _current(c, where, args):
     today, _ = _days()
     return H._rows(c.execute(
-        "SELECT * FROM market_edges WHERE (since IS NULL OR substr(since,1,10)<=?) AND (until IS NULL OR "
-        f"substr(until,1,10)>=?) AND ({where})", (today, today, *args)))
+        "SELECT * FROM market_edges WHERE (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR "
+        f"substr(valid_until_on,1,10)>=?) AND ({where})", (today, today, *args)))
 
 
 def _end(c, actor, edge, ev):

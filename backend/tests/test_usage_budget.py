@@ -58,7 +58,7 @@ def big_org(api, first, last, groups_=8):
             slug = f"acme-bot-{n:03d}"
             c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                       "VALUES(?,?,?,?,?,?,'','keeper','active',?)", (slug, slug, slug, "fake", "m", "", H.now()))
-            c.execute("INSERT INTO bot_config(bot,config,operator,team) VALUES(?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,owner_id,team) VALUES(?,?,?,?)",
                       (slug, encode({"name": slug}), "ana", teams[n % len(teams)]))
             c.execute("INSERT INTO turns(id,bot,started_at,finished_at,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
                       (H.new_id(), slug, H.now(), H.now(), 0.25, "api"))

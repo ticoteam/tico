@@ -51,7 +51,7 @@ def environment(tmp_path):
             H.sync_registry(c, BOTS, roster)
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode(roster),))
             for slug, config in BOTS.items():
-                c.execute("INSERT INTO bot_config(bot,config,team,operator,repo) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,owner_id,repo) VALUES(?,?,?,?,?)",
                           (slug, encode(config), None, "riley" if slug == "support" else "morgan",
                            REPOS[slug]))
         return client

@@ -36,7 +36,7 @@ def fake(api):
 def events(api, actor):
     with api.app.state.store.read() as c:
         return [(r["target"], json.loads(r["detail"])) for r in c.execute(
-            "SELECT target, detail FROM events WHERE action='judge.call' AND actor=? ORDER BY ts", (actor,))]
+            "SELECT target, detail FROM events WHERE action='judge.call' AND actor=? ORDER BY created_at", (actor,))]
 
 
 def test_a_person_or_a_bot_judges_and_the_audit_keeps_the_answers_not_the_state(api):

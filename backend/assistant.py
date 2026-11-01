@@ -125,7 +125,7 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         owner = str(fields.get("owner") or "").strip()
         return _mine(actor, owner) or bool(direct and (owner.startswith("human:")
                                                        or (to_bot and to_bot(owner))))
-    if "owner" in fields and not _mine(actor, fields["owner"]):
+    if "owner_id" in fields and not _mine(actor, fields["owner"]):
         return False
     return bool(owns and owns(updating.group(1), False))
 
@@ -275,7 +275,7 @@ def require_addressed(c, who, path, body):
             message_id = m.group(1)
         else:
             continue
-        if (H.message(c, message_id) or {}).get("to_actor") != who.actor:
+        if (H.message(c, message_id) or {}).get("recipient_id") != who.actor:
             raise Problem("forbidden", "That approval or question is not addressed to you", 403)
 
 
@@ -388,17 +388,17 @@ def approval_words(c, who, cited, assistant_bot, approval):
     words = str(msg.get("body") or "").strip()
     room, at = msg.get("conversation_id"), str(msg.get("created_at") or "")
     back = None
-    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created_at>? AND id<>? "
+    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND id<>? "
                       "AND deleted_at IS NULL LIMIT 1", (room, who.actor, at, cited)).fetchone()
     if len(words) <= 60 and AFFIRM.fullmatch(words) and not later:
-        before = c.execute("SELECT created_at FROM messages WHERE conversation_id=? AND from_actor=? AND created_at<? "
+        before = c.execute("SELECT created_at FROM messages WHERE conversation_id=? AND sender_id=? AND created_at<? "
                            "AND id<>? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
                            (room, who.actor, at, cited)).fetchone()
-        last = c.execute("SELECT m.id, m.from_actor, m.body, e.detail FROM messages m LEFT JOIN events e "
-                         "ON e.target=m.id AND e.action=? WHERE m.conversation_id=? AND m.from_actor<>? AND m.created_at>=? AND m.created_at<=? "
+        last = c.execute("SELECT m.id, m.sender_id, m.body, e.detail FROM messages m LEFT JOIN events e "
+                         "ON e.target=m.id AND e.action=? WHERE m.conversation_id=? AND m.sender_id<>? AND m.created_at>=? AND m.created_at<=? "
                          "AND m.id<>? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
                          (READ_BACK, room, who.actor, before["created_at"] if before else "", at, cited)).fetchone()
-        if last and last["from_actor"] == bot and last["detail"]:
+        if last and last["sender_id"] == bot and last["detail"]:
             back = {"body": last["body"], "approves": (json.loads(last["detail"]) or {}).get("approves") or []}
     if not back or approval not in back["approves"]:
         raise Problem("approve_not_asked", "Approving needs the person's yes to your read-back: post the list with "
@@ -423,9 +423,9 @@ def instruction(c, who, ref):
     room = H.conversation(c, msg["conversation_id"]) if msg else None
     refs = (msg or {}).get("refs") or {}
     # Only the person's own Assistant room: the owner's earlier Strategy Bot chat (`rooms.STRATEGY_ROOM`) is history.
-    if (not msg or msg["from_actor"] != who.actor or msg["kind"] != "say" or not refs.get("assistant")
+    if (not msg or msg["sender_id"] != who.actor or msg["kind"] != "say" or not refs.get("assistant")
             or refs.get("via") or not room or room.get("scope") != rooms.PERSONAL
-            or room.get("owner_actor") != who.actor or room.get("room_key") != rooms.ASSISTANT_ROOM
+            or room.get("owner_id") != who.actor or room.get("room_key") != rooms.ASSISTANT_ROOM
             or room.get("closed_at")):
         refuse("Cite a message the person sent you in their own Assistant chat")
     if str(msg["created_at"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
@@ -446,7 +446,7 @@ def require_on_task(c, auth, who, path):
         return          # the route answers for a task that is not there
     auth.task_row(c, who, row)
     from . import task_roles
-    people = {row["owner"], row["requester"]} | {a for actors in task_roles.roles_of(c, row["id"]).values()
+    people = {row["owner_id"], row["requester_id"]} | {a for actors in task_roles.roles_of(c, row["id"]).values()
                                                  for a in actors}
     if who.actor not in people:
         raise Problem("on_behalf_of", "That task is another person's: an Assistant acts only on the person's own "
@@ -655,7 +655,7 @@ def describe(c, method, path, body):
 
     def answer_line(mid):
         asked = H.message(c, mid) or {}
-        return (f"Answer {who(asked.get('from_actor'))}'s question “{preview(asked.get('body'), 80)}”"
+        return (f"Answer {who(asked.get('sender_id'))}'s question “{preview(asked.get('body'), 80)}”"
                 + (f", {age(asked['created_at'])}" if asked.get("created_at") else "") + f": {preview(body.get('text'), 120)}")
     diff = []
     m = re.fullmatch(r"/api/v2/tasks/([^/]+)", path)
@@ -920,7 +920,7 @@ def room_bot(settings, room):
 
 
 def find_room(c, actor):
-    row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
+    row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=? "
                     "AND closed_at IS NULL ORDER BY created_at LIMIT 1", (actor, rooms.ASSISTANT_ROOM)).fetchone()
     return H.conversation(c, row["id"]) if row else None
 
@@ -930,7 +930,7 @@ def own_room(c, who, conversation_id):
     if not conversation_id or who.role not in ("owner", "human") or who.via:
         return False
     room = H.conversation(c, conversation_id)
-    return bool(room and room.get("scope") == rooms.PERSONAL and room.get("owner_actor") == who.actor
+    return bool(room and room.get("scope") == rooms.PERSONAL and room.get("owner_id") == who.actor
                 and room.get("room_key") == rooms.ASSISTANT_ROOM and not room.get("closed_at"))
 
 
@@ -971,17 +971,17 @@ def find_strategy_room(c, actor=None):
     row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND room_key=? AND closed_at IS NULL "
                     "ORDER BY created_at LIMIT 1", (rooms.STRATEGY_ROOM,)).fetchone()
     room = H.conversation(c, row["id"]) if row else None
-    return room if room and (actor is None or room.get("owner_actor") == actor) else None
+    return room if room and (actor is None or room.get("owner_id") == actor) else None
 
 
 def move_strategy_room(c, actor, to):
     """The earlier Strategy Bot chat goes with the owner seat to `to`, the new owner, as history. A card still in it
     is withdrawn: it ran as the old owner, who is no longer the owner."""
     room = find_strategy_room(c)
-    if not room or room.get("owner_actor") == to:
+    if not room or room.get("owner_id") == to:
         return room
-    before = room.get("owner_actor")
-    c.execute("UPDATE conversations SET owner_actor=?, participants=? WHERE id=?",
+    before = room.get("owner_id")
+    c.execute("UPDATE conversations SET owner_id=?, participants=? WHERE id=?",
               (to, json.dumps([to, "bot:" + strategy_bot.SLUG]), room["id"]))
     c.execute("UPDATE assistant_actions SET status='cancelled', decided_at=? WHERE conversation_id=? AND owner=? "
               "AND status='pending'", (H.now(), room["id"], before))
@@ -998,7 +998,7 @@ def migrate(c, settings):
     moved = 0
     for row in c.execute("SELECT a.id, a.owner, a.summary FROM assistant_actions a JOIN conversations v "
                          "ON v.id=a.conversation_id WHERE a.status='pending' AND v.scope='personal' AND v.room_key=? "
-                         "AND a.owner=v.owner_actor ORDER BY a.created_at", (rooms.STRATEGY_ROOM,)).fetchall():
+                         "AND a.owner=v.owner_id ORDER BY a.created_at", (rooms.STRATEGY_ROOM,)).fetchall():
         room = ensure_room(c, row["owner"], settings.assistant_bot)
         c.execute("UPDATE assistant_actions SET conversation_id=? WHERE id=?", (room["id"], row["id"]))
         H._write_message(c, "bot:" + settings.assistant_bot, row["owner"], "Needs your OK: " + row["summary"], room,
@@ -1041,7 +1041,7 @@ OLD_REPO_SUMMARY = re.compile(r"Set .+'s repository access to (own|all|chosen)\b
 
 def action_view(row, c=None):
     result = json.loads(row["result"]) if row.get("result") else None
-    view = {"id": row["id"], "owner": row["owner"], "conversation_id": row["conversation_id"],
+    view = {"id": row["id"], "owner_id": row["owner_id"], "conversation_id": row["conversation_id"],
             "summary": row["summary"], "method": row["method"], "path": row["path"],
             "body": json.loads(row["body"] or "{}"), "status": row["status"],
             "proposed_via": row["proposed_via"], "proposer": row.get("proposer") or row["proposed_via"],
@@ -1351,7 +1351,7 @@ async def fast_bot_today(api, who, bots, slug):
     since = H.shift(H.now(), hours=-24)
     updates = await api.get("updates", bot=bot["id"], limit=10) or {}
     recent = [u for u in updates.get("updates") or [] if str(u.get("created_at") or "") >= since]
-    tasks = await api.get("tasks", owner=bot["id"], limit=100) or {}
+    tasks = await api.get("tasks", owner_id=bot["id"], limit=100) or {}
     touched = [t for t in tasks.get("tasks") or [] if str(t.get("updated_at") or "") >= since]
     lines, links = [], []
     for u in recent[:3]:
@@ -1561,7 +1561,7 @@ def install(app, store, auth, mutate, onboarding):
             said, kind, fast_links = reply, intent, links
             # The canned hello only opens a chat: a "hi" after anything the person said goes to the model, which knows
             # what came before, rather than repeating the same line.
-            if kind == "greeting" and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? LIMIT 1",
+            if kind == "greeting" and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? LIMIT 1",
                                                 (room["id"], who.actor)).fetchone():
                 said, kind, fast_links = None, None, []
             refs = {"assistant": True}
@@ -1653,8 +1653,8 @@ def install(app, store, auth, mutate, onboarding):
         who = own(request)
         since = H.shift(H.now(), days=-max(1, min(days, 90)))
         with store.read() as c:
-            rows = c.execute("SELECT a.id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.decided_by=? "
-                             "AND a.decided_via='assistant' AND m.to_actor=? AND a.decided_at>=? "
+            rows = c.execute("SELECT a.id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.decided_by_id=? "
+                             "AND a.decided_via='assistant' AND m.recipient_id=? AND a.decided_at>=? "
                              "ORDER BY a.decided_at DESC LIMIT 200", (who.actor, who.actor, since)).fetchall()
             out = []
             for r in rows:
@@ -1688,7 +1688,7 @@ def install(app, store, auth, mutate, onboarding):
             lines = []
             for aid in ids:
                 row = H.approval(c, aid)
-                if not row or (H.message(c, row.get("message_id")) or {}).get("to_actor") != who.actor:
+                if not row or (H.message(c, row.get("message_id")) or {}).get("recipient_id") != who.actor:
                     raise Problem("forbidden", "That approval is not addressed to you", 403)
                 if row["decision"]:
                     raise Problem("conflict", f"Approval {aid} is already decided", 409)

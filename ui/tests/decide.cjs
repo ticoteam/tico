@@ -10,22 +10,22 @@ const NOW = Date.now(), at = minutes => new Date(NOW - minutes * 60000).toISOStr
 const NOTE = 'Engineering answer db14c907 resolves initial inquiry 8719e1a6: public example is independent static Larkspur. '
   + 'Docs task Doing; no sample edit/deploy or duplicate human question. <img src=x onerror="window.pwned=1">';
 const PLAIN = "Approve the video tool trial on Thursday? If yes, I'll send the invite.";
-const wait = (id, title, over = {}) => ({id, kind: 'waiting', title, body: '', owner: 'bot:writer', requester: 'bot:botops',
+const wait = (id, title, over = {}) => ({id, kind: 'waiting', title, body: '', owner_id: 'bot:writer', requester_id: 'bot:botops',
   status: 'waiting', waiting_on: 'human:ana', note: NOTE, version: 2, created_at: at(400), updated_at: at(360), ask: null, open_asks: 0,
   person_ask: '', ask_missing: false, lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, ...over});
 const items = [
   // an open question with "or" is not a yes or a no: it opens the task
   wait('t-ask', 'Coordinate the external agent scenario in the example', {created_at: at(500),
-    ask: {id: 'q-1', from_actor: 'bot:writer', to_actor: 'human:ana', body: 'Should the public example show the agent demo, or stay static?', created_at: at(300)}}),
+    ask: {id: 'q-1', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Should the public example show the agent demo, or stay static?', created_at: at(300)}}),
   // a stale ask (unanswered past three days): the card carries one-click Clarify
   wait('t-stale', 'Sync the external agent scenario', {created_at: at(5000), updated_at: at(5000),
-    ask: {id: 'q-stale', from_actor: 'bot:writer', to_actor: 'human:ana', body: 'Should the public example show the agent demo?', created_at: at(5000), stale: true}}),
+    ask: {id: 'q-stale', sender_id: 'bot:writer', recipient_id: 'human:ana', body: 'Should the public example show the agent demo?', created_at: at(5000), stale: true}}),
   wait('t-plain', 'Run the video tool trial', {created_at: at(490), note: PLAIN, person_ask: PLAIN,
     body: 'Run the video tool trial\n\nThe test plan is in the shared folder.'}),
   // set waiting before the rule, with no plain ask: its task, not a card
   wait('t-blank', 'Check the newsletter list', {created_at: at(480), ask_missing: true}),
-  {id: 't-person', kind: 'task', title: 'Read the Q4 board notes', body: 'Read the Q4 board notes\n\nBefore Thursday, please.', owner: 'human:ana',
-    requester: 'human:sam', status: 'open', version: 1, created_at: at(460), updated_at: at(460), ask: null, open_asks: 0,
+  {id: 't-person', kind: 'task', title: 'Read the Q4 board notes', body: 'Read the Q4 board notes\n\nBefore Thursday, please.', owner_id: 'human:ana',
+    requester_id: 'human:sam', status: 'open', version: 1, created_at: at(460), updated_at: at(460), ask: null, open_asks: 0,
     lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}},
 ];
 (async () => {
@@ -70,9 +70,9 @@ const items = [
     // The card says whose request it is when that is not the name it shows.
     assert.deepEqual(await page.evaluate(() => ({
       order: decideCards([
-        {id: 'bot-made', kind: 'waiting', owner: 'bot:writer', requester: 'bot:writer', waiting_on: 'human:ana', created_at: '2026-01-01T00:00:00Z'},
-        {id: 'for-sam', kind: 'task', owner: 'human:ana', requester: 'bot:writer', from_person: 'human:sam', created_at: '2026-01-03T00:00:00Z'},
-        {id: 'overdue', kind: 'waiting', owner: 'bot:writer', requester: 'bot:writer', waiting_on: 'human:ana', pressing: true, created_at: '2026-01-02T00:00:00Z'},
+        {id: 'bot-made', kind: 'waiting', owner_id: 'bot:writer', requester_id: 'bot:writer', waiting_on: 'human:ana', created_at: '2026-01-01T00:00:00Z'},
+        {id: 'for-sam', kind: 'task', owner_id: 'human:ana', requester_id: 'bot:writer', from_person: 'human:sam', created_at: '2026-01-03T00:00:00Z'},
+        {id: 'overdue', kind: 'waiting', owner_id: 'bot:writer', requester_id: 'bot:writer', waiting_on: 'human:ana', pressing: true, created_at: '2026-01-02T00:00:00Z'},
       ]).map(c => c.key),
       cue: [decideFromPerson({from_person: 'human:sam'}, 'bot:writer'), decideFromPerson({from_person: 'human:ana'}, 'bot:writer'),
         decideFromPerson({from_person: 'human:sam'}, 'human:sam'), decideFromPerson({}, 'bot:writer')],
@@ -80,15 +80,15 @@ const items = [
     // A 4-day-old question and a 1-hour-old one that holds up a roadmap item at Building: the Building one is first.
     // Something due, or going ahead on its own, within two working days goes ahead of both (backend/views.py decide_tier).
     assert.deepEqual(await page.evaluate(() => decideCards([
-      {id: 'old', kind: 'waiting', owner: 'bot:writer', waiting_on: 'human:ana', created_at: new Date(Date.now() - 96 * 3600e3).toISOString(), tier: 2},
-      {id: 'building', kind: 'waiting', owner: 'bot:writer', waiting_on: 'human:ana', created_at: new Date(Date.now() - 3600e3).toISOString(), tier: 1},
-      {id: 'due', kind: 'waiting', owner: 'bot:writer', waiting_on: 'human:ana', created_at: new Date(Date.now() - 200 * 3600e3).toISOString(), tier: 0},
+      {id: 'old', kind: 'waiting', owner_id: 'bot:writer', waiting_on: 'human:ana', created_at: new Date(Date.now() - 96 * 3600e3).toISOString(), tier: 2},
+      {id: 'building', kind: 'waiting', owner_id: 'bot:writer', waiting_on: 'human:ana', created_at: new Date(Date.now() - 3600e3).toISOString(), tier: 1},
+      {id: 'due', kind: 'waiting', owner_id: 'bot:writer', waiting_on: 'human:ana', created_at: new Date(Date.now() - 200 * 3600e3).toISOString(), tier: 0},
     ]).map(c => c.key)), ['task:due', 'task:building', 'task:old']);
     // A yes or no, an option, an approval, a stale check, a question outside a task, or a recommendation: a card.
     // Anything else opens whole.
     assert.deepEqual(await page.evaluate(() => [
       {id: 'a', kind: 'approval'}, {id: 'b', kind: 'ask'}, {id: 'c', kind: 'stale'},
-      {id: 'd', kind: 'task', owner: 'human:ana', recommend: {ask: 'q', do: 'Gusto'}}, {id: 'e', kind: 'task', owner: 'human:ana'},
+      {id: 'd', kind: 'task', owner_id: 'human:ana', recommend: {ask: 'q', do: 'Gusto'}}, {id: 'e', kind: 'task', owner_id: 'human:ana'},
     ].map(decideCardKey)), ['approval:a', 'ask:b', 'stale:c', 'task:d', '']);
 
     // An old link to one item: Needs you, with that item's card open over it, full screen.

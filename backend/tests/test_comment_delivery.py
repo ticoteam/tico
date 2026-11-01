@@ -17,7 +17,7 @@ def world(api, goals=True):
     post(api, "runners/heartbeat", {"version": "test", "platform": "test",
          "capabilities": ["task_lanes_v2", "session_roots_v1", "task_goals_v1"], "readiness": {
          "schema_version": 1, "bots": {"ops": {"ready": True, "runtime": "codex", "goals": goals}}}}, machine["token"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Plan the launch", "body": "For the team."})
     return machine, task["id"]
 
 
@@ -78,13 +78,13 @@ def test_defer_wakes_nobody_and_keeps_a_deadline(api):
     held = post(api, f"tasks/{tid}/comments", {"text": "Billing first.", "delivery": "defer"})
     assert held["woke"] is False and job_state(api, held["comment"]["id"]) is None
     [row] = deferrals(api, held["comment"]["id"])
-    assert row["kind"] == "comment" and row["task_id"] == tid and row["due"] >= H.shift(before, hours=24)
-    assert held["sent_as"] == {"delivery": "defer", "until": row["due"]}
+    assert row["kind"] == "comment" and row["task_id"] == tid and row["due_at"] >= H.shift(before, hours=24)
+    assert held["sent_as"] == {"delivery": "defer", "until": row["due_at"]}
 
     timed = post(api, f"tasks/{tid}/comments", {"text": "Then the docs.", "delivery": "defer", "defer_for": "30m"})
-    assert deferrals(api, timed["comment"]["id"])[0]["due"] < H.shift(before, hours=1)
+    assert deferrals(api, timed["comment"]["id"])[0]["due_at"] < H.shift(before, hours=1)
     never = post(api, f"tasks/{tid}/comments", {"text": "Some day.", "delivery": "defer", "defer_for": "never"})
-    assert deferrals(api, never["comment"]["id"])[0]["due"] is None and never["sent_as"]["until"] is None
+    assert deferrals(api, never["comment"]["id"])[0]["due_at"] is None and never["sent_as"]["until"] is None
 
 
 def forwarded(turn, after):
@@ -144,7 +144,7 @@ def test_the_send_says_which_ways_a_reader_may_deliver(api):
     assert isinstance(cd["steers"], bool) and cd["goal"] is True
 
     # A person's task with no bot on it: nothing to deliver to.
-    person = post(api, "tasks", {"owner": "human:ana", "title": "Call the venue", "body": "Ask about Friday."})
+    person = post(api, "tasks", {"owner_id": "human:ana", "title": "Call the venue", "body": "Ask about Friday."})
     assert get(api, f"tasks/{person['id']}")["comment_delivery"] == {
         "default": None, "default_for": None, "steer": False, "queue": False, "steers": False, "goal": False}
 

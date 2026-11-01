@@ -249,7 +249,7 @@ def test_due_dates_wait_for_finance_and_the_bookkeeper_then_seed_once(store):
             rules = c.execute("SELECT COUNT(*) FROM org_rules WHERE id=? AND kind='external' AND status='active'",
                               (rule_id,)).fetchone()[0]
             dues = [(str(r[0]), str(r[1]), str(r[2]), r[3]) for r in c.execute(
-                "SELECT owner, repeats, first_due, routine_id FROM rule_due_dates WHERE rule_id=?", (rule_id,))]
+                "SELECT owner, repeats, first_due_on, routine_id FROM rule_due_dates WHERE rule_id=?", (rule_id,))]
             assert rules == 1, key
             assert len(dues) == 1, key
             owner, repeats, first_due, routine_id = dues[0]

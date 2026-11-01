@@ -1003,7 +1003,7 @@ def install_github_app(app, settings, store):
         if who.role == "bot":
             attempts = [who.attempt_id] if who.actor == "bot:" + BOTOPS and not who.via and who.attempt_id else []
         elif who.role == "runner":
-            attempts = [r["id"] for r in c.execute("SELECT id FROM attempts WHERE bot=? AND runner_id=? "
+            attempts = [r["id"] for r in c.execute("SELECT id FROM attempts WHERE bot_id=? AND runner_id=? "
                                                    "AND state IN ('leased','running')", (BOTOPS, who.runner_id))]
         else:
             attempts = []

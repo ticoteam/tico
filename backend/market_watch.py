@@ -45,9 +45,9 @@ ACTOR = H.KEEPER            # who writes what a check finds
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS market_watches (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, url TEXT NOT NULL, "
-    "kind TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT, checked TEXT, changed TEXT, "
+    "kind TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT, checked_at TEXT, changed_at TEXT, "
     "last_hash TEXT, last_text TEXT, last_status TEXT, error TEXT)",
-    "CREATE INDEX IF NOT EXISTS market_watches_active ON market_watches(active, checked)",
+    "CREATE INDEX IF NOT EXISTS market_watches_active ON market_watches(active, checked_at)",
     "CREATE INDEX IF NOT EXISTS market_watches_entity ON market_watches(entity_id)",
 )
 
@@ -206,7 +206,7 @@ def due(c, limit=BATCH):
     """The active watches to read now, the longest unchecked first (never checked first of all)."""
     return [dict(r) for r in c.execute(
         "SELECT id, entity_id, url, kind FROM market_watches WHERE active=1 "
-        "ORDER BY checked IS NOT NULL, checked, id LIMIT ?", (limit,))]
+        "ORDER BY checked_at IS NOT NULL, checked_at, id LIMIT ?", (limit,))]
 
 
 def record(c, watch, result):
@@ -216,22 +216,22 @@ def record(c, watch, result):
         return False                # stopped while it was being read
     now = H.now()
     if result["status"] != "ok":
-        c.execute("UPDATE market_watches SET checked=?, last_status=?, error=? WHERE id=?",
+        c.execute("UPDATE market_watches SET checked_at=?, last_status=?, error=? WHERE id=?",
                   (now, result["status"], result.get("error") or "", row["id"]))
         return False
     text = result["text"]
     fresh = digest(text)
     if row["last_hash"] is None:    # the baseline
-        c.execute("UPDATE market_watches SET checked=?, last_status='ok', error=NULL, last_hash=?, last_text=? WHERE id=?",
+        c.execute("UPDATE market_watches SET checked_at=?, last_status='ok', error=NULL, last_hash=?, last_text=? WHERE id=?",
                   (now, fresh, text, row["id"]))
         return False
-    c.execute("UPDATE market_watches SET checked=?, last_status='ok', error=NULL WHERE id=?", (now, row["id"]))
+    c.execute("UPDATE market_watches SET checked_at=?, last_status='ok', error=NULL WHERE id=?", (now, row["id"]))
     if row["last_hash"] == fresh:
         return False                # nothing new
     removed, added = changes(row["last_text"] or "", text)
     if size_of(removed, added) < MIN_CHANGE:
         return False                # too small to report; the baseline stays, so slow edits add up
-    c.execute("UPDATE market_watches SET changed=?, last_hash=?, last_text=? WHERE id=?", (now, fresh, text, row["id"]))
+    c.execute("UPDATE market_watches SET changed_at=?, last_hash=?, last_text=? WHERE id=?", (now, fresh, text, row["id"]))
     file_change(c, row, removed, added, fresh)
     return True
 

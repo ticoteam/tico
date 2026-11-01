@@ -41,13 +41,13 @@ def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
                   (encode({"revision": 1, "enabled": ["anthropic", "xai", "openai", "cursor"], "runtime": "claude",
                            "model": "claude-sonnet-5-5", "check_models": ["codex", "claude", "grok", "cursor"]}),))
     computer(api, machine)
-    sub = post(api, "tasks", {"owner": "ops", "title": "Check the import fix", "body": "Read the PR.",
+    sub = post(api, "tasks", {"owner_id": "ops", "title": "Check the import fix", "body": "Read the PR.",
                               "check_model": "auto", "relations": [{"task": parent["id"], "kind": "parent"}]},
                turn["token"])
     assert tuple(check_row(api, sub["id"])) == ("grok", "grok-4.6", "check")
     # Grok signed out on the bot's computer: the next in order.
     computer(api, machine, grok="missing")
-    later = post(api, "tasks", {"owner": "ops", "title": "Check it on another", "body": "Read the PR.",
+    later = post(api, "tasks", {"owner_id": "ops", "title": "Check it on another", "body": "Read the PR.",
                                 "check_model": "auto", "relations": [{"task": parent["id"], "kind": "parent"}]},
                  turn["token"])
     assert tuple(check_row(api, later["id"]))[:2] == ("cursor", "cursor-auto")
@@ -55,7 +55,7 @@ def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE registry_metadata SET value=? WHERE key='providers'",
                   (encode({"revision": 2, "enabled": ["anthropic"], "runtime": "claude", "model": "claude-sonnet-5-5"}),))
-    alone = post(api, "tasks", {"owner": "ops", "title": "Check it again", "body": "Read the PR.", "check_model": "auto",
+    alone = post(api, "tasks", {"owner_id": "ops", "title": "Check it again", "body": "Read the PR.", "check_model": "auto",
                                 "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     assert tuple(check_row(api, alone["id"]))[:2] == ("claude", "claude-sonnet-5-5")
     with api.app.state.store.read() as c:
@@ -66,28 +66,28 @@ def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
 def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says_which(api):
     machine, parent, turn = parent_turn(api)
     finish(api, machine, turn, CLAUDE)          # the parent's work ran on Claude
-    plain = post(api, "tasks", {"owner": "cpo", "title": "Review PR 700", "body": "https://github.com/ticoteam/tico/pull/700",
+    plain = post(api, "tasks", {"owner_id": "cpo", "title": "Review PR 700", "body": "https://github.com/ticoteam/tico/pull/700",
                                 "relations": [{"task": parent["id"], "kind": "parent"}]})
     assert check_row(api, plain["id"]) is None, "a bot not set to review on the check model keeps its own"
     def review_model(value):
         return post(api, "bots/cpo/definition", {"review_model": value, "expected_revision":
                     next(b for b in get(api, "bots") if b["slug"] == "cpo")["revision"]})
     review_model("check")
-    review = post(api, "tasks", {"owner": "cpo", "title": "Review PR 701", "body": "https://github.com/ticoteam/tico/pull/701",
+    review = post(api, "tasks", {"owner_id": "cpo", "title": "Review PR 701", "body": "https://github.com/ticoteam/tico/pull/701",
                                  "relations": [{"task": parent["id"], "kind": "parent"}]})
     assert tuple(check_row(api, review["id"])) == ("grok", "grok-4.6", "review")
     # Its own top-level work is no review of someone else's: its own model.
-    own = post(api, "tasks", {"owner": "cpo", "title": "Write the weekly notes", "body": "As every week."})
+    own = post(api, "tasks", {"owner_id": "cpo", "title": "Write the weekly notes", "body": "As every week."})
     assert check_row(api, own["id"]) is None
     # A subtask under its own task is no one else's work either.
-    mine = post(api, "tasks", {"owner": "cpo", "title": "Split the notes", "body": "Two parts.",
+    mine = post(api, "tasks", {"owner_id": "cpo", "title": "Split the notes", "body": "Two parts.",
                                "relations": [{"task": own["id"], "kind": "parent"}]})
     assert check_row(api, mine["id"]) is None
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_model'", (mine["id"],)).fetchone()
     # A person's task with no runs has no known author: its own model, and the history says why.
-    person = post(api, "tasks", {"owner": "human:ana", "title": "Draft the launch post", "body": "Mine."})
-    unknown = post(api, "tasks", {"owner": "cpo", "title": "Review my draft", "body": "Please.",
+    person = post(api, "tasks", {"owner_id": "human:ana", "title": "Draft the launch post", "body": "Mine."})
+    unknown = post(api, "tasks", {"owner_id": "cpo", "title": "Review my draft", "body": "Please.",
                                   "relations": [{"task": person["id"], "kind": "parent"}]})
     assert check_row(api, unknown["id"]) is None
     with api.app.state.store.read() as c:
@@ -112,11 +112,11 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
     shown = get(api, "tasks/" + review["id"])
     assert shown["check_model"]["model"] == "grok-4.6" and shown["runs"][0]["ran_on"]["family"] == "xai"
     with api.app.state.store.read() as c:
-        notices = [r[0] for r in c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND kind='notice' "
+        notices = [r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:ops' AND kind='notice' "
                                            "AND body LIKE '%Review PR 701%'")]
     assert len(notices) == 1 and "Review done (ran on grok-4.6)" in notices[0], notices
     review_model("own")
-    after = post(api, "tasks", {"owner": "cpo", "title": "Review PR 702", "body": "https://github.com/ticoteam/tico/pull/702",
+    after = post(api, "tasks", {"owner_id": "cpo", "title": "Review PR 702", "body": "https://github.com/ticoteam/tico/pull/702",
                                 "relations": [{"task": parent["id"], "kind": "parent"}]})
     assert check_row(api, after["id"]) is None, "turned off, its reviews run on its own model again"
     # Set again, with only the author's provider on: still reviewed on the check model, and the history says why.
@@ -124,7 +124,7 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE registry_metadata SET value=? WHERE key='providers'",
                   (encode({"revision": 9, "enabled": ["anthropic"], "runtime": "claude", "model": "claude-sonnet-5-5"}),))
-    alone = post(api, "tasks", {"owner": "cpo", "title": "Review PR 703", "body": "https://github.com/ticoteam/tico/pull/703",
+    alone = post(api, "tasks", {"owner_id": "cpo", "title": "Review PR 703", "body": "https://github.com/ticoteam/tico/pull/703",
                                 "relations": [{"task": parent["id"], "kind": "parent"}]})
     assert tuple(check_row(api, alone["id"]))[:2] == ("claude", "claude-sonnet-5-5")
     with api.app.state.store.read() as c:

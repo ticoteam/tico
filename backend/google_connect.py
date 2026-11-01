@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS google_connects(
  kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, holder TEXT, started_at REAL, created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
-CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen_at REAL NOT NULL);
 """
 # The SHA-256 of a grant's refresh token: the one being connected (`pending_hash`, from the exchange) and the one
 # connected (`grant_hash`, once the computer says connected). A fingerprint, never the token.
@@ -244,7 +244,7 @@ def claimable(c, runner_id, holds):
     expire(c)
     elsewhere = c.execute(
         "SELECT 1 FROM google_mail_holders h JOIN runners r ON r.id=h.runner_id AND r.revoked_at IS NULL "
-        "WHERE h.runner_id<>? AND h.holds=1 AND h.seen>? UNION ALL SELECT 1 FROM google_connects g "
+        "WHERE h.runner_id<>? AND h.holds=1 AND h.seen_at>? UNION ALL SELECT 1 FROM google_connects g "
         "JOIN runners r ON r.id=g.holder AND r.revoked_at IS NULL WHERE g.holder<>? LIMIT 1",
         (runner_id, time.time() - HOLDER_SECONDS, runner_id)).fetchone()
     return c.execute(
@@ -356,10 +356,10 @@ def install(app, store, publisher, mutate):
         with store.transaction() as c:
             runner = publisher(c, request.state.identity)
             holds = bool(body and body.holds_mail)
-            c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen) VALUES(?,?,?) ON CONFLICT(runner_id) "
-                      "DO UPDATE SET holds=excluded.holds,seen=excluded.seen", (runner["id"], int(holds), time.time()))
+            c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
+                      "DO UPDATE SET holds=excluded.holds,seen_at=excluded.seen_at", (runner["id"], int(holds), time.time()))
             # Only recent answers count (claimable), so older ones and revoked computers' go.
-            c.execute("DELETE FROM google_mail_holders WHERE seen<? OR runner_id IN "
+            c.execute("DELETE FROM google_mail_holders WHERE seen_at<? OR runner_id IN "
                       "(SELECT id FROM runners WHERE revoked_at IS NOT NULL)", (time.time() - HOLDER_SECONDS,))
             row = claimable(c, runner["id"], holds)
             if not row:

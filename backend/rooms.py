@@ -144,7 +144,7 @@ def room_bot(conversation):
 
 def personal_room(c, human_actor, bot="coo", subject="Private control room"):
     row = c.execute(
-        "SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
+        "SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=? "
         "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1",
         (human_actor, bot)).fetchone()
     if row:
@@ -155,7 +155,7 @@ def personal_room(c, human_actor, bot="coo", subject="Private control room"):
     for candidate in H.conversations_for(c, human_actor, limit=500):
         if (candidate["kind"] == "chat" and not candidate.get("task_id") and not candidate["closed_at"]
                 and set(candidate["participants"]) == pair):
-            c.execute("UPDATE conversations SET scope='personal',owner_actor=?,room_key=? WHERE id=?",
+            c.execute("UPDATE conversations SET scope='personal',owner_id=?,room_key=? WHERE id=?",
                       (human_actor, bot, candidate["id"]))
             return H.conversation(c, candidate["id"])
     # A person's own room opens even while the bot is paused: their message waits for it (hubdb.say).
@@ -192,7 +192,7 @@ def sync_shared_room(c, auth, bot, actor=None, create=False):
             # Preserve the original pair as that person's private archive. Giving each
             # legacy archive its own room key avoids colliding with their active room.
             c.execute(
-                "UPDATE conversations SET scope='personal',owner_actor=?,room_key=?,closed_at=? WHERE id=?",
+                "UPDATE conversations SET scope='personal',owner_id=?,room_key=?,closed_at=? WHERE id=?",
                 (humans[0], f"{bot}:legacy:{old['id']}", H.now(), old["id"]))
             H.event(c, H.KEEPER, "conversation.archived_for_shared_room", old["id"], {"bot": bot})
     opener = actor or next((p for p in participants if p.startswith("human:")), H.KEEPER)
@@ -232,9 +232,9 @@ def work_room(c, auth, bot, requester):
         return sync_shared_room(c, auth, bot, actor=actor, create=True)
     human = requester if str(requester).startswith("human:") else None
     if not human:
-        row = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone()
-        if row and row["operator"] and H.human(c, row["operator"]):
-            human = "human:" + row["operator"]
+        row = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        if row and row["owner_id"] and H.human(c, row["owner_id"]):
+            human = "human:" + row["owner_id"]
     if not human:
         owner = auth.owner_id(c)
         if owner:
@@ -259,7 +259,7 @@ def task_conversation_id(c, auth, owner, requester):
 
 def archive_personal_room(c, actor, bot="coo"):
     row = c.execute(
-        "SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
+        "SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=? "
         "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1",
         (actor, bot)).fetchone()
     if not row:

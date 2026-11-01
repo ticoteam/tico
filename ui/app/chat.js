@@ -271,7 +271,7 @@ function v2RunHTML(m) {
     if (!given.has(id)) rows.push(v2RunRow('task ·', esc(t.title), {task: id}));
   for (const d of run.did || []) {
     if (d.kind === 'task') {
-      const verb = d.owner === m.from_actor ? 'made itself a task' : `gave ${youAware(d.owner)} a task`;
+      const verb = d.owner === m.from_actor ? 'made itself a task' : `gave ${youAware(d.owner_id)} a task`;
       rows.push(v2RunRow(esc(verb) + ' ·', esc(d.title), {task: d.task_id})); said.push(verb);
     } else if (d.kind === 'link') {
       const ref = shortRef(d.url);
@@ -388,17 +388,17 @@ function v2MessageHTML(m) {
   if (m.refs?.org_rule && m.kind === 'notice') return ruleHeldNoteHTML(m);
   if (m.kind === 'notice') return `<div class="chat-system" data-message="${esc(m.id || '')}"><b>Task</b> ${esc(plainActors(m.body))}<div class="chat-meta">${when}</div></div>`;
   // One bot's message to another, landed in a person's room: shown as an aside, not a reply.
-  if (String(m.from_actor || '').startsWith('bot:') && String(m.to_actor || '').startsWith('bot:') && m.to_actor !== m.from_actor)
-    return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>${esc(actorLabel(m.from_actor))} → ${esc(actorLabel(m.to_actor))}</b> · ${esc(chatLine(plainActors(m.body), 80))} ${when}</summary><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></details>`;
-  const pid = actorPerson(m.from_actor);
+  if (String(m.sender_id || '').startsWith('bot:') && String(m.recipient_id || '').startsWith('bot:') && m.recipient_id !== m.sender_id)
+    return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>${esc(actorLabel(m.sender_id))} → ${esc(actorLabel(m.recipient_id))}</b> · ${esc(chatLine(plainActors(m.body), 80))} ${when}</summary><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></details>`;
+  const pid = actorPerson(m.sender_id);
   const mine = !!pid;                       // any person's message sits on the right, under their name
-  const who = mine ? esc(personHandle(pid)) : esc(actorLabel(m.from_actor));
-  const me = m.from_actor === myActor();    // your own lines need no name on a bot's page
+  const who = mine ? esc(personHandle(pid)) : esc(actorLabel(m.sender_id));
+  const me = m.sender_id === myActor();    // your own lines need no name on a bot's page
   // The message a new topic started a fresh session for (backend/topic_change.py): one quiet line above it.
   const fresh = mine && m.refs?.topic_changed ? '<div class="conv-break chat-topic-break" role="separator">Topic changed</div>' : '';
   return `${fresh}<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
     <time class="chat-stamp" datetime="${esc(m.created_at || '')}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>
-    <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : actorChip(m.from_actor)}
+    <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : actorChip(m.sender_id)}
       ${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}
       <span class="spacer" style="flex:1"></span>
       <span class="tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</span></div>
@@ -421,8 +421,8 @@ function v2DeliveryHTML(m) {
   if (!d) return '';
   if (d.mode === 'steer') return `<div class="chat-delivery">Steering this turn</div>`;
   if (d.mode === 'redirect') return '<div class="chat-delivery">Stopping this turn; this message starts the next one</div>';
-  const slug = String(m.to_actor || '').replace(/^bot:/, '');
-  const can = m.from_actor === myActor() && settingsCanManageBot(botRow(slug));
+  const slug = String(m.recipient_id || '').replace(/^bot:/, '');
+  const can = m.sender_id === myActor() && settingsCanManageBot(botRow(slug));
   return `<div class="chat-delivery">Queued for the next turn${can ? ` <button type="button" class="btn sm" data-redirect="${esc(m.id)}" data-redirect-bot="${esc(slug)}" data-redirect-run="${esc(d.run_id)}">Stop and redirect</button>` : ''}</div>`;
 }
 document.addEventListener('click', async ev => {
@@ -441,9 +441,9 @@ document.addEventListener('click', async ev => {
 // task's notes. Side traffic folds into one line per run (v2MessagesHTML); nothing is dropped. Read from the message's
 // fields, never its words: a reply that quotes another bot is still a reply.
 const chatNeedsYou = m => !!(m.refs?.action || m.refs?.credential_request)
-  || !!actorPerson(m.to_actor) && (m.kind === 'ask' || !!m.refs?.approval || !!m.refs?.questions);
+  || !!actorPerson(m.recipient_id) && (m.kind === 'ask' || !!m.refs?.approval || !!m.refs?.questions);
 function chatSideKind(m, slug) {
-  const from = String(m.from_actor || ''), refs = m.refs || {};
+  const from = String(m.sender_id || ''), refs = m.refs || {};
   if (m.elsewhere) return 'bots';                       // a conversation between bots, shown in this chat's timeline
   // A task's start or milestone: its own row in time order (not folded with side traffic), never the conversation's last line.
   if (chatTaskMark(m)) return 'task';
@@ -451,25 +451,25 @@ function chatSideKind(m, slug) {
   if (chatNeedsYou(m) || refs.chat_goal) return '';
   if (refs.note) return 'note';
   // A reply addressed to a person (the bot's answer, or why it could not start) is the conversation.
-  if (m.in_reply_to && actorPerson(m.to_actor)) return '';
+  if (m.in_reply_to && actorPerson(m.recipient_id)) return '';
   const self = slug && (from === `bot:${slug}` || from === `bot:${botBranchChatTarget(slug)}`);
-  if (self && !actorSlug(m.to_actor) && m.to_actor !== 'keeper')
+  if (self && !actorSlug(m.recipient_id) && m.recipient_id !== 'keeper')
     // A loose message sent while a run another bot started was working: that bot's news, passed on (backend/turns.py).
     return m.prompted_by === 'bot' && !refs.turn_id ? 'relay' : '';
   return from === 'keeper' || m.kind === 'notice' ? 'notice' : 'bots';
 }
 // Who a side item is from, as the folded line names it: the other bot in a bot-to-bot message, else the sender.
 function chatSideName(m, slug) {
-  if (m.from_actor === 'keeper') return m.refs?.task ? 'tasks' : actorLabel('keeper');
+  if (m.sender_id === 'keeper') return m.refs?.task ? 'tasks' : actorLabel('keeper');
   const self = [`bot:${slug}`, `bot:${botBranchChatTarget(slug)}`];
-  if (self.includes(m.from_actor) && actorSlug(m.to_actor) && !self.includes(m.to_actor)) return actorLabel(m.to_actor);
-  return actorLabel(m.from_actor);
+  if (self.includes(m.sender_id) && actorSlug(m.recipient_id) && !self.includes(m.recipient_id)) return actorLabel(m.recipient_id);
+  return actorLabel(m.sender_id);
 }
 function chatSideHead(m) {
   if (m.refs?.note) return 'Note' + ((t => t ? ' · ' + t : '')(Object.values(m.ref_tasks || {})[0]?.title || ''));
-  if (m.from_actor === 'keeper') return m.refs?.task ? 'Task' : actorLabel('keeper');
-  const to = m.to_actor && m.to_actor !== m.from_actor ? ' → ' + actorLabel(m.to_actor) : '';
-  return actorLabel(m.from_actor) + to + (m.elsewhere?.subject ? ' · ' + m.elsewhere.subject : '');
+  if (m.sender_id === 'keeper') return m.refs?.task ? 'Task' : actorLabel('keeper');
+  const to = m.recipient_id && m.recipient_id !== m.sender_id ? ' → ' + actorLabel(m.recipient_id) : '';
+  return actorLabel(m.sender_id) + to + (m.elsewhere?.subject ? ' · ' + m.elsewhere.subject : '');
 }
 // About two lines at phone width: longer text, or more than one line of it, gets "Show more".
 const CHAT_SIDE_SHORT = 110;
@@ -512,8 +512,8 @@ function v2MessagesHTML(messages, goalLine, slug = V2C?.slug) {
   const rows = [];
   for (let i = 0; i < feed.length;) {
     if (feed[i].task) {
-      const run = [], from = feed[i].message.from_actor;
-      while (i < feed.length && feed[i].task && feed[i].message.from_actor === from) run.push(feed[i++].message);
+      const run = [], from = feed[i].message.sender_id;
+      while (i < feed.length && feed[i].task && feed[i].message.sender_id === from) run.push(feed[i++].message);
       rows.push(chatTaskRunHTML(run));
       continue;
     }
@@ -602,7 +602,7 @@ function v2Jump(state) {
   if (!state.stick) return '';
   const last = v2Latest(state), fresh = !!last && last !== state.seenLast;
   if (state.stick.atBottom) state.seenLast = last;
-  return fresh && (actorPerson(state.lastMain.from_actor) && !state.live?.text ? 'Latest' : 'New reply');
+  return fresh && (actorPerson(state.lastMain.sender_id) && !state.live?.text ? 'Latest' : 'New reply');
 }
 function v2ChatRender(state) {
   const thread = $('#conv-thread');

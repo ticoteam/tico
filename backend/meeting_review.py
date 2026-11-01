@@ -103,7 +103,7 @@ def install_meeting_review(app, store, auth, mutate):
         with store.read() as c:
             rows = []
             for row in c.execute('SELECT id FROM meetings WHERE review_state=? '
-                                 'AND (?=\'live\' OR owner=? COLLATE NOCASE) ORDER BY created_at DESC',
+                                 'AND (?=\'live\' OR owner_id=? COLLATE NOCASE) ORDER BY created_at DESC',
                                  (review, review, who.email)):
                 try:
                     item = media.view(c, who, row[0])
@@ -122,7 +122,7 @@ def install_meeting_review(app, store, auth, mutate):
         def work(c):
             ids = list(dict.fromkeys(body.ids)) if body.ids is not None else [row[0] for row in c.execute(
                 "SELECT m.id FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
-                "WHERE m.review_state='pending' AND lower(m.owner)=? AND mc.deleted_at IS NULL ORDER BY m.created_at,m.id",
+                "WHERE m.review_state='pending' AND lower(m.owner_id)=? AND mc.deleted_at IS NULL ORDER BY m.created_at,m.id",
                 (who.email.lower(),))]
             # Validate the whole selection before publishing any of it.
             action = 'approve' if body.action == 'approve_all' else 'dismiss'

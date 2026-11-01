@@ -58,7 +58,7 @@ def test_a_stored_needs_onboarding_row_becomes_needs_setup_and_readers_take_both
         c.execute("PRAGMA ignore_check_constraints=ON")     # rows an older release wrote, before the onboarding CHECK
         for slug, state in (("old", "needs_onboarding"), ("new", "needs_setup"), ("done", "onboarded")):
             c.execute("INSERT INTO bots(id,slug,display_name) VALUES(?,?,?)", (slug, slug, slug))
-            c.execute("INSERT INTO bot_config(bot,config,operator,onboarding_state) VALUES(?,?,?,?)", (slug, "{}", "morgan", state))
+            c.execute("INSERT INTO bot_config(bot,config,owner_id,onboarding_state) VALUES(?,?,?,?)", (slug, "{}", "morgan", state))
         c.execute("PRAGMA ignore_check_constraints=OFF")
         c.execute("DELETE FROM cloud_migrations WHERE version=45")             # the state a database is in before this release
     store.initialize()

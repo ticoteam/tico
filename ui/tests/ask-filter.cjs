@@ -11,7 +11,7 @@ const {open} = require('./tasks-page.cjs');
 const SHOTS = process.env.NEEDS_SHOTS || '';
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
-const base = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'human:ana', requester: 'bot:botops', status: 'open',
+const base = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:botops', status: 'open',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const TASKS = [base('t-access', 'Grant ops read access to the billing repo'), base('t-pick', 'Gusto or Rippling for payroll?')];
 const NEEDS = [{...TASKS[1], kind: 'task', need: 'decide'}, {...TASKS[0], kind: 'task', need: 'hands'}];

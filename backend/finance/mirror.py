@@ -1163,7 +1163,7 @@ def _doc_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[
     lines = [{"account": _need(_key(c, cid, "fin_accounts", str(x["account_id"])), f"account {x['account_id']}"),
               "amount": x["amount"], "description": x["description"]} for x in local["lines"]]
     return {"party": _need(_key(c, cid, "fin_contacts", str(local["party"])), f"contact {local['party']}"),
-            "number": local["number"], "day": local["day"], "due": local["due"], "memo": local["memo"], "lines": lines}
+            "number": local["number"], "day": local["day"], "due_at": local["due_at"], "memo": local["memo"], "lines": lines}
 
 
 def _void_out(c: sqlite3.Connection, cid: str, table: str, local: Mapping[str, Any]) -> dict[str, Any]:
@@ -1345,7 +1345,7 @@ def _confirm_document(c: sqlite3.Connection, cid: str, sent: Sent, local: Mappin
         return
     rows = [(str(x["account_id"]), int(x["amount"]), str(x["description"])) for x in local["lines"]]
     # Only the head is read here: the lines come in as rows, and the party as its local id.
-    head = M.Document(ext, party="", number=str(local["number"]), day=str(local["day"]), due=str(local["due"]),
+    head = M.Document(ext, party="", number=str(local["number"]), day=str(local["day"]), due=str(local["due_at"]),
                       total=sum(amount for _, amount, _ in rows), lines=(), memo=str(local["memo"]))
     tags = [dict(x.get("tags") or {}) for x in local["lines"]]
     _write_document(c, load(c, now), cid, head, M.CREATE, row, str(local["party"]), rows, now, tags)

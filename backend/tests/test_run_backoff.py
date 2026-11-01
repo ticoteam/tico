@@ -38,7 +38,7 @@ def setup(api, monkeypatch, tasks=8, when="2026-10-24T12:00:00.000000Z"):
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     for n in range(tasks):
-        post(api, "tasks", {"owner": "ops", "title": f"Review change {n}", "body": "Please review it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Review change {n}", "body": "Please review it."})
     return machine
 
 
@@ -103,8 +103,8 @@ def test_a_prompt_too_large_to_send_compacts_first_then_starts_a_fresh_session_a
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
         assert H.status(c, "ops") is not None
-        task = c.execute("SELECT title,owner,status FROM tasks WHERE title LIKE '%failed runs in a row'").fetchone()
-        assert task["owner"] == "human:ana" and task["status"] in H.ACTIVE_STATUSES
+        task = c.execute("SELECT title,owner_id,status FROM tasks WHERE title LIKE '%failed runs in a row'").fetchone()
+        assert task["owner_id"] == "human:ana" and task["status"] in H.ACTIVE_STATUSES
         found = [f for f in health_monitor.findings(c, api.app.state.store.settings) if f["check_id"] == "run_hold"]
         assert len(found) == 1 and "ops" in found[0]["title"]
     # Only someone who manages the bot releases it; one action clears the hold and its Needs-you item.
@@ -211,7 +211,7 @@ def test_a_try_that_completes_releases_the_bot_and_closes_its_item_and_a_person_
     post(api, "chat/ops", {"text": "Are you there?"})
     tick(api, machine, monkeypatch, H.shift(held, seconds=run_backoff.PROBE_FIRST + 1))
     probe = claim(api, machine)
-    assert probe and probe["message"]["from_actor"] == "human:ana"       # the person's message rides the first try
+    assert probe and probe["message"]["sender_id"] == "human:ana"       # the person's message rides the first try
     complete(api, machine, probe)
     with api.app.state.store.read() as c:
         state = run_backoff.get(c, "ops")
@@ -265,7 +265,7 @@ def test_a_bot_over_its_run_budget_is_held_but_a_persons_message_still_runs_unti
     assert held["words"] == ("Tico stopped ops: 3 runs in the last hour. This looks like a runaway loop, not normal "
                              "work. Check its last runs, then release it or raise its budget.")
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] >= 3  # kept
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] >= 3  # kept
         assert c.execute("SELECT status FROM tasks WHERE title LIKE '%runs in the last hour'").fetchone()
     post(api, "chat/ops", {"text": "Please look at this now."})
     person = claim(api, machine)
@@ -296,7 +296,7 @@ def test_a_persons_message_runs_through_the_wait_and_its_failure_counts(api, mon
     post(api, "chat/ops", {"text": "Are you there?"})
     ready(api, machine, ["ops"])
     mine = claim(api, machine)
-    assert mine and mine["message"]["from_actor"] == "human:ana"         # the person's retry does not wait
+    assert mine and mine["message"]["sender_id"] == "human:ana"         # the person's retry does not wait
     fail(api, machine, mine, TOO_BIG)
     with api.app.state.store.read() as c:
         assert run_backoff.get(c, "ops")["fails"] == 2

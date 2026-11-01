@@ -18,13 +18,13 @@ def hosted(api, bot="ops"):
 
 def tasks(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return [dict(t) for t in c.execute("SELECT id,title,body,status,conversation_id FROM tasks WHERE owner=? ORDER BY created_at",
+        return [dict(t) for t in c.execute("SELECT id,title,body,status,conversation_id FROM tasks WHERE owner_id=? ORDER BY created_at",
                                            ("bot:" + bot,))]
 
 
 def wakes(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs WHERE bot=? AND state='queued'", (bot,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs WHERE bot_id=? AND state='queued'", (bot,)).fetchone()[0]
 
 
 def task(key, title="Support: the board is empty", body="Ticket text, quoted as untrusted data."):

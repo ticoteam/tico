@@ -114,7 +114,7 @@ def test_decline_someone_else_and_a_lost_right_never_commit(books):
         assert (FA.approval_decided(c, no.approval_id, AT).status) == "denied"
         other = _coder_asks(c, parent, "k-other", 4_000)
         H.approval_decide(c, "human:cara", other.approval_id, "approved")
-        c.execute("UPDATE approvals SET decided_by='human:dan' WHERE id=?", (other.approval_id,))
+        c.execute("UPDATE approvals SET decided_by_id='human:dan' WHERE id=?", (other.approval_id,))
         assert FA.approval_decided(c, other.approval_id, AT).status == "denied"
         late = _coder_asks(c, parent, "k-late", 3_000)
         H.approval_decide(c, "human:cara", late.approval_id, "approved")

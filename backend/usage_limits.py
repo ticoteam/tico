@@ -505,8 +505,8 @@ def after_run(c, bot, owner_email="", at=None):
 
 def recipients(c, bot, owner_email=""):
     """The person to tell: the bot's operator, else the company owner."""
-    row = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone() if bot else None
-    person = H.human(c, row["operator"]) if row and row["operator"] else None
+    row = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (bot,)).fetchone() if bot else None
+    person = H.human(c, row["owner_id"]) if row and row["owner_id"] else None
     if not person and owner_email:
         owner = c.execute("SELECT id FROM humans WHERE lower(email)=?", (owner_email.lower(),)).fetchone()
         person = H.human(c, owner["id"]) if owner else None

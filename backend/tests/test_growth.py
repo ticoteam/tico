@@ -145,7 +145,7 @@ def test_a_bot_files_and_edits_its_own_idea_but_not_another_bots(api):
     post(api, f"growth/ideas/{tid}/score", {"i": 1, "c": 1, "e": 1}, token=finance, expected=403)
     post(api, f"growth/ideas/{tid}/score", {"i": 11, "c": 1, "e": 1}, token=ops, expected=422)
     assert post(api, f"growth/ideas/{tid}/score", {"i": 9, "c": 9, "e": 9}, token="ben-test")["idea"]["ice"] == 9.0
-    plain = post(api, "tasks", {"owner": "ops", "title": "Clean the van", "body": "Clean it."})
+    plain = post(api, "tasks", {"owner_id": "ops", "title": "Clean the van", "body": "Clean it."})
     get(api, f"growth/ideas/{plain['id']}", expected=404)
 
 
@@ -196,7 +196,7 @@ def test_idea_test_and_verdict_close_the_task_and_count_as_bet_evidence(api):
 def test_working_lists_open_subtasks_of_ideas(api):
     ops = bot(api, "ops")
     made = post(api, "growth/ideas", {"title": "Door hangers in Elm Park"}, token=ops)["idea"]
-    sub = post(api, "tasks", {"owner": "ops", "title": "Print 500 door hangers", "body": "Print them.",
+    sub = post(api, "tasks", {"owner_id": "ops", "title": "Print 500 door hangers", "body": "Print them.",
                               "relations": [{"task": made["task_id"], "kind": "parent"}]}, token=ops)
     items = get(api, "growth/working")["items"]
     assert [(i["task_id"], i["idea_task_id"]) for i in items] == [(sub["id"], made["task_id"])]
@@ -221,7 +221,7 @@ def test_the_total_weighs_profit_per_cohort_and_a_hidden_kpis_guardrail_stays_hi
     add_channel(api, guardrail_kpi_id=kpi["id"], guardrail_max=5)
     with api.app.state.store.transaction() as c:
         assert [g["kpi_id"] for g in G.guardrails(c)] == [kpi["id"]]
-        c.execute("UPDATE kpis SET owner='bot:acme-helper' WHERE id=?", (kpi["id"],))
+        c.execute("UPDATE kpis SET owner_id='bot:acme-helper' WHERE id=?", (kpi["id"],))
         assert G.guardrails(c, {"bot:acme-helper"}) == []
 
 
@@ -257,7 +257,7 @@ def test_a_kpi_says_whether_the_caller_may_edit_it_and_an_unreadable_one_has_no_
     kpi = post(api, "kpis", {"name": "Refund rate"})["kpi"]
     hidden = post(api, "kpis", {"name": "Inbox depth"})["kpi"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE kpis SET owner='bot:inbox' WHERE id=?", (hidden["id"],))   # the fixture restricts inbox to Ana
+        c.execute("UPDATE kpis SET owner_id='bot:inbox' WHERE id=?", (hidden["id"],))   # the fixture restricts inbox to Ana
     may = lambda token: {k["id"]: k["may_edit"] for k in get(api, "growth/kpis", token)["kpis"]}   # noqa: E731
     assert may("ana-test") == {kpi["id"]: True, hidden["id"]: True}
     assert may("cara-test") == {kpi["id"]: False} and may(bot(api, "ops"))[kpi["id"]] is False
@@ -317,7 +317,7 @@ def test_migration_starts_segments_the_graph_already_marks_us_or_next(tmp_path):
                      "VALUES (?, 'segment', ?, ?, 'active', 'x', 'x', 'x')", (sid, sid.split("/")[1].title(), props))
     conn.execute("INSERT INTO market_edges (id, src, rel, dst, created_at, created_by, updated_at) VALUES "
                  "('e1','company/self','operates_in','segment/homes','x','x','x')")
-    conn.execute("INSERT INTO market_edges (id, src, rel, dst, until, created_at, created_by, updated_at) VALUES "
+    conn.execute("INSERT INTO market_edges (id, src, rel, dst, valid_until_on, created_at, created_by, updated_at) VALUES "
                  "('e2','company/self','operates_in','segment/hotels','2020-01-01','x','x','x')")   # ended: not Us
     H.migrate(conn)
     rows = {r["segment_id"]: r["status"] for r in conn.execute("SELECT segment_id, status FROM growth_segments")}
@@ -476,7 +476,7 @@ def test_a_member_cannot_move_the_north_star_off_a_kpi_they_may_not_edit_nor_rea
     post(api, f"kpis/{company['id']}", {"growth_role": "north_star"})
     own = post(api, "kpis", {"name": "Cara's signups"})["kpi"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE kpis SET owner='human:cara' WHERE id=?", (own["id"],))
+        c.execute("UPDATE kpis SET owner_id='human:cara' WHERE id=?", (own["id"],))
     refused = post(api, f"kpis/{own['id']}", {"growth_role": "north_star"}, token="cara-test", expected=403)
     assert "Active customers" not in str(refused)
     roles = {k["id"]: k["growth_role"] for k in get(api, "growth/kpis")["kpis"]}
@@ -485,6 +485,6 @@ def test_a_member_cannot_move_the_north_star_off_a_kpi_they_may_not_edit_nor_rea
     put(api, "gtm/draft", {"sections": {"motion": {"primary": "local"}}})
     post(api, "gtm/publish", {"note": "First"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE kpis SET owner='bot:inbox' WHERE id=?", (company["id"],))
+        c.execute("UPDATE kpis SET owner_id='bot:inbox' WHERE id=?", (company["id"],))
     assert "Active customers" in get(api, "gtm/summary")["text"]
     assert "Active customers" not in get(api, "gtm/summary", "cara-test")["text"]

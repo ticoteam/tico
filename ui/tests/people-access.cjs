@@ -28,10 +28,10 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
       {id: 'ana', name: 'Ana Rivera', email: 'ana@acme.example', title: 'CEO', team: 'leadership'},
       {id: 'ben', name: 'Ben Cole', email: 'ben@acme.example', title: 'Ops', team: 'leadership'}];
     const access = () => ({
-      owner: {email: owner, revision: 1, person: 'ana'},
+      owner_id: {email: owner, revision: 1, person: 'ana'},
       people: people.map(p => {
         const isOwner = p.email === owner, role = isOwner ? 'owner' : p.admin ? 'admin' : 'member';
-        return {...p, left: !!p.left, removable: !!p.left && !p.history, owner: isOwner, role, bot_admin: role === 'admin', create_bots: p.create_bots !== false,
+        return {...p, left: !!p.left, removable: !!p.left && !p.history, owner_id: isOwner, role, bot_admin: role === 'admin', create_bots: p.create_bots !== false,
                 add_people: p.add_people === undefined ? true : !!p.add_people, add_people_default: p.add_people === undefined,
                 sign_in: p.sign_in !== false, can_sign_in: !p.left && !!p.email && p.sign_in !== false};
       }),
@@ -92,12 +92,12 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
         const body = request.postDataJSON(); calls.push(['owner-email', body]);
         if (body.email === 'taken@acme.example') return route.fulfill({status: 409, contentType: 'application/json',
           body: JSON.stringify({error: {code: 'conflict', detail: 'taken@acme.example already belongs to someone else on the roster'}})});
-        owner = body.email; people.find(x => x.id === 'ana').email = body.email; return json({owner, revision: 2, person: 'ana'});
+        owner = body.email; people.find(x => x.id === 'ana').email = body.email; return json({owner_id: owner, revision: 2, person: 'ana'});
       }
       if (p === '/api/v2/logout') { calls.push(['logout']); return route.fulfill({contentType: 'text/html', body: '<p>Signed out</p>'}); }
       if (p === '/api/v2/access/owner') {
         calls.push(['owner', request.postDataJSON()]); owner = people.find(x => x.id === request.postDataJSON().person).email;
-        return json({owner});
+        return json({owner_id: owner});
       }
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});

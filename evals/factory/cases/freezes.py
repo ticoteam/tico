@@ -63,12 +63,12 @@ def lose_probe(mode):
         with w.store.read() as c:
             hold = login_holds.get(c, w.runner["runner_id"], "", "fake")
         job = (hold or {}).get("probe_job")
-        row = w.sql("SELECT bot FROM jobs WHERE id=?", (job,)) if job else []
-        if not row or not team.bot(row[0]["bot"]).running:
+        row = w.sql("SELECT bot_id FROM jobs WHERE id=?", (job,)) if job else []
+        if not row or not team.bot(row[0]["bot_id"]).running:
             return
-        bot = team.bot(row[0]["bot"])
+        bot = team.bot(row[0]["bot_id"])
         run.probe_lost_at, run.probe_bot = now, bot.slug
-        run.lost_probe = {"job": job, "bot": bot.slug, "attempt": bot.attempt["id"], "mode": mode, "at": now}
+        run.lost_probe = {"job": job, "bot_id": bot.slug, "attempt": bot.attempt["id"], "mode": mode, "at": now}
         if mode == "stale":
             bot.available = False
             run.back_at = now + at(0, 40)
@@ -100,7 +100,7 @@ def setup_with(tasks, each=0, providers=(), groups=()):
         for bot in team.all:
             if bot.slug.startswith("fleet-"):
                 for n in range(each):
-                    w.post("tasks", {"owner": bot.slug, "title": f"Routine {n + 1}", "body": "Look at the queue."})
+                    w.post("tasks", {"owner_id": bot.slug, "title": f"Routine {n + 1}", "body": "Look at the queue."})
         tickets(run, w, tasks)
     return setup
 
@@ -108,7 +108,7 @@ def setup_with(tasks, each=0, providers=(), groups=()):
 def packet_task(slug):
     """One task the bot owns, which the person's messages to it are about: the run keeps its id."""
     def setup(run, w, team):
-        made = w.post("tasks", {"owner": slug, "title": "Acme packet", "body": "Check the packet figures."})
+        made = w.post("tasks", {"owner_id": slug, "title": "Acme packet", "body": "Check the packet figures."})
         run.packet = made.get("task", made)["id"]
     return setup
 
@@ -126,7 +126,7 @@ def routine(slug, count):
     has queued work to resume with once the login is back."""
     def act(run, w, team):
         for n in range(count):
-            w.post("tasks", {"owner": slug, "title": f"Routine {n + 1}", "body": "Look at the queue."})
+            w.post("tasks", {"owner_id": slug, "title": f"Routine {n + 1}", "body": "Look at the queue."})
     return act
 
 

@@ -124,7 +124,7 @@ async function updcLoad(chat) {
   let info = null, messages = [], execution = null, rendered = '', es = null, poll = null;
   const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
   chat.stop = stopStream;
-  const isReply = m => m.from_actor === 'bot:' + info?.bot;
+  const isReply = m => m.sender_id === 'bot:' + info?.bot;
   const draw = () => {
     if (!current()) return;
     const rows = messages.map(m => v2MessageHTML({...m, run: null}));

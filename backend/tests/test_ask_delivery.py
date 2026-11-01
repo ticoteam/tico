@@ -32,19 +32,19 @@ def test_an_ask_whose_wait_fails_still_returns_its_id_and_a_retry_is_not_sent_tw
     assert first["ana"]["timeout"] and first["ana"]["message_id"]
     assert hubtools.ask(bot, args) == first
     with api.app.state.store.read() as c:
-        sent = c.execute("SELECT id FROM messages WHERE from_actor='bot:ops' AND to_actor='human:ana' "
+        sent = c.execute("SELECT id FROM messages WHERE sender_id='bot:ops' AND recipient_id='human:ana' "
                          "AND kind='ask'").fetchall()
     assert [r[0] for r in sent] == [first["ana"]["message_id"]]
 
 
 def test_a_task_waiting_on_a_person_nobody_asked_shows_in_health_until_they_are_asked(api):
-    tid = post(api, "tasks", {"owner": "ops", "title": "Renew the Acme domain", "body": "x"})["id"]
+    tid = post(api, "tasks", {"owner_id": "ops", "title": "Renew the Acme domain", "body": "x"})["id"]
     with api.app.state.store.transaction() as c:
         # Set waiting on Ana before asks became subtasks, so the task itself waits on her.
         c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?",
                   ("Renew the Acme domain for a year? If yes, I'll pay the invoice.", tid))
         H._task_event(c, tid, "bot:ops", "waiting_on", None, "human:ana", "")
-        c.execute("UPDATE task_events SET ts=? WHERE task_id=? AND field='waiting_on'",
+        c.execute("UPDATE task_events SET created_at=? WHERE task_id=? AND field='waiting_on'",
                   (H.shift(H.now(), hours=-2), tid))
 
     def check():
@@ -68,7 +68,7 @@ def test_a_question_asked_outside_any_task_is_in_the_persons_needs_you_until_ans
         return api.get("/api/v2/needs-you", headers=headers()).json()["items"]
 
     item = next(it for it in needs() if it["id"] == asked["id"])
-    assert item["kind"] == "ask" and item["requester"] == "bot:ops"
+    assert item["kind"] == "ask" and item["requester_id"] == "bot:ops"
     assert api.get("/api/v2/needs-you?count=1", headers=headers()).json()["count"] == len(needs())
     post(api, f"messages/{asked['id']}/answer", {"text": "Acme Bank."})
     assert all(it["id"] != asked["id"] for it in needs())
@@ -78,8 +78,8 @@ def test_a_wait_with_no_plain_ask_goes_last_and_its_bot_is_asked_once_to_restate
     from backend import restate_asks
     store = api.app.state.store
     plain = "Approve the venue for Friday? If yes, I'll book it."
-    explained = post(api, "tasks", {"owner": "ops", "title": "Book the venue", "body": "x"})["id"]
-    legacy = post(api, "tasks", {"owner": "ops", "title": "Renew the Acme domain", "body": "x"})["id"]
+    explained = post(api, "tasks", {"owner_id": "ops", "title": "Book the venue", "body": "x"})["id"]
+    legacy = post(api, "tasks", {"owner_id": "ops", "title": "Renew the Acme domain", "body": "x"})["id"]
     with store.transaction() as c:
         explained = H.task_update(c, "bot:ops", explained, status="waiting", waiting_on="ana", note=plain)["asked_in"]["id"]
         # Set waiting before the plain-ask rule, with the bot's shorthand as its only words.
@@ -91,7 +91,7 @@ def test_a_wait_with_no_plain_ask_goes_last_and_its_bot_is_asked_once_to_restate
 
     def restate_requests():
         with store.read() as c:
-            return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND from_actor=? "
+            return c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:ops' AND sender_id=? "
                              "AND refs LIKE '%restate_ask%'", (H.KEEPER,)).fetchone()[0]
 
     items = needs()

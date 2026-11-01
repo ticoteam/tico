@@ -16,7 +16,7 @@ const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
 const now = new Date().toISOString();
-const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Details.', owner: 'bot:ops', requester: 'human:ana',
+const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Details.', owner_id: 'bot:ops', requester_id: 'human:ana',
   status: 'doing', lane: 'company', labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
 const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.stringify({seq, ...data})}\n\n`;
 
@@ -25,7 +25,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
   const errors = [], streams = [], reads = {snapshot: 0, tasks: 0, active: 0, changed: [], labels: [], needs: []};
   page.on('pageerror', e => errors.push(e.message));
-  let snapshot = {messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes', created_at: now}], execution: null};
+  let snapshot = {messages: [{id: 'm1', sender_id: 'human:ana', body: 'Draft the release notes', created_at: now}], execution: null};
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -60,7 +60,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     if (p === '/api/v2/needs-you') {
       reads.needs.push(url.search);
       if (url.searchParams.get('ids') === 't9') return json({count: 1, version: 'v1', positions: {t9: 0}, items: [{id: 't9', kind: 'task',
-        title: 'Approve the notes', owner: 'human:ana', requester: 'bot:ops', status: 'open', created_at: now}]});
+        title: 'Approve the notes', owner_id: 'human:ana', requester_id: 'bot:ops', status: 'open', created_at: now}]});
       return json(url.searchParams.get('version') === 'v0' ? {count: 0, version: 'v0', unchanged: true} : {items: [], version: 'v0'});
     }
     return json(unrouted(p));
@@ -85,7 +85,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   const opened = reads.snapshot;
 
   // The chat: one stream for the page, following this conversation; a change to it reads the snapshot once.
-  snapshot = {messages: [...snapshot.messages, {id: 'm2', from_actor: 'bot:ops', body: 'The notes are in the doc.', created_at: now}], execution: null};
+  snapshot = {messages: [...snapshot.messages, {id: 'm2', sender_id: 'bot:ops', body: 'The notes are in the doc.', created_at: now}], execution: null};
   const first = await send(following, block(10, 'ready', {}), block(11, 'messages', {id: 'm2', conversation_id: 'c-ops', message: snapshot.messages[1]}));
   assert.deepEqual(first.searchParams.get('topics').split(',').sort(), ['bots', 'messages', 'needs', 'runs', 'tasks']);
   assert.equal(first.searchParams.get('party'), 'bot:ops', "a bot's page is sent its own tasks' changes, not every task's");

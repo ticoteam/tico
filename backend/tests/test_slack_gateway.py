@@ -154,7 +154,7 @@ def hub(tmp_path):
             "default_user": "ana", "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
             "people": PEOPLE}),))
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,operator,description,reports_to) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
                       (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
     return store
 
@@ -194,7 +194,7 @@ def events(hub):
 
 
 def jobs(hub):
-    return rows(hub, "SELECT bot,state FROM jobs ORDER BY created_at")
+    return rows(hub, "SELECT bot_id,state FROM jobs ORDER BY created_at")
 
 
 def send(gateway, text, judge_answer=None, **kw):
@@ -309,19 +309,19 @@ def test_a_persons_new_thread_to_a_bot_held_since_the_roster_was_read_is_kept_an
     result = send(gateway, "please review the vendor terms", judge_answer=hold, channel=DM, kind="message")
     assert result["state"] == "routed", result
     (kept,) = result["decision"]["delivered"]
-    assert kept["bot"] == "legal" and kept["opened"] and result["decision"]["dropped"] == []
+    assert kept["bot_id"] == "legal" and kept["opened"] and result["decision"]["dropped"] == []
     assert "Your message is kept for when it is back" in kept["held"]
     assert ("until about" if held == "quarantined" else "until a person resumes it") in kept["held"]
     assert [p["text"] for p in gateway.slack.posts] == [kept["held"]] and gateway.slack.posts[0]["channel"] == DM
     message = rows(hub, "SELECT * FROM messages WHERE id=?", kept["message_id"])[0]
-    assert (message["from_actor"], message["to_actor"], message["body"]) == ("human:ana", "bot:legal",
+    assert (message["sender_id"], message["recipient_id"], message["body"]) == ("human:ana", "bot:legal",
                                                                              "please review the vendor terms")
-    assert rows(hub, "SELECT bot,state FROM jobs WHERE message_id=?", kept["message_id"]) == [{"bot": "legal", "state": "queued"}]
+    assert rows(hub, "SELECT bot_id,state FROM jobs WHERE message_id=?", kept["message_id"]) == [{"bot_id": "legal", "state": "queued"}]
     # Nothing else woke up for it, and it is not sent again: the assistant got nothing, one job waits for Legal.
-    assert jobs(hub) == [{"bot": "legal", "state": "queued"}]
+    assert jobs(hub) == [{"bot_id": "legal", "state": "queued"}]
     with hub.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug='legal'")
-    assert gateway.tick()["events"] == [] and jobs(hub) == [{"bot": "legal", "state": "queued"}]
+    assert gateway.tick()["events"] == [] and jobs(hub) == [{"bot_id": "legal", "state": "queued"}]
 
 
 def test_a_new_thread_to_a_bot_that_is_gone_is_still_dropped_and_the_assistant_asks(gateway, hub):
@@ -419,7 +419,7 @@ channels:
             "default_user": "ana", "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
             "people": PEOPLE}),))
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,operator,description,reports_to) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
                       (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
     slack, engine, clock = FakeSlack(), FakeJudge(), Clock()
     gw = G.Gateway(store, slack, judge_engine=engine, clock=clock)
@@ -440,7 +440,7 @@ def channel_message(text, channel=MARKETING, user="U1", thread_ts=None, subtype=
 
 
 def digests(hub):
-    return rows(hub, "SELECT d.reader,d.count,d.skipped,d.channels,m.body,m.refs,m.from_actor,m.to_actor "
+    return rows(hub, "SELECT d.reader,d.count,d.skipped,d.channels,m.body,m.refs,m.sender_id,m.recipient_id "
                      "FROM slack_digests d JOIN messages m ON m.id=d.message_id ORDER BY d.created_at, d.reader")
 
 
@@ -463,7 +463,7 @@ def test_a_channel_message_is_stored_and_reaches_the_readers_once_on_the_hourly_
     sent = digests(hub)
     assert [d["reader"] for d in sent] == ["cmo", "cto", "seo"]
     cmo = sent[0]
-    assert cmo["from_actor"] == "keeper" and cmo["to_actor"] == "bot:cmo"
+    assert cmo["sender_id"] == "keeper" and cmo["recipient_id"] == "bot:cmo"
     assert "## #marketing — Marketing work log." in cmo["body"] and "Ana Rivera: Launch copy is ready for review" in cmo["body"]
     assert "Deploy 4.2" not in cmo["body"] and "Nobody reads this" not in cmo["body"]
     assert "Ben: Deploy 4.2 went out" in sent[1]["body"]
@@ -606,7 +606,7 @@ def test_a_muted_bot_stays_in_tico_unless_the_person_is_talking_to_it_in_slack(g
     gateway.mirror()
     with hub.transaction() as c:
         # Days later, Legal's unprompted digest lands in the same chat; Ana is no longer talking there.
-        c.execute("UPDATE messages SET created_at=? WHERE conversation_id=? AND from_actor='human:ana'",
+        c.execute("UPDATE messages SET created_at=? WHERE conversation_id=? AND sender_id='human:ana'",
                   (H.shift(H.now(), days=-2), thread["conversation_id"]))
         muted = H.say(c, "bot:legal", "human:ana", "Weekly contract digest.", conversation_id=thread["conversation_id"])["id"]
     gateway.originate()
@@ -861,8 +861,8 @@ def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_aft
     assert gw.receive(channel_message("Before the automation")) == "stored"
     gw.clock.advance(60)
     with hub.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner,grp,trigger_type,enabled,builtin,flow,version,created_at,"
-                  "created_by,updated_at) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
+        c.execute("INSERT INTO automations(id,name,owner_id,group_id,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by_id,updated_at) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
                   ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()))
     gw.clock.advance(60)
     assert gw.receive(channel_message("After the automation")) == "stored"
@@ -872,7 +872,7 @@ def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_aft
     assert heard == [("After the automation", "ana", "#marketing")]
     gw.clock.advance(60)
     assert gw.tick()["events"] == [] and len(heard) == 1, "offered once, never again"
-    states = rows(hub, "SELECT text,state,processed FROM slack_events ORDER BY received")
+    states = rows(hub, "SELECT text,state,processed_at FROM slack_events ORDER BY received_at")
     assert [s["state"] for s in states] == ["stored", "stored"], "the readers keep the row as it was"
-    assert states[0]["processed"] is None, "the backlog is not offered"
-    assert states[1]["processed"] is not None
+    assert states[0]["processed_at"] is None, "the backlog is not offered"
+    assert states[1]["processed_at"] is not None

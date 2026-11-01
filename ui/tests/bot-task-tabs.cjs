@@ -14,15 +14,15 @@ const {unrouted} = require('./support/routes.cjs');
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer'}[name], org_parent: '',
   host: 'keeper', status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}));
-const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bot:lead', requester: 'human:ana', status: 'doing',
+const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:lead', requester_id: 'human:ana', status: 'doing',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const TASKS = [
   task('t-own', 'Ship the release notes'),
   task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', created_at: ago(480)}),
-  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: null, note: 'Waiting for the test machine', relations: {blocks: [{id: 't-qa', title: 'Run the release check', owner: 'bot:qa', status: 'doing', direction: 'in'}]}, holds: [{kind: 'blocked', reason: 'Waiting for the test machine', since: ago(480), until: null, by: 'keeper', cause: 'dependency'}]}),
+  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: null, note: 'Waiting for the test machine', relations: {blocks: [{id: 't-qa', title: 'Run the release check', owner_id: 'bot:qa', status: 'doing', direction: 'in'}]}, holds: [{kind: 'blocked', reason: 'Waiting for the test machine', since: ago(480), until: null, by: 'keeper', cause: 'dependency'}]}),
   task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created_at: ago(30)}),
   task('t-roadmap-done', 'Write the import spec', {status: 'done', type_id: 'roadmap', done_at: ago(1440), created_at: ago(3 * 1440)}),
-  task('t-qa', 'Run the release check', {owner: 'bot:qa', requester: 'bot:lead'}),
+  task('t-qa', 'Run the release check', {owner_id: 'bot:qa', requester_id: 'bot:lead'}),
 ];
 const TYPES = [{id: 'general', name: 'General', steps: []}, {id: 'roadmap', name: 'Product roadmap', role: 'product-roadmap', steps: []}];
 const OTHERS = {name: 'Assigned to Others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
@@ -39,21 +39,21 @@ const WIDGETS = ['tasks', 'updates', 'files'].map(id => ({id, hidden: false, hei
 const PAGES = {'page:f1': {file_id: 'f1', title: 'Weekly numbers', bot: 'lead', updated_at: ago(90), archived: false},
   'page:f2': {file_id: 'f2', title: 'Release plan', bot: 'lead', updated_at: ago(30), archived: false}};
 // The server's filter, for the fields these fixtures use; Ana is the viewer.
-const matches = (bot, tab, t) => (t.owner === 'bot:' + bot || t.requester === 'bot:' + bot) && tab.conditions.every(({field, value}) => {
+const matches = (bot, tab, t) => (t.owner_id === 'bot:' + bot || t.requester_id === 'bot:' + bot) && tab.conditions.every(({field, value}) => {
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
   if (field === 'status') return value.includes(t.status);
-  if (field === 'needs') return (t.owner === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana');
+  if (field === 'needs') return (t.owner_id === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana');
   if (field === 'waiting_on') {
     const blockers = (t.relations?.blocks || []).filter(r => r.direction === 'in' && !['done', 'closed', 'declined'].includes(r.status));
     const person = String(t.waiting_on || '').startsWith('human:');
-    const botWait = !person && !['gate', 'worktree'].includes((t.holds || []).find(h => h.kind === 'blocked')?.cause) && !t.ask?.to_actor?.startsWith('human:')
-      && !blockers.some(r => r.owner?.startsWith('human:')) && blockers[0]?.owner?.startsWith('bot:');
+    const botWait = !person && !['gate', 'worktree'].includes((t.holds || []).find(h => h.kind === 'blocked')?.cause) && !t.ask?.recipient_id?.startsWith('human:')
+      && !blockers.some(r => r.owner_id?.startsWith('human:')) && blockers[0]?.owner_id?.startsWith('bot:');
     return t.status === 'waiting' && (value === 'me' ? t.waiting_on === 'human:ana' : value === 'not_me' ? t.waiting_on !== 'human:ana'
       : value === 'person' ? person : value === 'bot' ? botWait : true);
   }
   if (field === 'type') return value.includes(t.type_id || 'general');
-  if (field === 'asked_by') return t.requester === who;
-  if (field === 'assigned_to') return value === 'others' ? !['human:ana', 'bot:' + bot].includes(t.owner) : t.owner === who;
+  if (field === 'asked_by') return t.requester_id === who;
+  if (field === 'assigned_to') return value === 'others' ? !['human:ana', 'bot:' + bot].includes(t.owner_id) : t.owner_id === who;
   throw new Error('fixture has no ' + field);
 });
 
@@ -399,7 +399,7 @@ async function open(browser, viewport, colorScheme, server) {
       await context.close();
     }
     // A read-only viewer gets the same default filters: one wait is Blocked 1 and Doing 0.
-    const isolated = {layouts: {}, puts: [], page: 200, tasks: [task('one-wait', 'Wait for the builder', {owner: 'bot:qa', status: 'waiting', waiting_on: null, relations: {blocks: [{id: 'builder', owner: 'bot:lead', title: 'Build it', status: 'doing', direction: 'in'}]}})]};
+    const isolated = {layouts: {}, puts: [], page: 200, tasks: [task('one-wait', 'Wait for the builder', {owner_id: 'bot:qa', status: 'waiting', waiting_on: null, relations: {blocks: [{id: 'builder', owner_id: 'bot:lead', title: 'Build it', status: 'doing', direction: 'in'}]}})]};
     const readOnly = await open(browser, {width:1280,height:900}, 'light', isolated);
     await readOnly.page.goto('https://tico-ui.test/#/bot/qa/tasks');
     await readOnly.page.waitForFunction(() => document.querySelector('#cnt-blocked')?.textContent === '1');

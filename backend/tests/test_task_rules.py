@@ -178,11 +178,11 @@ def test_history_and_scoped_message_activity_with_old_task_timestamps(api, monke
         for t in [history, *scoped, unrelated]:
             c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (shared, t['id']))
         # A step-only history touch and imported message metadata must protect without tasks.updated.
-        c.execute("INSERT INTO task_events(id,task_id,ts,actor,field,old,new,note) "
+        c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new,note) "
                   "VALUES(?,?,?,'human:ana','step','before','after','')", (H.new_id(), history['id'], recent))
         for t, field in zip(scoped, ('created_at', 'edited_at', 'deleted_at')):
             times = {'created_at': old, 'edited_at': None, 'deleted_at': None, field: recent}
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at,edited_at,deleted_at) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at,edited_at,deleted_at) "
                       "VALUES(?,?,'human:ana','human:ana','say','Fixture',?,?,?,?)",
                       (H.new_id(), shared, json.dumps({'task': t['id']}), times['created_at'], times['edited_at'], times['deleted_at']))
         # None of the message fixtures gets a recent history row; all task timestamps stay aged.
@@ -190,7 +190,7 @@ def test_history_and_scoped_message_activity_with_old_task_timestamps(api, monke
             row = dict(c.execute('SELECT * FROM tasks WHERE id=?', (t['id'],)).fetchone())
             assert all(not row.get(k) or row[k] <= old for k in ('created_at', 'updated_at', 'done_at', 'checkpoint_at'))
         for t in [*scoped, unrelated]:
-            assert c.execute('SELECT max(ts) FROM task_events WHERE task_id=?', (t['id'],)).fetchone()[0] <= old
+            assert c.execute('SELECT max(created_at) FROM task_events WHERE task_id=?', (t['id'],)).fetchone()[0] <= old
     assert not run(api)
     assert task(api, history['id'])['status'] == 'done'
     assert [task(api, t['id'])['status'] for t in scoped] == ['done'] * 3

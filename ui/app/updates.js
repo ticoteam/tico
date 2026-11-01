@@ -244,8 +244,8 @@ function updCard(u, i, state, kids = '') {
       <div class="upd-actions">
         ${who.person ? '' : updReplyBtn(u)}${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}${kids}
       </div>
-      ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.from_actor).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
-          <b>${esc(actorLabel(m.from_actor))}</b> ${String(m.from_actor).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
+      ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.sender_id).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
+          <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
           <span class="muted">${m.pending ? 'sending…' : esc(ago(m.created_at))}</span></div>`).join('') : (u.replies ? '<div class="muted">Loading replies…</div>' : '')}
         <form class="upd-reply" data-upd-form><textarea rows="1" placeholder="Reply to ${esc(who.label)}…" aria-label="Reply">${esc(UPD_DRAFTS.get(u.id) || '')}</textarea>
           <button class="primary" type="submit" aria-label="Send">Send</button></form>
@@ -518,7 +518,7 @@ function updRender(state) {
     return;
   }
   const meId = S.me?.id;
-  const isMine = slug => { const e = botRow(slug); return !e || e.operator === meId || (!e.operator && S.me?.role === 'owner'); };
+  const isMine = slug => { const e = botRow(slug); return !e || e.owner_id === meId || (!e.owner_id && S.me?.role === 'owner'); };
   // Unread first, then newest to oldest; the order is set when the page opens
   // (updOrder) and never moves while you read and scroll, only on the next visit.
   const rank = state.order || new Map();

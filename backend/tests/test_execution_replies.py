@@ -26,9 +26,9 @@ def test_equal_answers_to_distinct_inputs_are_delivered_once(api, kind):
     assert finish(api, runner, attempt)["in_reply_to"] == first["id"]
     ready(api, runner, ["ops"])
     if kind == "task":
-        task = post(api, "tasks", {"owner": "ops", "title": "Check the second folder", "body": "Check its contents"})
+        task = post(api, "tasks", {"owner_id": "ops", "title": "Check the second folder", "body": "Check its contents"})
         with api.app.state.store.read() as c:
-            second = H.message(c, c.execute("SELECT message_id FROM jobs WHERE state='queued' AND bot='ops'").fetchone()[0])
+            second = H.message(c, c.execute("SELECT message_id FROM jobs WHERE state='queued' AND bot_id='ops'").fetchone()[0])
     else:
         second = post(api, "messages", {"to": "ops", "kind": "ask" if kind == "ask" else "say",
                       "text": "Check the second folder", "conversation_id": first["conversation_id"]})
@@ -44,7 +44,7 @@ def test_equal_answers_to_distinct_inputs_are_delivered_once(api, kind):
     reply = finish(api, runner, attempt)
     assert reply and reply["in_reply_to"] == second["id"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE from_actor='bot:ops' AND in_reply_to=?", (second["id"],)).fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM messages WHERE sender_id='bot:ops' AND in_reply_to=?", (second["id"],)).fetchone()[0] == 1
         if kind == "folded":
             assert H.message(c, reply["id"])["refs"]["answers"] == [second["id"], folded["id"]]
 
@@ -73,7 +73,7 @@ def test_current_attempt_tool_reply_is_not_duplicated(api, route):
         sent = post(api, "messages", body, attempt["token"])
     assert finish(api, runner, attempt, "Different summary" if route == "linked" else "Tool answer") is None
     rows = get(api, f"conversations/{origin['conversation_id']}/messages")
-    assert [m["id"] for m in rows if m["from_actor"] == "bot:ops"] == [sent["id"]]
+    assert [m["id"] for m in rows if m["sender_id"] == "bot:ops"] == [sent["id"]]
     ready(api, runner, ["ops"])
     second = post(api, "chat/ops", {"text": "Check again"})
     attempt = claim(api, runner)
@@ -100,7 +100,7 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Check the packet", "body": "Check the fixture packet", "private": True})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Check the packet", "body": "Check the fixture packet", "private": True})
     attempt = claim(api, machine)
     start(api, machine, attempt)
     task = post(api, "tasks/" + task["id"], {"version": attempt["task"]["version"], "status": "done", "quiet": True}, attempt["token"])
@@ -114,7 +114,7 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
     elif revocation == "runner":
         post(api, f"runners/{machine['runner_id']}/revoke", {})
     elif revocation == "private-task":
-        post(api, "tasks/" + task["id"], {"version": task["version"], "owner": "finance"})
+        post(api, "tasks/" + task["id"], {"version": task["version"], "owner_id": "finance"})
     else:
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
@@ -124,7 +124,7 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
     assert result.status_code in (401, 403, 404), result.text
     assert "Fixture task result" not in result.text
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE from_actor='bot:ops' AND body='Fixture task result'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM messages WHERE sender_id='bot:ops' AND body='Fixture task result'").fetchone()[0] == 1
 
 
 @pytest.mark.parametrize("notice", ["current", "listed-private"])
@@ -161,12 +161,12 @@ def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_ta
     assert [(m["refs"] or {}).get("task_started") for m in started] == [True]
     shown = get(api, f"conversations/{room}/messages")
     if notice == "current":
-        assert reply and reply["to_actor"] == "human:ana" and reply["body"] == "Map refreshed."
+        assert reply and reply["recipient_id"] == "human:ana" and reply["body"] == "Map refreshed."
     else:
         # The reply stays off the room; the person is told, and nothing of the private task is shown.
         assert reply is None
-        told = [m for m in shown if m["from_actor"] == H.KEEPER and (m.get("refs") or {}).get("withheld")]
-        assert len(told) == 1 and told[0]["to_actor"] == "human:ana"
+        told = [m for m in shown if m["sender_id"] == H.KEEPER and (m.get("refs") or {}).get("withheld")]
+        assert len(told) == 1 and told[0]["recipient_id"] == "human:ana"
         assert not any("Map refreshed." in m["body"] or "Nightly" in m["body"] for m in shown)
 
 
@@ -189,12 +189,12 @@ def test_a_task_session_becomes_the_tasks_one_primary_session_and_a_shared_threa
     with api.app.state.store.transaction() as c:
         config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
         c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "bot"}),))
-    shared = post(api, "tasks", {"owner": "ops", "title": "Check the shared folder", "body": "Check it"})
+    shared = post(api, "tasks", {"owner_id": "ops", "title": "Check the shared folder", "body": "Check it"})
     assert turn(shared, "shared-thread") == {}
     with api.app.state.store.transaction() as c:
         config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
         c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "task"}),))
-    task = post(api, "tasks", {"owner": "ops", "title": "Check the task folder", "body": "Check it"})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Check the task folder", "body": "Check it"})
     assert turn(task, "old") == {"session:ops/old": True}
     # Someone linked the next thread before it ran: it becomes the one primary, the old one an alternate.
     post(api, f"tasks/{task['id']}/links", {"url": "ops/new", "kind": "session"})
@@ -209,7 +209,7 @@ def test_a_runs_confirmed_thread_replaces_the_one_it_started_on_and_only_while_i
     assign(api, r, "ops")
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"ops": True},
                                     "capabilities": ["task_lanes_v2"]}, token=r["token"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Watch the Acme release", "body": "Watch build 41"})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Watch the Acme release", "body": "Watch build 41"})
     attempt = claim(api, r)
     path = f"attempts/{attempt['id']}/"
     post(api, path + "started", {"thread_id": "old-thread"}, r["token"])

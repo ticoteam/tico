@@ -86,15 +86,15 @@ def test_tasks_and_chat_route_only_to_an_active_branch_while_enabled(api):
     share(api)
     branch(api, runner(api, 'cara'))
     branch_actor = H.bot_actor(bot_id(api, 'cpo-cara'))
-    mine = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review design', 'body': 'Please review.'}, 'cara-test')
-    assert mine['owner'] == branch_actor
-    other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review another design', 'body': 'Please review.'})
-    assert other['owner'] == 'bot:cpo'
+    mine = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Review design', 'body': 'Please review.'}, 'cara-test')
+    assert mine['owner_id'] == branch_actor
+    other = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Review another design', 'body': 'Please review.'})
+    assert other['owner_id'] == 'bot:cpo'
     task_chat = post(api, f'tasks/{other["id"]}/chat', {'text': 'Discuss the design'}, 'cara-test')
     assert task_chat['bot'] == bot_id(api, 'cpo-cara')
-    assert task_chat['message']['to_actor'] == branch_actor
+    assert task_chat['message']['recipient_id'] == branch_actor
     chat = post(api, 'chat/cpo', {'text': 'Hello'}, 'cara-test')
-    assert chat['to_actor'] == branch_actor
+    assert chat['recipient_id'] == branch_actor
     conversation = get(api, 'conversations?chat_with=cpo-cara', 'cara-test')['conversations'][0]
     assert set(conversation['participants']) == {'human:cara', branch_actor}
     chats = get(api, 'conversations?chat_with=cpo', 'cara-test')
@@ -102,9 +102,9 @@ def test_tasks_and_chat_route_only_to_an_active_branch_while_enabled(api):
     new = post(api, 'conversations', {'participants': ['bot:cpo'], 'kind': 'chat'}, 'cara-test')
     assert new['id'] == chat['conversation_id']
     share(api, False)
-    assert post(api, 'chat/cpo', {'text': 'Original now'}, 'cara-test')['to_actor'] == 'bot:cpo'
+    assert post(api, 'chat/cpo', {'text': 'Original now'}, 'cara-test')['recipient_id'] == 'bot:cpo'
     with api.app.state.store.transaction() as c:
-        assert H.task_create(c, 'human:cara', 'Direct task', 'Please.', 'cpo')['owner'] == 'bot:cpo'
+        assert H.task_create(c, 'human:cara', 'Direct task', 'Please.', 'cpo')['owner_id'] == 'bot:cpo'
 
 
 def test_refuses_a_computer_already_running_original_or_a_sibling_branch(api):
@@ -125,12 +125,12 @@ def test_archive_restores_branches_without_losing_their_work_or_assignment(api):
     share(api)
     computer = runner(api, 'cara')
     branch(api, computer)
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Keep work', 'body': 'Please.'}, 'cara-test')
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Keep work', 'body': 'Please.'}, 'cara-test')
     branch_id = bot_id(api, 'cpo-cara')
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
     with api.app.state.store.read() as c:
         assert H.bot(c, branch_id)['state'] == 'archived'
-        assert H.task(c, task['id'])['owner'] == H.bot_actor(branch_id)
+        assert H.task(c, task['id'])['owner_id'] == H.bot_actor(branch_id)
         assert c.execute('SELECT runner_id FROM assignments WHERE bot=?', (branch_id,)).fetchone()[0] == computer['runner_id']
     # Restore uses upstream's activation check; the original was already active before archive.
     with api.app.state.store.transaction() as c:
@@ -181,5 +181,5 @@ def test_name_only_roster_marks_branches_without_exposing_the_original(api):
     assert 'finance' not in rows
     branch_row = rows['cpo']
     assert branch_row['my_access']['read'] is False
-    assert branch_row['is_branch'] is True and branch_row['operator'] == 'ben'
+    assert branch_row['is_branch'] is True and branch_row['owner_id'] == 'ben'
     assert not {'shared_from', 'repo', 'schedules', 'model'} & branch_row.keys()

@@ -17,8 +17,8 @@ def dev_ticket(api, owner="bot:cpo", requester="bot:coo"):
 
 def heard(api, bot):
     with api.app.state.store.read() as c:
-        jobs = c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
-        notes = c.execute("SELECT count(*) FROM messages WHERE to_actor=? AND json_extract(refs,'$.quiet')=1 "
+        jobs = c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
+        notes = c.execute("SELECT count(*) FROM messages WHERE recipient_id=? AND json_extract(refs,'$.quiet')=1 "
                           "AND json_extract(refs,'$.rule') IS NOT NULL", ("bot:" + bot,)).fetchone()[0]
     return jobs, notes
 
@@ -51,7 +51,7 @@ def test_blocked_on_someone_else_wakes_the_requester_once_and_a_wait_on_the_owne
         TR.add_blocker(c, "bot:cpo", plain["id"], own["id"])                 # its owner's own work: no news
         review = H.task_create(c, "bot:cpo", "Review the draft", "x", "bot:ops", parent_id=plain["id"], lint=False)
         TR.add_blocker(c, "bot:cpo", plain["id"], review["id"])              # work it split off to a bot: no news
-        c.execute("DELETE FROM jobs WHERE bot='cpo'")
+        c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
     assert heard(api, "coo")[0] == 0
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:cpo", plain["id"], status="waiting", waiting_on="human:ana", note="Which date?")

@@ -22,7 +22,7 @@ def setup(api):
 
 def jobs(api, bot):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
 
 
 def ops_token(api, r):
@@ -157,9 +157,9 @@ def test_a_bots_comment_flagged_needs_action_wakes_the_task_owner(api):
     setup(api)
     with api.app.state.store.transaction() as c:
         t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
-        before = c.execute("SELECT count(*) FROM jobs WHERE bot='cpo'").fetchone()[0]
+        before = c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo'").fetchone()[0]
         H.task_comment(c, "bot:ops", t["id"], "The release is blocked on your fix.", extra_refs={"needs_action": True})
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='cpo'").fetchone()[0] == before + 1
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo'").fetchone()[0] == before + 1
 
 
 def test_never_delayed_asks_answers_gate_verdicts_approvals_and_awaited_replies(api):
@@ -167,17 +167,17 @@ def test_never_delayed_asks_answers_gate_verdicts_approvals_and_awaited_replies(
     sha = "a" * 40
     with api.app.state.store.transaction() as c:
         ask = H.say(c, "bot:cpo", "bot:ops", "Which release has the fix?", kind="ask")
-        start = c.execute("SELECT count(*) FROM jobs WHERE bot='ops'").fetchone()[0]
+        start = c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops'").fetchone()[0]
         H.say(c, "bot:cpo", "bot:ops", "Is the export done?", kind="ask")
         H.say(c, "bot:cpo", "bot:ops", f"Review done.\nVERDICT: changes PR #12 head {sha}")
         H.say(c, "bot:cpo", "bot:ops", "Please spend this", refs={"approval": "a1"})
         flagged = H.say(c, "bot:cpo", "bot:ops", "Need the build now", refs={"needs_action": True})
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops'").fetchone()[0] == start + 4
-        before = c.execute("SELECT count(*) FROM jobs WHERE bot='cpo'").fetchone()[0]
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops'").fetchone()[0] == start + 4
+        before = c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo'").fetchone()[0]
         # Replies the asker waits on: to its ask and to its needs-action message.
         H.say(c, "bot:ops", "bot:cpo", "v0.3.62", conversation_id=ask["conversation_id"], in_reply_to=ask["id"])
         H.say(c, "bot:ops", "bot:cpo", "Built", conversation_id=flagged["conversation_id"], in_reply_to=flagged["id"])
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='cpo'").fetchone()[0] == before + 2
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo'").fetchone()[0] == before + 2
 
 
 def test_the_rule_fails_open_and_never_touches_a_persons_or_the_keepers_messages():
@@ -206,7 +206,7 @@ def test_a_flagged_wake_counts_in_the_weekly_table_and_a_waiting_one_does_not(ap
     post(api, "messages", {"to": "cpo", "text": "Act now", "needs_action": True}, token=token)
     with api.app.state.store.read() as c:
         queued = [dict(row) for row in c.execute(
-            "SELECT m.body FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='cpo'")]
+            "SELECT m.body FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='cpo'")]
     assert [row["body"] for row in queued] == ["Act now"]
     attempt = claim(api, r, "cpo")
     assert attempt["message"]["body"] == "Act now"
@@ -229,7 +229,7 @@ def test_needs_action_wakes_the_owner_of_a_snoozed_task_where_a_plain_comment_do
     with api.app.state.store.transaction() as c:
         t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
         c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), days=2), t["id"]))
-        c.execute("DELETE FROM jobs WHERE bot='cpo'")
+        c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
     plain = post(api, f"tasks/{t['id']}/comments", {"text": "FYI: docs merged."}, token=token)
     assert plain["woke"] is False and jobs(api, "cpo") == 0
     flagged = post(api, f"tasks/{t['id']}/comments", {"text": "Blocked on you.", "needs_action": True}, token=token)
@@ -245,7 +245,7 @@ def test_a_held_message_or_comment_tells_its_sender_how_to_wake_the_bot_now(api)
     token = ops_token(api, r)
     with api.app.state.store.transaction() as c:
         t = H.task_create(c, "bot:ops", "Open the window", "x", "bot:cpo")
-        c.execute("DELETE FROM jobs WHERE bot='cpo'")
+        c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
     dm = post(api, "messages", {"to": "cpo", "text": "Deadline 14:10Z"}, token=token)
     comment = post(api, f"tasks/{t['id']}/comments", {"text": "Deadline 14:10Z"}, token=token)
     for sent in (dm, comment):
@@ -264,7 +264,7 @@ def test_a_held_message_with_a_file_keeps_its_hold_and_tells_its_sender(api):
     r = setup(api)
     token = ops_token(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM jobs WHERE bot='cpo'")
+        c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
     first = post(api, "messages", {"to": "cpo", "text": "Chart follows"}, token=token)
     made = publish(api, {"token": token}, name="chart.png", text=None,
                    content_base64=base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64).decode())
@@ -297,7 +297,7 @@ def waiting_on_a_hold(api):
     post(api, "tasks/" + t["id"] + "/relations", {"task": hold["id"], "kind": "blocked_by"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (t["id"],))
-        c.execute("DELETE FROM jobs WHERE bot='cpo'")
+        c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
     return t
 
 

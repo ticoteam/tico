@@ -32,12 +32,12 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api, provenance)
         # Bulk fixture loading must not queue actual runs or construct message links.
         for trigger in ('message_links_insert', 'queue_bot_message', 'wake_preset_hold', 'message_links_update'):
             c.execute('DROP TRIGGER IF EXISTS ' + trigger)
-        c.executemany('INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) '
+        c.executemany('INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) '
                       "VALUES(?,'Synthetic task','bot:ops','human:ana',0,'done',?,?)",
                       [(public_tasks[i], now, now) for i in range(rooms)])
         # Authorization must also work with a nonempty denied-private set;
         # no message references these unrelated synthetic private rows.
-        c.executemany('INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) '
+        c.executemany('INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) '
                       "VALUES(?,'Hidden synthetic task','bot:finance','human:ben',1,'done',?,?)",
                       [(str(uuid.uuid5(uuid.NAMESPACE_URL, f'synthetic-hidden-task-{i}')), now, now) for i in range(500)])
         c.executemany('INSERT INTO conversations(id,kind,task_id,participants,created_at) '

@@ -170,8 +170,8 @@ def too_long(c, settings, row, conversation_id, aid):
         turn = c.execute("SELECT task_id FROM turns WHERE id=?", (aid,)).fetchone()
         fresh_session(c, settings, bot, conversation_id, aid, turn[0] if turn else None)
         return
-    c.execute("INSERT INTO compact_first(bot,conversation_id,marked,taken_by) VALUES(?,?,?,NULL) "
-              "ON CONFLICT(bot,conversation_id) DO UPDATE SET marked=excluded.marked,taken_by=NULL",
+    c.execute("INSERT INTO compact_first(bot,conversation_id,marked_at,taken_by) VALUES(?,?,?,NULL) "
+              "ON CONFLICT(bot,conversation_id) DO UPDATE SET marked_at=excluded.marked_at,taken_by=NULL",
               (bot, conversation_id, H.now()))
     H.event(c, H.KEEPER, "session.compact_first", conversation_id, {"bot": bot, "attempt": aid})
 
@@ -236,7 +236,7 @@ def probe_due(c, bot, state, now=None):
     """Whether a held bot may take a try now: its time has come and none of its runs is out."""
     at = probe_at(state)
     return bool(at and at <= (now or H.now()) and not c.execute(
-        "SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running') LIMIT 1", (bot,)).fetchone())
+        "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)).fetchone())
 
 
 def probe(c, bot):
@@ -260,8 +260,8 @@ def _since_failure(c, bot):
 
 def person_waiting(c, bot):
     """Whether a person wrote to the bot since its last failed run: the job a back-off wait lets through."""
-    return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? AND j.state='queued' "
-                          "AND m.from_actor LIKE 'human:%' AND m.created_at>? LIMIT 1", (bot, _since_failure(c, bot))).fetchone())
+    return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND j.state='queued' "
+                          "AND m.sender_id LIKE 'human:%' AND m.created_at>? LIMIT 1", (bot, _since_failure(c, bot))).fetchone())
 
 
 def job_refusal(c, bot, message):
@@ -269,7 +269,7 @@ def job_refusal(c, bot, message):
     (execution.job_refusal)."""
     if refusal(c, bot) != "backoff":
         return None
-    fresh = str(message.get("from_actor") or "").startswith("human:") and str(message.get("created_at") or "") > _since_failure(c, bot)
+    fresh = str(message.get("sender_id") or "").startswith("human:") and str(message.get("created_at") or "") > _since_failure(c, bot)
     return None if fresh else "backoff"
 
 

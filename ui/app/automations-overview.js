@@ -30,20 +30,20 @@ function auOverviewState() {
 const auKind = a => a.kind || a.trigger?.type || '';
 const auState = a => a.paused ? 'paused' : a.enabled === false ? 'off' : a.hold ? 'hold' : a.last_run?.status === 'failed' ? 'failing' : 'on';
 function auTeam(a) {
-  const g = a.group || (String(a.owner || '').startsWith('group:') ? a.owner : '');
+  const g = a.group || (String(a.owner_id || '').startsWith('group:') ? a.owner_id : '');
   if (g) return auGroupName(g);
-  const home = typeof rdoHome === 'function' && a.owner ? rdoHome(String(a.owner)) : '';
+  const home = typeof rdoHome === 'function' && a.owner_id ? rdoHome(String(a.owner_id)) : '';
   return home ? auGroupName(home) : '';
 }
 const auTrigLine = a => auKind(a) === 'system' ? a.schedule || a.controls?.schedule || 'Tico' : auSource(a.trigger) || AU_TRIGGER_WORDS[a.trigger?.type] || '';
-const auActive = f => f.trig.size + !!f.status + !!f.team + !!f.owner;
+const auActive = f => f.trig.size + !!f.status + !!f.team + !!f.owner_id;
 
 function auMatches(a, f = AU.f) {
   if (f.trig.size && !f.trig.has(auKind(a))) return false;
   if (f.status && auState(a) !== f.status) return false;
   if (f.team && auTeam(a) !== f.team) return false;
-  if (f.owner && a.owner !== f.owner) return false;
-  return !f.q || [a.name, auTrigLine(a), auActorName(a.owner), AU_KIND_WORDS[auKind(a)], a.description]
+  if (f.owner_id && a.owner_id !== f.owner_id) return false;
+  return !f.q || [a.name, auTrigLine(a), auActorName(a.owner_id), AU_KIND_WORDS[auKind(a)], a.description]
     .join(' ').toLowerCase().includes(f.q);
 }
 const auShown = () => (AU.list || []).filter(a => auMatches(a));
@@ -74,7 +74,7 @@ function auAllQuery() {
   const f = AU.f, p = new URLSearchParams({range: AU.range});
   if (AU.rstatus) p.set('status', AU.rstatus);
   if (f.trig.size) p.set('trigger', [...f.trig].join(','));
-  if (f.owner) p.set('owner', f.owner);
+  if (f.owner_id) p.set('owner', f.owner_id);
   if (f.q || f.status || f.team) {
     const ids = auShown().map(a => a.id);
     if (ids.length <= AU_IDS_MAX) p.set('ids', ids.join(',') || 'none');
@@ -108,7 +108,7 @@ function auFacetsDraw() {
   const count = pred => list.filter(pred).length;
   const btn = (attr, val, on, lead, label, n) => `<button type="button" class="au-fb" ${attr}="${esc(val)}" aria-pressed="${on}">${lead}<span class="au-ft">${esc(label)}</span><span class="au-fn">${n}</span></button>`;
   const teams = [...new Set(list.map(auTeam).filter(Boolean))].sort((x, y) => x.localeCompare(y));
-  const owners = [...new Set(list.map(a => a.owner).filter(Boolean))].map(o => [o, auActorName(o)]).sort((x, y) => x[1].localeCompare(y[1]));
+  const owners = [...new Set(list.map(a => a.owner_id).filter(Boolean))].map(o => [o, auActorName(o)]).sort((x, y) => x[1].localeCompare(y[1]));
   box.innerHTML = `<div class="au-fg" role="group" aria-label="Trigger"><div class="au-lb">Trigger</div>
       ${AU_KINDS.map(k => btn('data-ftrig', k, f.trig.has(k), auIcon(AU_KIND_ICONS[k]), AU_KIND_WORDS[k], count(a => auKind(a) === k))).join('')}</div>
     <div class="au-fg" role="group" aria-label="Status"><div class="au-lb">Status</div>
@@ -116,7 +116,7 @@ function auFacetsDraw() {
     ${teams.length ? `<div class="au-fg" role="group" aria-label="Team"><div class="au-lb">Team</div>
       ${teams.map(t => btn('data-fteam', t, f.team === t, auIcon('groups'), t, count(a => auTeam(a) === t))).join('')}</div>` : ''}
     <div class="au-fg" role="group" aria-label="Owner"><div class="au-lb">Owner</div>
-      ${owners.map(([o, name]) => btn('data-fowner', o, f.owner === o, personCircle(name, 16), name, count(a => a.owner === o))).join('')}</div>`;
+      ${owners.map(([o, name]) => btn('data-fowner', o, f.owner_id === o, personCircle(name, 16), name, count(a => a.owner_id === o))).join('')}</div>`;
 }
 function auCtlDraw() {
   const ctl = AU.root.querySelector('.au-ctl'), list = AU.tab === 'list', n = auActive(AU.f);
@@ -179,7 +179,7 @@ function auTableHTML() {
   const sorters = {last: (x, y) => last(y).localeCompare(last(x)), fail: (x, y) => y.s.failed - x.s.failed || y.s.runs - x.s.runs,
     runs: (x, y) => y.s.runs - x.s.runs, cost: (x, y) => y.s.cost - x.s.cost, name: (x, y) => String(x.a.name).localeCompare(String(y.a.name))};
   rows.sort(sorters[AU.sort] || sorters.last);
-  const keyOf = r => AU.group === 'trigger' ? auKind(r.a) : AU.group === 'owner' ? r.a.owner || '' : '';
+  const keyOf = r => AU.group === 'trigger' ? auKind(r.a) : AU.group === 'owner' ? r.a.owner_id || '' : '';
   const groups = [];
   for (const r of rows) { const k = keyOf(r); let g = groups.find(x => x.k === k); if (!g) groups.push(g = {k, rows: []}); g.rows.push(r); }
   // A kind this page does not know yet goes after the known ones, not before them.
@@ -194,7 +194,7 @@ function auTableHTML() {
   const cols = {
     name: ['au-tn', 'Name', ({a}) => `<div><a href="${auHref(a.id)}">${auIcon(AU_KIND_ICONS[auKind(a)] || 'bolt')}<span class="au-nm">${esc(a.name || 'Untitled')}</span></a>${auPill(a)}</div>${auWarn(a)}`],
     trigger: ['au-tt', 'Trigger', ({a}) => esc(auTrigLine(a))],
-    owner: ['au-to', 'Owner', ({a}) => `<span title="${esc(auActorName(a.owner))}" aria-label="${esc(auActorName(a.owner))}">${personCircle(auActorName(a.owner), 18)}</span>`],
+    owner: ['au-to', 'Owner', ({a}) => `<span title="${esc(auActorName(a.owner_id))}" aria-label="${esc(auActorName(a.owner_id))}">${personCircle(auActorName(a.owner_id), 18)}</span>`],
     last: ['au-cl', 'Last run', ({a}) => a.last_run ? `<span class="au-lr"><span class="au-dot ${AU_DOTS[a.last_run.status] || 'idle'}" role="img" aria-label="${esc(AU_RUN_STATUS[a.last_run.status] || a.last_run.status)}"></span>${esc(auAge(a.last_run.started_at))}</span>` : '<span class="muted">—</span>'],
     next: ['au-cx muted', 'Next', ({a}) => auNextHTML(a)],
     trend: ['au-cs', 'Last ' + AU.range, ({s}) => auSpark(s.buckets || zero)],

@@ -8,7 +8,7 @@ from backend.tests.test_task_lanes import task_bot
 
 
 def reopened(api, sweep=True):
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Check the installed runtime',
+    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check the installed runtime',
                               'body': 'Check the installed runtime.', 'next_run': True})
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:ops', task['id'], status='waiting', note='Waiting for installation evidence')
@@ -29,7 +29,7 @@ def test_reopened_quiet_task_reuses_its_queued_job_once(api, sweep):
     machine = task_bot(api, lanes=True)
     task = reopened(api, sweep)
     with api.app.state.store.read() as c:
-        [job] = c.execute("SELECT id FROM jobs WHERE bot='ops' AND state='queued'").fetchall()
+        [job] = c.execute("SELECT id FROM jobs WHERE bot_id='ops' AND state='queued'").fetchall()
         assert H.task(c, task['id'])['next_run'] == 1  # also covers queues stranded before this fix
     assert reason(api, machine) is None
     attempt = post(api, 'jobs/claim', {'next_run': True}, machine['token'])['attempt']
@@ -38,7 +38,7 @@ def test_reopened_quiet_task_reuses_its_queued_job_once(api, sweep):
     assert attempt['next_run'] == []
     assert post(api, 'jobs/claim', {}, machine['token'])['attempt'] is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops'").fetchone()[0] == 1
         assert H.task(c, task['id'])['carried_by'] is None
 
 
@@ -72,17 +72,17 @@ def test_reopened_job_keeps_real_gates_and_health_reports_them(api, gate):
     assert reason(api, machine) == expected
     assert post(api, 'jobs/claim', {}, machine['token'])['attempt'] is None
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'",
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
                   (H.shift(H.now(), hours=-40),))
         rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2]
-                if r['bot'] == 'ops']
+                if r['bot_id'] == 'ops']
         assert [r['reason'] for r in rows] == [expected]
         assert expected in health.HELD
 
 
 def test_a_completed_carrier_does_not_strand_reopened_work(api):
     machine = task_bot(api, lanes=True)
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Check runtime history',
+    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check runtime history',
                               'body': 'Check the installed history.', 'next_run': True})
     post(api, 'chat/ops', {'text': 'Check the queued work.'})
     carrier = post(api, 'jobs/claim', {'next_run': True}, machine['token'])['attempt']
@@ -101,7 +101,7 @@ def test_a_completed_carrier_does_not_strand_reopened_work(api):
 @pytest.mark.parametrize('worked', [False, True])
 def test_carrier_after_reopen_settles_before_queued_notice_starts(api, worked):
     machine = task_bot(api, lanes=True)
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Check the installation receipt',
+    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check the installation receipt',
                               'body': 'Check the installation receipt.', 'next_run': True})
     # An older chat job claims first and carries the newly reopened work.
     post(api, 'chat/ops', {'text': 'Check the pending receipts.'})
@@ -135,7 +135,7 @@ def test_carrier_after_reopen_settles_before_queued_notice_starts(api, worked):
 
 def test_quiet_work_without_a_reopening_still_waits(api):
     machine = task_bot(api, lanes=True)
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Check on the next run',
+    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check on the next run',
                               'body': 'Check the counts next time.', 'next_run': True})
     with api.app.state.store.read() as c:
         assert auto_tasks.refusal(c, H.task(c, task['id']), {}, woken=True) == 'task_next_run'

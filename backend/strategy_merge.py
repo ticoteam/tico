@@ -32,7 +32,7 @@ def _name(c, actor):
 
 def _open_ask(c, row, person):
     """The open question a bot asked `person` on this task, or None."""
-    return next((a for a in H.open_task_asks(c, row) if a["to_actor"] == person and H.is_bot(a["from_actor"])), None)
+    return next((a for a in H.open_task_asks(c, row) if a["recipient_id"] == person and H.is_bot(a["sender_id"])), None)
 
 
 def waiting_on(c, person, row):
@@ -43,11 +43,11 @@ def waiting_on(c, person, row):
         return None
     ask = _open_ask(c, row, person)
     if ask:
-        return "asked", ask["from_actor"], ask["id"]
-    if H.is_bot(row["owner"]) and row["status"] == "waiting" and row.get("waiting_on") == person:
-        return "waiting", row["owner"], None
-    if row["owner"] == person and H.is_bot(row["requester"]):
-        return "owned", row["requester"], None
+        return "asked", ask["sender_id"], ask["id"]
+    if H.is_bot(row["owner_id"]) and row["status"] == "waiting" and row.get("waiting_on") == person:
+        return "waiting", row["owner_id"], None
+    if row["owner_id"] == person and H.is_bot(row["requester_id"]):
+        return "owned", row["requester_id"], None
     return None
 
 
@@ -67,11 +67,11 @@ def _asked_again(c, link, row):
     them on it, or the task set waiting on them again."""
     said = c.execute(
         "SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE m.conversation_id=? AND "
-        "m.to_actor=? AND m.from_actor<>? AND m.from_actor LIKE 'bot:%' AND m.created_at>? "
+        "m.recipient_id=? AND m.sender_id<>? AND m.sender_id LIKE 'bot:%' AND m.created_at>? "
         f"AND {H.MESSAGE_TASK_SQL}=? LIMIT 1",
         (row["conversation_id"], link["person"], STRATEGY_BOT, link["settled_at"], row["id"])).fetchone()
     return bool(said) or bool(c.execute(
-        "SELECT 1 FROM task_events WHERE task_id=? AND field='waiting_on' AND new=? AND ts>? LIMIT 1",
+        "SELECT 1 FROM task_events WHERE task_id=? AND field='waiting_on' AND new=? AND created_at>? LIMIT 1",
         (row["id"], link["person"], link["settled_at"])).fetchone())
 
 
@@ -197,7 +197,7 @@ def on_reply(c, actor, row, text):
     """A person's reply on a merged item they were asked (hubdb.task_comment, hubdb.answer): passed to every original,
     then the item is done; called again for the same reply, it finds nothing left to pass on. An original it can't
     reach is back in their Needs you, with the reason kept."""
-    if not row or row["owner"] != STRATEGY_BOT or not H.is_human(actor):
+    if not row or row["owner_id"] != STRATEGY_BOT or not H.is_human(actor):
         return
     links = H._rows(c.execute("SELECT * FROM strategy_merges WHERE merged_into=? AND person=? AND state='merged'",
                               (row["id"], actor)))

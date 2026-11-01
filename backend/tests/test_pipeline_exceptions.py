@@ -19,7 +19,7 @@ def board(c, profile="manager"):
     c.execute("UPDATE bot_config SET config=? WHERE bot='coo'",
               (encode({"name": "coo", "runtime": "fake", "status": "active", "profile": profile}),))
     if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at,last_seen_at) VALUES('r1','box','ana','h',?,?)",
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) VALUES('r1','box','ana','h',?,?)",
                   (H.now(), H.now()))
     return H.type_get(c, typ["id"])
 
@@ -46,21 +46,21 @@ def ticket(c, typ, title="Fix the connection", step="In Progress", minutes=0):
     if minutes:
         then = H.shift(H.now(), minutes=-minutes)
         c.execute("UPDATE tasks SET created_at=?, updated_at=? WHERE id=?", (then, then, row["id"]))
-        c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (then, row["id"]))
+        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (then, row["id"]))
     return H.task(c, row["id"])
 
 
 def run(c, row, state, minutes_ago, stop=None):
     """One finished attempt of the owner's on the task's lane, `minutes_ago`."""
     when = H.shift(H.now(), minutes=-minutes_ago)
-    msg = H._write_message(c, "human:ana", row["owner"], "go", H.conversation(c, row["conversation_id"]), "say",
+    msg = H._write_message(c, "human:ana", row["owner_id"], "go", H.conversation(c, row["conversation_id"]), "say",
                            {"task": row["id"]}, None, None)
     job = c.execute("SELECT id FROM jobs WHERE message_id=?", (msg["id"],)).fetchone()[0]
     c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
     aid = H.new_id()
-    c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,started_at,"
+    c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at,"
               "finished_at,lane,stop_requested_at) VALUES(?,?,?,'r1',1,?,?,?,?,?,?,?,?)",
-              (aid, job, H.actor_id(row["owner"]), aid, state, when, when, when, when, "task:" + row["id"], stop))
+              (aid, job, H.actor_id(row["owner_id"]), aid, state, when, when, when, when, "task:" + row["id"], stop))
     return when
 
 
@@ -77,12 +77,12 @@ def listed(c, typ, kind=None):
 
 
 def late_notices(c, row):
-    return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:coo' AND json_extract(refs,'$.task')=? "
+    return c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:coo' AND json_extract(refs,'$.task')=? "
                      "AND json_extract(refs,'$.step_late')", (row["id"],)).fetchone()[0]
 
 
 def unheld_jobs(c, slug):
-    return c.execute("SELECT count(*) FROM jobs WHERE bot=? AND state='queued' AND coalesce(held,0)=0",
+    return c.execute("SELECT count(*) FROM jobs WHERE bot_id=? AND state='queued' AND coalesce(held,0)=0",
                      (slug,)).fetchone()[0]
 
 
@@ -93,7 +93,7 @@ def test_a_ticket_with_no_run_for_45_minutes_is_listed_once_with_its_owner_and_s
             ticket(c, typ, "Fix Grok", minutes=50)
         c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), hours=5), snoozed["id"]))
         [entry] = listed(c, typ, "stuck")
-        assert entry["ticket"]["id"] == quiet["id"] and entry["ticket"]["owner"] == "cpo"
+        assert entry["ticket"]["id"] == quiet["id"] and entry["ticket"]["owner_id"] == "cpo"
         assert "owner cpo" in entry["cause"]
         assert entry["since"] == H.task(c, quiet["id"])["created_at"], "since it last had a run or entered the step"
         assert [e["key"] for e in listed(c, typ, "stuck")] == [entry["key"]], "read again: still one entry"
@@ -111,10 +111,10 @@ def test_a_check_left_doing_with_no_run_is_listed_under_its_ticket_and_the_ticke
         check = check_of(c, row)
         check = doing(c, check)
         run(c, check, "completed", 360)
-        c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), hours=-6), check["id"]))
+        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), hours=-6), check["id"]))
         [entry] = listed(c, typ, "stuck")
         assert entry["ticket"]["id"] == row["id"] and entry["check"]["id"] == check["id"]
-        assert entry["check"]["owner"] == "ops" and "owner ops" in entry["cause"]
+        assert entry["check"]["owner_id"] == "ops" and "owner ops" in entry["cause"]
 
 
 def test_a_cut_run_is_one_entry_a_second_cut_is_the_same_entry_and_a_finished_run_clears_it(api):
@@ -137,7 +137,7 @@ def test_a_refusal_repeated_twice_on_one_ticket_is_one_entry(api):
         row, other = ticket(c, typ, "Fix Cursor"), ticket(c, typ, "Fix Muse")
 
         def refuse(task_id):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO refusals(id,created_at,actor,rule,detail,severity) VALUES(?,?,?,?,?,?)",
                       (H.new_id(), H.now(), "bot:cpo", "review_gate", json.dumps({"task": task_id}), "warn"))
 
         refuse(row["id"])
@@ -183,7 +183,7 @@ def test_the_hourly_list_wakes_a_manager_only_for_a_new_entry(api):
         before = unheld_jobs(c, "coo")
         assert PE.deliver(c) == ["coo"]
         assert unheld_jobs(c, "coo") == before + 1
-        [wake] = c.execute("SELECT body, refs FROM messages WHERE to_actor='bot:coo' AND "
+        [wake] = c.execute("SELECT body, refs FROM messages WHERE recipient_id='bot:coo' AND "
                            "json_extract(refs,'$.wake')='exceptions'").fetchall()
         assert "Fix Cursor" in wake[0] and "no run for 45 minutes" in wake[0]
         assert PE.deliver(c) == [], "the same entry an hour later: no second turn"
@@ -211,7 +211,7 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         H.task_update(c, "bot:cpo", row["id"], status="doing", note="Back on it")
         # Its own words: the same notice again is dropped as a repeat, which would hide a wake.
         H._wake(c, H.task(c, row["id"]), "bot:coo", f"A setup blocker on {title} needs you.", {"wake": "blocker"})
-        c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), hours=-5), late["id"]))
+        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), hours=-5), late["id"]))
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-5), late["id"]))
         step_age.sweep(c, H.shift(H.now(), minutes=1))
         H.task_update(c, "bot:cpo", row["id"], status="done", note="Shipped")
@@ -222,14 +222,14 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         before = unheld_jobs(c, "coo")
         late = routine(c, typ, "Fix Cursor")
         assert unheld_jobs(c, "coo") > before, "control: the Lead profile is woken for the blocker and the late one"
-        assert step_backlog._targets(c, {"notify": ["manager"], "per": "step"}, late, late["owner"]) == ["bot:coo"]
+        assert step_backlog._targets(c, {"notify": ["manager"], "per": "step"}, late, late["owner_id"]) == ["bot:coo"]
         assert late_notices(c, late) == 1
 
         typ = board(c, profile="manager")
         settled(c)
         late = routine(c, typ, "Fix Muse")
         assert unheld_jobs(c, "coo") == 0, "no routine event woke the manager"
-        assert step_backlog._targets(c, {"notify": ["manager"], "per": "step"}, late, late["owner"]) == []
+        assert step_backlog._targets(c, {"notify": ["manager"], "per": "step"}, late, late["owner_id"]) == []
         assert late_notices(c, late) == 0, "not even a held note: the list carries it"
         settled(c)      # its owner's status check ran and left it as it was
         assert any(e["key"] == "ticket:" + late["id"] + ":stuck" for e in listed(c, typ)), "it is on the list instead"
@@ -248,12 +248,12 @@ def test_a_turn_that_ends_doing_with_nothing_queued_wakes_its_owner_once_and_the
         row = ticket(c, typ, minutes=120)
         check = check_of(c, row)
         check = doing(c, check)
-        c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
+        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
         run(c, check, "completed", 60)
         before = unheld_jobs(c, "ops")
         assert step_age.turn_ended(c) == [check["id"]]
         assert unheld_jobs(c, "ops") == before + 1, "a reviewer's profile would hold a status check; this one wakes"
-        c.execute("UPDATE jobs SET state='completed' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
         assert step_age.turn_ended(c) == [], "once per stay at the step"
         [entry] = listed(c, typ, "stuck")
         assert entry["check"]["id"] == check["id"]
@@ -292,7 +292,7 @@ def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_mana
             settled(c)
             H.task_update(c, "bot:ops", child["id"], status="done", note="Three bots, one free")
             H.task_update(c, "bot:ops", upstream["id"], status="done", note="Shipped")
-            return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='coo' "
+            return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='coo' "
                              "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs,'$.task') "
                              "IN (?,?)", (mine["id"], waits["id"])).fetchone()[0]
 
@@ -307,7 +307,7 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_and_unwoken_unti
         row = ticket(c, typ, minutes=200)
         check = doing(c, check_of(c, row))
         profile(c, "ops", "reviewer")
-        c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
+        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
         run(c, check, "completed", 60)
         upstream = H.task_create(c, "bot:cpo", "Ship the base fix", "Ship.", "bot:cpo", lint=False)
         settled(c)
@@ -325,7 +325,7 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_and_unwoken_unti
 
         def approval():
             aid = H.new_id()
-            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by,created_at) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by_id,created_at) VALUES(?,?,?,?,?)",
                       (aid, "send", check["id"], "bot:ops", H.now()))
             return lambda: c.execute("DELETE FROM approvals WHERE id=?", (aid,))
 
@@ -415,7 +415,7 @@ def both_reads(api, c, typ, kind):
     c.execute("DELETE FROM events WHERE action=?", (PE.EVENT,))      # every entry is new to this pass
     before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
     PE.deliver(c)
-    body = (c.execute("SELECT body FROM messages WHERE rowid>? AND to_actor='bot:coo' AND "
+    body = (c.execute("SELECT body FROM messages WHERE rowid>? AND recipient_id='bot:coo' AND "
                       "json_extract(refs,'$.wake')='exceptions'", (before,)).fetchone() or [""])[0]
     return [e for e in shown if e["kind"] == kind], body
 
@@ -430,12 +430,12 @@ def test_slots_count_only_the_tickets_the_manager_reads_in_pipeline_and_the_hour
         shown, body = both_reads(api, c, typ, "slots")
         assert shown == [] and "finance holds" not in body, "no visible ticket: no private workload count"
         mine = ticket(c, typ, "Visible slot", step="In QA")
-        c.execute("UPDATE tasks SET owner='bot:finance' WHERE id=?", (mine["id"],))
+        c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id=?", (mine["id"],))
         shown, body = both_reads(api, c, typ, "slots")
         assert shown == [] and "finance holds" not in body, "one readable ticket is within its one slot"
         # Authorized positive: a second readable ticket is over the slot, and the count is of readable ones only.
         other = ticket(c, typ, "Visible slot 2", step="QA Fixes")
-        c.execute("UPDATE tasks SET owner='bot:finance' WHERE id=?", (other["id"],))
+        c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id=?", (other["id"],))
         shown, body = both_reads(api, c, typ, "slots")
         assert [e["cause"].split(",")[0] for e in shown] == ["finance holds 2 tickets"]
         assert "finance holds 2 tickets" in body
@@ -465,7 +465,7 @@ def test_the_github_outage_folds_in_only_the_tickets_the_manager_reads_in_pipeli
         early, late = H.shift(H.now(), minutes=-30), H.shift(H.now(), minutes=-10)
 
         def held(row, since):
-            c.execute("INSERT INTO task_events(id,task_id,ts,actor,field,old,new,note) VALUES(?,?,?,?,?,?,?,'')",
+            c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new,note) VALUES(?,?,?,?,?,?,?,'')",
                       (H.new_id(), row["id"], H.shift(H.now(), seconds=1), H.KEEPER, move_retry.FIELD,
                        row["step_id"], json.dumps({"state": "waiting", "outage": True, "since": since,
                                                    "step": "Review 1", "kind": "github"})))

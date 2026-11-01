@@ -19,7 +19,7 @@ def wait(c, tid, owner="bot:ops", note=None):
 
 
 def notices(c, to, news="ask_withdrawn"):
-    return [m for m in H._rows(c.execute("SELECT body, refs FROM messages WHERE to_actor=? ORDER BY created_at", (to,)))
+    return [m for m in H._rows(c.execute("SELECT body, refs FROM messages WHERE recipient_id=? ORDER BY created_at", (to,)))
             if (H._json(m["refs"], {}) or {}).get("news") == news]
 
 

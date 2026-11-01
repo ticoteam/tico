@@ -57,7 +57,7 @@ def _bot(c, value):
 def _live_bot_task(c, task_id):
     """A task a recovery may move: live, owned by a bot, and one the Strategy Bot may read."""
     row = H.task(c, str(task_id or ""))
-    if not row or row["status"] not in H.ACTIVE_STATUSES or not H.is_bot(row["owner"]):
+    if not row or row["status"] not in H.ACTIVE_STATUSES or not H.is_bot(row["owner_id"]):
         return None
     if not H.task_private_readable(c, STRATEGY_BOT, row):
         return None
@@ -98,13 +98,13 @@ def _action_error(c, action):
     if do not in ACTIONS:
         return f"an action is {'|'.join(ACTIONS)}"
     if do == "create":
-        owner = str(action.get("owner") or "").strip()
+        owner = str(action.get("owner_id") or "").strip()
         if H.is_human(owner) or (H.resolve_actor(c, owner) or "").startswith("human:"):
             return "a task for a person stays the person's to make; the Strategy Bot proposes tasks for bots only"
         actor = _bot(c, owner)
         if not actor:
             return f"no bot {owner or '(none named)'} to give the task to"
-        action["owner"] = actor
+        action["owner_id"] = actor
         action["title"] = _text(action.get("title"), 300)
         action["body"] = str(action.get("body") or "").strip()[:8000]
         if not action["title"]:
@@ -137,17 +137,17 @@ def _title(c, task_id):
 def describe(c, action):
     """One action in plain words."""
     if action["do"] == "create":
-        return f'New task for {_name(c, action["owner"])}: "{action["title"]}"'
+        return f'New task for {_name(c, action["owner_id"])}: "{action["title"]}"'
     if action["do"] == "reorder":
         row = H.task(c, action["task_id"]) or {}
-        return f'Move {_title(c, action["task_id"])} to the top of {_name(c, row.get("owner", ""))}\'s queue'
+        return f'Move {_title(c, action["task_id"])} to the top of {_name(c, row.get("owner_id", ""))}\'s queue'
     return f'Settle a clash: {_title(c, action["first"])} goes before {_title(c, action["then"])} ({action["why"]})'
 
 
 def offline(c, action):
     """Why the bot this action reaches can't take it now, in plain words, or None."""
-    owners = [action["owner"]] if action["do"] == "create" else \
-        [(H.task(c, action.get(k)) or {}).get("owner") for k in ("task_id", "first", "then") if action.get(k)]
+    owners = [action["owner_id"]] if action["do"] == "create" else \
+        [(H.task(c, action.get(k)) or {}).get("owner_id") for k in ("task_id", "first", "then") if action.get(k)]
     for owner in owners:
         state = (H.bot(c, H.actor_id(owner or "")) or {}).get("state") if owner else None
         if owner and state != "active":
@@ -218,14 +218,14 @@ def _apply(c, action, goal_id, approver, proposal_id):
         made = H.task_create(c, STRATEGY_BOT, action["title"],
                              (action["body"] + "\n\n" if action["body"] else "") +
                              f"Suggested by the {strategy_bot.name(c)} to recover a goal; approved by {who}.",
-                             action["owner"], goal_id=goal_id or None, lane="company")
+                             action["owner_id"], goal_id=goal_id or None, lane="company")
         return {"task_id": made["id"]}
     if action["do"] == "reorder":
         row = H.task(c, action["task_id"])
-        H.task_update(c, STRATEGY_BOT, row["id"], rank=H._queue_end(c, row["owner"], top=True), mover=True, quiet=True)
+        H.task_update(c, STRATEGY_BOT, row["id"], rank=H._queue_end(c, row["owner_id"], top=True), mover=True, quiet=True)
         return {"task_id": row["id"]}
     first, then = H.task(c, action["first"]), H.task(c, action["then"])
-    H.task_update(c, STRATEGY_BOT, first["id"], rank=H._queue_end(c, first["owner"], top=True), mover=True, quiet=True)
+    H.task_update(c, STRATEGY_BOT, first["id"], rank=H._queue_end(c, first["owner_id"], top=True), mover=True, quiet=True)
     said = (f"The {strategy_bot.name(c)} settled a clash, approved by {who}: \"{first['title']}\" goes before "
             f"\"{then['title']}\". {action['why']}")
     for row in (first, then):
@@ -329,7 +329,7 @@ def offer_view(c):
 def offer_made(c, actor):
     """The Strategy Bot records that its Monday note offered level 3. Refused unless the offer is due, so it is made
     once and never more often than every 30 days."""
-    if not offer_view(c)["due"]:
+    if not offer_view(c)["due_at"]:
         raise H.Refused("state", f"Level 3 can be offered after {STREAK_FOR_OFFER} approvals in a row at level 2, "
                                  f"at most once every {OFFER_EVERY_DAYS} days; it is not due now")
     record = strategy_bot._record(c)

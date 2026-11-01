@@ -113,7 +113,7 @@ def audit_rows(api, gid):
 def lead_notices(api):
     """The top of the org's notices that a group lost its lead."""
     with api.app.state.store.read() as c:
-        return [r["body"] for r in c.execute("SELECT body FROM messages WHERE from_actor=? AND to_actor='human:ana' "
+        return [r["body"] for r in c.execute("SELECT body FROM messages WHERE sender_id=? AND recipient_id='human:ana' "
                                              "AND kind='notice' AND body LIKE '%no lead now%'", (H.KEEPER,))]
 
 
@@ -154,27 +154,27 @@ def test_a_bare_person_id_in_reports_to_is_that_person(api):
 def test_deleting_a_group_takes_its_peoples_automations_to_the_group_above(api):
     outer = send(api, "POST", "groups", {"name": "Product"})["id"]
     inner = send(api, "POST", "groups", {"name": "Web", "parent": outer, "add": {"people": ["ana"]}})["id"]
-    aid = post(api, "automations", {"name": "Acme digest", "owner": "person:ana", "group": "group:" + inner,
+    aid = post(api, "automations", {"name": "Acme digest", "owner_id": "person:ana", "group": "group:" + inner,
                                     "trigger": {"type": "event", "name": "x.y"}, "steps": []})["id"]
     send(api, "DELETE", "groups/" + inner)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT grp FROM automations WHERE id=?", (aid,)).fetchone()[0] == "group:" + outer
+        assert c.execute("SELECT group_id FROM automations WHERE id=?", (aid,)).fetchone()[0] == "group:" + outer
 
 
 def test_deleting_a_group_moves_what_it_owns_and_what_outsiders_tagged_with_it(api):
     outer = send(api, "POST", "groups", {"name": "Product"})["id"]
     inner = send(api, "POST", "groups", {"name": "Web", "parent": outer})["id"]
-    owned = post(api, "automations", {"name": "Acme web digest", "owner": "group:" + inner, "group": "group:" + inner,
+    owned = post(api, "automations", {"name": "Acme web digest", "owner_id": "group:" + inner, "group": "group:" + inner,
                                       "trigger": {"type": "event", "name": "x.y"}, "steps": []})["id"]
-    tagged = post(api, "automations", {"name": "Acme web check", "owner": "person:ana", "group": "group:" + inner,
+    tagged = post(api, "automations", {"name": "Acme web check", "owner_id": "person:ana", "group": "group:" + inner,
                                        "trigger": {"type": "event", "name": "x.y"}, "steps": []})["id"]
     send(api, "DELETE", "groups/" + inner)
     with api.app.state.store.read() as c:
-        rows = {r[0]: (r[1], r[2]) for r in c.execute("SELECT id, owner, grp FROM automations WHERE id IN (?,?)",
+        rows = {r[0]: (r[1], r[2]) for r in c.execute("SELECT id, owner_id, group_id FROM automations WHERE id IN (?,?)",
                                                        (owned, tagged))}
     assert rows[owned] == ("group:" + outer, "group:" + outer)
     assert rows[tagged] == ("person:ana", "group:" + outer)
     send(api, "DELETE", "groups/" + outer)       # the top group: no group left, the group's own goes to the top person
     with api.app.state.store.read() as c:
-        owner, grp = c.execute("SELECT owner, grp FROM automations WHERE id=?", (owned,)).fetchone()
+        owner, grp = c.execute("SELECT owner_id, group_id FROM automations WHERE id=?", (owned,)).fetchone()
     assert owner.startswith("person:") and grp is None

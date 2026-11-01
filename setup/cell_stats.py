@@ -680,7 +680,7 @@ out = {}
 if mode == "top":
     cap(budget)
     try:
-        out["sql_top"] = c.execute("SELECT fingerprint, SUM(n), SUM(total_ms), MAX(max_ms) FROM flight_sql WHERE ts>=? "
+        out["sql_top"] = c.execute("SELECT fingerprint, SUM(n), SUM(total_ms), MAX(max_ms) FROM flight_sql WHERE created_at>=? "
                                    "GROUP BY fingerprint ORDER BY 3 DESC LIMIT ?",
                                    (int(sys.argv[4]), int(sys.argv[5]))).fetchall()
     except sqlite3.Error as e:

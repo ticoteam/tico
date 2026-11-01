@@ -63,11 +63,11 @@ def mailbox_of(c, bot, config, instructions=None):
 def owner_of(c, bot, roster, requester=None):
     """The roster person the bot belongs to: the one who asked for it, else who made it, else its only owner, else
     its operator. None when that person is not on the roster."""
-    row = c.execute("SELECT created_by,operator,bot_owners FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute("SELECT created_by,owner_id,bot_owners FROM bot_config WHERE bot=?", (bot,)).fetchone()
     owners = BA.owner_ids(row["bot_owners"]) if row else []
     made = H.actor_id(row["created_by"]) if row and str(row["created_by"] or "").startswith("human:") else ""
     for who in (H.actor_id(requester) if str(requester or "").startswith("human:") else "", made,
-                owners[0] if len(owners) == 1 else "", str(row["operator"] or "") if row else ""):
+                owners[0] if len(owners) == 1 else "", str(row["owner_id"] or "") if row else ""):
         person = P.person(who, roster) if who else None
         if person and not person.get("hidden"):
             return person

@@ -52,7 +52,7 @@ def fake_computer(base, admin, label, received, ready, works=True, shared_fetch=
                           headers={"Authorization": "Bearer " + token, "Idempotency-Key": H.new_id()})
         r.raise_for_status()
         return r.json()
-    code = call("POST", "enrollments", {"operator": "ana"})["code"]
+    code = call("POST", "enrollments", {"owner_id": "ana"})["code"]
     made = call("POST", "runners/enroll", {"code": code, "label": label, "platform": "linux"}, token="none")
     token = made["token"]
     claude = {"installed": True, "authenticated": "missing"}
@@ -117,7 +117,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="tico-computers-"))
     registry = tmp / "registry"
     registry.mkdir()
-    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": OWNER}))
+    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner_id": OWNER}))
     port = free_port()
     url = "http://127.0.0.1:%d" % port
     settings = Settings(db_path=tmp / "hub.db", registry_dir=registry, public_url=url, company_name="Acme",

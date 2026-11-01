@@ -112,8 +112,8 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     rows = []
     # One bot's runs as their own query text: `? IS NULL OR a.bot=?` would hide attempts_bot_state.
     found = list(c.execute(
-            "SELECT a.id,a.bot,a.started_at,a.created_at,a.finished_at,a.state,a.result,j.message_id FROM attempts a "
-            "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot=? " if bot is not None else "") +
+            "SELECT a.id,a.bot_id,a.started_at,a.created_at,a.finished_at,a.state,a.result,j.message_id FROM attempts a "
+            "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot_id=? " if bot is not None else "") +
             "AND (? IS NULL OR coalesce(a.finished_at,a.created_at)>=?) AND NOT EXISTS "
             "(SELECT 1 FROM turns t WHERE t.id=a.id) ORDER BY coalesce(a.finished_at,a.created_at) DESC LIMIT ?",
             ((bot,) if bot is not None else ()) + (since, since, limit)))
@@ -390,7 +390,7 @@ def default_bot(c, settings, botops="botops"):
 def docs_room(conv, who):
     """A person's own "Ask the Librarian" room. Its follow-ups reach the documentation agent
     whether or not the person is one of that bot's assigned users, as the first question did."""
-    return (conv.get("scope") == rooms.PERSONAL and conv.get("owner_actor") == who.actor
+    return (conv.get("scope") == rooms.PERSONAL and conv.get("owner_id") == who.actor
             and str(conv.get("room_key") or "").startswith("docs:")
             and "bot:" + DOC_BOT in conv["participants"])
 
@@ -399,12 +399,12 @@ def bot_owner_rows(c, registry, slug, people, configs, archived):
     """The people listed as a bot's owners: the creator and co-owners, and its operator. Whoever it reports
     up to and the Admins own it too, without being listed."""
     ids = list(dict.fromkeys([*A.owner_ids(registry["bot_owners"] if registry else None),
-                              *([registry["operator"]] if registry and registry["operator"] else [])]))
+                              *([registry["owner_id"]] if registry and registry["owner_id"] else [])]))
     return [{"id": i, "name": (P.person(i, people) or {}).get("name") or i} for i in ids]
 
 
 # A bot's computer, as machine() reads it; prime_machines reads it for many bots at once.
-ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.operator,r.last_seen_at,r.revoked_at,r.readiness,"
+ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,r.revoked_at,r.readiness,"
                     "r.platform,r.version,r.awake_since,r.screen,r.capabilities")
 ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?"
 
@@ -456,11 +456,11 @@ def machine(c, bot):
 def deploy_draining(c, bot):
     """When the deploy drained this bot (its latest drain was the deploy's, within the hour a
     deploy may hold it), else None. A drain a person set is theirs, not an update."""
-    row = c.execute("SELECT actor, ts FROM events WHERE action IN ('bot.drain','bot.pause','bot.resume') "
-                    "AND target=? ORDER BY ts DESC LIMIT 1", (bot,)).fetchone()
-    if not row or row["actor"] != "system:deploy" or row["ts"] < H.shift(H.now(), seconds=-3600):
+    row = c.execute("SELECT actor, created_at FROM events WHERE action IN ('bot.drain','bot.pause','bot.resume') "
+                    "AND target=? ORDER BY created_at DESC LIMIT 1", (bot,)).fetchone()
+    if not row or row["actor"] != "system:deploy" or row["created_at"] < H.shift(H.now(), seconds=-3600):
         return None
-    return row["ts"]
+    return row["created_at"]
 
 
 def updating(c):
@@ -596,7 +596,7 @@ def operation_issues(c, who, auth):
             # message and scaled with the agent's unread inbox on every /status and /operations poll.
             unread = "delivered_at IS NULL" if location["agent"].get("synced") else "read_at IS NULL"
             waiting = [{"id": row["id"]} for row in c.execute(
-                "SELECT id FROM messages WHERE to_actor=? AND " + unread + " "
+                "SELECT id FROM messages WHERE recipient_id=? AND " + unread + " "
                 "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", ("bot:" + slug, H.now()))]
             queued = len(privacy.readable_messages(c, privacy.actor(who), waiting))
         uncertain = jobs["uncertain"]
@@ -710,7 +710,7 @@ def operation_issues(c, who, auth):
             # One issue per machine, not one per bot: the person can only do one thing about it.
             entry = offline.setdefault(location["machine"]["runner_id"], {
                 "label": location["machine"]["label"], "since": location["machine"]["last_seen_at"],
-                "operator": location["machine"]["operator"], "bots": [], "slugs": [], "queued": 0})
+                "owner_id": location["machine"]["owner_id"], "bots": [], "slugs": [], "queued": 0})
             entry["bots"].append(bot["display_name"])
             entry["slugs"].append(slug)
             entry["queued"] += queued
@@ -731,7 +731,7 @@ def operation_issues(c, who, auth):
             # Work piling up behind a computer that stopped checking in is an outage, not a blip. Its owner is the one
             # who can bring it back (the company owner when no current person enrolled it), so after a while it is
             # theirs to handle; the title stays the same as the minutes pass, so it opens for them once.
-            operator = entry["operator"] or ""
+            operator = entry["owner_id"] or ""
             person = P.person(operator, roster(c)) if operator else None
             mine = who.actor == "human:" + operator or (who.role == "owner" and (not person or bool(person.get("hidden"))))
             add("machine", entry["label"] + " stopped checking in",
@@ -747,7 +747,7 @@ def operation_issues(c, who, auth):
     if who.role == "owner":
         # Container backups report through replication; imported VM timer history stays historical.
         managed_backups = bool(os.environ.get("TICO_BACKUP_MODE"))
-        for row in c.execute("SELECT id,label,operator,last_seen_at,revoked_at,version,checkout,restart_requested_at "
+        for row in c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,version,checkout,restart_requested_at "
                              "FROM runners WHERE revoked_at IS NULL"):
             online = row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-60)
             if online and not runner_version_supported(row["version"]):
@@ -904,7 +904,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
 
 # The queued job of a task. INDEXED BY jobs_queued: the expression on the message cannot use an index, and with the
 # stale sqlite_stat1 row for messages the planner scanned all of them (40-44 ms a call on TIDY v0.5.1, 545 an hour).
-TASK_WAIT_SQL = ("SELECT j.bot FROM jobs j INDEXED BY jobs_queued JOIN messages m ON m.id=j.message_id "
+TASK_WAIT_SQL = ("SELECT j.bot_id FROM jobs j INDEXED BY jobs_queued JOIN messages m ON m.id=j.message_id "
                  "JOIN conversations cv ON cv.id=m.conversation_id "
                  f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at LIMIT 1")
 
@@ -954,10 +954,10 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
     A run waiting for its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
     name the bot holding it."""
-    person = "m.from_actor LIKE 'human:%'"
-    which = (f"AND (j.bot=? OR {person}) " if bot and people else "AND j.bot=? " if bot
+    person = "m.sender_id LIKE 'human:%'"
+    which = (f"AND (j.bot_id=? OR {person}) " if bot and people else "AND j.bot_id=? " if bot
              else f"AND {person} " if people else "")
-    job = c.execute("SELECT j.*,m.from_actor AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested_at "
+    job = c.execute("SELECT j.*,m.sender_id AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested_at "
                     "FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
                     "AND coalesce(json_extract(m.refs,'$.maintenance'),'')!='checkpoint' "
@@ -973,7 +973,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             state = "uncertain" if state in ("running", "input") else "queued"
         elif state == "input":
             state = "running"
-        location = machine(c, job["bot"])
+        location = machine(c, job["bot_id"])
         label = {"queued": "Saved — queued", "leased": "Starting", "running": "Working",
                  "completed": "Complete", "canceled": "Delivery dismissed", "uncertain": "Stopped — saved for later"}.get(state, state)
         if state == "canceled" and job["stop_requested_at"]:
@@ -986,18 +986,18 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         if state in ("leased", "running") and job["attempt_id"]:
             # Before it starts, or after: a fallback hop takes its own login once the turn has started.
             from .login_waits import waiting as login_wait
-            waiting = login_wait(c, job["attempt_id"], job["bot"], who, auth)
+            waiting = login_wait(c, job["attempt_id"], job["bot_id"], who, auth)
             label = waiting or label
         readiness_reason = ""
         if state == "queued":
             message = H.message(c, job["message_id"]) or {}
             behind = c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id JOIN attempts a ON a.id=j.attempt_id "
-                               "WHERE m.conversation_id=? AND j.bot=? AND a.state IN ('leased','running') LIMIT 1",
-                               (cid, job["bot"])).fetchone()
-            label, readiness_reason = queued_label(c, job["bot"], location, settings,
-                                                   human=H.is_human(message.get("from_actor") or ""), behind=bool(behind),
+                               "WHERE m.conversation_id=? AND j.bot_id=? AND a.state IN ('leased','running') LIMIT 1",
+                               (cid, job["bot_id"])).fetchone()
+            label, readiness_reason = queued_label(c, job["bot_id"], location, settings,
+                                                   human=H.is_human(message.get("sender_id") or ""), behind=bool(behind),
                                                    queued=(message.get("refs") or {}).get("delivery") == "queue")
-            if ((H.status(c, job['bot']) or {}).get('state') == 'limited'
+            if ((H.status(c, job['bot_id']) or {}).get('state') == 'limited'
                     and (reason := login_holds.fallback_resume_reason(c, job['attempt_id']))):
                 label = 'Saved — ' + reason
         parts = []
@@ -1008,10 +1008,10 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             # A bot that org rules apply to shows that it works and its tool steps, never its reply before the reply
             # is checked and delivered (backend/org_rule_check.py).
             from .org_rule_check import watched
-            if watched(c, job["bot"]):
+            if watched(c, job["bot_id"]):
                 parts = [p for p in parts if p["kind"] == "tool"]
         parts, omitted = live_parts(parts)
-        execution = {"job_id": job["id"], "message_id": job["message_id"], "bot": job["bot"],
+        execution = {"job_id": job["id"], "message_id": job["message_id"], "bot_id": job["bot_id"],
                      "attempt_id": job["attempt_id"], "state": state, "label": label,
                      "text": "\n\n".join(p["text"] for p in parts if p["kind"] != "tool"), "parts": parts,
                      "from_person": H.is_human(job["sender"]), **location}
@@ -1071,7 +1071,7 @@ def prime_list_origins(c, visible_sql, rows):
     read_cache.prime(c, _VISIBLE_TASK_SQL % visible_sql, {(row["id"],): row for row in rows})
     TR.prime_ancestry(c, [row["id"] for row in rows])
     # Only rows whose requester is not a person walk their ancestors (person_origin).
-    chain = {tid for row in rows if not H.is_human(row.get("requester")) for tid in TR.ancestors(c, row["id"])}
+    chain = {tid for row in rows if not H.is_human(row.get("requester_id")) for tid in TR.ancestors(c, row["id"])}
     _prime_person_origins(c, visible_sql, chain - {row["id"] for row in rows})
 
 
@@ -1084,24 +1084,24 @@ def person_origin(c, row, visible_sql, me=None):
         return read_cache.one(c, _VISIBLE_TASK_SQL % visible_sql, (tid,))
     if not row or not readable(row["id"]):
         return None
-    if me and row.get("requester") == row.get("owner") == me:
+    if me and row.get("requester_id") == row.get("owner_id") == me:
         return None
-    if H.is_human(row.get("requester")):
-        return row["requester"]
+    if H.is_human(row.get("requester_id")):
+        return row["requester_id"]
     from .task_relations import ancestors
     for tid in ancestors(c, row["id"]):
         parent = readable(tid)
         if not parent:
             return None
-        if H.is_human(parent["requester"]):
-            return parent["requester"]
+        if H.is_human(parent["requester_id"]):
+            return parent["requester_id"]
     return None
 
 
 def pressing(it, now=None):
     """A bot's item that may go ahead of a person's: due within a day or overdue, or waiting long enough."""
     now = now or H.now()
-    due = it.get("due")
+    due = it.get("due_at")
     if due and str(due) <= H.shift(now, days=1):
         return True
     days = DECISIVE_DAYS if KIND_RANK.get(it.get("kind"), 9) <= 1 else PRESSING_DAYS
@@ -1197,7 +1197,7 @@ _YES_NO = frozenset("approve can could should shall may do does did is are was w
 def deadline(item):
     """When the card is due: a person's task's due date. A bot's own task's due is when it looks again, not a date
     anyone owes it by."""
-    return item.get("due") if item.get("kind") != "approval" and not H.is_bot(item.get("owner")) else None
+    return item.get("due_at") if item.get("kind") != "approval" and not H.is_bot(item.get("owner_id")) else None
 
 
 def yes_no_ask(text):
@@ -1239,7 +1239,7 @@ def recommendation(ask, me):
     """What the bot that asked `me` recommends ({"do", "ask", "option"}), from what it said it would do if nobody
     answered (`if_no_answer`), or None. `option` is the label of the one question's option it names, so taking it
     answers that question exactly as picking it would."""
-    if not ask or ask.get("to_actor") != me or not H.is_bot(ask.get("from_actor")):
+    if not ask or ask.get("recipient_id") != me or not H.is_bot(ask.get("sender_id")):
         return None
     default = (ask.get("refs") or {}).get("if_no_answer") or {}
     do = str(default.get("do") or "").strip()
@@ -1256,9 +1256,9 @@ def recommendation(ask, me):
 def _whole_card(c, task, asked, me):
     """Whether `task`, which `me` owns, exists only to put this one ask to them: the bot that asked filed it, nothing
     else on it asks them, and it is the card the bot filed for its ask (H.ask_card) or says just that question."""
-    if task["requester"] != asked["from_actor"]:
+    if task["requester_id"] != asked["sender_id"]:
         return False
-    if any(a["id"] != asked["id"] and a["to_actor"] == me for a in H.open_task_asks(c, task)):
+    if any(a["id"] != asked["id"] and a["recipient_id"] == me for a in H.open_task_asks(c, task)):
         return False
     said = lambda text: " ".join(str(text or "").split()).casefold()  # noqa: E731
     return H.ask_card(c, task) == me or said(asked.get("body")) in {
@@ -1271,7 +1271,7 @@ def _another_card_under(c, row, answered, me):
     for t in H.descendants(c, row["id"]):
         if t["id"] == answered or t["status"] not in H.ACTIVE_STATUSES:
             continue
-        if t["owner"] == me or any(a["to_actor"] == me for a in H.open_task_asks(c, t)):
+        if t["owner_id"] == me or any(a["recipient_id"] == me for a in H.open_task_asks(c, t)):
             return True
     return False
 
@@ -1285,7 +1285,7 @@ def take_recommendation(c, auth, who, asked, version=None):
     wakes on the answer as on any other."""
     from . import models as M
     from .task_review import answer_task
-    if asked["to_actor"] != who.actor:
+    if asked["recipient_id"] != who.actor:
         raise Problem("forbidden", "Only the person it asked takes its recommendation", 403)
     rec = recommendation(asked, who.actor)
     if not rec:
@@ -1297,7 +1297,7 @@ def take_recommendation(c, auth, who, asked, version=None):
     task = H.task(c, task_id) if task_id else None
     if task and version is not None and task["version"] != version:
         raise Problem("version_conflict", "Task changed; fetch it and retry", 409)
-    finish = bool(task and task["owner"] == who.actor and _whole_card(c, task, asked, who.actor))
+    finish = bool(task and task["owner_id"] == who.actor and _whole_card(c, task, asked, who.actor))
     if rec["option"] and task_id:
         question = asked["refs"]["questions"][0]
         # A question on a file version is answered through its file and version.
@@ -1312,7 +1312,7 @@ def take_recommendation(c, auth, who, asked, version=None):
             H.task_update(c, who.actor, task_id, status="done", note=text)
         waits = [t for t in [task, *(H.task(c, a) for a in TR.ancestors(c, task_id))]
                  if t and t["status"] == "waiting" and t.get("waiting_on") == who.actor
-                 and (t is task or t["owner"] == asked["from_actor"] and not _another_card_under(c, t, task_id, who.actor))]
+                 and (t is task or t["owner_id"] == asked["sender_id"] and not _another_card_under(c, t, task_id, who.actor))]
         for t in waits:
             c.execute("UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE id=?", (H.now(), t["id"]))
             H._task_event(c, t["id"], who.actor, "waiting_on", who.actor, None, text)
@@ -1379,7 +1379,7 @@ def fold_related(items, c, me):
     card (its parent, grandparent, ...), one the card blocks, and a waiting subtask of such a folded parent. A card is
     the person's own task or one with an ask to them. A wait with no card above or beside it this way, or one that
     would fold into two cards, keeps its own card: siblings under one project are not one blocker."""
-    mine = lambda it: it.get("owner") == me or (it.get("ask") or {}).get("to_actor") == me  # noqa: E731
+    mine = lambda it: it.get("owner_id") == me or (it.get("ask") or {}).get("recipient_id") == me  # noqa: E731
     waits = {str(it["id"]): it for it in items if it["kind"] == "waiting" and not mine(it)}
     anchors = [it for it in items if it["kind"] in ("task", "question", "waiting") and mine(it)]
     if not waits or not anchors:
@@ -1404,9 +1404,9 @@ def fold_related(items, c, me):
 # Plans on messages_superseded_asks_to: on messages_to_delivered it walked every message to the person (31k on Tico
 # Team, 43 ms warm) to find a few hundred replaced asks.
 WITHDRAWN_ASKS_SQL = (
-    "SELECT count(*) FROM messages s WHERE s.to_actor=? AND s.kind='ask' AND s.superseded_at>=? "
-    "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.kind='ask' AND m.to_actor=s.to_actor "
-    "AND m.from_actor=s.from_actor AND m.conversation_id=s.conversation_id AND m.rowid>s.rowid "
+    "SELECT count(*) FROM messages s WHERE s.recipient_id=? AND s.kind='ask' AND s.superseded_at>=? "
+    "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.kind='ask' AND m.recipient_id=s.recipient_id "
+    "AND m.sender_id=s.sender_id AND m.conversation_id=s.conversation_id AND m.rowid>s.rowid "
     f"AND {H.OPEN_ASK_SQL})")
 
 
@@ -1415,16 +1415,16 @@ def went_away(c, me, days=7):
     default, an ask or approval withdrawn (superseded by a newer one, or no longer needed), and what their Assistant
     answered for them."""
     since = H.shift(H.now(), days=-days)
-    expired = c.execute("SELECT count(*) FROM events WHERE ts>=? AND action IN ('ask.expired','ask.went_ahead') "
+    expired = c.execute("SELECT count(*) FROM events WHERE created_at>=? AND action IN ('ask.expired','ask.went_ahead') "
                         "AND json_extract(detail,'$.to')=?", (since, me)).fetchone()[0]
     # A question a newer one from the same bot replaced, still open in the same thread, did not go away: it is asked
     # again, so only one with no open successor counts.
     withdrawn = (c.execute(WITHDRAWN_ASKS_SQL, (me, since)).fetchone()[0]
-                 + c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "
+                 + c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.recipient_id=? "
                              "AND a.decision='withdrawn' AND a.decided_at>=?", (me, since)).fetchone()[0])
-    assistant = (c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "
+    assistant = (c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.recipient_id=? "
                            "AND a.decided_via='assistant' AND a.decided_at>=?", (me, since)).fetchone()[0]
-                 + c.execute("SELECT count(*) FROM messages WHERE from_actor=? AND kind='answer' AND created_at>=? "
+                 + c.execute("SELECT count(*) FROM messages WHERE sender_id=? AND kind='answer' AND created_at>=? "
                              "AND json_extract(refs,'$.via')='assistant'", (me, since)).fetchone()[0])
     return {"expired": expired, "withdrawn": withdrawn, "assistant": assistant,
             "total": expired + withdrawn + assistant, "days": days}
@@ -1435,12 +1435,12 @@ def person_ask(row, kind, me, ask):
     and to sort by. A task a bot set waiting on me asks in its waiting note, one given to me by a bot in its body's
     first paragraph, each when it passes H.lint_person_ask. A waiting card has its ask missing when neither that
     nor an open question to me asks; a task a person asked for, or a question card, never does."""
-    if kind == "waiting" and H.is_bot(row.get("owner")):
+    if kind == "waiting" and H.is_bot(row.get("owner_id")):
         text = str(row.get("note") or "").strip()
         if H.lint_person_ask(text):
-            return "", not (ask and ask.get("to_actor") == me)
+            return "", not (ask and ask.get("recipient_id") == me)
         return text, False
-    if row.get("owner") == me and H.is_bot(row.get("requester")):
+    if row.get("owner_id") == me and H.is_bot(row.get("requester_id")):
         text = H.person_ask_of_body(row.get("body"), row.get("title"))
         return ("" if H.lint_person_ask(text) else text), False
     return "", False
@@ -1461,22 +1461,22 @@ def recent_bots(c, auth, who, since, limit, needs):
             seen[slug] = ts
     # Discovery window: one readable_messages prime (not message_readable per row), then task_sql for tasks.
     recent_msgs = [dict(r) for r in c.execute(
-        "SELECT id, from_actor, to_actor, created_at FROM messages WHERE created_at>=? AND "
-        "((from_actor=? AND to_actor LIKE 'bot:%') OR (to_actor=? AND from_actor LIKE 'bot:%'))",
+        "SELECT id, sender_id, recipient_id, created_at FROM messages WHERE created_at>=? AND "
+        "((sender_id=? AND recipient_id LIKE 'bot:%') OR (recipient_id=? AND sender_id LIKE 'bot:%'))",
         (since, me, me))]
     for row in privacy.readable_messages(c, privacy.actor(who), recent_msgs):
-        touch(H.actor_id(row["to_actor"] if row["from_actor"] == me else row["from_actor"]), row["created_at"])
+        touch(H.actor_id(row["recipient_id"] if row["sender_id"] == me else row["sender_id"]), row["created_at"])
     visible = auth.task_sql(c, who)
     for row in c.execute(
-            "SELECT id, owner, requester, updated_at FROM tasks WHERE updated_at>=? AND "
-            f"((requester=? AND owner LIKE 'bot:%') OR (owner=? AND requester LIKE 'bot:%')) AND ({visible})",
+            "SELECT id, owner_id, requester_id, updated_at FROM tasks WHERE updated_at>=? AND "
+            f"((requester_id=? AND owner_id LIKE 'bot:%') OR (owner_id=? AND requester_id LIKE 'bot:%')) AND ({visible})",
             (since, me, me)):
-        touch(H.actor_id(row["owner"] if row["requester"] == me else row["requester"]), row["updated_at"])
+        touch(H.actor_id(row["owner_id"] if row["requester_id"] == me else row["requester_id"]), row["updated_at"])
     waiting = {}
     for item in needs:
         # A task waiting on the person waits with the bot that owns it, whoever asked for it.
-        actors = ((item.get("owner"),) if item.get("kind") == "waiting" else
-                  (item.get("origin_actor"), (item.get("ask") or {}).get("from_actor"), item.get("requester"), item.get("owner")))
+        actors = ((item.get("owner_id"),) if item.get("kind") == "waiting" else
+                  (item.get("origin_actor"), (item.get("ask") or {}).get("sender_id"), item.get("requester_id"), item.get("owner_id")))
         for actor in actors:
             if str(actor or "").startswith("bot:"):
                 waiting.setdefault(H.actor_id(actor), []).append(item.get("title") or item.get("first_line") or "")
@@ -1492,15 +1492,15 @@ def recent_bots(c, auth, who, since, limit, needs):
         actor = H.bot_actor(slug)
         # Newest readable line each way. Lazy, not a fixed window: deleted or unreadable newest rows must not
         # hide an older readable one, and the first row is readable almost always.
-        mine = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? "
+        mine = next((m for m in c.execute("SELECT * FROM messages WHERE sender_id=? AND recipient_id=? "
                     "ORDER BY created_at DESC", (me, actor)) if privacy.message_readable(c, privacy.actor(who), m)), None)
-        theirs = next((m for m in c.execute("SELECT * FROM messages WHERE from_actor=? AND to_actor=? AND deleted_at IS NULL "
+        theirs = next((m for m in c.execute("SELECT * FROM messages WHERE sender_id=? AND recipient_id=? AND deleted_at IS NULL "
                       "ORDER BY created_at DESC", (actor, me)) if privacy.message_readable(c, privacy.actor(who), m)), None)
 
         conversation = next((m["conversation_id"] for m in sorted(filter(None, (mine, theirs)),
                              key=lambda m: m["created_at"], reverse=True) if m["conversation_id"]), None)
-        tasks = c.execute("SELECT id, title, status, owner, updated_at FROM tasks WHERE status IN "
-                          "('open','doing','waiting','review','ready') AND ((owner=? AND requester=?) OR (owner=? AND requester=?)) "
+        tasks = c.execute("SELECT id, title, status, owner_id, updated_at FROM tasks WHERE status IN "
+                          "('open','doing','waiting','review','ready') AND ((owner_id=? AND requester_id=?) OR (owner_id=? AND requester_id=?)) "
                           "ORDER BY updated_at DESC LIMIT 5", (actor, me, me, actor)).fetchall()
         current = H.task(c, status["task_id"]) if status.get("task_id") else None
         out.append({
@@ -1512,7 +1512,7 @@ def recent_bots(c, auth, who, since, limit, needs):
             "you_said": {"text": _clip(mine["body"]), "at": mine["created_at"]} if mine else None,
             "it_said": {"text": _clip(theirs["body"]), "at": theirs["created_at"]} if theirs else None,
             "open_tasks": [{"id": t["id"], "title": t["title"], "status": t["status"],
-                            "owner": t["owner"], "updated_at": t["updated_at"]} for t in tasks],
+                            "owner_id": t["owner_id"], "updated_at": t["updated_at"]} for t in tasks],
             "needs_you": waiting.get(slug, []),
         })
     return out
@@ -1575,7 +1575,7 @@ def roadmap_entry(c, t):
         return None
     step = c.execute("SELECT name FROM task_steps WHERE id=?", (t.get("step_id"),)).fetchone()
     return {"id": t["id"], "title": t["title"], "kind": "roadmap", "step": step[0] if step else None,
-            "due": t.get("due")}
+            "due_at": t.get("due_at")}
 
 
 def holds_up(c, row, readable):
@@ -1594,14 +1594,14 @@ def holds_up(c, row, readable):
         t = H.task(c, tid) if tid != row["id"] else row
         if not t or t["status"] in ("closed", "declined", "done") or not readable(tid):
             continue
-        if when_of(t.get("due")):
-            dues.append(t["due"])
+        if when_of(t.get("due_at")):
+            dues.append(t["due_at"])
         if roadmap is None and tid != row["id"]:
             roadmap = roadmap_entry(c, t)
     held = roadmap
     parent = H.task(c, chain[1]) if len(chain) > 1 else None
     if held is None and parent and readable(parent["id"]):
-        held = {"id": parent["id"], "title": parent["title"], "kind": "task", "step": None, "due": parent.get("due")}
+        held = {"id": parent["id"], "title": parent["title"], "kind": "task", "step": None, "due_at": parent.get("due_at")}
     if held is not None:
         held["soonest"] = min(dues, key=when_of) if dues else None
     return held
@@ -1614,8 +1614,8 @@ def decide_tier(item, now=None, own=None):
     it, but it counts here like the item it holds up. How old a card is never moves it up."""
     soon = when_of(business_days_ahead(now or H.now(), SOON_BUSINESS_DAYS))
     ask, held, own = item.get("ask") or {}, item.get("holds_up") or {}, own or {}
-    dates = [ask.get("goes_ahead_at"), ((ask.get("refs") or {}).get("if_no_answer") or {}).get("by"), held.get("due"),
-             held.get("soonest"), own.get("due"), deadline(item)]
+    dates = [ask.get("goes_ahead_at"), ((ask.get("refs") or {}).get("if_no_answer") or {}).get("by"), held.get("due_at"),
+             held.get("soonest"), own.get("due_at"), deadline(item)]
     if any(when_of(d) and when_of(d) <= soon for d in dates):
         return 0
     return 1 if any(r.get("kind") == "roadmap" and r.get("step") in ROADMAP_LIVE_STEPS for r in (held, own)) else 2
@@ -1683,7 +1683,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     H.prime_tasks(c, chain)
     # H.needs_you already read every pending approval's message for this snapshot.
     privacy.prime_messages(c, [m for row in raw["approvals"]
-                               if (m := H.message(c, row["message_id"])) and m["to_actor"] == who.actor])
+                               if (m := H.message(c, row["message_id"])) and m["recipient_id"] == who.actor])
     H.prime_task_origins(c, [row["id"] for row in cards])
     chain_seen = _prime_person_origins(c, visible, chain)     # the chain's visibility, read once with its rows
     pipelines = H.type_list(c)
@@ -1703,7 +1703,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             if row["id"] not in can_see:
                 continue
             open_asks = asks_of[row["id"]]
-            ask = next((a for a in open_asks if a["to_actor"] == who.actor), None) or next(iter(open_asks), None)
+            ask = next((a for a in open_asks if a["recipient_id"] == who.actor), None) or next(iter(open_asks), None)
             if ask and (ask.get("refs") or {}).get("if_no_answer"):
                 ask["goes_ahead_at"] = ask_deadlines.deadline(ask, rules)     # when the bot's default goes ahead
             typ = next((t for t in pipelines if t["id"] == (row.get("type_id") or H.GENERAL_TYPE)), None) or {}
@@ -1713,7 +1713,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                     "steps_only": bool(typ.get("steps_only")),
                     "origin_actor": H.task_origin(c, row), "ask": ask, "open_asks": len(open_asks),
                     "first_line": (row.get("body") or "").split("\n")[0],
-                    "from_person": (ask["from_actor"] if ask and H.is_human(ask["from_actor"])
+                    "from_person": (ask["sender_id"] if ask and H.is_human(ask["sender_id"])
                                     else person_origin(c, row, visible, who.actor))}
             item["person_ask"], item["ask_missing"] = person_ask(row, item["kind"], who.actor, ask)
             if row["id"] in reconnect_cards:
@@ -1728,30 +1728,30 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 # The Strategy Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs
                 # you.
                 item["merged"] = [t for t in merged[row["id"]] if t in can_see]
-            if ask and ask.get("to_actor") == who.actor and H.ask_older(ask):
+            if ask and ask.get("recipient_id") == who.actor and H.ask_older(ask):
                 ask["stale"] = True      # its one-click Clarify (backend/clarify_asks.py) shows on the card
             items.append(item)
     for msg in privacy.readable_messages(c, privacy.actor(who), H.loose_asks_to(c, who.actor)):
         msg["refs"] = H._json(msg.get("refs"), {}) or {}
         ask = {k: msg[k] for k in ("id", "from_actor", "to_actor", "body", "created_at", "conversation_id", "refs")}
         item = {"kind": "ask", "id": msg["id"], "message_id": msg["id"], "title": _clip(msg["body"], 160),
-                "first_line": (msg["body"] or "").split("\n")[0], "body": msg["body"], "requester": msg["from_actor"],
-                "origin_actor": msg["from_actor"], "conversation_id": msg["conversation_id"],
+                "first_line": (msg["body"] or "").split("\n")[0], "body": msg["body"], "requester_id": msg["sender_id"],
+                "origin_actor": msg["sender_id"], "conversation_id": msg["conversation_id"],
                 "created_at": msg["created_at"], "ask": ask,
-                "from_person": msg["from_actor"] if H.is_human(msg["from_actor"]) else None,
+                "from_person": msg["sender_id"] if H.is_human(msg["sender_id"]) else None,
                 "recommend": recommendation(ask, who.actor)}
         if H.ask_older(msg):
             ask["stale"] = True
         items.append(item)
     for row in raw["approvals"]:
         msg = H.message(c, row["message_id"])
-        if msg and msg["to_actor"] == who.actor and privacy.message_readable(c, privacy.actor(who), msg):
+        if msg and msg["recipient_id"] == who.actor and privacy.message_readable(c, privacy.actor(who), msg):
             # Its task's title only when the person may read that task.
             task = (H.task(c, row["task_id"])
                     if row.get("task_id") and row["task_id"] in can_see else None)
             item = {**row, "kind": "approval", "what": row["kind"],
                     "title": approval_title(row["kind"], row.get("payload"), (task or {}).get("title")),
-                    "requester": row["requested_by"], "conversation_id": msg["conversation_id"],
+                    "requester_id": row["requested_by_id"], "conversation_id": msg["conversation_id"],
                     "from_person": person_origin(c, task, visible)}
             if row["kind"] == "send":
                 item["attachment_files"] = approval_files(c, auth, who, row.get("payload"))
@@ -1883,16 +1883,16 @@ def needs_actor(it, me):
     """The teammate one Needs-you item goes with (needs_bots), or None."""
     actor = None
     if it.get("kind") == "approval":
-        actor = it.get("requested_by") or it.get("requester")
+        actor = it.get("requested_by") or it.get("requester_id")
     elif it.get("kind") == "ask":
-        actor = it.get("requester")
+        actor = it.get("requester_id")
     elif it.get("kind") in ("task", "question", "waiting"):
         ask = it.get("ask") or {}
         on = it.get("waiting_on") if it.get("status") == "waiting" and H.is_human(it.get("waiting_on")) else None
         on = on or (it.get("reconnect") or {}).get("person")
-        if it.get("owner") == me or ask.get("to_actor") == me or on == me:
-            asked = (it.get("origin_actor") or "keeper") if it.get("requester") == "keeper" else it.get("requester")
-            options = [it.get("owner")] if on == me else [ask.get("from_actor"), asked, it.get("owner")]
+        if it.get("owner_id") == me or ask.get("recipient_id") == me or on == me:
+            asked = (it.get("origin_actor") or "keeper") if it.get("requester_id") == "keeper" else it.get("requester_id")
+            options = [it.get("owner_id")] if on == me else [ask.get("sender_id"), asked, it.get("owner_id")]
             actor = (next((a for a in options if H.is_bot(a) and a != me), None)
                      or next((a for a in options if a and a != me), None))
     return actor
@@ -1915,14 +1915,14 @@ def fleet_snapshot(c, auth, identity, task_view):
     task_rows = [dict(t) for t in c.execute(f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE {privacy.STATUS_TASKS_SQL}")]
     bot_tasks = {}
     for task in task_rows:
-        for actor in {task["owner"], task["requester"]}:
+        for actor in {task["owner_id"], task["requester_id"]}:
             if H.is_bot(actor):
                 bot_tasks.setdefault(H.actor_id(actor), []).append(task)
     statuses = {s["bot"]: dict(s) for s in c.execute("SELECT * FROM bot_status")}
     queued = {}
     from .privacy_index import ReadIndex
     index = ReadIndex(c, principal)
-    for m in c.execute("SELECT m.*,j.bot,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'"):
+    for m in c.execute("SELECT m.*,j.bot_id,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'"):
         if (not dict(m).get("deleted_at") and not dict(m).get("deleted") and
                 index.message(m["id"], m["conversation_id"], m["refs"], m["in_reply_to"]) and
                 (not m["attempt_id"] or index.attempt(m["attempt_id"]))):
@@ -1931,7 +1931,7 @@ def fleet_snapshot(c, auth, identity, task_view):
     now = H.now()
     live_by_bot = {}
     for row in c.execute(
-            "SELECT id,bot,state,started_at,lease_until,created_at FROM attempts "
+            "SELECT id,bot_id,state,started_at,lease_until,created_at FROM attempts "
             "WHERE state IN ('leased','running') AND lease_until>? ORDER BY created_at DESC", (now,)):
         live_by_bot.setdefault(row["bot"], []).append(row)
     # machine() / presence used to re-SELECT assignment+agent rows once per readable bot; Health already primes.
@@ -1966,7 +1966,7 @@ def fleet_snapshot(c, auth, identity, task_view):
                      "active_runs": len(active)})
     tasks = []
     for row in H.tasks(c, status=H.ACTIVE_STATUSES + ("declined",), visible=auth.task_sql(c, principal)):
-        actors = (row["owner"], row["requester"])
+        actors = (row["owner_id"], row["requester_id"])
         relevant = principal.actor in actors or any(
             str(actor).startswith("bot:") and H.actor_id(actor) in allowed for actor in actors)
         if not relevant:
@@ -2061,9 +2061,9 @@ def install_views(app, store, auth, mutate, task_view):
         open_tasks = {}
         read_now = [slug for slug in shown if access.get(slug, auth.FULL)["read"]]
         for part in H.chunks(read_now):
-            for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner IN (" + ",".join("?" * len(part)) +
+            for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner_id IN (" + ",".join("?" * len(part)) +
                                           ") AND status IN ('open','doing')", ["bot:" + slug for slug in part])):
-                open_tasks.setdefault(H.actor_id(task["owner"]), []).append(task)
+                open_tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
         # Each bot's task flow counts, all bots at once: the wait and step checks are read once for every task.
         task_flow = auto_tasks.counts_many(c, {slug: open_tasks.get(slug, []) for slug in read_now}, who)
         from .shared_bots import _json as config_of
@@ -2103,7 +2103,7 @@ def install_views(app, store, auth, mutate, task_view):
             # Who may manage the bot (`Auth.bot_manager`), with the audiences and its owners when they may.
             pid = H.actor_id(who.actor)
             manager = (who.role == "owner" or (who.role == "human" and (
-                auth.bot_admin(who) or (registry and (registry["operator"] == pid
+                auth.bot_admin(who) or (registry and (registry["owner_id"] == pid
                                                       or pid in A.owner_ids(registry["bot_owners"])))
                 or P.manages(pid, "bot", slug, people, configs, archived, bare))))
             policy = {"can_manage": manager, "bot_owners": bot_owner_rows(c, registry, slug, people, configs, archived)}
@@ -2123,7 +2123,7 @@ def install_views(app, store, auth, mutate, task_view):
                              "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
                              **strategy_bot.chart_hidden_row(slug, hide_strategy),
                              "report_position": places.get("bot:" + slug),
-                             "operator": registry["operator"] if registry else None,
+                             "owner_id": registry["owner_id"] if registry else None,
                              "is_branch": bool((configs.get(slug) or {}).get("shared_from")),
                              "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
                              "icon": icon_of(configs.get(slug, {}) or {}),
@@ -2166,7 +2166,7 @@ def install_views(app, store, auth, mutate, task_view):
                          "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
                          **strategy_bot.chart_hidden_row(slug, hide_strategy),
                          "report_position": places.get("bot:" + slug),
-                         "operator": registry["operator"] if registry else None,
+                         "owner_id": registry["owner_id"] if registry else None,
                          "revision": registry["revision"] if registry else None,
                          "goals": (registry["goals"] if registry else "") or "",
                          "goal_active": readable_active(c, auth, who, slug, goals.get(slug, [])),
@@ -2355,7 +2355,7 @@ def install_views(app, store, auth, mutate, task_view):
             from . import browser_exit
             # One pass each for every computer's internet sharing and today's bytes through it.
             exit_policies, exit_used = browser_exit.policies(c), browser_exit.used_today_all(c)
-            runners = list(c.execute("SELECT id,label,operator,last_seen_at,revoked_at,platform,version,capacity,readiness,"
+            runners = list(c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,platform,version,capacity,readiness,"
                                       "accepts_member_bots,turns_at_once,screen,performance,capabilities,"
                                       "restart_since,"
                                       "readiness_at FROM runners ORDER BY created_at"))
@@ -2370,7 +2370,7 @@ def install_views(app, store, auth, mutate, task_view):
                 # Every person sees every working computer; only an admin or its operator may change it, and only
                 # they read its signed-in accounts, own login's usage and key previews (#610, as in /v2/computers).
                 # Another member gets the bots they may see on it.
-                manage = auth.bot_admin(who) or who.actor == "human:" + row["operator"]
+                manage = auth.bot_admin(who) or who.actor == "human:" + row["owner_id"]
                 if not manage and row["revoked_at"]:
                     continue
                 hidden = set() if manage else unseen
@@ -2479,11 +2479,11 @@ def install_views(app, store, auth, mutate, task_view):
             # surfaces as a health issue, cancelled work is history.
             readable = auth.bot_accesses(c, who)
             jobs = [row for row in c.execute(
-                "SELECT j.*,a.started_at,t.title AS task_title,m.from_actor FROM jobs j "
+                "SELECT j.*,a.started_at,t.title AS task_title,m.sender_id FROM jobs j "
                 "LEFT JOIN attempts a ON a.id=j.attempt_id JOIN messages m ON m.id=j.message_id "
                 f"JOIN conversations cv ON cv.id=m.conversation_id LEFT JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
                 "WHERE j.state IN ('queued','leased','running','input') ORDER BY j.created_at")
-                if readable.get(row["bot"], auth.FULL)["read"]]
+                if readable.get(row["bot_id"], auth.FULL)["read"]]
             # Every job's message and run are read and checked together, not a few queries per job. A deleted
             # message is not readable, as H.message (which leaves it out) made it.
             shown = {m["id"] for m in privacy.readable_messages(c, privacy.actor(who),
@@ -2495,8 +2495,8 @@ def install_views(app, store, auth, mutate, task_view):
                 if row["attempt_id"] and not privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]):
                     continue
                 # Never the message text: a shared bot's private chats belong to their people.
-                title = row["task_title"] or "Message from " + H.actor_id(row["from_actor"])
-                item = {"employee": row["bot"], "bot": row["bot"], "id": row["id"], "started_at": row["started_at"],
+                title = row["task_title"] or "Message from " + H.actor_id(row["sender_id"])
+                item = {"employee": row["bot_id"], "bot_id": row["bot_id"], "id": row["id"], "started_at": row["started_at"],
                         "state": row["state"], "created_at": row["created_at"],
                         "title": title if len(title) <= 80 else title[:79].rstrip() + "\u2026"}
                 (queued if row["state"] == "queued" else active).append(item)
@@ -2569,7 +2569,7 @@ def install_views(app, store, auth, mutate, task_view):
             # Newest readable bot-owned done tasks with a long enough note. Filter with task_sql in one pass
             # (not auth.task per candidate); 120 is the activity cap beside product releases.
             activity = [dict(r) for r in c.execute(
-                "SELECT id,title,owner,note,done_at,updated_at FROM tasks WHERE status='done' AND substr(owner,1,4)='bot:' "
+                "SELECT id,title,owner_id,note,done_at,updated_at FROM tasks WHERE status='done' AND substr(owner_id,1,4)='bot:' "
                 f"AND length(note)>=20 AND ({auth.task_sql(c, who)}) "
                 "ORDER BY COALESCE(NULLIF(done_at,''),updated_at) DESC LIMIT 120")] \
                 if kind != "product" and not unread and since_version is None else []
@@ -2692,7 +2692,7 @@ def install_views(app, store, auth, mutate, task_view):
             session = c.execute("SELECT * FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
                                 (bot, str(runtime), model)).fetchone() if runtime else None
             if session and any(not privacy.attempt_readable(c, privacy.actor(who), r[0]) for r in c.execute(
-                    "SELECT id FROM attempts WHERE bot=? AND thread_id=?", (bot, session["thread_id"]))):
+                    "SELECT id FROM attempts WHERE bot_id=? AND thread_id=?", (bot, session["thread_id"]))):
                 session = None
             return {"cloud": True, "current": True, "runtime": runtime, "model": model,
                     "session_id": (session["thread_id"] if session
@@ -2775,7 +2775,7 @@ def install_views(app, store, auth, mutate, task_view):
     def task_chat(c, who, tid, text=None, expected_recipient=None):
         human_only(who)
         task = auth.task(c, who, tid)
-        candidates = [task["owner"], task["requester"], H.task_origin(c, task)]
+        candidates = [task["owner_id"], task["requester_id"], H.task_origin(c, task)]
         # No assistant fallback since its chat was retired: a task with no bot has nobody to chat to.
         slug = next((H.actor_id(p) for p in candidates if str(p).startswith("bot:")
                      and auth.visible_bot(c, who, H.actor_id(p)) and H.bot(c, H.actor_id(p))), None)

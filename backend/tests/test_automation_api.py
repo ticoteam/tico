@@ -8,7 +8,7 @@ NOTE_STEP = {"id": "tell", "type": "action", "enabled": True, "do": "wake_bot", 
 
 
 def flow(**extra):
-    return {"name": "Morning check", "owner": "person:ana", "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
+    return {"name": "Morning check", "owner_id": "person:ana", "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
             "steps": [NOTE_STEP], **extra}
 
 
@@ -62,7 +62,7 @@ EVENING = {"type": "schedule", "cron": "0 18 * * *", "tz": "UTC"}
 def test_a_change_to_what_it_does_is_a_version_a_rename_or_pause_is_not(api):
     made = make(api)
     aid = made["id"]
-    assert aid.startswith("auto_") and made["version"] == 1 and made["owner"] == "person:ana" and made["can_edit"]
+    assert aid.startswith("auto_") and made["version"] == 1 and made["owner_id"] == "person:ana" and made["can_edit"]
     edited = patch(api, aid, {"name": "Morning check · weekdays", "enabled": False, "spend_cap": {"per_30m": 2}})
     assert edited["version"] == 1 and edited["enabled"] is False and edited["spend_cap"] == {"per_30m": 2}
     assert "spend_cap" not in patch(api, aid, {"spend_cap": None})          # null: back to the bot's own limit
@@ -167,7 +167,7 @@ def test_what_wakes_bots_is_the_hubs_read_only_builtin_the_top_may_only_pause(ap
     assert len(wakes) == 1 and wakes[0]["builtin"] is True and wakes[0]["can_edit"] is False
     assert wakes[0]["can_pause"] is True                                   # the page shows the top its switch
     shown = get(api, f"automations/{wakes[0]['id']}")
-    assert shown["owner"] == "person:ana" and shown["trigger"]["type"] == "event" and shown["readonly"] is True
+    assert shown["owner_id"] == "person:ana" and shown["trigger"]["type"] == "event" and shown["readonly"] is True
     assert shown["steps"] and all(s["type"] == "filter" for s in shown["steps"])
     aid = shown["id"]
     patch(api, aid, {"name": "Mine now"}, expected=403)                     # nobody edits it
@@ -187,7 +187,7 @@ def test_run_now_runs_the_flow_and_records_each_step(api):
     assert run["status"] == "ok" and run["version"] == 1 and run["finished_at"]
     assert [(s["id"], s["status"]) for s in run["steps"]] == [("tell", "ok"), ("off", "skipped")]
     with api.app.state.store.read() as c:
-        woke = c.execute("SELECT body, refs FROM messages WHERE to_actor='bot:ops' ORDER BY created_at DESC").fetchone()
+        woke = c.execute("SELECT body, refs FROM messages WHERE recipient_id='bot:ops' ORDER BY created_at DESC").fetchone()
     assert woke["body"] == "Look" and json.loads(woke["refs"])["automation"] == aid
     runs = get(api, f"automations/{aid}/runs")
     assert runs["runs"][0]["id"] == run["id"] and runs["daily"][0]["runs"] == 1 and runs["next"] is None
@@ -259,12 +259,12 @@ def test_the_librarian_gets_the_market_builtins_which_stand_down_for_the_teams_o
     automations.tick(api.app.state.store)
     automations.tick(api.app.state.store)                                  # made once
     brief = get(api, "automations/auto_builtin_market_briefing")
-    assert (brief["builtin"], brief["enabled"], brief["owner"], brief["trigger"]) == (
+    assert (brief["builtin"], brief["enabled"], brief["owner_id"], brief["trigger"]) == (
         True, True, "bot:librarian", {"type": "schedule", "cron": "0 7 * * *", "tz": "America/Los_Angeles"})
     assert [s["type"] for s in brief["steps"]] == ["bot_turn", "action"]
     assert brief["steps"][1]["args"] == {"to": ["market", "updates"]}
     listen = get(api, "automations/auto_builtin_market_listening_tools")
-    assert listen["trigger"] == {"type": "listening", "destination": "tools"} and listen["owner"] == "bot:librarian"
+    assert listen["trigger"] == {"type": "listening", "destination": "tools"} and listen["owner_id"] == "bot:librarian"
     assert api.delete("/api/v2/automations/auto_builtin_market_briefing", headers=headers()).status_code == 409
     patch(api, "auto_builtin_market_briefing", {"enabled": False}, "ben-test", expected=403)
     assert patch(api, "auto_builtin_market_briefing", {"enabled": False})["warning"]
@@ -291,7 +291,7 @@ def test_a_bot_may_not_make_an_automation_it_may_not_change(api):
     bot = as_bot(api, "finance")
     post(api, "automations", flow(), bot, expected=403)
     post(api, "automations", flow(builtin=True), bot, expected=403)
-    assert [a["id"] for a in get(api, "automations")["automations"] if a["owner"] == "person:ana"
+    assert [a["id"] for a in get(api, "automations")["automations"] if a["owner_id"] == "person:ana"
             and not a["builtin"]] == []
     own = post(api, "automations", flow(owner="bot:finance"), bot)
     assert own["enabled"] is True and own["can_edit"] is True                   # a bot's own: no BotOps, so on

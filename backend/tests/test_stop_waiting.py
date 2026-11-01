@@ -10,7 +10,7 @@ def task_attempt(api):
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Count the words", "body": "Count them."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Count the words", "body": "Count them."})
     return machine, task, claim(api, machine)
 
 
@@ -175,7 +175,7 @@ def test_finished_task_notices_to_a_requester_are_also_obsolete(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (original["job_id"],))
-        c.execute("UPDATE tasks SET owner='bot:finance',requester='bot:ops',status='done' WHERE id=?", (task["id"],))
+        c.execute("UPDATE tasks SET owner_id='bot:finance',requester_id='bot:ops',status='done' WHERE id=?", (task["id"],))
         notice = H.say(c, H.KEEPER, "bot:ops", "Subtask result returned: Finished", kind="notice",
                        conversation_id=task["conversation_id"], refs={"task": task["id"], "trigger": "other", "wake": "update"})
     assert claim(api, machine) is None

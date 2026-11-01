@@ -110,7 +110,7 @@ def fake_runner(base, admin):
                        headers={"Authorization": "Bearer " + token, "Idempotency-Key": H.new_id()})
         r.raise_for_status()
         return r.json()
-    code = call("enrollments", {"operator": "ana"})["code"]
+    code = call("enrollments", {"owner_id": "ana"})["code"]
     runner = call("runners/enroll", {"code": code, "label": "Test computer", "platform": "test"}, token="none")
     call("bots/ops/assignment", {"runner_id": runner["runner_id"], "expected_generation": 0})
     token, last_beat = runner["token"], 0
@@ -141,7 +141,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="tico-frontend-"))
     registry = tmp / "registry"
     registry.mkdir()
-    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example"}))
+    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner_id": "ana@acme.example"}))
     port = free_port()
     url = "http://127.0.0.1:%d" % port
     common = dict(db_path=tmp / "hub.db", registry_dir=registry, public_url=url, cors_origins=args.origin,
@@ -166,13 +166,13 @@ def main():
         H.sync_registry(c, bots, {"people": people})
         c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
         for slug, config in bots.items():
-            c.execute("INSERT INTO bot_config(bot,config,operator,reports_to,description) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,owner_id,reports_to,description) VALUES(?,?,?,?,?)",
                       (slug, encode(config), "ana", "ana" if slug == "coo" else "coo", config.get("description", "")))
         c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
     call = lambda path, body: httpx.post(url + "/api/v2/" + path, json=body, timeout=20, headers={  # noqa: E731
         "Authorization": "Bearer admin", "Idempotency-Key": H.new_id()}).raise_for_status()
-    call("tasks", {"title": "Review the launch plan", "body": "Please review the plan and reply.", "owner": "human:ana"})
-    call("tasks", {"title": "Draft the weekly update", "body": "Summarize the week for the team.", "owner": "bot:ops"})
+    call("tasks", {"title": "Review the launch plan", "body": "Please review the plan and reply.", "owner_id": "human:ana"})
+    call("tasks", {"title": "Draft the weekly update", "body": "Summarize the week for the team.", "owner_id": "bot:ops"})
     call("files/links", {"bot": "ops", "url": "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit", "title": "Launch plan"})
     threading.Thread(target=fake_runner, args=(url, "admin"), daemon=True).start()
     print(json.dumps({"url": url, "token": LOCAL_TOKEN, "issuer": issuer}), flush=True)

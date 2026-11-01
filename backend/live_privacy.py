@@ -25,13 +25,13 @@ def member(c, actor, meeting):
     if not meeting:
         return False
     if H.is_human(actor):
-        return (meeting["visibility"] == "team" or actor == meeting["owner_actor"] or bool(c.execute(
+        return (meeting["visibility"] == "team" or actor == meeting["owner_id"] or bool(c.execute(
             "SELECT 1 FROM live_meeting_access WHERE meeting_id=? AND actor=?", (meeting["id"], actor)).fetchone()))
     if H.is_bot(actor):
         # Only the connector can delegate private meeting access to a bot.
         return bool(c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot=? "
                               "AND (?='team' OR joined_by=?)",
-                              (meeting["id"], H.actor_id(actor), meeting["visibility"], meeting["owner_actor"])).fetchone())
+                              (meeting["id"], H.actor_id(actor), meeting["visibility"], meeting["owner_id"])).fetchone())
     return False
 
 
@@ -74,7 +74,7 @@ class Sources:
                               "ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
                               "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
                               "WHERE m.conversation_id=? AND json_extract(m.refs,'$.live_meeting.turn_id') IS NOT NULL "
-                              "AND m.from_actor=? AND m.to_actor='bot:'||t.bot LIMIT 101",
+                              "AND m.sender_id=? AND m.recipient_id='bot:'||t.bot LIMIT 101",
                               (cid, H.KEEPER)).fetchall()
         return self._legacy_room([row[0] for row in rows])
 
@@ -101,7 +101,7 @@ class Sources:
                     "JOIN live_meeting_turns t ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
                     "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
                     "WHERE m.conversation_id IN (%s) AND json_extract(m.refs,'$.live_meeting.turn_id') IS NOT NULL "
-                    "AND m.from_actor=? AND m.to_actor='bot:'||t.bot) WHERE n<=101"
+                    "AND m.sender_id=? AND m.recipient_id='bot:'||t.bot) WHERE n<=101"
                     % ",".join("?" * len(part)), (*part, H.KEEPER)):
                 inputs[cid].append(refs)
             for cid, found in inputs.items():

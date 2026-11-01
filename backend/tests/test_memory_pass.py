@@ -16,7 +16,7 @@ def pass_filed(api, spec="codex:gpt-6.1-sol"):
     machine, parent, turn = parent_turn(api)
     company(api, "anthropic", "openai", "xai")
     all_ready(api, machine)
-    sub = post(api, "tasks", {"owner": "ops", "title": "Nightly memory tidy: 2026-11-02", "body": "Read memory.",
+    sub = post(api, "tasks", {"owner_id": "ops", "title": "Nightly memory tidy: 2026-11-02", "body": "Read memory.",
                               "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     finish(api, machine, turn)
     with api.app.state.store.transaction() as c:
@@ -83,7 +83,7 @@ def test_a_pass_whose_named_model_is_out_of_quota_is_skipped_with_the_reason_and
 def test_a_pass_with_no_memory_commit_since_its_last_pass_is_a_free_skip(api):
     machine, parent, turn = parent_turn(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files,attempt_id,runner_id,reported)"
+        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,attempt_id,runner_id,reported_at)"
                   " VALUES('ops',?,?,?,?,?,?,?,?)",
                   ("a" * 40, "Dreamed the pass's own wake turn", "ops", "2026-11-01T20:00:00Z", "[]", turn["id"],
                    machine["runner_id"], "2026-11-01T20:00:00Z"))
@@ -92,7 +92,7 @@ def test_a_pass_with_no_memory_commit_since_its_last_pass_is_a_free_skip(api):
         assert memory_history.changed_since(c, "ops", since, [parent["id"]]) is False, "only the pass's wake turn wrote"
         assert memory_history.changed_since(c, "ops", since, []) is True, "without the pass tasks it is a change"
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files,attempt_id,runner_id,reported)"
+        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,attempt_id,runner_id,reported_at)"
                   " VALUES('ops',?,?,?,?,?,?,?,?)",
                   ("b" * 40, "A rule from an ordinary turn", "ops", "2026-11-01T21:00:00Z", "[]", "", machine["runner_id"],
                    "2026-11-01T21:00:00Z"))
@@ -102,7 +102,7 @@ def test_a_pass_with_no_memory_commit_since_its_last_pass_is_a_free_skip(api):
 
 def queued_for(api, bot):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs WHERE bot=? AND state='queued'", (bot,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs WHERE bot_id=? AND state='queued'", (bot,)).fetchone()[0]
 
 
 def test_a_skipped_pass_wakes_nothing_on_its_parent_or_its_requester(api):

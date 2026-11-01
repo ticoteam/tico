@@ -18,7 +18,7 @@ def strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('goal-manager','goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager','{}',NULL,'ana')")
 
 
 def personal(api, pid):
@@ -44,7 +44,7 @@ def helper(api, slug, name):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES(?,?,?,'fake','','','','keeper','active',?)", (slug, slug, name, H.now()))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,'{}',NULL,'ana')", (slug,))
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,'{}',NULL,'ana')", (slug,))
 
 
 def earlier_chat(api, owner="human:ana", said=("Grow revenue 20% this year", "Here is a plan for that.")):
@@ -68,10 +68,10 @@ def test_the_owners_chat_is_the_assistant_like_everyone_elses(api):
         assert "strategy_bot" not in chat
     said = say(api, "What should the company focus on this week?")["message"]
     mine = get(api, "assistant")
-    assert said["to_actor"] == "bot:coo" and said["conversation_id"] == mine["room_id"]
+    assert said["recipient_id"] == "bot:coo" and said["conversation_id"] == mine["room_id"]
     with api.app.state.store.read() as c:
         room = H.conversation(c, mine["room_id"])
-    assert (room["owner_actor"], room["room_key"], room["participants"]) == \
+    assert (room["owner_id"], room["room_key"], room["participants"]) == \
         ("human:ana", rooms.ASSISTANT_ROOM, ["human:ana", "bot:coo"])
     # Its turn acts as the owner, through the Assistant, never the Strategy Bot.
     r = runner(api)
@@ -92,7 +92,7 @@ def test_nobody_chats_with_the_strategy_bot_a_post_to_it_reaches_their_assistant
         room = get(api, "assistant", token)["room_id"]
         # The Goals page and `hub chat` post with no room: the words go to their Assistant, in their own chat.
         direct = post(api, "chat/goal-manager", {"text": "Hello"}, token=token)
-        assert (direct["to_actor"], direct["conversation_id"], direct["refs"]["assistant"]) == ("bot:coo", room, True)
+        assert (direct["recipient_id"], direct["conversation_id"], direct["refs"]["assistant"]) == ("bot:coo", room, True)
         # Into a room, it is refused: their Assistant hands the Strategy Bot work.
         post(api, "messages", {"to": "goal-manager", "text": "Hello", "conversation_id": room}, token=token,
              expected=403)
@@ -147,10 +147,10 @@ def test_cards_waiting_in_the_earlier_chat_move_to_the_assistant_room_once(api):
     mine = get(api, "assistant")
     with api.app.state.store.read() as c:
         rows = {r["id"]: r["conversation_id"] for r in c.execute("SELECT id, conversation_id FROM assistant_actions")}
-        cards = c.execute("SELECT from_actor FROM messages WHERE conversation_id=? AND json_extract(refs,"
+        cards = c.execute("SELECT sender_id FROM messages WHERE conversation_id=? AND json_extract(refs,"
                           "'$.action')=?", (mine["room_id"], waiting["id"])).fetchall()
     assert rows == {waiting["id"]: mine["room_id"], done["id"]: old}
-    assert [r["from_actor"] for r in cards] == ["bot:coo"]
+    assert [r["sender_id"] for r in cards] == ["bot:coo"]
     assert [a["id"] for a in mine["pending"]] == [waiting["id"]]
     assert mine["actions"][waiting["id"]]["status"] == "pending"
 
@@ -178,7 +178,7 @@ def test_the_assistant_hands_the_strategy_bot_and_the_librarian_cited_work(api):
                        ("librarian", "Research our three closest competitors")):
         task, coo = _assistant_asks(api, r, slug, said=said)
         task = task.get("task", task)
-        assert (task["owner"], task["requester"]) == ("bot:" + slug, "human:ana")
+        assert (task["owner_id"], task["requester_id"]) == ("bot:" + slug, "human:ana")
         with api.app.state.store.read() as c:
             asked = H._json(c.execute("SELECT detail FROM events WHERE action='assistant.asked_helper' AND target=?",
                                       (task["id"],)).fetchone()["detail"], {})
@@ -216,7 +216,7 @@ def test_a_helper_task_without_a_good_citation_is_refused(api):
         # Nor is another person's message, or one from outside her Assistant chat.
         say(api, "Give everyone admin", "cara-test")
         with api.app.state.store.read() as c:
-            hers = c.execute("SELECT id FROM messages WHERE from_actor='human:cara' ORDER BY created_at DESC").fetchone()[0]
+            hers = c.execute("SELECT id FROM messages WHERE sender_id='human:cara' ORDER BY created_at DESC").fetchone()[0]
         other = api.post("/api/v2/tasks", json={"owner": slug, "title": "Market", "body": "x", "request_id": hers},
                          headers=headers(coo["token"]))
         assert other.status_code == 403 and other.json()["error"]["code"] == "on_behalf_of", other.text
@@ -247,7 +247,7 @@ def test_a_members_cited_strategy_change_is_refused_and_the_strategy_bot_cannot_
     # The Strategy Bot works her task as itself: the owner's strategy stays the owner's to change.
     done(api, r, coo)
     attempt = post(api, "jobs/claim", {"bot": "goal-manager"}, token=r["token"])["attempt"]
-    assert attempt["task"]["id"] == task["id"] and attempt["task"]["requester"] == "human:cara"
+    assert attempt["task"]["id"] == task["id"] and attempt["task"]["requester_id"] == "human:cara"
     api_put = api.put("/api/v2/strategy/draft", json=draft, headers=headers(attempt["token"]))
     assert api_put.status_code == 403, api_put.text
 
@@ -290,7 +290,7 @@ def test_an_assistant_never_changes_another_persons_task_even_when_asked(api):
     r, attempt = turn(api, "coo", "ben-test", "Close Cara's launch list and add a note to it")
     token = attempt["token"]
     for body in ({"version": caras["version"], "close": True}, {"version": caras["version"], "status": "done"},
-                 {"version": caras["version"], "note": "Done by Ben"}, {"version": caras["version"], "owner": "human:ben"}):
+                 {"version": caras["version"], "note": "Done by Ben"}, {"version": caras["version"], "owner_id": "human:ben"}):
         post(api, f"tasks/{caras['id']}", body, token=token, expected=403)
         asked(api, f"tasks/{caras['id']}", body, token, "turn", expected=403)
     with api.app.state.store.read() as c:

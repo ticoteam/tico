@@ -280,9 +280,9 @@ async function meetSources(state) {
 
 const noteTitle = r => r.title || (r.kind === 'note' ? 'Meeting log' : 'Meeting');
 const notePreview = r => plainMd(r.note || r.voice_text || r.preview || '');
-const meetRecorder = r => r.recorded_by || (r.owner === 'owner' ? 'the owner' : r.owner) || 'someone';
+const meetRecorder = r => r.recorded_by_id || (r.owner_id === 'owner' ? 'the owner' : r.owner_id) || 'someone';
 const meetPersonKey = value => String(value || '').trim().toLowerCase();
-const meetPersonNames = r => [...(r.participants || []).map(p => p.name || p.email), ...(r.confirmed_attendees || []), ...(r.calendar?.attendees || []), ...(r.speakers || []).filter(v => !/^(?:[A-Z]|speaker[\s_-]*[A-Z0-9]+)$/i.test(String(v).trim())), r.source_context?.lead_name, r.source_context?.contact_name, r.recorded_by, r.owner !== 'owner' ? r.owner : ''].filter(v => typeof v === 'string' && v.trim());
+const meetPersonNames = r => [...(r.participants || []).map(p => p.name || p.email), ...(r.confirmed_attendees || []), ...(r.calendar?.attendees || []), ...(r.speakers || []).filter(v => !/^(?:[A-Z]|speaker[\s_-]*[A-Z0-9]+)$/i.test(String(v).trim())), r.source_context?.lead_name, r.source_context?.contact_name, r.recorded_by_id, r.owner_id !== 'owner' ? r.owner_id : ''].filter(v => typeof v === 'string' && v.trim());
 const meetStatus = r => r.delivery?.status === 'pending' ? 'sending'
   : r.delivery?.status === 'error' || r.status === 'error' ? 'failed'
   : r.sent ? 'sent' : 'unsent';
@@ -539,7 +539,7 @@ function meetPaint(state, rec) {
       ${t.summary ? `<div class="note-body">${esc(t.summary).replace(/\n/g, '<br>')}</div>` : ''}
       <div class="note-transcript">${(t.turns || []).map(turn => `<p><span class="muted mono">[${mmss(turn.start_ms)}]</span> ${turn.speaker ? `<strong>${esc(turn.speaker)}</strong> ` : ''}${esc(turn.text)}</p>`).join('')}</div></details>`).join('');
   const options = `<option value="auto">Auto — ${esc(assistantName())} routes it</option>` + activeEmps().map(e => `<option value="${esc(e.id)}">${esc(e.display_name)}</option>`).join('');
-  const owner = rec.owner === 'owner' ? 'the owner' : (rec.owner || 'the sender');
+  const owner = rec.owner_id === 'owner' ? 'the owner' : (rec.owner_id || 'the sender');
   const meta = [meetWhen(rec.started), rec.duration_ms ? mmss(rec.duration_ms) : '', owner, meetSourceLabel(rec.source)].filter(Boolean).map(esc).join(' · ');
   const leadLink = rec.source === 'close' && /^https:\/\//i.test(rec.source_context?.lead_url || '')
     ? ` <span class="sep">·</span> <a href="${esc(rec.source_context.lead_url)}" target="_blank" rel="noopener">Open in Close</a>` : '';
@@ -794,7 +794,7 @@ const meetItemLine = it => {
   // A bare "ana" or "support" is a person's id or a bot's name: show the name, as everywhere else.
   const who = o => String(o).includes(':') ? actorLabel(o) : (S.people || []).find(p => p.id === o)?.name
     || (botByRef(o) ? botDisplayName(botByRef(o).id) : o);
-  if (it.section === 'task') return [d.owner ? who(d.owner) : 'No owner yet', d.due ? 'due ' + String(d.due).slice(0, 10) : '',
+  if (it.section === 'task') return [d.owner_id ? who(d.owner_id) : 'No owner yet', d.due_at ? 'due ' + String(d.due_at).slice(0, 10) : '',
     /^p\d$/i.test(d.priority || '') ? 'priority ' + d.priority.toUpperCase() : d.priority || ''].filter(Boolean).join(' · ');
   if (it.section === 'doc') return [d.document || 'No document named', d.change].filter(Boolean).join(' — ');
   if (it.section === 'feature') return [({B: 'Backend', F: 'Frontend', 'B/F': 'Backend and frontend'})[d.side] || d.side, ({CA: 'Client app', PA: 'Pro app'})[d.app] || d.app, d.area, d.bug ? 'bug' : ''].filter(Boolean).join(' · ');
@@ -826,7 +826,7 @@ function meetItemFields(section, detail) {
   return fields.map(([name, label]) => {
     if (name === 'owner') {
       // An owner the notes named by slug (or a bare name) is picked by its id.
-      const named = String((detail || {}).owner || ''), bot = !named.includes(':') || named.startsWith('bot:') ? botByRef(named) : null;
+      const named = String((detail || {}).owner_id || ''), bot = !named.includes(':') || named.startsWith('bot:') ? botByRef(named) : null;
       const current = bot ? bot.id : named;
       return `<select data-field="owner" aria-label="${esc(label)}">${taskOwnerOptions(current)}</select>`;
     }

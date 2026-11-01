@@ -8,7 +8,7 @@ from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_market import _librarian
 
 MAIL = {"message": {"source": "mail", "mailbox": "ana@acme.example", "id": "m1", "subject": "Invoice"}}
-SLACK = {"message": {"source": "slack", "inbox": "slack:#general", "channel": "C1", "ts": "1.1", "text": "Help?"}}
+SLACK = {"message": {"source": "slack", "inbox": "slack:#general", "channel": "C1", "created_at": "1.1", "text": "Help?"}}
 
 
 def auto(owner="person:ana"):
@@ -22,7 +22,7 @@ def act(api, do, args=None, values=None, owner="person:ana"):
 
 
 def task(api, title="Check the deploy"):
-    made = post(api, "tasks", {"owner": "ops", "title": title, "body": "Please."})
+    made = post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Please."})
     return {"task": {"id": made["id"], "title": title}}
 
 
@@ -32,9 +32,9 @@ def sql(api, query, args=()):
 
 
 def test_create_task_files_it_from_the_owner(api):
-    done = act(api, "create_task", {"title": "Follow up", "owner": "coo"})
-    row = sql(api, "SELECT owner, requester FROM tasks WHERE id=?", (done["task"],))[0]
-    assert done["ok"] and row == {"owner": "bot:coo", "requester": "human:ana"}
+    done = act(api, "create_task", {"title": "Follow up", "owner_id": "coo"})
+    row = sql(api, "SELECT owner_id, requester_id FROM tasks WHERE id=?", (done["task"],))[0]
+    assert done["ok"] and row == {"owner_id": "bot:coo", "requester_id": "human:ana"}
     assert act(api, "create_task", {}) == {"ok": False, "detail": "create_task needs a title"}
 
 
@@ -43,8 +43,8 @@ def test_label_note_and_assign_work_on_the_runs_task(api):
     assert act(api, "label", {"tag": "billing"}, values)["detail"] == "labelled"
     assert act(api, "label", {"tag": "billing"}, values)["detail"] == "already labelled"
     assert act(api, "note", {"text": "Seen by the automation"}, values)["ok"]
-    assert act(api, "assign", {"owner": "coo"}, values)["ok"]
-    assert sql(api, "SELECT owner FROM tasks WHERE id=?", (values["task"]["id"],))[0]["owner"] == "bot:coo"
+    assert act(api, "assign", {"owner_id": "coo"}, values)["ok"]
+    assert sql(api, "SELECT owner_id FROM tasks WHERE id=?", (values["task"]["id"],))[0]["owner_id"] == "bot:coo"
     assert not act(api, "assign", {}, values)["ok"]
 
 
@@ -58,7 +58,7 @@ def test_a_note_with_no_task_or_bot_stays_in_the_run_log(api):
 
 def test_wake_bot_wakes_it_with_the_run_on_the_notice(api):
     assert act(api, "wake_bot", {"bot": "ops", "text": "Look"})["ok"]
-    woke = sql(api, "SELECT body, refs FROM messages WHERE to_actor='bot:ops' ORDER BY created_at DESC")[0]
+    woke = sql(api, "SELECT body, refs FROM messages WHERE recipient_id='bot:ops' ORDER BY created_at DESC")[0]
     assert woke["body"] == "Look" and json.loads(woke["refs"])["automation_run"] == "run_1"
     assert not act(api, "wake_bot", {"bot": "nobody"})["ok"]
 

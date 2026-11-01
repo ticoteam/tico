@@ -22,7 +22,7 @@ def test_a_bots_message_and_comment_to_a_held_bot_wait_and_run_once_it_is_back(a
     machine = runner(api, label="Finance Mac")
     assign(api, machine, "finance")
     ready(api, machine, ["finance"])
-    task = post(api, "tasks", {"owner": "finance", "title": "Check the invoice run", "body": "Read the fixture invoices"},
+    task = post(api, "tasks", {"owner_id": "finance", "title": "Check the invoice run", "body": "Read the fixture invoices"},
                 token=attempt["token"])
     while (work := claim(api, machine, "finance")):            # the new-task notice: done before it is held
         finish(api, machine, work)
@@ -36,7 +36,7 @@ def test_a_bots_message_and_comment_to_a_held_bot_wait_and_run_once_it_is_back(a
     comment = post(api, f"tasks/{task['id']}/comments", {"text": "Finding 1", "needs_action": True}, token=attempt["token"])
     assert "is kept" in sent["warning"] and "is kept" in comment["warning"], (sent, comment)
     assert ("until about" if held == "quarantined" else "until a person resumes it") in sent["warning"]
-    refused = post(api, "tasks", {"owner": "finance", "title": "Check the payroll run", "body": "Read it"},
+    refused = post(api, "tasks", {"owner_id": "finance", "title": "Check the payroll run", "body": "Read it"},
                    token=attempt["token"], expected=422)
     assert refused["error"]["code"] == "target_inactive" and "is not a repeat" in refused["error"]["detail"]
     kept = {sent["id"], comment["comment"]["id"]}
@@ -95,7 +95,7 @@ def test_a_persons_new_slack_thread_to_a_held_bot_waits_and_runs_once_it_is_back
     assert gateway.receive(S.envelope("please check the invoice run", user="U1", channel=S.DM, kind="message")) == "queued"
     (result,) = gateway.tick()["events"]
     (kept,) = result["decision"]["delivered"]
-    assert kept["bot"] == "finance" and kept["opened"] and "is kept" in kept["held"], result
+    assert kept["bot_id"] == "finance" and kept["opened"] and "is kept" in kept["held"], result
     assert [p["text"] for p in gateway.slack.posts] == [kept["held"]]
     assert claim(api, machine, "finance") is None, "nothing runs while it is held"
 
@@ -106,6 +106,6 @@ def test_a_persons_new_slack_thread_to_a_held_bot_waits_and_runs_once_it_is_back
     assert run_all(api, machine, "finance") == [kept["message_id"]], "it runs once it is back"
     assert gateway.tick()["events"] == [] and run_all(api, machine, "finance") == [], "and is not sent again"
     with api.app.state.store.read() as c:
-        jobs = [dict(r) for r in c.execute("SELECT bot, message_id, state FROM jobs")]
-        sent = c.execute("SELECT count(*) FROM messages WHERE from_actor='human:ana' AND to_actor='bot:finance'").fetchone()[0]
-    assert jobs == [{"bot": "finance", "message_id": kept["message_id"], "state": "completed"}] and sent == 1
+        jobs = [dict(r) for r in c.execute("SELECT bot_id, message_id, state FROM jobs")]
+        sent = c.execute("SELECT count(*) FROM messages WHERE sender_id='human:ana' AND recipient_id='bot:finance'").fetchone()[0]
+    assert jobs == [{"bot_id": "finance", "message_id": kept["message_id"], "state": "completed"}] and sent == 1

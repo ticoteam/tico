@@ -48,7 +48,7 @@ def test_absent_pending_or_only_skipped_checks_still_need_passing_receipt(api, m
     assert response.status_code == 422 and 'passing test receipt' in response.text, response.text
     assert 'manager' in response.text and 'person' in response.text
     with api.app.state.store.transaction() as c:
-        H.task_comment(c, task['owner'], task['id'], f'Tests: head {HEAD}: 9 passed, 0 failed', wake=False)
+        H.task_comment(c, task['owner_id'], task['id'], f'Tests: head {HEAD}: 9 passed, 0 failed', wake=False)
     assert move(api, task).status_code == 200
 
 
@@ -275,7 +275,7 @@ def test_manager_chain_and_editing_person_can_supply_no_ci_receipt(api, author):
         for slug, parent in [('cpo', 'cmo'), ('cmo', 'boss')]:
             c.execute('UPDATE bot_config SET reports_to=? WHERE bot=?', (parent, slug))
         c.execute("INSERT INTO bots(id,slug,state) VALUES('boss','boss','active')")
-        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('boss','{}','ana')")
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('boss','{}','ana')")
         if author == 'outsider':
             c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='cpo'")
         actor = {'manager': 'bot:cmo', 'grandmanager': 'bot:boss', 'person': 'human:ana', 'outsider': 'bot:cmo'}[author]
@@ -298,7 +298,7 @@ def test_human_without_task_edit_rights_is_not_a_receipt_author(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email,teams) VALUES('guest','Guest','guest@example.test','[]')")
         conv = H.conversation(c, task['conversation_id'])
-        H._write_message(c, 'human:guest', task['owner'], f'Tests: head {HEAD}: 9 passed', conv,
+        H._write_message(c, 'human:guest', task['owner_id'], f'Tests: head {HEAD}: 9 passed', conv,
                          'say', {'task': task['id'], 'quiet': True}, None, None)
     assert move(api, task).status_code == 422
 
@@ -314,7 +314,7 @@ def test_nonparty_person_with_task_edit_rights_counts(api, permission):
                       (json.dumps({'email': 'editor@example.test'}),))
         elif permission == 'delegate':
             c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,expires_at) VALUES(?,?,?,?)',
-                      (task['id'], 'human:editor', task['requester'], '2099-01-01T00:00:00Z'))
+                      (task['id'], 'human:editor', task['requester_id'], '2099-01-01T00:00:00Z'))
         H.task_comment(c, 'human:editor', task['id'], f'Tests: head {HEAD}: 9 passed', wake=False)
     response = move(api, task)
     assert response.status_code == 200, response.text
@@ -348,7 +348,7 @@ def test_null_email_receipt_author_fails_closed_without_crashing(api):
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)",
                   (json.dumps({'email': 'owner@acme.example'}),))
         conv = H.conversation(c, task['conversation_id'])
-        H._write_message(c, 'human:guest', task['owner'], f'Tests: head {HEAD}: 9 passed', conv,
+        H._write_message(c, 'human:guest', task['owner_id'], f'Tests: head {HEAD}: 9 passed', conv,
                          'say', {'task': task['id'], 'quiet': True}, None, None)
     response = move(api, task)
     assert response.status_code == 422 and 'missing test receipt' in response.text, response.text
@@ -374,7 +374,7 @@ def test_removed_manager_receipt_does_not_count(api, removal):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='cmo' WHERE bot='cpo'")
         conv = H.conversation(c, task['conversation_id'])
-        msg = H._write_message(c, 'bot:cmo', task['owner'], f'Tests: head {HEAD}: 9 passed', conv,
+        msg = H._write_message(c, 'bot:cmo', task['owner_id'], f'Tests: head {HEAD}: 9 passed', conv,
                                'say', {'task': task['id'], 'quiet': True}, None, None)
         c.execute(f'UPDATE messages SET {removal}=? WHERE id=?', (H.now(), msg['id']))
         facts = review_gate.evidence(c, H.task(c, task['id']), 'human:ana')
@@ -394,12 +394,12 @@ def test_manager_receipt_in_private_child_still_requires_mover_visibility(api):
         c.execute("UPDATE bot_config SET reports_to='human:zed' WHERE bot='cmo'")
         c.execute("UPDATE bot_config SET reports_to='cmo' WHERE bot='cpo'")
         child = H.task_create(c, 'human:ana', 'Evidence', 'x', 'cmo', parent_id=task['id'], next_run=True)
-        c.execute("UPDATE tasks SET title='Review 1: previous', private=1, requester=? WHERE id=?",
-                  (task['owner'], child['id']))
+        c.execute("UPDATE tasks SET title='Review 1: previous', private=1, requester_id=? WHERE id=?",
+                  (task['owner_id'], child['id']))
         conv = H.conversation(c, child['conversation_id'])
-        H._write_message(c, 'bot:cmo', child['owner'], f'Tests: head {HEAD}: 9 passed', conv,
+        H._write_message(c, 'bot:cmo', child['owner_id'], f'Tests: head {HEAD}: 9 passed', conv,
                          'say', {'task': child['id'], 'quiet': True}, None, None)
-        assert H.task_private_readable(c, task['owner'], H.task(c, child['id']))
+        assert H.task_private_readable(c, task['owner_id'], H.task(c, child['id']))
         assert not H.task_private_readable(c, 'human:ana', H.task(c, child['id']))
     response = move(api, task)
     assert response.status_code == 422 and 'missing test receipt' in response.text, response.text
@@ -416,7 +416,7 @@ def test_stored_owner_revokes_environment_owners_receipt_authority(api):
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)",
                   (json.dumps({'email': 'current@acme.example'}),))
         conv = H.conversation(c, task['conversation_id'])
-        H._write_message(c, 'human:former', task['owner'], f'Tests: head {HEAD}: 9 passed', conv,
+        H._write_message(c, 'human:former', task['owner_id'], f'Tests: head {HEAD}: 9 passed', conv,
                          'say', {'task': task['id'], 'quiet': True}, None, None)
     response = move(api, task)
     assert response.status_code == 422 and 'missing test receipt' in response.text, response.text

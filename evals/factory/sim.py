@@ -219,8 +219,8 @@ class Run:
             return {}, 0
         marks = ",".join("?" * len(bots))
         with w.store.read() as c:
-            rows = c.execute(f"SELECT id,bot,held FROM jobs WHERE state='queued' AND bot IN ({marks})", bots).fetchall()
-        return {r["id"]: r["bot"] for r in rows if not r["held"]}, sum(1 for r in rows if r["held"])
+            rows = c.execute(f"SELECT id,bot_id,held FROM jobs WHERE state='queued' AND bot_id IN ({marks})", bots).fetchall()
+        return {r["id"]: r["bot_id"] for r in rows if not r["held"]}, sum(1 for r in rows if r["held"])
 
     def queued_now(self, w, bots):
         """After a round's claims: the queued jobs of `bots` that are not held and not an obsolete keeper notice. The
@@ -234,9 +234,9 @@ class Run:
         with w.store.read() as c:
             obsolete = {r[0] for r in c.execute("SELECT j.id " + X.obsolete_notices_sql(),
                                                 (w.runner["runner_id"], H.KEEPER, H.now()))}
-            rows = c.execute(f"SELECT id,bot FROM jobs WHERE state='queued' AND held=0 AND bot IN ({marks})",
+            rows = c.execute(f"SELECT id,bot_id FROM jobs WHERE state='queued' AND held=0 AND bot_id IN ({marks})",
                              bots).fetchall()
-        return {r["id"]: r["bot"] for r in rows if r["id"] not in obsolete}
+        return {r["id"]: r["bot_id"] for r in rows if r["id"] not in obsolete}
 
     def readiness(self, w, bots, started):
         """Each candidate bot's readiness now, from the records and never from a claim's answer. A bot is ready when its
@@ -257,7 +257,7 @@ class Run:
             login = login_holds.canonical(c, rid, "", PRIMARY)
             own = login_holds.holding(c, rid, login, PRIMARY, now=now)
             probe = login_holds.get(c, rid, login, PRIMARY).get("probe_job")
-            prober = c.execute("SELECT bot FROM jobs WHERE id=?", (probe,)).fetchone() if probe else None
+            prober = c.execute("SELECT bot_id FROM jobs WHERE id=?", (probe,)).fetchone() if probe else None
             fallbacks = []
             for name in w.runtime_fallbacks():
                 if name != PRIMARY and name in w.signed_in:
@@ -274,7 +274,7 @@ class Run:
                     blocked[bot] = "computer waking"
                 else:
                     # The probe's own bot is let through its login's probe (execution.login_wait).
-                    held = None if own == "probing" and prober and prober["bot"] == bot else own
+                    held = None if own == "probing" and prober and prober["bot_id"] == bot else own
                     cooling = X.cooling_off(c, bot)
                     if login_ready(held, cooling, bool(fallbacks)):
                         ready.append(bot)
@@ -376,16 +376,16 @@ class Run:
         minutes a person does it instead, and the run records the fallback."""
         for t in w.tickets():
             step = w.board.step(t["step"])
-            if not step or not step.assign or str(t["owner"]).startswith("bot:") or t["status"] in B.FINISHED:
+            if not step or not step.assign or str(t["owner_id"]).startswith("bot:") or t["status"] in B.FINISHED:
                 continue
             if (w.now() - w.H.parse_ts(t["created_at"])).total_seconds() < 30 * 60:
                 continue
             pool = [b for b in team.all if b.role == step.assign and w.slots(b.slug) < b.slots]
             if not pool:
                 continue
-            owned = Counter(x["owner"] for x in w.tickets() if not self.shipped(x))
+            owned = Counter(x["owner_id"] for x in w.tickets() if not self.shipped(x))
             pick = min(pool, key=lambda b: (w.slots(b.slug), owned["bot:" + b.slug], b.slug))
-            w.update(t["id"], owner="bot:" + pick.slug)
+            w.update(t["id"], owner_id="bot:" + pick.slug)
             w.fallback("person", t["id"], f"assigned to {pick.slug} by hand")
 
     def observe(self, w, team):
@@ -428,23 +428,23 @@ class Run:
         for t in self.final:
             if self.shipped(t):
                 continue
-            out.append(f"{t['title']} @ {t['step']} ({t['status']}, {t['owner']})"
+            out.append(f"{t['title']} @ {t['step']} ({t['status']}, {t['owner_id']})"
                        + (f" blocked: {t['blocked_since']}" if t["blocked_since"] else ""))
             for c in self.w.checks(t["id"]):
-                out.append(f"  {c['title']}: {c['owner']} {c['status']} verdict={c['verdict']} head={str(c['verdict_head'])[:7]}")
-            for e in self.w.sql("SELECT e.ts, e.actor, e.field, coalesce(s.name, e.new) new, e.note FROM task_events e "
+                out.append(f"  {c['title']}: {c['owner_id']} {c['status']} verdict={c['verdict']} head={str(c['verdict_head'])[:7]}")
+            for e in self.w.sql("SELECT e.created_at, e.actor, e.field, coalesce(s.name, e.new) new, e.note FROM task_events e "
                                 "LEFT JOIN task_steps s ON s.id=e.new WHERE e.task_id=? AND e.field IN ('step','verdict_move',"
-                                "'round_skipped','step_skipped','allocated','merge_wake','verdict_wait') ORDER BY e.ts, e.rowid",
+                                "'round_skipped','step_skipped','allocated','merge_wake','verdict_wait') ORDER BY e.created_at, e.rowid",
                                 (t["id"],)):
-                out.append(f"  {e['ts'][11:16]} {e['actor'][:14]:14} {e['field']:13} {str(e['new'])[:60]} {str(e['note'] or '')[:60]}")
+                out.append(f"  {e['created_at'][11:16]} {e['actor'][:14]:14} {e['field']:13} {str(e['new'])[:60]} {str(e['note'] or '')[:60]}")
             pr = self.w.pr_of(t["id"])
             if pr:
                 out.append(f"  PR #{pr} head={self.w.prs[pr]['head'][:7]} ci={self.w.ci_state(pr)} merged={self.w.prs[pr]['merged']}")
-            for j in self.w.sql("SELECT j.bot, j.state, j.held, j.wake_class, m.refs FROM jobs j "
+            for j in self.w.sql("SELECT j.bot_id, j.state, j.held, j.wake_class, m.refs FROM jobs j "
                                 "JOIN messages m ON m.id=j.message_id WHERE json_extract(m.refs,'$.task') IN "
                                 "(SELECT ? UNION SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent') "
                                 "AND j.state NOT IN ('done','cancelled')", (t["id"], t["id"])):
-                out.append(f"  job {j['bot']} {j['state']} held={j['held']} {j['wake_class'] or ''}")
+                out.append(f"  job {j['bot_id']} {j['state']} held={j['held']} {j['wake_class'] or ''}")
         out += self.diagnostics()
         return out
 
@@ -456,13 +456,13 @@ class Run:
             lp = self.lost_probe
             posts = [p for p in w.attempt_posts if p[1].startswith(f"attempts/{lp['attempt']}/")]
             off = [p for p in posts if not p[4]]
-            out.append(f"lost probe {lp['job'][:6]} bot {lp['bot']} attempt {lp['attempt'][:6]} ({lp['mode']} at "
+            out.append(f"lost probe {lp['job'][:6]} bot {lp['bot_id']} attempt {lp['attempt'][:6]} ({lp['mode']} at "
                        f"{lp['at']:%H:%M}): {len(posts)} sim posts to it, {len(off)} sent while its bot was off")
         for b in self.back_lines:
-            out.append(f"back {b['bot']} at {b['at']:%H:%M}: server_ready {b['server_ready']}; "
+            out.append(f"back {b['bot_id']} at {b['at']:%H:%M}: server_ready {b['server_ready']}; "
                        + " | ".join(b["reasons"]))
         for win in w.limit_windows:
-            out.append(f"limit {win['bot']} since {win['since']} until {win['until']} ({win['source']}, "
+            out.append(f"limit {win['bot_id']} since {win['since']} until {win['until']} ({win['source']}, "
                        f"streak {win['streak']})")
         for job in sorted(self.probe_seen):
             for row in w.sql("SELECT id,state,created_at,started_at,finished_at,lease_until FROM attempts "
@@ -531,7 +531,7 @@ def tickets(run, w, n, owner=None, step=None, title="Ticket"):
             owner = run.t.builders[i % len(run.t.builders)].slug
         tags = ["major"] if run.rng.random() < run.scenario.major else []
         # A task always has an owner: an unassigned ticket is the person's until the board hands it to a bot.
-        made.append(w.post("tasks", {"owner": owner or "ana", "title": f"{title} {i + 1}",
+        made.append(w.post("tasks", {"owner_id": owner or "ana", "title": f"{title} {i + 1}",
                                      "body": "Build it.", "type": w.dev["id"], "step": step or first.name,
                                      "labels": tags}))
     return [m.get("task", m) for m in made]

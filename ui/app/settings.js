@@ -116,7 +116,7 @@ const settingsIsAdmin = () => S.me?.role === 'owner' || !!S.me?.bot_admin;
 // The team owner's name, for "who can change this" lines; '' when the roster has not loaded.
 function settingsOwnerName() {
   const people = [...(SETTINGS_DATA.people || []), ...(S.people || [])], id = S.me?.owner_id;
-  const owner = people.find(p => (id && p.id === id) || p.owner || p.role === 'owner');
+  const owner = people.find(p => (id && p.id === id) || p.owner_id || p.role === 'owner');
   return owner?.name || S.config?.owner_name || '';
 }
 // "Only Ana, the owner, can change models." / "Only Ana (the owner) or an admin can change this."

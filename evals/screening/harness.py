@@ -246,11 +246,11 @@ def one(org, query, args=()):
 
 def wakes(org, bot):
     """The bot's queued turns: a held item must not add one."""
-    return one(org, "SELECT count(*) FROM jobs WHERE bot=? AND state='queued'", (bot,))
+    return one(org, "SELECT count(*) FROM jobs WHERE bot_id=? AND state='queued'", (bot,))
 
 
 def task_row(org, task_id):
-    rows = org.sql("SELECT id,title,body,owner,status,version FROM tasks WHERE id=?", (task_id,))
+    rows = org.sql("SELECT id,title,body,owner_id,status,version FROM tasks WHERE id=?", (task_id,))
     return rows[0] if rows else None
 
 
@@ -263,11 +263,11 @@ def classify(task, bot):
     """What a door did, read from the task it opened: held for a person, warned, or passed to the bot as before."""
     if not task:
         return "missing"
-    if task["owner"].startswith("human:") and task["title"].startswith("Held: ") and \
+    if task["owner_id"].startswith("human:") and task["title"].startswith("Held: ") and \
             task["body"].startswith("Held by Tico's screening"):
         return "hold"
-    if task["owner"] != "bot:" + bot:
-        return f"other ({task['owner']})"
+    if task["owner_id"] != "bot:" + bot:
+        return f"other ({task['owner_id']})"
     return "warn" if task["body"].startswith(WARNING) else "pass"
 
 
@@ -282,14 +282,14 @@ class Doors:
         made = org.api("post", "/api/v2/triggers", {"name": "Shop", "id": "shop"})
         self.shop = made.body["trigger"]["url"]
         org.api("post", "/api/v2/automations", {
-            "name": "Shop order", "owner": "person:" + DANA_ID, "enabled": True, "builtin": False,
+            "name": "Shop order", "owner_id": "person:" + DANA_ID, "enabled": True, "builtin": False,
             "trigger": {"type": "webhook", "id": "shop"},
             "steps": [{"id": "file", "type": "action", "enabled": True, "do": "create_task",
-                       "args": {"title": "{{webhook.delivery}}", "owner": DOOR_BOT["webhook"],
+                       "args": {"title": "{{webhook.delivery}}", "owner_id": DOOR_BOT["webhook"],
                                 "body": "{{webhook.content}}"}}]})
         made = org.api("post", "/api/v2/triggers", {"name": "Orders", "id": "orders"})
         self.orders = made.body["trigger"]["url"]
-        rule_row(org, {"action": "create_task", "owner": DOOR_BOT["rule"], "title": "Rule {{delivery}}"},
+        rule_row(org, {"action": "create_task", "owner_id": DOOR_BOT["rule"], "title": "Rule {{delivery}}"},
                  when={"trigger": "orders"}, by="human:" + DANA_ID)
         org.api("post", "/api/v2/tags", {"key": "roadmap"})
         org.api("post", "/api/v2/roadmaps/settings", {"labels": ["roadmap"], "cors_origins": ["https://acme.example"],

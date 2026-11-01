@@ -30,16 +30,16 @@ REMINDER_BATCH = 50
 
 def remind(c, row, at):
     """Whether a task from H.tasks_due_for_bots gets its due-date reminder now."""
-    due = H.parse_ts(row.get("due"))
+    due = H.parse_ts(row.get("due_at"))
     if due and due.tzinfo is None:
         # Legacy rows allowed dates/local timestamps. New API writes require an
         # offset; preserve the old machine's Pacific interpretation on migration.
         due = due.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
-    if not due or due > at or not row["owner"].startswith("bot:"):
+    if not due or due > at or not row["owner_id"].startswith("bot:"):
         return False
-    if c.execute("SELECT 1 FROM task_reminders WHERE task_id=? AND due=?", (row["id"], row["due"])).fetchone():
+    if c.execute("SELECT 1 FROM task_reminders WHERE task_id=? AND due_at=?", (row["id"], row["due_at"])).fetchone():
         return False
-    return H.bot(c, H.actor_id(row["owner"]))["state"] == "active"
+    return H.bot(c, H.actor_id(row["owner_id"]))["state"] == "active"
 
 
 # The controlled system routines' blocks (backend/system_routines.py CONTROLS), shared by the scheduler and Run now: a
@@ -414,20 +414,20 @@ class Scheduler:
             with locked("reminders") as c:
                 for listed in ready[batch:batch + REMINDER_BATCH]:
                     with isolated(c, "reminder", listed["id"], failures):
-                        row = c.execute("SELECT id,title,owner,due,conversation_id FROM tasks WHERE id=? AND due=? "
-                                        "AND owner=? AND snoozed_until IS NULL AND status IN (" +
+                        row = c.execute("SELECT id,title,owner_id,due_at,conversation_id FROM tasks WHERE id=? AND due_at=? "
+                                        "AND owner_id=? AND snoozed_until IS NULL AND status IN (" +
                                         ",".join("?" * len(H.ACTIVE_STATUSES)) + ")",
-                                        (listed["id"], listed["due"], listed["owner"], *H.ACTIVE_STATUSES)).fetchone()
+                                        (listed["id"], listed["due_at"], listed["owner_id"], *H.ACTIVE_STATUSES)).fetchone()
                         if row is None or not remind(c, dict(row), at):
                             continue
                         try:
-                            H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
+                            H.say(c, H.KEEPER, row["owner_id"], "Due: " + row["title"], kind="notice",
                                   conversation_id=row["conversation_id"],
                                   refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule",
                                                            purpose="work task due soon"))
                         except H.Refused as exc:
                             H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
-                        c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))
+                        c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due_at"], stamp(at)))
                         reminders += 1
         SR.write(self.store, SR.Run("due_reminders").did(SR.words_of(reminders, "reminder sent", "Nothing due"),
                                                          quiet=not reminders))
@@ -757,7 +757,7 @@ class Scheduler:
                         # The expensive privacy/provenance scan does not need the writer lock.
                         from . import task_privacy
                         job_ids = [row["job_id"] for row in c.execute(
-                            "SELECT j.id AS job_id,j.bot,m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'")
+                            "SELECT j.id AS job_id,j.bot_id,m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'")
                             if not task_privacy.message_readable(c, "bot:" + row["bot"], row, current=True)]
                     for job_id in job_ids:
                         with locked("drop_unreadable:" + job_id) as c:

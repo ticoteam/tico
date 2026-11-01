@@ -122,7 +122,7 @@ def qa_owner(c, ticket):
     from . import task_relations as TR
     kids = [H.task(c, i) for i in TR.child_ids(c, ticket["id"])]
     for kid in sorted((k for k in kids if k and QA_CHILD.match(k["title"] or "")), key=lambda k: k["created_at"], reverse=True):
-        slug = H.actor_id(kid["owner"]) if H.is_bot(kid["owner"]) else None
+        slug = H.actor_id(kid["owner_id"]) if H.is_bot(kid["owner_id"]) else None
         if slug and (H.bot(c, slug) or {}).get("state") == "active":
             return slug
     for (actor,) in c.execute("SELECT actor FROM task_roles WHERE task_id=? AND lower(role)='qa' ORDER BY created_at",
@@ -140,7 +140,7 @@ def _qa_room(c, ticket, qa):
         return ticket, _name(ticket)
     from . import task_relations as TR
     mine = [k for k in (H.task(c, i) for i in TR.child_ids(c, ticket["id"]))
-            if k and QA_CHILD.match(k["title"] or "") and k["owner"] == H.bot_actor(qa)]
+            if k and QA_CHILD.match(k["title"] or "") and k["owner_id"] == H.bot_actor(qa)]
     newest = max(mine, key=lambda k: k["created_at"], default=None)
     return (newest, str(newest["title"]).strip()) if newest else (None, None)
 
@@ -165,7 +165,7 @@ def _name(t):
 
 def _line(t):
     pr = next((p["url"] for p in t["prs"]), "")
-    return f"- {_name(t)} (owner {t['owner']}){' ' + pr if pr else ''}"
+    return f"- {_name(t)} (owner {t['owner_id']}){' ' + pr if pr else ''}"
 
 
 def _listing(c, tickets, more_where):
@@ -193,7 +193,7 @@ def _task_body(c, tickets, why):
 
 def _unfinished(c, owner):
     """The Release task `owner` has not finished, if any: a second is never filed beside it."""
-    row = c.execute("SELECT id FROM tasks WHERE owner=? AND title LIKE ? ESCAPE '\\' AND status IN (" +
+    row = c.execute("SELECT id FROM tasks WHERE owner_id=? AND title LIKE ? ESCAPE '\\' AND status IN (" +
                     ",".join("?" * len(H.ACTIVE_STATUSES)) + ") ORDER BY created_at DESC LIMIT 1",
                     (owner, TITLE.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%",
                      *H.ACTIVE_STATUSES)).fetchone()
@@ -309,7 +309,7 @@ def _docs_task(c, writer, tag, tickets, url):
     """The Technical Writer's one task for release `tag`, unless it already has one (a replay files none)."""
     prefix = f"Docs for {tag}:"
     owner = H.bot_actor(writer)
-    if c.execute("SELECT 1 FROM tasks WHERE owner=? AND substr(title,1,?)=? LIMIT 1", (owner, len(prefix), prefix)).fetchone():
+    if c.execute("SELECT 1 FROM tasks WHERE owner_id=? AND substr(title,1,?)=? LIMIT 1", (owner, len(prefix), prefix)).fetchone():
         return None
     title = f"{prefix} {len(tickets)} ticket{'s' if len(tickets) != 1 else ''}"
     body = (f"{tag} is published" + (f" ({url})" if url else "") + ". Update the docs for the changes people will see, "
@@ -339,8 +339,8 @@ def published(c, target, url="", release_repo=""):
                             "watch live items; report to the ticket.", trigger=EVENT,
                             refs={"wake": EVENT, "release": tag, "role": "qa"}, source=target):
             sent.setdefault(ticket["id"], []).append(qa)
-        if H.is_bot(ticket["owner"]) and ticket["owner"] != (H.bot_actor(qa) if qa else None):
-            H._wake(c, ticket, ticket["owner"], f"Shipped in {tag}.", quiet_bots=True, quiet=True, trigger=EVENT,
+        if H.is_bot(ticket["owner_id"]) and ticket["owner_id"] != (H.bot_actor(qa) if qa else None):
+            H._wake(c, ticket, ticket["owner_id"], f"Shipped in {tag}.", quiet_bots=True, quiet=True, trigger=EVENT,
                     refs={"wake": EVENT, "release": tag, "role": "note"}, source=target)
     docs = _docs_task(c, writer, tag, tickets, url) if writer and tickets else None
     H.event(c, H.KEEPER, "release.published", target, {"tickets": [t["id"] for t in tickets], "woke": sent, "docs": docs})

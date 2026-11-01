@@ -13,11 +13,11 @@ const {unrouted} = require('./support/routes.cjs');
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     const writes = [];
-    const computers = [{id: 'computer-1', label: 'Build server', operator: 'ana', bots: ['helper'], platform: 'linux',
+    const computers = [{id: 'computer-1', label: 'Build server', owner_id: 'ana', bots: ['helper'], platform: 'linux',
       last_seen_at: new Date().toISOString(), readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}}}];
     let providers = {enabled: ['openai'], default: {runtime: 'codex', model: 'test-model'}, revision: 1,
       providers: [{id: 'openai', label: 'OpenAI', recommended: 'test-model'}]};
-    const bots = [{name: 'helper', display_name: 'Helper', status: 'active', operator: 'ana', can_manage: true, users: [], bot_owners: []}];
+    const bots = [{name: 'helper', display_name: 'Helper', status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: []}];
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -37,7 +37,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});
       const github = {service: 'github', title: 'GitHub', kind: 'cli', summary: 'Code', access: 'gh CLI', credentials: ['GH_TOKEN'], declared_as: '',
-        writes: 'allowed', owner: 'Ana', aliases: [], status: 'not_configured', bots: [], connections: []};
+        writes: 'allowed', owner_id: 'Ana', aliases: [], status: 'not_configured', bots: [], connections: []};
       if (p === '/api/v2/tools') return json({integrations: [github]});
       if (p === '/api/v2/tools/github') return json({...github, queries: [], body: '', learnings: []});
       if (p === '/api/v2/github/app') return json({connected: false});
@@ -49,7 +49,7 @@ const {unrouted} = require('./support/routes.cjs');
       }
       if (p === '/api/v2/computers/computer-1/revoke') { writes.push({p, body: req.postDataJSON()}); computers[0].revoked_at = new Date().toISOString(); return json({revoked: true}); }
       if (p === '/api/v2/assistant/messages') { writes.push({p, body: req.postDataJSON()}); return json({}); }
-      if (p === '/api/v2/access') return json({people: [{id: 'ana', name: 'Ana', owner: true, role: 'owner', can_sign_in: true}], home_domain: 'example.com', allowed: [], allowed_domains: [], owner: {}, rules: {}});
+      if (p === '/api/v2/access') return json({people: [{id: 'ana', name: 'Ana', owner_id: true, role: 'owner', can_sign_in: true}], home_domain: 'example.com', allowed: [], allowed_domains: [], owner_id: {}, rules: {}});
       if (p === '/api/v2/me/tokens') return json({tokens: []});
       if (p === '/api/v2/slack/app') return json({configured: false});
       if (p === '/api/v2/meeting-importers') return json({importers: [], computers: []});

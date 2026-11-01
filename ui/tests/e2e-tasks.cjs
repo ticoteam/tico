@@ -19,7 +19,7 @@ async function detail(page) {
       title: m?.querySelector('.tmodal-title')?.textContent.trim() || '',
       status: m?.querySelector('.tstatus')?.textContent.trim() || '',
       created_at: m?.querySelector('.tmodal-age')?.getAttribute('title') || '',
-      owner: row('Owner'),
+      owner_id: row('Owner'),
       asked: row('Asked by'),
       history: m?.querySelector('.task-comments')?.innerText.replace(/\s+/g, ' ').trim() || '',
       canDone: !!m?.querySelector('[data-task-finish="done"]'),
@@ -73,7 +73,7 @@ journey('e2e-tasks', async ({hub, browser, phone}) => {
   // The sheet draws what the task says. Dana asked for it, so she can close it; she is not its owner, so no Done.
   go(page, '#/task/' + id);
   let d = await sheet(page, TITLE);
-  assert.match(d.owner, /engineering-lead/, `${where}: owner row names the bot`);
+  assert.match(d.owner_id, /engineering-lead/, `${where}: owner row names the bot`);
   assert.match(d.asked, /You/, `${where}: asked-by row names the requester`);
   assert.match(d.created_at, CREATED, `${where}: created time is drawn`);
   assert.match(d.status, /Plan/, `${where}: a typed task shows its first step`);

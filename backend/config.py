@@ -415,7 +415,7 @@ class Settings:
             document = yaml.safe_load((self.registry_dir / "hub-access.yaml").read_text())
         except OSError:
             return ""
-        return str((document or {}).get("owner") or "")
+        return str((document or {}).get("owner_id") or "")
 
     @property
     def proxy_kind(self):

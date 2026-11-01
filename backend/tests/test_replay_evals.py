@@ -22,30 +22,30 @@ _spec.loader.exec_module(live)
 
 
 def message(mid, actor, body, created, kind="say"):
-    return {"id": mid, "from_actor": actor, "body": body, "created_at": created, "kind": kind}
+    return {"id": mid, "sender_id": actor, "body": body, "created_at": created, "kind": kind}
 
 
 def test_capture_splits_opening_state_from_outcome_and_needs_a_signature():
-    detail = {"task": {"id": "t1", "title": "Fix the login page", "body": "It 500s.", "owner": "bot:dev",
+    detail = {"task": {"id": "t1", "title": "Fix the login page", "body": "It 500s.", "owner_id": "bot:dev",
                        "status": "done", "acceptance_criteria": []},
               "runs": [{"bot": "botops", "started_at": "2026-10-16T09:00:00Z", "finished_at": "2026-10-16T09:01:00Z"},
                        {"bot": "dev", "started_at": "2026-10-16T10:00:00Z", "finished_at": "2026-10-16T10:06:00Z"},
                        {"bot": "dev", "started_at": "2026-10-16T11:00:00Z", "finished_at": "2026-10-16T11:03:00Z"}],
-              "events": [{"ts": "2026-10-16T10:20:00Z", "field": "title", "old": "Login page 500s", "new": "Fix the login page"}],
+              "events": [{"created_at": "2026-10-16T10:20:00Z", "field": "title", "old": "Login page 500s", "new": "Fix the login page"}],
               "messages": [message("n", "keeper", "New task from human:ana", "2026-10-16T09:59:00Z", "notice"),
                            message("a", "human:ana", "Only the login page.", "2026-10-16T09:58:00Z"),
                            message("b", "bot:dev", "Which browser?", "2026-10-16T10:05:00Z"),
                            message("c", "human:ana", "Safari.", "2026-10-16T10:30:00Z"),
                            message("d", "bot:dev", "Fixed in PR 12.", "2026-10-16T11:02:00Z")],
               "comments": [message("a", "human:ana", "Only the login page.", "2026-10-16T09:58:00Z")],
-              "children": [{"id": "q", "owner": "bot:dev", "status": "done", "title": "Which account?"},
-                           {"id": "r", "owner": "bot:pr-reviewer", "status": "done", "title": "Review PR 12"}]}
+              "children": [{"id": "q", "owner_id": "bot:dev", "status": "done", "title": "Which account?"},
+                           {"id": "r", "owner_id": "bot:pr-reviewer", "status": "done", "title": "Review PR 12"}]}
     # A question card is owned by the bot that asked and waits on the person: one step for them; a review is not.
     files = {"files": [{"name": "trace.txt", "versions": [{"n": 1, "by": "human:ana", "created_at": "2026-10-16T09:57:00Z",
                                                            "text": "Traceback"}]},
                        {"name": "fix.diff", "versions": [{"n": 1, "by": "bot:dev", "created": "2026-10-16T11:01:00Z"}]}]}
-    cards = [{"task": {"id": "q", "owner": "bot:dev", "waiting_on": "human:ana", "status": "done"}},
-             {"task": {"id": "r", "owner": "bot:pr-reviewer", "status": "done"}}]
+    cards = [{"task": {"id": "q", "owner_id": "bot:dev", "waiting_on": "human:ana", "status": "done"}},
+             {"task": {"id": "r", "owner_id": "bot:pr-reviewer", "status": "done"}}]
     case = replay.split(detail, files, {"content": "# Dev", "updated_at": "2026-10-15T00:00:00Z"}, card_details=cards)
 
     assert case["id"] == "fix-the-login-page-t1"         # the task id keeps two tasks with one title apart
@@ -94,7 +94,7 @@ class FakeTico:
         if tid not in self.tasks:
             return 404, {}
         row = self.tasks[tid]
-        handed = str(self.tasks.get("r1", {"task": {}})["task"].get("owner")).startswith("bot:")
+        handed = str(self.tasks.get("r1", {"task": {}})["task"].get("owner_id")).startswith("bot:")
         if path.endswith("/files"):
             if method == "POST":
                 row["files"].append({"name": body["name"], "versions": [{"by": "human:owner"}]})
@@ -107,7 +107,7 @@ class FakeTico:
             return 200, {}
         if method == "POST":
             row["task"].update({k: v for k, v in body.items() if k != "version"})
-            if body.get("owner", "").startswith("bot:"):
+            if body.get("owner_id", "").startswith("bot:"):
                 self.behave(self, row, "assigned")
             if tid != "r1" and body.get("status") == "done":
                 next(c for c in self.tasks["r1"]["children"] if c["id"] == tid)["status"] = "done"
@@ -124,7 +124,7 @@ def bot_asks_then_finishes(fake, row, event):
     if event == "assigned":
         row["runs"].append(run_at(1))
         ask = message("a1", "bot:engineering-lead", "Which repository?", "2099-01-01T00:01:30Z", "ask")
-        row["messages"].append(ask | {"to_actor": "human:owner"})
+        row["messages"].append(ask | {"recipient_id": "human:owner"})
         row["task"].update(status="waiting", waiting_on=None)
     elif event == "answered":
         row["runs"].append(run_at(2))
@@ -205,7 +205,7 @@ def test_replay_answers_the_bots_questions_the_way_the_server_asks_them(api):
     card = api.post("/api/v2/task-questions", headers=headers(attempt["token"]), json={
         "question": "Which week?", "on": "ana", "parent": tid, "options": [{"label": "This week", "then": "Go with This week"}, {"label": "Last week", "then": "Go with Last week"}]})
     assert card.status_code == 200, card.text
-    assert card.json()["task"]["owner"] == "bot:ops"
+    assert card.json()["task"]["owner_id"] == "bot:ops"
     now = live.outcome(server, "ana-test", tid, "ops")
     assert [q["task"] for q in now["open_questions"]] == [card.json()["task"]["id"]] and now["person_steps"] == 2
     assert live.answer(server, "ana-test", "human:ana", tid, now, "this week")

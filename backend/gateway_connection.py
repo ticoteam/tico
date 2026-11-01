@@ -441,7 +441,7 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
     """`run_credentials` for attempt `attempt_id`, by what its claim handed it out on, to the runner `who` that holds it.
     Only a runner is handed the key: its turn reaches the Gateway through the runner's relay with a token for that turn
     alone (runner-rs/src/gateway_relay.rs), because the turn's own commands can read whatever the turn's processes hold."""
-    row = c.execute("SELECT bot FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    row = c.execute("SELECT bot_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     config = handed(c, attempt_id)
     if not row or not wanted(config):
         return []
@@ -449,7 +449,7 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
     items = run_credentials(c, vault, settings, config.get("model") if is_tico(config.get("model"))
                             else fallback.get("model") if is_tico(fallback.get("model"))
                             else config.get("gateway_fallback"))
-    if items and (bot := bot_header(c, vault, row["bot"])):
+    if items and (bot := bot_header(c, vault, row["bot_id"])):
         # The relay sends it on every model call of the turn, in place of anything the turn sends by that name.
         items.append({"id": "gateway-bot", "name": G.LABEL + " bot", "env": RUN_BOT_ENV, "kind": "text",
                       "value": bot[G.BOT_HEADER]})
@@ -458,7 +458,7 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
         # primary/fallback deadline stays inside HQ's 24-hour rotation grace (runner-rs/src/gateway_relay.rs).
         c.execute("UPDATE attempts SET gateway_key_id=? WHERE id=?", (key_id(c, settings) or None, attempt_id))
         H.event(c, who.actor, "gateway.key_sent", PROVIDER,
-                {"bot": row["bot"], "attempt": attempt_id, "runner": who.runner_id})
+                {"bot_id": row["bot_id"], "attempt": attempt_id, "runner": who.runner_id})
     return items
 
 

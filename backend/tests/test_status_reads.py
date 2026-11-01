@@ -26,7 +26,7 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
     hold_bot(api, machine, monkeypatch)                  # ops: held after five failed runs, its last stop on record
     assign(api, machine, "doc-updater")
     ready(api, machine, ["ops", "doc-updater"])
-    post(api, "tasks", {"owner": "doc-updater", "title": "Update the guide", "body": "Please update it."})
+    post(api, "tasks", {"owner_id": "doc-updater", "title": "Update the guide", "body": "Please update it."})
     live = claim(api, machine, "doc-updater")
     post(api, f"attempts/{live['id']}/started", {"thread_id": "t-live"}, machine["token"])       # a live run
     with api.app.state.store.transaction() as c:
@@ -56,7 +56,7 @@ def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch
     machine = setup(api, monkeypatch, tasks=9)
     first = claim(api, machine)
     with api.app.state.store.transaction() as c:
-        jobs = [row[0] for row in c.execute("SELECT id FROM jobs WHERE bot='ops' ORDER BY rowid")]
+        jobs = [row[0] for row in c.execute("SELECT id FROM jobs WHERE bot_id='ops' ORDER BY rowid")]
         for job, bot, created, run, state, started in (
                 (jobs[0], "ops", "2026-10-24T11:00:00.000000Z", "old", "failed", True),
                 (jobs[1], "ops", H.now(), "tie-first", "failed", True),
@@ -67,10 +67,10 @@ def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch
                 (jobs[6], "coo", H.now(), "coo-new", "expired", False),
                 (jobs[7], "finance", "2026-10-24T11:00:00.000000Z", "finance-marked", "expired", True),
                 (jobs[8], "finance", H.now(), "finance-newer", "failed", True)):
-            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,"
+            c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
                       "started_at,finished_at) SELECT ?,?,?,runner_id,generation,?,?,lease_until,?,?,? FROM attempts WHERE id=?",
                       (run, job, bot, "hash-" + run, state, created, created if started else None, H.now(), first["id"]))
-            c.execute("UPDATE jobs SET bot=?,state='uncertain',created_at=?,attempt_id=? WHERE id=?", (bot, created, run, job))
+            c.execute("UPDATE jobs SET bot_id=?,state='uncertain',created_at=?,attempt_id=? WHERE id=?", (bot, created, run, job))
         c.execute("UPDATE attempts SET state='expired' WHERE id=?", (first["id"],))
         c.execute("DELETE FROM registry_metadata WHERE key='last-stop:ops'")
         for slug, run in (("cpo", "marked"), ("finance", "finance-marked")):
@@ -103,7 +103,7 @@ def busy(api, machine, first, count, live=1):
         H.sync_registry(c, {**bots, **{s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs}},
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for slug in slugs:
-            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,?)",
                       (slug, encode({"name": slug, "runtime": "fake"}), "ana"))
     for slug in slugs:
         assign(api, machine, slug)
@@ -218,7 +218,7 @@ def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monke
             c.set_progress_handler(None, 1)
             # The rows an unindexed read of the same filter gives: live or private tasks a bot owns or asked for.
             wanted = {tuple(t) for t in c.execute(
-                f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE (owner{marks} OR requester{marks}) "
+                f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE (owner_id{marks} OR requester_id{marks}) "
                 f"AND {privacy.STATUS_TASKS_SQL}", actors * 2)}
         got = {slug: sorted(tuple(t[k] for k in t) for t in kinds["tasks"]) for slug, kinds in inputs.items()}
         assert {t for rows in got.values() for t in rows} == wanted
@@ -274,17 +274,17 @@ def test_status_task_rows_come_back_as_one_row_with_the_statements_own_rows(api,
     assert guest["id"] in ids and done["id"] not in ids
     assert any(row["private"] and row["status"] not in H.ACTIVE_STATUSES for row in packed)
     assert any(row["guest"] == "human:cara" and row["waiting_on"] == "human:ben" for row in packed)
-    assert any(row["owner"] == "human:cara" and row["requester"] == "bot:busy-3" for row in packed)
+    assert any(row["owner_id"] == "human:cara" and row["requester_id"] == "bot:busy-3" for row in packed)
 
 
 def finish_private(store, slug):
     """Closes the private task `slug` owns and the private one it asked a person for; returns their ids."""
     with store.transaction() as c:
         ids = {row[0] for row in c.execute(
-            "SELECT id FROM tasks WHERE private=1 AND ? IN (owner,requester)", ("bot:" + slug,))}
-        assert {row[0] for row in c.execute(f"SELECT owner='bot:{slug}' FROM tasks WHERE id IN ({','.join('?' * len(ids))})",
+            "SELECT id FROM tasks WHERE private=1 AND ? IN (owner_id,requester_id)", ("bot:" + slug,))}
+        assert {row[0] for row in c.execute(f"SELECT owner_id='bot:{slug}' FROM tasks WHERE id IN ({','.join('?' * len(ids))})",
                                             tuple(ids))} == {0, 1}
-        c.execute(f"UPDATE tasks SET status=CASE WHEN owner=? THEN 'done' ELSE 'closed' END "
+        c.execute(f"UPDATE tasks SET status=CASE WHEN owner_id=? THEN 'done' ELSE 'closed' END "
                   f"WHERE id IN ({','.join('?' * len(ids))})", ("bot:" + slug, *ids))
     return ids
 
@@ -318,7 +318,7 @@ def test_stopped_runs_of_each_uncertain_bot_cost_a_bounded_number_of_statements(
     def stop(count):
         with store.transaction() as c:
             c.execute("UPDATE jobs SET state='uncertain' WHERE id IN "
-                      "(SELECT id FROM jobs WHERE state='queued' GROUP BY bot LIMIT ?)", (count,))
+                      "(SELECT id FROM jobs WHERE state='queued' GROUP BY bot_id LIMIT ?)", (count,))
 
     stop(2)
     two = page(api, monkeypatch, "/api/status")[1]

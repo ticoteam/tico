@@ -84,7 +84,7 @@ def test_read_access_is_not_chat_access_and_other_rooms_stay_private(api):
     # A reader can inspect the goal in a conversation they joined but cannot change it.
     with api.app.state.store.transaction() as c:
         conv = H.conversation(c, cid)
-        c.execute("UPDATE conversations SET scope='direct',owner_actor=NULL,participants=? WHERE id=?",
+        c.execute("UPDATE conversations SET scope='direct',owner_id=NULL,participants=? WHERE id=?",
                   (encode(conv['participants'] + ['human:cara']), cid))
         restrict(c, 'ops', see={'people': ['ana', 'cara']}, read={'people': ['ana', 'cara']}, write={'people': ['ana']})
     assert get(api, f'conversations/{cid}/goal', 'cara-test')['goal'] is None
@@ -137,7 +137,7 @@ def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
          'capabilities': ['task_lanes_v2', 'session_roots_v1', 'task_goals_v1'], 'readiness': {
          'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': 'codex', 'goals': True}}}}, machine['token'])
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Publish the Acme summary', 'body': 'For the board.',
+    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Publish the Acme summary', 'body': 'For the board.',
                                'acceptance_criteria': ['The summary is in Docs']})
     attempt = claim(api, machine)
     goal = attempt['chat_goal']
@@ -158,7 +158,7 @@ def task_goal_world(api):
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
          'capabilities': ['task_lanes_v2', 'session_roots_v1', 'task_goals_v1'], 'readiness': {
          'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': 'codex', 'goals': True}}}}, machine['token'])
-    return machine, post(api, 'tasks', {'owner': 'ops', 'title': 'Publish the Acme summary', 'body': 'For the board.'})
+    return machine, post(api, 'tasks', {'owner_id': 'ops', 'title': 'Publish the Acme summary', 'body': 'For the board.'})
 
 
 def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_completes_the_task(api):
@@ -202,7 +202,7 @@ def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(ap
         H._write_message(c, 'bot:ops', 'bot:product-design', 'The summary is drafted.', conv, 'say',
                          {'task': task['id'], 'needs_action': True}, None, None)
     other = claim(api, machine)
-    assert other['bot'] == 'product-design' and other['task']['id'] == task['id'] and other['chat_goal'] is None
+    assert other['bot_id'] == 'product-design' and other['task']['id'] == task['id'] and other['chat_goal'] is None
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']
     assert goal['id'] == first['chat_goal']['id'] and goal['status'] == 'active'
     with api.app.state.store.read() as c:

@@ -14,7 +14,7 @@ function qcardQuestion(it) {
   const ask = it?.ask, qs = ask?.refs?.questions;
   if (!ask || !Array.isArray(qs) || qs.length !== 1) return null;
   const q = qs[0], n = (q.options || []).length;
-  if (n < 2 || n > QC_MAX_OPTIONS || ask.to_actor !== myActor() || ask.from_actor === myActor()) return null;
+  if (n < 2 || n > QC_MAX_OPTIONS || ask.recipient_id !== myActor() || ask.sender_id === myActor()) return null;
   return q;
 }
 // Who really asks: the bot by its name, or Tico for its own checks. Never the assistant's name or "You asked".
@@ -99,7 +99,7 @@ function qcardBodyHTML(it, q, {attr = 'qc', ticked = qcardRecommended(q), pic = 
       <input type="checkbox" data-qc-tick="${i}"${ticked.has(i) ? ' checked' : ''}>${pic(o)}<span class="qc-pl"><span class="qc-l"><b class="tnum">${i + 1}.</b> ${esc(o.label)}${o.recommended
         ? ' <span class="qc-rec">(recommended)</span>' : ''}</span>${qcardThen(o.then)}${qcardDesc(o)}</span></label></li>`).join('')}</ul>`;
   } else {
-    const pics = q.options.some(o => o.file), bot = qcardAsker(it.ask?.from_actor);
+    const pics = q.options.some(o => o.file), bot = qcardAsker(it.ask?.sender_id);
     if (q.options.length === 2 && pics) picks = `<div class="dc-pair">${q.options.map((o, i) =>
       `<button type="button" class="dc-opt" data-${attr}="pick" data-i="${i}" aria-label="${esc(o.label)}">${pic(o)}<span class="dc-l">${esc(o.label)}</span>${qcardThen(qcardOutcome(o, bot))}${qcardDesc(o)}</button>`).join('')}</div>`;
     else if (q.options.length === 2) picks = q.options.some(o => o.description)
@@ -117,7 +117,7 @@ const qcardYesNo = q => !q.multi && q.options.length === 2 && q.options.map(o =>
 // option for two; none for more (the tiles are the buttons). `keys` labels a button with its key.
 function qcardActionsHTML(it, q, {attr = 'qc', ticked = qcardRecommended(q), keys = false} = {}) {
   const k = key => keys ? `<kbd>${key}</kbd>` : '';
-  const bot = qcardAsker(it.ask?.from_actor), n = q.options.length, t = ticked.size;
+  const bot = qcardAsker(it.ask?.sender_id), n = q.options.length, t = ticked.size;
   const btn = (cls, data, label, then, extra = '') =>
     `<button type="button" class="qc-btn${cls ? ' ' + cls : ''}" data-${attr}="${data}"${extra}><span class="qc-bl">${label}</span>${qcardThen(then)}</button>`;
   if (q.multi) return btn('', 'all', `Yes to all${k('A')}`, `All ${n} go to ${bot} as yes`)
@@ -136,7 +136,7 @@ function qcardActionsHTML(it, q, {attr = 'qc', ticked = qcardRecommended(q), key
 function qcardFallbackHTML(it) {
   const ask = it.ask, d = ask?.refs?.if_no_answer;
   if (!d?.do) return '';
-  const bot = qcardAsker(ask.from_actor), at = ask.goes_ahead_at ? new Date(ask.goes_ahead_at) : null;
+  const bot = qcardAsker(ask.sender_id), at = ask.goes_ahead_at ? new Date(ask.goes_ahead_at) : null;
   const when = at && !isNaN(at) ? at.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}) : '';
   return `<p class="qc-fallback">${esc(when ? `If you don't answer by ${when}: ${d.do}`
     : `If you don't answer, ${bot} waits for you before it goes ahead (${d.do}).`)}</p>`;
@@ -166,7 +166,7 @@ function qcardWrites(it, q, labels, note) {
 }
 // What an answer's toast says.
 function qcardSaid(it, q, labels) {
-  const to = qcardAsker(it.ask?.from_actor);
+  const to = qcardAsker(it.ask?.sender_id);
   if (!q.multi) return `Picked ${labels[0]} · sent to ${to}`;
   return labels.length === q.options.length ? `Yes to all · sent to ${to}` : `Sent ${labels.length} ticked · sent to ${to}`;
 }
@@ -226,7 +226,7 @@ function qcardBoxHTML(t) {
   stale.forEach(k => QC_DRAFTS.delete(k));
   const ticked = draft ? new Set(draft.ticked) : qcardRecommended(q), files = TF_CACHE.get(String(t.id));
   return `<section class="task-ask qcard" data-qcard="${esc(it.id)}" data-qc-key="${esc(key)}" aria-label="Needs you">
-    <div class="qc-head"><span class="lbl">Needs you</span> <b class="qc-who">${esc(qcardAsker(it.ask.from_actor))}</b><span class="qc-sub"> · ${esc(qcardSub(it))}</span></div>
+    <div class="qc-head"><span class="lbl">Needs you</span> <b class="qc-who">${esc(qcardAsker(it.ask.sender_id))}</b><span class="qc-sub"> · ${esc(qcardSub(it))}</span></div>
     ${stale.length ? '<p class="qc-changed muted">The question changed, so your earlier ticks and note were cleared.</p>' : ''}
     ${qcardBodyHTML(it, q, {attr: 'qc', ticked, pic: o => qcardPicture(files, o)})}
     <div class="qc-actions">${qcardActionsHTML(it, q, {attr: 'qc', ticked})}</div>

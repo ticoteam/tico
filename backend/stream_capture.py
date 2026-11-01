@@ -117,7 +117,7 @@ def require_run(c, who, auth, aid):
     attempt = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
     if not attempt:
         raise Problem("not_found", "Turn not found", 404)
-    auth.require_read(c, who, attempt["bot"])
+    auth.require_read(c, who, attempt["bot_id"])
     msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0])
     if msg:
         auth.conversation(c, who, msg["conversation_id"])
@@ -161,7 +161,7 @@ def export(c, who, auth, aid, full=True):
                 **diagnostics, "truncated": bool(cap["truncated"]), "captured": cap["created_at"],
                 "fixture": f"hub run export {aid} --fixture"}
     # A deleted message's text is not served again; the stream may still hold it until the week is out.
-    message = ({"kind": msg["kind"], "from": msg["from_actor"], "body": mask(msg["body"] or "")} if msg
+    message = ({"kind": msg["kind"], "from": msg["sender_id"], "body": mask(msg["body"] or "")} if msg
                else {"deleted": True})
     config = c.execute("SELECT config FROM bot_config WHERE bot=?", (attempt["bot"],)).fetchone()
     declared = json.loads(config[0] or "{}") if config else {}

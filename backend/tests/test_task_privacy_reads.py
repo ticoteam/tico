@@ -110,7 +110,7 @@ def test_private_execution_output_context_and_grants_revoke_on_reassignment(api)
     post(api, f"attempts/{attempt['id']}/events", {"events": [{"seq": 1, "kind": "message", "payload": {"text": "Private runtime output"}}]}, machine["token"])
     get(api, f"turns/{attempt['id']}/steps", expected=404)
     get(api, f"turns/{attempt['id']}/steps", "ben-test")
-    post(api, "tasks/" + row["id"], {"version": attempt["task"]["version"], "owner": "finance"}, "ben-test")
+    post(api, "tasks/" + row["id"], {"version": attempt["task"]["version"], "owner_id": "finance"}, "ben-test")
     get(api, "messages/" + attempt["message"]["id"], attempt["token"], expected=404)
     assert api.get(f"/api/v2/conversations/{row['conversation_id']}/messages", headers=headers(attempt["token"])).status_code in (403, 404)
     assert api.post("/api/v2/jobs/claim", json={"bot": "ops", "start_places": True}, headers=headers(machine["token"], key)).status_code in (403, 404)
@@ -128,7 +128,7 @@ def test_private_execution_cannot_publish_public_task_or_wider_reply(api):
     public = task(api, private=False, requester="bot:ops", owner="bot:ops", title="Public work")
     for ident in (public["id"], public["id"][:8]):
         post(api, "tasks/" + ident, {"version": public["version"], "body": "Private derived output"}, attempt["token"], expected=403)
-    post(api, "tasks", {"owner": "ops", "title": "Private follow-up", "body": "Keep this private", "private": False}, attempt["token"], expected=403)
+    post(api, "tasks", {"owner_id": "ops", "title": "Private follow-up", "body": "Keep this private", "private": False}, attempt["token"], expected=403)
     post(api, "messages", {"to": "ana", "text": "Private derived output"}, attempt["token"], expected=403)
     post(api, "updates", {"body": "Private derived output"}, attempt["token"], expected=403)
     post(api, "integrations/github/learnings", {"text": "Private derived output"}, attempt["token"], expected=403)
@@ -151,7 +151,7 @@ def test_live_events_stop_when_private_owner_loses_access(api):
     before, cursor = seen(start)
     assert "First packet note" in before and row["id"] in before
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='human:cara' WHERE id=?", (row["id"],))
+        c.execute("UPDATE tasks SET owner_id='human:cara' WHERE id=?", (row["id"],))
     post(api, "tasks/" + row["id"] + "/comments", {"text": "Second packet note"})
     after, _ = seen(cursor)
     assert "Second packet note" not in after and row["id"] not in after and "Sensitive" not in after
@@ -167,7 +167,7 @@ def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):
         who = Identity("human:ben", "human", email="ben@acme.example")
         before = views.fleet_snapshot_cached(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] in {t["id"] for t in before["tasks"]}
-        c.execute("UPDATE tasks SET owner='human:ana' WHERE id=?", (row["id"],))
+        c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (row["id"],))
         after = views.fleet_snapshot_cached(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] not in {t["id"] for t in after["tasks"]}
     result = get(api, "context/search?q=Sensitive&source=docs", "ben-test")
@@ -187,9 +187,9 @@ def test_verified_legal_requester_is_kept_without_forged_human_grants(api, reque
         assign(api, machine, "ops", generation=assigned["generation"] if assigned else 0)
     ready(api, machine, ["ops"])
     attempt = claim(api, machine, "ops")
-    followup = post(api, "tasks", {"owner": "ops", "title": "Review the agreement", "body": "Review its terms."}, attempt["token"])
-    assert followup["private"] and followup["requester"] == requester
-    assert followup["owner"] == "bot:ops"
+    followup = post(api, "tasks", {"owner_id": "ops", "title": "Review the agreement", "body": "Review its terms."}, attempt["token"])
+    assert followup["private"] and followup["requester_id"] == requester
+    assert followup["owner_id"] == "bot:ops"
     get(api, "tasks/" + followup["id"], expected=404)
     get(api, "tasks/" + followup["id"], "ben-test", expected=200 if H.is_human(requester) else 404)
     assert get(api, "tasks/" + source["id"], attempt["token"])["task"]["private"]
@@ -231,7 +231,7 @@ def test_deleted_comment_receipt_is_canonical_empty_and_currently_authorized(api
         for forged in ({**receipt, "body": "Withdrawn private comment"}, {**receipt, "extra": "Private words"}):
             with pytest.raises(Problem):
                 task_privacy.require_payload(c, who, forged)
-        c.execute("UPDATE tasks SET owner='human:ana' WHERE id=?", (row["id"],))
+        c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (row["id"],))
         with pytest.raises(Problem):
             task_privacy.require_payload(c, who, receipt)
 
@@ -252,17 +252,17 @@ def test_delegated_creation_keeps_defaults_and_requires_actual_bot_audience(api,
                       (encode({**config, "private_tasks_default": True}), sensitive))
         before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
         rooms_before = c.execute("SELECT count(*) FROM conversations").fetchone()[0]
-    created = post(api, "tasks", {"owner": owner, "title": "Review delegated work", "body": "Review it.",
+    created = post(api, "tasks", {"owner_id": owner, "title": "Review delegated work", "body": "Review it.",
                                    "private": explicit}, "acted-test", expected=expected)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == before + (expected == 200)
         if expected != 200:
             assert c.execute("SELECT count(*) FROM conversations").fetchone()[0] == rooms_before
     if expected == 200:
-        assert created["private"] and created["requester"] == "human:ben" and created["owner"] == "bot:finance"
+        assert created["private"] and created["requester_id"] == "human:ben" and created["owner_id"] == "bot:finance"
         assert get(api, "tasks/" + created["id"], "acted-test")["task"]["private"]
         # A signed-in person keeps their explicit choice to publish.
-        public = post(api, "tasks", {"owner": owner, "title": "Review public work", "body": "Review it.",
+        public = post(api, "tasks", {"owner_id": owner, "title": "Review public work", "body": "Review it.",
                                      "private": False}, "ben-test")
         assert public["private"] is False
 
@@ -311,7 +311,7 @@ def test_sql_audit_keeps_no_literals_and_provenance_uses_the_result_snapshot(api
                            Identity("human:ben", "human", email="ben@acme.example"))
         try:
             with api.app.state.store.transaction() as write:
-                write.execute("UPDATE tasks SET owner='human:ana' WHERE id=?", (row["id"],))
+                write.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (row["id"],))
             # An in-flight read has one coherent snapshot; the next request sees revocation.
             assert SQL.run(conn, f"SELECT id FROM tasks WHERE id='{row['id']}'", [], 500, 5)["rows"] == [[row["id"]]]
             with pytest.raises(Problem):
@@ -329,7 +329,7 @@ def test_sql_event_privacy_scales_with_matching_attempts_not_their_cross_product
         conv = H.open_conversation(c, "human:ana", ["bot:ops"], subject="Public work")
         private_mid = next(r["id"] for r in c.execute("SELECT * FROM messages WHERE conversation_id=?", (private["conversation_id"],)))
         private_job = c.execute("SELECT id FROM jobs WHERE message_id=?", (private_mid,)).fetchone()[0]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
                   "VALUES('synthetic-private',?,'ops',?,1,'synthetic-private','completed',?,?,?)",
                   (private_job, machine["runner_id"], H.now(), H.shift(H.now(), minutes=-1), H.now()))
         c.execute("INSERT INTO events VALUES('synthetic-private-event',?,'bot:ops','synthetic.privacy','','{}')",
@@ -340,11 +340,11 @@ def test_sql_event_privacy_scales_with_matching_attempts_not_their_cross_product
                 started = H.shift("2026-01-01T00:00:00Z", minutes=n * 2)
                 finished = H.shift(started, minutes=1)
                 mid, jid, aid = (f"synthetic-{kind}-{n}" for kind in ("message", "job", "attempt"))
-                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
+                c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                           "VALUES(?,?,'human:ana','bot:ops','say','Public request','{}',?)", (mid, conv["id"], started))
                 jid = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()[0]
                 c.execute("UPDATE jobs SET state='completed',attempt_id=? WHERE id=?", (aid, jid))
-                c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
+                c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
                           "VALUES(?,?,'ops',?,1,?,'completed',?,?,?)", (aid, jid, machine["runner_id"], aid, finished, started, finished))
                 c.execute("INSERT INTO events VALUES(?,?,'bot:ops','synthetic.privacy','','{}')", (f"synthetic-event-{n}", started))
     def measure():
@@ -400,7 +400,7 @@ def test_task_page_reads_a_fixed_number_of_statements_and_hides_private_provenan
     store = api.app.state.store
     with store.transaction() as c:
         hidden = H.task_create(c, "human:cara", "Private plan", "Secret", "human:cara", private=True, lint=False)
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES('rn','Mac','ana','th',?)", (H.now(),))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('rn','Mac','ana','th',?)", (H.now(),))
 
     def task_with(size):
         with store.transaction() as c:
@@ -410,9 +410,9 @@ def test_task_page_reads_a_fixed_number_of_statements_and_hides_private_provenan
                 H.task_create(c, "human:ana", f"Step {size}-{n}", "Do it.", "human:ben", parent_id=parent["id"], lint=False)
                 asked = secret if n == 1 else H.task_comment(c, "human:ana", parent["id"], f"Please do {n}", wake=False)
                 aid = f"run-{size}-{n}"
-                c.execute("INSERT INTO jobs(id,message_id,bot,state,created_at,attempt_id) VALUES(?,?,'ops','completed',?,?)",
+                c.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,'ops','completed',?,?)",
                           ("job-" + aid, asked["id"], H.now(), aid))
-                c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
+                c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                           "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + aid, aid, H.now(), H.now()))
                 c.execute("INSERT INTO turns(id,bot,started_at,task_id,exit) VALUES(?,'ops',?,?,'ok')", (aid, H.now(), parent["id"]))
                 H.task_comment(c, "bot:ops", parent["id"], f"Did {n}", wake=False, extra_refs={"turn_id": aid})
@@ -602,7 +602,7 @@ def running_turn(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    work = post(api, "tasks", {"owner": "ops", "title": "Release", "body": "Ship it."})
+    work = post(api, "tasks", {"owner_id": "ops", "title": "Release", "body": "Ship it."})
     attempt = claim(api, r)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, r["token"])
     with api.app.state.store.read() as c:
@@ -612,7 +612,7 @@ def running_turn(api):
 
 def queue(c, mid, cid, refs, *, sender="human:ana", in_reply_to=None):
     """A message to bot:ops as stored; the jobs trigger queues it."""
-    c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at,refs,in_reply_to) "
+    c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs,in_reply_to) "
               "VALUES(?,?,?,'bot:ops','say','More',?,?,?)", (mid, cid, sender, H.now(), encode(refs), in_reply_to))
 
 

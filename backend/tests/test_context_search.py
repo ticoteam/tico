@@ -10,7 +10,7 @@ def seed(api):
                                source_url="https://example.test/market")
         for rid, kind, private in (("shared", "meeting", False), ("private", "meeting", True), ("note", "note", False)):
             meetings.snapshot({"id": rid, "title": "Pricing discussion", "kind": kind,
-                "private": private, "owner": "ben@acme.example", "status": "done",
+                "private": private, "owner_id": "ben@acme.example", "status": "done",
                 "calendar": {"attendees": ["ben@acme.example"]},
                 "turns": [{"text": "Cancellation window is seven days", "speaker": "Dana",
                            "start_ms": 1000, "end_ms": 4000}]},

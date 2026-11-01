@@ -33,7 +33,7 @@ def row(name, minutes, actor, action, target, detail):
 
 def add(s, rows):
     with s.transaction() as c:
-        c.executemany("INSERT INTO events(id,ts,actor,action,target,detail) VALUES(?,?,?,?,?,?)", rows)
+        c.executemany("INSERT INTO events(id,created_at,actor,action,target,detail) VALUES(?,?,?,?,?,?)", rows)
 
 
 def remaining(s):

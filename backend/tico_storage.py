@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS tico_storage(
  bucket TEXT NOT NULL DEFAULT '', prefix TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT '',
  access_key_id TEXT NOT NULL DEFAULT '', secret TEXT NOT NULL DEFAULT '', expires_at TEXT,
  signing_key_id TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', keep_until TEXT,
- changed TEXT, checked TEXT, error TEXT NOT NULL DEFAULT '');
+ changed_at TEXT, checked_at TEXT, error TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS storage_moves(
  id TEXT PRIMARY KEY, target TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('running','done','failed','stopped')),
  started_at TEXT NOT NULL, started_by TEXT NOT NULL, finished_at TEXT,
@@ -358,14 +358,14 @@ def sync(store, vault, blobs, settings=None, opener=None, report=False):
         saved = row(c)
         if parsed is None:
             if saved:
-                c.execute("UPDATE tico_storage SET checked=?, error=? WHERE id=1", (now, error))
+                c.execute("UPDATE tico_storage SET checked_at=?, error=? WHERE id=1", (now, error))
             elif error:
                 LOG.warning("%s", error)
         elif parsed["state"] == "off" and not saved:
             pass
         else:
             fields = {"state": parsed["state"], "address": parsed["address"], "keep_until": parsed["keep_until"],
-                      "checked": now, "error": ""}
+                      "checked_at": now, "error": ""}
             if parsed.get("keys"):
                 signing = parsed["signing"] or ("", "")
                 fields.update(bucket=parsed["bucket"], prefix=parsed["prefix"], region=parsed["region"],
@@ -380,7 +380,7 @@ def sync(store, vault, blobs, settings=None, opener=None, report=False):
             # swaps them in (`Blobs.rekey`) and leaves the file store alone, so uploads and a Move carry on.
             moved = not saved or saved["state"] != parsed["state"] or not same
             if moved:
-                fields["changed"] = now
+                fields["changed_at"] = now
                 H.event(c, "system:gateway", "storage.tico", parsed["state"],
                         {"from": saved["state"] if saved else "off", "address": parsed["address"]})
             c.execute("UPDATE tico_storage SET " + ",".join(k + "=?" for k in fields) + " WHERE id=1", tuple(fields.values()))

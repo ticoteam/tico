@@ -9,7 +9,7 @@ CURSOR = {"model": "cursor-auto", "runtime": "cursor", "harness": "cursor-agent"
 
 
 def work(api, machine, title, segments, **extra):
-    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Build it."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Build it."})
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": title}, machine["token"])
     parts = [{**s, "input_tokens": tokens, "output_tokens": tokens} for s, tokens in segments]
@@ -54,7 +54,7 @@ def test_a_claude_bot_that_fell_back_to_codex_shows_codex_and_unknown_stays_unkn
 
     # Cursor on auto picks its own model; nothing counted at all is unknown too.
     assert ran_on(api, work(api, machine, "cursor", [(CURSOR, 20)])[0])["family"] is None
-    task = post(api, "tasks", {"owner": "ops", "title": "silent", "body": "Build it."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "silent", "body": "Build it."})
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "silent"}, machine["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Built."},
@@ -79,7 +79,7 @@ def test_a_run_that_also_worked_a_private_task_is_left_out_for_whoever_cannot_re
     ready(api, machine, ["ops"])
     tid, aid = work(api, machine, "shared", [(CODEX, 20)])
     assert [r["run"] for r in get(api, f"tasks/{tid}", token="cara-test")["runs"]] == [aid]
-    hidden = post(api, "tasks", {"owner": "ops", "title": "Private", "body": "Only Ana.", "private": True})
+    hidden = post(api, "tasks", {"owner_id": "ops", "title": "Private", "body": "Only Ana.", "private": True})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, hidden["id"]))
         assert H.task_private(c, H.task(c, hidden["id"]))

@@ -21,7 +21,7 @@ const bots = [
   bot('channel', 'Channel Inbox', 'b:botops', {helper: true}),
 ];
 const day = Date.now() - 2 * 86400000;
-const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence: 'weekly', owner: 'bot:cmo', definition: 'Signed-up accounts that finish setup',
+const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence: 'weekly', owner_id: 'bot:cmo', definition: 'Signed-up accounts that finish setup',
   definition_version: 2, source_note: 'Product database', freshness: 'fresh', status: 'yellow', reason: name + ' is behind', spark: [44, 47, 50, 52],
   latest: {value: 52, period_end: new Date(day).toISOString(), quality: 'measured'}, target_label: '→ 65% by Dec 31',
   link: {goal_id: 'g-cmo', kind: 'improve', target: 65, baseline: 40, deadline: '2027-12-31'}, ...over});
@@ -37,14 +37,14 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     const activation = kpi('k-act', 'Activation', {reason: 'Activation 52% vs 58% needed on pace'});
     const nps = kpi('k-nps', 'NPS', {freshness: 'stale', status: 'gray', reason: 'NPS is stale', target_label: 'range 40–60', link: {goal_id: 'g-cmo', kind: 'maintain', min: 40, max: 60}});
     const goals = [
-      {id: 'g-top', title: 'Grow revenue 30% this year', owner: 'company', parent_id: null, status: 'red', status_source: 'person', status_by: 'human:ana',
+      {id: 'g-top', title: 'Grow revenue 30% this year', owner_id: 'company', parent_id: null, status: 'red', status_source: 'person', status_by_id: 'human:ana',
        status_note: 'Launch slipped', rank: 0, kpis: []},
-      {id: 'g-cmo', title: 'Double organic signups', owner: 'bot:cmo', parent_id: 'g-top', status: 'yellow', status_source: 'auto', rank: 0, kpis: [activation, nps],
+      {id: 'g-cmo', title: 'Double organic signups', owner_id: 'bot:cmo', parent_id: 'g-top', status: 'yellow', status_source: 'auto', rank: 0, kpis: [activation, nps],
        checkin: {id: 'c1', body: 'The onboarding email went out late.', signal: 'at_risk', source_actor: 'bot:cmo', ts: new Date(day).toISOString()}},
-      {id: 'g-cmo2', title: LONG, owner: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: []},
-      {id: 'g-gm', title: 'Every KPI read on time', owner: 'bot:goal-manager', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
+      {id: 'g-cmo2', title: LONG, owner_id: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: []},
+      {id: 'g-gm', title: 'Every KPI read on time', owner_id: 'bot:goal-manager', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
     ];
-    const other = [kpi('k-cash', 'Cash runway', {owner: 'human:ana', unit: 'months', target_label: '', link: undefined, status: 'none', latest: {value: 11, period_end: new Date(day).toISOString(), quality: 'measured'}})];
+    const other = [kpi('k-cash', 'Cash runway', {owner_id: 'human:ana', unit: 'months', target_label: '', link: undefined, status: 'none', latest: {value: 11, period_end: new Date(day).toISOString(), quality: 'measured'}})];
     const needs = [{kind: 'kpi_red', goal_id: 'g-cmo', goal_title: 'Double organic signups', kpi_id: 'k-act', kpi_name: 'Activation', reason: 'Activation 52% vs 58% needed on pace',
        task: {id: 't-red', title: 'Check why Activation is off track on Double organic signups', status: 'open'}},
       {kind: 'proposal', proposal: {id: 'p1', kind: 'kpi_target', goal_id: 'g-cmo', kpi_id: 'k-act', payload: {kind: 'improve', target: 60, deadline: '2027-12-31'},
@@ -53,7 +53,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     const detail = {kpi: activation, links: [{...activation.link, goal_title: 'Double organic signups', goal_owner: 'bot:cmo', target_label: activation.target_label, status: 'yellow', reason: activation.reason}],
       readings: [47, 50, 52].map((v, i) => ({id: 'r' + i, value: v, period_end: new Date(day - (2 - i) * 7 * 86400000).toISOString(), quality: 'measured', evidence: i === 2 ? 'https://analytics.example/q/12' : '', actor: 'bot:goal-manager', superseded_by: null})),
       definitions: [], checkins: [], proposals: [], may_edit: true, may_log: true};
-    const archivedKpi = kpi('k-retired', 'Retired conversion', {owner: 'human:ana', archived_at: new Date(day).toISOString(), link: undefined});
+    const archivedKpi = kpi('k-retired', 'Retired conversion', {owner_id: 'human:ana', archived_at: new Date(day).toISOString(), link: undefined});
     let archivedMayEdit = true;
     const requests = [], liveStreams = [];
     await page.route('**/*', async route => {
@@ -111,7 +111,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.deepEqual(requests.filter(r => /goals|kpis/.test(r)).sort(), ['GET /api/v2/goals/needs-you', 'GET /api/v2/goals/tree', 'GET /api/v2/growth/kpis']);
 
     // Every person and every bot that is not archived, goal or not, nested as the org chart nests them; helper bots off it.
-    const lines = await page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner}@${el.style.getPropertyValue('--d')}`));
+    const lines = await page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner_id}@${el.style.getPropertyValue('--d')}`));
     assert.deepEqual(lines, ['company@0', 'human:ana@0', 'human:ben@1', 'bot:cmo@1', '+g-cmo2', 'bot:seo@2', 'bot:sales@1', 'bot:support@1'], JSON.stringify(lines));   // the Strategy Bot is a helper too
     // The sidebar leaves the same helper bots off.
     assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"], #tree [data-org="b:goal-manager"]').count(), 0);
@@ -145,7 +145,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await fresh.locator('input[name=title]').fill('Book 20 demos a month');
     await fresh.locator('[type=submit]').click();
     await until(() => row('bot:sales').locator('.gt-goal').count().then(n => n === 1), 'sales has a goal');
-    assert.deepEqual(last(), {path: '/api/v2/goals', body: {title: 'Book 20 demos a month', owner: 'bot:sales'}});
+    assert.deepEqual(last(), {path: '/api/v2/goals', body: {title: 'Book 20 demos a month', owner_id: 'bot:sales'}});
     // Then a KPI on that goal, from the panel.
     const added = goals.at(-1).id;
     await panel.locator(`[data-gp-kpi-add="${added}"]`).click();
@@ -165,7 +165,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await panel.locator('[data-kpi-add="@page"] [type=submit]').click();
     await until(() => panel.locator('.kpi-line', {hasText: 'Reply time'}).count().then(n => n === 1), 'the KPI is under Other KPIs');
     assert.equal(last().path, '/api/v2/kpis');
-    assert.equal(last().body.owner, 'bot:sales');
+    assert.equal(last().body.owner_id, 'bot:sales');
     await panel.locator('[data-gp-close]').click();
     assert.equal(await page.locator('#goal-panel[open]').count(), 0);
 

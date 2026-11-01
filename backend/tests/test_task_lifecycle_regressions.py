@@ -30,7 +30,7 @@ def eligible(c, task_id):
 
 def age(c, task_id):
     c.execute("UPDATE tasks SET created_at=?,updated_at=?,done_at=? WHERE id=?", (OLD, OLD, OLD, task_id))
-    c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (OLD, task_id))
+    c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (OLD, task_id))
     c.execute("UPDATE messages SET created_at=? WHERE conversation_id=(SELECT conversation_id FROM tasks WHERE id=?)",
               (OLD, task_id))
 
@@ -39,7 +39,7 @@ def test_keeper_notices_do_not_restart_auto_close_but_team_messages_do(c):
     task = create(c, "Finished export")
     H.task_update(c, "bot:cmo", task["id"], status="done")
     age(c, task["id"])
-    H._wake(c, task, task["owner"], "Release validation finished", quiet=True)
+    H._wake(c, task, task["owner_id"], "Release validation finished", quiet=True)
     H.task_comment(c, H.KEEPER, task["id"], "Seen again by the watcher", wake=False)
     row = H.task(c, task["id"])
     assert row["updated_at"] == OLD
@@ -169,17 +169,17 @@ def test_milestone_resume_with_obsolete_step_notifies_owner_once(c, retained):
         {"name": "Ready", "status": "open"}, {"name": "Archived", "status": "closed"}], mover=True)
     task = create(c, "Resume after merge", type=typ["id"], step="Ready")
     step = typ["steps"][1]["id"] if retained == "closed" else None
-    c.execute("UPDATE tasks SET status='waiting',step_id=?,requester='bot:cpo' WHERE id=?", (step, task["id"]))
+    c.execute("UPDATE tasks SET status='waiting',step_id=?,requester_id='bot:cpo' WHERE id=?", (step, task["id"]))
     c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,then_outcome,created_by,created_at,updated_at) "
               "VALUES('resume-rule','team','','step_entered','wake','human:ana',?,?)", (AT, AT))
     MW.add(c, "human:ana", H.task(c, task["id"]), "pr:https://github.com/acme/product/pull/2")
-    before = c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cmo'").fetchone()[0]
-    other = c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cpo'").fetchone()[0]
+    before = c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cmo'").fetchone()[0]
+    other = c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cpo'").fetchone()[0]
     assert MW.happened(c, "pr_merged", "acme/product#2") == [task["id"]]
     row = H.task(c, task["id"])
     assert row["status"] == "open" and row["step_id"] == typ["steps"][0]["id"]
-    assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cmo'").fetchone()[0] == before + 1
-    assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cpo'").fetchone()[0] == other + 1
+    assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cmo'").fetchone()[0] == before + 1
+    assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:cpo'").fetchone()[0] == other + 1
     assert H.sweep_stranded(c, at=H.shift(AT, hours=3)) == []
 
 
@@ -211,7 +211,7 @@ def test_trashed_task_prevents_its_step_changing_before_restore(c, edit):
 
 @pytest.mark.parametrize("merged", [False, True])
 def test_opening_task_refreshes_links_without_touching_tasks_or_close_timer(api, monkeypatch, merged):
-    tasks = [post(api, "tasks", {"owner": "cpo", "title": title, "body": "x", "links": [PR]})
+    tasks = [post(api, "tasks", {"owner_id": "cpo", "title": title, "body": "x", "links": [PR]})
              for title in ("Ship export", "Review export")]
     service = api.app.state.github_app
     with service.store.transaction() as c:
@@ -243,7 +243,7 @@ def test_opening_task_refreshes_links_without_touching_tasks_or_close_timer(api,
             assert row["updated_at"] == OLD
             assert R.untouched(c, row, 24, H.parse_ts(AT))
             assert eligible(c, task["id"])
-            history = c.execute("SELECT * FROM task_events WHERE task_id=? AND field='github' AND ts>?", (task["id"], OLD)).fetchall()
+            history = c.execute("SELECT * FROM task_events WHERE task_id=? AND field='github' AND created_at>?", (task["id"], OLD)).fetchall()
             assert len(history) == int(merged)
             if merged:
                 assert "GitHub" in history[0]["note"] and "merged" in history[0]["new"]

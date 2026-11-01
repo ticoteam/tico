@@ -27,7 +27,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS company_storage(
  id TEXT PRIMARY KEY, bucket TEXT NOT NULL, prefix TEXT NOT NULL DEFAULT '', region TEXT NOT NULL,
  access_key_id TEXT NOT NULL, secret TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL, created_by TEXT NOT NULL, retired TEXT);
+ created_at TEXT NOT NULL, created_by TEXT NOT NULL, retired_at TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS company_storage_one_active ON company_storage(active) WHERE active=1;
 """
 BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
@@ -65,7 +65,7 @@ def _public(row):
 def places(c, vault):
     """(the active place or None, earlier places newest first), each {bucket, prefix, region, keys} for Blobs.configure."""
     active, earlier = None, []
-    for row in c.execute("SELECT * FROM company_storage ORDER BY active DESC, COALESCE(retired, created_at) DESC"):
+    for row in c.execute("SELECT * FROM company_storage ORDER BY active DESC, COALESCE(retired_at, created_at) DESC"):
         place = {"bucket": row["bucket"], "prefix": row["prefix"], "region": row["region"],
                  "keys": (row["access_key_id"], vault.cipher.unseal(c, _context(row["id"]), row["secret"]))}
         if row["active"]:
@@ -84,7 +84,7 @@ def active_location(c):
 def view(c, settings, blobs):
     from . import tico_storage
     active = c.execute("SELECT * FROM company_storage WHERE active=1").fetchone()
-    earlier = c.execute("SELECT * FROM company_storage WHERE active=0 ORDER BY retired DESC").fetchall()
+    earlier = c.execute("SELECT * FROM company_storage WHERE active=0 ORDER BY retired_at DESC").fetchall()
     return {"active": _public(active) if active else None,
             "earlier": [_public(row) for row in earlier],
             "server": {"mode": "s3" if settings.blob_bucket else "local",
@@ -173,7 +173,7 @@ def save(store, vault, who, body):
     check(store.settings, bucket, prefix, region, (body.access_key_id, secret))
     row_id = H.new_id()
     with store.transaction() as c:
-        c.execute("UPDATE company_storage SET active=0, retired=? WHERE active=1", (H.now(),))
+        c.execute("UPDATE company_storage SET active=0, retired_at=? WHERE active=1", (H.now(),))
         # One row per place: the new keys read what the older ones wrote there.
         c.execute("DELETE FROM company_storage WHERE bucket=? AND prefix=?", (bucket, prefix))
         c.execute("INSERT INTO company_storage(id,bucket,prefix,region,access_key_id,secret,active,created_at,created_by) "
@@ -190,7 +190,7 @@ def turn_off(store, who):
         current = c.execute("SELECT * FROM company_storage WHERE active=1").fetchone()
         if not current:
             raise Problem("not_set", "The company's files already use the server's own storage", 409)
-        c.execute("UPDATE company_storage SET active=0, retired=? WHERE id=?", (H.now(), current["id"]))
+        c.execute("UPDATE company_storage SET active=0, retired_at=? WHERE id=?", (H.now(), current["id"]))
         H.event(c, who.actor, "storage.off", _location(current["bucket"], current["prefix"]), {})
 
 

@@ -27,9 +27,9 @@ def held(api, machine, asks=True, **busy):
         assert post(api, "jobs/claim", busy, token=machine["token"])["attempt"] is None
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
         online = {r["id"] for r in health._online_runners(c)}
-        rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
+        rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot_id"] == "ops"]
         found = {f["check_id"] for f in health_monitor.findings(c, store.settings)}
     return rows, found
 
@@ -68,7 +68,7 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
     def control(**body):
         post(api, "bots/ops/control", {**body, "expected_revision": get(api, "bots/ops")["revision"]})
     task, other = new_task(api, "the check"), new_task(api, "unrelated")
-    child = post(api, "tasks", {"owner": "ops", "title": "review", "body": "Review it.",
+    child = post(api, "tasks", {"owner_id": "ops", "title": "review", "body": "Review it.",
                                 "relations": [{"task": task["id"], "kind": "parent"}]})
     control(action="pause")
     control(action="scope", task_id=task["id"])
@@ -83,7 +83,7 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
     control(action="unscope")
     assert claim(api, machine) is None                       # released while paused: eligible again, not started
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM attempts WHERE bot='ops' AND state IN ('leased','running')").fetchone()
+        assert not c.execute("SELECT 1 FROM attempts WHERE bot_id='ops' AND state IN ('leased','running')").fetchone()
         assert [r[0] for r in c.execute("SELECT action FROM events WHERE target='ops' AND action LIKE 'bot.%scope' "
                                         "ORDER BY rowid")] == ["bot.scope", "bot.unscope"]
     control(action="resume")
@@ -115,9 +115,9 @@ def test_a_limited_bots_turn_carries_only_next_run_work_inside_the_limit_until_r
     monkeypatch.setattr(bot_to_bot, "continue_backlog", lambda c, bot: backlog.append(bot))
     machine = task_bot(api, lanes=True)
     task = new_task(api, "the check")
-    child = post(api, "tasks", {"owner": "ops", "title": "review", "body": "Review it.", "next_run": True,
+    child = post(api, "tasks", {"owner_id": "ops", "title": "review", "body": "Review it.", "next_run": True,
                                 "relations": [{"task": task["id"], "kind": "parent"}]})
-    other = post(api, "tasks", {"owner": "ops", "title": "unrelated", "body": "Do it later.", "next_run": True})
+    other = post(api, "tasks", {"owner_id": "ops", "title": "unrelated", "body": "Do it later.", "next_run": True})
     note = post(api, "notes", {"to": "ops", "text": "Cancellations are flat."})["note"]
     post(api, "bots/ops/control", {"action": "scope", "task_id": task["id"],
                                    "expected_revision": get(api, "bots/ops")["revision"]})
@@ -181,7 +181,7 @@ def test_work_fenced_behind_an_interrupted_run_on_its_task(api):
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=(SELECT job_id FROM attempts WHERE id=?)", (attempt["id"],))
     post(api, "tasks/" + task["id"] + "/comments", {"text": "Is the first part done?"})
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] == 1
     says(api, machine, "uncertain")
 
 
@@ -189,8 +189,8 @@ def test_a_bot_cooling_off_after_a_usage_limit(api):
     machine = task_bot(api, lanes=True)
     new_task(api, "first")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_status(bot,state,since,updated_at) VALUES('ops','limited',?,?) "
-                  "ON CONFLICT(bot) DO UPDATE SET state='limited',since=excluded.since", (H.now(), H.now()))
+        c.execute("INSERT INTO bot_status(bot,state,changed_at,updated_at) VALUES('ops','limited',?,?) "
+                  "ON CONFLICT(bot) DO UPDATE SET state='limited',changed_at=excluded.changed_at", (H.now(), H.now()))
     says(api, machine, "cooling_off")
 
 
@@ -200,8 +200,8 @@ def test_operations_names_a_limited_bots_runtime_when_config_was_primed_slug_fir
     machine = task_bot(api, lanes=True)
     new_task(api, "first")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_status(bot,state,since,updated_at) VALUES('ops','limited',?,?) "
-                  "ON CONFLICT(bot) DO UPDATE SET state='limited',since=excluded.since", (H.now(), H.now()))
+        c.execute("INSERT INTO bot_status(bot,state,changed_at,updated_at) VALUES('ops','limited',?,?) "
+                  "ON CONFLICT(bot) DO UPDATE SET state='limited',changed_at=excluded.changed_at", (H.now(), H.now()))
     body = api.get("/api/v2/operations", headers=headers())
     assert body.status_code == 200, body.text
     [issue] = [i for i in body.json()["issues"] if i["kind"] == "bot" and i["bot"] == "ops"]
@@ -265,9 +265,9 @@ def ops_rows(api):
 
 def queued_at(api, task, minutes):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued' AND message_id IN "
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued' AND message_id IN "
                   "(SELECT id FROM messages WHERE body LIKE ?)", (H.shift(H.now(), minutes=-minutes), f"%{task['title']}%"))
-        return c.execute("SELECT created_at FROM jobs WHERE bot='ops' AND state='queued' AND message_id IN "
+        return c.execute("SELECT created_at FROM jobs WHERE bot_id='ops' AND state='queued' AND message_id IN "
                          "(SELECT id FROM messages WHERE body LIKE ?)", (f"%{task['title']}%",)).fetchone()[0]
 
 

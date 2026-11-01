@@ -57,7 +57,7 @@ WAKE_RULES = {
 TASK_RULE = {"name": "Close 48h after done", "department": "engineering",
              "triggers": [{"key": "done_untouched", "hours": 48}], "actions": ["close"], "preset": "hourly"}
 SYSTEM_JOBS = {"stale_review": {"on": False, "preset": "hourly"},           # PLAN §8: keeps Off + hourly
-               "still_wanted": {"on": True, "preset": "daily", "at": "10:00"}}   # a control a built-in keeps
+               "still_wanted": {"on": True, "preset": "daily", "migrated_at": "10:00"}}   # a control a built-in keeps
 BUILTIN_JOBS = ("assigned_tasks", "assignment_recovery")   # "Start assigned tasks", "Recover unstarted assignments"
 # person -> (their Inbox Manager bot, the mailbox it reads)
 INBOXES = {DANA_ID: (INBOX_DANA, "dana@acme.example"), PRIYA_ID: (INBOX_PRIYA, "priya@acme.example")}
@@ -67,7 +67,7 @@ HOURLY = {OPENAI_ID: 3.00, CLAUDE_ID: 5.00, RELEASE_ID: 0.25}
 TEAM_BUDGET = {"turns_per_hour": 120, "turns_per_day": 1000}
 GUARD = {"turns_per_hour": 300, "turns_per_day": 2500}   # CONTRACT §1 run guard defaults
 BOT_BUDGET = (OPENAI_ID, {"turns_per_hour": 600})         # set above the guard: kept
-GOAL = {"title": "Ship the v2 billing page", "owner": LEAD_ID}
+GOAL = {"title": "Ship the v2 billing page", "owner_id": LEAD_ID}
 
 
 def _call(org, name, method, path, payload=None):
@@ -114,7 +114,7 @@ def old_rows(org):
         profiles.migrate(c)
         for name, (bot, r) in ROUTINES.items():
             due = stamp(next_due(r["cron"], now, r["timezone"])) if "cron" in r else None
-            c.execute("INSERT INTO schedules(id, bot, cron, event_name, title, playbook, next_due, updated_at) "
+            c.execute("INSERT INTO schedules(id, bot, cron, event_name, title, playbook, next_due_at, updated_at) "
                       "VALUES(?,?,?,?,?,?,?,?)", (routine_id(name), bot, r.get("cron"), r.get("on"), r["title"],
                                                   r["text"], due, H.now()))
             c.execute("INSERT INTO schedule_config(schedule_id, timezone, enabled) VALUES(?,?,1)",
@@ -155,7 +155,7 @@ def install_fixture(org, facts):
         secret = url.rstrip("/").rsplit("/", 1)[-1]
     old = not isinstance(facts.get("fx:old"), Unmet)
     ids = {"routines": {name: routine_id(name) if old else None for name in ROUTINES},
-           "due": facts["fx:old"]["due"] if old else {},
+           "due": facts["fx:old"]["due_at"] if old else {},
            "rule_bots": facts["fx:old"]["rule_bots"] if old else [],   # every bot with wake rules of its own
            "hook": {"id": _id(facts, "fx:trigger", "trigger", "id"), "secret": secret},
            "rules": {name: rule_id(name) if old else None for name in WAKE_RULES},

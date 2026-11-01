@@ -53,7 +53,7 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
                           "bot:inbox" if hidden else owner, rng.choice(("open", "done", "closed")),
                           room_ids[i] if i < tasks_n * 2 // 3 else None, stamp(rng.randrange(180 * 1440)), 1 if hidden else 0,
                           100_000 + i))
-        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created_at,private,number) "
+        c.executemany("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,conversation_id,created_at,private,number) "
                       "VALUES(?,?,?,?,?,?,?,?,?,?)", tasks)
         rooms = []
         for i, cid in enumerate(room_ids):
@@ -63,7 +63,7 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
                 person, bot = rng.choice(PEOPLE), rng.choice(BOTS)
                 rooms.append((cid, "chat", None, json.dumps([person, "bot:" + bot]), "personal", person,
                               f"{bot}:{i}"))
-        c.executemany("INSERT INTO conversations(id,kind,task_id,participants,scope,owner_actor,room_key,created_at) "
+        c.executemany("INSERT INTO conversations(id,kind,task_id,participants,scope,owner_id,room_key,created_at) "
                       "VALUES(?,?,?,?,?,?,?,'2026-01-01T00:00:00.000000Z')", rooms)
         messages, jobs, attempts, turns, inputs, events = [], [], [], [], [], []
         last, root, waiting = {}, {}, {}
@@ -102,15 +102,15 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
                 waiting[cid] = (aid, mid, taken)
             if not reply:
                 root[cid] = mid
-        c.executemany("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,in_reply_to,"
+        c.executemany("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,"
                       "created_at) VALUES(?,?,?,?,?,?,?,?,?)", messages)
-        c.executemany("INSERT INTO jobs(id,message_id,bot,state,created_at,attempt_id) VALUES(?,?,?,?,?,?)", jobs)
-        c.executemany("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,"
+        c.executemany("INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,?,?,?,?)", jobs)
+        c.executemany("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
                       "started_at,finished_at) VALUES(?1,?2,substr(?3,5),?4,0,'synthetic-'||?1,'done',?5,?5,?5,?5)", attempts)
         c.executemany("INSERT INTO turns(id,bot,started_at,finished_at,message_id,task_id,trigger_kind,outcome) "
                       "VALUES(?,?,?,?3,?,?,'message','acted')", turns)
         c.executemany("INSERT OR IGNORE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", inputs)
-        c.executemany("INSERT INTO events(id,ts,actor,action,target,detail) VALUES"
+        c.executemany("INSERT INTO events(id,created_at,actor,action,target,detail) VALUES"
                       "(lower(hex(randomblob(16))),'2026-01-01T00:00:00.000000Z','keeper','task.next-run.carried',?,?)",
                       events)
         for _, sql in triggers:
@@ -202,7 +202,7 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
                                                    "WHERE deleted_at IS NULL")
                         if r["conversation_id"] in rooms and index.message(r["id"], r["conversation_id"],
                                                                            r["refs"], r["in_reply_to"])}
-            jobs = {r[0] for r in c.execute("SELECT id,bot,message_id FROM jobs") if r[1] not in hidden and r[2] in messages}
+            jobs = {r[0] for r in c.execute("SELECT id,bot_id,message_id FROM jobs") if r[1] not in hidden and r[2] in messages}
             attempts = {r[0] for r in c.execute("SELECT id,job_id FROM attempts") if r[1] in jobs and index.attempt(r[0])}
             turns = {r[0] for r in c.execute("SELECT id,bot,message_id,task_id FROM turns")
                      if r[1] not in hidden and (r[2] is None or r[2] in messages)
@@ -253,7 +253,7 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
         task = json.loads(cited["refs"])["task"]
     changes = [
         ("a cited task turns private", False,
-         lambda c: c.execute("UPDATE tasks SET private=1, requester='human:ana', owner='bot:inbox' WHERE id=?",
+         lambda c: c.execute("UPDATE tasks SET private=1, requester_id='human:ana', owner_id='bot:inbox' WHERE id=?",
                              (task,))),
         ("a message now cites a denied task", True,
          lambda c: c.execute("UPDATE messages SET refs=? WHERE id=?",

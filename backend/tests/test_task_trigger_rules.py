@@ -49,12 +49,12 @@ def task_type(c, name="Dev tickets"):
 def test_created_creates_one_linked_review_and_names_rule_in_history(api):
     with api.app.state.store.transaction() as c:
         typ = task_type(c)
-    made = rule(api, action="create_task", params={"owner": "cpo", "title": "Review {{task.title}}"},
+    made = rule(api, action="create_task", params={"owner_id": "cpo", "title": "Review {{task.title}}"},
                 when={"type": typ["id"]})
     with api.app.state.store.transaction() as c:
         original = make(c, "Implement widget", type=typ["id"])
         review = c.execute("SELECT * FROM tasks WHERE title='Review Implement widget'").fetchall()
-        assert len(review) == 1 and review[0]["owner"] == "bot:cpo"
+        assert len(review) == 1 and review[0]["owner_id"] == "bot:cpo"
         assert c.execute("SELECT 1 FROM task_relations WHERE kind='related' AND "
                          "((from_task=? AND to_task=?) OR (from_task=? AND to_task=?))",
                          (original["id"], review[0]["id"], review[0]["id"], original["id"])).fetchone()
@@ -80,8 +80,8 @@ def test_done_note_once_per_transition_and_once_more_after_reopen(api):
 
 
 def test_created_action_cannot_start_a_same_or_alternate_rule_chain(api):
-    made = rule(api, action="create_task", params={"owner": "ops", "title": "Derived work"})
-    other = rule(api, action="create_task", params={"owner": "cpo", "title": "Alternate work"})
+    made = rule(api, action="create_task", params={"owner_id": "ops", "title": "Derived work"})
+    other = rule(api, action="create_task", params={"owner_id": "cpo", "title": "Alternate work"})
     with api.app.state.store.transaction() as c:
         make(c)
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 3
@@ -94,8 +94,8 @@ def test_created_action_cannot_start_a_same_or_alternate_rule_chain(api):
 
 def test_sourceless_create_action_cannot_start_a_task_trigger_chain(api):
     from backend import rules as R
-    rule(api, "webhook.received", "create_task", {"owner": "ops", "title": "From webhook"})
-    made = rule(api, action="create_task", params={"owner": "ops", "title": "Must not chain"})
+    rule(api, "webhook.received", "create_task", {"owner_id": "ops", "title": "From webhook"})
+    made = rule(api, action="create_task", params={"owner_id": "ops", "title": "Must not chain"})
     with api.app.state.store.transaction() as c:
         R.judge_event(c, "webhook.received", {"trigger": "synthetic", "delivery": "one"})
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 1
@@ -105,7 +105,7 @@ def test_sourceless_create_action_cannot_start_a_task_trigger_chain(api):
 
 
 def test_missing_bot_and_throwing_action_preserve_task_and_row_error_time(api, monkeypatch):
-    gone = rule(api, "task.done", "create_task", {"owner": "cpo", "title": "Review work"})
+    gone = rule(api, "task.done", "create_task", {"owner_id": "cpo", "title": "Review work"})
     broken = rule(api, "task.done", params={"text": "Must roll back"})
     from backend import rules as R
     def failing(c, tid, params, said):
@@ -143,8 +143,8 @@ def test_webhook_transport_failure_reaches_rule_row_after_task_saved(api):
 
 
 def test_private_source_uses_author_read_view_and_creates_private_copy(api):
-    allowed = rule(api, "task.done", "create_task", {"owner": "cpo", "title": "Private copy", "body": "{{task.body}}"})
-    denied = rule(api, "task.done", "create_task", {"owner": "cpo", "title": "Must not copy"}, by="human:ben")
+    allowed = rule(api, "task.done", "create_task", {"owner_id": "cpo", "title": "Private copy", "body": "{{task.body}}"})
+    denied = rule(api, "task.done", "create_task", {"owner_id": "cpo", "title": "Must not copy"}, by="human:ben")
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
         task = make(c, private=True)
@@ -166,7 +166,7 @@ def test_wake_action_cannot_disclose_private_source_to_unreadable_bot(api):
         assert H.task_private_readable(c, "human:ana", task)
         assert not H.task_private_readable(c, "bot:cpo", task)
         H.task_update(c, "human:ana", task["id"], status="done")
-        assert not c.execute("SELECT 1 FROM messages WHERE to_actor='bot:cpo' AND body LIKE 'Secret %'").fetchone()
+        assert not c.execute("SELECT 1 FROM messages WHERE recipient_id='bot:cpo' AND body LIKE 'Secret %'").fetchone()
         assert T.state(c, made["id"])["last_error_at"]
         assert "Action failed" in history(c, task["id"])[0]["note"]
         assert H.task(c, task["id"])["status"] == "done"
@@ -214,7 +214,7 @@ def test_fifty_first_attempt_pauses_persistently_without_refusing_task_changes(a
     with api.app.state.store.transaction() as c:
         # Synthetic previous fires; execute the actual boundary transitions below.
         for n in range(49):
-            c.execute("INSERT INTO rule_task_runs(rule_id,task_id,event,revision,at,fired) VALUES(?,?,?,?,?,1)",
+            c.execute("INSERT INTO rule_task_runs(rule_id,task_id,event,revision,ran_at,fired) VALUES(?,?,?,?,?,1)",
                       (made["id"], "synthetic-" + str(n), "task.done", str(n), H.now()))
         task = make(c)
         for _ in range(3):
@@ -250,7 +250,7 @@ def test_scopes_and_all_five_conditions_match_task_owner_not_message_recipient(a
         roster["org_groups"] = {"engineering": {"name": "Engineering"}, "web": {"name": "Web", "parent": "engineering"}}
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
         c.execute("UPDATE bot_config SET team='web',config=json_set(config,'$.team','web') WHERE bot='ops'")
-    condition = {"type": typ["id"], "step": "Open", "tag": "triage", "owner": "ops", "requester": "ana"}
+    condition = {"type": typ["id"], "step": "Open", "tag": "triage", "owner_id": "ops", "requester_id": "ana"}
     scoped = [rule(api, scope_kind=kind, scope_id=ident, when=condition) for kind, ident in
               (("team", ""), ("type", typ["id"]), ("department", "engineering"), ("bot", "ops"))]
     with api.app.state.store.transaction() as c:
@@ -304,7 +304,7 @@ def test_wait_link_wake_and_close_actions_use_existing_domain_paths(api):
             assert "Completed" in h["note"], h["note"]
         assert c.execute("SELECT 1 FROM task_relations WHERE kind='related' AND "
                          "(from_task=? OR to_task=?)", (task["id"], task["id"])).fetchone()
-        assert c.execute("SELECT 1 FROM messages WHERE to_actor='bot:cpo' AND body='Read Synthetic work'").fetchone()
+        assert c.execute("SELECT 1 FROM messages WHERE recipient_id='bot:cpo' AND body='Read Synthetic work'").fetchone()
 
 
 def test_a_rule_moved_into_a_what_wakes_automation_still_runs_and_a_pause_still_holds_it(api):
@@ -331,7 +331,7 @@ def test_a_rule_moved_into_a_what_wakes_automation_still_runs_and_a_pause_still_
 def test_execution_ledgers_have_indexed_hour_and_webhook_lookups(api):
     with api.app.state.store.read() as c:
         hourly = " ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN SELECT count(*) FROM rule_task_runs "
-                        "WHERE rule_id=? AND fired=1 AND at>?", ("synthetic", H.now())))
+                        "WHERE rule_id=? AND fired=1 AND ran_at>?", ("synthetic", H.now())))
         delivery = " ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN SELECT rule_id FROM rule_task_runs "
                         "WHERE webhook_event_id=?", ("synthetic",)))
         assert "rule_task_runs_hour" in hourly and "rule_task_runs_webhook" in delivery

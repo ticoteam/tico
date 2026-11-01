@@ -144,7 +144,7 @@ def test_a_clear_task_under_budget_reaches_the_person(gate):
     api, model, token = gate
     plate(api, 4)
     out = file(api, token)
-    assert out["task"]["owner"] == "human:ben"
+    assert out["task"]["owner_id"] == "human:ben"
     assert "ingest" not in out, "an item that goes through reads as before"
     assert [(i["outcome"], i["reason"]) for i in items(api)] == [(A.THROUGH, "under_budget")]
     assert len(model.calls) == 1 and model.calls[0]["label"].startswith("person-ask-ingest@")
@@ -157,7 +157,7 @@ def test_over_budget_with_no_criterion_it_stays_with_the_bot_and_names_its_manag
     with api.app.state.store.read() as c:
         refusals = c.execute("SELECT count(*) FROM refusals").fetchone()[0]
     out = file(api, token)
-    assert out["task"]["owner"] == "bot:ops", "sent back: the task stays the bot's own"
+    assert out["task"]["owner_id"] == "bot:ops", "sent back: the task stays the bot's own"
     text = out["ingest"]["text"]
     assert out["ingest"]["outcome"] == A.SENT_BACK and text.startswith("Not sent to ")
     assert "15 open items" in text and "cpo" in text and "nothing was refused" in text
@@ -175,7 +175,7 @@ def test_meeting_a_criterion_gets_it_through_at_that_load(gate):
     plate(api, 15)
     model.meets = "$200 a month"
     out = file(api, token, "Raise the Gateway cap to $400 a month")
-    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
     assert [(i["outcome"], i["reason"]) for i in items(api)] == [(A.THROUGH, "criteria")]
 
 
@@ -183,7 +183,7 @@ def test_a_status_line_is_fyi_and_stays_with_the_bot(gate):
     api, model, token = gate
     model.kind = "status"
     out = file(api, token, "Merged; release at 17:00Z", "Merged; release at 17:00Z.")
-    assert out["task"]["owner"] == "bot:ops" and out["ingest"]["outcome"] == A.FYI
+    assert out["task"]["owner_id"] == "bot:ops" and out["ingest"]["outcome"] == A.FYI
     assert [i["outcome"] for i in get(api, "ask-ingest/filtered", token="ben-test")["items"]] == [A.FYI]
 
 
@@ -193,7 +193,7 @@ def test_rehearsal_changes_nothing_and_lists_what_on_would_do(gate):
         A.save(c, "human:ben", "human:ben", {"mode": "rehearsal", "budget": 10, "chores_budget": 5, "criteria": []})
     model.kind = "own_work"
     out = file(api, token, "Verify the preview cleanup and charges")
-    assert out["task"]["owner"] == "human:ben"
+    assert out["task"]["owner_id"] == "human:ben"
     assert out["ingest"]["outcome"] == A.THROUGH and out["ingest"]["would"] == A.SENT_BACK
     assert out["ingest"]["text"].startswith("Rehearsal, nothing changed.")
     assert "work you can do yourself" in out["ingest"]["text"]
@@ -218,7 +218,7 @@ def test_it_fails_open_and_records_the_failure(gate, monkeypatch, how):
     out = file(api, token)
     if model.hold:
         model.hold.set()
-    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
     [item] = items(api)
     assert item["outcome"] == A.FAILED_OPEN and item["ref"] == out["task"]["id"]
     if how == "cap":
@@ -245,7 +245,7 @@ def test_a_full_pool_refuses_at_once_and_a_freed_slot_runs_again(gate, monkeypat
         started = time.monotonic()
         out = file(api, token, title="Second")
         assert time.monotonic() - started < 2
-        assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+        assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
     finally:
         model.hold.set()
         first.join(10)
@@ -260,7 +260,7 @@ def test_an_abandoned_call_keeps_its_slot_until_it_really_ends(gate, monkeypatch
     monkeypatch.setattr(A, "CONCURRENCY", 1)
     monkeypatch.setattr(A, "DEADLINE", 0.2)
     model.hold = threading.Event()
-    assert file(api, token, title="First")["task"]["owner"] == "human:ben"     # the waiter gives up; the call runs on
+    assert file(api, token, title="First")["task"]["owner_id"] == "human:ben"     # the waiter gives up; the call runs on
     started = time.monotonic()
     file(api, token, title="Second")          # so the slot is still taken
     assert time.monotonic() - started < 2 and len(model.calls) == 1
@@ -301,8 +301,8 @@ def test_ask_ingest_and_rule_checks_have_their_own_slots(gate, monkeypatch):
 
 def test_a_persons_own_task_for_someone_is_not_gated_but_counts(gate):
     api, model, token = gate
-    out = post(api, "tasks", {"owner": "ben", "title": "Read the contract", "body": "By Friday."})
-    assert out["owner"] == "human:ben" and not model.calls
+    out = post(api, "tasks", {"owner_id": "ben", "title": "Read the contract", "body": "By Friday."})
+    assert out["owner_id"] == "human:ben" and not model.calls
     with api.app.state.store.read() as c:
         assert A.load(c, "human:ben") == (1, 0)
 
@@ -313,7 +313,7 @@ def test_no_decision_model_is_decide_off(gate):
     api.app.state.store.settings.rehearsal = True
     plate(api, 120)
     out = file(api, token)
-    assert out["task"]["owner"] == "human:ben" and "ingest" not in out and not items(api) and not calls(api)
+    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out and not items(api) and not calls(api)
 
 
 def test_mode_off_asks_nothing(gate):
@@ -321,21 +321,21 @@ def test_mode_off_asks_nothing(gate):
     with api.app.state.store.transaction() as c:
         A.save(c, "human:ben", "human:ben", {"mode": "off", "budget": 10, "chores_budget": 5, "criteria": []})
     out = file(api, token)
-    assert out["task"]["owner"] == "human:ben" and "ingest" not in out and not model.calls
+    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out and not model.calls
 
 
 def test_a_settings_change_applies_to_the_next_item_only(gate):
     api, model, token = gate
     plate(api, 15)
     first = file(api, token, "Pick the launch date")
-    assert first["task"]["owner"] == "bot:ops"
+    assert first["task"]["owner_id"] == "bot:ops"
     r = api.put("/api/v2/ask-ingest/settings", headers=headers("ben-test"),
                 json={"mode": "on", "budget": 50, "chores_budget": 5, "criteria": ["Pricing"]})
     assert r.status_code == 200, r.text
     second = file(api, token, "Pick the launch venue")
-    assert second["task"]["owner"] == "human:ben"
+    assert second["task"]["owner_id"] == "human:ben"
     with api.app.state.store.read() as c:
-        assert H.task(c, first["task"]["id"])["owner"] == "bot:ops", "nothing already decided moves"
+        assert H.task(c, first["task"]["id"])["owner_id"] == "bot:ops", "nothing already decided moves"
 
 
 def test_settings_are_a_persons_own_and_the_team_default_is_an_admins(gate):
@@ -385,7 +385,7 @@ def test_a_sent_back_question_on_a_task_is_withdrawn_at_once(gate):
     assert r.json()["ingest"]["outcome"] == A.SENT_BACK
     assert not on_plate(api, tid)
     with api.app.state.store.read() as c:
-        assert not [a for a in H.open_task_asks(c, H.task(c, tid)) if a["to_actor"] == "human:ben"]
+        assert not [a for a in H.open_task_asks(c, H.task(c, tid)) if a["recipient_id"] == "human:ben"]
     [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
     assert (item["kind"], item["task"], item["outcome"]) == ("question", tid, A.SENT_BACK) and item["message"]
 
@@ -483,7 +483,7 @@ def test_let_it_through_puts_a_sent_back_task_on_the_plate_and_tells_the_asker_o
     [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
     assert let_through(api, item["id"])["item"]["let_through_by"] == "human:ben"
     with api.app.state.store.read() as c:
-        assert H.task(c, tid)["owner"] == "human:ben" and on_plate(api, tid)
+        assert H.task(c, tid)["owner_id"] == "human:ben" and on_plate(api, tid)
         told = [m for m in H.task_comments(c, tid) if "let this through" in (m["body"] or "")]
     assert len(told) == 1
     let_through(api, item["id"])
@@ -538,7 +538,7 @@ def test_a_repeat_joins_the_open_item_and_the_answer_there_goes_back_to_the_bot(
     first = file(api, token, "Pick the launch date for Acme", "Nov 3 or Nov 10?")["task"]
     model.covered = "launch date for Acme"
     second = file(api, token, "Launch date?", "Which day do we launch Acme: Nov 3 or Nov 10?")
-    assert second["task"]["owner"] == "bot:ops", "the repeat stays with the bot"
+    assert second["task"]["owner_id"] == "bot:ops", "the repeat stays with the bot"
     assert second["ingest"]["outcome"] == A.MERGED and "Pick the launch date for Acme" in second["ingest"]["text"]
     [_, merged] = items(api)
     assert (merged["merged_into"], merged["reason"]) == (first["id"], "covered")
@@ -548,7 +548,7 @@ def test_a_repeat_joins_the_open_item_and_the_answer_there_goes_back_to_the_bot(
     assert r.status_code == 200, r.text
     with api.app.state.store.read() as c:
         passed = [m for m in H.task_comments(c, second["task"]["id"]) if "Nov 10." in (m["body"] or "")]
-        assert len(passed) == 1 and H.task(c, second["task"]["id"])["owner"] == "bot:ops"
+        assert len(passed) == 1 and H.task(c, second["task"]["id"])["owner_id"] == "bot:ops"
     api.post(f"/api/v2/tasks/{first['id']}/comments", json={"text": "Still Nov 10."}, headers=headers("ben-test"))
     with api.app.state.store.read() as c:
         assert not [m for m in H.task_comments(c, second["task"]["id"]) if "Still" in (m["body"] or "")], "once"
@@ -565,7 +565,7 @@ def test_a_repeat_loose_question_hears_the_answer_as_a_message(gate):
         assert H.loose_asks_to(c, "human:ben") == []
     api.post(f"/api/v2/tasks/{first['id']}/comments", json={"text": "Nov 10."}, headers=headers("ben-test"))
     with api.app.state.store.read() as c:
-        told = c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND body LIKE '%answered this%Nov 10.%'").fetchall()
+        told = c.execute("SELECT body FROM messages WHERE recipient_id='bot:ops' AND body LIKE '%answered this%Nov 10.%'").fetchall()
     assert len(told) == 1
 
 
@@ -576,7 +576,7 @@ def test_in_rehearsal_a_repeat_still_reaches_the_person(gate):
     first = file(api, token, "Pick the launch date for Acme")["task"]
     model.covered = "launch date for Acme"
     second = file(api, token, "Launch date?")
-    assert second["task"]["owner"] == "human:ben" and second["ingest"]["would"] == A.MERGED
+    assert second["task"]["owner_id"] == "human:ben" and second["ingest"]["would"] == A.MERGED
     api.post(f"/api/v2/tasks/{first['id']}/comments", json={"text": "Nov 10."}, headers=headers("ben-test"))
     with api.app.state.store.read() as c:
         assert not [m for m in H.task_comments(c, second["task"]["id"]) if "Nov 10." in (m["body"] or "")]
@@ -604,7 +604,7 @@ def test_a_person_goes_back_to_the_team_default(gate):
     assert r.status_code == 200, r.text
     assert r.json()["settings"] == {**get(api, "ask-ingest/settings", token="ben-test")["team"], "own": False}
     plate(api, 15)
-    assert file(api, token)["task"]["owner"] == "human:ben", "the team default ships as Rehearsal"
+    assert file(api, token)["task"]["owner_id"] == "human:ben", "the team default ships as Rehearsal"
     assert api.delete("/api/v2/ask-ingest/settings", headers=headers(token)).status_code == 403
 
 
@@ -661,7 +661,7 @@ def test_let_it_through_a_task_question_asks_again_and_waits_on_the_person(gate)
     with api.app.state.store.read() as c:
         row = H.task(c, tid)
         assert (row["status"], row["waiting_on"]) == ("waiting", "human:ben"), "the wait is back as first filed"
-        assert [a for a in H.open_task_asks(c, row) if a["to_actor"] == "human:ben"]
+        assert [a for a in H.open_task_asks(c, row) if a["recipient_id"] == "human:ben"]
     assert on_plate(api, tid)
 
 
@@ -671,11 +671,11 @@ def test_a_bot_handing_its_task_to_a_person_is_gated(gate):
     task = own_task(api, token, "Pick the launch date")
     r = api.post(f"/api/v2/tasks/{task['id']}", json={"version": task["version"], "owner": "ben"}, headers=headers(token))
     assert r.status_code == 200, r.text
-    assert r.json()["ingest"]["outcome"] == A.SENT_BACK and r.json()["task"]["owner"] == "bot:ops"
+    assert r.json()["ingest"]["outcome"] == A.SENT_BACK and r.json()["task"]["owner_id"] == "bot:ops"
     [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
     let_through(api, item["id"])
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["owner"] == "human:ben"
+        assert H.task(c, task["id"])["owner_id"] == "human:ben"
 
 
 def test_a_bots_bulk_handoff_to_a_person_is_gated_task_by_task(gate):
@@ -686,7 +686,7 @@ def test_a_bots_bulk_handoff_to_a_person_is_gated_task_by_task(gate):
                  headers=headers(token))
     assert r.status_code == 200, r.text
     with api.app.state.store.read() as c:
-        assert {H.task(c, i)["owner"] for i in ids} == {"bot:ops"}
+        assert {H.task(c, i)["owner_id"] for i in ids} == {"bot:ops"}
     assert sorted(i["ref"] for i in items(api) if i["kind"] == "task" and i["ref"] in ids) == sorted(ids)
 
 
@@ -712,7 +712,7 @@ def test_a_bots_task_ask_over_budget_is_sent_back_withdrawn_and_listed(gate):
     with api.app.state.store.read() as c:
         row = H.task(c, task["id"])
         assert row["status"] != "waiting", "not parked on a question that was withdrawn"
-        assert not [a for a in H.open_task_asks(c, row) if a["to_actor"] == "human:ben"]
+        assert not [a for a in H.open_task_asks(c, row) if a["recipient_id"] == "human:ben"]
         assert c.execute("SELECT count(*) FROM refusals").fetchone()[0] == refusals
     [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
     assert (item["kind"], item["task"], item["outcome"]) == ("task_ask", task["id"], A.SENT_BACK)
@@ -736,7 +736,7 @@ def test_a_sent_back_task_ask_keeps_the_bots_note_and_says_why_in_a_quiet_commen
         assert (row["status"], row["note"]) == ("doing", "Drafting the venue shortlist")
         assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='status' AND new='waiting'",
                              (task["id"],)).fetchone(), "never parked, so nothing to put back"
-        said = [m for m in H.task_comments(c, task["id"]) if m["from_actor"] == H.KEEPER]
+        said = [m for m in H.task_comments(c, task["id"]) if m["sender_id"] == H.KEEPER]
     assert [m["body"] for m in said] == [r.json()["ingest"]["text"]]
     assert said[0]["refs"].get("quiet") is True
 
@@ -848,7 +848,7 @@ def test_a_question_on_a_task_already_on_the_plate_counts_it_once(gate):
     api, model, token = gate
     plate(api, 8)
     task = file(api, token)["task"]               # ops's task for Ben: on his plate, the ninth item
-    assert task["owner"] == "human:ben"
+    assert task["owner_id"] == "human:ben"
     question = {"questions": [{"id": "date", "header": "Date", "question": "Nov 3 or Nov 10?",
                                "options": [{"label": "Nov 3", "then": "Launch on Nov 3"},
                                            {"label": "Nov 10", "then": "Launch on Nov 10"}]}], "who": "ben"}
@@ -911,7 +911,7 @@ def test_a_bots_bulk_handoff_tells_it_why_for_each_task(gate):
     api, model, token = gate
     plate(api, 15)
     ids = [own_task(api, token, f"Pick launch option {n}")["id"] for n in range(3)]
-    r = api.post("/api/v2/task-bulk", json={"filter": {"ids": ids}, "action": "owner", "owner": "ben"},
+    r = api.post("/api/v2/task-bulk", json={"filter": {"ids": ids}, "action": "owner", "owner_id": "ben"},
                  headers=headers(token))
     assert r.status_code == 200, r.text
     lines = {line["id"]: line for line in r.json()["tasks"]["changed"]}
@@ -992,7 +992,7 @@ def test_preflight_exception_keeps_failed_open_record(gate, monkeypatch, mode, w
         raise JudgeError(reason, "private item text must not be recorded")
     monkeypatch.setattr(A.J if where == "load_set" else A, where, fail)
     out = file(api, token)
-    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
     [item] = items(api)
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, reason)
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None
@@ -1011,7 +1011,7 @@ def test_exception_after_judging_keeps_call_link_and_fails_open(gate, monkeypatc
         return original(own)
     monkeypatch.setattr(A, "_criteria", criteria)
     out = file(api, token)
-    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
     [item], [call] = items(api), calls(api)
     assert (item["outcome"], item["reason"], item["call_id"]) == (A.FAILED_OPEN, "error", call["id"])
     assert len(model.calls) == 1
@@ -1031,7 +1031,7 @@ def test_a_plain_bot_task_to_a_person_in_rehearsal_writes_one_row_and_one_judge_
     with api.app.state.store.transaction() as c:
         A.save(c, "human:ben", "human:ben", {**A.DEFAULTS, "mode": "rehearsal"})
     out = file(api, token)
-    assert out["task"]["owner"] == "human:ben"
+    assert out["task"]["owner_id"] == "human:ben"
     [item], [call] = items(api), calls(api)
     assert (item["call_id"], item["mode"], item["outcome"]) == (call["id"], A.REHEARSAL, A.THROUGH)
     assert len(model.calls) == 1 and not reasons(api)
@@ -1121,7 +1121,7 @@ def test_a_settings_failure_before_the_verdict_keeps_the_failed_open_record(gate
         return real(c, person)
     monkeypatch.setattr(A, "settings", fails_once)
     out = file(api, token)
-    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
     [item] = items(api)
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None
@@ -1137,7 +1137,7 @@ def test_a_settings_read_that_always_fails_still_lands_a_failed_open_row(gate, m
         raise RuntimeError("settings unreadable")
     monkeypatch.setattr(A, "settings", always_fails)
     out = file(api, token)
-    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    assert out["task"]["owner_id"] == "human:ben" and "ingest" not in out
     [item] = items(api)
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None

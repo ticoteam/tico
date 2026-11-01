@@ -144,7 +144,7 @@ def suggestions_full(c, manager, mine=None):
     limit = R.settings(c)['suggestion_limit']
     waiting = c.execute("SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id "
                         "JOIN task_types ty ON ty.id=t.type_id WHERE ty.role='product-roadmap' AND s.name='Suggested' "
-                        "AND t.requester=? AND t.status NOT IN ('done','closed','declined')", (H.KEEPER,)).fetchone()[0]
+                        "AND t.requester_id=? AND t.status NOT IN ('done','closed','declined')", (H.KEEPER,)).fetchone()[0]
     waiting += len(set(reservations(c)) - {mine})
     if waiting < limit:
         return False
@@ -232,12 +232,12 @@ def output(c, row):
 
 
 def comments(c, row, limit=100, offset=0):
-    rows = c.execute('SELECT id,body,from_actor,created_at FROM messages WHERE conversation_id=? '
+    rows = c.execute('SELECT id,body,sender_id,created_at FROM messages WHERE conversation_id=? '
                      "AND json_extract(refs,'$.task')=? AND json_extract(refs,'$.comment')=1 "
                      'AND public=1 AND hidden_at IS NULL AND deleted_at IS NULL ORDER BY created_at,id LIMIT ? OFFSET ?',
                      (row['conversation_id'], row['id'], limit + 1, offset))
-    items = ({'id': r['id'], 'text': r['body'], 'author': 'Team' if H.is_human(r['from_actor']) or
-               H.is_bot(r['from_actor']) else 'Visitor', 'created_at': r['created_at']} for r in rows)
+    items = ({'id': r['id'], 'text': r['body'], 'author': 'Team' if H.is_human(r['sender_id']) or
+               H.is_bot(r['sender_id']) else 'Visitor', 'created_at': r['created_at']} for r in rows)
     items, after = R.page(items, limit, offset, max_bytes=196608)
     return {'comments': items, 'next_offset': after}
 

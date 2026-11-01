@@ -7,7 +7,7 @@ MESSAGE = {"message": {"from": "news@acme.example", "subject": "Weekly digest"}}
 
 
 def flow(*steps, **extra):
-    return {"name": "Test", "owner": "person:ana", "trigger": {"type": "message", "inbox": "ana@acme.example"},
+    return {"name": "Test", "owner_id": "person:ana", "trigger": {"type": "message", "inbox": "ana@acme.example"},
             "steps": list(steps), **extra}
 
 

@@ -27,17 +27,17 @@ from .views import human_only
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_memory_updates(
- bot TEXT NOT NULL, sha TEXT NOT NULL, subject TEXT NOT NULL, author TEXT NOT NULL, committed TEXT NOT NULL,
+ bot TEXT NOT NULL, sha TEXT NOT NULL, subject TEXT NOT NULL, author TEXT NOT NULL, committed_at TEXT NOT NULL,
  files TEXT NOT NULL, diff TEXT NOT NULL DEFAULT '', truncated INTEGER NOT NULL DEFAULT 0,
  attempt_id TEXT NOT NULL DEFAULT '', shared INTEGER NOT NULL DEFAULT 0, runner_id TEXT NOT NULL,
- reported TEXT NOT NULL, PRIMARY KEY(bot, sha));
-CREATE INDEX IF NOT EXISTS bot_memory_updates_by_time ON bot_memory_updates(bot, committed);
+ reported_at TEXT NOT NULL, PRIMARY KEY(bot, sha));
+CREATE INDEX IF NOT EXISTS bot_memory_updates_by_time ON bot_memory_updates(bot, committed_at);
 CREATE TABLE IF NOT EXISTS bot_memory_documents(
  bot TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(bot, path));
 CREATE TABLE IF NOT EXISTS bot_memory_oversized(
  bot TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(bot, path));
 CREATE TABLE IF NOT EXISTS bot_memory_seen(
- actor TEXT NOT NULL, bot TEXT NOT NULL, seen TEXT NOT NULL, PRIMARY KEY(actor, bot));
+ actor TEXT NOT NULL, bot TEXT NOT NULL, seen_at TEXT NOT NULL, PRIMARY KEY(actor, bot));
 """
 
 FOLDERS = ("memory/", "knowledge/")
@@ -80,8 +80,8 @@ def _run_of(c, bot, attempt):
     """The attempt id when it is a run of this bot's family, else ""."""
     if not attempt:
         return ""
-    row = c.execute("SELECT bot FROM attempts WHERE id=?", (attempt,)).fetchone()
-    return attempt if row and row["bot"] in family(c, bot) else ""
+    row = c.execute("SELECT bot_id FROM attempts WHERE id=?", (attempt,)).fetchone()
+    return attempt if row and row["bot_id"] in family(c, bot) else ""
 
 
 def changed_since(c, bot, since, pass_tasks=()):
@@ -91,7 +91,7 @@ def changed_since(c, bot, since, pass_tasks=()):
     counts, and so does one whose run is unknown (spec criterion 2)."""
     from .learnings import run_attempts
     own = {run for task in pass_tasks for run in run_attempts(c, task)}
-    rows = c.execute("SELECT attempt_id FROM bot_memory_updates WHERE bot=? AND committed>?", (bot, since)).fetchall()
+    rows = c.execute("SELECT attempt_id FROM bot_memory_updates WHERE bot=? AND committed_at>?", (bot, since)).fetchall()
     return any((row[0] or "") not in own for row in rows)
 
 
@@ -112,8 +112,8 @@ def record(c, who, bot, report):
         if before and (before["attempt_id"] or not attempt) and (before["shared"] or not commit.shared):
             continue
         # A commit's content never changes; only what is known about it grows (its run, reaching the repository).
-        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files,diff,truncated,"
-                  "attempt_id,shared,runner_id,reported) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,diff,truncated,"
+                  "attempt_id,shared,runner_id,reported_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
                   "ON CONFLICT(bot,sha) DO UPDATE SET "
                   "attempt_id=CASE WHEN bot_memory_updates.attempt_id='' THEN excluded.attempt_id ELSE bot_memory_updates.attempt_id END,"
                   "shared=max(bot_memory_updates.shared,excluded.shared),"
@@ -165,7 +165,7 @@ def source(c, auth, who, attempt):
     """Where a run came from, for this reader: a task, or a message in a conversation; None when unreadable."""
     if not attempt:
         return None
-    row = c.execute("SELECT a.bot,m.id AS mid,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+    row = c.execute("SELECT a.bot_id,m.id AS mid,m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
                     "JOIN messages m ON m.id=j.message_id WHERE a.id=?", (attempt,)).fetchone()
     if not row or not privacy.attempt_readable(c, privacy.actor(who), attempt):
         return None
@@ -177,12 +177,12 @@ def source(c, auth, who, attempt):
         found = H.task(c, task)
         if not found or not privacy.task_readable(c, who, found):
             return None
-        return {"bot": row["bot"], "task": task, "title": found["title"]}
+        return {"bot_id": row["bot_id"], "task": task, "title": found["title"]}
     try:
         auth.conversation(c, who, row["conversation_id"])
     except Problem:
         return None
-    return {"bot": row["bot"], "conversation": row["conversation_id"], "message": row["mid"],
+    return {"bot_id": row["bot_id"], "conversation": row["conversation_id"], "message": row["mid"],
             "excerpt": re.sub(r"\s+", " ", message["body"] or "").strip()[:120]}
 
 
@@ -206,23 +206,23 @@ def install_memory_history(app, store, auth, mutate):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
             limit = max(1, min(limit, 50))
-            rows = c.execute("SELECT * FROM bot_memory_updates WHERE bot=? AND (?='' OR committed<?) "
-                             "ORDER BY committed DESC, sha LIMIT ?", (bot, before, before, limit + 1)).fetchall()
-            row = c.execute("SELECT seen FROM bot_memory_seen WHERE actor=? AND bot=?", (who.actor, bot)).fetchone()
+            rows = c.execute("SELECT * FROM bot_memory_updates WHERE bot=? AND (?='' OR committed_at<?) "
+                             "ORDER BY committed_at DESC, sha LIMIT ?", (bot, before, before, limit + 1)).fetchall()
+            row = c.execute("SELECT seen_at FROM bot_memory_seen WHERE actor=? AND bot=?", (who.actor, bot)).fetchone()
             # Before a first visit, only the last few days count as new, not years of history reported at once.
-            seen, column = (row["seen"], "reported") if row else (H.shift(H.now(), days=-NEW_DAYS), "committed")
+            seen, column = (row["seen_at"], "reported") if row else (H.shift(H.now(), days=-NEW_DAYS), "committed")
             unseen = c.execute(f"SELECT count(*) FROM bot_memory_updates WHERE bot=? AND {column}>?",
                                (bot, seen)).fetchone()[0]
             base = commit_base(c, bot, store.settings.github_owner)
             # Only a commit that reached the shared repository has an address to open.
-            updates = [{"sha": r["sha"], "subject": r["subject"], "author": r["author"], "when": r["committed"],
+            updates = [{"sha": r["sha"], "subject": r["subject"], "author": r["author"], "when": r["committed_at"],
                         "files": json.loads(r["files"]), "diff": r["diff"], "truncated": bool(r["truncated"]),
                         "shared": bool(r["shared"]), "new": r[column] > seen,
                         "url": f"{base}/commit/{r['sha']}" if base and r["shared"] else None,
                         "source": source(c, auth, who, r["attempt_id"])} for r in rows[:limit]]
             return {"updates": updates, "unseen": unseen, "documents": documents(c, bot) if include_documents else {},
                     "document_status": document_status(c, bot),
-                    "next_before": rows[limit - 1]["committed"] if len(rows) > limit else None}
+                    "next_before": rows[limit - 1]["committed_at"] if len(rows) > limit else None}
 
     @app.post("/api/v2/bots/{bot}/memory/seen")
     def seen(request: Request, bot: str, body: M.Empty):
@@ -234,7 +234,7 @@ def install_memory_history(app, store, auth, mutate):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
-            c.execute("INSERT INTO bot_memory_seen(actor,bot,seen) VALUES(?,?,?) "
-                      "ON CONFLICT(actor,bot) DO UPDATE SET seen=excluded.seen", (who.actor, bot, H.now()))
+            c.execute("INSERT INTO bot_memory_seen(actor,bot,seen_at) VALUES(?,?,?) "
+                      "ON CONFLICT(actor,bot) DO UPDATE SET seen_at=excluded.seen_at", (who.actor, bot, H.now()))
             return {"ok": True}
         return mutate(request, body, work)

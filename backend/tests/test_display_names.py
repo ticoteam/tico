@@ -17,7 +17,7 @@ def named_data(api):
                     conversation_id=task['conversation_id'], kind='ask', refs={'task': task['id']})
         notice = H.notice(c, 'bot:ops', 'human:ana', 'New task from bot:ops: Review the plan')
         meetings.snapshot({'id': 'review-meeting', 'title': 'Review the plan', 'kind': 'meeting',
-                           'private': False, 'owner': 'ana@example.com', 'status': 'done'},
+                           'private': False, 'owner_id': 'ana@example.com', 'status': 'done'},
                           transcript='Please review the plan.', conn=c)
     doc = post(api, 'docs', {'title': 'Review plan', 'body': 'Please review the plan.'})['doc']
     return {'task': task, 'ask': ask, 'notice': notice, 'doc': doc}

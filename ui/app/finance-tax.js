@@ -69,7 +69,7 @@ function finTaxDraw() {
   box.innerHTML = `<table class="fin-t"><thead><tr><th>Quarter</th><th>Jurisdiction</th><th class="fin-n">Taxable</th><th class="fin-n">Exempt</th><th class="fin-n">Collected</th><th class="fin-n">Remitted</th><th class="fin-n">Due</th><th>Due on</th></tr></thead><tbody>${rows.map(r =>
     `<tr data-fin-tax="${esc(finTaxKey(r))}"${on(r)}><td class="fin-nowrap">${esc(finQuarter(r.period))}</td><td><button type="button" class="fin-link">${esc(r.jurisdiction || r.code || '—')}</button></td>
       <td class="fin-n">${finNum(r.taxable_sales)}</td><td class="fin-n">${finNum(r.exempt_sales)}</td><td class="fin-n">${finNum(r.tax_collected)}</td>
-      <td class="fin-n">${finNum(r.tax_remitted)}</td><td class="fin-n${r.due > 0 ? ' fin-bad' : ''}">${finNum(r.due)}</td><td class="fin-nowrap">${esc(finDayLabel(r.due_on))}</td></tr>`).join('')}</tbody></table>`;
+      <td class="fin-n">${finNum(r.tax_remitted)}</td><td class="fin-n${r.due_at > 0 ? ' fin-bad' : ''}">${finNum(r.due_at)}</td><td class="fin-nowrap">${esc(finDayLabel(r.due_on))}</td></tr>`).join('')}</tbody></table>`;
 }
 // "2026-Q3" → "Q3 2026".
 const finQuarter = p => { const m = /^(\d{4})-Q([1-4])$/.exec(String(p || '')); return m ? `Q${m[2]} ${m[1]}` : String(p || ''); };
@@ -83,7 +83,7 @@ function finTaxRail() {
       ${finKv('TIN', r.tin_on_file ? 'On file' : 'Missing', r.tin_on_file ? '' : 'fin-bad')}${d.due_on ? finKv('File by', esc(finDayLabel(d.due_on))) : ''}`);
     return;
   }
-  finRail(`<div class="fin-rail-title"><h2>${esc(r.jurisdiction || r.code || '—')}</h2><span class="fin-big">${finUsd(r.due)}</span></div>
+  finRail(`<div class="fin-rail-title"><h2>${esc(r.jurisdiction || r.code || '—')}</h2><span class="fin-big">${finUsd(r.due_at)}</span></div>
     ${finKv('Quarter', esc(finQuarter(r.period)))}${r.code ? finKv('Code', esc(r.code)) : ''}
     ${finKv('Taxable', finUsd(r.taxable_sales))}${finKv('Exempt', finUsd(r.exempt_sales))}${finKv('Collected', finUsd(r.tax_collected))}
     ${finKv('Remitted', finUsd(r.tax_remitted))}${r.due_on ? finKv('Due on', esc(finDayLabel(r.due_on))) : ''}`);

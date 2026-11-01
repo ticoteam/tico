@@ -17,12 +17,12 @@ def unexplained(conn):
     """Tasks a bot set waiting on a person with no plain ask and no open question to them, not yet asked about."""
     out = []
     for row in H._rows(conn.execute(
-            "SELECT * FROM tasks t WHERE t.status='waiting' AND t.waiting_on LIKE 'human:%' AND t.owner LIKE 'bot:%' "
+            "SELECT * FROM tasks t WHERE t.status='waiting' AND t.waiting_on LIKE 'human:%' AND t.owner_id LIKE 'bot:%' "
             "AND NOT EXISTS (SELECT 1 FROM events e WHERE e.action=? AND e.target=t.id) ORDER BY t.created_at",
             (ACTION,))):
         if not H.lint_person_ask(row.get("note")):
             continue
-        if any(a["to_actor"] == row["waiting_on"] for a in H.open_task_asks(conn, row)):
+        if any(a["recipient_id"] == row["waiting_on"] for a in H.open_task_asks(conn, row)):
             continue
         out.append(row)
     return out
@@ -42,7 +42,7 @@ def ask_restate(conn):
     asked = []
     for row in unexplained(conn):
         with isolated(conn, "restate_asks", row["id"]):
-            H._wake(conn, row, row["owner"], message(row), {"wake": "restate_ask"}, trigger="stall_check")
-            H.event(conn, H.KEEPER, ACTION, row["id"], {"bot": H.actor_id(row["owner"]), "to": row["waiting_on"]})
+            H._wake(conn, row, row["owner_id"], message(row), {"wake": "restate_ask"}, trigger="stall_check")
+            H.event(conn, H.KEEPER, ACTION, row["id"], {"bot": H.actor_id(row["owner_id"]), "to": row["waiting_on"]})
             asked.append(row["id"])
     return asked

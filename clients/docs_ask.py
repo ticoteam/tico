@@ -50,7 +50,7 @@ def result(text):
 
 def final_reply(snapshot, message_id):
     replies = [message for message in snapshot.get("messages") or []
-               if message.get("in_reply_to") == message_id and message.get("from_actor") == "bot:" + LIBRARIAN]
+               if message.get("in_reply_to") == message_id and message.get("sender_id") == "bot:" + LIBRARIAN]
     execution = snapshot.get("execution") or {}
     if execution.get("state") in ("queued", "leased", "running", "input", "uncertain"):
         return None

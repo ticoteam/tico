@@ -27,7 +27,7 @@ def notice(api, task, body, to="ops", **refs):
 def jobs(api, bot="ops", since=""):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT j.id,j.state,j.held,j.wake_class,j.hold_until,m.body FROM jobs j "
-                                           "JOIN messages m ON m.id=j.message_id WHERE j.bot=? AND m.created_at>? "
+                                           "JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND m.created_at>? "
                                            "ORDER BY m.rowid", (bot, since))]
 
 
@@ -44,7 +44,7 @@ def tick(api, when):
 def settled(api):
     """Mark the bot's queued jobs (a new task's assignment) handled, so the next claim takes the job under test."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed' WHERE bot='ops' AND state='queued'")
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops' AND state='queued'")
 
 
 def start(api, machine, attempt):
@@ -71,7 +71,7 @@ def test_existing_bots_use_performance_and_new_bots_start_as_doers(api):
     assert [(j["state"], j["held"]) for j in jobs(api)] == [("queued", 0), ("queued", 1)]
     made = post(api, "bots", {"slug": "scout", "display_name": "Scout", "description": "A test bot.", "status": "active",
                               "repo": "emp-scout", "thread_mode": "personal", "model": "hermes-profile",
-                              "effort": "as-configured", "harness": "hermes", "operator": "ana", "owners": ["ana"],
+                              "effort": "as-configured", "harness": "hermes", "owner_id": "ana", "owners": ["ana"],
                               "runner_id": None})
     assert made["wake"]["preset"] == "performance" and made["profile"]["name"] == "doer"
     listed = {b["slug"]: b for b in get(api, "bots")}
@@ -116,7 +116,7 @@ def test_immediate_wakes_are_never_held_and_a_duplicate_wakes_once(api, name):
 @pytest.mark.parametrize("name,window", [("token_saver", 1800), ("performance", 60)])
 def test_an_unchanged_webhook_queues_nothing_and_the_preset_is_its_only_timer(api, name, window):
     preset(api, "ops", name)
-    task = post(api, "tasks", {"owner": "ops", "title": "Repair checks", "body": "x", "links": [PR]})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Repair checks", "body": "x", "links": [PR]})
     failing = {"action": "created", "repository": {"full_name": "ticoteam/tico"}, "pull_request": {"html_url": PR},
                "comment": {"id": 1, "user": {"login": "sam"}}}
     with api.app.state.store.transaction() as c:
@@ -142,13 +142,13 @@ def test_a_subordinates_ordinary_edits_do_not_wake_its_manager(api, name):
     with api.app.state.store.transaction() as c:
         parent = H.task_create(c, "bot:coo", "Plan the launch", "Plan it.", "bot:coo")
         task = H.task_create(c, "bot:coo", "Draft the plan", "Please draft it.", "bot:ops", parent_id=parent["id"])
-        before = c.execute("SELECT count(*) FROM jobs WHERE bot='coo'").fetchone()[0]
+        before = c.execute("SELECT count(*) FROM jobs WHERE bot_id='coo'").fetchone()[0]
         H.task_update(c, "bot:ops", task["id"], status="doing", note="Started on the outline")
         H.task_update(c, "bot:ops", task["id"], note="Half way")
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='coo'").fetchone()[0] == before
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='coo'").fetchone()[0] == before
         H.task_update(c, "bot:ops", task["id"], status="done", note="Drafted")
         [done] = c.execute("SELECT j.held,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
-                           "WHERE j.bot='coo' AND json_extract(m.refs,'$.subtask')=?", (task["id"],))
+                           "WHERE j.bot_id='coo' AND json_extract(m.refs,'$.subtask')=?", (task["id"],))
         assert done["held"] == 0                       # a delegated result continues the parent's work immediately
         assert json.loads(done["refs"])["task"] == parent["id"]
 

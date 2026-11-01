@@ -64,7 +64,7 @@ def computer_waits(c, bot):
 def _current_task(c, who, task):
     """Only the task the asking turn is working on: a wait wakes that task's session, which a turn on another
     task cannot end."""
-    if who.role != 'bot' or who.actor != task['owner'] or not who.attempt_id:
+    if who.role != 'bot' or who.actor != task['owner_id'] or not who.attempt_id:
         return False
     from .task_privacy import attempt_tasks
     return task['id'] in attempt_tasks(c, who.attempt_id)
@@ -129,9 +129,9 @@ def _ended(c, wait, task):
     """Why a wait no longer stands, or ''."""
     if not task or task['status'] in CLOSED_TASK:
         return 'The task is finished'
-    if task['owner'] != wait['owner']:
+    if task['owner_id'] != wait['owner_id']:
         return 'The task has another owner now'
-    bot = H.bot(c, H.actor_id(wait['owner']))
+    bot = H.bot(c, H.actor_id(wait['owner_id']))
     if not bot or bot.get('state') != 'active':
         return 'The bot is not active'
     # Checked again before serving and before preparing: a task blocked since it asked gets no tree (and no wake).
@@ -140,7 +140,7 @@ def _ended(c, wait, task):
 
 
 def _wake(c, wait, task, body):
-    H._wake(c, task, wait['owner'], body, refs={'worktree_wait': wait['id'], 'generation': wait['generation']},
+    H._wake(c, task, wait['owner_id'], body, refs={'worktree_wait': wait['id'], 'generation': wait['generation']},
             trigger='other', source=wait['id'])
 
 
@@ -181,7 +181,7 @@ def serve(c, owners=None, default_org=''):
 def _broken(c, wait, reason):
     """End a wait that failed unexpectedly: the task hears once, quietly, so a lasting fault wakes nothing again."""
     if _finish(c, wait, 'cancelled', reason):
-        H._wake(c, H.task(c, wait['task_id']), wait['owner'],
+        H._wake(c, H.task(c, wait['task_id']), wait['owner_id'],
                 f"Tico stopped holding a place for this task's {wait['repo']} worktree: {reason}. Run "
                 f"`hub task worktree add {wait['repo']}` again when you work on this task.",
                 refs={'worktree_wait': wait['id'], 'quiet': True}, trigger='other', source=wait['id'])

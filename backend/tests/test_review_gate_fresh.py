@@ -37,7 +37,7 @@ def github(api, monkeypatch, checks):
 
 def bot_token(api, slug='cpo'):
     """A leased bot identity: enroll a runner, assign the bot, send it a message, claim the turn."""
-    code = post(api, 'enrollments', {'operator': 'ana'})['code']
+    code = post(api, 'enrollments', {'owner_id': 'ana'})['code']
     runner = post(api, 'runners/enroll', {'code': code, 'label': 'Mac', 'platform': 'test'})
     post(api, 'bots/' + slug + '/assignment', {'runner_id': runner['runner_id'], 'expected_generation': 0})
     as_runner = {'Authorization': 'Bearer ' + runner['token'], 'Idempotency-Key': str(uuid.uuid4())}
@@ -104,7 +104,7 @@ def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_
 def test_fresh_green_checks_do_not_clear_a_waiting_reviewers_hold(api, monkeypatch):
     task = ticket(api, STALE)
     github(api, monkeypatch, GREEN)
-    check = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review 1: PR #412',
+    check = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Review 1: PR #412',
         'body': 'Review the candidate.', 'relations': [{'task': task['id'], 'kind': 'parent'}]})
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:cmo', check['id'], status='waiting', note='Review runner unavailable')
@@ -166,7 +166,7 @@ def test_blocked_gate_hold_stays_unless_every_hosted_check_passes_and_reads_once
     assert count and task_blocked.fresh(service, force=True) == []
     assert len(reads) == count, 'nothing the gate reads changed, so GitHub is not read again'
     with api.app.state.store.transaction() as c:
-        H.task_update(c, task['owner'], task['id'], note='Checks rerunning.')
+        H.task_update(c, task['owner_id'], task['id'], note='Checks rerunning.')
     github(api, monkeypatch, GREEN)
     assert task_blocked.fresh(service, force=True) == [task['id']]
 
@@ -205,7 +205,7 @@ def test_a_same_head_failure_landing_during_the_read_keeps_the_hold(api, monkeyp
 def test_reads_that_keep_failing_take_turns_with_the_other_holds(api, monkeypatch):
     from backend import review_gate
     first = ticket(api, STALE)
-    second = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve replies', 'body': 'Build replies.',
+    second = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Improve replies', 'body': 'Build replies.',
                                  'type': first['type_id'], 'step': 'In Progress', 'links': [PR]})
     hook(api, 'pull_request', pr_event('synchronize', head={'sha': HEAD}))
     with api.app.state.store.transaction() as c:

@@ -17,7 +17,7 @@ from backend.tests.test_wake_rules import jobs, news
 
 def add_bot(c, slug, **config):
     H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"}}, {"people": []})
-    c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
+    c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
               (slug, encode({"name": slug, "runtime": "fake", "status": "active", **config}), None, "ana"))
 
 
@@ -68,14 +68,14 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
 def turn_for(api, slug):
     """What a routine for `slug` is today: an automation whose Bot turn step is the bot's. It runs on a task made for
     another bot; returns its run's status once no task for `slug` was opened by it."""
-    aid = post(api, "automations", {"name": "Notes", "owner": "person:ana",
+    aid = post(api, "automations", {"name": "Notes", "owner_id": "person:ana",
                                     "trigger": {"type": "event", "name": "task.created"},
                                     "steps": [{"id": "notes", "type": "bot_turn", "bot": "bot:" + slug,
                                                "prompt": "Write the notes."}]})["id"]
-    post(api, "tasks", {"owner": "cpo", "title": "Start the notes", "body": "Please."})
+    post(api, "tasks", {"owner_id": "cpo", "title": "Start the notes", "body": "Please."})
     api.app.state.store.automations.drain()
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner=?", ("bot:" + slug,)).fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id=?", ("bot:" + slug,)).fetchone()
     found = get(api, f"automations/{aid}/runs")["runs"]
     assert len(found) == 1
     return found[0]["status"]
@@ -111,7 +111,7 @@ def test_a_reviewer_takes_review_children_only_and_wakes_for_its_request_and_peo
         assert raised.value.rule == "profile" and "reviewer" in str(raised.value)
         parent = H.task_create(c, "bot:ops", "Build 1/9", "x", "bot:cpo")
         review = H.task_create(c, "bot:ops", "QA: check the build", "x", "bot:checker", parent_id=parent["id"])
-        assert review["owner"] == "bot:checker"
+        assert review["owner_id"] == "bot:checker"
         # Its own work is not pulled by itself unless it is a review (auto_tasks), and nothing else stirs it.
         c.execute("DELETE FROM jobs")
         mine = H.task(c, review["id"])
@@ -127,7 +127,7 @@ def test_a_reviewer_takes_review_children_only_and_wakes_for_its_request_and_peo
         other = dict(mine, id="x", title="Something else")
         assert P.pull_refusal(c, other, profile_of(c, "checker")) == "auto_start_off"
         assert P.mismatches(c) == []
-        c.execute("INSERT INTO tasks(id,title,body,owner,requester,status,created_at,updated_at) "
+        c.execute("INSERT INTO tasks(id,title,body,owner_id,requester_id,status,created_at,updated_at) "
                   "VALUES('t-odd','Odd job','x','bot:checker','human:ana','open',?,?)", (H.now(), H.now()))
         assert P.mismatches(c) == [("reviewer_holds_tasks", "checker", 1)]
 
@@ -241,9 +241,9 @@ def test_a_lead_is_woken_by_people_and_hears_the_rest_once_a_day(api):
         mine = H.task_create(c, "bot:boss", "Ask around", "x", "bot:ops")
         c.execute("DELETE FROM jobs")
         # News about its task is held for the digest: the job waits, then a tick plans it for the next 09:00.
-        held = news(c, H.task(c, mine["id"]) | {"owner": "bot:boss"}, "Step moved: Open -> Doing")
+        held = news(c, H.task(c, mine["id"]) | {"owner_id": "bot:boss"}, "Step moved: Open -> Doing")
         assert held["refs"]["rule"] == "profile_lead_digest" and held["refs"]["wake_batch"] == "rule"
-        job = c.execute("SELECT id,held,created_at FROM jobs WHERE bot='boss'").fetchone()
+        job = c.execute("SELECT id,held,created_at FROM jobs WHERE bot_id='boss'").fetchone()
         assert job["held"] == 1
         W.tick(c, job["created_at"])
         due = c.execute("SELECT hold_until FROM jobs WHERE id=?", (job["id"],)).fetchone()[0]
@@ -392,16 +392,16 @@ def test_a_monitor_and_a_reviewer_still_run_their_automation_turns(api):
         with pytest.raises(H.Refused):
             H.task_create(c, "human:ana", "Fix the thing", "x", "bot:watch")
     for slug in ("watch", "checker"):
-        aid = post(api, "automations", {"name": "Sweep " + slug, "owner": "person:ana",
+        aid = post(api, "automations", {"name": "Sweep " + slug, "owner_id": "person:ana",
                                         "trigger": {"type": "event", "name": "task.created"},
                                         "steps": [{"id": "sweep", "type": "bot_turn", "bot": "bot:" + slug,
                                                    "prompt": "Check the watchlist."}]})["id"]
-        post(api, "tasks", {"owner": "cpo", "title": "Start " + slug, "body": "Please."})
+        post(api, "tasks", {"owner_id": "cpo", "title": "Start " + slug, "body": "Please."})
         api.app.state.store.automations.drain()
         runs = get(api, f"automations/{aid}/runs")["runs"]
         assert runs and runs[0]["status"] != "failed", runs
         with api.app.state.store.read() as c:
-            assert c.execute("SELECT 1 FROM tasks WHERE owner=? AND title=?", ("bot:" + slug, "Sweep " + slug)).fetchone()
+            assert c.execute("SELECT 1 FROM tasks WHERE owner_id=? AND title=?", ("bot:" + slug, "Sweep " + slug)).fetchone()
 
 
 def test_a_custom_bot_that_takes_no_task_runs_no_routine_and_the_migration_copies_rows_once(api):
@@ -445,7 +445,7 @@ def test_undoing_a_profile_change_restores_it_but_not_rules_that_were_dropped(ap
 
 
 def last_to(c, slug):
-    row = c.execute("SELECT refs FROM messages WHERE to_actor=? ORDER BY rowid DESC LIMIT 1", ("bot:" + slug,)).fetchone()
+    row = c.execute("SELECT refs FROM messages WHERE recipient_id=? ORDER BY rowid DESC LIMIT 1", ("bot:" + slug,)).fetchone()
     return json.loads(row[0])
 
 

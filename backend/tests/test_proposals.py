@@ -29,7 +29,7 @@ def audit(api, obj):
 
 def botops_notices(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT body, refs FROM messages WHERE from_actor=? AND to_actor=? "
+        return [dict(r) for r in c.execute("SELECT body, refs FROM messages WHERE sender_id=? AND recipient_id=? "
                                            "AND kind='notice'", (H.KEEPER, "bot:botops"))]
 
 

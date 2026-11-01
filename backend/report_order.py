@@ -233,8 +233,8 @@ def may_order(c, auth, who, manager):
         return False
     if kind == "human":
         return auth.manages(c, who, "person", ident)
-    row = c.execute("SELECT operator FROM bot_config WHERE bot=?", (ident,)).fetchone()
-    return bool(row and row["operator"] == H.actor_id(who.actor)) or auth.manages(c, who, "bot", ident)
+    row = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (ident,)).fetchone()
+    return bool(row and row["owner_id"] == H.actor_id(who.actor)) or auth.manages(c, who, "bot", ident)
 
 
 def view(c, auth, who, manager):

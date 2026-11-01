@@ -226,7 +226,7 @@ def _review(c, actor, record, raised=False):
 def _review_touched(c, since):
     """Whether anyone but the server started or paused the Monday note after the server started it."""
     since = since if isinstance(since, str) else ""
-    return c.execute("SELECT 1 FROM events WHERE action='routine.updated' AND target=? AND actor!=? AND ts>=? "
+    return c.execute("SELECT 1 FROM events WHERE action='routine.updated' AND target=? AND actor!=? AND created_at>=? "
                      "AND detail LIKE '%\"enabled\"%' LIMIT 1", (REVIEW, H.KEEPER, since)).fetchone() is not None
 
 
@@ -434,7 +434,7 @@ def day_start(at=None):
 def asked_today(c, person, at=None):
     """How many tasks the Strategy Bot filed for this person today (UTC), closed ones included, and merged items."""
     since = day_start(at)
-    return c.execute("SELECT COUNT(*) FROM tasks WHERE requester=? AND owner=? AND created_at>=?",
+    return c.execute("SELECT COUNT(*) FROM tasks WHERE requester_id=? AND owner_id=? AND created_at>=?",
                      ("bot:" + SLUG, person, since)).fetchone()[0] + c.execute(
         "SELECT COUNT(DISTINCT merged_into) FROM "
         "strategy_merges WHERE person=? AND created_at>=?", (person, since)).fetchone()[0]
@@ -444,7 +444,7 @@ def asked_today_all(c, at=None):
     """{person actor: tasks the Strategy Bot filed for them today}, for the people it filed any for."""
     since, out = day_start(at), {}
     for who, n in c.execute(
-            "SELECT owner, COUNT(*) FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND created_at>=? GROUP BY owner "
+            "SELECT owner_id, COUNT(*) FROM tasks WHERE requester_id=? AND owner_id LIKE 'human:%' AND created_at>=? GROUP BY owner_id "
             "UNION ALL SELECT person, COUNT(DISTINCT merged_into) FROM strategy_merges "
             "WHERE created_at>=? GROUP BY person",
             ("bot:" + SLUG, since, since)):

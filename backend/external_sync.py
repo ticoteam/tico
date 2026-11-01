@@ -153,7 +153,7 @@ def slug_for(c, name, fallback):
 
 
 def find(c, provider, person, ext_id):
-    for row in c.execute("SELECT bot,config FROM bot_config WHERE operator=? AND "
+    for row in c.execute("SELECT bot,config FROM bot_config WHERE owner_id=? AND "
                          "json_extract(config,'$.harness')=?", (person, provider.id)):
         record = (H._json(row["config"], {}) or {}).get(provider.key) or {}
         if provider.single or record.get("id") == ext_id:
@@ -355,7 +355,7 @@ def import_messages(c, provider, person, slug, ext_id, messages, images=None, wh
         if attached:
             refs["attachments"] = attached
         cur = c.execute(
-            "INSERT OR IGNORE INTO messages (id, conversation_id, from_actor, to_actor, kind, body, "
+            "INSERT OR IGNORE INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, "
             "refs, created_at, delivered_at, read_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (mid, room["id"], sender, target, "say", text, encode(refs), created, now, now))
         added += cur.rowcount
@@ -370,7 +370,7 @@ def import_messages(c, provider, person, slug, ext_id, messages, images=None, wh
 
 def synced_through(c, provider, person, slug):
     row = c.execute("SELECT max(m.created_at) FROM messages m JOIN conversations v ON v.id=m.conversation_id "
-                    "WHERE v.scope='personal' AND v.owner_actor=? AND v.room_key=? AND m.id LIKE ?",
+                    "WHERE v.scope='personal' AND v.owner_id=? AND v.room_key=? AND m.id LIKE ?",
                     ("human:" + person, slug, provider.key + "-%")).fetchone()
     return row[0] if row else None
 
@@ -381,7 +381,7 @@ def take_inbox(c, provider, person, slug):
     A message with a job is the computer's while the bot is delivered through its app (backend/app_delivery.py),
     and always once a runner tried it: it reaches the bot once. A job no runner tried, with app delivery off, is
     cancelled and its message handed over here."""
-    room = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=?",
+    room = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=?",
                      ("human:" + person, slug)).fetchone()
     if not room:
         return []
@@ -389,8 +389,8 @@ def take_inbox(c, provider, person, slug):
     config = H._json((c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
                       or {"config": "{}"})["config"], {}) or {}
     delivering = 1 if app_delivery.active(c, config) else 0
-    rows = c.execute("SELECT m.id,m.body,m.created_at FROM messages m WHERE m.conversation_id=? AND m.from_actor=? "
-                     "AND m.to_actor=? AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND m.kind='say' "
+    rows = c.execute("SELECT m.id,m.body,m.created_at FROM messages m WHERE m.conversation_id=? AND m.sender_id=? "
+                     "AND m.recipient_id=? AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND m.kind='say' "
                      "AND m.id NOT LIKE ? AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.message_id=m.id AND "
                      "(? OR j.state NOT IN ('queued','canceled') OR EXISTS (SELECT 1 FROM attempts a WHERE a.job_id=j.id))) "
                      "ORDER BY m.created_at LIMIT ?",

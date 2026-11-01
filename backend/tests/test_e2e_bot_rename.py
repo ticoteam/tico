@@ -55,7 +55,7 @@ def test_a_new_bot_runs_in_its_named_folder_and_keeps_it_after_a_rename(api, mac
 
     first = post(api, "chat/sales-helper", {"text": "What did we sell?"})
     answer = until(lambda: reply_to(api, first["conversation_id"], bot=bot), "the new bot's reply", timeout=60)
-    assert answer["from_actor"] == "bot:" + bot
+    assert answer["sender_id"] == "bot:" + bot
     turn = next(call for call in machine.prompts() if "What did we sell?" in call["prompt"])
     assert Path(turn["cwd"]).resolve() == folder.resolve()
 
@@ -71,4 +71,4 @@ def test_a_new_bot_runs_in_its_named_folder_and_keeps_it_after_a_rename(api, mac
     assert Path(turn["cwd"]).resolve() == folder.resolve()          # the folder stays
     assert not (projects / f"bot-{bot}").exists() and not (projects / "bot-revenue-helper").exists()
     messages = get(api, f"conversations/{first['conversation_id']}/messages")
-    assert {m["from_actor"] for m in messages if m["from_actor"].startswith("bot:")} == {"bot:" + bot}
+    assert {m["sender_id"] for m in messages if m["sender_id"].startswith("bot:")} == {"bot:" + bot}

@@ -410,7 +410,7 @@ def test_a_bill_made_here_goes_to_the_provider_and_is_booked_once_the_provider_c
         assert c.execute("SELECT COUNT(*) FROM fin_bills").fetchone()[0] == 0
     assert _drain(books, fake, cid, now=LATER) == []
     assert _sent(fake, "bill.create") == {"party": "Vendor:9", "number": "B-77", "day": "2026-10-05",
-                                          "due": "2026-11-05", "memo": "", "lines": [
+                                          "due_at": "2026-11-05", "memo": "", "lines": [
                                               {"account": "Account:2", "amount": 1500, "description": "seats"}]}
     with books.read() as c:
         bill = _local(c, "Bill:901", "fin_bills")

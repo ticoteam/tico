@@ -298,7 +298,7 @@ def task_dry_run(c, auth, who, body):
         if H.is_bot(who.actor) and H.TITLE_LINT != "off" and general:
             # plain-English titles: recorded on the task this week, refused once TICO_TITLE_LINT=refuse
             problems += [f"{p} (title lint, {H.TITLE_LINT})" for p in H.lint_title(title)]
-        dup = H._one(c, "SELECT id FROM tasks WHERE requester=? AND owner=? AND title=? "
+        dup = H._one(c, "SELECT id FROM tasks WHERE requester_id=? AND owner_id=? AND title=? "
                         f"AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
                      (who.actor, target, title, *H.ACTIVE_STATUSES))
         if dup and H.task_private_readable(c, who.actor, H.task(c, dup["id"])) and (

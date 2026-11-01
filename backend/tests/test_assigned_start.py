@@ -111,7 +111,7 @@ def test_private_assignment_reaches_the_bots_manager_and_no_one_else(api, clock)
     task_bot(api, lanes=True)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Private assigned work', 'body': 'Keep this private.', 'private': True})
+    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Private assigned work', 'body': 'Keep this private.', 'private': True})
     cancel(api)
     advance(api, clock, 1)
     assert sweep(api) == [task['id']]
@@ -203,7 +203,7 @@ def test_five_deck_tickets_progress_under_three_task_cap_without_lead_turns(api)
         reached.add(take(api, machine)['task']['id'])
     assert reached == set(by_id)
     with api.app.state.store.read() as c:
-        assert {r[0] for r in c.execute('SELECT DISTINCT bot FROM attempts')} == {'ops'}
+        assert {r[0] for r in c.execute('SELECT DISTINCT bot_id FROM attempts')} == {'ops'}
 
 
 @pytest.mark.parametrize('refusal', ['auto_start_off', 'task_wait', 'check_model', 'backoff'])
@@ -294,7 +294,7 @@ def test_older_same_lane_followup_does_not_hide_free_lane_refusal(api, clock):
                   (H.shift(H.now(), hours=-3), by_task[running['id']]))
         queued = by_task[task['id']]
         online = {r['id'] for r in health._online_runners(c)}
-        rows = [r for r in health._waiting(c, online, store.settings)[2] if r['bot'] == 'ops']
+        rows = [r for r in health._waiting(c, online, store.settings)[2] if r['bot_id'] == 'ops']
         assert [r['reason'] for r in rows] == ['auto_start_off']
         queue_refusals.observe(c, store.settings)
         assert queue_refusals.state(c, 'ops')['job'] == queued
@@ -417,7 +417,7 @@ def test_orphan_and_failed_delivery_are_recorded_once_and_do_not_starve_next_bat
 def test_queue_refusal_checks_the_observed_jobs_message_privacy_for_bot_readers(api, clock):
     from backend.auth import Identity
     task_bot(api, lanes=True)
-    post(api, 'tasks', {'owner': 'ops', 'title': 'Private refused work', 'body': 'Synthetic private task.', 'private': True})
+    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Private refused work', 'body': 'Synthetic private task.', 'private': True})
     set_cap(api, 0)
     store = api.app.state.store
     store.settings.test_identities['finance-observer'] = Identity('bot:finance', 'bot', agent='hermes')
@@ -440,12 +440,12 @@ def test_busy_health_ages_claim_priority_instead_of_oldest_free_job(api, clock, 
     with store.transaction() as c:
         c.execute("UPDATE jobs SET created_at=? WHERE state='queued'", (H.shift(H.now(), minutes=-task_minutes),))
         c.execute("UPDATE jobs SET created_at=? WHERE state='queued' AND message_id IN "
-                  "(SELECT id FROM messages WHERE from_actor LIKE 'human:%')",
+                  "(SELECT id FROM messages WHERE sender_id LIKE 'human:%')",
                   (H.shift(H.now(), minutes=-chat_minutes),))
         online = {r['id'] for r in health._online_runners(c)}
         _, slow, stuck = health._waiting(c, online, store.settings)
-        assert bool([r for r in stuck if r['bot'] == 'ops']) is expected
-        assert bool([r for r in slow if r['bot'] == 'ops']) is expected
+        assert bool([r for r in stuck if r['bot_id'] == 'ops']) is expected
+        assert bool([r for r in slow if r['bot_id'] == 'ops']) is expected
 
 
 def test_recovery_scan_advances_past_a_full_page_of_held_tasks_and_wraps(api, clock, monkeypatch):
@@ -508,7 +508,7 @@ def test_assignment_backlog_bounds_provenance_work_and_reuses_each_attempt(api, 
         c.execute("UPDATE tasks SET status='open' WHERE id=?", (first['id'],))
         # Large synthetic backlog of old open bot tasks, unlike the unrelated lock fixture.
         c.execute("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<40000) "
-                  "INSERT INTO tasks(id,title,body,requester,owner,status,lane,rank,created_at,updated_at,conversation_id) "
+                  "INSERT INTO tasks(id,title,body,requester_id,owner_id,status,lane,rank,created_at,updated_at,conversation_id) "
                   "SELECT printf('synthetic-%06d',x),'Synthetic assignment','','human:ana','bot:ops','open',"
                   "'company',x,?,?,? FROM n", (H.now(), H.now(), first['conversation_id']))
     advance(api, clock, 1)
@@ -571,7 +571,7 @@ def test_overdue_pages_past_more_than_two_hundred_ineligible_recoveries(api, clo
     store = api.app.state.store
     with store.transaction() as c:
         c.execute("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<250) "
-                  "INSERT INTO tasks(id,title,body,requester,owner,status,lane,rank,created_at,updated_at,conversation_id) "
+                  "INSERT INTO tasks(id,title,body,requester_id,owner_id,status,lane,rank,created_at,updated_at,conversation_id) "
                   "SELECT printf('00000000-0000-4000-8000-%012d',x),'Earlier recovery','','human:ana','bot:ops',"
                   "'open','company',x,?,?,? FROM n", (H.now(), H.now(), carrier['conversation_id']))
         ids = [r[0] for r in c.execute("SELECT id FROM tasks WHERE id LIKE '00000000-%'")]
@@ -584,7 +584,7 @@ def test_overdue_pages_past_more_than_two_hundred_ineligible_recoveries(api, clo
         c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='ops'")
         for tid in ids + [wanted['id']]:
             row = H.task(c, tid)
-            H.event(c, H.KEEPER, A.EVENT, tid, {'assignment': row['owner'] + ':' + row['created_at'],
+            H.event(c, H.KEEPER, A.EVENT, tid, {'assignment': row['owner_id'] + ':' + row['created_at'],
                     'assigned_at': row['created_at'], 'rewoken_at': H.now(), 'refusal': None})
     advance(api, clock, 2)
     calls = []
@@ -626,7 +626,7 @@ def test_overdue_reads_its_page_in_fixed_statements_not_per_task(api, clock, n):
     found, seen = traced_overdue(api)
     assert sorted(row['id'] for row in found) == sorted(t['id'] for t in tasks)
     # The page's assignment and ledger rows come in one statement each, not one per task.
-    assert [s for s in seen if s.startswith('SELECT id,ts FROM task_events WHERE task_id=')] == []
+    assert [s for s in seen if s.startswith('SELECT id,created_at FROM task_events WHERE task_id=')] == []
     assert [s for s in seen if s.startswith('SELECT detail FROM events WHERE target=')] == []
     # A short page is the last one: no second, empty page query.
     assert sum(s.startswith('SELECT t.* FROM tasks t JOIN bots b') for s in seen) == 1
@@ -641,14 +641,14 @@ def fleet(store, bots, tasks, attempts, *, days=30):
     with store.transaction() as c:
         c.execute("INSERT INTO conversations(id,kind,subject,created_at,last_message_at) VALUES('fleet-conv','task','',?,?)",
                   (now, now))
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at,last_seen_at,readiness) "
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at,readiness) "
                   "VALUES('fleet-runner','fleet','ana','fleet-token',?,?,'{}')", (now, now))
         for slug in slugs:
             c.execute("INSERT INTO bots(id,slug,display_name,runtime,state,created_at) VALUES(?,?,?,'fake','active',?)",
                       (slug, slug, slug, now))
-            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,'{}','ana')", (slug,))
+            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,'{}','ana')", (slug,))
         for k in range(tasks):
-            c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,rank,created_at,updated_at,conversation_id) "
+            c.execute("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,rank,created_at,updated_at,conversation_id) "
                       "VALUES(?,?,'','human:ana',?,'open',?,?,?,'fleet-conv')",
                       (f'fleet-t-{k:05d}', f'Fleet task {k}', 'bot:' + slugs[k % bots], k,
                        back(24 * (days - 2) - k), now))
@@ -657,16 +657,16 @@ def fleet(store, bots, tasks, attempts, *, days=30):
             b = i % bots
             at = back(24 * days - 24 * days * i / attempts)
             task = ids_by_bot[b][i // bots % len(ids_by_bot[b])] if ids_by_bot[b] else None
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                       "VALUES(?, 'fleet-conv','human:ana',?,'task','',?,?)",
                       (f'fleet-m-{i}', 'bot:' + slugs[b], json.dumps({'task': task}) if task and i % 3 == 0 else '{}', at))
             # A message to a bot queues its job under the message's id (store.QUEUE_TRIGGER).
             c.execute("UPDATE jobs SET state='completed' WHERE id=?", (f'fleet-m-{i}',))
-            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
+            c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                       "VALUES(?,?,?,'fleet-runner',1,?,'completed',?,?)",
                       (f'fleet-a-{i}', f'fleet-m-{i}', slugs[b], f'fleet-h-{i}', now, at))
             if i % 5 == 0 and task:
-                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
+                c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                           "VALUES(?, 'fleet-conv','bot:' || ?,'human:ana','chat','',?,?)",
                           (f'fleet-in-{i}', slugs[b], json.dumps({'task': task}), at))
                 c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (f'fleet-a-{i}', f'fleet-in-{i}'))
@@ -723,7 +723,7 @@ def test_repeated_selection_stops_reading_attempts_once_each_assignment_is_settl
         A.sweep(c, at, found)
     found, second = traced_due(store, at)
     assert found == []
-    attempt_reads = [s for s in second if 'FROM attempts WHERE bot' in s or s.startswith('SELECT a.id AS primed_attempt')]
+    attempt_reads = [s for s in second if 'FROM attempts WHERE bot_id' in s or s.startswith('SELECT a.id AS primed_attempt')]
     assert attempt_reads == []
     # Only the page's own reads remain (its rows, ledger, owners and waits): 12 statements, 41 before this change.
     assert len(second) <= 15

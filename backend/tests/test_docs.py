@@ -157,9 +157,9 @@ def test_upgrade_repairs_generated_docs_once_and_queues_next_run_refresh(api):
         c.execute("DELETE FROM registry_metadata WHERE key='librarian_fix33'")
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('librarian','{}','ana')")
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('librarian','{}','ana')")
         c.execute("UPDATE docs SET archived=1 WHERE id=?", (source["id"],))  # Older archive, stale cache.
-        c.execute("UPDATE docs SET updated_by='bot:librarian' WHERE id=?", (faq["id"],))
+        c.execute("UPDATE docs SET updated_by_id='bot:librarian' WHERE id=?", (faq["id"],))
     api.app.state.store.initialize(seed_market=False)
     fresh = call(api, "GET", "docs/" + idx["id"])["doc"]
     assert fresh["title"] == "Docs index" and "refunds.md`" not in fresh["body"]
@@ -171,6 +171,6 @@ def test_upgrade_repairs_generated_docs_once_and_queues_next_run_refresh(api):
     api.app.state.store.initialize(seed_market=False)
     assert call(api, "GET", "docs/" + idx["id"])["doc"]["version"] == fresh["version"]
     with api.app.state.store.read() as c:
-        tasks = c.execute("SELECT * FROM tasks WHERE owner='bot:librarian' AND title='Refresh the map'").fetchall()
+        tasks = c.execute("SELECT * FROM tasks WHERE owner_id='bot:librarian' AND title='Refresh the map'").fetchall()
         assert len(tasks) == 1 and tasks[0]["next_run"] == 1
         assert "unreadable" in tasks[0]["body"] and "archived" in tasks[0]["body"]

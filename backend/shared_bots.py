@@ -119,7 +119,7 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
         raise Problem("shared_copy", f"{original_bot['slug']} is itself a branch; add {parent.get('slug', source_of(original))}", 422)
     if not original.get("shared"):
         raise Problem("not_shared", f"{original_bot['slug']} does not allow branches", 409)
-    if original_row["operator"] == person:
+    if original_row["owner_id"] == person:
         raise Problem("own_bot", f"{original_bot['slug']} is already yours", 409)
     settings_admin.auth.require_read(c, who, source)
     runner = None
@@ -127,13 +127,13 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
         runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
         if not runner:
             raise Problem("not_found", "Computer is not registered", 404)
-        if runner["operator"] != person:
+        if runner["owner_id"] != person:
             raise Problem("operator", "That computer belongs to someone else", 403)
 
     slug = copy_slug(original_bot["slug"], person)
     existing = c.execute("SELECT bc.* FROM bot_config bc JOIN bots b ON b.id=bc.bot WHERE b.slug=?", (slug,)).fetchone()
     bot_id = existing["bot"] if existing else H.new_bot_id(slug)
-    if existing and (existing["operator"] != person or source_of(_json(existing["config"])) != source):
+    if existing and (existing["owner_id"] != person or source_of(_json(existing["config"])) != source):
         raise Problem("duplicate", f"The name {slug} is taken by another bot", 409)
     created = not existing
     if existing and H.bot(c, bot_id)["state"] == "archived":
@@ -157,7 +157,7 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
                   (bot_id, slug, original_bot["display_name"], original_bot["runtime"], original_bot["model"],
                    original_bot["effort"], status, now))
         c.execute(
-            "INSERT INTO bot_config(bot,config,team,operator,owner_ids,description,reports_to,"
+            "INSERT INTO bot_config(bot,config,team,owner_id,owner_ids,description,reports_to,"
             "repo,thread_mode,definition_updated_at,definition_updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (bot_id, encode(config), team, person, encode([person]), config["description"],
              config["reports_to"], repo, "personal", now, who.actor))
@@ -189,9 +189,9 @@ def check_runner(c, bot, runner_id, source=None):
             raise Problem("shared_runner", "That computer already runs the original or a branch of it. Choose another computer.", 409)
 
     if original:
-        runner = c.execute("SELECT operator FROM runners WHERE id=?", (runner_id,)).fetchone()
+        runner = c.execute("SELECT owner_id FROM runners WHERE id=?", (runner_id,)).fetchone()
         person = H.actor_id(config.get("reports_to") or "")
-        if runner and runner["operator"] != person:
+        if runner and runner["owner_id"] != person:
             raise Problem("operator", "A branch runs only on its person's computers", 403)
 
 
@@ -203,7 +203,7 @@ def place_pending(c, operator, runner_id, settings_admin, execution, github_owne
     placed = []
     for row in c.execute("SELECT bc.bot,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                          "LEFT JOIN assignments a ON a.bot=bc.bot "
-                         "WHERE bc.operator=? AND b.state='planned' AND a.bot IS NULL ORDER BY bc.bot",
+                         "WHERE bc.owner_id=? AND b.state='planned' AND a.bot IS NULL ORDER BY bc.bot",
                          (operator,)).fetchall():
         source = source_of(_json(row["config"]))
         if not source:
@@ -225,8 +225,8 @@ def route(c, actor, target):
     if not declared(c, source).get("shared"):
         return resolved
     for slug in copies(c, source):
-        row = c.execute("SELECT operator FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        if row["operator"] == H.actor_id(actor) and H.bot(c, slug)["state"] == "active":
+        row = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        if row["owner_id"] == H.actor_id(actor) and H.bot(c, slug)["state"] == "active":
             return "bot:" + slug
     return resolved
 
@@ -298,7 +298,7 @@ def retire_assignments(c):
         bot = row["bot"]
         # A turn still leased or running could not hand in its result once the actor is archived and off
         # its computer; leave this one as it is and retire it at a later startup, once the turn settles.
-        if c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running') LIMIT 1",
+        if c.execute("SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1",
                      (bot,)).fetchone():
             continue
         if row["state"] != "archived" or config.get("status") != "archived":
@@ -307,12 +307,12 @@ def retire_assignments(c):
             c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(config), bot))
         H.setup_finished(c, bot, archived=True)
         c.execute("DELETE FROM assignments WHERE bot=?", (bot,))
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot=? AND state='queued'", (bot,))
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id=? AND state='queued'", (bot,))
         source = H.bot(c, str(config.get("shared_from") or ""))
         if not source or source["state"] == "archived":
             continue
         owner = "bot:" + source["id"]
-        for task_id, title in c.execute(f"SELECT id,title FROM tasks WHERE owner=? AND status IN ({marks})",
+        for task_id, title in c.execute(f"SELECT id,title FROM tasks WHERE owner_id=? AND status IN ({marks})",
                                         ("bot:" + bot, *H.ACTIVE_STATUSES)).fetchall():
             # The normal handoff queues the role's turn and notice, so a `doing` task does not sit idle.
             # Only an active role can be handed a task; otherwise (or if refused) the owner is set
@@ -323,7 +323,7 @@ def retire_assignments(c):
                     continue
                 except H.Refused:
                     pass
-            c.execute("UPDATE tasks SET owner=?,updated_at=? WHERE id=?", (owner, H.now(), task_id))
+            c.execute("UPDATE tasks SET owner_id=?,updated_at=? WHERE id=?", (owner, H.now(), task_id))
             from . import task_run_models
             task_run_models.moved(c, H.KEEPER, task_id)
             H._wake(c, H.task(c, task_id), owner, f"Open: {title}", {"news": "assignment"})

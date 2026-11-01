@@ -461,7 +461,7 @@ function computerDetailHTML(machine) {
   const empty = machineReported(machine) && !conns.length && !machine.revoked_at
     ? `<p class="computer-detail-empty"><span class="machine-chip-dot" aria-hidden="true"></span>Bots here can't run until a connection is added${manage ? ' · Add connection below' : ''}.</p>` : '';
   const section = (key, title, body) => `<section class="computer-detail-section" data-detail-section="${key}"><h3>${title}</h3>${body}</section>`;
-  return `<header class="computer-detail-head"><div><h2 id="computer-detail-title">${esc(machine.label)}</h2><span class="muted">${esc(settingsPersonName(machine.operator))} · <span data-computer-status>${esc(status)}</span></span></div>
+  return `<header class="computer-detail-head"><div><h2 id="computer-detail-title">${esc(machine.label)}</h2><span class="muted">${esc(settingsPersonName(machine.owner_id))} · <span data-computer-status>${esc(status)}</span></span></div>
       <button class="ghost tmodal-x" type="button" data-detail-close aria-label="Close">✕</button></header>
     <div class="computer-detail-body">${notes}
       ${machine.turn_summary ? `<p class="computer-detail-note" data-turn-counts>${esc(machine.turn_summary)}</p><p class="muted">A turn has up to 3 minutes to start. Waiting turns leave room for other work.</p>` : ''}

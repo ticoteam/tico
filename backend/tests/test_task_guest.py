@@ -80,7 +80,7 @@ def test_private_bot_task_reaches_one_named_person_and_nobody_else(api, requeste
     # Dry-run says what the create does: no privacy refusal, then the create goes through.
     assert not [p for p in dry_run(api, body, attempt["token"]) if "rivate" in p or "guest" in p]
     child = post(api, "tasks", body, attempt["token"])
-    assert child["private"] and child["owner"] == "human:ben" and child["requester"] == "bot:ops"
+    assert child["private"] and child["owner_id"] == "human:ben" and child["requester_id"] == "bot:ops"
 
     # Ben, and only Ben, now reads the task and the subtask; its history says who it reached.
     assert get(api, "tasks/" + row["id"], "ben-test")["task"]["guest"] == "human:ben"
@@ -116,7 +116,7 @@ def test_guest_answer_comes_back_to_the_task_and_nowhere_wider(api):
     # Ben's answer wakes the bot that owns the task, which can act on its task with it.
     with api.app.state.store.read() as c:
         queued = c.execute("SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
-                           "WHERE j.bot='ops' AND j.state='queued'").fetchall()
+                           "WHERE j.bot_id='ops' AND j.state='queued'").fetchall()
     assert any(json.loads(r[0] or "{}").get("subtask") == child["id"] for r in queued)
     answer = run_on(api)
     post(api, f"tasks/{row['id']}/comments", {"text": "Ben approved; going ahead."}, answer["token"])
@@ -142,7 +142,7 @@ def test_refused_hand_offs_match_their_dry_run(api):
 def test_only_the_owning_bot_brings_a_person_in(api):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     child = post(api, "tasks", subtask(row["id"], "ben"), bot_token(api, "cpo"))
-    assert child["owner"] == "human:ben"
+    assert child["owner_id"] == "human:ben"
     # The requester bot's hand-off goes on as before (the subtask alone), and makes nobody a guest.
     assert readers(api, row["id"]) == set()
 
@@ -154,8 +154,8 @@ def test_waiting_on_a_person_makes_them_the_guest_and_reassignment_ends_it(api):
     waiting = post(api, "tasks/" + row["id"], {"version": current["version"], "status": "waiting", "waiting_on": "ben",
                                               "note": "Ben, please approve the plan."}, attempt["token"])
     # One question, one card: Ben gets a small subtask with the ask, and the task waits on it.
-    card = next(t for t in get(api, "tasks", "ben-test")["tasks"] if t["owner"] == "human:ben")
-    assert card["private"] and card["requester"] == "bot:ops"
+    card = next(t for t in get(api, "tasks", "ben-test")["tasks"] if t["owner_id"] == "human:ben")
+    assert card["private"] and card["requester_id"] == "bot:ops"
     assert waiting["status"] == "waiting" and readers(api, row["id"]) == {"ben"} and readers(api, card["id"]) == {"ben"}
     r = api.post("/api/v2/tasks/" + row["id"], json={"version": waiting["version"], "status": "waiting",
                                                        "waiting_on": "cara"}, headers=headers(attempt["token"]))
@@ -170,7 +170,7 @@ def test_a_guest_who_cannot_read_the_bots_opens_that_task_and_no_other_work_of_t
         current = get(api, f"bots/{slug}/access", "ana-test")
         put(api, f"bots/{slug}/access", {"see": {"everyone": True}, "read": {"people": ["ana", "ben"]},
                                         "write": {"everyone": True}, "revision": current["revision"]})
-    other = post(api, "tasks", {"owner": "ops", "title": "Ops weekly sweep", "body": "Routine."})
+    other = post(api, "tasks", {"owner_id": "ops", "title": "Ops weekly sweep", "body": "Routine."})
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     attempt = run_on(api)
     post(api, "tasks", subtask(row["id"], "cara"), attempt["token"])
@@ -187,7 +187,7 @@ def test_the_guests_answer_clears_the_wait_for_good(api):
     current = get(api, "tasks/" + row["id"], attempt["token"])["task"]
     post(api, "tasks/" + row["id"], {"version": current["version"], "status": "waiting", "waiting_on": "ben",
                                      "note": "Ben, please approve the plan."}, attempt["token"])
-    card = next(t for t in get(api, "tasks", "ben-test")["tasks"] if t["owner"] == "human:ben")
+    card = next(t for t in get(api, "tasks", "ben-test")["tasks"] if t["owner_id"] == "human:ben")
     with api.app.state.store.read() as c:
         assert TR.blocker_ids(c, row["id"]) == [card["id"]]
     done = post(api, "tasks/" + card["id"], {"version": card["version"], "status": "done", "note": "Approved."},
@@ -220,7 +220,7 @@ def test_a_run_carrying_work_the_person_cannot_read_does_not_reach_them(api):
     assert readers(api, own["id"]) == set() and not get(api, "tasks", "ben-test")["tasks"]
     # Once Ben reads every task the run carries, the same wait reaches him.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET requester='human:ben' WHERE id=?", (theirs["id"],))
+        c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (theirs["id"],))
     post(api, "tasks/" + own["id"], wait, attempt["token"])
     assert readers(api, own["id"]) == {"ben"}
 
@@ -231,7 +231,7 @@ def test_a_question_reaches_the_guest(api):
     asked = post(api, "task-questions", {"question": "Ship the zip fix in the next release?", "on": "ben",
                                          "parent": row["id"], "options": [{"label": "Yes", "then": "Go with Yes"}, {"label": "No", "then": "Go with No"}]},
                  attempt["token"])
-    assert asked["task"]["requester"] == "human:ben" and asked["task"]["private"]
+    assert asked["task"]["requester_id"] == "human:ben" and asked["task"]["private"]
     assert readers(api, row["id"]) == {"ben"} and readers(api, asked["task"]["id"]) == {"ben"}
     r = api.post("/api/v2/task-questions", json={"question": "Or should Cara decide?", "on": "cara",
                                                    "parent": row["id"], "options": [{"label": "Yes", "then": "Go with Yes"}, {"label": "No", "then": "Go with No"}]},

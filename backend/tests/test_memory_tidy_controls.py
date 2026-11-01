@@ -92,7 +92,7 @@ def test_confirmed_pilot_defaults_use_exact_slugs_low_effort_and_preserve_everyd
     with store.transaction() as c:
         for p in tidy.DEFAULT_PILOTS:
             c.execute("INSERT INTO bots(id,slug,model,effort) VALUES(?,?,?,?)", ('id-' + p['bot'], p['bot'], 'claude-haiku-5-5', 'high'))
-            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,'ana')", ('id-' + p['bot'], json.dumps(
+            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')", ('id-' + p['bot'], json.dumps(
                 {'model': 'claude-haiku-5-5', 'task_model': {'model': 'gpt-6-luna'}})))
         before = [tuple(r) for r in c.execute("SELECT bot,config FROM bot_config ORDER BY bot")]
     by_id = [{**p, 'bot': 'id-' + p['bot'], 'slug': p['bot']} for p in tidy.DEFAULT_PILOTS]

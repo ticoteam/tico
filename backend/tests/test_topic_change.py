@@ -374,7 +374,7 @@ def test_slow_reads_or_a_slow_audit_write_do_not_hold_the_send_past_the_budget(c
 
 def bot_says(c, conversation, text):
     """A bot message lands in the chat (a queued reply, another tab's send) while Decide is asked."""
-    c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at) "
+    c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
               "VALUES(?,?,'bot:ops','human:ana','say',?,?)", ("late-" + text[:4], conversation, text, H.now()))
 
 
@@ -557,7 +557,7 @@ def test_never_checked_under_three_turns_since_the_last_clear(chat):
 
 def test_never_checked_in_a_task_chat(chat):
     api, _, _, model, _ = chat
-    task = post(api, "tasks", {"owner": "ops", "title": "Look into it", "body": "The login bug"})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Look into it", "body": "The login bug"})
     post(api, f"tasks/{task['id']}/chat", {"text": UNRELATED})
     post(api, "chat/ops", {"text": UNRELATED, "refs": {"task": task["id"]}})
     assert model.calls == [] and checks(api) == []

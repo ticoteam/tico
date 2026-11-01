@@ -130,7 +130,7 @@ def test_a_read_only_turn_on_a_host_that_does_not_report_its_calls_is_held(api):
 def test_a_quarantine_stopped_turn_that_used_up_an_approval_is_held(api):
     machine, message, attempt = working(api, safe=True)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
                   ('quarantine-send', 'send', message['id'], 'bot:ops', H.now(), H.now()))
     quarantine(api)
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
@@ -163,7 +163,7 @@ def test_an_answer_finished_after_opening_a_pull_request_is_kept_on_the_run_and_
     assert tuple(row) == ('interrupted', 'Opened the pull request.')
     assert job_state(api, attempt['job_id']) == 'uncertain'
     assert end_reason(api, attempt).startswith('Quarantined: ')
-    assert not [m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['from_actor'] == 'bot:ops']
+    assert not [m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['sender_id'] == 'bot:ops']
     aged(api, attempt['id'])
     assert sweep(api) == [] and attempt['job_id'] in review(api)
     lift(api)
@@ -181,7 +181,7 @@ def test_an_answer_finished_by_a_read_only_turn_is_kept_on_the_run_and_its_job_r
         row = c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt['id'],)).fetchone()
     assert tuple(row) == ('interrupted', 'Here is the summary.')
     assert job_state(api, attempt['job_id']) == 'queued'
-    assert not [m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['from_actor'] == 'bot:ops']
+    assert not [m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['sender_id'] == 'bot:ops']
 
 
 def test_a_turn_still_waiting_to_start_is_stopped_the_same_way(api):
@@ -276,7 +276,7 @@ def test_all_running_turns_stop_each_judged_on_its_own_with_folded_inputs_follow
     post(api, f"attempts/{first['id']}/inputs/{folded['id']}/ack", {}, machine['token'])
     attempts = [first]
     for title in ['Check the export', 'Check the archive']:
-        post(api, 'tasks', {'owner': 'ops', 'title': title, 'body': 'Check the saved files.'})
+        post(api, 'tasks', {'owner_id': 'ops', 'title': title, 'body': 'Check the saved files.'})
         attempt = claim(api, machine)
         assert attempt is not None
         post(api, f"attempts/{attempt['id']}/started", {'thread_id': title}, machine['token'])

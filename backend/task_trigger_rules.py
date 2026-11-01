@@ -112,7 +112,7 @@ def judge(conn, item):
         row = item["row"]
         if not row:
             return
-        ctx = R._Context(conn, item["actor"], row.get("owner") or "", {}, None, row)
+        ctx = R._Context(conn, item["actor"], row.get("owner_id") or "", {}, None, row)
         rows = conn.execute("SELECT r.* FROM rules r LEFT JOIN rule_task_state s ON s.rule_id=r.id "
                             "WHERE r.enabled=1 AND r.event=? AND s.paused_at IS NULL", (item["event"],)).fetchall()
         from . import redesign_migration
@@ -125,13 +125,13 @@ def judge(conn, item):
                 continue
             params = H._json(rule["params"], {}) or {}
             action = params.get("action")
-            if not conn.execute("INSERT OR IGNORE INTO rule_task_runs(rule_id,task_id,event,revision,at) VALUES(?,?,?,?,?)",
+            if not conn.execute("INSERT OR IGNORE INTO rule_task_runs(rule_id,task_id,event,revision,ran_at) VALUES(?,?,?,?,?)",
                                 (rule["id"], item["task"], item["event"], item["revision"], H.now())).rowcount:
                 continue
             if item["chain"]:
                 _history(conn, item, rule, action, "Skipped: an Action already caused this change; maximum chain depth is one")
                 continue
-            count = conn.execute("SELECT count(*) FROM rule_task_runs WHERE rule_id=? AND fired=1 AND at>?",
+            count = conn.execute("SELECT count(*) FROM rule_task_runs WHERE rule_id=? AND fired=1 AND ran_at>?",
                                  (rule["id"], H.shift(H.now(), hours=-1))).fetchone()[0]
             if count >= 50:
                 conn.execute("INSERT INTO rule_task_state(rule_id,paused_at,pause_reason) VALUES(?,?,?) "

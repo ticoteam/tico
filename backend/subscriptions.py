@@ -118,7 +118,7 @@ def reported_runtimes(c, runner, profile, raw, meta=None):
 def may_see_accounts(auth, who, runner):
     """Who may read a computer's signed-in accounts (#610): an administrator or the computer's operator, as for
     /api/v2/operations; never a bot or another member."""
-    return who.role in ('human', 'owner') and (auth.bot_admin(who) or runner['operator'] == H.actor_id(who.actor))
+    return who.role in ('human', 'owner') and (auth.bot_admin(who) or runner['owner_id'] == H.actor_id(who.actor))
 
 
 def without_accounts(runtimes, windows=False):
@@ -242,7 +242,7 @@ def listing(c, auth, who, computer_rows):
         if who.role == 'bot' and not c.execute('SELECT 1 FROM assignments WHERE runner_id=? AND bot=?',
                                               (runner['id'], H.actor_id(who.actor))).fetchone():
             continue
-        operator = c.execute('SELECT operator FROM runners WHERE id=?', (runner['id'],)).fetchone()
+        operator = c.execute('SELECT owner_id FROM runners WHERE id=?', (runner['id'],)).fetchone()
         accounts = bool(operator) and may_see_accounts(auth, who, operator)
         computers.append({'runner_id': runner['id'], 'label': runner['label'],
                           'profiles': computer_profiles(c, runner, accounts)})
@@ -405,7 +405,7 @@ def install(app, store, auth, mutate, settings, computer_rows):
             auth.domain(who)
             runner = c.execute('SELECT * FROM runners WHERE id=? AND revoked_at IS NULL', (body.runner_id,)).fetchone()
             if not runner or not (who.role == 'human' or who.role == 'owner') or not (
-                    auth.bot_admin(who) or runner['operator'] == H.actor_id(who.actor)):
+                    auth.bot_admin(who) or runner['owner_id'] == H.actor_id(who.actor)):
                 raise Problem('forbidden', 'Only a computer operator or administrator can record weekly usage', 403)
             row = c.execute('SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?',
                             (body.runner_id, body.profile)).fetchone()

@@ -27,7 +27,7 @@ def test_overlap_wait_is_visible_and_reviewed_within_five_minutes_of_freeing(api
     with api.app.state.store.read() as c:
         mark = c.execute("SELECT detail FROM events WHERE action='job.recovery_wait' AND target=?", (attempt['id'],)).fetchone()
         assert json.loads(mark[0])['blocking_attempt'] == other['id']
-        assert json.loads(mark[0])['owner'] == H.KEEPER
+        assert json.loads(mark[0])['owner_id'] == H.KEEPER
     assert 'Tico owns recovery' in get(api, 'bots/ops/execution-review')['jobs'][0]['reason']
     assert sweep(api) == []
     with api.app.state.store.read() as c:
@@ -39,8 +39,8 @@ def test_overlap_wait_is_visible_and_reviewed_within_five_minutes_of_freeing(api
     assert job_state(api, attempt['job_id']) == 'uncertain'
     with api.app.state.store.read() as c:
         held = json.loads(c.execute("SELECT detail FROM events WHERE action='job.held' AND target=?", (attempt['id'],)).fetchone()[0])
-        assert held['owner'] == 'bot:botops' and held['reason']
-        assert c.execute("SELECT 1 FROM tasks WHERE owner='bot:botops' AND status='open'").fetchone()
+        assert held['owner_id'] == 'bot:botops' and held['reason']
+        assert c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()
     assert 'BotOps owns recovery' in get(api, 'bots/ops/execution-review')['jobs'][0]['reason']
 
 
@@ -60,7 +60,7 @@ def test_known_reset_keeps_new_person_messages_queued_or_uses_ready_fallback(api
     assert claim(api, machine, bot='ops') is None
     assert claim(api, machine, bot='ops') is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 1
     at(monkeypatch, '2026-10-19T02:40:00.000000Z', api)
     signed_in(api, machine, ['ops', 'finance'], [])
     assert claim(api, machine, bot='ops')
@@ -91,7 +91,7 @@ def test_interrupted_fallback_waits_for_reset_only_with_positive_empty_evidence(
     if evidence == 'approval':
         with api.app.state.store.transaction() as c:
             aid = H.new_id()
-            c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created_at,consumed_at) VALUES(?,?,?,?,?,?)',
+            c.execute('INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)',
                       (aid, 'spend', fallback['message']['id'], 'bot:ops', H.now(), H.now()))
             H.event(c, 'bot:ops', 'approval.consume', aid, {'kind': 'spend', 'attempt_id': fallback['id']})
     post(api, f"attempts/{fallback['id']}/events", {'events': [
@@ -134,7 +134,7 @@ def test_approval_consumer_attempt_overrides_request_message_association(api, th
     machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
     with api.app.state.store.transaction() as c:
         approval = H.new_id()
-        c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created_at,consumed_at) VALUES(?,?,?,?,?,?)',
+        c.execute('INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)',
                   (approval, 'spend', 'prior-request' if this_attempt else message['id'], 'bot:ops', H.now(), H.now()))
         token = H.RUN.set(attempt['id'] if this_attempt else 'different-attempt')
         try:
@@ -183,7 +183,7 @@ def test_no_fallback_ready_for_claim_persists_one_hold_until_named_reset(api, mo
         signed_in(api, machine, ['ops', 'finance'], ['codex'])
         assert claim(api, machine, bot='ops') is None
         with api.app.state.store.read() as c:
-            assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 2
+            assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 2
             assert tuple(c.execute('SELECT held,hold_until FROM jobs WHERE id=?',
                                    (fallback['job_id'],)).fetchone()) == (1, '2026-10-26T11:50:00.000000Z')
     if release == 'try-now':

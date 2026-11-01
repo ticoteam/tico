@@ -24,17 +24,17 @@ def source_db(tmp_path):
     with store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('morgan','Morgan','morgan@acme.example')")
         c.execute("INSERT INTO bots(id,slug,token_hash,state) VALUES('sales','sales','botsecret','active')")
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES('r1','mac','morgan','rh',?)", (now,))
-        c.execute("INSERT INTO enrollments(code_hash,operator,expires_at) VALUES('ch','morgan',?)", (now,))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','mac','morgan','rh',?)", (now,))
+        c.execute("INSERT INTO enrollments(code_hash,owner_id,expires_at) VALUES('ch','morgan',?)", (now,))
         c.execute("INSERT INTO conversations(id) VALUES('cv')")
         for mid, at in (("old", OLD), ("new", now), ("ran", now), ("ran-long-ago", OLD)):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
                       "VALUES(?,'cv','human:morgan','bot:sales','ask',?,?)", (mid, "Request " + mid, at))   # the trigger queues a job
         c.execute("UPDATE jobs SET state='completed' WHERE id IN ('ran','ran-long-ago')")
         # A run in progress, a finished run in the window, and a finished run from long ago.
         for aid, job, state, at, finished in (("live", "new", "running", now, None), ("done", "ran", "completed", now, now),
                                               ("gone", "ran-long-ago", "completed", OLD, OLD)):
-            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
+            c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
                       "VALUES(?,?,'sales','r1',1,?,?,?,?,?)", (aid, job, "hash-" + aid, state, now, at, finished))
             c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,1,'text','{}',?)",
                       (aid, at))
@@ -167,7 +167,7 @@ def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets
         c.execute("INSERT INTO webhooks(id,name,url,host,secret,secret_prev,created_by,created_at,updated_at) "
                   "VALUES('wh1','Acme CI','https://ci.acme.example/hook','ci.acme.example','whsec_live','whsec_old',"
                   "'human:morgan',?,?)", (now, now))
-        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow,version,created_at,created_by,"
+        c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
                   "updated_at) VALUES('auto_1','Morning check','person:morgan','schedule',1,'{}',1,?,'human:morgan',?)",
                   (now, now))
         c.execute("INSERT INTO automation_runs(id,automation_id,version,started_at,status) VALUES('run1','auto_1',1,?,"
@@ -195,7 +195,7 @@ def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets
 def test_a_dev_copy_cuts_old_audit_rows_and_keeps_the_audit_log_append_only(tmp_path):
     source = source_db(tmp_path)
     with closing(sqlite3.connect(source)) as c:
-        c.executemany("INSERT INTO audit_log(id,at,actor,object,before,after,via) VALUES(?,?,?,?,?,?,?)",
+        c.executemany("INSERT INTO audit_log(id,created_at,actor,object,before,after,via) VALUES(?,?,?,?,?,?,?)",
                       [("old", OLD, "human:morgan", "task_cap:1", None, "{}", None),
                        ("new", H.now(), "human:morgan", "task_cap:1", None, "{}", None)])
         c.commit()

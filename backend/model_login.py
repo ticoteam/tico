@@ -161,7 +161,7 @@ def view(row):
 def _operator(c, who, rid, auth=None):
     runner = _runner(c, rid)
     if not (who.role == "owner" or auth and auth.bot_admin(who)
-            or who.role == "human" and H.actor_id(who.actor) == runner["operator"]):
+            or who.role == "human" and H.actor_id(who.actor) == runner["owner_id"]):
         raise Problem("forbidden", "You cannot sign a model in on this computer", 403)
 
 
@@ -393,10 +393,10 @@ def _share_with(c, who, runner_ids, credential_id, here, runtime):
     for row in rows:
         subject = SHARED_WITH + row["id"]
         for other in c.execute("SELECT g.id FROM credential_grants g JOIN credentials cr ON cr.id=g.credential_id "
-                               "WHERE g.subject=? AND g.revoked IS NULL AND g.credential_id<>? AND cr.env IN (%s)"
+                               "WHERE g.subject=? AND g.revoked_at IS NULL AND g.credential_id<>? AND cr.env IN (%s)"
                                % ",".join("?" * len(allowed)), (subject, credential_id, *allowed)).fetchall():
-            c.execute("UPDATE credential_grants SET revoked=?, revoked_by=? WHERE id=?", (now, who.actor, other["id"]))
-        if not c.execute("SELECT 1 FROM credential_grants WHERE credential_id=? AND subject=? AND revoked IS NULL",
+            c.execute("UPDATE credential_grants SET revoked_at=?, revoked_by=? WHERE id=?", (now, who.actor, other["id"]))
+        if not c.execute("SELECT 1 FROM credential_grants WHERE credential_id=? AND subject=? AND revoked_at IS NULL",
                          (credential_id, subject)).fetchone():
             c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)",
                       (H.new_id(), credential_id, subject, who.actor, now))
@@ -460,7 +460,7 @@ def attach_shared_key(c, who, rid, runtime, credential_id, auth=None, vault=None
     require_admin(c, who, vault.admins)
     runner = _runner(c, rid)
     row = c.execute("SELECT * FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (credential_id,)).fetchone()
-    shared = row and c.execute("SELECT 1 FROM credential_grants WHERE credential_id=? AND revoked IS NULL AND "
+    shared = row and c.execute("SELECT 1 FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL AND "
                                "(subject=? OR subject LIKE ?)", (credential_id, COMPUTERS,
                                                                  computer_keys.SHARED_WITH + "%")).fetchone()
     if not shared or row["env"] not in computer_keys.names(runtime):
@@ -478,7 +478,7 @@ def shared_choices(c, runtime):
     from .credentials import COMPUTERS
     out = []
     for row in c.execute("SELECT cr.id, cr.name, cr.env, cr.preview, max(g.subject=?) AS every FROM credentials cr "
-                         "JOIN credential_grants g ON g.credential_id=cr.id AND g.revoked IS NULL "
+                         "JOIN credential_grants g ON g.credential_id=cr.id AND g.revoked_at IS NULL "
                          "WHERE cr.ciphertext IS NOT NULL AND (g.subject=? OR g.subject LIKE ?) GROUP BY cr.id "
                          "ORDER BY lower(cr.name), cr.id", (COMPUTERS, COMPUTERS, computer_keys.SHARED_WITH + "%")):
         if row["env"] in computer_keys.names(runtime):

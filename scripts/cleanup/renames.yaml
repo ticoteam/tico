@@ -2,7 +2,7 @@
 # in cleanup-spec.md. Do not edit by hand: change the tables in gen_map.py and regenerate.
 # `# CHECK` marks a name the integration owner should confirm before the map is frozen.
 base: 29fcaaf6e
-applied_waves: [1, 2]
+applied_waves: [1, 2, 2s, 2b, 3]
 tables: {}
 columns:
   agent_pairings.created: created_at

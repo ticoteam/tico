@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS invariant_state(
  check_id TEXT PRIMARY KEY, firing INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 0,
- examples TEXT NOT NULL DEFAULT '[]', checked_at TEXT, since TEXT, task_id TEXT);
+ examples TEXT NOT NULL DEFAULT '[]', checked_at TEXT, started_firing_at TEXT, task_id TEXT);
 CREATE INDEX IF NOT EXISTS invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running');
 CREATE INDEX IF NOT EXISTS invariants_doing ON tasks(updated_at) WHERE status='doing';
 CREATE INDEX IF NOT EXISTS invariants_open_approvals ON approvals(created_at) WHERE decision IS NULL;
@@ -81,10 +81,10 @@ def lease_overdue(c, ctx):
 def task_stuck(c, ctx):
     """A bot's task in progress (`doing`) with no job for it still owed work, and nothing changed on it for the hour.
     The live-job test is in the query, ahead of LIMIT, so busy old tasks cannot hide a stuck newer one."""
-    rows = c.execute(f"SELECT t.id FROM tasks t WHERE t.status='doing' AND t.owner LIKE 'bot:%' AND t.updated_at<? "
+    rows = c.execute(f"SELECT t.id FROM tasks t WHERE t.status='doing' AND t.owner_id LIKE 'bot:%' AND t.updated_at<? "
                      f"AND NOT EXISTS (SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
                      f"JOIN conversations cv ON cv.id=m.conversation_id "
-                     f"WHERE j.bot=substr(t.owner, 5) AND j.state IN ({','.join('?' * len(LIVE_JOBS))}) "
+                     f"WHERE j.bot_id=substr(t.owner_id, 5) AND j.state IN ({','.join('?' * len(LIVE_JOBS))}) "
                      f"AND {H.MESSAGE_TASK_SQL}=t.id) ORDER BY t.updated_at LIMIT ?",
                      (_ago(ctx, minutes=TASK_QUIET_MINUTES), *LIVE_JOBS, LIMIT)).fetchall()
     return [row["id"] for row in rows]
@@ -111,15 +111,15 @@ def owner_unreachable(c, ctx):
     # Every open ask's addressee and every undecided approval is read: the reachability test is in Python, so a
     # LIMIT before it could leave an unreachable owner behind reachable ones.
     open_ask = f"m.kind='ask' AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}"
-    targets = [row["to_actor"] for row in c.execute(f"SELECT DISTINCT m.to_actor FROM messages m WHERE {open_ask}")]
+    targets = [row["recipient_id"] for row in c.execute(f"SELECT DISTINCT m.recipient_id FROM messages m WHERE {open_ask}")]
     for actor in targets:
         if _unreachable(actor, people, bots):
             found += [row["id"] for row in c.execute(
-                f"SELECT m.id FROM messages m WHERE {open_ask} AND m.to_actor=? ORDER BY m.created_at LIMIT ?",
+                f"SELECT m.id FROM messages m WHERE {open_ask} AND m.recipient_id=? ORDER BY m.created_at LIMIT ?",
                 (actor, LIMIT))]
-    for row in c.execute("SELECT a.id, COALESCE(a.decision_owner, m.to_actor) AS owner FROM approvals a "
+    for row in c.execute("SELECT a.id, COALESCE(a.decision_owner, m.recipient_id) AS owner FROM approvals a "
                          "LEFT JOIN messages m ON m.id=a.message_id WHERE a.decision IS NULL ORDER BY a.created_at").fetchall():
-        if row["owner"] and _unreachable(row["owner"], people, bots):
+        if row["owner_id"] and _unreachable(row["owner_id"], people, bots):
             found.append(row["id"])
     return found[:LIMIT]
 
@@ -130,7 +130,7 @@ def refused_again(c, ctx):
     since = _ago(ctx, hours=24)
     found = []
     for bot_id, slug in c.execute("SELECT id, slug FROM bots ORDER BY slug LIMIT ?", (LIMIT,)).fetchall():
-        for row in c.execute("SELECT rule, count(*) AS n FROM refusals WHERE actor=? AND ts>=? "
+        for row in c.execute("SELECT rule, count(*) AS n FROM refusals WHERE actor=? AND created_at>=? "
                              "GROUP BY rule HAVING n>?", (f"bot:{bot_id}", since, REFUSALS_PER_DAY)).fetchall():
             found.append((row["n"], f"bot:{slug} {row['rule']} ({row['n']}x)"))
     return [text for _, text in sorted(found, reverse=True)][:LIMIT]
@@ -151,7 +151,7 @@ def webhook_stuck(c, ctx):
 
 def automation_overdue(c, ctx):
     rows = c.execute("SELECT id FROM automations WHERE deleted_at IS NULL AND enabled=1 AND trigger_type='schedule' "
-                     "AND next_due<? ORDER BY next_due LIMIT ?", (_ago(ctx, minutes=OVERDUE_MINUTES), LIMIT)).fetchall()
+                     "AND next_due_at<? ORDER BY next_due_at LIMIT ?", (_ago(ctx, minutes=OVERDUE_MINUTES), LIMIT)).fetchall()
     return [row["id"] for row in rows]
 
 
@@ -177,12 +177,12 @@ def long_holds(c, ctx):
     """Write-lock holds of LONG_HOLD_MS or more in the last hour (flight_events, kind long_hold), when there are more
     than LONG_HOLDS_PER_HOUR: the routes and code sites holding the one write lock, most holds first."""
     since = _hour_ago(ctx)
-    total = c.execute("SELECT count(*) FROM flight_events WHERE kind='long_hold' AND ts>=?", (since,)).fetchone()[0]
+    total = c.execute("SELECT count(*) FROM flight_events WHERE kind='long_hold' AND created_at>=?", (since,)).fetchone()[0]
     if total <= LONG_HOLDS_PER_HOUR:
         return []
     rows = c.execute("SELECT json_extract(detail,'$.route') AS route, json_extract(detail,'$.site') AS site, "
                      "count(*) AS n, max(json_extract(detail,'$.hold_s')) AS worst FROM flight_events "
-                     "WHERE kind='long_hold' AND ts>=? GROUP BY route, site ORDER BY n DESC LIMIT ?",
+                     "WHERE kind='long_hold' AND created_at>=? GROUP BY route, site ORDER BY n DESC LIMIT ?",
                      (since, LIMIT)).fetchall()
     return [f"{row['route'] or 'a background job'} at {row['site'] or 'an unknown site'}: {row['n']} holds, "
             f"longest {row['worst']:g} s" for row in rows]
@@ -193,7 +193,7 @@ def runner_errors(c, ctx):
     least RUNNER_MIN_REQUESTS requests (flight_requests: one row per minute, route and caller)."""
     marks = ",".join("?" * len(RUNNER_ROUTES))
     rows = c.execute(f"SELECT route, sum(n) AS n, sum(errors) AS errors FROM flight_requests "
-                     f"WHERE span=60 AND ts>=? AND route IN ({marks}) GROUP BY route",
+                     f"WHERE span=60 AND created_at>=? AND route IN ({marks}) GROUP BY route",
                      (_hour_ago(ctx), *RUNNER_ROUTES)).fetchall()
     return [f"{row['route']}: {row['errors']} of {row['n']} answered with a 5xx"
             for row in rows
@@ -205,13 +205,13 @@ def recorder_drops(c, ctx):
     measurement losing data, most on the bad days it exists to show."""
     since = _hour_ago(ctx)
     totals = c.execute("SELECT coalesce(sum(dropped),0) AS dropped, coalesce(sum(requests),0) AS requests "
-                       "FROM flight_process WHERE ts>=?", (since,)).fetchone()
+                       "FROM flight_process WHERE created_at>=?", (since,)).fetchone()
     dropped, taken = totals["dropped"], totals["requests"] + totals["dropped"]
     if dropped < DROPPED_MIN or dropped * 100 < DROPPED_PERCENT * taken:
         return []
-    rows = c.execute("SELECT ts, dropped FROM flight_process WHERE ts>=? AND dropped>0 ORDER BY dropped DESC LIMIT ?",
+    rows = c.execute("SELECT created_at, dropped FROM flight_process WHERE created_at>=? AND dropped>0 ORDER BY dropped DESC LIMIT ?",
                      (since, LIMIT)).fetchall()
-    return [f"{datetime.fromtimestamp(row['ts'], timezone.utc):%H:%M} UTC: {row['dropped']} dropped" for row in rows]
+    return [f"{datetime.fromtimestamp(row['created_at'], timezone.utc):%H:%M} UTC: {row['dropped']} dropped" for row in rows]
 
 
 CHECKS = (
@@ -320,7 +320,7 @@ def _apply(c, auth, check, hits, now):
     row = c.execute("SELECT * FROM invariant_state WHERE check_id=?", (check.id,)).fetchone()
     was = bool(row and row["firing"])
     task_id = row["task_id"] if row else None
-    since = row["since"] if row else None
+    since = row["started_firing_at"] if row else None
     if hits:
         if not was:
             since, task_id = now, None           # a new episode: one alert for it
@@ -331,9 +331,9 @@ def _apply(c, auth, check, hits, now):
         if was:
             _close(c, task_id)
         firing, task_id, since = 0, None, None
-    c.execute("INSERT INTO invariant_state(check_id,firing,count,examples,checked_at,since,task_id) "
+    c.execute("INSERT INTO invariant_state(check_id,firing,count,examples,checked_at,started_firing_at,task_id) "
               "VALUES(?,?,?,?,?,?,?) ON CONFLICT(check_id) DO UPDATE SET firing=excluded.firing, count=excluded.count, "
-              "examples=excluded.examples, checked_at=excluded.checked_at, since=excluded.since, "
+              "examples=excluded.examples, checked_at=excluded.checked_at, started_firing_at=excluded.started_firing_at, "
               "task_id=excluded.task_id",
               (check.id, firing, len(hits), json.dumps(hits[:EXAMPLES]), now, since, task_id))
 
@@ -383,7 +383,7 @@ def health_checks(c):
         count = row["count"]
         shown = f"{count}{'+' if count >= LIMIT else ''}"
         more = f" and {count - len(examples)} more" if count > len(examples) else ""
-        since = (row["since"] or "")[:16].replace("T", " ")
+        since = (row["started_firing_at"] or "")[:16].replace("T", " ")
         fixes = [{"label": "Open the alert", "href": "#/tasks/" + row["task_id"], "tab": "", "click": ""}] \
             if row["task_id"] else []
         out.append({"id": "invariant:" + check.id, "label": check.label, "status": "warn",

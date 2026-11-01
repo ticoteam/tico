@@ -8,7 +8,7 @@ from clients.hubcli import parser
 
 
 def task(api, title="Review the draft"):
-    return post(api, "tasks", {"owner": "ops", "title": title, "body": "Read the report."})["id"]
+    return post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Read the report."})["id"]
 
 
 def ask(who=None, other=True):
@@ -92,7 +92,7 @@ def test_a_file_answer_wakes_the_bot_with_the_structured_answer(api):
     assert 'approved "report.md" v1.' in answer["comment"]["body"]
     with api.app.state.store.read() as c:
         msg = H.message(c, answer["comment"]["id"])
-        assert msg["to_actor"] == "bot:ops"
+        assert msg["recipient_id"] == "bot:ops"
         assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (msg["id"],)).fetchone()
         question = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (fid,)).fetchone()[0]
         assert H.answers_to(c, [question])[question]["refs"]["answer"] == answer["answer"]
@@ -154,9 +154,9 @@ def test_requester_bot_can_open_person_uploads_and_adopted_legacy_ids(api):
     machine = runner(api)
     assign(api, machine, "coo")
     ready(api, machine, ["coo"])
-    post(api, "tasks", {"owner": "coo", "title": "Review a draft", "body": "Read the report."})
+    post(api, "tasks", {"owner_id": "coo", "title": "Review a draft", "body": "Read the report."})
     token = claim(api, machine, "coo")["token"]
-    tid = post(api, "tasks", {"owner": "ops", "title": "Review the draft", "body": "Read the report."}, token)["id"]
+    tid = post(api, "tasks", {"owner_id": "ops", "title": "Review the draft", "body": "Read the report."}, token)["id"]
     made = attach(api, tid)
     assert api.get(made["link"], headers=headers(token)).content == b"# Report"
     digest = api.app.state.blobs.put(b"old")
@@ -171,7 +171,7 @@ def test_requester_bot_can_open_person_uploads_and_adopted_legacy_ids(api):
     # Legacy blob ownership remains readable after a series changes scope.
     with api.app.state.store.transaction() as c:
         private = H.open_conversation(c, "human:ben", ["bot:ops"], scope="personal", room_key="ops")
-        c.execute("UPDATE bot_files SET scope=?,bot='inbox' WHERE id=?",
+        c.execute("UPDATE bot_files SET scope=?,bot_id='inbox' WHERE id=?",
                   ("conversation:" + private["id"], old["id"]))
         from backend.store import Problem
         with pytest.raises(Problem):
@@ -258,18 +258,18 @@ def test_the_person_a_bot_asked_wakes_it_with_their_answer(api):
     question = post(api, f"tasks/{tid}/comments", {"text": "Which draft?", "ask": ask("ben")}, token)["comment"]
     body = {"target": {"comment": question["id"]}, "answers": {"verdict": ["Approve"]}, "other": "Ship it."}
     answer = post(api, f"tasks/{tid}/answers", body, "ben-test")
-    assert answer["woke"] and answer["comment"]["to_actor"] == "bot:ops"
+    assert answer["woke"] and answer["comment"]["recipient_id"] == "bot:ops"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (answer["comment"]["id"],)).fetchone()
 
 
 def test_done_news_skips_a_bot_that_cannot_read_the_task(api):
-    parent = post(api, "tasks", {"owner": "ops", "title": "Plan the launch week", "body": "All of it."})["id"]
-    child = post(api, "tasks", {"owner": "inbox", "title": "Draft the launch mail", "body": "One page.",
+    parent = post(api, "tasks", {"owner_id": "ops", "title": "Plan the launch week", "body": "All of it."})["id"]
+    child = post(api, "tasks", {"owner_id": "inbox", "title": "Draft the launch mail", "body": "One page.",
                                 "relations": [{"task": parent, "kind": "parent"}]})["id"]
     version = get(api, f"tasks/{child}")["task"]["version"]
     post(api, f"tasks/{child}", {"version": version, "status": "done", "note": "Sent the draft."})
     with api.app.state.store.read() as c:
-        told = {r[0] for r in c.execute("SELECT to_actor FROM messages WHERE body LIKE '% marked this done:%' "
+        told = {r[0] for r in c.execute("SELECT recipient_id FROM messages WHERE body LIKE '% marked this done:%' "
                                         "AND json_extract(refs,'$.task')=?", (child,))}
     assert "bot:inbox" in told and "bot:ops" not in told, told

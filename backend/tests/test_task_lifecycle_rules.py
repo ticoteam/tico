@@ -40,7 +40,7 @@ class Case(unittest.TestCase):
 
     def wakes(self, target, task_id, text):
         return [r for r in self.conn.execute(
-            "SELECT body, refs FROM messages WHERE to_actor=? AND json_extract(refs,'$.task')=? "
+            "SELECT body, refs FROM messages WHERE recipient_id=? AND json_extract(refs,'$.task')=? "
             "AND body LIKE ?", (target, task_id, f"%{text}%"))]
 
 
@@ -50,7 +50,7 @@ class LeavingClosed(Case):
         H.task_close(self.conn, ANA, t["id"], note="Not now")
         H.task_update(self.conn, ANA, t["id"], status="done", note="It went out after all")
         row = H.task(self.conn, t["id"])
-        self.assertEqual((row["status"], row["closed_at"], row["closed_by"]), ("done", None, None))
+        self.assertEqual((row["status"], row["closed_at"], row["closed_by_id"]), ("done", None, None))
         self.assertIsNotNone(row["done_at"])
         self.assertEqual({f for (f,) in self.conn.execute(
             "SELECT field FROM task_events WHERE task_id=? AND new IS NULL", (t["id"],))}, {"closed_at", "closed_by"})
@@ -70,7 +70,7 @@ class LeavingClosed(Case):
         H.task_update(self.conn, ANA, done["id"], status="declined")
         for tid in (closed["id"], done["id"]):
             row = H.task(self.conn, tid)
-            self.assertEqual((row["status"], row["done_at"], row["closed_at"], row["closed_by"]),
+            self.assertEqual((row["status"], row["done_at"], row["closed_at"], row["closed_by_id"]),
                              ("declined", None, None, None))
 
     def test_closing_a_done_task_keeps_when_it_was_done(self):
@@ -79,7 +79,7 @@ class LeavingClosed(Case):
         done_at = H.task(self.conn, t["id"])["done_at"]
         H.task_close(self.conn, ANA, t["id"])
         row = H.task(self.conn, t["id"])
-        self.assertEqual((row["status"], row["done_at"], row["closed_by"]), ("closed", done_at, ANA))
+        self.assertEqual((row["status"], row["done_at"], row["closed_by_id"]), ("closed", done_at, ANA))
         self.assertIsNotNone(done_at)
 
     def test_start_clears_close_times_left_on_finished_tasks_once(self):
@@ -87,10 +87,10 @@ class LeavingClosed(Case):
         kept = self.make(ANA, "Draft the events post", CMO)
         H.task_update(self.conn, CMO, stuck["id"], status="done")
         H.task_close(self.conn, ANA, kept["id"])
-        self.conn.execute("UPDATE tasks SET closed_at='2026-10-04T16:17:20Z', closed_by=? WHERE id=?",
+        self.conn.execute("UPDATE tasks SET closed_at='2026-10-04T16:17:20Z', closed_by_id=? WHERE id=?",
                           (ANA, stuck["id"]))      # as an old move out of closed left it
         self.assertEqual(H.clear_finished_close_times(self.conn), [stuck["id"]])
-        self.assertEqual((H.task(self.conn, stuck["id"])["closed_at"], H.task(self.conn, stuck["id"])["closed_by"]),
+        self.assertEqual((H.task(self.conn, stuck["id"])["closed_at"], H.task(self.conn, stuck["id"])["closed_by_id"]),
                          (None, None))
         self.assertIsNotNone(H.task(self.conn, kept["id"])["closed_at"], "a closed task keeps its close time")
         self.assertEqual(H.clear_finished_close_times(self.conn), [])
@@ -177,9 +177,9 @@ class Renaming(Case):
 class Ownership(Case):
     def test_the_same_owner_in_another_form_is_no_reassignment(self):
         t = self.make(ANA, "Draft the launch post", CMO)
-        before = self.conn.execute("SELECT count(*) FROM messages WHERE to_actor=?", (CMO,)).fetchone()[0]
+        before = self.conn.execute("SELECT count(*) FROM messages WHERE recipient_id=?", (CMO,)).fetchone()[0]
         H.task_update(self.conn, BEN, t["id"], owner="cmo")
-        self.assertEqual(self.conn.execute("SELECT count(*) FROM messages WHERE to_actor=?", (CMO,)).fetchone()[0],
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM messages WHERE recipient_id=?", (CMO,)).fetchone()[0],
                          before)
         self.assertFalse(self.conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='owner'",
                                            (t["id"],)).fetchone())
@@ -188,8 +188,8 @@ class Ownership(Case):
         t = self.make(CMO, "Draft the launch post", SEO)
         H.task_close(self.conn, ANA, t["id"], note="Not needed")
         self.refused("close", H.task_update, self.conn, CMO, t["id"], owner="legal")
-        self.assertEqual(H.task(self.conn, t["id"])["owner"], SEO)
+        self.assertEqual(H.task(self.conn, t["id"])["owner_id"], SEO)
         self.assertEqual(self.wakes(LEGAL, t["id"], "Open:"), [])
         own = self.make(CMO, "Draft the pricing post", SEO)
         H.task_close(self.conn, CMO, own["id"])
-        self.assertEqual(H.task_update(self.conn, CMO, own["id"], owner="legal")["owner"], LEGAL)
+        self.assertEqual(H.task_update(self.conn, CMO, own["id"], owner="legal")["owner_id"], LEGAL)

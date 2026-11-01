@@ -154,7 +154,7 @@ def live_turn(c, task_id, owner, memo=None):
     a bot the task has since moved away from, neither holds the tree nor shields it from the setup deadline."""
     if not task_id or not H.is_bot(owner or ''):
         return False
-    task = c.execute('SELECT owner FROM tasks WHERE id=?', (task_id,)).fetchone()
+    task = c.execute('SELECT owner_id FROM tasks WHERE id=?', (task_id,)).fetchone()
     if not task or task[0] != owner:
         return False
     memo = {} if memo is None else memo
@@ -167,7 +167,7 @@ def live_turn(c, task_id, owner, memo=None):
 def _live_tasks(c, bot, memo):
     from .task_privacy import attempt_tasks
     try:
-        rows = c.execute("SELECT id FROM attempts WHERE bot=? AND state IN ('leased','running')", (bot,)).fetchall()
+        rows = c.execute("SELECT id FROM attempts WHERE bot_id=? AND state IN ('leased','running')", (bot,)).fetchall()
     except sqlite3.OperationalError as exc:
         if 'no such table' not in str(exc):
             raise                   # a fault must not release a checkout under its running turn
@@ -179,7 +179,7 @@ def live_turn_cache(c, computer):
     """Prepare provenance without the write lock; the caller validates its source clock before using it."""
     from . import provenance_clock
     memo = {("provenance_clock",): provenance_clock.current(c)}
-    owners = {row['owner'] for row in inventory(c, computer) if H.is_bot(row['owner'] or '')}
+    owners = {row['owner_id'] for row in inventory(c, computer) if H.is_bot(row['owner_id'] or '')}
     for owner in owners:
         memo[("live_turn", owner)] = _live_tasks(c, H.actor_id(owner), memo)
     return memo
@@ -266,7 +266,7 @@ def expire_pending(c, row, detail):
         waits._finish(c, wait, 'failed', reason)
     retry = ('hub task worktree setup ' if checked_out(detail) else 'hub task worktree add ') + (row['repo'] or '')
     if row.get('bot_state', 'active') == 'active':
-        H._wake(c, H.task(c, row['task_id']), row['owner'],
+        H._wake(c, H.task(c, row['task_id']), row['owner_id'],
                 f"Tico stopped preparing this task's {row['repo'] or ''} worktree at {row['path']}: {reason}. Its place "
                 f"stays this task's; run `{retry}` to try again on the same worktree.",
                 refs={'wake': 'blocker'}, trigger='other', source=row['id'])
@@ -277,7 +277,7 @@ def held_reason(c, row, detail, memo=None):
     fix-forward or review fix starting), or its pushed branch has moved past the head of the last finished pull
     request on it (fix-forward commits after a merge). Both clear on their own: the turn ends, or a new pull request
     carries the commits and finishes."""
-    if live_turn(c, row['task_id'], row.get('owner'), memo):
+    if live_turn(c, row['task_id'], row.get('owner_id'), memo):
         return 'held: live turn'
     last = c.execute("SELECT number,detail,coalesce(pr_merged_at,updated_at) AS finished_at FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
                      f"AND branch=? AND state IN {PR_FINISHED} ORDER BY coalesce(pr_merged_at,updated_at,created_at) DESC LIMIT 1",
@@ -304,8 +304,8 @@ def held_reason(c, row, detail, memo=None):
 def inventory(c, computer):
     if not supported(c):
         return []
-    owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner END)"
-    return [dict(r) for r in c.execute(f"SELECT l.*,{owner} AS owner,t.status AS task_status,"
+    owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner_id END)"
+    return [dict(r) for r in c.execute(f"SELECT l.*,{owner_id} AS owner_id,t.status AS task_status,"
             "coalesce(b.state,'active') AS bot_state FROM task_links l JOIN tasks t ON t.id=l.task_id "
             # 'bot:'||slug = owner exactly when owner starts with 'bot:' and slug = its rest. Written that way the
             # join seeks bots' slug key; the expression form scanned every bot for each worktree link kept.
@@ -319,7 +319,7 @@ def attached(c, task_id, computer, bot):
     task turn carries them (backend/execution.py) so the runner adds each to the session with its repo's rules."""
     if not supported(c) or not task_id or not computer:
         return []
-    owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner END)"
+    owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner_id END)"
     rows = c.execute(f"SELECT l.repo,l.branch,l.path,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id "
                      f"WHERE l.task_id=? AND l.kind='worktree' AND l.computer_id=? AND l.state='present' AND {owner}=? "
                      "ORDER BY l.created_at", (task_id, computer, "bot:" + bot)).fetchall()
@@ -353,7 +353,7 @@ def holdings(c, owner):
     or `in_progress`. A worktree the computer kept says why in `kept`."""
     rows = c.execute("SELECT l.id,l.task_id,l.path,l.repo,l.branch,l.detail,l.created_at,coalesce(l.updated_at,l.created_at) AS updated_at,t.title,t.status FROM task_links l "
                      "JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' "
-                     "AND coalesce(json_extract(l.detail,'$.owner'),t.owner)=? ORDER BY l.created_at", (owner,)).fetchall()
+                     "AND coalesce(json_extract(l.detail,'$.owner'),t.owner_id)=? ORDER BY l.created_at", (owner,)).fetchall()
     out = []
     for row in rows:
         prs = c.execute("SELECT url,state,review_state,checks,mergeable,created_at,pr_merged_at,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
@@ -402,7 +402,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
             continue
         if report.repo and row['repo'] is None:
             connection = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
-            grants = R.access(c, H.actor_id(row['owner']), connection['org'] if connection else default_org)['effective']
+            grants = R.access(c, H.actor_id(row['owner_id']), connection['org'] if connection else default_org)['effective']
             grant = next((r for r in grants if r['full_name'].lower() == report.repo.lower() and r['access'] == 'write'), None)
             if connection and not grant:
                 c.execute("UPDATE task_links SET state='unknown',detail=?,updated_at=? WHERE id=?",
@@ -470,7 +470,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
                 if since and not detail.get(key) and (datetime.now(timezone.utc) - datetime.fromisoformat(since.replace('Z', '+00:00'))).total_seconds() >= days * 86400:
                     task = H._one(c, "SELECT * FROM tasks WHERE id=?", (row['task_id'],))
                     if task['status'] not in CLOSED:
-                        H._wake(c, task, task['owner'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
+                        H._wake(c, task, task['owner_id'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
                         detail[key] = True
         # A stamped report is stale when the record was added, attached, re-queued or patched after the
         # computer read it; heartbeat writes don't count, or a busy worktree's reports would always be stale.
@@ -587,7 +587,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         if (row['state'] == 'pending' and not closed and not released and not detail.get('pending_expired')
                 and detail.get('checkout_state') != 'setup_failed'
                 and H.shift(row['updated_at'] or row['created_at'], hours=PENDING_HOURS) < H.now()
-                and not live_turn(c, row['task_id'], row['owner'], live_tasks)):
+                and not live_turn(c, row['task_id'], row['owner_id'], live_tasks)):
             expire_pending(c, row, detail)
         if released and not detail.get('release_requested'):
             detail['release_requested'] = True
@@ -627,7 +627,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
             c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), row['id']))
         if action and (action == 'remove' or row['repo'] and row['branch']):
             actions.append({'link_id': row['id'], 'action': action, 'branch': row['branch'], 'path': row['path'],
-                            'task_id': row['task_id'], 'repo': row['repo'], 'owner': H.actor_id(row['owner']),
+                            'task_id': row['task_id'], 'repo': row['repo'], 'owner_id': H.actor_id(row['owner_id']),
                             'prs_finished': bool(prs) and finished, **({'release': True} if released else {}),
                             **({'cleanup_retry_generation': detail['cleanup_retry_generation']}
                                if action == 'remove' and detail.get('cleanup_retry_generation') else {})})
@@ -642,7 +642,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     that refusal."""
     if not supported(c):
         raise Problem('worktrees_unavailable', 'The server is too old for task worktrees', 409)
-    bot = H.actor_id(task['owner'])
+    bot = H.actor_id(task['owner_id'])
     connection = c.execute("SELECT * FROM github_app WHERE id='app'").fetchone()
     org = connection['org'] if connection else default_org
     grants = R.access(c, bot, org)['effective']
@@ -658,7 +658,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     if not assigned or not readiness_document(assigned['readiness']).get('worktrees'):
         raise Problem('computer_update', 'Update this computer to use task worktrees', 409)
     if (who.role == 'bot' and who.runner_id != assigned['id']
-            and not (who.actor != task['owner'] and H.task_represents(c, who.actor, task['owner']))):
+            and not (who.actor != task['owner_id'] and H.task_represents(c, who.actor, task['owner_id']))):
         raise Problem('forbidden', 'Worktree belongs on the bot\'s computer', 403)
     attaching = path is not None
     short = task['id'][:8]
@@ -672,15 +672,15 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
     suffix = ''
     if existing and not attaching and existing['task_id'] == task['id']:
-        owner = json.loads(existing['detail'] or '{}').get('owner', task['owner'])
-        if owner != task['owner'] and existing['state'] != 'removed':
+        owner = json.loads(existing['detail'] or '{}').get('owner_id', task['owner_id'])
+        if owner != task['owner_id'] and existing['state'] != 'removed':
             suffix = '-' + ((H.bot(c, bot) or {}).get('slug') or bot)   # a folder name people read: the slug now
             path = relative(path + suffix)
             canonical = unicodedata.normalize('NFC', path).casefold()
             existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
     if existing:
-        owner = json.loads(existing['detail'] or '{}').get('owner', task['owner'])
-        if existing['task_id'] != task['id'] or existing['path'] != path or owner != task['owner'] and existing['state'] != 'removed':
+        owner = json.loads(existing['detail'] or '{}').get('owner_id', task['owner_id'])
+        if existing['task_id'] != task['id'] or existing['path'] != path or owner != task['owner_id'] and existing['state'] != 'removed':
             raise Problem('worktree_path', 'This worktree belongs to another task', 409)
         if existing['state'] != 'removed':
             detail = json.loads(existing['detail'] or '{}')
@@ -710,11 +710,11 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     # A new or restored tree only for work a coding step can run on now; an existing one is still answered above.
     if why := start_refusal(c, task):
         raise Problem('worktree_start', why, 409)
-    count = c.execute("SELECT count(*) FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(json_extract(l.detail,'$.owner'),t.owner)=? AND coalesce(l.state,'unknown')<>'removed'", (task['owner'],)).fetchone()[0]
+    count = c.execute("SELECT count(*) FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(json_extract(l.detail,'$.owner'),t.owner_id)=? AND coalesce(l.state,'unknown')<>'removed'", (task['owner_id'],)).fetchone()[0]
     if count >= LIMIT and brief:
         raise Problem('worktree_limit', f'This bot already has {LIMIT} worktrees.', 409, extra={'limit': LIMIT})
     if count >= LIMIT:
-        held = holdings(c, task['owner'])
+        held = holdings(c, task['owner_id'])
         # Worded so a bot never removes a worktree by hand: finished ones free themselves.
         detail = f'This bot already has {LIMIT} worktrees.'
         merge = [w['path'] for w in held if w['clear'] == 'merge_ready']
@@ -740,7 +740,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                     'pending_expired', 'error', 'held'):
             detail.pop(key, None)
         detail['allocation_started'] = H.now()
-        detail['owner'] = task['owner']
+        detail['owner'] = task['owner_id']
         detail.update(checkout_state='attached_pending' if attaching else 'queued', setup_pending=not attaching)
         detail.pop('expected_head', None)
         detail.pop('checkout_target', None)
@@ -762,7 +762,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch,computer_id,path,updated_at) VALUES(?,?,'worktree',?,?,'pending',?,?,?,?,?,?,?)",
               (link, task['id'], 'worktree:' + link, repo or 'Worktree', who.actor, now, repo, branch, assigned['id'], path, now))
     c.execute('UPDATE task_links SET detail=? WHERE id=?',
-              (json.dumps({'owner': task['owner'], 'checkout_state': 'attached_pending' if attaching else 'queued',
+              (json.dumps({'owner': task['owner_id'], 'checkout_state': 'attached_pending' if attaching else 'queued',
                            'setup_pending': not attaching, 'record_changed': now}), link))
     return {'link_id': link, 'branch': branch, 'path': path, 'state': 'pending',
             'checkout_state': 'attached_pending' if attaching else 'queued', 'setup_pending': not attaching,
@@ -775,7 +775,7 @@ def install(app, store, auth, mutate):
         task_id = auth.resolve_task(c, who, tid)
         row = auth.task(c, who, task_id)
         human = who.role == 'owner' or who.role == 'human' and H.can_move(c, who.actor)
-        if not H.is_bot(row['owner']) or not (human or H.task_represents(c, who.actor, row['owner'])):
+        if not H.is_bot(row['owner_id']) or not (human or H.task_represents(c, who.actor, row['owner_id'])):
             raise Problem('forbidden', "Only the task's owner bot, its managers or a human mover manages its worktrees", 403)
         return row
 
@@ -906,7 +906,7 @@ def install(app, store, auth, mutate):
             fields['updated_at'] = now
             c.execute('UPDATE task_links SET ' + ','.join(k + '=?' for k in fields) + ' WHERE id=?', (*fields.values(), link_id))
             # A worktree set up, failed or removed may be what a waiting task needs, or the place it waits for.
-            owner = detail.get('owner') or H.task(c, task_id)['owner']
+            owner = detail.get('owner') or H.task(c, task_id)['owner_id']
             waits.serve(c, [owner], store.settings.github_owner)
             # Only a computer or its bot changes a link here: the answer keeps the runner wire's names (backend/runner_wire.py).
             return runner_wire.worktree(dict(c.execute('SELECT * FROM task_links WHERE id=?', (link_id,)).fetchone()))
@@ -924,7 +924,7 @@ def install(app, store, auth, mutate):
                 raise Problem('not_found', 'No worktree on this computer', 404)
             if not link['repo']:
                 raise Problem('worktree_repo', 'Repository not identified yet', 409)
-            assigned = c.execute('SELECT 1 FROM assignments WHERE bot=? AND runner_id=?', (H.actor_id(link['owner']), who.runner_id)).fetchone()
+            assigned = c.execute('SELECT 1 FROM assignments WHERE bot=? AND runner_id=?', (H.actor_id(link['owner_id']), who.runner_id)).fetchone()
             detail = json.loads(link['detail'] or '{}')
             closed = link['task_status'] in CLOSED or link['bot_state'] == 'archived' or detail.get('delete_requested')
             prs = [r[0] for r in c.execute("SELECT state FROM task_links WHERE task_id=? AND kind='pr'", (link['task_id'],))]
@@ -937,7 +937,7 @@ def install(app, store, auth, mutate):
             connection = service.row(c)
             if not connection:
                 return {'configured': False, 'token': None}
-            grants = R.access(c, H.actor_id(link['owner']), connection['org'])['effective']
+            grants = R.access(c, H.actor_id(link['owner_id']), connection['org'])['effective']
             if not any(r['full_name'].lower() == link['repo'].lower() and r['access'] == 'write' for r in grants):
                 raise Problem('forbidden', 'This bot needs write access to save its worktree', 403)
         value, expires = service.mint([link['repo']], {'contents': 'write', 'metadata': 'read'})
@@ -958,20 +958,20 @@ def install(app, store, auth, mutate):
                 if item.task.startswith(sessions.PRIVATE_FOLDER):
                     # A private meeting's own checkout (clients/sessions.py PRIVATE_LANE): done once the meeting ends.
                     conv = item.task[len(sessions.PRIVATE_FOLDER):]
-                    if c.execute("SELECT 1 FROM attempts WHERE runner_id=? AND bot=? AND lane=?",
+                    if c.execute("SELECT 1 FROM attempts WHERE runner_id=? AND bot_id=? AND lane=?",
                                  (who.runner_id, item.bot, sessions.private_lane(conv))).fetchone():
                         room = c.execute("SELECT room_key FROM conversations WHERE id=?", (conv,)).fetchone()
                         key = (room["room_key"] if room else "") or ""
                         meeting = key.startswith(ROOM_PREFIX) and c.execute(
                             "SELECT state FROM live_meetings WHERE id=?", (key[len(ROOM_PREFIX):],)).fetchone()
-                        out.append({'bot': item.bot, 'task': item.task,
+                        out.append({'bot_id': item.bot, 'task': item.task,
                                     'status': 'open' if meeting and meeting['state'] != 'ended' else 'done'})
                     continue
                 row = c.execute("SELECT t.status FROM tasks t WHERE t.id=? AND EXISTS (SELECT 1 FROM attempts a "
-                                "WHERE a.runner_id=? AND a.bot=? AND a.lane=?)",
+                                "WHERE a.runner_id=? AND a.bot_id=? AND a.lane=?)",
                                 (item.task, who.runner_id, item.bot, 'task:' + item.task)).fetchone()
                 if row:
-                    out.append({'bot': item.bot, 'task': item.task, 'status': row['status']})
+                    out.append({'bot_id': item.bot, 'task': item.task, 'status': row['status']})
             return {'sessions': out}
 
     @app.get('/api/v2/runners/me/worktrees')

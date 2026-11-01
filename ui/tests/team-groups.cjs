@@ -42,7 +42,7 @@ async function open(browser, me, branches = false) {
   const groups = [{id: 'marketing', name: 'Marketing', parent: ''}, {id: 'seo', name: 'SEO', parent: 'marketing'},
                   {id: 'sales', name: 'Sales', parent: ''}];
   const bot = (name, display_name, team, org_parent, extra = {}) => ({name, display_name, team, org_parent, host: 'keeper',
-    status: 'active', state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], operator: 'ana', revision: 1, ...extra});
+    status: 'active', state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], owner_id: 'ana', revision: 1, ...extra});
   const bots = [
     bot('cmo', 'CMO', 'marketing', 'p:ben', {reports_to: 'human:ben'}),
     bot('writer', 'Writer', 'seo', 'b:cmo', {reports_to: 'cmo'}),
@@ -52,10 +52,10 @@ async function open(browser, me, branches = false) {
     bot('channel', 'Channel Inbox', 'marketing', 'b:botops', {helper: true}),
   ];
   if (branches) bots.push(
-    bot('cmo-ben', 'CMO', 'marketing', 'p:ben', {shared_from: 'cmo', operator: 'ben'}),
-    bot('cmo-ana', 'CMO', 'marketing', 'p:ana', {shared_from: 'cmo', operator: 'ana'}),
-    bot('cmo-limited', 'CMO', 'marketing', 'p:ben', {is_branch: true, operator: 'ben', my_access: {see: true, read: false, write: false}}),
-    bot('cmo-unknown', 'CMO', 'marketing', 'p:ben', {shared_from: 'cmo', operator: null}),
+    bot('cmo-ben', 'CMO', 'marketing', 'p:ben', {shared_from: 'cmo', owner_id: 'ben'}),
+    bot('cmo-ana', 'CMO', 'marketing', 'p:ana', {shared_from: 'cmo', owner_id: 'ana'}),
+    bot('cmo-limited', 'CMO', 'marketing', 'p:ben', {is_branch: true, owner_id: 'ben', my_access: {see: true, read: false, write: false}}),
+    bot('cmo-unknown', 'CMO', 'marketing', 'p:ben', {shared_from: 'cmo', owner_id: null}),
   );
   const seats = [];
   const seatView = seat => ({...seat, kind: 'seat', stage: 'recruiting', can_edit: true,

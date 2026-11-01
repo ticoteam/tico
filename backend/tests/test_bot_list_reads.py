@@ -23,14 +23,14 @@ SEE_ONLY = ("slug", "display_name", "state", "description", "team", "operator", 
 def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registry_entries, who):
     """The bot list's row as it was read before backend/bot_rows.py: one bot at a time."""
     row = {k: v for k, v in bot.items() if k not in ("token_hash", "cwd", "thread_id")}
-    config = c.execute("SELECT team,operator,owner_ids,revision,description,reports_to,repo,"
+    config = c.execute("SELECT team,owner_id,owner_ids,revision,description,reports_to,repo,"
                        "thread_mode,config,onboarding_state FROM bot_config WHERE bot=?", (bot["slug"],)).fetchone()
-    assignment = c.execute("SELECT a.bot,a.runner_id,a.generation,r.label,r.operator,r.last_seen_at,"
+    assignment = c.execute("SELECT a.bot,a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,"
                            "r.revoked_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
                            "WHERE a.bot=?", (bot["slug"],)).fetchone() if level["read"] else None
     row["access"] = level
     row["team"] = config["team"] if config else None
-    row["operator"] = config["operator"] if config else None
+    row["owner_id"] = config["owner_id"] if config else None
     row["revision"] = config["revision"] if config else None
     row["onboarding_state"] = (config["onboarding_state"] or "") if config else ""
     row["stage"] = lifecycle.stage(row["onboarding_state"])
@@ -122,7 +122,7 @@ def add_bots(api, extra):
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in (*BASE, *extra)}
         H.sync_registry(c, bots, {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for slug, config in extra.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
                       (slug, encode({**bots[slug], **config}), None, "ana"))
 
 
@@ -145,9 +145,9 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     for bot in ("ops", "finance"):
         T.assign(api, r, bot)
     T.ready(api, r, ["ops", "finance"])
-    secret = T.post(api, "tasks", {"owner": "ops", "title": "Secret", "body": "x", "private": True})
-    T.post(api, "tasks", {"owner": "finance", "title": "Open", "body": "y"})
-    bens = T.post(api, "tasks", {"owner": "finance", "title": "Ben's", "body": "z", "private": True}, token="ben-test")
+    secret = T.post(api, "tasks", {"owner_id": "ops", "title": "Secret", "body": "x", "private": True})
+    T.post(api, "tasks", {"owner_id": "finance", "title": "Open", "body": "y"})
+    bens = T.post(api, "tasks", {"owner_id": "finance", "title": "Ben's", "body": "z", "private": True}, token="ben-test")
     T.post(api, "chat/ops", {"text": "hello"})
     T.post(api, "chat/finance", {"text": "hi"}, token="ben-test")
     with store.transaction() as c:
@@ -158,13 +158,13 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
         c.execute("INSERT INTO bot_status(bot,state,focus,task_id,last_result,open_tasks,needs_human) "
                   "VALUES('ops','running','the secret',?,'done',1,1)", (secret["id"],))
         c.execute("INSERT INTO bot_status(bot,state,focus,open_tasks,needs_human) VALUES('finance','idle','',2,2)")
-        cid = c.execute("SELECT conversation_id FROM messages WHERE to_actor='bot:ops' LIMIT 1").fetchone()[0]
+        cid = c.execute("SELECT conversation_id FROM messages WHERE recipient_id='bot:ops' LIMIT 1").fetchone()[0]
         for kind, refs in (("ask", {"task": bens["id"], "questions": []}), ("notice", {"task": bens["id"]})):
             mid = H.new_id()
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                       "VALUES(?,?,?,?,?,?,?,?)", (mid, cid, "bot:finance", "human:ben", kind, "?", encode(refs), H.now()))
             if kind == "notice":
-                c.execute("INSERT INTO approvals(id,kind,task_id,message_id,requested_by,created_at) VALUES(?,?,?,?,?,?)",
+                c.execute("INSERT INTO approvals(id,kind,task_id,message_id,requested_by_id,created_at) VALUES(?,?,?,?,?,?)",
                           (H.new_id(), "spend", bens["id"], mid, "bot:finance", H.now()))
         c.execute("INSERT INTO chat_goals(id,conversation_id,bot,objective,status,set_by,set_at,updated_at) "
                   "VALUES('g1',?,'ops','Ship it','active','human:ana',?,?)", (cid, H.now(), H.now()))
@@ -297,7 +297,7 @@ def test_status_task_read_seeks_each_bots_tasks_on_a_big_task_table(api):
     bots = [f"t{n:02d}" for n in range(60)]
     add_bots(api, {slug: {} for slug in bots})
     with store.transaction() as c:
-        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,created_at,updated_at,private) "
+        c.executemany("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), "Old", "Done.", "human:ana", "bot:" + bots[n % 60],
                         "done" if n % 9 else "open", H.now(), H.now(), 0) for n in range(4000)])
@@ -320,7 +320,7 @@ def test_status_private_tasks_are_read_from_an_index_holding_their_status(api):
     bots = [f"t{n:02d}" for n in range(60)]
     add_bots(api, {slug: {} for slug in bots})
     with store.transaction() as c:
-        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,created_at,updated_at,private) "
+        c.executemany("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), "Old", "Done.", "human:ana", "bot:" + bots[n % 60],
                         "done" if n % 9 else "open", H.now(), H.now(), int(n % 5 == 0)) for n in range(4000)])

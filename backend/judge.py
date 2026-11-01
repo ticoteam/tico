@@ -203,9 +203,9 @@ def cost_usd(settings, model, usage):
 # reads the whole month again.
 _SPEND, _SPEND_LOCK = {}, threading.Lock()
 MONTH_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max(rowid) FROM events "
-                   "WHERE ts>=? AND action=?")
+                   "WHERE created_at>=? AND action=?")
 NEW_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max(rowid) FROM events "
-                 "WHERE rowid>? AND +ts>=? AND +action=?")
+                 "WHERE rowid>? AND +created_at>=? AND +action=?")
 # A budget is the settings field holding its monthly cap and the event action its spend rows are written as. Decide's
 # own is the default; org rule checks keep a separate one (backend/org_rule_check.py), so neither can spend the other's.
 DECIDE_BUDGET = ("decisions_monthly_usd", "judge.spend")
@@ -552,7 +552,7 @@ def used_today(c, actor, at=None, action="judge.call", target=None):
     elif actor == H.KEEPER and action == "judge.call":
         where, args = " AND target NOT LIKE ?", [*args, RULES_TARGET]
     # The actor's own rows, counted in the index (events_task_origin), not every actor's today (events_action_ts).
-    return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND ts>=?"
+    return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND created_at>=?"
                      + where, args).fetchone()[0]
 
 

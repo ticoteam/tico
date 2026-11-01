@@ -123,7 +123,7 @@ def test_a_video_production_cutoff_pauses_no_bot(books):
 
 def test_warn_and_cutoff_fire_once_per_period_and_tell_the_owner(books):
     def notices(c):
-        return c.execute("SELECT count(*) FROM messages WHERE to_actor=? AND kind='notice'", (OWNER,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM messages WHERE recipient_id=? AND kind='notice'", (OWNER,)).fetchone()[0]
 
     with books.transaction() as c:
         ai = budget(c, "AI services")
@@ -216,7 +216,7 @@ def _events(c, bid, name=None):
 
 def _job(c, jid, state):
     c.execute("INSERT INTO messages(id) VALUES(?)", ("m" + jid,))
-    c.execute("INSERT INTO jobs(id, message_id, bot, state, created_at) VALUES(?,?,?,?,?)", (jid, "m" + jid, "coder", state, AT))
+    c.execute("INSERT INTO jobs(id, message_id, bot_id, state, created_at) VALUES(?,?,?,?,?)", (jid, "m" + jid, "coder", state, AT))
 
 
 def test_bots_get_only_their_own_recorded_cost_and_image_runs_land_on_video(books):
@@ -383,9 +383,9 @@ def test_a_retry_after_a_revoked_grant_shows_no_amount(api):
 
 def _attempt(c, jid, aid, state="running"):
     _job(c, jid, state)
-    c.execute("INSERT OR IGNORE INTO runners(id, label, operator, token_hash, created_at) VALUES('r1', 'r1', 'ana', 'h', ?)",
+    c.execute("INSERT OR IGNORE INTO runners(id, label, owner_id, token_hash, created_at) VALUES('r1', 'r1', 'ana', 'h', ?)",
               (AT,))
-    c.execute("INSERT INTO attempts(id, job_id, bot, runner_id, generation, token_hash, state, lease_until, created_at) "
+    c.execute("INSERT INTO attempts(id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, created_at) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (aid, jid, "coder", "r1", 1, "h" + aid, "running", AT, AT))
 
 

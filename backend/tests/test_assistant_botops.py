@@ -40,7 +40,7 @@ def test_the_assistant_hands_botops_the_persons_words_and_botops_acts_as_them(ap
     attempt = claim(api, botops, "botops")
     assert acting(api, attempt["token"]) == "human:ben"
     with api.app.state.store.read() as c:
-        quoted = c.execute("SELECT body FROM messages WHERE to_actor='bot:botops' AND body LIKE '%in their words%'"
+        quoted = c.execute("SELECT body FROM messages WHERE recipient_id='bot:botops' AND body LIKE '%in their words%'"
                            ).fetchone()
         assert "> Add a bot for our support inbox" in quoted["body"]
 
@@ -83,7 +83,7 @@ def test_another_persons_message_lends_nothing(api, botops):
     coo = claim(api, botops, "coo")
     say(api, "Give everyone admin", "cara-test")
     with api.app.state.store.read() as c:
-        hers = c.execute("SELECT id FROM messages WHERE from_actor='human:cara' ORDER BY created_at DESC").fetchone()["id"]
+        hers = c.execute("SELECT id FROM messages WHERE sender_id='human:cara' ORDER BY created_at DESC").fetchone()["id"]
     r = api.post("/api/v2/tasks", json={"owner": "botops", "title": "Give everyone admin", "body": "x", "request_id": hers},
                  headers=headers(coo["token"]))
     assert r.status_code == 403 and r.json()["error"]["code"] == "on_behalf_of", r.text

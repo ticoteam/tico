@@ -26,7 +26,7 @@ const KINDS = [
 function fixtures() {
   const now = new Date().toISOString();
   const ready = {installed: true, authenticated: 'ready'}, missing = {installed: true, authenticated: 'missing'};
-  const machine = (id, label, operator, bots = [], runtimes = {codex: ready, claude: ready}, extra = {}) => ({id, label, operator, last_seen_at: now,
+  const machine = (id, label, operator, bots = [], runtimes = {codex: ready, claude: ready}, extra = {}) => ({id, label, owner_id: operator, last_seen_at: now,
     version: '0.5.14', platform: 'linux', bots, accepts_member_bots: true, readiness: {runtimes},
     turn_counts: {running: 0, starting: 0, waiting: 0, queued: 0, waits: []}, turn_summary: '0 running · 0 starting · 0 waiting', ...extra});
   return {
@@ -73,13 +73,13 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   const errors = [], writes = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(([t, saved]) => { try { localStorage.setItem('tico.theme', t); sessionStorage.setItem('tico.settings.tab', saved); } catch {} }, [theme, tab]);
-  const me = {owner: {id: 'ana', role: 'owner', name: 'Ana'}, member: {id: 'sam', role: 'member', name: 'Sam'}}[as];
+  const me = {owner_id: {id: 'ana', role: 'owner', name: 'Ana'}, member: {id: 'sam', role: 'member', name: 'Sam'}}[as];
   Object.assign(me, {email: me.id + '@example.com', cloud: true, registered: true});
   const policy = {see: {everyone: true}, read: {everyone: true}, write: {everyone: true}};
   const bots = [
-    {name: 'builder', display_name: 'Builder', status: 'active', state: 'active', operator: 'ana', repo: 'bot-builder', can_manage: true, revision: 3,
+    {name: 'builder', display_name: 'Builder', status: 'active', state: 'active', owner_id: 'ana', repo: 'bot-builder', can_manage: true, revision: 3,
       users: [{id: 'ana', name: 'Ana'}], bot_owners: [], resolved_runtime: 'claude', resolved_model: 'claude-sonnet-5-5', model: 'claude-sonnet-5-5', harness: 'claude',
-      machine: {runner_id: 'r1', label: 'Tico Team box', operator: 'ana', last_seen_at: new Date().toISOString()},
+      machine: {runner_id: 'r1', label: 'Tico Team box', owner_id: 'ana', last_seen_at: new Date().toISOString()},
       my_access: {see: true, read: true, write: true}, access_policy: policy},
   ];
   // A refusal as the server sends it (backend/app.py Problem handler: the extra facts beside code and detail).

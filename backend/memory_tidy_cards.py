@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS memory_tidy_cards (
  diff TEXT NOT NULL, diary TEXT NOT NULL, edits TEXT NOT NULL,
  parent_task_id TEXT, check_task_id TEXT, started_at TEXT NOT NULL, created_at TEXT NOT NULL,
  expires_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', reason TEXT NOT NULL DEFAULT '',
- decided TEXT, decided_by TEXT);
+ decided_at TEXT, decided_by TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS memory_tidy_cards_one_open ON memory_tidy_cards(bot) WHERE status='open';
 CREATE INDEX IF NOT EXISTS memory_tidy_cards_reviewer ON memory_tidy_cards(reviewer,status,expires_at);
 CREATE INDEX IF NOT EXISTS memory_tidy_cards_started ON memory_tidy_cards(bot,started_at);
@@ -40,7 +40,7 @@ def stamp(at):
 def sweep(c, at=None):
     """Hourly cleanup and filing cleanup; withdrawal never applies an edit."""
     at = at or H.now()
-    return c.execute("UPDATE memory_tidy_cards SET status='withdrawn',reason='expired',decided=? "
+    return c.execute("UPDATE memory_tidy_cards SET status='withdrawn',reason='expired',decided_at=? "
                      "WHERE status='open' AND expires_at<=?", (at, at)).rowcount
 
 
@@ -53,7 +53,7 @@ def view(c, row, *, detail=True):
     # Task ids and numbered edits remain internal provenance for Keep.
     slug = (H.bot(c, row['bot']) or {}).get('slug') or row['bot']
     return {**{k: row[k] for k in SUMMARY_FIELDS}, **({'diff': row['diff']} if detail else {}), 'kind': 'memory_tidy',
-            'title': 'Nightly memory tidy: ' + slug, 'requester': 'bot:' + row['bot'],
+            'title': 'Nightly memory tidy: ' + slug, 'requester_id': 'bot:' + row['bot'],
             'keep_available': False}
 
 
@@ -91,7 +91,7 @@ def file_card(c, *, bot, reviewer, pass_id, memory_commit, model, cost_usd,
     if newer:
         raise Problem('conflict', 'A newer Nightly memory tidy pass already has a card', 409)
     sweep(c, created)
-    c.execute("UPDATE memory_tidy_cards SET status='withdrawn',reason='replaced',decided=? "
+    c.execute("UPDATE memory_tidy_cards SET status='withdrawn',reason='replaced',decided_at=? "
               "WHERE bot=? AND status='open'", (created, bot))
     ident = H.new_id()
     expires = stamp(crossed_at(created))
@@ -150,7 +150,7 @@ def install(app, store, auth, mutate):
                 raise Problem('conflict', 'This Nightly memory tidy card is no longer open', 409)
             if body.decision == 'keep':
                 raise Problem('unavailable', 'Keep is not available yet; the proposal remains open', 409)
-            c.execute("UPDATE memory_tidy_cards SET status='discarded',decided=?,decided_by=? WHERE id=?",
+            c.execute("UPDATE memory_tidy_cards SET status='discarded',decided_at=?,decided_by=? WHERE id=?",
                       (H.now(), who.actor, ident))
             return {'card': view(c, require_card(c, who.actor, ident))}
         return mutate(request, body, write)

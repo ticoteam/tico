@@ -6,7 +6,7 @@ const {open} = require('./tasks-page.cjs');
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks', baseTasks: []});
-    const it = {id: 'tidy-1', kind: 'memory_tidy', bot: 'writer', requester: 'bot:writer', reviewer: 'human:ana',
+    const it = {id: 'tidy-1', kind: 'memory_tidy', bot: 'writer', requester_id: 'bot:writer', reviewer: 'human:ana',
       title: 'Nightly memory tidy: writer', model: 'codex:gpt-6.1-sol', cost_usd: .125, memory_commit: 'a'.repeat(40),
       diary: 'Merged duplicate rules.\nArchived old notes.\nChecks passed.', created_at: new Date().toISOString(),
       expires_at: new Date(Date.now() + 4 * 86400000).toISOString(), status: 'open', reason: '', keep_available: false};

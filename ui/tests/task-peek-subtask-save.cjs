@@ -4,7 +4,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
 const at = mins => new Date(Date.now() - mins * 60000).toISOString();
-const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bot:reviewer', requester: 'bot:lead', status: 'doing',
+const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'bot:reviewer', requester_id: 'bot:lead', status: 'doing',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3,
   created_at: at(600), updated_at: at(30), ...over});
 (async () => {
@@ -14,7 +14,7 @@ const t = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bot:r
       t('t-dev', 'Dev 99: fix the checkout total', {children_summary: {total: 2, done: 1, direct_total: 2, direct_done: 1}, parts: {total: 2, done: 1}}),
       t('t-r1', 'Review 1: PR #12', {_parent: 't-dev', status: 'review', updated_at: at(20)}),
       t('t-dup', 'Review 1: PR #12 (duplicate)', {_parent: 't-dev', status: 'declined', updated_at: at(25)}),
-      t('t-other', 'Someone else\'s task', {owner: 'bot:engineer'}),
+      t('t-other', 'Someone else\'s task', {owner_id: 'bot:engineer'}),
     ];
     const {page, errors, posts} = await open(browser, {hash: '#/tasks?owner=bot:reviewer&view=list', baseTasks});
     const peek = page.locator('#task-peek');

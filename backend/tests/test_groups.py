@@ -41,7 +41,7 @@ def add_bots(c, **bots):
             c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                       "VALUES(?,?,?,?,?,?,'','keeper','active',?)", (slug, slug, slug, "fake", "m", "", H.now()))
         c.execute("DELETE FROM bot_config WHERE bot=?", (slug,))
-        c.execute("INSERT INTO bot_config(bot,config,operator,reports_to) VALUES(?,?,?,?)",
+        c.execute("INSERT INTO bot_config(bot,config,owner_id,reports_to) VALUES(?,?,?,?)",
                   (slug, encode({"name": slug, **config}), "ana", reports_to))
 
 

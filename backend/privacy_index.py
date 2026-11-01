@@ -31,7 +31,7 @@ class ReadIndex:
         answers = {}
         self.denied = set()
         for tid, row in self.private.items():
-            key = (row["owner"], row["requester"], row["guest"], row["private"])
+            key = (row["owner_id"], row["requester_id"], row["guest"], row["private"])
             if key not in answers:
                 answers[key] = privacy.task_readable(c, who, row)
             if not answers[key]:
@@ -67,7 +67,7 @@ class ReadIndex:
                     "SELECT DISTINCT m.conversation_id FROM messages m JOIN live_meeting_turns t "
                     "ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
                     "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
-                    "WHERE m.from_actor=? AND m.to_actor='bot:'||t.bot", (H.KEEPER,)))
+                    "WHERE m.sender_id=? AND m.recipient_id='bot:'||t.bot", (H.KEEPER,)))
 
     @cached_property
     def task_ids(self):
@@ -131,7 +131,7 @@ class ReadIndex:
     def attempts(self):
         if self._attempts is None:
             rows = {r["id"]: {**dict(r), "messages": [r["message_id"]], "tasks": set()} for r in self.c.execute(
-                "SELECT a.id,a.bot,a.created_at,a.finished_at,a.lease_until,j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id")}
+                "SELECT a.id,a.bot_id,a.created_at,a.finished_at,a.lease_until,j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id")}
             for aid, mid in self.c.execute("SELECT attempt_id,message_id FROM attempt_inputs"):
                 if aid in rows:
                     rows[aid]["messages"].append(mid)

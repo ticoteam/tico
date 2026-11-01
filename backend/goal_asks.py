@@ -310,7 +310,7 @@ def _reword(conn, task, item):
     if H.TITLE_LINT == "refuse" and H.lint_title(title):
         return
     with isolated(conn, "goal_ask_reword", task["id"]):
-        H.task_update(conn, G.AUTO_ACTOR, task["id"], title=_free_title(conn, task["owner"], title), body=body,
+        H.task_update(conn, G.AUTO_ACTOR, task["id"], title=_free_title(conn, task["owner_id"], title), body=body,
                       private=True if item.get("private") else None, quiet=True)
 
 
@@ -348,7 +348,7 @@ def _free_title(conn, owner, title):
     """task_create refuses a second live task with the same requester, owner and title; two different proposals
     can word the same, so the second one is numbered instead of refused."""
     taken = {r[0] for r in conn.execute(
-        f"SELECT title FROM tasks WHERE requester=? AND owner=? AND status IN ({','.join('?' * len(H.LIVE_STATUSES))})",
+        f"SELECT title FROM tasks WHERE requester_id=? AND owner_id=? AND status IN ({','.join('?' * len(H.LIVE_STATUSES))})",
         (G.AUTO_ACTOR, owner, *H.LIVE_STATUSES))}
     out, n = title[:290], 2
     while out in taken:

@@ -368,8 +368,8 @@ def _facts(c, name, subject, data, actor):
         if row:
             break
     if row:
-        who = {a for a in (row.get("owner"), actor) if a and H.is_bot(a)}
-        return {"bots": who, "owner": row.get("owner"), "type": row.get("type_id")}
+        who = {a for a in (row.get("owner_id"), actor) if a and H.is_bot(a)}
+        return {"bots": who, "owner": row.get("owner_id"), "type": row.get("type_id")}
     if name.split(".")[0] == "bot":
         return {"bots": {H.bot_actor(subject)}}
     return {}
@@ -383,10 +383,10 @@ def passes(c, filt, facts):
         return False
     if filt.get("task_types") and "type" in facts and facts["type"] not in filt["task_types"]:
         return False
-    if filt.get("departments") and "owner" in facts and _state.get("settings") is not None:
+    if filt.get("departments") and "owner_id" in facts and _state.get("settings") is not None:
         from . import task_rules
         try:
-            mine = task_rules.department_of(c, _state["settings"], facts["owner"])
+            mine = task_rules.department_of(c, _state["settings"], facts["owner_id"])
         except Exception:
             mine = None
         if mine not in filt["departments"]:
@@ -772,12 +772,12 @@ def create(c, vault, who, body):
         raise Problem("forbidden", "A person sets custom headers; a bot asks without them", 403)
     payload = _approval_payload(spec)
     digest = H.payload_hash(payload)
-    approved = c.execute("SELECT * FROM approvals WHERE payload_hash=? AND requested_by=? AND kind='send' AND "
+    approved = c.execute("SELECT * FROM approvals WHERE payload_hash=? AND requested_by_id=? AND kind='send' AND "
                          "decision='approved' AND consumed_at IS NULL ORDER BY decided_at LIMIT 1",
                          (digest, who.actor)).fetchone()
     if approved:
         H.approval_consume(c, who.actor, approved["id"])
-        return _insert(c, vault, who, spec, approved["decided_by"], requested_by=who.actor)
+        return _insert(c, vault, who, spec, approved["decided_by_id"], requested_by=who.actor)
     open_ = c.execute("SELECT id FROM approvals WHERE payload_hash=? AND decision IS NULL", (digest,)).fetchone()
     owner_only_http(who, spec["allow_http"])
     check_address(spec["url"], False)
@@ -992,7 +992,7 @@ def one_send(c, who, hook_id, send_id):
     row = c.execute("SELECT * FROM webhook_sends WHERE id=? AND webhook_id=?", (send_id, hook_id)).fetchone()
     if not row:
         raise Problem("not_found", "Send not found", 404)
-    attempts = c.execute("SELECT n,at,timestamp_sent,status,ms,response_head,error FROM webhook_attempts WHERE send_id=? "
+    attempts = c.execute("SELECT n,created_at,timestamp_sent,status,ms,response_head,error FROM webhook_attempts WHERE send_id=? "
                          "ORDER BY n DESC LIMIT 50", (send_id,)).fetchall()
     return {**send_view(row), "attempt_log": [dict(a) for a in attempts]}
 
@@ -1116,7 +1116,7 @@ def auto_disable(c, now=None):
     window = H.shift(now, days=-DISABLE_DAYS)
     off = []
     for hook in c.execute("SELECT * FROM webhooks WHERE enabled=1 AND deleted_at IS NULL AND failing_since<=?", (window,)).fetchall():
-        row = c.execute("SELECT count(*) n, max(at) latest FROM webhook_attempts WHERE webhook_id=? AND at>=?",
+        row = c.execute("SELECT count(*) n, max(created_at) latest FROM webhook_attempts WHERE webhook_id=? AND created_at>=?",
                         (hook["id"], hook["failing_since"])).fetchone()
         if not row["n"] or row["latest"] <= H.shift(hook["failing_since"], hours=DISABLE_SPAN_HOURS):
             continue
@@ -1152,7 +1152,7 @@ def health_summary(c):
         "SELECT DISTINCT webhook_id FROM webhook_sends WHERE state='failed' AND next_attempt_at>=?", (day,)) if r["webhook_id"] in names]
     flaky = []
     for r in c.execute("SELECT webhook_id, count(*) n, sum(CASE WHEN status BETWEEN 200 AND 299 THEN 0 ELSE 1 END) bad "
-                       "FROM webhook_attempts WHERE at>=? GROUP BY webhook_id", (day,)):
+                       "FROM webhook_attempts WHERE created_at>=? GROUP BY webhook_id", (day,)):
         if r["webhook_id"] in names and r["n"] >= 5 and r["bad"] * 2 > r["n"] and names[r["webhook_id"]] not in failed:
             flaky.append(names[r["webhook_id"]])
     skipped = c.execute("SELECT count(*) FROM webhook_events WHERE skipped>0 AND created_at>=?", (day,)).fetchone()[0]
@@ -1214,7 +1214,7 @@ def install(app, settings, store, auth, mutate):
             hook = _reach(c, who, hook_id)
             shown = view(hook, who, counts(c, [hook_id]).get(hook_id))
             recent = [] if who.role == "bot" else [dict(r) for r in c.execute(
-                "SELECT send_id,n,at,status,ms,error FROM webhook_attempts WHERE webhook_id=? ORDER BY at DESC, n DESC LIMIT 10",
+                "SELECT send_id,n,created_at,status,ms,error FROM webhook_attempts WHERE webhook_id=? ORDER BY created_at DESC, n DESC LIMIT 10",
                 (hook_id,))]
             return {"webhook": shown, "recent_attempts": recent}
 

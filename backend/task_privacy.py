@@ -68,7 +68,7 @@ def _task_rows(c, ids):
     for start in range(0, len(missing), 500):
         chunk = missing[start:start + 500]
         found = {row[0]: row for row in c.execute(
-            "SELECT id,private,owner,requester,guest FROM tasks WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk)}
+            "SELECT id,private,owner_id,requester_id,guest FROM tasks WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk)}
         for tid in chunk:
             known[tid] = found.get(tid)
     return {tid: known[tid] for tid in ids}
@@ -531,7 +531,7 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
         attempt = payload.get("attempt")
         aid = payload.get("attempt_id") or (attempt.get("id") if isinstance(attempt, dict) else None)
         if aid:
-            hosted = c.execute("SELECT a.bot FROM attempts a JOIN assignments x ON x.bot=a.bot "
+            hosted = c.execute("SELECT a.bot_id FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
                                "WHERE a.id=? AND a.runner_id=? AND x.runner_id=?",
                                (aid, who.runner_id, who.runner_id)).fetchone()
             if not hosted:
@@ -617,7 +617,7 @@ def worktree_action_readable(c, who, action):
             "SELECT 1 FROM task_links WHERE id=? AND kind='worktree' AND computer_id=?",
             (action.get("link_id"), who.runner_id)).fetchone():
         return True
-    return hosted_owner_reads(c, who, action.get("owner"), ids)
+    return hosted_owner_reads(c, who, action.get("owner_id"), ids)
 
 
 def worktree_link_readable(c, who, link):
@@ -629,8 +629,8 @@ def worktree_link_readable(c, who, link):
     detail = H._json(link.get("detail"), {}) or {}
     owner = detail.get("owner")
     if not owner and link.get("task_id"):
-        task = c.execute("SELECT owner FROM tasks WHERE id=?", (link["task_id"],)).fetchone()
-        owner = task and task["owner"]
+        task = c.execute("SELECT owner_id FROM tasks WHERE id=?", (link["task_id"],)).fetchone()
+        owner = task and task["owner_id"]
     return hosted_owner_reads(c, who, H.actor_id(owner) if isinstance(owner, str) else None, ids)
 
 
@@ -686,8 +686,8 @@ def guest_for(c, who, person, parent):
     The hand-offs are a subtask for them and a question to them (backend/media.py); waiting on them is hubdb's.
     Outside private work a hand-off the guest rules refuse only for what is above the task goes on as before,
     without a guest: the person gets the subtask alone. A second, different person is refused either way."""
-    if not (parent and who.role == "bot" and not who.via and who.actor == parent["owner"]
-            and H.is_bot(parent["requester"]) and H.is_human(person) and H.task_private(c, parent)
+    if not (parent and who.role == "bot" and not who.via and who.actor == parent["owner_id"]
+            and H.is_bot(parent["requester_id"]) and H.is_human(person) and H.task_private(c, parent)
             and not H.task_private_readable(c, person, parent)):
         return None
     refusal = H.task_reach_refusal(c, who.actor, parent, person)
@@ -723,7 +723,7 @@ def sealed_for(c, who, owner, parent):
     above it, has a person on it: the words name them and the route to them."""
     if not (parent and who.role == "bot" and not who.via and not getattr(who, "task_actor", "") and who.attempt_id
             and H.is_bot(owner or "") and owner != who.actor and H.task_private(c, parent)
-            and H.task_represents(c, who.actor, parent["owner"])):
+            and H.task_represents(c, who.actor, parent["owner_id"])):
         return None
     kept = {}
     for tid in attempt_tasks(c, who.attempt_id):
@@ -747,7 +747,7 @@ def _no_person(c, who, rows):
                 # filer's own requester, who can reach it.
                 if not H.task_private_readable(c, who.actor, above):
                     raise Problem("privacy", "A person is on a private task above this one: ask "
-                                  f"{row['requester']}, who gave you this task, to file the subtask", 403)
+                                  f"{row['requester_id']}, who gave you this task, to file the subtask", 403)
                 raise Problem("privacy", f"{_person_name(c, person)} is on a private task above this one: {SEALED_ROUTE}",
                               403)
 
@@ -855,7 +855,7 @@ def from_private(c, who, owner, parent):
         row = _task(c, tid)
         if row and H.task_private(c, row):
             rows.setdefault(row["id"], H.task(c, row["id"]) or dict(row))
-    if any(not H.task_represents(c, who.actor, row["owner"]) for row in rows.values()):
+    if any(not H.task_represents(c, who.actor, row["owner_id"]) for row in rows.values()):
         raise Problem("privacy", "Only a private task's owning bot, or its manager, files a task from its work", 403)
     _no_person(c, who, rows.values())
     return list(rows.values())
@@ -1051,7 +1051,7 @@ def guard_write(c, who, path, auth):
             if row and not H.task_private(c, row):
                 raise Problem("privacy", "Private task work cannot write company-visible tasks", 403)
             if row:
-                require_destination(c, who, row["owner"], row["conversation_id"], {"task": row["id"]})
+                require_destination(c, who, row["owner_id"], row["conversation_id"], {"task": row["id"]})
         return
     if path.endswith(("/status", "/usage")) or path == "/api/v2/status":
         return
@@ -1151,17 +1151,17 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
 # `{}` is `=?` for one bot or `IN (...)` for many (`status_inputs`).
 ASKS_SQL = (f"SELECT m.*, {H.MESSAGE_TASK_SQL} AS about FROM messages m "
             "JOIN conversations cv ON cv.id=m.conversation_id "
-            "WHERE m.kind='ask' AND m.from_actor{} AND m.to_actor LIKE 'human:%' "
+            "WHERE m.kind='ask' AND m.sender_id{} AND m.recipient_id LIKE 'human:%' "
             f"AND m.deleted_at IS NULL AND {H.OPEN_ASK_SQL}")
 APPROVALS_SQL = ("SELECT m.*, a.task_id AS approval_task{by} FROM approvals a JOIN messages m ON m.id=a.message_id "
-                 "WHERE a.requested_by{match} AND a.decision IS NULL")
+                 "WHERE a.requested_by_id{match} AND a.decision IS NULL")
 
 
 # The only tasks `status` looks at: a live one (its counts) or a private one (whether its focus may be shown).
 # A long-lived bot's finished company tasks are most of its rows and change nothing.
 STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
 # The columns `status` reads of them: never the bodies, which were megabytes a status page on a real install.
-STATUS_TASK_COLUMNS = "id,owner,requester,status,private,guest,waiting_on"
+STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,guest,waiting_on"
 
 
 def status_tasks_sql(match):
@@ -1169,11 +1169,11 @@ def status_tasks_sql(match):
     index: OR-ing owner and requester made SQLite read every task the bots ever had, finished ones included,
     to test status and privacy columns stored past the bodies; a busy team's page spent most of a second there."""
     live = "status IN (%s)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
-    return (f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE owner{match} AND {live} "
-            f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE requester{match} AND {live} "
+    return (f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE owner_id{match} AND {live} "
+            f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE requester_id{match} AND {live} "
             # `+` keeps the few private tasks on their own index (tasks_private_status), not the owner's every task.
             f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0 "
-            f"AND (+owner{match} OR +requester{match})")
+            f"AND (+owner_id{match} OR +requester_id{match})")
 
 
 def status_tasks(c, match, args):
@@ -1196,14 +1196,14 @@ def status_inputs(c, bots):
         actors = ["bot:" + bot for bot in part]
         marks = " IN (" + ",".join("?" * len(actors)) + ")"
         for t in status_tasks(c, marks, actors * 4):
-            for party in {t["owner"], t["requester"]}:
+            for party in {t["owner_id"], t["requester_id"]}:
                 if party in actors:
                     out[H.actor_id(party)]["tasks"].append(t)
         # Who asked is read alongside, to sort the rows, and left out of the rows `status` is given.
         for m in c.execute(APPROVALS_SQL.format(by=", a.requested_by AS by_", match=marks), actors):
             out[H.actor_id(m["by_"])]["approvals"].append({k: m[k] for k in m.keys() if k != "by_"})
         for m in c.execute(ASKS_SQL.format(marks), actors):
-            out[H.actor_id(m["from_actor"])]["asks"].append(m)
+            out[H.actor_id(m["sender_id"])]["asks"].append(m)
     # Each open ask and approval is checked as read here, its tasks, parents and rooms read together: not a few
     # queries per message, which on a busy team were most of a status page's statements.
     if read_cache.cache(c) is not None:
@@ -1229,15 +1229,15 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
         row.update(task_id=None, focus="", last_result="", reason="")
     tasks = [t for t in tasks if task_readable(c, who, t)]
     if "open_tasks" in row:
-        row["open_tasks"] = sum(t["owner"] == "bot:" + row["bot"] and t["status"] in H.ACTIVE_STATUSES for t in tasks)
+        row["open_tasks"] = sum(t["owner_id"] == "bot:" + row["bot"] and t["status"] in H.ACTIVE_STATUSES for t in tasks)
     if "needs_human" in row:
         # One per readable task that waits on a person (hubdb._recount): filed for a person, set
         # waiting on one, or carrying the bot's unanswered question to one.
         bot = "bot:" + row["bot"]
         live = {t["id"]: t for t in tasks if t["status"] in H.ACTIVE_STATUSES}
         waits = {i for i, t in live.items()
-                 if (t["requester"] == bot and H.is_human(t["owner"]))
-                 or (t["owner"] == bot and t["status"] == "waiting" and H.is_human(t.get("waiting_on") or ""))}
+                 if (t["requester_id"] == bot and H.is_human(t["owner_id"]))
+                 or (t["owner_id"] == bot and t["status"] == "waiting" and H.is_human(t.get("waiting_on") or ""))}
         if len(waits) < len(live):
             # Both are the message rows (`m.*`) as stored, read in this snapshot.
             for m in asks if asks is not None else c.execute(ASKS_SQL.format("=?"), (bot,)):
@@ -1256,7 +1256,7 @@ def job_count(c, who, bot, states=("queued",)):
     marks = ",".join("?" * len(states))
     # The rows are the messages as stored in this snapshot (as in job_counts), checked after one lookup for them all.
     rows = [dict(row) for row in c.execute("SELECT m.*,j.attempt_id AS job_attempt FROM jobs j JOIN messages m "
-                                           f"ON m.id=j.message_id WHERE j.bot=? AND j.state IN ({marks})", (bot, *states))]
+                                           f"ON m.id=j.message_id WHERE j.bot_id=? AND j.state IN ({marks})", (bot, *states))]
     jobs = [(row.pop("job_attempt"), row) for row in rows]
     prime_messages(c, rows)
     prime_attempts(c, [aid for aid, _ in jobs])
@@ -1271,8 +1271,8 @@ def job_counts(c, who, bots, states=("queued",)):
     out = dict.fromkeys(bots, 0)
     marks = ",".join("?" * len(states))
     for part in H.chunks(out):
-        for row in c.execute("SELECT m.*,j.attempt_id,j.bot AS job_bot FROM jobs j JOIN messages m ON m.id=j.message_id "
-                             f"WHERE j.bot IN ({','.join('?' * len(part))}) AND j.state IN ({marks})", (*part, *states)):
+        for row in c.execute("SELECT m.*,j.attempt_id,j.bot_id AS job_bot FROM jobs j JOIN messages m ON m.id=j.message_id "
+                             f"WHERE j.bot_id IN ({','.join('?' * len(part))}) AND j.state IN ({marks})", (*part, *states)):
             out[row["job_bot"]] += bool(message_readable(c, actor(who), row, current=True) and
                                         (not row["attempt_id"] or attempt_readable(c, actor(who), row["attempt_id"])))
     return out
@@ -1413,7 +1413,7 @@ def event_readable(c, actor, event):
             return False
     # Tool/audit events from a private execution often have no explicit task ref.
     if H.is_bot(event.get("actor")):
-        for row in c.execute("SELECT id FROM attempts WHERE bot=? AND created_at<=? "
+        for row in c.execute("SELECT id FROM attempts WHERE bot_id=? AND created_at<=? "
                              "AND coalesce(finished_at,?)>=?", (H.actor_id(event["actor"]),
                                                             event["ts"], H.now(), event["ts"])):
             if not meetings.attempt_readable(actor, row[0]):

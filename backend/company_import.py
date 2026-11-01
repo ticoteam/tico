@@ -151,7 +151,7 @@ def plan(onboarding, c, who, text):
                           "reports_to": seat["reports_to"], **({"waits_on": seat["waits_on"]} if seat["waits_on"] else {})}
                          for key, seat in seats.items()],
                "people": people,
-               "goals": [{"id": goal["id"], "title": goal_title(goal), "owner": goal_owner(goal, owner_id, ids, required)}
+               "goals": [{"id": goal["id"], "title": goal_title(goal), "owner_id": goal_owner(goal, owner_id, ids, required)}
                          for goal in draft["goals"]],
                "builtins": sorted(required), "deferred": deferred}
     if D.has_strategy(saved):
@@ -166,8 +166,8 @@ def goal_owner(goal, owner_id, ids, builtins):
     its goal is the company's until the seat is recruited; check() has already given a goal whose owner left the chart
     to the owner. The built-in bots own no goals (Goals keeps them out of its tree), so a goal the file gives one, the
     Assistant's in a starter plan, is the company's too."""
-    slug = ids.get(goal["owner"])
-    return G.COMPANY if goal["owner"] == owner_id or slug is None or slug in builtins else "bot:" + slug
+    slug = ids.get(goal["owner_id"])
+    return G.COMPANY if goal["owner_id"] == owner_id or slug is None or slug in builtins else "bot:" + slug
 
 
 def goal_title(goal):
@@ -467,7 +467,7 @@ def apply(onboarding, c, who, text, fingerprint):
         team = named.get(seat["team"]) or teams.get(seat["template"], "")
         chart[key] = {**seat, "team": team, "description_by": "chart"}
     made = lifecycle.lay_out(c, who.actor, chart)
-    owners = {goal["id"]: goal["owner"] for goal in summary["goals"]}
+    owners = {goal["id"]: goal["owner_id"] for goal in summary["goals"]}
     import_goals(c, who.actor, [(goal, owners[goal["id"]]) for goal in saved["goals"]], bets)
     record = O.load(c)
     record["selected"] = {slug: choice.model_dump() for slug, choice in body.selected.items()}

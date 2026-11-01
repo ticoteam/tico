@@ -49,7 +49,7 @@ function growthIdeaOneBody(slot) {
 function growthIdeaDraw(slot) {
   const i = slot.giIdea, refs = slot.giRefs, titles = slot.giTitles, task = slot.giTask || {};
   // As the server allows: the assignee or an admin runs the test and gives the verdict; the creator also edits and scores.
-  const run = grAdmin() || grSame(i.assignee ?? task.owner, grMe()), may = run || grSame(i.created_by, grMe());
+  const run = grAdmin() || grSame(i.assignee ?? task.owner_id, grMe()), may = run || grSame(i.created_by, grMe());
   const bet = refs.bets.find(b => b.id === i.bet_id), kpi = refs.kpis.find(k => k.id === i.kpi_id), judged = refs.kpis.find(k => k.id === i.judged_kpi_id);
   const kpiName = kpi?.name || i.kpi_name, judgedName = judged?.name || i.judged_kpi_name;
   const dl = rows => rows.filter(r => r[1]).map(([k, v, raw]) => `<dt>${esc(k)}</dt><dd>${raw ? v : esc(v)}</dd>`).join('');

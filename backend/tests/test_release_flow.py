@@ -17,7 +17,7 @@ def _team(api):
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cpo", "cmo", "qab")}
         H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
         for slug, template in (("cmo", RF.MANAGER), ("cpo", RF.WRITER), ("qab", RF.QA)):
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
                       (slug, encode({**bots[slug], "template": template}), "product", "ana"))
         dev = H.type_create(c, "human:ana", "Dev tickets", numbered=True, steps=[
             {"name": "In QA", "status": "review"}, {"name": "Pending Release", "status": "review"},
@@ -27,7 +27,7 @@ def _team(api):
 
 def _ticket(api, dev, title, number=412, tags=()):
     url = PR.replace("/412", f"/{number}")
-    ticket = post(api, "tasks", {"owner": "cpo", "title": title, "body": "x", "links": [url], "type": dev["id"],
+    ticket = post(api, "tasks", {"owner_id": "cpo", "title": title, "body": "x", "links": [url], "type": dev["id"],
                                  "step": "Pending Release", "labels": list(tags)})
     hook(api, "pull_request", pr_event("closed", html_url=url, merged=True, merge_commit_sha="abc%d" % number,
                                        merged_at="2026-10-19T12:42:19Z"))
@@ -36,7 +36,7 @@ def _ticket(api, dev, title, number=412, tags=()):
 
 def _tasks(api, owner, prefix="Release:"):
     with api.app.state.store.read() as c:
-        return [r["title"] for r in c.execute("SELECT title FROM tasks WHERE owner=? AND title LIKE ?",
+        return [r["title"] for r in c.execute("SELECT title FROM tasks WHERE owner_id=? AND title LIKE ?",
                                               (H.bot_actor(owner), prefix + "%"))]
 
 
@@ -129,7 +129,7 @@ def test_a_private_ticket_is_counted_but_never_named_in_the_docs_task(api):
     hook(api, "release", {"action": "published", "release": {"tag_name": "v1.2.3", "html_url": RELEASE_URL},
                           "repository": {"full_name": "ticoteam/tico"}})
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body FROM tasks WHERE owner='bot:cpo' AND title LIKE 'Docs for%'").fetchone()["body"]
+        body = c.execute("SELECT body FROM tasks WHERE owner_id='bot:cpo' AND title LIKE 'Docs for%'").fetchone()["body"]
     assert "Visual replies" in body and "1 private ticket, not named here" in body
     assert "Acme payroll" not in body and "/413" not in body
 
@@ -145,6 +145,6 @@ def test_qa_hears_a_private_ticket_shipped_on_its_own_qa_subtask(api):
                           "repository": {"full_name": "ticoteam/tico"}})
     with api.app.state.store.read() as c:
         woke = c.execute("SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                         f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor='bot:qab' "
+                         f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.recipient_id='bot:qab' "
                          "AND json_extract(m.refs,'$.wake')='release_published'", (check["id"],)).fetchall()
     assert len(woke) == 1 and "QA: payroll export" in woke[0][0] and "Acme payroll export" not in woke[0][0]

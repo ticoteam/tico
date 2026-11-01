@@ -36,8 +36,8 @@ def recent_history(c, pid):
     """The indexed kinds of history: what they did (events, tasks, messages), a token they used, a sign-in."""
     ids = _ids(pid)
     checks = ("SELECT 1 FROM events WHERE actor IN (?,?)",
-              "SELECT 1 FROM tasks WHERE owner IN (?,?)", "SELECT 1 FROM tasks WHERE requester IN (?,?)",
-              "SELECT 1 FROM messages WHERE to_actor IN (?,?)")
+              "SELECT 1 FROM tasks WHERE owner_id IN (?,?)", "SELECT 1 FROM tasks WHERE requester_id IN (?,?)",
+              "SELECT 1 FROM messages WHERE recipient_id IN (?,?)")
     if any(c.execute(sql + " LIMIT 1", ids).fetchone() for sql in checks):
         return True
     return bool(c.execute("SELECT 1 FROM human_tokens WHERE human=? AND last_used_at IS NOT NULL", (pid,)).fetchone()

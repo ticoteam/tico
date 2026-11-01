@@ -190,7 +190,7 @@ def visible_authors(c, auth, who, mine=False, scope=None):
         readable |= {H.human_actor(p["id"]) for p in P.visible_people(views.roster(c))}
     if mine:
         pid = H.actor_id(who.actor)
-        operators = {r[0]: r[1] for r in c.execute("SELECT bot, operator FROM bot_config")}
+        operators = {r[0]: r[1] for r in c.execute("SELECT bot, owner_id FROM bot_config")}
         readable = {slug for slug in readable if slug == who.actor or operators.get(slug) == pid
                     or (not is_person(slug) and not operators.get(slug) and who.role == "owner")}
     if scope == "direct":
@@ -324,7 +324,7 @@ def person_depths(c, authors):
 
 
 def _busy(c, bot):
-    return c.execute("SELECT 1 FROM jobs WHERE bot=? AND state IN ('queued','leased','running','input') "
+    return c.execute("SELECT 1 FROM jobs WHERE bot_id=? AND state IN ('queued','leased','running','input') "
                      f"AND {H.unheld_sql('jobs')} LIMIT 1",
                      (bot,)).fetchone() is not None
 
@@ -444,13 +444,13 @@ def request_text(c, bot, kind, day, redo=False):
     else:
         last = c.execute("SELECT max(created_at) FROM updates WHERE bot=?", (bot,)).fetchone()[0]
         since, until = last or H.shift(H.now(), days=-7 if week else -1), "9999"
-    done = c.execute("SELECT title FROM tasks WHERE owner=? AND status IN ('done','closed') AND updated_at>=? AND updated_at<? "
+    done = c.execute("SELECT title FROM tasks WHERE owner_id=? AND status IN ('done','closed') AND updated_at>=? AND updated_at<? "
                      "ORDER BY updated_at DESC LIMIT 12", (actor, since, until)).fetchall()
-    open_ = c.execute("SELECT title, status FROM tasks WHERE owner=? AND status IN ('open','doing','waiting','review','ready') "
+    open_ = c.execute("SELECT title, status FROM tasks WHERE owner_id=? AND status IN ('open','doing','waiting','review','ready') "
                       "ORDER BY updated_at DESC LIMIT 12", (actor,)).fetchall()
-    asked = c.execute("SELECT title, owner FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND status IN "
+    asked = c.execute("SELECT title, owner_id FROM tasks WHERE requester_id=? AND owner_id LIKE 'human:%' AND status IN "
                       "('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8", (actor,)).fetchall()
-    goals = c.execute("SELECT title FROM goals WHERE owner=? AND (status IS NULL OR status NOT IN ('done','dropped')) "
+    goals = c.execute("SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN ('done','dropped')) "
                       "ORDER BY rank LIMIT 5", (actor,)).fetchall()
     line = lambda rows, f: "\n".join("- " + f(r) for r in rows) or "- (none)"
     post_day = f" with day {day}" if redo else ""
@@ -468,7 +468,7 @@ def request_text(c, bot, kind, day, redo=False):
         facts = [
             "", f"Finished {'that week' if redo else 'this week'}:", line(done, lambda r: r["title"]),
             "Open:", line(open_, lambda r: f"{r['title']} ({r['status']})"),
-            "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_id(r['owner'])})"),
+            "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_id(r['owner_id'])})"),
             "Your goals:", line(goals, lambda r: r["title"]),
             "Your goal KPIs (Tico puts these on the KPI slide):",
             line(tracked, lambda k: f"{k['name']}: {k['value'] if k['value'] is not None else 'no data'}"
@@ -489,7 +489,7 @@ def request_text(c, bot, kind, day, redo=False):
         facts = [
             "", f"Finished {'that day' if redo else 'since your last update'}:", line(done, lambda r: r["title"]),
             "Open:", line(open_, lambda r: f"{r['title']} ({r['status']})"),
-            "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_id(r['owner'])})"),
+            "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_id(r['owner_id'])})"),
             "Your goals:", line(goals, lambda r: r["title"]),
         ]
     team, missing = team_updates(c, bot, kind, day)
@@ -576,21 +576,21 @@ def draft_facts(c, author, kind, day):
     since = H.shift(H.now(), days=-7 if week else -1)
     hidden = [H.bot_actor(slug) for slug in sorted(restricted_bots(c))]
     shared = shared_tasks_sql(hidden)
-    done = c.execute(f"SELECT title FROM tasks WHERE owner=? AND {shared} AND status IN ('done','closed') AND updated_at>=? "
+    done = c.execute(f"SELECT title FROM tasks WHERE owner_id=? AND {shared} AND status IN ('done','closed') AND updated_at>=? "
                      "ORDER BY updated_at DESC LIMIT 12", (author, since)).fetchall()
-    open_ = c.execute(f"SELECT title, status FROM tasks WHERE owner=? AND {shared} AND status IN "
+    open_ = c.execute(f"SELECT title, status FROM tasks WHERE owner_id=? AND {shared} AND status IN "
                       "('open','doing','waiting','review','ready') ORDER BY updated_at DESC LIMIT 12", (author,)).fetchall()
-    asked = c.execute(f"SELECT title, owner FROM tasks WHERE requester=? AND {shared} AND owner<>? AND status IN "
+    asked = c.execute(f"SELECT title, owner_id FROM tasks WHERE requester_id=? AND {shared} AND owner_id<>? AND status IN "
                       "('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8", (author, author)).fetchall()
-    goals = c.execute("SELECT title FROM goals WHERE owner=? AND (status IS NULL OR status NOT IN "
+    goals = c.execute("SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN "
                       "('done','dropped')) ORDER BY rank LIMIT 5", (author,)).fetchall()
     # Their decisions in Needs you: what they moved a shared task to (approved, declined, done, closed)...
     decided = c.execute(f"SELECT t.title, e.new FROM task_events e JOIN tasks t ON t.id=e.task_id WHERE e.actor=? "
-                        f"AND e.field='status' AND e.old IS NOT NULL AND e.ts>=? AND {shared_tasks_sql(hidden, 't.')} "
-                        "ORDER BY e.ts DESC LIMIT ?", (author, since, DRAFT_LIST_MAX)).fetchall()
+                        f"AND e.field='status' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
+                        "ORDER BY e.created_at DESC LIMIT ?", (author, since, DRAFT_LIST_MAX)).fetchall()
     # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
     said = lambda where: [(title, m["body"]) for m in c.execute(
-        "SELECT * FROM messages WHERE from_actor=? AND deleted_at IS NULL AND created_at>=? AND " + where
+        "SELECT * FROM messages WHERE sender_id=? AND deleted_at IS NULL AND created_at>=? AND " + where
         + " ORDER BY created_at DESC LIMIT ?", (author, since, DRAFT_SCAN_MAX)).fetchall()
         if (title := _shared_message(c, m, shared))][:DRAFT_LIST_MAX]
     answers = said("kind='answer'")
@@ -603,7 +603,7 @@ def draft_facts(c, author, kind, day):
         "SELECT m.title, m.notes FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
         "WHERE m.review_state='live' AND mc.deleted_at IS NULL AND json_extract(m.metadata,'$.kind')='meeting' "
         "AND coalesce(json_extract(m.metadata,'$.private'),0)=0 AND trim(m.notes)<>'' AND m.created_at>=? AND ("
-        "lower(m.owner)=? OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.calendar.attendees')) "
+        "lower(m.owner_id)=? OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.calendar.attendees')) "
         "WHERE lower(trim(value))=?) OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.participants')) "
         "WHERE lower(trim(json_extract(value,'$.email')))=?)) ORDER BY m.created_at DESC LIMIT ?",
         (since, email, email, email, MEETINGS_MAX)).fetchall() if email else []
@@ -611,7 +611,7 @@ def draft_facts(c, author, kind, day):
     facts = [f"{name}'s {'week in review' if week else 'daily update'} for {day}.", "",
              f"Finished {'this week' if week else 'since yesterday'}:", line(done, lambda r: r["title"]),
              "Open:", line(open_, lambda r: f"{r['title']} ({r['status']})"),
-             "Waiting on someone else:", line(asked, lambda r: f"{r['title']} ({_label(c, r['owner'] if is_person(r['owner']) else H.actor_id(r['owner']))})"),
+             "Waiting on someone else:", line(asked, lambda r: f"{r['title']} ({_label(c, r['owner_id'] if is_person(r['owner_id']) else H.actor_id(r['owner_id']))})"),
              "Their goals:", line(goals, lambda r: r["title"]),
              "Their decisions:", line(decided, lambda r: f"{r['title']}: {r['new']}"),
              "Their answers:", line(answers, lambda r: f"On {r[0]}: {_clip(r[1], 200)}"),
@@ -827,7 +827,7 @@ def kpi_snapshot(c, bot):
     sparkline. With no goal KPIs, its automatic ones that have a reading."""
     from . import botkpis, kpis as K
     goal_ids = [r["id"] for r in c.execute(
-        "SELECT id FROM goals WHERE owner=? AND (status IS NULL OR status NOT IN ('done','dropped')) ORDER BY rank LIMIT 5",
+        "SELECT id FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN ('done','dropped')) ORDER BY rank LIMIT 5",
         (author_actor(bot),))]
     views, seen = [], set()
     for gid, items in K.goal_views(c, goal_ids).items() if goal_ids else ():
@@ -1156,11 +1156,11 @@ def inbox_ids(c, actor, readable, created_after=None, meetings=False):
 def thread(c, uid):
     """Replies to an update (messages carrying refs.update) and the bot's answers to them."""
     replies = [dict(r) for r in c.execute(
-        "SELECT id, from_actor, to_actor, body, created_at, conversation_id FROM messages "
+        "SELECT id, sender_id, recipient_id, body, created_at, conversation_id FROM messages "
         "WHERE json_extract(refs,'$.update')=? ORDER BY created_at", (uid,))]
     ids = [r["id"] for r in replies]
     answers = [dict(r) for r in c.execute(
-        "SELECT id, from_actor, to_actor, body, created_at, conversation_id, in_reply_to FROM messages WHERE in_reply_to IN ("
+        "SELECT id, sender_id, recipient_id, body, created_at, conversation_id, in_reply_to FROM messages WHERE in_reply_to IN ("
         + ",".join("?" * len(ids)) + ") ORDER BY created_at", ids)] if ids else []
     return sorted(replies + answers, key=lambda m: m["created_at"])
 

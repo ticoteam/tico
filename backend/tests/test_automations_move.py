@@ -37,7 +37,7 @@ def old_install(tmp_path, *, routines=True):
             {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),))
         c.execute("INSERT OR IGNORE INTO bot_config(bot, config) VALUES('coo', '{}')")
         if routines:
-            c.execute("INSERT INTO schedules(id, bot, cron, title, playbook, next_due) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO schedules(id, bot, cron, title, playbook, next_due_at) VALUES(?,?,?,?,?,?)",
                       ("sch_notes", "coo", "0 9 * * *", "Morning notes", "Post yesterday's work.",
                        "2026-11-02T09:00:00Z"))
             c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, created_by, created_at, updated_at) "
@@ -161,7 +161,7 @@ def test_pending_reads_a_database_an_older_release_wrote(tmp_path):
     c = sqlite3.connect(path)
     c.executescript("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT);"
                     "CREATE TABLE schedules(id TEXT PRIMARY KEY, bot TEXT, cron TEXT, title TEXT, playbook TEXT, "
-                    "last_fired_at TEXT, next_due TEXT);"
+                    "last_fired_at TEXT, next_due_at TEXT);"
                     "INSERT INTO schedules(id, bot) VALUES('s1', 'coo'), ('s2', 'coo');")
     c.commit()
     c.close()
@@ -227,7 +227,7 @@ def test_a_paused_bots_routine_keeps_its_switch_and_runs_again_when_the_bot_is_b
     runs = "SELECT 1 FROM automation_runs WHERE automation_id=?"
     automations.tick(store, at=datetime(2026, 11, 2, 9, 1, tzinfo=timezone.utc))      # due while the bot is paused
     assert not read(store, runs, (aid,))
-    assert read(store, "SELECT next_due FROM automations WHERE id=?", (aid,))[0]["next_due"] > "2026-11-02T09:01"
+    assert read(store, "SELECT next_due_at FROM automations WHERE id=?", (aid,))[0]["next_due_at"] > "2026-11-02T09:01"
     with store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug='coo'")
     automations.tick(store, at=datetime(2026, 11, 3, 9, 1, tzinfo=timezone.utc))      # back: the next one runs

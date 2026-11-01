@@ -30,7 +30,7 @@ def bot(api, slug, reports_to=None):
                               "reports_to": reports_to, "status": "active", "repo": "emp-" + slug,
                               "thread_mode": "personal", "model": "hermes-profile",
                               "effort": "as-configured", "harness": "hermes",
-                              "operator": "ana", "owners": ["ana"], "runner_id": None})
+                              "owner_id": "ana", "owners": ["ana"], "runner_id": None})
 
 
 def bot_id(api, slug):
@@ -56,7 +56,7 @@ def world(api):
     bot(api, "analyst")
     tokens = {"ana": "ana-test", "ben": "ben-test", "cara": "cara-test", "dee": "dee-test"}
     tokens.update({slug: post(api, f"bots/{slug}/agent-credential", {})["token"] for slug in ("stranger", "analyst")})
-    task = post(api, "tasks", {"owner": "counsel", "title": "Review the NDA", "body": "Redline it."})
+    task = post(api, "tasks", {"owner_id": "counsel", "title": "Review the NDA", "body": "Redline it."})
     with store.transaction() as c:
         c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                   ("u1", H.resolve_bot(c, "counsel")["id"], "daily", "2026-09-29", "Two contracts reviewed",
@@ -120,7 +120,7 @@ def test_visible_requests_only_lets_everyone_ask_and_only_readers_look(world):
     # Everyone may write to it: chat, task, note, and a comment that wakes it.
     for who in ALL:
         assert call(api, "post", "chat/counsel", tokens[who], {"text": "Is this clause standard?"}).status_code == 200, who
-        assert call(api, "post", "tasks", tokens[who], {"owner": "counsel", "title": f"Check for {who}",
+        assert call(api, "post", "tasks", tokens[who], {"owner_id": "counsel", "title": f"Check for {who}",
                                                          "body": "Please."}).status_code == 200, who
         assert call(api, "post", "notes", tokens[who], {"to": "counsel", "text": f"A note from {who}"}).status_code == 200, who
     assert call(api, "post", f"tasks/{task['id']}/comments", "ana-test", {"text": "Any news?"}).status_code == 200
@@ -164,11 +164,11 @@ def test_private_hides_the_bot_from_everyone_but_its_audience_and_managers(world
         "ana": 200, "ben": 200, "cara": 200, "dee": 404}
     assert outcomes(api, tokens, "post", "chat/counsel", body={"text": "hello"}) == gone
     assert outcomes(api, tokens, "post", "notes", body={"to": "counsel", "text": "a note"}) == gone
-    assert outcomes(api, tokens, "post", "tasks", body={"owner": "counsel", "title": "A task", "body": "Do it."}) == gone
+    assert outcomes(api, tokens, "post", "tasks", body={"owner_id": "counsel", "title": "A task", "body": "Do it."}) == gone
     assert outcomes(api, tokens, "post", "messages", body={"to": "counsel", "text": "hi"}) == gone
-    assert outcomes(api, tokens, "post", "tasks/dry-run", body={"owner": "counsel", "title": "A task", "body": "x"}
+    assert outcomes(api, tokens, "post", "tasks/dry-run", body={"owner_id": "counsel", "title": "A task", "body": "x"}
                     )["dee"] == 200      # the check answers, and says the bot is not one they can name
-    dry = call(api, "post", "tasks/dry-run", tokens["dee"], {"owner": "counsel", "title": "A task", "body": "x"}).json()
+    dry = call(api, "post", "tasks/dry-run", tokens["dee"], {"owner_id": "counsel", "title": "A task", "body": "x"}).json()
     assert dry["ok"] is False and "not a bot or a person" in dry["problems"][0]
     # SQL counts do not leak it either.
     for who, seen in (("dee", 0), ("cara", 1)):
@@ -186,7 +186,7 @@ def test_read_without_write_can_look_but_not_ask(world):
     refused = {who: 200 if who in can else 403 for who in ALL}
     assert outcomes(api, tokens, "post", "chat/counsel", body={"text": "hello"}) == refused
     assert outcomes(api, tokens, "post", "notes", body={"to": "counsel", "text": "a note"}) == refused
-    assert outcomes(api, tokens, "post", "tasks", body={"owner": "counsel", "title": "A task", "body": "Do it."}) == refused
+    assert outcomes(api, tokens, "post", "tasks", body={"owner_id": "counsel", "title": "A task", "body": "Do it."}) == refused
     r = call(api, "post", "chat/counsel", tokens["dee"], {"text": "hello"})
     assert r.json()["error"]["code"] == "forbidden" and "Write access" in r.json()["error"]["detail"]
     assert outcomes(api, tokens, "post", f"tasks/{task['id']}/comments", body={"text": "Any news?"},
@@ -220,7 +220,7 @@ def test_the_owner_the_manager_and_the_bot_itself_always_have_full_access(world)
     # A bot administrator has it for the bots run under their own name.
     counsel = bot_id(api, "counsel")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='ben' WHERE bot=?", (counsel,))
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot=?", (counsel,))
         c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot=?", (counsel,))
     row = next(b for b in get(api, "bots", "ben-test") if b["slug"] == "counsel")
     assert row["access"] == {"see": True, "read": True, "write": True}
@@ -237,8 +237,8 @@ def test_write_without_read_shows_only_your_own_threads_and_tasks(world):
     set_access(api, see=EVERYONE, read={"teams": ["legal"]}, write=EVERYONE)
     mine = post(api, "chat/counsel", {"text": "Dee's private question"}, token="dee-test")
     theirs = post(api, "chat/counsel", {"text": "Cara's question"}, token="cara-test")
-    dees_task = post(api, "tasks", {"owner": "counsel", "title": "Dee's contract", "body": "Please look."}, token="dee-test")
-    others_task = post(api, "tasks", {"owner": "counsel", "title": "Cara's contract", "body": "Please look."}, token="cara-test")
+    dees_task = post(api, "tasks", {"owner_id": "counsel", "title": "Dee's contract", "body": "Please look."}, token="dee-test")
+    others_task = post(api, "tasks", {"owner_id": "counsel", "title": "Cara's contract", "body": "Please look."}, token="cara-test")
     # Dee's own thread and task, and nothing else the bot is doing.
     assert get(api, f"conversations/{mine['conversation_id']}/messages", "dee-test")
     get(api, f"conversations/{theirs['conversation_id']}/messages", "dee-test", expected=403)
@@ -253,11 +253,11 @@ def test_write_without_read_shows_only_your_own_threads_and_tasks(world):
     get(api, "status?bot=counsel", "dee-test", expected=403)
     assert get(api, "bots/counsel/files", "dee-test")["total"] == 0
     # The counts through SQL are hers too.
-    r = call(api, "post", "sql", "dee-test", {"sql": f"SELECT count(*) FROM tasks WHERE owner='{H.bot_actor(bot_id(api, 'counsel'))}'"})
+    r = call(api, "post", "sql", "dee-test", {"sql": f"SELECT count(*) FROM tasks WHERE owner_id='{H.bot_actor(bot_id(api, 'counsel'))}'"})
     assert r.json()["rows"] == [[1]]
 
     # A subtask filed for her under a task she may not read says nothing of whose that task is.
-    child = post(api, "tasks", {"owner": "human:dee", "title": "Sign the contract", "body": "Sign it.",
+    child = post(api, "tasks", {"owner_id": "human:dee", "title": "Sign the contract", "body": "Sign it.",
                                 "relations": [{"task": others_task["id"], "kind": "parent"}]},
                  token=post(api, "bots/counsel/agent-credential", {})["token"])
     assert get(api, "tasks/" + child["id"], "dee-test")["task"]["from_person"] is None
@@ -325,7 +325,7 @@ def test_the_old_private_and_routing_lists_are_retired_with_one_note_for_the_own
                 H.sync_registry(c, {"inbox": {"name": "inbox", "runtime": "fake", "status": "active"}},
                                 {"people": [{"id": "ana", "email": "ana@acme.example"},
                                             {"id": "ben", "email": "ben@acme.example"}]})
-                c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('inbox','{}','ana')")
+                c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('inbox','{}','ana')")
             # The bot the file called private is Open: Ben sees, reads and writes to it.
             row = next(b for b in get(client, "bots", "ben-test") if b["slug"] == "inbox")
             assert row["access"] == {"see": True, "read": True, "write": True}

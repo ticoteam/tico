@@ -26,7 +26,7 @@ def task(api, task_id):
 
 def proposals(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE requester=? AND owner=? AND title LIKE 'Decide %' "
+        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE requester_id=? AND owner_id=? AND title LIKE 'Decide %' "
                                            "ORDER BY created_at", (STRATEGY_BOT, OWNER))]
 
 
@@ -50,7 +50,7 @@ def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_o
     decide(api, bot(api, "ops"), changes, expected=403)        # only the Strategy Bot decides alone
     made = decide(api, strategy_token, changes)
     assert made["state"] == "done" and not made["left"] and len(made["done"]) == 4
-    assert task(api, first)["owner"] == "bot:finance" and task(api, stale)["status"] == "closed"
+    assert task(api, first)["owner_id"] == "bot:finance" and task(api, stale)["status"] == "closed"
     new = made["done"][0]["task_id"]
     with api.app.state.store.read() as c:
         stamped = {r[0] for r in c.execute("SELECT DISTINCT task_id FROM task_events WHERE action_id=?", (made["id"],))}
@@ -68,10 +68,10 @@ def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_o
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
     assert undone["state"] == "undone"
     assert task(api, stale)["status"] == "open" and task(api, new)["status"] == "closed"
-    assert task(api, first)["owner"] == "bot:finance"                  # the person's later edit stays
+    assert task(api, first)["owner_id"] == "bot:finance"                  # the person's later edit stays
     assert "owner was changed since" in undone["undo"]["text"]
     with api.app.state.store.read() as c:
-        told = c.execute("SELECT COUNT(*) FROM messages m WHERE m.from_actor=? AND m.body LIKE '%undid a decision%'",
+        told = c.execute("SELECT COUNT(*) FROM messages m WHERE m.sender_id=? AND m.body LIKE '%undid a decision%'",
                          (H.KEEPER,)).fetchone()[0]
     assert told >= 2
     post(api, f"strategy-bot/log/{made['id']}/undo", {}, expected=422)       # once
@@ -92,8 +92,8 @@ def test_a_change_a_bot_offline_or_a_person_would_take_becomes_one_proposal_neve
         H.task_create(c, "bot:finance", "Close the books", "Work it.", "bot:finance", lint=False)
         c.execute("UPDATE bots SET state='paused' WHERE slug='finance'")
     made = decide(api, strategy_token, [{"do": "reorder", "task_id": paused},
-                             {"do": "create", "owner": "finance", "title": "Pause the signup campaign"},
-                             {"do": "create", "owner": OWNER, "title": "Call the three biggest customers"}])
+                             {"do": "create", "owner_id": "finance", "title": "Pause the signup campaign"},
+                             {"do": "create", "owner_id": OWNER, "title": "Call the three biggest customers"}])
     assert made["state"] == "done" and len(made["done"]) == 1 and len(made["left"]) == 2
     asked = proposals(api)
     assert len(asked) == 1 and asked[0]["id"] == made["proposal_task"]
@@ -113,7 +113,7 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
         mine = H.task_create(c, STRATEGY_BOT, "Write the onboarding email", "Work it.", "bot:ops", lint=False)["id"]
     tries = [
         ("cost", "bots/ops/model", {"model": "opus", "expected_revision": 1}),
-        ("publish", "tasks", {"title": "Share the roadmap", "body": "Publish it.", "owner": "bot:ops",
+        ("publish", "tasks", {"title": "Share the roadmap", "body": "Publish it.", "owner_id": "bot:ops",
                               "visibility": "public", "public_title": "Our roadmap"}),
         ("send", "calendar/appointments", {"calendar": "ana@acme.example", "title": "Intro call",
                                            "start": "2099-01-01T09:00:00+00:00", "end": "2099-01-01T09:30:00+00:00",
@@ -124,14 +124,14 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
         ("vision", "company", {"vision": "Rule the world"}),
         ("instructions", "bots/ops/definition", {"description": "Only ever work on growth",
                                                    "expected_revision": 1}),
-        ("person_task", f"tasks/{mine}", {"owner": OWNER, "version": task(api, mine)["version"]}),
+        ("person_task", f"tasks/{mine}", {"owner_id": OWNER, "version": task(api, mine)["version"]}),
     ]
     for kind, path, body in tries:
         r = api.post("/api/v2/" + path, json=body, headers=headers(strategy_token))
         assert r.status_code == 409 and "proposal" in r.text, (kind, r.text)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM bots WHERE slug='ops'").fetchone()[0] == "active"
-        assert H.task(c, mine)["owner"] == "bot:ops"
+        assert H.task(c, mine)["owner_id"] == "bot:ops"
         assert not c.execute("SELECT 1 FROM calendar_actions").fetchone()
         assert not c.execute("SELECT 1 FROM refusals WHERE actor=?", (STRATEGY_BOT,)).fetchone()
     log = get(api, "strategy-bot/log")["items"]
@@ -162,7 +162,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     typ = post(api, "task-types", {"name": "Dev ticket", "steps_only": True, "bots": "work", "steps": [
         {"name": "Backlog", "status": "open"}, {"name": "On Deck", "status": "open"},
         {"name": "Done", "status": "closed"}]})["type"]
-    ticket = post(api, "tasks", {"owner": "ops", "title": "Fix the guest message times", "body": "Please.",
+    ticket = post(api, "tasks", {"owner_id": "ops", "title": "Fix the guest message times", "body": "Please.",
                                  "type": typ["id"], "step": "On Deck"})["id"]
     with api.app.state.store.transaction() as c:
         H.task_update(c, OWNER, ticket, note="Waiting on the copy")
@@ -173,14 +173,14 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     with api.app.state.store.transaction() as c:
         H.task_update(c, OWNER, refused, owner="bot:coo", mover=True)
     start = {t: task(api, t) for t in (moved, back, twice, refused, ticket)}
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": moved, "owner": "finance"},
-                             {"do": "reassign", "task_id": back, "owner": "finance"},
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": moved, "owner_id": "finance"},
+                             {"do": "reassign", "task_id": back, "owner_id": "finance"},
                              {"do": "reorder", "task_id": twice}, {"do": "reorder", "task_id": twice},
-                             {"do": "reassign", "task_id": refused, "owner": "finance"},
+                             {"do": "reassign", "task_id": refused, "owner_id": "finance"},
                              {"do": "close", "task_id": ticket},
-                             {"do": "create", "owner": "ops", "title": "Fix the setup step that drops new accounts"}])
+                             {"do": "create", "owner_id": "ops", "title": "Fix the setup step that drops new accounts"}])
     assert made["state"] == "done" and len(made["done"]) == 7, made["left"]
-    post(api, f"tasks/{moved}", {"version": start[moved]["version"], "due": "2099-01-01T00:00:00+00:00"},
+    post(api, f"tasks/{moved}", {"version": start[moved]["version"], "due_at": "2099-01-01T00:00:00+00:00"},
          expected=409)
     new = made["done"][-1]["task_id"]
     with api.app.state.store.transaction() as c:
@@ -193,12 +193,12 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     held = task(api, ticket)["version"]
     post(api, f"strategy-bot/log/{made['id']}/undo", {}, token="ben-test", expected=403)        # an admin doesn't undo
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
-    post(api, f"tasks/{ticket}", {"version": held, "due": "2099-01-01T00:00:00+00:00"}, expected=409)
+    post(api, f"tasks/{ticket}", {"version": held, "due_at": "2099-01-01T00:00:00+00:00"}, expected=409)
     text = undone["undo"]["text"]
     now = {t: task(api, t) for t in (moved, back, twice, refused, ticket, new)}
     # The person's place in the queue stays, and the owner still goes back.
-    assert now[moved]["owner"] == "bot:ops" and now[moved]["rank"] == -50
-    assert now[back]["owner"] == "bot:ops" and now[back]["rank"] == decided
+    assert now[moved]["owner_id"] == "bot:ops" and now[moved]["rank"] == -50
+    assert now[back]["owner_id"] == "bot:ops" and now[back]["rank"] == decided
     assert '"Write the onboarding email": its place in the queue was changed since by' in text
     assert '"Clean up old reports": its place in the queue was changed since by' in text
     # Two moves of one task go back to where it started, with no later edit claimed.
@@ -208,10 +208,10 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
         "open", start[ticket]["step_id"], "Waiting on the copy")
     assert now[ticket]["step_rank"] == start[ticket]["step_rank"] and not now[ticket]["closed_at"]
     # What a person took on stays theirs and open; a refused restore is said and the rest still went back.
-    assert (now[new]["owner"], now[new]["status"]) == (OWNER, "doing") and "which it made, was changed since" in text
-    assert now[refused]["owner"] == "bot:finance" and '"Plan the launch" could not be put back' in text
+    assert (now[new]["owner_id"], now[new]["status"]) == (OWNER, "doing") and "which it made, was changed since" in text
+    assert now[refused]["owner_id"] == "bot:finance" and '"Plan the launch" could not be put back' in text
     with api.app.state.store.read() as c:
-        told = {r[0] for r in c.execute("SELECT to_actor FROM messages WHERE from_actor=? AND body LIKE "
+        told = {r[0] for r in c.execute("SELECT recipient_id FROM messages WHERE sender_id=? AND body LIKE "
                                         "'%undid a decision%'", (H.KEEPER,))}
     assert {"bot:ops", "bot:finance"} <= told
 
@@ -237,7 +237,7 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
     for name in (hidden, unseen):
         r = api.post("/api/v2/strategy-bot/decisions", headers=headers(strategy_token), json={
             "reason": "Activation is red", "changes": [{"do": "reorder", "task_id": name},
-                                                       {"do": "create", "owner": "ops", "title": "Fix setup"}]})
+                                                       {"do": "create", "owner_id": "ops", "title": "Fix setup"}]})
         assert r.status_code == 422 and r.json()["error"]["code"] == "not-found", r.text
         assert "Fire the vendor" not in r.text and "Acquire Initech" not in r.text
     with api.app.state.store.read() as c:
@@ -252,11 +252,11 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
     before = task(api, mine)
     made = decide(api, strategy_token, [
         {"do": "reorder", "task_id": mine},
-        {"do": "reassign", "task_id": mine, "owner": OWNER},
+        {"do": "reassign", "task_id": mine, "owner_id": OWNER},
         {"do": "close", "task_id": mine, "note": "Globex walked away from the merger"}])
     assert made["state"] == "proposed" and not made["done"] and len(made["left"]) == 3
     after = task(api, mine)
-    assert (after["status"], after["owner"], after["rank"]) == (before["status"], before["owner"], before["rank"])
+    assert (after["status"], after["owner_id"], after["rank"]) == (before["status"], before["owner_id"], before["rank"])
     seen = str(get(api, "strategy-bot/log")) + str(proposals(api))
     for secret in ("Merge with Globex", "Secret terms", "Globex walked away"):
         assert secret not in seen, secret
@@ -269,8 +269,8 @@ def test_undo_leaves_open_a_task_it_made_whose_title_or_body_was_edited_since(ap
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     level(api, 3)
-    made = decide(api, strategy_token, [{"do": "create", "owner": "ops", "title": "Fix the setup step"},
-                             {"do": "create", "owner": "ops", "title": "Write the release note"}])
+    made = decide(api, strategy_token, [{"do": "create", "owner_id": "ops", "title": "Fix the setup step"},
+                             {"do": "create", "owner_id": "ops", "title": "Write the release note"}])
     titled, bodied = (x["task_id"] for x in made["done"])
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:ops", titled, title="Fix the setup step and the signup form")
@@ -293,18 +293,18 @@ def test_a_decision_never_makes_a_task_private_and_undo_puts_back_one_made_priva
         c.execute("UPDATE bot_config SET config=? WHERE bot='finance'",
                   (encode({**config, "private_tasks_default": True}), ))
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
-    held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "finance"}])
+    held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner_id": "finance"}])
     assert held["state"] == "proposed" and "keeps its tasks private" in held["left"][0]["why"]
-    assert task(api, work)["owner"] == "bot:ops" and not task(api, work)["private"]
+    assert task(api, work)["owner_id"] == "bot:ops" and not task(api, work)["private"]
 
     bot(api, "coo")
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner_id": "coo"}])
     assert made["state"] == "done" and "before" not in made["done"][0]        # the owner's log keeps the fields
     assert get(api, "strategy-bot/log")["items"][0]["done"][0]["before"]["private"] == 0
     with api.app.state.store.transaction() as c:          # made private since, by someone else
         c.execute("UPDATE tasks SET private=1, visibility='private' WHERE id=?", (work,))
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
-    assert task(api, work)["owner"] == "bot:ops", undone["undo"]["text"]
+    assert task(api, work)["owner_id"] == "bot:ops", undone["undo"]["text"]
     assert "its owner" in undone["undo"]["text"] and "could not be put back" not in undone["undo"]["text"]
 
 
@@ -319,11 +319,11 @@ def test_a_decision_never_creates_a_task_for_a_bot_that_keeps_its_tasks_private(
         config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='finance'").fetchone()[0], {})
         c.execute("UPDATE bot_config SET config=? WHERE bot='finance'",
                   (encode({**config, "private_tasks_default": True}), ))
-    held = decide(api, strategy_token, [{"do": "create", "owner": "finance", "title": "Review the vendor contract"}])
+    held = decide(api, strategy_token, [{"do": "create", "owner_id": "finance", "title": "Review the vendor contract"}])
     assert held["state"] == "proposed" and not held["done"]
     assert "keeps its tasks private" in held["left"][0]["why"]
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:finance'").fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:finance'").fetchone()
 
 
 def test_the_strategy_bot_publishes_only_with_a_real_approval_whatever_the_team_setting(api):
@@ -399,12 +399,12 @@ def test_undo_keeps_a_guest_given_the_task_since_and_says_why_its_owner_stays(ap
         bot(api, slug)
     level(api, 3)
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner_id": "coo"}])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1, visibility='private', guest='human:ben' WHERE id=?", (work,))
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
     after = task(api, work)
-    assert after["owner"] == "bot:coo" and after["guest"] == "human:ben"
+    assert after["owner_id"] == "bot:coo" and after["guest"] == "human:ben"
     assert "has a guest now, so its owner stays" in undone["undo"]["text"], undone["undo"]["text"]
 
 
@@ -422,22 +422,22 @@ def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by
         hidden = H.task_create(c, OWNER, "Restructure the payroll", "Secret salaries", "bot:finance", lint=False)["id"]
     assert not task(api, hidden)["private"]
     before = task(api, hidden)
-    for change in ({"do": "reorder", "task_id": hidden}, {"do": "reassign", "task_id": hidden, "owner": "ops"},
+    for change in ({"do": "reorder", "task_id": hidden}, {"do": "reassign", "task_id": hidden, "owner_id": "ops"},
                    {"do": "close", "task_id": hidden, "note": "Not needed"}):
         r = api.post("/api/v2/strategy-bot/decisions", headers=headers(strategy_token),
                      json={"reason": "Activation is red", "changes": [change]})
         assert r.status_code == 422 and r.json()["error"]["code"] == "not-found", (change, r.text)
         assert "Restructure the payroll" not in r.text and "Secret salaries" not in r.text
     after = task(api, hidden)
-    assert (after["owner"], after["status"], after["rank"]) == (before["owner"], before["status"], before["rank"])
+    assert (after["owner_id"], after["status"], after["rank"]) == (before["owner_id"], before["status"], before["rank"])
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM strategy_actions").fetchone()
 
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
-    held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "finance"},
-                             {"do": "create", "owner": "finance", "title": "Review the payroll"}])
+    held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner_id": "finance"},
+                             {"do": "create", "owner_id": "finance", "title": "Review the payroll"}])
     assert held["state"] == "proposed" and not held["done"] and len(held["left"]) == 2
-    assert task(api, work)["owner"] == "bot:ops"
+    assert task(api, work)["owner_id"] == "bot:ops"
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM tasks WHERE title='Review the payroll'").fetchone()
 
@@ -457,8 +457,8 @@ def test_a_bot_the_strategy_bot_cant_see_is_answered_as_a_bot_that_isnt_there(ap
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
 
     def left(owner):
-        made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": owner},
-                                 {"do": "create", "owner": owner, "title": "Review the payroll"}])
+        made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner_id": owner},
+                                 {"do": "create", "owner_id": owner, "title": "Review the payroll"}])
         assert made["state"] == "proposed" and not made["done"], made
         body = task(api, made["proposal_task"])["body"]
         return made, [(x["text"], x["why"]) for x in made["left"]], body
@@ -471,7 +471,7 @@ def test_a_bot_the_strategy_bot_cant_see_is_answered_as_a_bot_that_isnt_there(ap
     _, missing_left, missing_body = left("nobody")       # the same words for a slug no bot has
     assert hidden_left == [(t.replace("nobody", "finance"), w.replace("nobody", "finance")) for t, w in missing_left]
     assert hidden_body == missing_body.replace("nobody", "finance"), (hidden_body, missing_body)
-    assert task(api, work)["owner"] == "bot:ops"
+    assert task(api, work)["owner_id"] == "bot:ops"
 
 
 def test_undo_puts_back_a_decision_logged_before_a_tasks_column_was_renamed(api, monkeypatch):
@@ -485,13 +485,13 @@ def test_undo_puts_back_a_decision_logged_before_a_tasks_column_was_renamed(api,
     bot(api, "finance")
     first = bot_task(api, "ops", "Write the onboarding email")
     level(api, 3)
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": first, "owner": "finance"}])
-    assert task(api, first)["owner"] == "bot:finance"
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": first, "owner_id": "finance"}])
+    assert task(api, first)["owner_id"] == "bot:finance"
     monkeypatch.setattr(renames, "COLUMNS", (*renames.COLUMNS, ("tasks", "owner_before_rename", "owner", "9")))
     with api.app.state.store.transaction() as c:
         changes = json.loads(c.execute("SELECT changes FROM strategy_actions WHERE id=?", (made["id"],)).fetchone()[0])
         for side in ("before", "after"):
-            changes["done"][0][side]["owner_before_rename"] = changes["done"][0][side].pop("owner")
+            changes["done"][0][side]["owner_before_rename"] = changes["done"][0][side].pop("owner_id")
         c.execute("UPDATE strategy_actions SET changes=? WHERE id=?", (json.dumps(changes), made["id"]))
     assert post(api, f"strategy-bot/log/{made['id']}/undo", {})["state"] == "undone"
-    assert task(api, first)["owner"] == "bot:ops"
+    assert task(api, first)["owner_id"] == "bot:ops"

@@ -79,15 +79,15 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
     : {draft: {...v1, id: 'v-d', n: null, status: 'draft', sections: {...sections, extra: {...sections.extra}}, revision: 7, published: null, published_by: null},
       current: v1, bets: bets()};
   const goals = [
-    {id: 'g-top', title: 'Margin per job ≥ 30%', owner: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: [], why: '', bet_id: 'b-price'},
-    {id: 'g-cmo', title: 'Sign 5 property managers', owner: 'bot:cmo', parent_id: 'g-top', status: 'red', status_source: 'auto', rank: 0, kpis: [], why: '', bet_id: null},
+    {id: 'g-top', title: 'Margin per job ≥ 30%', owner_id: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: [], why: '', bet_id: 'b-price'},
+    {id: 'g-cmo', title: 'Sign 5 property managers', owner_id: 'bot:cmo', parent_id: 'g-top', status: 'red', status_source: 'auto', rank: 0, kpis: [], why: '', bet_id: null},
     ...more];
   const groups = [{id: 'ops', name: 'Operations', parent: '', bet_id: null}];
   const mk = market();
   const strategy = () => ({...(role === 'owner' ? {draft: st.draft} : {}), current: st.current, bets: role === 'owner' ? st.bets : st.current?.bets || [],
     label: 'Bets', label_one: 'Bet', may_edit: role === 'owner',
-    website: 'https://acme.example', goals_by_bet: {'b-price': [{id: 'g-top', title: 'Margin per job ≥ 30%', owner: 'company', status: 'green'},
-      {id: 'g-jobs', title: '400 jobs/week', owner: 'bot:cmo', status: 'yellow'}], 'b-offices': [{id: 'g-cmo', title: 'Sign 5 property managers', owner: 'bot:cmo', status: 'red'}]},
+    website: 'https://acme.example', goals_by_bet: {'b-price': [{id: 'g-top', title: 'Margin per job ≥ 30%', owner_id: 'company', status: 'green'},
+      {id: 'g-jobs', title: '400 jobs/week', owner_id: 'bot:cmo', status: 'yellow'}], 'b-offices': [{id: 'g-cmo', title: 'Sign 5 property managers', owner_id: 'bot:cmo', status: 'red'}]},
     // goals_by_bet is the first 20 a bet has; this counts all of its live ones.
     live_by_bet: {'b-price': 21, 'b-offices': 1},
     health_by_bet: {'b-price': 'green', 'b-offices': 'red', 'b-weekly': 'gray'}});
@@ -503,7 +503,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
           sections: {sell: 'Weekly at $99.', extra: {brand: {title: 'Brand', body: 'Fair, on time.'}}},
           bets: [{id: 'b-price', status: 'retired'}, {statement: 'Price at the market and win on reliability.', rules_out: 'Discounts.',
             wrong_if: {kind: 'text', text: 'Churn above 5% a month', check_by: '2027-03-01'}}, {id: 'b-offices', why: 'Managers sign yearly.'}]}};
-      const {page, errors, sent} = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-draft', owner: 'human:ana', proposal}]});
+      const {page, errors, sent} = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-draft', owner_id: 'human:ana', proposal}]});
       const card = page.locator('#goal-needs [data-proposal="p-draft"]');
       await card.waitFor();
       const flat = t => t.replace(/\s+/g, ' ').trim();
@@ -536,7 +536,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
     // sets it aside; "No, leave it" rejects; with nothing published the line says so.
     {
       const long = Array.from({length: 8}, (_, i) => `Line ${i + 1} of who we serve.`).join('\n');
-      const card = (id, payload, extra = {}) => ({kind: 'proposal', ref: id, owner: 'human:ana', proposal: {id, kind: 'strategy_draft', goal_id: null, kpi_id: null,
+      const card = (id, payload, extra = {}) => ({kind: 'proposal', ref: id, owner_id: 'human:ana', proposal: {id, kind: 'strategy_draft', goal_id: null, kpi_id: null,
         status: 'pending', proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(), reason: '', payload, ...extra}});
       const {page, errors, sent} = await open(browser, {route: '#/goals', needs: [
         card('p-lens', {source: 'lens', lens: 'blue-ocean', sections: {serve: long}}, {lens_name: 'Blue Ocean'}),
@@ -582,7 +582,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
     }
     // A goal serving a bet this person can't see (retired, or not published) keeps it when saved for something else.
     {
-      const old = {id: 'g-old', title: 'Win the office park', owner: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: [], why: '', bet_id: 'b-gone'};
+      const old = {id: 'g-old', title: 'Win the office park', owner_id: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: [], why: '', bet_id: 'b-gone'};
       const {page, errors, sent} = await open(browser, {route: '#/goals', more: [old]});
       await page.locator('#goal-tree .gt-row').first().waitFor();
       await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]:not(.gt-cont) .gt-name').click();
@@ -630,12 +630,12 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       const realign = (closed = [], old = false) => ({id: 'p-realign', kind: 'strategy_realign', goal_id: null, kpi_id: null, status: 'pending', proposed_by: 'keeper',
         proposed_at: new Date().toISOString(), reason: 'strategy v2 retired or rewrote the bets these goals serve', closed_goals: closed,
         payload: {n: 2, goals: [
-          {goal_id: 'g-top', title: 'Margin per job ≥ 30%', owner: 'company', bet_id: 'b-price', change: 'retired', statement: bets()[0].statement},
-          {goal_id: 'g-cmo', title: 'Sign 5 property managers', owner: 'bot:cmo', bet_id: 'b-offices', change: 'rewritten', statement: 'Sell to offices through managers and agents.',
+          {goal_id: 'g-top', title: 'Margin per job ≥ 30%', owner_id: 'company', bet_id: 'b-price', change: 'retired', statement: bets()[0].statement},
+          {goal_id: 'g-cmo', title: 'Sign 5 property managers', owner_id: 'bot:cmo', bet_id: 'b-offices', change: 'rewritten', statement: 'Sell to offices through managers and agents.',
            ...(old ? {} : {was: bets()[1].statement})}],
           bets: [{id: 'b-offices', number: 1, statement: 'Sell to offices through managers and agents.'}, {id: 'b-weekly', number: 2, statement: bets()[2].statement}]}});
       const proposal = realign();
-      const {page, errors, sent} = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-realign', owner: 'human:ana', proposal}]});
+      const {page, errors, sent} = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-realign', owner_id: 'human:ana', proposal}]});
       const card = page.locator('#goal-needs [data-proposal="p-realign"]');
       await card.waitFor();
       assert.match(await card.locator('.kpi-prop-head').innerText(), /^Strategy v2 changed bets that 2 goals serve/);
@@ -667,7 +667,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       await page.close();
       // A goal closed since reads Already closed and is not counted; every goal closed is "Got it", which changes nothing.
       for (const [closed, button, line] of [[['g-top'], 'Keep this goal as it is', /^Choose what happens/], [['g-top', 'g-cmo'], 'Got it', /^These goals were closed since; nothing to decide\.$/]]) {
-        const again = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-realign', owner: 'human:ana', proposal: realign(closed)}]});
+        const again = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-realign', owner_id: 'human:ana', proposal: realign(closed)}]});
         const c = again.page.locator('#goal-needs [data-proposal="p-realign"]');
         await c.waitFor();
         assert.match(await c.locator('.strat-realign-goal').first().innerText(), /Already closed/);
@@ -682,7 +682,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       }
       // A card filed before the earlier wording was carried shows the reworded bet's Now only, with no empty Before row.
       {
-        const old = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-realign', owner: 'human:ana', proposal: realign([], true)}]});
+        const old = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-realign', owner_id: 'human:ana', proposal: realign([], true)}]});
         const row = old.page.locator('#goal-needs [data-proposal="p-realign"] .strat-realign-goal').nth(1);
         await row.waitFor();
         assert.deepEqual(await row.locator('.prop-np-k').allInnerTexts(), ['Now']);

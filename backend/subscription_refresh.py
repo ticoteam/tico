@@ -60,7 +60,7 @@ def request_refresh(c, auth, who, body):
     auth.domain(who)
     runner = c.execute('SELECT * FROM runners WHERE id=? AND revoked_at IS NULL', (body.runner_id,)).fetchone()
     if not runner or who.role not in ('human', 'owner') or not (
-            auth.bot_admin(who) or runner['operator'] == H.actor_id(who.actor)):
+            auth.bot_admin(who) or runner['owner_id'] == H.actor_id(who.actor)):
         raise Problem('forbidden', 'Only a computer operator or administrator can refresh weekly usage', 403)
     row = c.execute('SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?',
                     (body.runner_id, body.profile)).fetchone()

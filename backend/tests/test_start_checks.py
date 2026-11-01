@@ -30,7 +30,7 @@ def employees(api, monkeypatch, token="ana-test"):
 
 def open_tasks(store, slug="ops"):
     with store.read_transaction() as c:
-        return H._rows(c.execute("SELECT * FROM tasks WHERE owner=? AND status IN ('open','doing') ORDER BY rowid",
+        return H._rows(c.execute("SELECT * FROM tasks WHERE owner_id=? AND status IN ('open','doing') ORDER BY rowid",
                                  ("bot:" + slug,)))
 
 
@@ -65,7 +65,7 @@ def counted_once(store, rows):
 def test_batched_counts_match_each_tasks_own_checks(api, monkeypatch):
     setup(api, monkeypatch, tasks=2)
     for n in range(2, 16):
-        post(api, "tasks", {"owner": "ops", "title": f"Review change {n}", "body": "Please review it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Review change {n}", "body": "Please review it."})
     store = api.app.state.store
     by_title = {r["title"]: r["id"] for r in open_tasks(store)}
     flagged_titles = ("Review change 2", "Review change 3", "Review change 4", "Review change 5",
@@ -100,7 +100,7 @@ def test_counts_read_a_fixed_number_of_statements_however_many_open_tasks(api, m
     store = api.app.state.store
     small = counted(store, open_tasks(store))[1]
     for n in range(40):
-        post(api, "tasks", {"owner": "ops", "title": f"More {n}", "body": "Please review it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"More {n}", "body": "Please review it."})
     rows = open_tasks(store)
     assert len(rows) == 44
     got, big = counted(store, rows)
@@ -119,7 +119,7 @@ def test_employees_page_reads_no_more_statements_as_its_bots_open_tasks_grow(api
     employees(api, monkeypatch)                  # the first read warms the table checks each connection keeps
     _, small = employees(api, monkeypatch)
     for n in range(40):
-        post(api, "tasks", {"owner": "ops", "title": f"More {n}", "body": "Please review it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"More {n}", "body": "Please review it."})
     employees(api, monkeypatch)
     body, big = employees(api, monkeypatch)
     assert any(row.get("name") == "ops" for row in body if isinstance(row, dict))

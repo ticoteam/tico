@@ -251,7 +251,7 @@ def test_tico_models_are_on_only_while_a_key_is_set(api, monkeypatch):
 def new_bot(api, slug, expected=200, **choice):
     return post(api, "bots", {"slug": slug, "display_name": slug.title(), "description": "A test bot.",
                               "status": "active", "repo": "emp-" + slug, "thread_mode": "personal",
-                              "operator": "ana", "owners": ["ana"], "runner_id": None, **choice}, expected=expected)
+                              "owner_id": "ana", "owners": ["ana"], "runner_id": None, **choice}, expected=expected)
 
 
 def test_the_old_lineup_is_retired_but_a_default_or_bot_already_on_it_keeps_it(api, monkeypatch):
@@ -586,7 +586,7 @@ def test_the_key_follows_what_the_run_was_handed_not_a_later_setting(api, monkey
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     if change == "check_to_tico":
-        post(api, "tasks", {"owner": "ops", "title": "Synthetic check", "body": "Use only the synthetic fixture"})
+        post(api, "tasks", {"owner_id": "ops", "title": "Synthetic check", "body": "Use only the synthetic fixture"})
     else:
         post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
     attempt = claim(api, machine, "ops")
@@ -858,7 +858,7 @@ def test_a_tico_model_on_a_runner_that_runs_bots_as_itself_says_so_once_and_is_n
         assert ended(api, attempt)[1] == "uncertain" and claim(api, machine, "ops") is None
     # Its owner sees why in Needs you, not a bot that just went quiet.
     issue = next(i for i in api.get("/api/status", headers=headers()).json()["health_issues"]
-                 if i["bot"] == "ops" and i["kind"] == "uncertain_work")
+                 if i["bot_id"] == "ops" and i["kind"] == "uncertain_work")
     assert issue["needs_person"] and "Docker runner" in issue["action"], issue
     assert issue["detail"].startswith(error.removesuffix(" (not_isolated)") + "."), issue
 
@@ -871,14 +871,14 @@ def test_a_refusal_for_want_of_isolation_is_shown_only_to_who_may_read_its_run(a
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    post(api, "tasks", {"owner": "ops", "title": "Company work", "body": "Use only the synthetic fixture"})
+    post(api, "tasks", {"owner_id": "ops", "title": "Company work", "body": "Use only the synthetic fixture"})
     ordinary = claim(api, machine, "ops")
     post(api, f"attempts/{ordinary['id']}/started", {"thread_id": "company"}, machine["token"])
     post(api, f"attempts/{ordinary['id']}/events", {"events": [
         {"seq": 1, "kind": "tool", "payload": {"tool": "Bash", "status": "started", "item_id": "b1"}},
         {"seq": 2, "kind": "error", "payload": {"error": "the harness stopped"}}]}, machine["token"])
     post(api, f"attempts/{ordinary['id']}/complete", {"outcome": "failed", "last_seq": 2, "text": ""}, machine["token"])
-    post(api, "tasks", {"owner": "ops", "title": "Ana only", "body": "Private work.", "private": True})
+    post(api, "tasks", {"owner_id": "ops", "title": "Ana only", "body": "Private work.", "private": True})
     ready(api, machine, ["ops"])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
@@ -993,7 +993,7 @@ def test_a_reply_the_gateway_cut_off_is_posted_with_what_happened(api, monkeypat
     status, job = ended(api, attempt)
     assert job == "completed" and status["state"] == "idle"
     with api.app.state.store.read() as c:
-        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE from_actor='bot:ops'")]
+        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE sender_id='bot:ops'")]
     assert any("cut this reply off" in body and body.startswith("Hello there") for body in said), said
 
 

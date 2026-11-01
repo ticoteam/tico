@@ -106,7 +106,7 @@ def sharing(c, rid):
 
 def is_owner(who, runner):
     """The person whose computer it is: the only one who shares its internet."""
-    return bool(runner) and who.role in ("human", "owner") and who.actor == "human:" + runner["operator"]
+    return bool(runner) and who.role in ("human", "owner") and who.actor == "human:" + runner["owner_id"]
 
 
 BOT_EXIT_SQL = "SELECT * FROM bot_browser_exits WHERE bot=?"
@@ -231,7 +231,7 @@ def install(app, store, auth, mutate, execution, sessions):
 
     def changed(c, rid):
         # The heartbeat answer carries `browser_exit`: a change row asks the runner for one now (backend/events.py).
-        c.execute("INSERT INTO changes(topic,kind,subject_id,at) VALUES('runner','browser_exit',?,?)", (rid, H.now()))
+        c.execute("INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('runner','browser_exit',?,?)", (rid, H.now()))
 
     def view(c, who, runner):
         p = policy(c, runner["id"])
@@ -318,8 +318,8 @@ def install(app, store, auth, mutate, execution, sessions):
         return {"rows": rows[:limit], "days": totals, "next": offset + limit if more else None}
 
     def choices(c, bot):
-        return [{"runner_id": r["id"], "label": r["label"], "operator": r["operator"]}
-                for r in c.execute("SELECT r.id,r.label,r.operator,e.bots FROM browser_exits e "
+        return [{"runner_id": r["id"], "label": r["label"], "owner_id": r["owner_id"]}
+                for r in c.execute("SELECT r.id,r.label,r.owner_id,e.bots FROM browser_exits e "
                                    "JOIN runners r ON r.id=e.runner_id WHERE e.sharing=1 AND r.revoked_at IS NULL "
                                    "ORDER BY r.label")
                 if bot in _bots(r["bots"])]

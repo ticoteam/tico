@@ -42,9 +42,9 @@ def test_botops_continuation_keeps_the_requester_and_quiet_progress_stays_on_the
     active = turn(api, botops, person="ana-test", text="Review ops and keep working until done")
     with api.app.state.store.read() as c:
         origin = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (active["id"],)).fetchone()[0]
-    task = post(api, "tasks", {"owner": "botops", "title": "Review ops", "body": "Finish the requested review",
+    task = post(api, "tasks", {"owner_id": "botops", "title": "Review ops", "body": "Finish the requested review",
                               "request_id": origin}, active["token"])
-    assert task["requester"] == "human:ana" and task["request_id"] == origin
+    assert task["requester_id"] == "human:ana" and task["request_id"] == origin
     post(api, "tasks/" + task["id"], {"version": task["version"], "note": "QA detailed progress", "quiet": True}, active["token"])
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE body='QA detailed progress'").fetchone()
@@ -227,7 +227,7 @@ def test_an_input_the_runtime_never_got_goes_back_to_the_queue_whatever_the_outc
             first["id"]
         assert not c.execute("SELECT 1 FROM attempt_inputs WHERE message_id=?", (lost["id"],)).fetchone()
         if outcome == "completed":
-            answers = c.execute("SELECT json_extract(refs,'$.answers') FROM messages WHERE from_actor='bot:ops' "
+            answers = c.execute("SELECT json_extract(refs,'$.answers') FROM messages WHERE sender_id='bot:ops' "
                                 "AND body='Here is the summary.'").fetchone()[0]
             assert lost["id"] not in answers and applied["id"] in answers
     if outcome == "completed":
@@ -244,7 +244,7 @@ def test_a_comment_in_the_room_a_task_moved_to_steers_the_turn_still_running_fro
                                     "readiness": {"ops": True}}, token=r["token"])
     room = post(api, "chat/ops", {"text": "Hello"})["conversation_id"]
     with api.app.state.store.transaction() as c:      # filed into the chat before task rooms
-        c.execute("UPDATE jobs SET state='completed' WHERE bot='ops'")
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
         task = H.task_create(c, "human:ana", "Recheck the cash warning", "Today.", "bot:ops", conversation_id=room, own_room=False)
     active = claim(api, r)
     post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
@@ -260,7 +260,7 @@ def test_a_task_botops_files_from_a_persons_chat_lends_their_rights_to_its_own_r
     from the task notice, was refused bot registration."""
     from backend.tests.test_member_bots import register
     active = turn(api, botops, person="ana-test", text="Add a Software Engineer bot in engineering")
-    task = post(api, "tasks", {"owner": "botops", "title": "Build a bot: Software Engineer", "body": "Build it.",
+    task = post(api, "tasks", {"owner_id": "botops", "title": "Build a bot: Software Engineer", "body": "Build it.",
                                "request_id": "turn"}, active["token"])
     with api.app.state.store.read() as c:
         origin = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (active["id"],)).fetchone()[0]
@@ -316,7 +316,7 @@ def test_a_requester_bot_steers_its_delegated_tasks_running_turn(api):
     r = two_bots(api)
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:finance", "Close the books", "March.", "bot:ops", private=False, lint=False)
-        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND bot<>'ops'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND bot_id<>'ops'")
     active = claim(api, r, "ops")
     post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
     post(api, "chat/finance", {"text": "Tell ops to use the new ledger"})
@@ -338,7 +338,7 @@ def test_a_comment_taken_back_while_the_turn_read_it_does_not_break_the_turns_fi
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Review the report", "body": "Please review."})
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
     path = f"tasks/{task['id']}/comments"
@@ -368,7 +368,7 @@ def test_a_turn_whose_own_comment_was_taken_back_still_finishes(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Review the report", "body": "Please review."})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     path = f"tasks/{task['id']}/comments"
@@ -390,7 +390,7 @@ def test_a_comment_taken_back_before_the_runtime_got_it_is_cancelled_not_requeue
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Review the report", "body": "Please review."})
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
     path = f"tasks/{task['id']}/comments"
@@ -413,7 +413,7 @@ def _a_turn_started_by_a_comment(api, bot="ops", r=None):
         r = runner(api)
         assign(api, r, bot)
         ready(api, r, [bot])
-    task = post(api, "tasks", {"owner": bot, "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner_id": bot, "title": "Review the report", "body": "Please review."})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     path = f"tasks/{task['id']}/comments"
@@ -463,7 +463,7 @@ def test_a_reply_does_not_list_a_comment_taken_back_mid_turn_among_those_it_answ
     done = post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Reviewed.", "last_seq": 0},
                 r["token"])
     with api.app.state.store.read() as c:
-        reply = c.execute("SELECT refs FROM messages WHERE in_reply_to=? AND from_actor='bot:ops'",
+        reply = c.execute("SELECT refs FROM messages WHERE in_reply_to=? AND sender_id='bot:ops'",
                           (said["id"],)).fetchone()
         assert reply, done
         assert json.loads(reply[0])["answers"] == [said["id"], kept["id"]]
@@ -479,8 +479,8 @@ def test_background_commands_a_finished_turn_kept_wake_the_bot_once(api):
     # The runner retries a report it is not sure landed: the bot is woken once.
     assert post(api, f"attempts/{a['id']}/background-done", done, r["token"]) == {"woke": False}
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT body,refs,conversation_id FROM messages WHERE to_actor='bot:ops' AND kind='notice'").fetchall()
-        assert c.execute("SELECT state FROM jobs WHERE message_id IN (SELECT id FROM messages WHERE to_actor='bot:ops' "
+        rows = c.execute("SELECT body,refs,conversation_id FROM messages WHERE recipient_id='bot:ops' AND kind='notice'").fetchall()
+        assert c.execute("SELECT state FROM jobs WHERE message_id IN (SELECT id FROM messages WHERE recipient_id='bot:ops' "
                          "AND kind='notice')").fetchone()[0] == "queued"
     assert len(rows) == 1 and rows[0]["conversation_id"] == origin["conversation_id"]
     assert json.loads(rows[0]["refs"])["trigger"] == "background_done"
@@ -499,7 +499,7 @@ def test_a_wake_restored_after_a_runner_restart_stores_only_what_the_runner_sent
     assert post(api, f"attempts/{a['id']}/background-done", done, r["token"]) == {"woke": True}
     assert post(api, f"attempts/{a['id']}/background-done", done, r["token"]) == {"woke": False}
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND kind='notice'").fetchall()
+        rows = c.execute("SELECT body FROM messages WHERE recipient_id='bot:ops' AND kind='notice'").fetchall()
         logged = c.execute("SELECT detail FROM events WHERE action='attempt.background-done'").fetchall()
     assert len(rows) == 1 and withheld in rows[0]["body"] and "Deploy with ••••: exit 0" in rows[0]["body"]
     assert "SYNTH_SECRET" not in rows[0]["body"] and all("SYNTH_SECRET" not in e[0] for e in logged)

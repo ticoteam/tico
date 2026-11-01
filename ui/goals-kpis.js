@@ -62,7 +62,7 @@ function kpiLine(k, {owner = false, goal = ''} = {}) {
     ? `<span class="kpi-val tnum">${esc(kpiNum(k.latest.value, k.unit))}${KPI_QUALITY[k.latest.quality] ? ` <span class="kpi-q">${KPI_QUALITY[k.latest.quality]}</span>` : ''}<span class="muted"> · ${esc(kpiDay(k.latest.period_end))}</span></span>`
     : `<span class="kpi-val kpi-off">${k.freshness === 'stale' ? 'stale' : 'no data'}</span>`;
   return `<li class="kpi-line" data-kpi="${esc(k.id)}"${goal ? ` data-kpi-goal="${esc(goal)}"` : ''} tabindex="0" role="button" title="${esc(k.reason || '')}">
-    ${gdot(k.status, k.reason)}<span class="kpi-name">${esc(k.name)}</span>${owner ? `<span class="kpi-owner">${esc(goalActorName(k.owner))}</span>` : ''}
+    ${gdot(k.status, k.reason)}<span class="kpi-name">${esc(k.name)}</span>${owner ? `<span class="kpi-owner">${esc(goalActorName(k.owner_id))}</span>` : ''}
     ${value}${k.target_label ? `<span class="kpi-target">${esc(k.target_label)}</span>` : ''}${kpiSpark(k.spark, k.status)}</li>`;
 }
 function kpiLinesHtml(kpis, opts) {
@@ -344,7 +344,7 @@ function strategyRealignPropHtml(p) {
   const bet = g => g.change === 'retired' ? `<span class="muted">Its ${esc(one.toLowerCase())} was retired: ${esc(g.statement || '')}</span>`
     : `<div class="prop-np strat-realign-bet">${g.was ? `<div class="prop-np-row"><span class="prop-np-k">Before v${esc(pl.n)}</span><span class="prop-np-v">${esc(g.was)}</span></div>` : ''}<div class="prop-np-row"><span class="prop-np-k">Now</span><span class="prop-np-v">${esc(g.statement || '')}</span></div></div>`;
   const goals = (pl.goals || []).map(g => `<li class="strat-realign-goal${closed.has(g.goal_id) ? ' closed' : ''}"><span class="strat-realign-t"><b>${esc(g.title)}</b>
-      <span class="muted">${esc(goalActorName(g.owner))}</span>${bet(g)}</span>
+      <span class="muted">${esc(goalActorName(g.owner_id))}</span>${bet(g)}</span>
       ${closed.has(g.goal_id) ? '<span class="muted strat-realign-closed">Already closed</span>' : `<label class="goal-f strat-realign-f"><span class="sr-only">${esc(g.title)}</span><select data-realign-goal="${esc(g.goal_id)}" aria-label="${esc(g.title)}"${p.may_decide ? '' : ' disabled'}>
         <option value="keep" selected>Keep as it is</option><option value="retire">Retire goal</option>${moveTo}</select></label>`}</li>`).join('');
   const count = (pl.goals || []).length, open = (pl.goals || []).filter(g => !closed.has(g.goal_id)).length;
@@ -440,7 +440,7 @@ function kpiPanelHtml(d, {back = false} = {}) {
       ${kpiChart(rows, links, k)}
       <dl class="kpi-meta">
         ${k.definition ? `<dt>Definition</dt><dd>${esc(k.definition)}</dd>` : ''}
-        <dt>Owner</dt><dd>${esc(goalActorName(k.owner))}</dd>
+        <dt>Owner</dt><dd>${esc(goalActorName(k.owner_id))}</dd>
         <dt>Measured</dt><dd>${esc(k.cadence)}, ${esc(k.direction === 'range' ? 'in a range' : k.direction === 'down' ? 'lower is better' : 'higher is better')}${k.unit ? ', ' + esc(k.unit) : ''}</dd>
         ${k.source_note ? `<dt>Source</dt><dd>${esc(k.source_note)}</dd>` : ''}
       </dl>
@@ -473,7 +473,7 @@ function kpiEditForm(k) {
     <div class="goal-fs"><label class="goal-f"><span>Unit</span><input name="unit" maxlength="40" value="${esc(k.unit || '')}"></label>
       <label class="goal-f"><span>Direction</span><select name="direction">${opt([['up', 'Up'], ['down', 'Down'], ['range', 'Range']], k.direction)}</select></label></div>
     <div class="goal-fs"><label class="goal-f"><span>Cadence</span><select name="cadence">${opt([['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']], k.cadence)}</select></label>
-      <label class="goal-f"><span>Owner</span><select name="owner">${ownerOptions(kpiOwnerChoices(k.owner), k.owner)}</select></label></div>
+      <label class="goal-f"><span>Owner</span><select name="owner">${ownerOptions(kpiOwnerChoices(k.owner_id), k.owner_id)}</select></label></div>
     <label class="goal-f"><span>Source</span><input name="source_note" maxlength="2000" value="${esc(k.source_note || '')}"></label>
     <div class="goal-actions"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-cancel>Cancel</button></div></form>`;
 }
@@ -487,7 +487,7 @@ function kpiPanelBind(dlg, d) {
   const inPanel = dlg.id === 'goal-panel' && GOALS_ST;
   for (const b of body.querySelectorAll('[data-kpi-goal-open]')) b.onclick = () => {
     const g = inPanel && GOALS_ST.goals.find(x => x.id === b.dataset.kpiGoalOpen);
-    if (g) goalPanelOpen(GOALS_ST, g.owner, {goal: g.id});
+    if (g) goalPanelOpen(GOALS_ST, g.owner_id, {goal: g.id});
     else { dlg.close(); openGoal(b.dataset.kpiGoalOpen); }
   };
   const back = dlg.querySelector('[data-kpi-back]');
@@ -591,7 +591,7 @@ async function kpiOpen(id) {
   const data = await v2Get('/v2/kpis/' + encodeURIComponent(id));
   if (dlg.dataset.kpi !== id || !dlg.open) return;
   if (!data) { dlg.innerHTML = '<div class="tmodal-body"><p class="err">Could not load the KPI.</p><div class="goal-actions"><button class="ghost" type="button" data-kpi-close>Close</button></div></div>'; dlg.querySelector('[data-kpi-close]').onclick = () => dlg.close(); return; }
-  if (inPage && !GOALS_ST.panel.owner) GOALS_ST.panel.owner = data.kpi.owner;
+  if (inPage && !GOALS_ST.panel.owner_id) GOALS_ST.panel.owner_id = data.kpi.owner_id;
   dlg.innerHTML = kpiPanelHtml(data, {back: inPage});
   kpiPanelBind(dlg, data);
 }
@@ -600,7 +600,7 @@ async function kpiOpen(id) {
 // On a goal: pick a KPI that exists (or a bot's automatic ones) or make one, with the target on the link.
 // On its own: a KPI no goal uses yet, owned by whoever's panel it is.
 function kpiAddHtml(goal, forOwner = '') {
-  const owner = goal ? goal.owner : forOwner || (mePerson() ? 'human:' + mePerson().id : '');
+  const owner = goal ? goal.owner_id : forOwner || (mePerson() ? 'human:' + mePerson().id : '');
   const choices = kpiOwnerChoices(owner);
   const target = goal ? `<div data-target>${kpiTargetFields({goal_id: goal.id, kind: 'improve'})}</div>` : '';
   return `<form class="goal-form kpi-add" data-kpi-add="${esc(goal ? goal.id : '@page')}" novalidate>
@@ -623,10 +623,10 @@ async function kpiAddBind(form, goal, done) {
   if (form.elements.kind) kpiTargetKinds(form);
   if (pick) {
     pick.onchange = () => { fresh.hidden = !!pick.value; };
-    const [all, auto] = await Promise.all([v2Get('/v2/kpis'), String(goal.owner).startsWith('bot:') ? v2Get(`/v2/kpis?auto_for=${encodeURIComponent(goal.owner.slice(4))}`) : null]);
+    const [all, auto] = await Promise.all([v2Get('/v2/kpis'), String(goal.owner_id).startsWith('bot:') ? v2Get(`/v2/kpis?auto_for=${encodeURIComponent(goal.owner_id.slice(4))}`) : null]);
     if (!form.isConnected) return;
     const linked = new Set((goal.kpis || []).map(k => k.id));
-    const opts = list => list.filter(k => !linked.has(k.id)).map(k => `<option value="${esc(k.id)}">${esc(k.name)}${k.auto ? '' : ' · ' + esc(goalActorName(k.owner))}</option>`).join('');
+    const opts = list => list.filter(k => !linked.has(k.id)).map(k => `<option value="${esc(k.id)}">${esc(k.name)}${k.auto ? '' : ' · ' + esc(goalActorName(k.owner_id))}</option>`).join('');
     const a = opts(auto?.kpis || []), b = opts(all?.kpis || []);
     pick.insertAdjacentHTML('beforeend', (a ? `<optgroup label="Bot">${a}</optgroup>` : '') + (b ? `<optgroup label="KPIs">${b}</optgroup>` : ''));
   }
@@ -643,13 +643,13 @@ async function kpiAddBind(form, goal, done) {
         if (!text('name')) { form.elements.name.focus(); return; }
         Object.assign(body, {name: text('name'), definition: text('definition'), unit: text('unit'), direction: form.elements.direction.value,
           cadence: form.elements.cadence.value, source_note: text('source_note')});
-        if (form.elements.owner.value !== goal.owner) body.owner = form.elements.owner.value;
+        if (form.elements.owner_id.value !== goal.owner_id) body.owner_id = form.elements.owner_id.value;
       }
     } else {
       if (!text('name')) { form.elements.name.focus(); return; }
       path = '/v2/kpis';
       body = {name: text('name'), definition: text('definition'), unit: text('unit'), direction: form.elements.direction.value,
-        cadence: form.elements.cadence.value, source_note: text('source_note'), owner: form.elements.owner.value};
+        cadence: form.elements.cadence.value, source_note: text('source_note'), owner: form.elements.owner_id.value};
     }
     submit.disabled = true;
     try { await post(path, body); done(true); }
@@ -679,7 +679,7 @@ function goalTreeShape() {
     let parent = orgBossKey({kind: 'bot', ...e});
     for (let hops = 0; parent.startsWith('b:') && !keys.has(parent) && hops < 5; hops++)
       parent = orgBossKey({kind: 'bot', ...(botRow(parent.slice(2)) || {})});
-    if (parent.startsWith('b:') && !keys.has(parent)) parent = e.operator || e.users?.[0]?.id ? 'p:' + (e.operator || e.users[0].id) : '';
+    if (parent.startsWith('b:') && !keys.has(parent)) parent = e.owner_id || e.users?.[0]?.id ? 'p:' + (e.owner_id || e.users[0].id) : '';
     put(orgHang('b:' + e.id, parent, groupOf), {kind: 'bot', ...e});
   }
   return {byParent: orgTreeWithHelpers(byParent)};
@@ -708,7 +708,7 @@ function goalChips(kpis) {
 }
 function goalStatusNote(g) {
   const byHand = g.status_source === 'person' && ['red', 'yellow', 'green'].includes(g.status);
-  return byHand ? `Set by ${goalActorName(g.status_by)}${g.status_note ? ': ' + g.status_note : ''}` : g.status_note || '';
+  return byHand ? `Set by ${goalActorName(g.status_by_id)}${g.status_note ? ': ' + g.status_note : ''}` : g.status_note || '';
 }
 function goalTreeRows(actor, depth, goals, loose, standing = '') {
   const info = goalOwnerInfo(actor);
@@ -836,9 +836,9 @@ function goalsRender(state) {
   if (!body || !state.loaded) return;
   state.shape = goalTreeKey();
   const owned = {}, loose = {};
-  for (const g of state.goals.filter(goalLive)) (owned[g.owner] ||= []).push(g);
+  for (const g of state.goals.filter(goalLive)) (owned[g.owner_id] ||= []).push(g);
   for (const list of Object.values(owned)) list.sort(goalRank);
-  for (const k of state.other) (loose[k.owner] ||= []).push(k);
+  for (const k of state.other) (loose[k.owner_id] ||= []).push(k);
   const {byParent} = goalTreeShape();
   const seen = new Set([GOAL_COMPANY]);
   const rows = (actor, depth, standing) => { seen.add(actor); return goalTreeRows(actor, depth, owned[actor] || [], loose[actor] || [], standing); };
@@ -860,15 +860,15 @@ function goalsRender(state) {
   goalTreeLines(body.querySelector('#goal-tree'));
   // Tapping a goal opens it on its own (goalSheetOpen); the name, a line with no goal, or Enter opens the owner's panel.
   for (const li of body.querySelectorAll('.gt-row')) {
-    const open = () => goalPanelOpen(state, li.dataset.owner, {tapped: li.dataset.goal || ''});
+    const open = () => goalPanelOpen(state, li.dataset.owner_id, {tapped: li.dataset.goal || ''});
     li.onclick = ev => {
       if (goalPressed(li)) return;
-      if (ev.target.closest('[data-goal-add]')) goalSheetOpen(state, {owner: li.dataset.owner});
+      if (ev.target.closest('[data-goal-add]')) goalSheetOpen(state, {owner: li.dataset.owner_id});
       else if (li.dataset.goal && ev.target.closest('.gt-goal')) goalSheetOpen(state, {goal: li.dataset.goal});
       else open();
     };
     li.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } };
-    if (li.querySelector('[data-goal-add]')) goalLongPress(li, () => goalSheetOpen(state, {owner: li.dataset.owner}));
+    if (li.querySelector('[data-goal-add]')) goalLongPress(li, () => goalSheetOpen(state, {owner: li.dataset.owner_id}));
   }
   for (const li of body.querySelectorAll('.gt-group')) {
     const plus = li.querySelector('[data-goal-add-group]');
@@ -883,7 +883,7 @@ function goalsRender(state) {
     const vision = () => { location.hash = STRATEGY; };
     const why = id => {
       const goal = (state.goals || []).find(g => g.id === id);
-      if (goal) goalPanelOpen(state, goal.owner, {tapped: goal.id});
+      if (goal) goalPanelOpen(state, goal.owner_id, {tapped: goal.id});
     };
     for (const li of needs.querySelectorAll('[data-need-vision], [data-need-why]')) {
       const open = () => li.dataset.needWhy !== undefined ? why(li.dataset.needWhy) : vision();
@@ -931,7 +931,7 @@ window.addEventListener('hashchange', () => {
 // goal: the goal to open for editing ('new' to add one). tapped: the goal on the line that was tapped. Someone with no
 // goal opens on a new one; the team line opens its goal when it has just one.
 function goalPanelOpen(state, owner, {goal = '', tapped = ''} = {}) {
-  const live = state.goals.filter(g => goalLive(g) && g.owner === owner);
+  const live = state.goals.filter(g => goalLive(g) && g.owner_id === owner);
   if (!goal && !live.length && goalMayEdit({owner}, state.goals)) goal = 'new';
   if (!goal && owner === GOAL_COMPANY && live.length === 1) goal = live[0].id;
   state.panel = {owner, goal, kpiAdd: '', kpi: '', standing: false, tapped, history: false, historyKpis: null,
@@ -969,10 +969,10 @@ function goalUpdateHtml(g, P) {
     </form>`;
 }
 function goalPanelHtml(state) {
-  const P = state.panel, actor = P.owner, info = goalOwnerInfo(actor);
-  const goals = state.goals.filter(g => goalLive(g) && g.owner === actor).sort(goalRank);
+  const P = state.panel, actor = P.owner_id, info = goalOwnerInfo(actor);
+  const goals = state.goals.filter(g => goalLive(g) && g.owner_id === actor).sort(goalRank);
   const may = goalMayEdit({owner: actor}, state.goals);
-  const other = state.other.filter(k => k.owner === actor);
+  const other = state.other.filter(k => k.owner_id === actor);
   const finished = goalFinishedOf(state.goals, actor).length;
   const person = actor.startsWith('human:') ? (S.people || []).find(p => p.id === actor.slice(6)) : null;
   const standing = String(person?.goals || '').trim();
@@ -1015,8 +1015,8 @@ function goalPanelHtml(state) {
 function goalPanelRender(state) {
   const dlg = document.getElementById('goal-panel'), P = state.panel;
   if (!dlg?.open || !P || P.kpi || dlg._state !== state) return;
-  dlg.setAttribute('aria-label', goalOwnerInfo(P.owner).name);
-  dlg.dataset.owner = P.owner;
+  dlg.setAttribute('aria-label', goalOwnerInfo(P.owner_id).name);
+  dlg.dataset.owner_id = P.owner_id;
   const scroll = dlg.querySelector('.gp-body')?.scrollTop || 0;
   const toasts = [...dlg.querySelectorAll(':scope > .toast')];   // a toast shown in the panel (Undo) outlives a redraw
   dlg.innerHTML = goalPanelHtml(state);
@@ -1030,7 +1030,7 @@ function goalPanelRender(state) {
   const form = body.querySelector('[data-goal-form]');
   if (form) {
     const id = form.dataset.goalForm, g = state.goals.find(x => x.id === id) || {};
-    bindGoalForm(form, g, state.goals, {company: id === 'company', owner: P.owner}, async ok => {
+    bindGoalForm(form, g, state.goals, {company: id === 'company', owner: P.owner_id}, async ok => {
       setGoal('');
       if (ok && GOALS_ST === state) goalsRender(state);
     });
@@ -1039,14 +1039,14 @@ function goalPanelRender(state) {
     if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
     ev.preventDefault();
     const g = state.goals.find(x => x.id === a.dataset.goalGo);
-    if (g) goalPanelOpen(state, g.owner, {goal: g.id});
+    if (g) goalPanelOpen(state, g.owner_id, {goal: g.id});
   };
   for (const b of body.querySelectorAll('button[data-goal-auto]')) if (b.dataset.goalAuto) b.onclick = async () => {
     b.disabled = true;
     try { await post('/v2/goals/' + encodeURIComponent(b.dataset.goalAuto) + '/status/auto', {}); await reload(); }
     catch (e) { toast(e.message || 'Could not hand the colour back', true); b.disabled = false; }
   };
-  goalFinishedMount(body.querySelector('[data-gp-finished]'), P.owner, state.goals, reload);
+  goalFinishedMount(body.querySelector('[data-gp-finished]'), P.owner_id, state.goals, reload);
   bindKpiLines(body);
   bindProposals(body, reload);
   bindGoalWhy(state, body, reload);
@@ -1061,11 +1061,11 @@ function goalPanelRender(state) {
     P.historyLoading = true;
     P.historyError = false;
     redraw();
-    const result = await v2Get(`/v2/kpis?owner=${encodeURIComponent(P.owner)}&include_archived=true`);
+    const result = await v2Get(`/v2/kpis?owner=${encodeURIComponent(P.owner_id)}&include_archived=true`);
     if (state.panel !== P) return;
     P.historyLoading = false;
     P.historyError = !result;
-    P.historyKpis = result ? (result.kpis || []).filter(k => k.archived_at && !goalBuiltInOwner(k.owner)) : null;
+    P.historyKpis = result ? (result.kpis || []).filter(k => k.archived_at && !goalBuiltInOwner(k.owner_id)) : null;
     redraw();
   };
   const kform = body.querySelector('[data-kpi-add]');

@@ -76,7 +76,7 @@ def test_a_pick_spend_is_approved_once_and_spent_once(api):
     assert approved(api, bot, file=a["id"])["approved"] and not approved(api, bot, file=b["id"])["approved"]
     with api.app.state.store.transaction() as c:
         row = H.approval(c, aid)
-        assert row["kind"] == "spend" and row["decision"] == "approved" and row["requested_by"] == "bot:ops"
+        assert row["kind"] == "spend" and row["decision"] == "approved" and row["requested_by_id"] == "bot:ops"
         assert c.execute("SELECT count(*) FROM approvals WHERE kind='spend'").fetchone()[0] == 1
         H.approval_consume(c, "bot:ops", aid)
     with pytest.raises(H.Refused):
@@ -141,7 +141,7 @@ def review(api, token, body, expected=200):
 def test_a_bot_reviews_another_bots_file_and_only_by_names_whose_verdicts_count(api):
     _, _, ops = setup_attempt(api)
     _, _, finance = setup_attempt(api, bot="finance")
-    task = post(api, "tasks", {"owner": "bot:ops", "title": "Cut the launch video", "body": "For the launch."})
+    task = post(api, "tasks", {"owner_id": "bot:ops", "title": "Cut the launch video", "body": "For the launch."})
     r = api.post("/api/v2/files/uploads", json={"name": "cut.md", "text": "# Cut", "task": task["id"]},
                  headers=headers(ops["token"]))
     assert r.status_code == 200, r.text

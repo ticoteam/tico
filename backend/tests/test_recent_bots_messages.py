@@ -10,7 +10,7 @@ def test_recent_bots_discovers_in_one_pass_and_skips_deleted_newest_lines(api, m
     for n in range(42):
         post(api, "chat/ops", {"text": f"line {n}"})
     with api.app.state.store.transaction() as c:
-        newest = [r[0] for r in c.execute("SELECT id FROM messages WHERE from_actor='human:ana' AND to_actor='bot:ops' "
+        newest = [r[0] for r in c.execute("SELECT id FROM messages WHERE sender_id='human:ana' AND recipient_id='bot:ops' "
                                           "ORDER BY created_at DESC")][:41]
         c.executemany("UPDATE messages SET deleted_at=? WHERE id=?", [(H.now(), mid) for mid in newest])
     calls = []

@@ -139,23 +139,23 @@ def test_tools_write_through_the_same_rules_as_http(api):
 
     # A person's task opens with a plain ask, or it is refused with the rule and an example the bot can act on.
     wordy = " ".join(["word"] * 150)
-    err, out = call(api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
+    err, out = call(api, "hub_task_create", {"owner_id": "ana", "title": "The thing", "body": wordy}, token=token)
     assert err and "Your ask to ana is 150 words" in json.dumps(out) and "Example:" in json.dumps(out)
     # Other writing problems on it are warnings: the task is made and the bot told how to improve.
     wordy = "Approve the thing? If yes, I'll ship it.\n\n" + wordy
-    err, out = call(api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": wordy, "dry_run": True}, token=token)
+    err, out = call(api, "hub_task_create", {"owner_id": "ana", "title": "The thing", "body": wordy, "dry_run": True}, token=token)
     assert not err and out["ok"] is True and any("verb" in w for w in out["warnings"])
-    err, out = call(api, "hub_task_create", {"owner": "ana", "title": "The thing", "body": wordy}, token=token)
-    assert not err and out["task"]["owner"] == "human:ana" and any("words outside" in w for w in out["warnings"])
+    err, out = call(api, "hub_task_create", {"owner_id": "ana", "title": "The thing", "body": wordy}, token=token)
+    assert not err and out["task"]["owner_id"] == "human:ana" and any("words outside" in w for w in out["warnings"])
     wordy_task = out["task"]["id"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM tasks WHERE requester='bot:ops'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM tasks WHERE requester_id='bot:ops'").fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'refus%' AND actor='bot:ops'").fetchone()[0] >= 1
 
-    err, task = call(api, "hub_task_create", {"owner": "cpo", "title": "Review the runtime", "body": "Please.",
+    err, task = call(api, "hub_task_create", {"owner_id": "cpo", "title": "Review the runtime", "body": "Please.",
                                                "operation_id": "op-1"}, token=token)
-    assert not err and task["task"]["owner"] == "bot:cpo"
-    err, again = call(api, "hub_task_create", {"owner": "cpo", "title": "Review the runtime", "body": "Please.",
+    assert not err and task["task"]["owner_id"] == "bot:cpo"
+    err, again = call(api, "hub_task_create", {"owner_id": "cpo", "title": "Review the runtime", "body": "Please.",
                                                 "operation_id": "op-1"}, token=token)
     assert not err and again["task"]["id"] == task["task"]["id"]
 
@@ -170,7 +170,7 @@ def test_tools_write_through_the_same_rules_as_http(api):
     assert [m["body"] for m in page["messages"]][0] == msg["body"]
     assert (page["has_more"], page["next_before"]) == (False, None)
 
-    err, listed = call(api, "hub_task_list", {"requester": "me"}, token=token)
+    err, listed = call(api, "hub_task_list", {"requester_id": "me"}, token=token)
     assert not err and sorted(t["id"] for t in listed["result"]) == sorted([task["task"]["id"], wordy_task])
 
     err, out = call(api, "hub_task_close", {"id": task["task"]["id"], "note": "Not needed"}, token=token)
@@ -239,7 +239,7 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
     err, again = call(api, "hub_task_question", ask, token=attempt["token"])
     assert not err and again["task"]["id"] == out["task"]["id"], "a retry is the same question"
     # A question the person could not read is refused whole: no task is left behind.
-    secret = post(api, "tasks", {"owner": "ops", "title": "Draft the settlement terms", "body": "Only us.", "private": True})
+    secret = post(api, "tasks", {"owner_id": "ops", "title": "Draft the settlement terms", "body": "Only us.", "private": True})
     err, refused = call(api, "hub_task_question", {"question": "Sign the settlement today?", "on": "ben", "private": True,
                                                    "parent": secret["id"]}, token=attempt["token"])
     assert err and refused["error"] == "privacy"
@@ -273,10 +273,10 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Sign the settlement%' "
                          "OR title LIKE 'Renew the vendor%'").fetchone()[0] == 0
     made = out["task"]
-    assert (made["owner"], made["requester"], made["status"], made["waiting_on"]) == ("bot:ops", "bot:ops", "waiting", "human:ana")
+    assert (made["owner_id"], made["requester_id"], made["status"], made["waiting_on"]) == ("bot:ops", "bot:ops", "waiting", "human:ana")
     assert [o["label"] for o in out["question"]["ask"]["questions"][0]["options"]] == ["Yes", "No"]
     item = next(i for i in get(api, "needs-you")["items"] if i["id"] == made["id"])
-    assert item["kind"] == "question" and item["ask"]["from_actor"] == "bot:ops"
+    assert item["kind"] == "question" and item["ask"]["sender_id"] == "bot:ops"
 
 
 def test_a_private_question_goes_to_any_person_and_only_they_and_the_bot_read_it(api):
@@ -291,7 +291,7 @@ def test_a_private_question_goes_to_any_person_and_only_they_and_the_bot_read_it
     r = api.post("/api/v2/task-questions", json=ask, headers=headers(attempt["token"], "private-ben"))
     assert r.status_code == 200, r.text
     made = r.json()["task"]
-    assert made["private"] and (made["owner"], made["requester"], made["waiting_on"]) == ("bot:ops", "human:ben", "human:ben")
+    assert made["private"] and (made["owner_id"], made["requester_id"], made["waiting_on"]) == ("bot:ops", "human:ben", "human:ben")
     assert get(api, f"tasks/{made['id']}", token="ben-test")["task"]["id"] == made["id"]
     get(api, f"tasks/{made['id']}", token="cara-test", expected=404)
     get(api, f"tasks/{made['id']}", token="ana-test", expected=404)    # who started the run is not a party
@@ -304,7 +304,7 @@ def test_a_private_run_cannot_put_its_work_to_someone_outside_it(api):
     r = runner(api, "ana")
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Only us.", "private": True})
+    post(api, "tasks", {"owner_id": "ops", "title": "Plan the reorg", "body": "Only us.", "private": True})
     attempt = claim(api, r)
     err, refused = call(api, "hub_task_question", {"question": "Move the design team under product?", "on": "ben",
                                                    "private": True}, token=attempt["token"])
@@ -318,7 +318,7 @@ def test_a_question_asked_from_a_run_on_the_bots_own_task_is_filed_under_it(api)
     r = runner(api, "ana")
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    work = post(api, "tasks", {"owner": "ops", "title": "Assess the vendor agent", "body": "Is it worth a test?"})
+    work = post(api, "tasks", {"owner_id": "ops", "title": "Assess the vendor agent", "body": "Is it worth a test?"})
     attempt = claim(api, r)
     asked = api.post("/api/v2/task-questions", json={"question": "Run the vendor trial once?", "on": "ana"},
                      headers=headers(attempt["token"], "under-own-task"))
@@ -327,7 +327,7 @@ def test_a_question_asked_from_a_run_on_the_bots_own_task_is_filed_under_it(api)
     with api.app.state.store.read() as c:
         from backend import hubdb as H, task_relations as TR
         assert TR.parent_of(c, made["id"]) == work["id"]
-        assert H.task(c, work["id"])["owner"] == "bot:ops"
+        assert H.task(c, work["id"])["owner_id"] == "bot:ops"
     cards = [i["id"] for i in get(api, "needs-you")["items"]]
     assert made["id"] in cards and work["id"] not in cards
 
@@ -373,7 +373,7 @@ def add_bots(api, slugs, runner_id=None):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, bots, [])
         for slug, config in bots.items():
-            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,'ana')", (slug, encode(config)))
+            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')", (slug, encode(config)))
             if runner_id:
                 c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, runner_id, H.now()))
 
@@ -510,7 +510,7 @@ def test_a_bot_sends_raw_bodies_through_the_door_and_they_arrive_as_sent(api, do
     assert api.get("/api/v2/files/" + imported["file"]["id"], headers=headers(token)).content == b"# From S3\n"
 
     # Several files in one multipart body, as a task attachment sends them.
-    task = post(api, "tasks", {"owner": "ops", "title": "Plan", "body": "Write the plan."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Plan", "body": "Write the plan."})
     (tmp_path / "notes.txt").write_bytes(b"Notes for the plan.\n")
     attached = bot.request("POST", f"/api/v2/tasks/{task['id']}/files",
                            raw=MultipartBody({"file": tmp_path / "notes.txt"}, {"name": "notes.txt"}),

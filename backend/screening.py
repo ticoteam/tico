@@ -697,8 +697,8 @@ class ScreeningTest(Contract):
 
 
 def recent(c, limit=RECENT):
-    rows = c.execute("SELECT ts,action,target,detail FROM events WHERE actor=? "
-                     "AND action IN ('screening.held','screening.warned') ORDER BY ts DESC LIMIT ?",
+    rows = c.execute("SELECT created_at,action,target,detail FROM events WHERE actor=? "
+                     "AND action IN ('screening.held','screening.warned') ORDER BY created_at DESC LIMIT ?",
                      (H.KEEPER, limit)).fetchall()
     out = []
     for r in rows:
@@ -707,7 +707,7 @@ def recent(c, limit=RECENT):
         except ValueError:
             d = {}
         task = r["target"] if c.execute("SELECT 1 FROM tasks WHERE id=?", (r["target"],)).fetchone() else None
-        out.append({"at": r["ts"], "action": r["action"].split(".", 1)[1], "source": d.get("source"),
+        out.append({"at": r["created_at"], "action": r["action"].split(".", 1)[1], "source": d.get("source"),
                     "score": d.get("score"), "kinds": d.get("kinds") or [], "detector": d.get("detector"),
                     "bot": d.get("bot"), "task": task})
     return out

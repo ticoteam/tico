@@ -79,7 +79,7 @@ def row(c, sid):
     if not auto:
         return None
     return {**dict(found), "enabled": int(auto["enabled"]), "deleted_at": auto["deleted_at"], "automation": auto["id"],
-            "next_due": auto["next_due"]}
+            "next_due_at": auto["next_due_at"]}
 
 
 def _set_moved(c, actor, auto, enabled):
@@ -111,7 +111,7 @@ def create(c, actor, bot, fields, *, key=None, at=None):
     now = stamp(at)
     event = entry["on"] or None
     due = None if event else stamp(next_due(entry["cron"], at, entry["timezone"]))
-    c.execute("INSERT INTO schedules(id,bot,routine_key,cron,event_name,title,playbook,next_due,source,updated_at) "
+    c.execute("INSERT INTO schedules(id,bot,routine_key,cron,event_name,title,playbook,next_due_at,source,updated_at) "
               "VALUES(?,?,?,?,?,?,?,?,'hub',?)",
               (sid, bot, key, entry["cron"], event, entry["title"], entry["instructions"] or DEFAULT_TEXT, due, now))
     c.execute("INSERT INTO schedule_config(schedule_id,timezone,enabled) VALUES(?,?,?)",
@@ -164,8 +164,8 @@ def update(c, actor, sid, changes, *, at=None, restore=False):
     if event:
         due = None
     else:
-        due = stamp(next_due(entry["cron"], at, entry["timezone"])) if cadence_changed else current["next_due"]
-    c.execute("UPDATE schedules SET cron=?,event_name=?,title=?,playbook=?,next_due=?,deleted_at=NULL,updated_at=? WHERE id=?",
+        due = stamp(next_due(entry["cron"], at, entry["timezone"])) if cadence_changed else current["next_due_at"]
+    c.execute("UPDATE schedules SET cron=?,event_name=?,title=?,playbook=?,next_due_at=?,deleted_at=NULL,updated_at=? WHERE id=?",
               (entry["cron"], event, entry["title"], entry["instructions"] or DEFAULT_TEXT, due, now, sid))
     enabled = current["enabled"] if changes.get("enabled") is None else (1 if changes["enabled"] else 0)
     c.execute("INSERT INTO schedule_config(schedule_id,timezone,enabled) VALUES(?,?,?) ON CONFLICT(schedule_id) "
@@ -187,7 +187,7 @@ def remove(c, actor, sid, *, at=None):
     current = row(c, sid)
     if not current:
         return None
-    c.execute("UPDATE schedules SET deleted_at=?,updated_at=?,next_due=NULL WHERE id=?", (now, now, sid))
+    c.execute("UPDATE schedules SET deleted_at=?,updated_at=?,next_due_at=NULL WHERE id=?", (now, now, sid))
     H.event(c, actor, "routine.deleted", sid, {"bot": current["bot"]})
     return row(c, sid)
 

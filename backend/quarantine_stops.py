@@ -39,7 +39,7 @@ def stop(c, row):
     c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.KEEPER, row["id"]))
     H.event(c, H.KEEPER, "attempt.stop", row["id"], {"bot": row["bot"], "quarantine": said})
     return c.execute("SELECT a.*,x.runner_id AS assigned_runner,x.generation AS assigned_generation "
-                     "FROM attempts a JOIN assignments x ON x.bot=a.bot WHERE a.id=?", (row["id"],)).fetchone()
+                     "FROM attempts a JOIN assignments x ON x.bot=a.bot_id WHERE a.id=?", (row["id"],)).fetchone()
 
 
 def restart(c, row, line):
@@ -48,7 +48,7 @@ def restart(c, row, line):
     if row["stop_requested_at"]:
         return False
     c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.KEEPER, row["id"]))
-    H.event(c, H.KEEPER, "attempt.stop", row["id"], {"bot": row["bot"], "restart": line})
+    H.event(c, H.KEEPER, "attempt.stop", row["id"], {"bot": row["bot_id"], "restart": line})
     return True
 
 
@@ -56,7 +56,7 @@ def _stop_detail(c, row):
     if not row["stop_requested_at"] or row["stop_requested_at"] != H.KEEPER:
         return {}
     found = c.execute("SELECT detail FROM events WHERE action='attempt.stop' AND target=? "
-                      "ORDER BY ts DESC LIMIT 1", (row["id"],)).fetchone()
+                      "ORDER BY created_at DESC LIMIT 1", (row["id"],)).fetchone()
     return (json.loads(found[0] or "{}") or {}) if found else {}
 
 

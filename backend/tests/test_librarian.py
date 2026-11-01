@@ -25,7 +25,7 @@ def desk(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('librarian','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('librarian','{}',NULL,'ana')")
     r = runner(api)
     assign(api, r, "librarian")
     ready(api, r, ["librarian"])
@@ -51,7 +51,7 @@ def test_a_question_goes_to_the_persons_private_docs_conversation_and_is_answere
           "[Internal doc · Refund policy](doc:d1) `printf '\\n'`", "last_seq": 0},
          token=desk.runner["token"])
     snapshot = get(desk, f"conversations/{sent['conversation_id']}/snapshot")
-    reply = next(m for m in snapshot["messages"] if m["from_actor"] == "bot:librarian")
+    reply = next(m for m in snapshot["messages"] if m["sender_id"] == "bot:librarian")
     assert reply["in_reply_to"] in (sent["message_id"], again["message_id"])
     assert "Refund policy" in reply["body"]
     assert "14 days.\n\nRead Tico docs with your coworker." in reply["body"]
@@ -133,7 +133,7 @@ def test_mcp_docs_ask_status_collects_the_same_private_answer(desk):
     err, final = call(desk, "hub_doc_ask_status", ids)
     assert not err and final["covered"] and final["answer"].startswith("14 days")
     snapshot = get(desk, f"conversations/{pending['conversation_id']}/snapshot")
-    assert len([m for m in snapshot["messages"] if m["from_actor"] == "human:ana"]) == 1
+    assert len([m for m in snapshot["messages"] if m["sender_id"] == "human:ana"]) == 1
 
 
 
@@ -145,7 +145,7 @@ def test_a_research_request_is_one_task_to_the_librarian_for_that_page_and_secti
     assert asked["kind"] == "doc" and asked["target"] == doc["id"]
     task = get(desk, f"tasks/{asked['task_id']}")
     task = task.get("task", task)
-    assert task["owner"] == "bot:librarian" and task["title"] == "Research: Competitors · Pricing"
+    assert task["owner_id"] == "bot:librarian" and task["title"] == "Research: Competitors · Pricing"
     assert "Add Acme's and Northwind's public list prices." in task["body"]
     assert "Target: " + doc["id"] in task["body"] and "playbooks/research-a-section.md" in task["body"]
     again = post(desk, "librarian/research", {"target": "sales/competitors.md", "section": "Pricing", "instructions": "And Initech."})
@@ -181,7 +181,7 @@ def test_docs_first_visit_takes_the_sources_and_files_one_setup_task(desk):
                                                                        "https://help.acme.example"}
     task = get(desk, f"tasks/{done['task_id']}")
     task = task.get("task", task)
-    assert task["owner"] == "bot:librarian" and task["title"] == "Set up Docs"
+    assert task["owner_id"] == "bot:librarian" and task["title"] == "Set up Docs"
     assert "https://help.acme.example" in task["body"] and "Policies are in Google Drive." in task["body"]
     assert "playbooks/docs-setup.md" in task["body"]
     # Docs is past its first visit for everyone now, and Ben can still set up more from the menu.
@@ -213,7 +213,7 @@ def test_market_questions_are_kept_as_answered_so_the_owner_can_skip_and_resume(
                                                  "step": 3, "action": "finish"})
     task = get(desk, f"tasks/{done['task']['id']}")
     task = task.get("task", task)
-    assert task["owner"] == "bot:librarian" and task["title"] == "Set up the market map"
+    assert task["owner_id"] == "bot:librarian" and task["title"] == "Set up the market map"
     for text in ("## Who we compete with\n\nCleanCo\nSparkle", "## What to watch\n\nr/PropertyManagement",
                  "What Market tracks", "playbooks/market-setup.md"):
         assert text in task["body"]
@@ -228,7 +228,7 @@ def test_market_questions_are_kept_as_answered_so_the_owner_can_skip_and_resume(
 def test_a_market_setup_task_is_only_ever_the_owners_own_librarian_task(desk):
     # The owner can write any preferences row, so a stored task id is checked: it must be the Librarian's task and
     # the owner's own, or the setup shows no task.
-    elsewhere = post(desk, "tasks", {"owner": "ops", "title": "Not the Librarian's", "body": "x"})
+    elsewhere = post(desk, "tasks", {"owner_id": "ops", "title": "Not the Librarian's", "body": "x"})
     elsewhere = elsewhere.get("task", elsewhere)
     bens = post(desk, "librarian/setup/docs", {"note": "On the wiki"}, token="ben-test")["task_id"]
     for forged in (elsewhere["id"], bens):

@@ -116,7 +116,7 @@ def slugify(text):
 
 # ---------------------------------------------------------------------------------------------------- the chart
 def owner(draft):
-    return next((p for p in draft["people"] if p["owner"]), draft["people"][0] if draft["people"] else None)
+    return next((p for p in draft["people"] if p["owner_id"]), draft["people"][0] if draft["people"] else None)
 
 
 def owner_id(draft):
@@ -137,10 +137,10 @@ def manager_of(draft, bot):
         return chosen
     if bot["core"]:
         return owner_id(draft)
-    human = next((p for p in draft["people"] if p["dept"] == bot["dept"] and not p["owner"] and HEAD.search(p["role"])), None)
+    human = next((p for p in draft["people"] if p["department"] == bot["department"] and not p["owner_id"] and HEAD.search(p["role"])), None)
     if bot["lead"]:
         return human["id"] if human else owner_id(draft)
-    lead = next((x for x in draft["bots"] if x["dept"] == bot["dept"] and x["lead"] and x is not bot), None)
+    lead = next((x for x in draft["bots"] if x["department"] == bot["department"] and x["lead"] and x is not bot), None)
     if lead:
         return lead["id"]
     return human["id"] if human else owner_id(draft)
@@ -160,7 +160,7 @@ def loops(draft):
 
 
 def teams_in(draft):
-    return {b["dept"] for b in draft["bots"] if not b["core"] and not b["existing"]}
+    return {b["department"] for b in draft["bots"] if not b["core"] and not b["existing"]}
 
 
 # ---------------------------------------------------------------------------------------------------- shape
@@ -238,7 +238,7 @@ def _bot(raw, at):
     bot = {"id": _id(raw["id"], field + ".id"),
            "template": None if raw["template"] is None else _id(raw["template"], field + ".template"),
            "title": _text(raw["title"], field + ".title", LIMITS["title"], empty=False),
-           "dept": raw["dept"], "lead": _bool(raw["lead"], field + ".lead"), "core": _bool(raw["core"], field + ".core"),
+           "dept": raw["department"], "lead": _bool(raw["lead"], field + ".lead"), "core": _bool(raw["core"], field + ".core"),
            "reason": _text(raw["reason"], field + ".reason", LIMITS["reason"]),
            "start": _bool(raw["start"], field + ".start"),
            "routine": _text(raw["routine"], field + ".routine", LIMITS["routine"]),
@@ -246,7 +246,7 @@ def _bot(raw, at):
            "about": _text(raw["about"], field + ".about", LIMITS["summary"]),
            "runtime": None if raw["runtime"] is None else _id(raw["runtime"], field + ".runtime"),
            "existing": _bool(raw["existing"], field + ".existing")}
-    if bot["dept"] not in DEPARTMENTS:
+    if bot["department"] not in DEPARTMENTS:
         raise DraftError(field + ".dept is not a department")
     if bot["existing"] and bot["runtime"] not in HARNESSES:
         raise DraftError(field + ".runtime is not an agent Tico knows")
@@ -275,9 +275,9 @@ def _person(raw, at):
     field = "people[%d]" % at
     _keys(raw, field, PERSON_FIELDS, ("isNew",))
     person = {"id": _id(raw["id"], field + ".id"), "name": _text(raw["name"], field + ".name", LIMITS["name"]),
-              "role": _text(raw["role"], field + ".role", LIMITS["role"]), "dept": raw["dept"],
-              "owner": _bool(raw["owner"], field + ".owner")}
-    if person["dept"] is not None and person["dept"] not in DEPARTMENTS:
+              "role": _text(raw["role"], field + ".role", LIMITS["role"]), "department": raw["department"],
+              "owner_id": _bool(raw["owner_id"], field + ".owner")}
+    if person["department"] is not None and person["department"] not in DEPARTMENTS:
         raise DraftError(field + ".dept is not a department")
     if raw.get("isNew") is True:
         person["isNew"] = True
@@ -309,7 +309,7 @@ def _goal(raw, at):
     _keys(raw, field, ("id", "title", "owner", "measure"),
           GOAL_FIELDS + ("target", "baseline", "deadline", "min", "max", "isNew", "bet") + GOAL_LAYER)
     goal = {"id": _id(raw["id"], field + ".id"), "title": _text(raw["title"], field + ".title", LIMITS["goal_title"]),
-            "owner": _id(raw["owner"], field + ".owner"), **aim(raw, field)}
+            "owner_id": _id(raw["owner_id"], field + ".owner"), **aim(raw, field)}
     if raw.get("level") is not None:
         if raw["level"] not in LEVELS:
             raise DraftError(field + ".level must be company, group or role")
@@ -317,10 +317,10 @@ def _goal(raw, at):
     if "parent" in raw:
         # A parent that is no longer among the goals is let go in check().
         goal["parent"] = None if raw["parent"] is None else _id(raw["parent"], field + ".parent")
-    if "dept" in raw:
-        if raw["dept"] is not None and raw["dept"] not in DEPARTMENTS:
+    if "department" in raw:
+        if raw["department"] is not None and raw["department"] not in DEPARTMENTS:
             raise DraftError(field + ".dept is not a department")
-        goal["dept"] = raw["dept"]
+        goal["department"] = raw["department"]
     if raw.get("bet") is not None:
         # A bet that is no longer among the strategy's is let go in check().
         if not isinstance(raw["bet"], str) or not BET_ID.fullmatch(raw["bet"]):
@@ -529,10 +529,10 @@ def check(raw, snapshot=False):
         draft["strategy"] = _strategy(raw["strategy"])
     for field in ("people", "bots", "goals"):
         _unique(draft[field], field)
-    if draft["people"] and not any(p["owner"] for p in draft["people"]):
-        draft["people"][0]["owner"] = True
-    for extra in [p for p in draft["people"] if p["owner"]][1:]:
-        extra["owner"] = False
+    if draft["people"] and not any(p["owner_id"] for p in draft["people"]):
+        draft["people"][0]["owner_id"] = True
+    for extra in [p for p in draft["people"] if p["owner_id"]][1:]:
+        extra["owner_id"] = False
     if sum(1 for b in draft["bots"] if b.get("first_job")) > 1:
         raise DraftError("only one bot has the first job")
     # A reports-to whose target left the chart (the visitor removed that person or bot on the page) falls back to the
@@ -553,8 +553,8 @@ def check(raw, snapshot=False):
         raise DraftError("a bot's reporting line comes back to itself")
     goal_ids = {goal["id"] for goal in draft["goals"]}
     for goal in draft["goals"]:
-        if goal["owner"] not in known:
-            goal["owner"] = owner_id(draft)
+        if goal["owner_id"] not in known:
+            goal["owner_id"] = owner_id(draft)
         if goal.get("parent") is not None and (goal["parent"] not in goal_ids or goal["parent"] == goal["id"]):
             goal["parent"] = None
         if "bet" in goal and goal["bet"] not in {b["id"] for b in (draft.get("strategy") or {}).get("bets", [])}:

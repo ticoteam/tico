@@ -77,7 +77,7 @@ async function open(browser, {role = 'owner', admin = false, connected = true, v
   const errors = [], writes = [];
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
   const me = {id: role === 'owner' ? 'ana' : 'sam', role, name: role === 'owner' ? 'Ana' : 'Sam', email: 'ana@example.com', cloud: true, registered: true, bot_admin: admin};
-  const bot = {name: 'release-captain', display_name: 'Release Captain', status: 'active', state: 'active', operator: 'ana',
+  const bot = {name: 'release-captain', display_name: 'Release Captain', status: 'active', state: 'active', owner_id: 'ana',
     repo: 'bot-release-captain', can_manage: true, revision: 3, users: [{id: 'ana', name: 'Ana'}], bot_owners: [{id: 'sam', name: 'Sam'}],
     my_access: {see: true, read: true, write: true}, access_policy: {}};
   await page.route('**/*', async route => {

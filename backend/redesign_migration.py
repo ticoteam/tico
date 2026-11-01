@@ -125,7 +125,7 @@ def _zone():
 
 def _mirror(name, owner, key, controls, source, words=""):
     """A read-only built-in automation that shows something Tico still runs from its own table."""
-    return {"name": name[:120], "owner": owner, "builtin": True, "readonly": True, "enabled": bool(controls.get("on", True)),
+    return {"name": name[:120], "owner_id": owner, "builtin": True, "readonly": True, "enabled": bool(controls.get("on", True)),
             "trigger": {"type": "event", "name": "tico.builtin." + key},
             "steps": [], "controls": controls, "source": source, **({"description": words[:500]} if words else {})}
 
@@ -207,7 +207,7 @@ def _routines(c, done, fresh=False):
                     "enabled": enabled, "source": flow["source"]}
             do = "adopt_briefing"
         out.append({"kind": "routine", "id": sid, "title": row["title"], "becomes": flow, "flags": flags,
-                    "_do": (do, {"next_due": row["next_due"]})})
+                    "_do": (do, {"next_due_at": row["next_due_at"]})})
     return out
 
 
@@ -309,7 +309,7 @@ def _builtins(c, done, me):
         for row in c.execute("SELECT * FROM task_rules ORDER BY created_at, id").fetchall():
             if ("task_rule", row["id"]) in done or not me:
                 continue
-            controls = {"on": bool(row["enabled"]), "preset": row["preset"], "at": row["at"],
+            controls = {"on": bool(row["enabled"]), "preset": row["preset"], "daily_at": row["daily_at"],
                         "department": row["department"], "triggers": _json(row["triggers"], []),
                         "actions": _json(row["actions"], [])}
             flow = _mirror(row["name"], me, "task_rule", controls, {"kind": "task_rule", "id": row["id"]})
@@ -324,7 +324,7 @@ def _builtins(c, done, me):
         if job.key == "stale_review":
             control = cfg[job.key]
             flow = {"name": job.name, "owner": me, "enabled": bool(control["on"]),
-                    "trigger": {"type": "schedule", "cron": _cron(control["preset"], control["at"]), "tz": _zone()},
+                    "trigger": {"type": "schedule", "cron": _cron(control["preset"], control["daily_at"]), "tz": _zone()},
                     "steps": [{"id": "tasks", "type": "find", "source": "tasks", "query": "open tasks that look finished "
                                "or forgotten", "limit": 20},
                               {"id": "verdict", "type": "decide", "set": "stale-review@1", "out": "d1", "level": "low"},
@@ -490,7 +490,7 @@ def _adopt(c, who, flow):
 
 
 def _mark(c, kind, ident, mid, aid, outcome="converted", why="", title=""):
-    c.execute("INSERT OR REPLACE INTO redesign_migrated(kind, id, migration, automation, outcome, why, title, at) "
+    c.execute("INSERT OR REPLACE INTO redesign_migrated(kind, id, migration, automation, outcome, why, title, migrated_at) "
               "VALUES(?,?,?,?,?,?,?,?)", (kind, ident, mid, aid, outcome, why[:1000], (title or "")[:300], _now()))
 
 
@@ -500,14 +500,14 @@ def _convert_one(c, who, mid, obj, group_done):
     kind, args = obj["_do"]
     now = _now()
     if kind in ("routine", "adopt_briefing"):
-        live = c.execute("SELECT next_due FROM schedules WHERE id=? AND deleted_at IS NULL", (obj["id"],)).fetchone()
+        live = c.execute("SELECT next_due_at FROM schedules WHERE id=? AND deleted_at IS NULL", (obj["id"],)).fetchone()
         if not live:
             return None
         aid = _save(c, who, obj["becomes"]) if kind == "routine" else _adopt(c, who, obj["becomes"])
-        if obj["becomes"]["trigger"]["type"] == "schedule" and live["next_due"]:
+        if obj["becomes"]["trigger"]["type"] == "schedule" and live["next_due_at"]:
             # The routine's own next fire: the occurrence it would have run is the automation's, once.
-            c.execute("UPDATE automations SET next_due=? WHERE id=?", (live["next_due"], aid))
-        c.execute("UPDATE schedules SET deleted_at=?, next_due=NULL, updated_at=? WHERE id=?", (now, now, obj["id"]))
+            c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (live["next_due_at"], aid))
+        c.execute("UPDATE schedules SET deleted_at=?, next_due_at=NULL, updated_at=? WHERE id=?", (now, now, obj["id"]))
         H.event(c, who.actor, "routine.converted", obj["id"], {"automation": aid})
         _mark(c, "routine", obj["id"], mid, aid)
         return aid
@@ -725,7 +725,7 @@ def _finish(c, who, mid, waiting):
     previous = state(c)
     total = totals(c, mid)
     untold = c.execute("SELECT 1 FROM redesign_migrated WHERE migration=? AND told IS NULL LIMIT 1", (mid,)).fetchone()
-    record = {"state": "done", "migration": mid, "at": _now(), **total, "told": told or previous.get("told"),
+    record = {"state": "done", "migration": mid, "migrated_at": _now(), **total, "told": told or previous.get("told"),
               "owner_wait": who.role != "owner" or bool(waiting) or bool(untold)}
     _set_meta(c, CUTOVER, json.dumps(record, sort_keys=True))
     line = (f"redesign cutover {mid}: {total['converted']} moved to automations, {total['kept']} kept as they were, "

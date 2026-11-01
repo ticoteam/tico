@@ -109,7 +109,7 @@ def test_locked_refuses_people_except_billing_and_the_download_and_opens_again_b
     answer = post(api, "jobs/claim", {"bot": "ops", "start_places": True}, token=r["token"])
     assert answer["attempt"] is None and answer["paused"] == cloud_access.LOCKED
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE bot='ops'").fetchone()[0] == "queued"
+        assert c.execute("SELECT state FROM jobs WHERE bot_id='ops'").fetchone()[0] == "queued"
         assert c.execute("SELECT detail FROM events WHERE action='cloud.access'").fetchone() is not None
     # Paid: the next answer opens everything, with no restart.
     say(api, hq, "open")
@@ -154,7 +154,7 @@ def test_frozen_holds_a_bot_on_a_tico_model_until_credit_lands(api, monkeypatch,
     assert [row["reason"] for row in rows] == ["out_of_credit"] and "queue_idle" not in found
     with api.app.state.store.read() as c:
         [row] = health._stuck(c, rows, set(), health_admin(api), True)
-        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
     assert row["why"].startswith("Out of credit") and row["fix"]["tab"] == "billing"
     cloud_access.apply(api.app.state.store, cloud_access.parse(signals("open")))
     assert claim(api, machine, "ops")["config"]["model"] == "tico-general-medium-1.0"
@@ -167,11 +167,11 @@ def test_routines_pass_over_while_frozen_or_locked(api, access):  # noqa: F811
         routines.create(c, H.KEEPER, "ops", {"title": "Morning check", "cron": "0 7 * * *", "timezone": "UTC"},
                         key="morning")
         aid = routines.row(c, "ops:morning")["automation"]
-        c.execute("UPDATE automations SET next_due=? WHERE id=?", ("2026-11-03T07:00:00.000000Z", aid))
+        c.execute("UPDATE automations SET next_due_at=? WHERE id=?", ("2026-11-03T07:00:00.000000Z", aid))
     automations.tick(store, datetime(2026, 11, 2, 6, tzinfo=timezone.utc))      # the first tick: the built-ins
     cloud_access.apply(store, cloud_access.parse(signals(access, None if access == "open" else "out_of_credit")))
     with store.transaction() as c:
-        c.execute("UPDATE automations SET next_due=? WHERE id=?", ("2026-11-02T07:00:00.000000Z", aid))
+        c.execute("UPDATE automations SET next_due_at=? WHERE id=?", ("2026-11-02T07:00:00.000000Z", aid))
     automations.tick(store, datetime(2026, 11, 2, 8, tzinfo=timezone.utc))
     with store.read() as c:
         runs = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()[0]

@@ -412,12 +412,12 @@ def mint(c, key, owner=None):
     if key == SHARED:
         operator = owner
     else:
-        config = c.execute("SELECT operator FROM bot_config WHERE bot=?", (key,)).fetchone()
-        operator = config["operator"] if config else None
+        config = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (key,)).fetchone()
+        operator = config["owner_id"] if config else None
     if not operator or not H.human(c, operator):
         raise Problem("operator", "Nobody on the roster to own this cloud machine's computer", 409)
     code = secrets.token_urlsafe(32)
-    c.execute("INSERT INTO enrollments(code_hash,operator,expires_at) VALUES(?,?,?)",
+    c.execute("INSERT INTO enrollments(code_hash,owner_id,expires_at) VALUES(?,?,?)",
               (digest(code), operator, H.shift(H.now(), minutes=ENROLL_MINUTES)))
     c.execute("INSERT INTO cloud_machine_codes VALUES(?,?,?)", (digest(code), key, H.now()))
     return code
@@ -543,9 +543,9 @@ def facts(c, settings, current, at):
                         if runner_id else set())
     turns, activity = False, 0
     for bot in sorted(seen) if runner_id else ():
-        turns = turns or bool(c.execute("SELECT 1 FROM attempts WHERE bot=? AND runner_id=? AND state IN "
+        turns = turns or bool(c.execute("SELECT 1 FROM attempts WHERE bot_id=? AND runner_id=? AND state IN "
                                         "('leased','running') LIMIT 1", (bot, runner_id)).fetchone())
-        latest = c.execute("SELECT max(coalesce(finished_at,started_at,created_at)) FROM attempts WHERE bot=? AND runner_id=?",
+        latest = c.execute("SELECT max(coalesce(finished_at,started_at,created_at)) FROM attempts WHERE bot_id=? AND runner_id=?",
                            (bot, runner_id)).fetchone()[0]
         ran = c.execute("SELECT max(finished_at) FROM watcher_runs WHERE bot=? AND runner_id=?",
                         (bot, runner_id)).fetchone()[0]
@@ -629,9 +629,9 @@ def wake_for(current, found):
 def runner_updating(c, runner_id, at):
     """Whether computer `runner_id` reports an update under way that is still fresh. One that has gone quiet for
     UPDATE_STALE is a dead runner's last word, and holds nothing up."""
-    found = c.execute("SELECT reported FROM runner_versions WHERE runner_id=? AND update_state='updating'",
+    found = c.execute("SELECT reported_at FROM runner_versions WHERE runner_id=? AND update_state='updating'",
                       (runner_id,)).fetchone()
-    return bool(found) and at - (epoch(found["reported"]) or 0) < UPDATE_STALE
+    return bool(found) and at - (epoch(found["reported_at"]) or 0) < UPDATE_STALE
 
 
 def bot_want(c, settings, bot, runner_id, at):
@@ -647,7 +647,7 @@ def bot_want(c, settings, bot, runner_id, at):
     if placed_on and placed_on["runner_id"] != runner_id:
         return True, "move:" + bot, (1, ""), 0      # chosen while on another computer: its machine is made now
     # Keyed by the newest queued job, so new work wakes a machine the guard holds for older work.
-    newest = c.execute("SELECT id,created_at FROM jobs WHERE bot=? AND state='queued' AND held=0 "
+    newest = c.execute("SELECT id,created_at FROM jobs WHERE bot_id=? AND state='queued' AND held=0 "
                        "ORDER BY created_at DESC,id DESC LIMIT 1", (bot,)).fetchone()
     if newest and runner_id:
         why, _, _, job = bot_claimable(c, settings, runner_id, bot, with_job=True)

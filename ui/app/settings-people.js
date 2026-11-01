@@ -31,30 +31,30 @@ function peopleSwitch(attrs, checked, disabled, label) {
 function peopleMenu(p, view) {
   const owner = S.me?.role === 'owner', items = [];
   // An invite comes from Tico's own sign-in mail (backend/invites.py), never the company's mailbox.
-  if (view?.invite_email && !p.owner && p.id !== S.me?.id && p.email && p.can_sign_in)
+  if (view?.invite_email && !p.owner_id && p.id !== S.me?.id && p.email && p.can_sign_in)
     items.push(`<button type="button" role="menuitem" data-person-act="invite">${view.invites?.[p.id] ? 'Send invite again' : 'Send invite'}</button>`);
   // Or the issuer makes them a Tico account with a generated password, shown here once (backend/invites.py).
-  if (view?.account_password && !p.owner && p.id !== S.me?.id && p.email && p.can_sign_in)
+  if (view?.account_password && !p.owner_id && p.id !== S.me?.id && p.email && p.can_sign_in)
     items.push('<button type="button" role="menuitem" data-person-act="password">Create password</button>');
   const check = (act, label, on) => `<button type="button" role="menuitemcheckbox" aria-checked="${on}" data-person-act="${act}"><span class="people-check" aria-hidden="true">${on ? '✓' : ''}</span>${label}</button>`;
   if (p.role === 'member') items.push(check('create_bots', 'Can add bots', !!p.create_bots), check('add_people', 'Can add people', !!p.add_people));
-  if (owner && !p.owner && p.email && p.can_sign_in) items.push('<button type="button" role="menuitem" data-person-act="owner">Make owner</button>');
-  if (owner && !p.owner && p.id !== S.me?.id) items.push('<button type="button" role="menuitem" class="danger-text" data-person-act="left">Mark as left</button>');
-  if (owner && p.owner && p.id === S.me?.id) items.push('<button type="button" role="menuitem" data-person-act="email">Change my sign-in email</button>');
+  if (owner && !p.owner_id && p.email && p.can_sign_in) items.push('<button type="button" role="menuitem" data-person-act="owner">Make owner</button>');
+  if (owner && !p.owner_id && p.id !== S.me?.id) items.push('<button type="button" role="menuitem" class="danger-text" data-person-act="left">Mark as left</button>');
+  if (owner && p.owner_id && p.id === S.me?.id) items.push('<button type="button" role="menuitem" data-person-act="email">Change my sign-in email</button>');
   return items.join('');
 }
 function peopleRow(p, view) {
   const owner = S.me?.role === 'owner', menu = peopleMenu(p, view), local = !!S.config?.local;
   const invited = view?.invites?.[p.id];
   const face = personAvatar({...(S.people || []).find(x => x.id === p.id), ...p}, 32);
-  const role = owner && !p.owner
+  const role = owner && !p.owner_id
     ? `<select data-person-role aria-label="Role">${['member', 'admin'].map(r => `<option value="${r}"${p.role === r ? ' selected' : ''}>${PEOPLE_ROLE[r]}</option>`).join('')}</select>`
     : `<span class="people-role" data-role="${esc(p.role)}">${PEOPLE_ROLE[p.role] || 'Member'}</span>`;
-  const locked = p.owner || p.id === S.me?.id || !p.email || (!owner && p.role === 'admin');
+  const locked = p.owner_id || p.id === S.me?.id || !p.email || (!owner && p.role === 'admin');
   return `<li class="people-row" data-person="${esc(p.id)}">
     <div class="people-who">${face}<div class="people-id"><div class="people-name">${esc(p.name)}</div><div class="people-email">${esc(p.email || 'No email')}</div>${invited ? `<div class="people-invited muted" data-invited>Invited ${agoSpan(invited)}</div>` : ''}</div></div>
     <div class="people-cell-role">${role}</div>
-    ${p.owner ? '<div class="people-cell-signin"><span class="muted" title="The owner can always sign in">Always</span></div>'   /* the owner's own sign-in is not a switch */
+    ${p.owner_id ? '<div class="people-cell-signin"><span class="muted" title="The owner can always sign in">Always</span></div>'   /* the owner's own sign-in is not a switch */
       : `<label class="people-cell-signin">${peopleSwitch('data-person-signin', p.can_sign_in, locked, local ? 'Sign-in access when configured' : 'Can sign in')}<span class="people-switch-label">${local ? 'When configured' : 'Can sign in'}</span></label>`}
     <div class="people-cell-more">${menu ? `<button class="people-more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="people-menu" role="menu" hidden>${menu}</div>` : ''}</div>
   </li>`;
@@ -294,7 +294,7 @@ function peopleOwnerEmailDialog(p, view) {
     form.querySelectorAll('button,input').forEach(b => b.disabled = true);
     try {
       await post('/v2/access/owner/email', {email: typed(), confirm_email: form.again.value.trim().toLowerCase(),
-        expected_revision: view.owner.revision, confirm: true});
+        expected_revision: view.owner_id.revision, confirm: true});
       // The address this browser signed in with no longer signs in: sign in again as the new one.
       if (S.me?.proxy_session) location.href = '/api/v2/logout';
       else { location.hash = '#/'; location.reload(); }
@@ -306,7 +306,7 @@ function peopleOwnerEmailDialog(p, view) {
   };
 }
 function peopleOwnerDialog(p, view) {
-  const old = view.people.find(q => q.owner);
+  const old = view.people.find(q => q.owner_id);
   const d = peopleDialog('Make ' + p.name + ' the owner?', `<form>
     <p>${esc(p.name)} becomes owner now. You lose the owner's controls.</p>
     <label class="onb-field"><span class="k"><input type="checkbox" name="admin"> Keep ${esc(old?.name || 'the current owner')} as an admin</span></label>
@@ -321,7 +321,7 @@ function peopleOwnerDialog(p, view) {
     form.querySelectorAll('button').forEach(b => b.disabled = true);
     try {
       await post('/v2/access/owner', {person: p.id, previous_owner_bot_admin: form.admin.checked,
-        expected_revision: view.owner.revision, confirm: true});
+        expected_revision: view.owner_id.revision, confirm: true});
       // This page's own rights just changed: start over rather than render an owner-only tab.
       location.hash = '#/'; location.reload();
     } catch (error) {

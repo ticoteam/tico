@@ -152,15 +152,15 @@ def sources(task):
                                      else re.match(r"^Review \d+(?:\b|:)", item.get("title", ""), re.I)):
             continue
         if item.get("note"):
-            out.append({"task": item["id"], "message": None, "actor": item.get("owner"),
+            out.append({"task": item["id"], "message": None, "actor": item.get("owner_id"),
                         "created_at": item.get("updated_at") or "", "source": "note", "text": item["note"]})
         for message in item.get("messages", []):
             if any(message.get(k) for k in REMOVED):
                 continue
-            actor = message.get("from_actor")
+            actor = message.get("sender_id")
             text = message.get("body", "")
             keeper = actor == "keeper" and keeper_words.search(text)
-            allowed = {item.get("owner"), task.get("owner"), *item.get("receipt_authors", [])}
+            allowed = {item.get("owner_id"), task.get("owner_id"), *item.get("receipt_authors", [])}
             if actor not in allowed and not keeper:
                 continue
             out.append({"task": item["id"], "message": message.get("id"), "actor": actor,

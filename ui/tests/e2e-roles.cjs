@@ -25,13 +25,13 @@ journey('e2e-roles', async ({hub, browser, phone}) => {
   const idOf = reply => (reply.task || reply).id;
 
   const T1 = idOf(await must(hub, 'dana', 'POST', 'tasks', {title: TITLES.T1, body: 'Everyone reads this one.',
-    owner: 'engineering-lead'}, 'the public task'));
+    owner_id: 'engineering-lead'}, 'the public task'));
   const P1 = idOf(await must(hub, 'omar', 'POST', 'tasks', {title: TITLES.P1, body: 'Omar and Dana only.',
-    owner: 'dana', private: true}, 'the person-only private task'));
+    owner_id: 'dana', private: true}, 'the person-only private task'));
   const P2 = idOf(await must(hub, 'release-manager', 'POST', 'tasks', {title: TITLES.P2, body: 'Bots, a manager and a guest.',
-    owner: 'builder-claude', private: true}, 'the bot-only private task'));
+    owner_id: 'builder-claude', private: true}, 'the bot-only private task'));
   await must(hub, 'builder-claude', 'POST', 'tasks', {title: 'Gina checks the cut', body: 'Gina is brought in here.',
-    owner: 'gina', private: true, relations: [{task: P2, kind: 'parent'}]}, 'builder-claude brings Gina in');
+    owner_id: 'gina', private: true, relations: [{task: P2, kind: 'parent'}]}, 'builder-claude brings Gina in');
   const ids = {T1, P1, P2};
 
   for (const who of Object.keys(SEES)) {

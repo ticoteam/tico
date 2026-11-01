@@ -25,7 +25,7 @@ def send(hq, n="n1", relay=TICO, system=True, **more):
 
 def botops_messages(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM messages WHERE to_actor='bot:botops' ORDER BY rowid")]
+        return [dict(r) for r in c.execute("SELECT * FROM messages WHERE recipient_id='bot:botops' ORDER BY rowid")]
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +33,7 @@ def botops(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('botops','botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('botops','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('botops','{}',NULL,'ana')")
 
 
 @pytest.fixture
@@ -84,7 +84,7 @@ def test_a_security_notice_wakes_botops_and_asks_the_owner(api, hq, judged):
     send(hq, "s1", kind="security", body="Rotate your Acme keys today.")
     service(api).tick()
     wakes = [m for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs"]]
-    assert len(wakes) == 1 and "Rotate your Acme keys today." in wakes[0]["body"] and wakes[0]["from_actor"] == H.KEEPER
+    assert len(wakes) == 1 and "Rotate your Acme keys today." in wakes[0]["body"] and wakes[0]["sender_id"] == H.KEEPER
     assert json.loads(wakes[0]["refs"])["rule_id"] == "tico-notice-security-wake"
     with api.app.state.store.read() as c:
         asked = c.execute("SELECT count(*) FROM events WHERE action='rule.event' AND target='tico-notice-security-ask'").fetchone()[0]
@@ -153,7 +153,7 @@ def test_a_delivery_naming_the_tico_trigger_from_a_relay_hq_does_not_list_as_sys
 
 def test_an_automation_on_the_tico_trigger_fires_and_webhook_received_is_not_judged(api, hq, judged, monkeypatch):
     relay_for(api, hq)
-    aid = post(api, "automations", {"name": "A notice", "owner": "person:ana", "trigger": {"type": "webhook", "id": "_tico"},
+    aid = post(api, "automations", {"name": "A notice", "owner_id": "person:ana", "trigger": {"type": "webhook", "id": "_tico"},
                                     "steps": [{"id": "read", "type": "bot_turn", "bot": "ops",
                                                "prompt": "Read it. {{webhook.content}}"}]})["id"]
     seen = []
@@ -165,5 +165,5 @@ def test_an_automation_on_the_tico_trigger_fires_and_webhook_received_is_not_jud
     api.app.state.store.automations.drain()
     assert [r["trigger_ref"] for r in get(api, f"automations/{aid}/runs")["runs"]] == ["webhook:_tico:notice:r1"]
     with api.app.state.store.read() as c:
-        tasks = c.execute("SELECT owner FROM tasks WHERE title='A notice'").fetchall()
+        tasks = c.execute("SELECT owner_id FROM tasks WHERE title='A notice'").fetchall()
     assert [t[0] for t in tasks] == ["bot:ops"]

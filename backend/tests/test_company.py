@@ -69,7 +69,7 @@ def test_the_owner_writes_it_a_member_reads_it_and_the_history_says_who_and_when
         ("description", "human:ana"), ("description", "human:ana"), ("vision", "human:ana")]
     newest = events[0]
     assert newest["old"].startswith("Tico runs a rental business") and newest["new"] == "Bots that run rentals."
-    assert newest["actor_name"] and newest["ts"]
+    assert newest["actor_name"] and newest["created_at"]
 
 
 def test_no_bot_writes_the_company_or_accepts_a_why_the_strategy_bot_included(api):
@@ -87,11 +87,11 @@ def test_no_bot_writes_the_company_or_accepts_a_why_the_strategy_bot_included(ap
     post(api, "company", {"vision": "Said for her."}, token="ana-via", expected=403)
     assert get(api, "company")["company"]["vision"] == ""
     # A bot's own goal: still no Why written by the bot, and no accept.
-    gid = post(api, "goals", {"title": "Answer every ticket in an hour", "owner": "ops"})["goal"]["id"]
+    gid = post(api, "goals", {"title": "Answer every ticket in an hour", "owner_id": "ops"})["goal"]["id"]
     post(api, f"goals/{gid}/why", {"why": "Support is the vision."}, token=ops, expected=403)
     post(api, f"goals/{gid}/why", {"why": "Support is the vision."}, token=strategy_token, expected=403)
     # Nor the Assistant writing it straight onto the owner's goal for her, with a Why waiting there: nothing changes.
-    company_goal = post(api, "goals", {"title": "Grow rentals 30%", "owner": "company"})["goal"]["id"]
+    company_goal = post(api, "goals", {"title": "Grow rentals 30%", "owner_id": "company"})["goal"]["id"]
     waiting = propose_why(api, company_goal, "More rentals is the vision.", strategy_token)
     post(api, f"goals/{company_goal}/why", {"why": "Said for her."}, token="ana-via", expected=403)
     unchanged = goal(api, company_goal)
@@ -115,7 +115,7 @@ def test_the_strategy_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     a = post(api, "goals", {"title": "Grow rentals 30%", "owner": "company"})["goal"]["id"]
     b = post(api, "goals", {"title": "Ship the stats page", "owner": "ben"})["goal"]["id"]
     c = post(api, "goals", {"title": "Hire a support lead", "owner": "cara"})["goal"]["id"]
-    assert goal(api, a)["why"] == "" and goal(api, a)["why_by"] is None                    # "Not tied to the vision"
+    assert goal(api, a)["why"] == "" and goal(api, a)["why_by_id"] is None                    # "Not tied to the vision"
     seen = propose_why(api, a, "More rentals is the vision's first step.", strategy_token)
     # The owner has the first line on screen; the Strategy Bot replaces it before they click. Accept on what they saw
     # never confirms the newer words: it is refused, nothing is written, and the newer line waits for them.
@@ -144,7 +144,7 @@ def test_the_strategy_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     assert decided["status"] == "confirmed" and decided["result"] == {"why": "More landlords on Tico is the vision.",
                                                                      "edited": False}
     accepted = goal(api, a)
-    assert accepted["why"] == "More landlords on Tico is the vision." and accepted["why_by"] == "human:ana"
+    assert accepted["why"] == "More landlords on Tico is the vision." and accepted["why_by_id"] == "human:ana"
     assert [(e["field"], e["actor"]) for e in accepted["events"] if e["field"] == "why"] == [("why", "human:ana")]
     # Accepted as edited, by the goal's own owner.
     p = propose_why(api, b, "The stats page shows landlords their money.", strategy_token)
@@ -153,7 +153,7 @@ def test_the_strategy_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     edited = post(api, f"goal-proposals/{p['id']}/decide", {"decision": "confirm", "why": "  Landlords see   their money. "},
                   token="ben-test")["proposal"]
     assert edited["result"] == {"why": "Landlords see their money.", "edited": True}
-    assert goal(api, b)["why"] == "Landlords see their money." and goal(api, b)["why_by"] == "human:ben"
+    assert goal(api, b)["why"] == "Landlords see their money." and goal(api, b)["why_by_id"] == "human:ben"
     post(api, f"goal-proposals/{edited['id']}/decide", {"decision": "confirm"}, token="ben-test", expected=422)
     # An edited line is for a Why only, and an accepted Why is never empty.
     p2 = propose_why(api, c, "Support keeps landlords.", strategy_token)
@@ -163,11 +163,11 @@ def test_the_strategy_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     post(api, f"goals/{c}/why", {"why": "x" * 201}, expected=422)
     post(api, f"goals/{c}/why", {"why": "Ben's line."}, token="ben-test", expected=403)
     written = post(api, f"goals/{c}/why", {"why": "Good support keeps landlords on Tico."}, token="cara-test")["goal"]
-    assert written["why"] == "Good support keeps landlords on Tico." and written["why_by"] == "human:cara"
+    assert written["why"] == "Good support keeps landlords on Tico." and written["why_by_id"] == "human:cara"
     settled = get(api, "goal-proposals?status=all")["proposals"]
     assert {(x["id"], x["status"], x["decision_note"]) for x in settled if x["id"] == p2["id"]} == {
         (p2["id"], "rejected", "The Why was set")}
     # Cleared: not tied to the vision again, and that is a change in the history too.
     cleared = post(api, f"goals/{c}/why", {"why": ""}, token="cara-test")["goal"]
-    assert cleared["why"] == "" and cleared["why_by"] is None
+    assert cleared["why"] == "" and cleared["why_by_id"] is None
     assert [e["new"] for e in cleared["events"] if e["field"] == "why"] == ["Good support keeps landlords on Tico.", ""]

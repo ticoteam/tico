@@ -57,9 +57,9 @@ def held(c, runner_id):
         return values[key]
     now = H.now()
     out = MappingProxyType({r[0]: r[1] for r in c.execute(
-        "SELECT a.bot,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+        "SELECT a.bot_id,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
         "WHERE a.runner_id=? AND a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
-        "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.bot",
+        "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.bot_id",
         (runner_id, now, now))})
     if values is not None:
         values[key] = out
@@ -118,7 +118,7 @@ def bot_held(c, bot, exclude=None):
     """Turns the bot holds on every computer together: what its "Turns at once" is checked against. A turn holds its
     place from its claim until it ends, whether it is starting, parked on a wait or running: a parked turn still
     belongs to the bot, so the bot's next one cannot start beside it. `exclude` leaves out one attempt."""
-    return c.execute("SELECT count(*) FROM attempts a WHERE a.bot=? AND a.id IS NOT ? AND (a.state='running' "
+    return c.execute("SELECT count(*) FROM attempts a WHERE a.bot_id=? AND a.id IS NOT ? AND (a.state='running' "
                      "OR (a.state='leased' AND a.lease_until>?))", (bot, exclude, H.now())).fetchone()[0]
 
 
@@ -159,13 +159,13 @@ def from_person(c, job_id):
     and holding it left a person's message waiting behind a hundred bot turns. A keeper notice (a routine, a sweep,
     a rule's wake), or a bot's message, is not one, even when a person's act caused it. Two primary-key reads."""
     return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-                          "WHERE j.id=? AND m.from_actor LIKE 'human:%'", (job_id,)).fetchone())
+                          "WHERE j.id=? AND m.sender_id LIKE 'human:%'", (job_id,)).fetchone())
 
 
 def person_queued(c, runner_id):
     """Whether a person's message waits in this computer's queue: only then does a held claim look for a job."""
-    return bool(c.execute("SELECT 1 FROM assignments x JOIN jobs j ON j.bot=x.bot AND j.state='queued' AND j.held=0 "
-                          "JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND m.from_actor LIKE 'human:%' "
+    return bool(c.execute("SELECT 1 FROM assignments x JOIN jobs j ON j.bot_id=x.bot AND j.state='queued' AND j.held=0 "
+                          "JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND m.sender_id LIKE 'human:%' "
                           "LIMIT 1", (runner_id,)).fetchone())
 
 
@@ -270,10 +270,10 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                'readiness_unknown': 'computer readiness', 'sign_in_rejected': 'sign-in',
                'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget',
                'bot_limit': 'at its turn limit'}
-    for row in c.execute("SELECT a.runner_id,j.bot,count(*) n,min(j.created_at) oldest,bc.config,b.state bot_state "
-                         "FROM jobs j JOIN assignments a ON a.bot=j.bot JOIN bots b ON b.id=j.bot "
-                         "JOIN bot_config bc ON bc.bot=j.bot WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
-                         "GROUP BY a.runner_id,j.bot", runner_ids):
+    for row in c.execute("SELECT a.runner_id,j.bot_id,count(*) n,min(j.created_at) oldest,bc.config,b.state bot_state "
+                         "FROM jobs j JOIN assignments a ON a.bot=j.bot_id JOIN bots b ON b.id=j.bot_id "
+                         "JOIN bot_config bc ON bc.bot=j.bot_id WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
+                         "GROUP BY a.runner_id,j.bot_id", runner_ids):
         rid = row['runner_id']
         runner = runners.get(rid)
         ready = readiness_document(runner['readiness']) if runner else {}

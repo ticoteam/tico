@@ -23,12 +23,12 @@ def test_enrollment_resolves_the_owner_email_to_the_existing_roster_id(tmp_path,
     out = tmp_path / "enrollment.json"
     manage.main(["enrollment", str(store.settings.db_path), "--owner", "Ana@Acme.Example", "--out", str(out)])
     code = json.loads(out.read_text())
-    assert code["operator"] == "ana"
+    assert code["owner_id"] == "ana"
     assert stat.S_IMODE(out.stat().st_mode) == 0o600
     assert code["code"] not in capsys.readouterr().out
     computer = Execution(store, Auth(store)).enroll(Enrollment(code=code["code"], label="Server computer", platform="linux"))
     with store.read() as c:
-        assert c.execute("SELECT operator FROM runners WHERE id=?", (computer["runner_id"],)).fetchone()[0] == "ana"
+        assert c.execute("SELECT owner_id FROM runners WHERE id=?", (computer["runner_id"],)).fetchone()[0] == "ana"
 
 
 def test_hosting_digest_is_bound_to_owner_machine_and_one_runner(tmp_path, monkeypatch):

@@ -979,7 +979,7 @@ def _state_row(s: _Seen, b: B.Budget, st: B.State) -> Row:
 def _budget_row(b: B.Budget) -> Row:
     return {"id": b.id, "name": b.name, "period": b.period, "account_id": b.account_id or None,
             "catch_all": b.catch_all, "team": b.team, "teammate": b.teammate, "vendor": b.vendor,
-            "parent_id": b.parent_id or None, "owner": b.owner, "warn_pct": b.warn_pct, "at_limit": b.at_limit,
+            "parent_id": b.parent_id or None, "owner_id": b.owner, "warn_pct": b.warn_pct, "at_limit": b.at_limit,
             "rollover": b.rollover, "active": b.active}
 
 

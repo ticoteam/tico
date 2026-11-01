@@ -49,7 +49,7 @@ def waits(c):
 def remember_owner(c, conversion):
     """The account that owns the App, as GitHub's manifest conversion reports it: its settings pages differ
     for an organization and a user."""
-    owner = conversion.get("owner") if isinstance(conversion.get("owner"), dict) else {}
+    owner = conversion.get("owner_id") if isinstance(conversion.get("owner_id"), dict) else {}
     _save(c, OWNER_KEY, {"login": str(owner.get("login") or ""), "type": str(owner.get("type") or "")})
 
 

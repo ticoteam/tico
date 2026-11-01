@@ -13,30 +13,30 @@ const SHOTS = process.env.NEEDS_SHOTS || '';
 const inDays = days => new Date(Date.now() + days * 86400000).toISOString();
 const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 
-const base = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'human:ana', requester: 'bot:writer', status: 'open',
+const base = (id, title, over = {}) => ({id, title, body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
   lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const TASKS = [
-  base('t-keys', 'Add the new OpenAI keys', {requester: 'bot:botops', due: inDays(2)}),
-  base('t-pick', 'Gusto or Rippling for payroll?', {requester: 'bot:analyst', due: inDays(9),
-    ask: {id: 'q-pick', body: 'Should payroll move to Gusto or Rippling?', from_actor: 'bot:analyst', to_actor: 'human:ana'}}),
-  base('t-invoice', 'Pay the October hosting invoice', {requester: 'bot:botops'}),
-  base('t-deck', 'Review the launch deck', {requester: 'human:sam'}),
-  base('t-call', 'Call Murphy back about the lease', {requester: 'bot:support'}),
-  base('t-vendor', 'Switch the payroll vendor', {owner: 'bot:analyst', requester: 'human:ana', status: 'waiting', note: 'Waiting on Ana to pick the vendor.'}),
+  base('t-keys', 'Add the new OpenAI keys', {requester_id: 'bot:botops', due_at: inDays(2)}),
+  base('t-pick', 'Gusto or Rippling for payroll?', {requester_id: 'bot:analyst', due_at: inDays(9),
+    ask: {id: 'q-pick', body: 'Should payroll move to Gusto or Rippling?', sender_id: 'bot:analyst', recipient_id: 'human:ana'}}),
+  base('t-invoice', 'Pay the October hosting invoice', {requester_id: 'bot:botops'}),
+  base('t-deck', 'Review the launch deck', {requester_id: 'human:sam'}),
+  base('t-call', 'Call Murphy back about the lease', {requester_id: 'bot:support'}),
+  base('t-vendor', 'Switch the payroll vendor', {owner_id: 'bot:analyst', requester_id: 'human:ana', status: 'waiting', note: 'Waiting on Ana to pick the vendor.'}),
   // A bot's question the Strategy Bot merged into an item of its own: the server leaves it out of Needs you, so the
   // page does.
-  base('t-merged', 'Which pricing page first?', {requester: 'bot:ops',
-    ask: {id: 'q-merged', body: 'Which pricing page launches first?', from_actor: 'bot:ops', to_actor: 'human:ana'}}),
+  base('t-merged', 'Which pricing page first?', {requester_id: 'bot:ops',
+    ask: {id: 'q-merged', body: 'Which pricing page launches first?', sender_id: 'bot:ops', recipient_id: 'human:ana'}}),
   // Bots' own tasks with a question to Ana over three days old: one merged, which stays out of Older questions too.
-  base('t-old-merged', 'Which launch day?', {owner: 'bot:coo', requester: 'bot:coo',
-    ask: {id: 'q-old-merged', body: 'Which day do we launch?', from_actor: 'bot:coo', to_actor: 'human:ana', older: true}}),
-  base('t-old', 'Which logo on the invoice?', {owner: 'bot:finance', requester: 'bot:finance',
-    ask: {id: 'q-old', body: 'Which logo goes on the invoice?', from_actor: 'bot:finance', to_actor: 'human:ana', older: true}}),
+  base('t-old-merged', 'Which launch day?', {owner_id: 'bot:coo', requester_id: 'bot:coo',
+    ask: {id: 'q-old-merged', body: 'Which day do we launch?', sender_id: 'bot:coo', recipient_id: 'human:ana', older: true}}),
+  base('t-old', 'Which logo on the invoice?', {owner_id: 'bot:finance', requester_id: 'bot:finance',
+    ask: {id: 'q-old', body: 'Which logo goes on the invoice?', sender_id: 'bot:finance', recipient_id: 'human:ana', older: true}}),
 ];
-const SEND = {id: 'ap-send', kind: 'approval', what: 'send', requester: 'bot:writer', requested_by: 'bot:writer', created_at: ago(30),
+const SEND = {id: 'ap-send', kind: 'approval', what: 'send', requester_id: 'bot:writer', requested_by: 'bot:writer', created_at: ago(30),
   title: "Send: '$200 for each rental owner you introduce' to Jennie Ooten", need: 'review',
   payload: {to: ['Jennie Ooten <jennie@acme.example>'], cc: [], subject: '$200 for each rental owner you introduce', body_sha256: 'a'.repeat(64)}};
-const SPEND = {id: 'ap-spend', kind: 'approval', what: 'spend', requester: 'bot:analyst', requested_by: 'bot:analyst', created_at: ago(90),
+const SPEND = {id: 'ap-spend', kind: 'approval', what: 'spend', requester_id: 'bot:analyst', requested_by: 'bot:analyst', created_at: ago(90),
   title: 'Pay $1,200: LinkedIn ads for October', need: 'pay', payload: {amount: '$1,200', what: 'LinkedIn ads for October', account: 'Ads'}};
 const REC = {do: 'Gusto', ask: 'q-pick', option: 'Gusto', kind: 'reversible'};
 const card = (id, over) => ({...TASKS.find(x => x.id === id), kind: 'task', ...over});
@@ -44,7 +44,7 @@ const NEEDS = [
   card('t-keys', {need: 'connect'}),
   // It holds up a roadmap item at Building, so Decide shows it first (backend/views.py decide_tier).
   card('t-pick', {need: 'decide', recommend: REC, tier: 1, holds_up: {id: 'r-payroll', title: 'Payroll move', kind: 'roadmap', step: 'Building'},
-    folded: [{id: 't-vendor', title: 'Switch the payroll vendor', owner: 'bot:analyst', kind: 'waiting', note: 'Waiting on Ana to pick the vendor.'}]}),
+    folded: [{id: 't-vendor', title: 'Switch the payroll vendor', owner_id: 'bot:analyst', kind: 'waiting', note: 'Waiting on Ana to pick the vendor.'}]}),
   SEND,
   SPEND,
   card('t-invoice', {need: 'pay'}),

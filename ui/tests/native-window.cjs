@@ -33,11 +33,11 @@ async function visualHandshake(browser) {
   `});
   let config = {company_name:'Acme', visual_origin:VISUAL}, visual = VISUAL, revision = 1;
   let authenticated = true, holdEmployees = null;
-  const message = () => ({id:'m1', from_actor:'bot:ops', body:'Visual revision '+revision,
+  const message = () => ({id:'m1', sender_id:'bot:ops', body:'Visual revision '+revision,
     created_at:'2026-01-01T00:00:00Z', refs:{attachments:[{id:'f1', file_id:'f1', version:revision,
       current_version:revision, ref:'f1@'+revision, title:'Plan', kind:'page', name:'plan.html',
       size:100, content_type:'text/html', url:'/api/v2/files/f1', src:visual+'/visuals/'+TOKEN}]}});
-  const task = {id:'t1', title:'Visual task', owner:'bot:ops', requester:'human:ana', status:'review', lane:'company',
+  const task = {id:'t1', title:'Visual task', owner_id:'bot:ops', requester_id:'human:ana', status:'review', lane:'company',
     rank:1, version:1, created_at:'2026-01-01T00:00:00Z', updated_at:'2026-01-01T00:00:00Z', body:'Plan',
     parts:{total:0, done:0}, labels:[], links:[], attachments:[]};
   await page.route('**/*', async route => {
@@ -275,7 +275,7 @@ async function hostedHandshake(browser, current) {
     })();
   `});
   const config = {company_name:'Acme', visual_origin:'', visual_files:FILES, visuals:'hosted'};
-  const message = {id:'m1', from_actor:'bot:ops', body:'Weekly', created_at:'2026-01-01T00:00:00Z',
+  const message = {id:'m1', sender_id:'bot:ops', body:'Weekly', created_at:'2026-01-01T00:00:00Z',
     refs:{attachments:[{id:'f1', file_id:'f1', version:1, current_version:1, ref:'f1@1', title:'Weekly', kind:'page',
       name:'weekly.html', size:100, content_type:'text/html', url:'/api/v2/files/f1', src:'/visuals/'+TOKEN}]}};
   await page.route('**/*', async route => {

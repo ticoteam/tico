@@ -35,7 +35,7 @@ def ops_on_sonnet(api):
 
 
 def task_turn(api, machine, title="Tidy the changelog"):
-    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Sort the entries."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Sort the entries."})
     turn = claim(api, machine)
     assert turn["task"]["id"] == task["id"]
     return task, turn
@@ -195,7 +195,7 @@ def test_a_check_subtask_keeps_its_check_model_over_the_task_model_and_says_so(a
     set_task_model(api, HAIKU)
     parent, turn = task_turn(api, machine, "Ship the import fix")
     assert turn["config"]["model"] == "claude-haiku-5-5", "the builder's own task follows the task model set on it"
-    sub = post(api, "tasks", {"owner": "ops", "title": "Review PR 700 with another model", "body": "Read it.",
+    sub = post(api, "tasks", {"owner_id": "ops", "title": "Review PR 700 with another model", "body": "Read it.",
                               "check_model": "grok", "check_role": "review",
                               "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     finish(api, machine, turn, HAIKU_RAN)
@@ -354,7 +354,7 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
     assert set_task_model(api, HAIKU)["warning"] == ""
     set_task_model(api, None)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO approvals(id,kind,requested_by,created_at) VALUES('ap-1','send','bot:ops',?)", (H.now(),))
+        c.execute("INSERT INTO approvals(id,kind,requested_by_id,created_at) VALUES('ap-1','send','bot:ops',?)", (H.now(),))
     saved = set_task_model(api, HAIKU)
     assert saved["task_model"]["model"] == "claude-haiku-5-5", "it still saves"
     assert saved["warning"] == ("This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, "

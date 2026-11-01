@@ -33,8 +33,8 @@ V3 = """
 CREATE TABLE IF NOT EXISTS mail_private_backfill (task_id TEXT PRIMARY KEY);
 INSERT OR IGNORE INTO mail_private_backfill SELECT task_id FROM mail_items
   WHERE kind IN ('government_tax','bill','financial') AND task_id IS NOT NULL;
-CREATE TABLE IF NOT EXISTS mail_reads (item_id TEXT NOT NULL, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS mail_reads (item_id TEXT NOT NULL, read_at TEXT NOT NULL);
 INSERT INTO mail_reads SELECT id, read_at FROM mail_items WHERE read_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM mail_reads);
-CREATE INDEX IF NOT EXISTS mail_reads_at ON mail_reads(at);
+CREATE INDEX IF NOT EXISTS mail_reads_at ON mail_reads(read_at);
 """

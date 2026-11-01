@@ -196,7 +196,7 @@ def _north_star_line(c, hidden=None):
     row = H._one(c, "SELECT * FROM kpis WHERE growth_role='north_star' AND archived_at IS NULL LIMIT 1")
     if not row:
         return []
-    owner = row.get("owner") or ""
+    owner = row.get("owner_id") or ""
     if owner in (hidden or ()) or (hidden is None and owner.startswith("bot:")):
         return []
     newest = K.latest(K.readings(c, row["id"], effective=True))

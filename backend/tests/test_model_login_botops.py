@@ -96,7 +96,7 @@ def test_botops_never_switches_or_signs_out_for_the_person_it_works_for(api, bot
         assert effects(api, rid) == NOTHING
 
     # Following through on her open task in a later run: the same.
-    task = act(api, ana, "POST", "tasks", {"owner": "botops", "title": "Switch the codex login", "body": "As asked.",
+    task = act(api, ana, "POST", "tasks", {"owner_id": "botops", "title": "Switch the codex login", "body": "As asked.",
                                           "request_id": ana["message"]["id"]})
     assert task.status_code == 200, task.text
     task_id = (task.json().get("task") or task.json())["id"]
@@ -128,7 +128,7 @@ def test_a_request_another_bot_carried_never_switches_or_signs_out(api, botops, 
     ready(api, botops, ["botops", "ops"])
     post(api, "chat/ops", {"text": "Switch the codex login on the Test Mac to my other account"}, token="ana-test")
     ops = claim(api, botops, "ops")
-    post(api, "tasks", {"owner": "botops", "title": "Switch Ana's codex login", "body": "She asked in her chat with Ops.",
+    post(api, "tasks", {"owner_id": "botops", "title": "Switch Ana's codex login", "body": "She asked in her chat with Ops.",
                         "request_id": "turn"}, token=ops["token"])
     finish(api, botops, ops)
     carried = claim(api, botops, "botops")
@@ -178,7 +178,7 @@ def test_a_person_still_switches_and_signs_out_from_the_app(api, alias):
     rid = r["runner_id"]
     cara = online(api)                                           # a computer Cara operates
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET operator='cara' WHERE id=?", (cara["runner_id"],))
+        c.execute("UPDATE runners SET owner_id='cara' WHERE id=?", (cara["runner_id"],))
     for token, machine, profile in (("ana-test", r, ""), ("ben-test", r, ""), ("cara-test", cara, "")):
         mid = machine["runner_id"]
         switch = post(api, f"{alias}/{mid}/logins", {"runtime": "codex", "profile": profile, "switch": True}, token=token)

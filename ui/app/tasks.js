@@ -32,7 +32,7 @@ const hasFiles = i => /s3:\/\//.test(i.body || '');
 const canMove = () => !!S.me?.mover;
 const taskFinished = t => ['done', 'closed'].includes(String(t?.status || ''));
 function taskAskToPerson(t) {
-  return !!(t?.ask?.body && actorPerson(t.ask.to_actor));
+  return !!(t?.ask?.body && actorPerson(t.ask.recipient_id));
 }
 // A task's relations (the server's `relations`, by kind; each {id, title, status, owner, direction}). `out` is the
 // task's own side: its parent, what it blocks, what it duplicates or follows up; `in` the other; related is `both`.
@@ -81,11 +81,11 @@ function taskBlockedLine(t) {
 function taskBotWait(t) {
   const open = r => !['done', 'closed', 'declined'].includes(String(r.status || ''));
   if (t?.status !== 'waiting' || ['gate', 'worktree'].includes(taskBlockedHold(t)?.cause) || actorPerson(t.waiting_on)
-      || taskAskToPerson(t) || taskBlockers(t).some(r => open(r) && actorPerson(r.owner))) return null;
+      || taskAskToPerson(t) || taskBlockers(t).some(r => open(r) && actorPerson(r.owner_id))) return null;
   const b = taskBlockers(t).find(open);
-  if (!b || !actorSlug(b.owner)) return null;
+  if (!b || !actorSlug(b.owner_id)) return null;
   const note = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';
-  return {name: actorLabel(b.owner), reason: note || b.title || '', blocker: b,
+  return {name: actorLabel(b.owner_id), reason: note || b.title || '', blocker: b,
     since: taskBlockedHold(t) ? ` · since ${fmt(taskBlockedHold(t).since)}` : ''};
 }
 function taskWaitLine(t) {
@@ -107,7 +107,7 @@ function hubColumn(t) {
   const status = String(t.status || 'open');
   if (status === 'done' || status === 'closed') return 'done';
   if (status === 'declined') return 'needs';
-  if (actorPerson(t.owner) || taskAskToPerson(t) || taskWaitingOn(t)) return 'needs';
+  if (actorPerson(t.owner_id) || taskAskToPerson(t) || taskWaitingOn(t)) return 'needs';
   if (status === 'waiting' || taskBlockers(t).length) return 'waiting';
   return 'doing';
 }
@@ -117,7 +117,7 @@ function taskWaitsOn(t) {
   if (!t || taskFinished(t)) return null;
   if (taskNeedsViewer(t)) return myActor();
   if (hubColumn(t) !== 'needs') return null;
-  const pid = actorPerson(t.ask?.to_actor) || actorPerson(t.owner) || actorPerson(taskWaitingOn(t))
+  const pid = actorPerson(t.ask?.recipient_id) || actorPerson(t.owner_id) || actorPerson(taskWaitingOn(t))
     || (t.status === 'declined' ? actorPerson(taskRequester(t)) : '');
   return pid && (S.people || []).some(p => p.id === pid) ? 'human:' + pid : '';
 }
@@ -145,18 +145,18 @@ function personShortName(pid) {
 const needsWho = t => {
   const who = taskWaitsOn(t);
   if (who != null) return needsWords(who);
-  const pid = actorPerson(t?.ask?.to_actor) || actorPerson(t?.owner);   // a partial row (a person's page passes only the owner)
+  const pid = actorPerson(t?.ask?.recipient_id) || actorPerson(t?.owner_id);   // a partial row (a person's page passes only the owner)
   return needsWords(pid ? 'human:' + pid : '');
 };
 // One shape for the list, the sort and the columns.
 const issueItem = i => ({kind: 'issue', key: `i${i.number}`, n: i.number, title: i.title || '',
-  slug: i.owner, actor: `bot:${i.owner}`, team: teamOf(i.owner), needs: !!i.needs_human,
+  slug: i.owner_id, actor: `bot:${i.owner_id}`, team: teamOf(i.owner_id), needs: !!i.needs_human,
   rank: null, updated_at: i.updatedAt, closed: i.state === 'CLOSED' ? i.closedAt : '', lane: 'company',
   issue: i});
 const taskItem = t => {
-  const slug = actorSlug(t.owner);
-  return {kind: 'hub', key: `t${t.id}`, id: t.id, title: t.title || '', slug, actor: t.owner,
-          team: slug ? teamOf(slug) : 'people', needs: !!actorPerson(t.owner),
+  const slug = actorSlug(t.owner_id);
+  return {kind: 'hub', key: `t${t.id}`, id: t.id, title: t.title || '', slug, actor: t.owner_id,
+          team: slug ? teamOf(slug) : 'people', needs: !!actorPerson(t.owner_id),
           rank: t.rank == null ? null : Number(t.rank), lane: t.lane || 'company', labels: t.labels || [],
           updated_at: t.updated_at || t.created_at, closed: t.done_at || t.closed_at || '', task: t, col: hubColumn(t)};
 };
@@ -181,12 +181,12 @@ function taskMatches(it, query) {
 // business days go back to their bot instead (backend/still_needed.py), servers no longer mark any.
 function taskNeedsViewer(t) {
   const me = myActor();
-  return !!me && !!t && !taskFinished(t) && (t.owner === me || (t.ask?.to_actor === me && !t.ask?.older) || taskWaitingOn(t) === me
-    || (t.status === 'declined' && taskRequester(t) === me && !actorPerson(t.owner)));
+  return !!me && !!t && !taskFinished(t) && (t.owner_id === me || (t.ask?.recipient_id === me && !t.ask?.older) || taskWaitingOn(t) === me
+    || (t.status === 'declined' && taskRequester(t) === me && !actorPerson(t.owner_id)));
 }
 function taskOlderAsk(t) {
   const me = myActor();
-  return !!me && !!t && !taskFinished(t) && t.ask?.to_actor === me && !!t.ask?.older && !taskNeedsViewer(t);
+  return !!me && !!t && !taskFinished(t) && t.ask?.recipient_id === me && !!t.ask?.older && !taskNeedsViewer(t);
 }
 // The person a bot's waiting task names (`hub task update --status waiting --on <person>`), or ''.
 // Who a waiting task waits on: the person it names, or the one its reconnect card is for (backend/reconnects.py).
@@ -272,17 +272,17 @@ function parseServerTime(value) {
 // trigger's zone, and that day is the routine's due_on: it reads as that calendar day in any viewer's zone. A step that
 // set its own due keeps the instant, as any task does. Null for other tasks.
 function occurrenceDay(t) {
-  const m = /:(\d{4}-\d{2}-\d{2})$/.exec(t?.occurrence || ''), due = String(t?.due || '');
+  const m = /:(\d{4}-\d{2}-\d{2})$/.exec(t?.occurrence || ''), due = String(t?.due_at || '');
   if (!m || !due.startsWith(m[1] + 'T23:59:59')) return null;
   const [y, mo, d] = m[1].split('-').map(Number);
   return new Date(y, mo - 1, d);
 }
 function taskDueInfo(t) {
-  if (!t?.due || taskFinished(t)) return null;
-  const at = parseServerTime(t.due); if (!at) return null;
+  if (!t?.due_at || taskFinished(t)) return null;
+  const at = parseServerTime(t.due_at); if (!at) return null;
   const shown = occurrenceDay(t) || new Date(at);
   const day = shown.toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
-  if (actorSlug(t.owner) && !t.occurrence) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
+  if (actorSlug(t.owner_id) && !t.occurrence) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
   const late = at < Date.now();
   // Within the coming week a deadline reads as its weekday ("Due Wed"), further out as its date.
   const start = d => new Date(d).setHours(0, 0, 0, 0), days = Math.round((start(shown) - start(Date.now())) / 864e5);
@@ -332,7 +332,7 @@ function actorFace(actor, size = 18) {
 // The row's tooltip: who added it, who has it, and the note in full.
 function taskRowTip(t) {
   const lines = [t.title || ''];
-  const meta = [taskStatusLabel(t), `Owner: ${actorLabel(t.owner)}`, taskSourceLine(t)];
+  const meta = [taskStatusLabel(t), `Owner: ${actorLabel(t.owner_id)}`, taskSourceLine(t)];
   if (taskParent(t)?.title) meta.push(`Part of ${taskParent(t).title}`);
   lines.push(meta.filter(Boolean).join(' · '));
   const note = taskWaitLine(t);
@@ -370,7 +370,7 @@ const STEP_LATE_MS = 4 * 3600e3;
 // Status belongs to the bot, not the ticket: its live changes must also reach an unchanged card or open page.
 function taskBuilderActors(t) {
   if (!t || taskFinished(t) || t.status === 'declined' || pipelineType(t)?.role !== 'engineering') return [];
-  return [...new Set([t.owner, ...(t.roles?.builder || [])].map(actorSlug).filter(Boolean))];
+  return [...new Set([t.owner_id, ...(t.roles?.builder || [])].map(actorSlug).filter(Boolean))];
 }
 function taskBuilderNoticesHTML(actors, names = false) {
   names ||= actors.length > 1;
@@ -498,6 +498,6 @@ let GOAL_OPTIONS = null;
 async function goalOptions() {
   if (GOAL_OPTIONS) return GOAL_OPTIONS;
   const r = await v2Get('/v2/goals?all=1');
-  GOAL_OPTIONS = (r?.goals || []).map(g => ({id: g.id, title: g.title, owner: g.owner, parent_id: g.parent_id, rank: g.rank, status: g.status}));
+  GOAL_OPTIONS = (r?.goals || []).map(g => ({id: g.id, title: g.title, owner: g.owner_id, parent_id: g.parent_id, rank: g.rank, status: g.status}));
   return GOAL_OPTIONS;
 }

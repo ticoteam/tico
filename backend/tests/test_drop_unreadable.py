@@ -20,16 +20,16 @@ def forget_claims():
 
 def job_of(c, task_id, bot="ops"):
     return c.execute("SELECT j.* FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv "
-                     f"ON cv.id=m.conversation_id WHERE j.bot=? AND {H.MESSAGE_TASK_SQL}=?", (bot, task_id)).fetchone()
+                     f"ON cv.id=m.conversation_id WHERE j.bot_id=? AND {H.MESSAGE_TASK_SQL}=?", (bot, task_id)).fetchone()
 
 
 def secret_taken_away(api):
     """A private task handed to ops, then taken off it with its notice still queued: ops may no longer read it."""
-    secret = post(api, "tasks", {"owner": "ops", "title": "Salary bands", "body": "Please review.", "private": True})
+    secret = post(api, "tasks", {"owner_id": "ops", "title": "Salary bands", "body": "Please review.", "private": True})
     with api.app.state.store.transaction() as c:
         assert job_of(c, secret["id"])["state"] == "queued"
         # Any way a bot loses read access to a queued message; the claim and the sweep judge only the verdict.
-        c.execute("UPDATE tasks SET owner='bot:finance' WHERE id=?", (secret["id"],))
+        c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id=?", (secret["id"],))
     return secret
 
 
@@ -84,10 +84,10 @@ def test_health_counts_no_queued_work_from_the_cancelled_job(api):
 
     def ops_rows():
         with store.transaction() as c:
-            c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
+            c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
             online = {r["id"] for r in health._online_runners(c)}
             waiting, slow, stuck = health._waiting(c, online, store.settings)
-        return [r for r in waiting + slow + stuck if r["bot"] == "ops"]
+        return [r for r in waiting + slow + stuck if r["bot_id"] == "ops"]
 
     assert post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None   # the claim passes it over...
     before = ops_rows()

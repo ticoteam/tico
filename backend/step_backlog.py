@@ -86,7 +86,7 @@ def per_owner(rule):
 
 
 def _recent(c, key, at, hours):
-    return bool(c.execute("SELECT 1 FROM events WHERE action=? AND json_extract(detail,'$.key')=? AND ts>? LIMIT 1",
+    return bool(c.execute("SELECT 1 FROM events WHERE action=? AND json_extract(detail,'$.key')=? AND created_at>? LIMIT 1",
                           (EVENT, key, H.shift(at, seconds=-hours * 3600))).fetchone())
 
 
@@ -105,10 +105,10 @@ def sweep(c, at=None):
         rows = H._rows(c.execute(
             f"SELECT * FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
             "ORDER BY created_at, id", (step["id"], *FINISHED)))
-        rows = [row for row in rows if not H.task_private(c, row) and not {row["owner"], row["requester"]} & hidden]
+        rows = [row for row in rows if not H.task_private(c, row) and not {row["owner_id"], row["requester_id"]} & hidden]
         groups = {}
         for row in rows:
-            groups.setdefault(row["owner"] if per_owner(rule) else None, []).append(row)
+            groups.setdefault(row["owner_id"] if per_owner(rule) else None, []).append(row)
         for owner, waiting in groups.items():
             if len(waiting) <= rule["over"]:
                 continue
@@ -119,8 +119,8 @@ def sweep(c, at=None):
             told = []
             by_owner = {}
             for row in waiting:
-                by_owner[H.actor_id(row["owner"] or "") or "nobody"] = by_owner.get(
-                    H.actor_id(row["owner"] or "") or "nobody", 0) + 1
+                by_owner[H.actor_id(row["owner_id"] or "") or "nobody"] = by_owner.get(
+                    H.actor_id(row["owner_id"] or "") or "nobody", 0) + 1
             spread = ", ".join(f"{who} {n}" for who, n in sorted(by_owner.items(), key=lambda x: -x[1])[:6])
             text = (f"Backlog: {len(waiting)} tickets wait at {step['name']}"
                     + (f" for {H.actor_id(owner)}" if owner else "") + f" (over {rule['over']}; {spread}). "
@@ -129,7 +129,7 @@ def sweep(c, at=None):
                 if H._wake(c, first, who, text, {"wake": "blocker", "step_backlog": True}, trigger="stall_check"):
                     told.append(who)
             if told:
-                H.event(c, H.KEEPER, EVENT, first["id"], {"key": key, "step": step["name"], "owner": owner,
+                H.event(c, H.KEEPER, EVENT, first["id"], {"key": key, "step": step["name"], "owner_id": owner,
                                                           "count": len(waiting), "told": told})
                 sent.append((step["name"], owner, len(waiting), told))
     return sent

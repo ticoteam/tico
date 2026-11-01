@@ -54,7 +54,7 @@ def stale_setup(run, w, team):
     attempt = probe(w)
     _, until = quota(w, attempt)
     with w.store.transaction() as c:
-        c.execute('UPDATE bot_status SET since=? WHERE bot=?', (w.H.shift(until, seconds=-60), BOT))
+        c.execute('UPDATE bot_status SET changed_at=? WHERE bot=?', (w.H.shift(until, seconds=-60), BOT))
     jump(w, 3660)
     with w.store.transaction() as c:
         release_limits(c)
@@ -76,7 +76,7 @@ def backlog_setup(run, w, team):
                               w.H.conversation(c, task['conversation_id']), 'notice', {'task': task['id']},
                               None, None, decided=Decision(WAKE, 'assignment'))
         source_outages.batch_waiters(c, BOT)
-        pending = c.execute("SELECT count(*) FROM jobs WHERE bot=? AND state='queued'", (BOT,)).fetchone()[0]
+        pending = c.execute("SELECT count(*) FROM jobs WHERE bot_id=? AND state='queued'", (BOT,)).fetchone()[0]
     first = w.post('jobs/claim', {'bot': BOT, 'start_places': True}, w.runner['token'])['attempt']
     second = w.post('jobs/claim', {'bot': BOT, 'start_places': True}, w.runner['token'])['attempt']
     carried = w.sql('SELECT count(*) n FROM jobs WHERE wake_carrier IS NOT NULL')[0]['n']
@@ -94,7 +94,7 @@ def bulk_setup(run, w, team):
             w.H.task_close(c, 'human:ana', task['id'], note='Finished and shipped.')
         count = c.execute('SELECT count(*) FROM notes WHERE to_actor IN (?,?) AND body LIKE ?',
                           (owner, requester, 'A person finished or closed 30 tasks.%')).fetchone()[0]
-        queued = c.execute("SELECT count(*) FROM jobs WHERE state='queued' AND bot IN (?,?)",
+        queued = c.execute("SELECT count(*) FROM jobs WHERE state='queued' AND bot_id IN (?,?)",
                            (BOT, 'engineering-lead')).fetchone()[0]
         run.proof = count == 2 and queued == 0
 

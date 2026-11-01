@@ -252,7 +252,7 @@ def _visible(auth, c, who):
     return f"g.task_id IN (SELECT id FROM tasks WHERE {auth.task_sql(c, who)})"
 
 
-IDEA_SQL = ("SELECT g.*, t.title, t.status AS task_status, t.owner AS assignee, t.requester AS created_by, "
+IDEA_SQL = ("SELECT g.*, t.title, t.status AS task_status, t.owner_id AS assignee, t.requester_id AS created_by, "
             "t.created_at AS task_created FROM growth_ideas g JOIN tasks t ON t.id=g.task_id")
 
 
@@ -300,8 +300,8 @@ def idea_views(c, rows, who=None, hidden=()):
     bets = _bet_titles(c, who, sorted({r["bet_id"] for r in rows if r.get("bet_id")}))
     kpi_marks = sorted({r[k] for r in rows for k in ("kpi_id", "judged_kpi_id") if r[k]})
     kpi_names = {r["id"]: r["name"] for r in H._rows(c.execute(
-        f"SELECT id, name, owner FROM kpis WHERE id IN ({','.join('?' * len(kpi_marks))})", kpi_marks))
-        if r["owner"] not in hidden} if kpi_marks else {}
+        f"SELECT id, name, owner_id FROM kpis WHERE id IN ({','.join('?' * len(kpi_marks))})", kpi_marks))
+        if r["owner_id"] not in hidden} if kpi_marks else {}
     out = []
     for r in rows:
         tid = r["task_id"]
@@ -459,8 +459,8 @@ def guardrails(c, hidden=()):
     out = []
     for ch in H._rows(c.execute("SELECT * FROM growth_channels WHERE retired_at IS NULL AND guardrail_kpi_id IS NOT NULL "
                                 "AND guardrail_max IS NOT NULL ORDER BY sort, name")):
-        kpi = H._one(c, "SELECT name, owner FROM kpis WHERE id=?", (ch["guardrail_kpi_id"],)) or {}
-        if kpi.get("owner") in hidden:
+        kpi = H._one(c, "SELECT name, owner_id FROM kpis WHERE id=?", (ch["guardrail_kpi_id"],)) or {}
+        if kpi.get("owner_id") in hidden:
             continue
         newest = _latest_value(c, ch["guardrail_kpi_id"])
         value = newest["value"] if newest else None
@@ -526,7 +526,7 @@ def economics(c, month=None, hidden=(), segment=None):
 
 def kpis(c, hidden=(), may_edit=lambda record: False):
     rows = H._rows(c.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created_at"))
-    rows = [r for r in rows if r.get("owner") not in hidden]
+    rows = [r for r in rows if r.get("owner_id") not in hidden]
     from . import kpis as K
     readings = K.effective_many(c, [r["id"] for r in rows])
     out = []
@@ -565,7 +565,7 @@ def working(c, auth, who, limit=200):
     """Open tasks under an idea, or labelled `channel:<slug>`."""
     visible = auth.task_sql(c, who)
     rows = H._rows(c.execute(
-        "SELECT t.id, t.title, t.owner, t.status, t.updated_at, rel.to_task AS idea_task_id, it.title AS idea_title, "
+        "SELECT t.id, t.title, t.owner_id, t.status, t.updated_at, rel.to_task AS idea_task_id, it.title AS idea_title, "
         "(SELECT substr(tg.key, 9) FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id WHERE tt.task_id=t.id "
         " AND tg.key LIKE 'channel:%' LIMIT 1) AS label_channel "
         "FROM tasks t LEFT JOIN task_relations rel ON rel.from_task=t.id AND rel.kind='parent' "

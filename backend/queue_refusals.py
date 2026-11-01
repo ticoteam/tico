@@ -84,8 +84,8 @@ def apply(c, change):
     bot, previous, value = change
     if state(c, bot) != previous:
         return                         # a newer scheduler pass already refreshed this observation
-    if value and not c.execute("SELECT 1 FROM jobs j JOIN bots b ON b.id=j.bot "
-                               "JOIN assignments a ON a.bot=b.id WHERE j.id=? AND j.bot=? "
+    if value and not c.execute("SELECT 1 FROM jobs j JOIN bots b ON b.id=j.bot_id "
+                               "JOIN assignments a ON a.bot=b.id WHERE j.id=? AND j.bot_id=? "
                                "AND j.state='queued' AND j.held=0 AND b.state='active' AND a.runner_id=?",
                                (value['job'], bot, value['runner_id'])).fetchone():
         value = {}

@@ -30,7 +30,7 @@ def computers(api):
 
 
 def task(api, bot, title):
-    return post(api, 'tasks', {'owner': bot, 'title': title, 'body': 'Please review it.'})
+    return post(api, 'tasks', {'owner_id': bot, 'title': title, 'body': 'Please review it.'})
 
 
 def test_a_retained_default_home_shares_old_primary_and_new_fallback_holds(api, monkeypatch):

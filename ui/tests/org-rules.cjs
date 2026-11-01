@@ -105,7 +105,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     assert.ok(dueId);
     await satisfy.click();
     await page.locator('#ru-side .ru-mark').waitFor({timeout: t(10000)});   // its History has the mark
-    const due = (await ok(page, 'GET', '/v2/rules/due?next=400d')).due.find(d => d.id === dueId);
+    const due = (await ok(page, 'GET', '/v2/rules/due?next=400d')).due_at.find(d => d.id === dueId);
     assert.equal(due.status, 'upcoming', 'a yearly due date moves on to next year');
     assert.equal(due.history[0].satisfied_by, 'human:dana');
 
@@ -141,7 +141,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
 
     // A second, earlier date on the same rule (the hub's clock decides overdue or due soon): the list shows the most
     // urgent one and +1, the panel lists both.
-    const sooner = await ok(page, 'POST', `/v2/rules/${ruleId}/due`, {first_due: day(-3), repeats: 'once', owner: 'human:dana'});
+    const sooner = await ok(page, 'POST', `/v2/rules/${ruleId}/due`, {first_due: day(-3), repeats: 'once', owner_id: 'human:dana'});
     await go(page, `#/rules?rule=${ruleId}`);
     await page.waitForFunction(() => document.querySelectorAll('#ru-side .ru-duebox').length === 2, null, {timeout: t(10000)});
     assert.equal(await side.locator('.ru-duebox').first().getAttribute('data-due'), sooner.id);

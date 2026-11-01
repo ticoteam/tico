@@ -31,7 +31,7 @@ def _live(conn, task_id):
 
 def recipient(conn, row):
     """The requester when a person asked for it, else the owner when a person owns it, else nobody."""
-    for actor in (row["requester"], row["owner"]):
+    for actor in (row["requester_id"], row["owner_id"]):
         if H.is_human(actor) and H._actor_exists(conn, actor):
             return actor
     return None
@@ -88,14 +88,14 @@ def ask_idle(conn, at=None):
 
 def is_ask(asked):
     refs = (asked or {}).get("refs") or {}
-    return bool(asked and asked.get("from_actor") == H.KEEPER and refs.get("still_wanted"))
+    return bool(asked and asked.get("sender_id") == H.KEEPER and refs.get("still_wanted"))
 
 
 def choice(asked, answer, actor):
     """Keep, Close or None (dismissed, or answered only in words) for an answer to a still-wanted ask.
     Only the person it was put to decides: anyone else who may comment (the bot that filed the task
     included) answers it as an ordinary answer, with no Keep or Close effect."""
-    if not is_ask(asked) or answer.dismiss or not (H.is_human(actor) and actor == asked.get("to_actor")):
+    if not is_ask(asked) or answer.dismiss or not (H.is_human(actor) and actor == asked.get("recipient_id")):
         return None
     labels = answer.answers.get(QUESTION_ID) or []
     return labels[0] if labels and labels[0] in (KEEP, CLOSE) else None

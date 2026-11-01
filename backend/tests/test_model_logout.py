@@ -110,7 +110,7 @@ def test_a_cancelled_switch_keeps_the_mark_and_the_old_login(api):
 def put_config(api, bot, runtime):
     import json
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot, config, operator) VALUES(?, ?, 'ana') ON CONFLICT(bot) DO UPDATE "
+        c.execute("INSERT INTO bot_config(bot, config, owner_id) VALUES(?, ?, 'ana') ON CONFLICT(bot) DO UPDATE "
                   "SET config=excluded.config", (bot, json.dumps({"runtime": runtime})))
 
 

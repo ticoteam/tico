@@ -37,7 +37,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const extra = [];
     // Keep a safe default first, with supporting evidence folded.
     const job = (id, title, stopped, acted, tools) => ({id, run_id: `a-${id}`, readable: true, stopped, acted,
-      task: {id: `t-${id}`, title, status: 'doing', owner: 'bot:builder', owner_name: 'Builder'},
+      task: {id: `t-${id}`, title, status: 'doing', owner_id: 'bot:builder', owner_name: 'Builder'},
       request: 'Ship Billing 3/5.', run: {started_at: '2026-10-22T08:12:00Z', final_text: 'Merged #25; deploying next.'},
       output: [], tools: tools.map(tool => ({tool, summary: '', status: 'completed'})),
       reason: 'The run stopped after using a tool that can change things (Bash). Tico cannot tell whether it finished.'});

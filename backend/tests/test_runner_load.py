@@ -26,7 +26,7 @@ def test_sampler_keeps_one_load_row_per_minute_and_prunes_at_48_hours(api):
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT * FROM runner_load_samples WHERE runner_id=?", (rid,)).fetchall()
     assert len(rows) == 1
-    assert dict(rows[0]) == {"runner_id": rid, "ts": now, "sampled_at": now + 10,
+    assert dict(rows[0]) == {"runner_id": rid, "created_at": now, "sampled_at": now + 10,
                                 "cpu_pct": 97.5, "mem_used": 500, "mem_total": 1000,
                                 "swap_used": 20, "swap_total": 100, "running_turns": 3}
 
@@ -87,7 +87,7 @@ def test_five_full_minutes_trip_overload_in_health_and_gaps_calm_stale_or_off_cl
     assert check["status"] == "warn" and "five minutes" in check["summary"]
     with api.app.state.store.transaction() as c:
         assert P.load_status(c, rid, now + 121)["overloaded"] is False
-        c.execute("DELETE FROM runner_load_samples WHERE runner_id=? AND ts=?", (rid, now - 120))
+        c.execute("DELETE FROM runner_load_samples WHERE runner_id=? AND created_at=?", (rid, now - 120))
         assert P.load_status(c, rid, now)["overloaded"] is False
         P.ingest(c, rid, [M.PerformanceSample(**point(now - 120, cpu=90, mem=.9))], now=now)
         assert P.load_status(c, rid, now)["overloaded"] is False  # strictly above 90

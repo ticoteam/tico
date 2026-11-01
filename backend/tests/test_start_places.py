@@ -29,7 +29,7 @@ def waiters(api, n=37, running=3):
 
 def sent_by(api, message_id, actor):
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE messages SET from_actor=? WHERE id=?', (actor, message_id))
+        c.execute('UPDATE messages SET sender_id=? WHERE id=?', (actor, message_id))
 
 
 def overload(api, computer, cpu=95, mem=.5):
@@ -222,7 +222,7 @@ def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypa
     with store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'failed'
     replies = get(api, f"conversations/{message['conversation_id']}/messages")
-    assert [m['body'] for m in replies if m['from_actor'] == 'bot:ops'] == [
+    assert [m['body'] for m in replies if m['sender_id'] == 'bot:ops'] == [
         "Your ops couldn't start on Test Mac; check that Computer"]
 
 
@@ -427,12 +427,12 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
     post(api, 'chat/finance', {'text': 'Close the books'})
     overload(api, computer)
     attempt = claim(api, computer)
-    assert attempt is not None and attempt['bot'] == 'finance'
+    assert attempt is not None and attempt['bot_id'] == 'finance'
     assert post(api, f"attempts/{attempt['id']}/start-place", {}, computer['token'])['reserved']
     assert claim(api, computer) is None
     with api.app.state.store.read() as c:
         assert c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE m.from_actor='bot:ops'").fetchone()[0] == 'queued'
+                         "WHERE m.sender_id='bot:ops'").fetchone()[0] == 'queued'
 
 
 def test_operations_and_computers_share_one_company_default_across_runners(api, monkeypatch):

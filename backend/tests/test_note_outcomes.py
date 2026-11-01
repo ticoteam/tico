@@ -7,7 +7,7 @@ class Outcomes(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(':memory:'); self.conn.row_factory = sqlite3.Row
         self.addCleanup(self.conn.close)
-        self.conn.execute('CREATE TABLE tasks (id,title,status,owner,requester,note,updated_at,created_at)')
+        self.conn.execute('CREATE TABLE tasks (id,title,status,owner_id,requester_id,note,updated_at,created_at)')
         self.conn.execute('CREATE TABLE task_relations (from_task,to_task,kind,created_by,created_at)')
         self.conn.execute("INSERT INTO tasks VALUES ('review','Review meeting','done','bot:coo','human:ana','Created follow-up tasks.','today','today')")
         for id,status in [('a','done'),('b','waiting')]:

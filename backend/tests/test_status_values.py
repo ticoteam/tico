@@ -79,7 +79,7 @@ def test_the_cancelled_spelling_is_refused_on_a_fresh_file(db):
     with sqlite3.connect(db, isolation_level=None) as conn:
         conn.execute("PRAGMA foreign_keys=OFF")
         with pytest.raises(sqlite3.IntegrityError, match="jobs.state: invalid value"):
-            conn.execute("INSERT INTO jobs(id,message_id,bot,state,created_at) VALUES('j1','m1','b1','cancelled','t')")
+            conn.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES('j1','m1','b1','cancelled','t')")
 
 
 def test_a_fresh_file_is_at_the_current_version_with_the_lists_installed(db):
@@ -97,7 +97,7 @@ def _old_file(path):
     conn = sqlite3.connect(path, isolation_level=None)
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript("""
-        CREATE TABLE jobs(id TEXT PRIMARY KEY, message_id TEXT NOT NULL, bot TEXT NOT NULL,
+        CREATE TABLE jobs(id TEXT PRIMARY KEY, message_id TEXT NOT NULL, bot_id TEXT NOT NULL,
                           state TEXT NOT NULL DEFAULT 'queued', created_at TEXT NOT NULL);
         CREATE INDEX jobs_state ON jobs(state);
     """)
@@ -119,7 +119,7 @@ def _upgrade_as_migrate_runs_it(conn):
 
 def test_the_upgrade_names_values_it_cannot_map_and_changes_nothing(tmp_path):
     conn = _old_file(tmp_path / "old.db")
-    conn.executemany("INSERT INTO jobs(id,message_id,bot,state,created_at) VALUES(?,?,?,?,?)",
+    conn.executemany("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,?,?)",
                      [("j1", "m", "b", "queued", "t"), ("j2", "m", "b", "stalled", "t"),
                       ("j3", "m", "b", "cancelled", "t")])
     with pytest.raises(SV.StatusValuesError) as failed:
@@ -130,7 +130,7 @@ def test_the_upgrade_names_values_it_cannot_map_and_changes_nothing(tmp_path):
 
 def test_the_upgrade_rewrites_cancelled_and_refuses_it_afterwards(tmp_path):
     conn = _old_file(tmp_path / "old.db")
-    conn.executemany("INSERT INTO jobs(id,message_id,bot,state,created_at) VALUES(?,?,?,?,?)",
+    conn.executemany("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,?,?)",
                      [("j1", "m", "b", "queued", "t"), ("j2", "m", "b", "cancelled", "t")])
     _upgrade_as_migrate_runs_it(conn)
     assert conn.execute("SELECT state FROM jobs ORDER BY id").fetchall() == [("queued",), ("canceled",)]

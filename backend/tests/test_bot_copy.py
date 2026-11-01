@@ -48,11 +48,11 @@ def test_a_copy_is_an_independent_bot_owned_by_whoever_asked(api, scribe):
     scribe_id = bot_id(api, "scribe")
     assert made["repo"] == "bot-cara-scribe" and made["copied_from"] == {"bot": scribe_id, "sha": SHA}
     row, config = config_of(api, "cara-scribe")
-    assert (row["created_by"], row["operator"], row["reports_to"]) == ("human:cara", "cara", "human:cara")
+    assert (row["created_by"], row["owner_id"], row["reports_to"]) == ("human:cara", "cara", "human:cara")
     assert row["description"] == "Takes meeting notes" and config["copied_from"] == {"bot": scribe_id, "sha": SHA}
     assert (config["model"], config["reasoning_effort"]) == ("gpt-6.1-sol", "high")         # the original's model settings
     # Nothing is linked: the original is as it was, and the copy is a bot of its own (its owner may change it, Ana's original she may not).
-    assert config_of(api, "scribe")[0]["operator"] == "ana" and "copied_from" not in config_of(api, "scribe")[1]
+    assert config_of(api, "scribe")[0]["owner_id"] == "ana" and "copied_from" not in config_of(api, "scribe")[1]
     current = get(api, "bots", "cara-test")
     revision = next(b for b in current if b["slug"] == "cara-scribe")["revision"]
     assert post(api, "bots/cara-scribe/definition", {"display_name": "Renamed", "expected_revision": revision}, "cara-test")

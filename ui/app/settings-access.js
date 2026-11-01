@@ -75,19 +75,19 @@ async function settingsEditBotOwners(slug, {stage} = {}) {
   const listed = new Set((e.bot_owners || []).map(o => o.id));
   const people = SETTINGS_DATA.people?.length ? SETTINGS_DATA.people : (S.people || []).filter(p => !p.hidden);
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-owners-title">Who owns ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-owners-close aria-label="Close">✕</button></div>
-    <div class="owner-picker-body">${e.operator ? `<p class="muted">${esc(settingsPersonName(e.operator))} is responsible for this bot and always stays an owner.</p>` : ''}
-      <div class="owner-options">${people.map(person => `<label class="owner-option"><input type="checkbox" name="owner" value="${esc(person.id)}" ${listed.has(person.id) || person.id === e.operator ? 'checked' : ''} ${person.id === e.operator ? 'disabled' : ''}>${personAvatar(person, 22)}<span>${esc(person.name || person.id)}</span></label>`).join('')}</div>
+    <div class="owner-picker-body">${e.owner_id ? `<p class="muted">${esc(settingsPersonName(e.owner_id))} is responsible for this bot and always stays an owner.</p>` : ''}
+      <div class="owner-options">${people.map(person => `<label class="owner-option"><input type="checkbox" name="owner" value="${esc(person.id)}" ${listed.has(person.id) || person.id === e.owner_id ? 'checked' : ''} ${person.id === e.owner_id ? 'disabled' : ''}>${personAvatar(person, 22)}<span>${esc(person.name || person.id)}</span></label>`).join('')}</div>
       <div class="row"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-owners-close>Cancel</button><span class="muted" data-owners-status role="status"></span></div></div></form>`;
   dialog.querySelectorAll('[data-owners-close]').forEach(button => button.onclick = () => settingsPanelClose(dialog));
   dialog.querySelector('form').onsubmit = async event => {
     event.preventDefault();
     const chosen = new Set([...dialog.querySelectorAll('input[name=owner]:checked:not(:disabled)')].map(input => input.value));
-    const add = [...chosen].filter(id => !listed.has(id) && id !== e.operator), remove = [...listed].filter(id => !chosen.has(id) && id !== e.operator);
+    const add = [...chosen].filter(id => !listed.has(id) && id !== e.owner_id), remove = [...listed].filter(id => !chosen.has(id) && id !== e.owner_id);
     const status = dialog.querySelector('[data-owners-status]');
     if (!add.length && !remove.length) { settingsPanelClose(dialog); return; }
     if (stage) {
       stage(async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/co-owners`, {add, remove}))?.revision ?? rev + 1,
-        people.filter(person => chosen.has(person.id) || person.id === e.operator));
+        people.filter(person => chosen.has(person.id) || person.id === e.owner_id));
       settingsPanelClose(dialog); return;
     }
     dialog.querySelectorAll('button,input').forEach(control => { control.disabled = true; }); status.textContent = 'Saving…';
@@ -97,7 +97,7 @@ async function settingsEditBotOwners(slug, {stage} = {}) {
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
       dialog.querySelectorAll('button,input').forEach(control => { control.disabled = false; });
-      dialog.querySelectorAll('input[name=owner][value]').forEach(input => { if (input.value === e.operator) input.disabled = true; });
+      dialog.querySelectorAll('input[name=owner][value]').forEach(input => { if (input.value === e.owner_id) input.disabled = true; });
     }
   };
   dialog.onclose = () => { dialog.innerHTML = ''; };

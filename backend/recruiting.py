@@ -232,7 +232,7 @@ def end_draft(c, row, why):
     person: nothing drafts a seat's description in the background any more."""
     task = H.task(c, row["draft_task"]) if row["draft_task"] else None
     if task and task["status"] in H.ACTIVE_STATUSES:
-        H.task_update(c, task["owner"], task["id"], status="declined", note=why[:500])
+        H.task_update(c, task["owner_id"], task["id"], status="declined", note=why[:500])
 
 
 # ------------------------------------------------------------------ 1. the job description, drafted from the title

@@ -202,8 +202,8 @@ def run_view(c, auth, who, tid):
     ids = [r["id"] for r in turns]
     jobs = sorted({r["job_id"] for r in turns})
     # A blocked checkpoint is no checkpoint: no prompt or stall report uses it either.
-    task = c.execute("SELECT checkpoint,checkpoint_at,checkpoint_by,checkpoint_blocked FROM tasks WHERE id=?", (tid,)).fetchone()
-    checkpoint = ({"text": task["checkpoint"], "at": task["checkpoint_at"], "by": task["checkpoint_by"]}
+    task = c.execute("SELECT checkpoint,checkpoint_at,checkpoint_by_id,checkpoint_blocked FROM tasks WHERE id=?", (tid,)).fetchone()
+    checkpoint = ({"text": task["checkpoint"], "at": task["checkpoint_at"], "by": task["checkpoint_by_id"]}
                   if task and (task["checkpoint"] or "").strip() and not task["checkpoint_blocked"] else None)
     if not ids:
         return {"task_id": tid, "checkpoint": checkpoint, "runs": []}
@@ -215,17 +215,17 @@ def run_view(c, auth, who, tid):
                                jobs)):
         tries.setdefault(r["job_id"], []).append(r)
     decisions, retries, lease = {}, {}, {}
-    for e in c.execute(f"SELECT ts,actor,action,target,detail FROM events WHERE {RECOVERY_SQL} AND target IN "
-                       f"({job_marks},{marks}) ORDER BY ts", (*jobs, *ids)):
+    for e in c.execute(f"SELECT created_at,actor,action,target,detail FROM events WHERE {RECOVERY_SQL} AND target IN "
+                       f"({job_marks},{marks}) ORDER BY created_at", (*jobs, *ids)):
         detail = json.loads(e["detail"] or "{}") or {}
         if e["action"] in DECISIONS and detail.get("attempt_id"):
             decisions[detail["attempt_id"]] = {
                 "kind": "resumed" if detail.get("decision") == "resume" else "dismissed",
-                "by": e["actor"], "at": e["ts"], "note": decision_note(e["actor"], detail)}
+                "by": e["actor"], "at": e["created_at"], "note": decision_note(e["actor"], detail)}
         elif e["action"] == "job.retry":
-            retries.setdefault(e["target"], []).append({"by": e["actor"], "at": e["ts"]})
+            retries.setdefault(e["target"], []).append({"by": e["actor"], "at": e["created_at"]})
         elif e["action"] in LEASE:
-            lease.setdefault(e["target"], []).append({"kind": LEASE[e["action"]], "at": e["ts"]})
+            lease.setdefault(e["target"], []).append({"kind": LEASE[e["action"]], "at": e["created_at"]})
     events = {aid: [] for aid in ids}
     for r in c.execute(f"SELECT attempt_id,kind,payload,created_at FROM attempt_events WHERE attempt_id IN ({marks}) "
                        "AND kind='tool' AND (json_extract(payload,'$.subagent') IS NOT NULL OR "

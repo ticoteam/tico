@@ -26,7 +26,7 @@ def note(api, text="Cancellations are flat; nothing for Ben today.", to="ops", t
 
 def jobs(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
 
 
 def listed(api, slug="ops"):

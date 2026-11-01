@@ -8,7 +8,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 
 // A bot made since bots got ids: its id is a UUID, its slug only a label. The picker and the meeting's bots use the id.
 const FINANCE = '0192f0c4-7b1e-7cc2-9d1a-3f5e8a6b2c10';
-const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_actor: 'human:ana', seq: 2, event_id: 5,
+const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_id: 'human:ana', seq: 2, event_id: 5,
   window_ms: 30000, cooldown_ms: 60000, reply_cap: 3, imported_meeting_id: null,
   humans: [{actor: 'human:ana', name: 'Ana'}], bots: [{bot: 'ops'}],
   chunks: [{seq: 1, revision: 1, speaker: 'Ana', text: 'We should ship the new plan.'},
@@ -68,7 +68,7 @@ async function main() {
       if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
       if (p === '/api/v2/tasks') return json({tasks: []});
       if (p === '/api/v2/setup/getting-started') return json({items: [], done: 0, total: 0, complete: true, dismissed: true, tour_seen: true, cards_dismissed: [],
-        can_build: true, owner: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
+        can_build: true, owner_id: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
       if (p === '/api/v2/live-meetings/bot-candidates') return json({bots: [{id: FINANCE, slug: 'finance', name: 'Finance', team: 'Operations'}]});
       if (p === '/api/v2/live-meetings' && method === 'GET') return json({meetings: world.meetings, count: world.meetings.length});
       if (p === '/api/v2/live-meetings' && method === 'POST') {

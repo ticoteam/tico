@@ -123,7 +123,7 @@ def not_agreed(detail):
 
 def stored(c, message_id):
     """The read-back stored with this message: {id, created, changes}, or None."""
-    row = c.execute("SELECT m.id, m.created_at, m.from_actor, m.conversation_id, e.detail FROM messages m "
+    row = c.execute("SELECT m.id, m.created_at, m.sender_id, m.conversation_id, e.detail FROM messages m "
                     "JOIN events e ON e.target=m.id AND e.action=? WHERE m.id=? AND m.deleted_at IS NULL",
                     (EVENT, message_id)).fetchone()
     if not row:
@@ -155,10 +155,10 @@ def answered(c, who, cited):
     before = c.execute("SELECT id FROM messages WHERE conversation_id=? AND id<>? AND created_at<=? AND deleted_at IS NULL "
                        "ORDER BY created_at DESC, rowid DESC LIMIT 1", (room, cited, at)).fetchone()
     back = stored(c, before["id"]) if before else None
-    if not back or H.message(c, back["id"])["from_actor"] != who.task_actor:
+    if not back or H.message(c, back["id"])["sender_id"] != who.task_actor:
         raise not_agreed("The owner's message is not a reply to a goal read-back (anything said after the read-back "
                          "takes the yes back)")
-    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created_at>? AND id<>? "
+    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND id<>? "
                       "AND deleted_at IS NULL LIMIT 1", (room, who.actor, at, cited)).fetchone()
     if later:
         raise not_agreed("The owner wrote again after their yes")
@@ -206,8 +206,8 @@ def canonical(c, path, body, actor):
         data = _model(path)(**body).model_dump()
     except (ValidationError, TypeError):
         return None
-    if data.get("owner"):
-        data["owner"] = owner_actor(c, data["owner"], actor)
+    if data.get("owner_id"):
+        data["owner_id"] = owner_actor(c, data["owner_id"], actor)
     return data
 
 
@@ -244,8 +244,8 @@ def changed_since(c, back, change, done):
             said.append(f"{editor_words(p['decided_by'])} {did} the suggestion" if did
                         else f"the suggestion was {p['status']}")
     for gid in dict.fromkeys(goals):
-        for r in c.execute("SELECT id, actor, field, old, new, status_source FROM goal_events WHERE goal_id=? AND ts>? "
-                           "ORDER BY ts", (gid, back["created_at"])):
+        for r in c.execute("SELECT id, actor, field, old, new, status_source FROM goal_events WHERE goal_id=? AND created_at>? "
+                           "ORDER BY created_at", (gid, back["created_at"])):
             if r["id"] in mine or r["field"] in ("rank", "checkin", "status_source") or (
                     r["field"] == "status" and r["status_source"] == "auto") or r["field"] == "proposal":
                 continue
@@ -265,13 +265,13 @@ def read_back_access(c, auth, raw):
     def goal(gid):
         row = G.goal(c, gid) if gid else None
         if row:
-            owners.append(row["owner"])
+            owners.append(row["owner_id"])
         return row
 
     def measure(kid):
         row = K.kpi(c, kid) if kid else None
         if row:
-            owners.append(row["owner"])
+            owners.append(row["owner_id"])
 
     def fields(body):
         if not isinstance(body, dict):

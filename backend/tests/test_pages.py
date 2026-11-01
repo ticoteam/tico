@@ -88,7 +88,7 @@ def test_a_replaced_page_names_its_replacement_only_to_readers_who_may_see_it(ap
     old = page(api, attempt).json()["page"]["file_id"]
     new = page(api, attempt, name="weekly-2.html", data=HTML + b"<p>v2</p>", replaces=old).json()["page"]
     seen = read(api, old, "ben-test").json()["page"]
-    assert (seen["replaced_by"], seen["replaced_by_title"]) == (new["file_id"], "weekly-2.html")
+    assert (seen["replaced_by_id"], seen["replaced_by_title"]) == (new["file_id"], "weekly-2.html")
     # Another bot's page cannot be named.
     _, other = turn(api, bot="finance")
     assert page(api, other, name="f.html", replaces=old).status_code == 404
@@ -96,7 +96,7 @@ def test_a_replaced_page_names_its_replacement_only_to_readers_who_may_see_it(ap
 
 def test_a_page_filed_on_a_task_is_pinned_to_its_top_and_says_where_it_is_pinned(api):
     _, attempt = turn(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Q3 launch", "body": "x", "private": True}, token="ben-test")
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Q3 launch", "body": "x", "private": True}, token="ben-test")
     made = page(api, attempt, name="launch.html", task=task["id"])
     assert made.status_code == 200, made.text
     fid = made.json()["page"]["file_id"]
@@ -190,7 +190,7 @@ def test_the_background_pass_indexes_older_files_and_lists_task_attachments(api)
     with store.transaction() as c:
         file_library.unindex(c, fid)
     assert api.get("/api/v2/files/search?q=forecast", headers=headers("ben-test")).json()["results"] == []
-    task = post(api, "tasks", {"owner": "bot:ops", "title": "Review the budget", "body": "Check Q3", "private": True}, "ben-test")
+    task = post(api, "tasks", {"owner_id": "bot:ops", "title": "Review the budget", "body": "Check Q3", "private": True}, "ben-test")
     digest = api.app.state.blobs.put(b"quarter,total\nQ3,9\n", "text/csv")
     with store.transaction() as c:
         from backend.blobs import register
@@ -262,7 +262,7 @@ def share_another_file(api, attempt, data):
 
 
 def share_task_file(api, attempt, data):
-    tid = post(api, "tasks", {"owner": "ops", "title": "Report", "body": "x"})["id"]
+    tid = post(api, "tasks", {"owner_id": "ops", "title": "Report", "body": "x"})["id"]
     made = post(api, f"tasks/{tid}/files", {"name": "report.txt", "text": data.decode()})
     return lambda: api.get(f"/api/v2/files/{made['file_id']}", headers=headers("ana-test")).content == data
 

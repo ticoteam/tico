@@ -190,8 +190,8 @@ def busy_minute(ts):
 def make_db(data, freelist=False):
     c = sqlite3.connect(data / "hub.sqlite")
     c.execute("PRAGMA journal_mode=WAL")
-    c.execute("CREATE TABLE flight_sql(ts INTEGER NOT NULL, fingerprint TEXT NOT NULL, n INTEGER NOT NULL, "
-              "total_ms REAL NOT NULL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(ts, fingerprint)) WITHOUT ROWID")
+    c.execute("CREATE TABLE flight_sql(created_at INTEGER NOT NULL, fingerprint TEXT NOT NULL, n INTEGER NOT NULL, "
+              "total_ms REAL NOT NULL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(created_at, fingerprint)) WITHOUT ROWID")
     hour = int(NOW) // 3600 * 3600
     c.executemany("INSERT INTO flight_sql VALUES(?,?,?,?,?,?,?)", [
         (hour, "SELECT id FROM tasks WHERE status = '?' AND n > N", 300, 400.0, 3.0, 50.0, "{}"),

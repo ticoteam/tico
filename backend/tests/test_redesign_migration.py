@@ -28,7 +28,7 @@ def routine(api, sid, bot="coo", *, cron="0 9 * * *", event=None, on=True, text=
             title="Morning notes", zone="Europe/London", due=DUE):
     """A routine as the release before wrote it (its routes are gone)."""
     with db(api).transaction() as c:
-        c.execute("INSERT INTO schedules(id, bot, cron, event_name, title, playbook, next_due, updated_at) "
+        c.execute("INSERT INTO schedules(id, bot, cron, event_name, title, playbook, next_due_at, updated_at) "
                   "VALUES(?,?,?,?,?,?,?,?)", (sid, bot, None if event else cron, event, title, text,
                                               None if event else due, "2026-10-01T00:00:00Z"))
         c.execute("INSERT INTO schedule_config(schedule_id, timezone, enabled) VALUES(?,?,?)", (sid, zone, int(on)))
@@ -102,9 +102,9 @@ def test_every_object_moves_once_and_runs_from_one_system(api):
     assert {i["now"] for i in after.values()} <= {"moved", "runs as before", "kept", "unchanged", "removed"}
     for sid, on in (("sch_daily", True), ("sch_off", False), ("sch_event", True)):
         assert after[("routine", sid)]["now"] == "moved"
-        old = rows(api, "SELECT deleted_at, next_due FROM schedules WHERE id=?", (sid,))[0]
-        assert old["deleted_at"] and old["next_due"] is None                    # the routine never fires again
-        made = rows(api, "SELECT enabled, next_due, flow FROM automations WHERE id=?",
+        old = rows(api, "SELECT deleted_at, next_due_at FROM schedules WHERE id=?", (sid,))[0]
+        assert old["deleted_at"] and old["next_due_at"] is None                    # the routine never fires again
+        made = rows(api, "SELECT enabled, next_due_at, flow FROM automations WHERE id=?",
                     (after[("routine", sid)]["automation"],))[0]
         flow = json.loads(made["flow"])
         assert bool(made["enabled"]) is on and flow["steps"][0]["bot"] == "bot:coo"
@@ -112,7 +112,7 @@ def test_every_object_moves_once_and_runs_from_one_system(api):
             assert flow["trigger"] == {"type": "event", "name": "release_published"}
         else:
             assert flow["trigger"] == {"type": "schedule", "cron": "0 9 * * *", "tz": "Europe/London"}
-            assert made["next_due"] == DUE                                     # its next occurrence, once
+            assert made["next_due_at"] == DUE                                     # its next occurrence, once
     assert not rows(api, "SELECT id FROM rules WHERE id IN ('rule_wake','rule_note','rule_team')")
     assert decisions(api, events, targets) == before_decisions                # the same wakes, from What wakes
     assert rows(api, "SELECT hourly_usd, per_30m_usd FROM usage_limits WHERE bot='coo'") == [
@@ -258,13 +258,13 @@ def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api)
     with db(api).read() as c:
         assert [r["id"] for r in M.wake_rows(c, "comment")] == ["rule_dept"]
         assert c.execute("SELECT state FROM bots WHERE slug='inbox'").fetchone()[0] == "paused"   # retired
-        made = c.execute("SELECT flow, owner FROM automations WHERE id=?",
+        made = c.execute("SELECT flow, owner_id FROM automations WHERE id=?",
                          (found[("inbox", "inbox:cara@acme.example")]["automation"],)).fetchone()
         dept = json.loads(c.execute("SELECT flow FROM automations WHERE id=?",
                                     (found[("wake_rule", "rule_dept")]["automation"],)).fetchone()[0])
     step = json.loads(made["flow"])["steps"][0]
     assert step["type"] == "llm" and step["prompt"].startswith(LONG.rstrip())
-    assert dept["owner"] == "person:ana" and dept["wakes"]["scope_kind"] == "department"
+    assert dept["owner_id"] == "person:ana" and dept["wakes"]["scope_kind"] == "department"
     paused = [a for a in get(api, "automations")["automations"] if a["name"] == "Weekly ops check"]
     assert paused and paused[0]["enabled"] is True                          # its own switch; the tick waits for the bot
     assert "paused" in found[("routine", "sch_ops")]["why"]                   # moved, with the bot's state told
@@ -321,7 +321,7 @@ def test_a_turn_prompt_runs_whole_up_to_32000_characters():
     from backend.tests.automation_fakes import Services
     words = "Acme instructions. " * 1000                                    # 19,000 characters
     services = Services()
-    E.execute({"name": "T", "owner": "person:ana", "trigger": {"type": "event", "name": "x.y"},
+    E.execute({"name": "T", "owner_id": "person:ana", "trigger": {"type": "event", "name": "x.y"},
                "steps": [{"id": "t", "type": "bot_turn", "bot": "coo", "prompt": words}]}, {}, services)
     assert services.turns[0]["prompt"] == words
 
@@ -349,7 +349,7 @@ def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still
         conn.execute("INSERT INTO redesign_migrations(id, state, actor, created_at, expires_at) VALUES('mig_1','converted',"
                      "'human:ana',?,?)", (H.now(), H.now()))
         conn.execute("CREATE TABLE redesign_migration_accepts(flag TEXT PRIMARY KEY, accepted_by TEXT NOT NULL, "
-                     "at TEXT NOT NULL)")
+                     "accepted_at TEXT NOT NULL)")
         conn.execute("INSERT INTO redesign_migrated(kind, id, migration, automation) VALUES('routine','sch_1','mig_1','a1')")
         # As a file from before 0007 has it: that migration and every later one not run yet.
         conn.execute("DELETE FROM schema_migrations WHERE version>='0007' AND version NOT LIKE 'legacy_%'")

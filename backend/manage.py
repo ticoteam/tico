@@ -31,7 +31,7 @@ def registry_dir():
 def bots_by_operator(c):
     """Who hosts what after an import, so an operator can check the split at a glance."""
     result = {}
-    for bot, operator in c.execute("SELECT bot,operator FROM bot_config ORDER BY operator,bot"):
+    for bot, operator in c.execute("SELECT bot,owner_id FROM bot_config ORDER BY owner_id,bot"):
         result.setdefault(operator, []).append(bot)
     return result
 
@@ -80,7 +80,7 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
                 {"source_sha256": source_report["sha256"]})
     with store.read() as c:
         pending_messages = c.execute(
-            "SELECT count(*) FROM messages WHERE to_actor LIKE 'bot:%' AND delivered_at IS NULL"
+            "SELECT count(*) FROM messages WHERE recipient_id LIKE 'bot:%' AND delivered_at IS NULL"
         ).fetchone()[0]
     if queue_backlog:
         store.enqueue_existing()

@@ -65,11 +65,11 @@ def private_history(conn, slug):
     # Mixed task/turn metrics have no stored participant provenance. Do not publish
     # a bot's aggregate history when it includes private work, even to its manager.
     return bool(conn.execute("SELECT 1 FROM tasks t WHERE (t.private IS NULL OR t.private<>0) AND "
-                    "(t.owner=? OR t.requester=? OR t.carried_by IN (SELECT id FROM attempts WHERE bot=?) "
+                    "(t.owner_id=? OR t.requester_id=? OR t.carried_by IN (SELECT id FROM attempts WHERE bot_id=?) "
                     "OR t.id IN (SELECT " + H.MESSAGE_TASK_SQL + " FROM jobs j JOIN messages m ON m.id=j.message_id "
-                    "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=?) "
+                    "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot_id=?) "
                     "OR t.id IN (SELECT v.value FROM events e JOIN attempts a ON a.id=e.target "
-                    "JOIN json_each(e.detail,'$.tasks') v WHERE a.bot=? AND e.action='task.next-run.carried')) LIMIT 1",
+                    "JOIN json_each(e.detail,'$.tasks') v WHERE a.bot_id=? AND e.action='task.next-run.carried')) LIMIT 1",
                     (actor, actor, slug, slug, slug)).fetchone())
 
 
@@ -82,13 +82,13 @@ def value(conn, slug, key, at=None, *, _privacy_checked=False):
     since = _stamp(at - timedelta(days=METRICS[key]["window"]))
     actor = H.bot_actor(slug)
     if key == "tasks_done_7d":
-        return float(conn.execute("SELECT count(*) FROM tasks WHERE owner=? AND done_at>? AND done_at<=?",
+        return float(conn.execute("SELECT count(*) FROM tasks WHERE owner_id=? AND done_at>? AND done_at<=?",
                                   (actor, since, end)).fetchone()[0])
     if key == "first_response_min":
         gaps = []
         for created, answered in conn.execute(
                 "SELECT m.created_at, (SELECT min(r.created_at) FROM messages r WHERE r.conversation_id=m.conversation_id "
-                "AND r.from_actor=? AND r.created_at>m.created_at) FROM messages m WHERE m.to_actor=? AND m.from_actor!=? "
+                "AND r.sender_id=? AND r.created_at>m.created_at) FROM messages m WHERE m.recipient_id=? AND m.sender_id!=? "
                 "AND m.kind IN ('say','ask') AND m.created_at>? AND m.created_at<=? ORDER BY m.created_at DESC LIMIT 500",
                 (actor, actor, actor, since, end)).fetchall():
             first, then = H.parse_ts(created), H.parse_ts(answered)
@@ -96,11 +96,11 @@ def value(conn, slug, key, at=None, *, _privacy_checked=False):
                 gaps.append((then - first).total_seconds() / 60)
         return round(statistics.median(gaps), 1) if gaps else None
     if key == "approval_rate_30d":
-        rows = conn.execute("SELECT decision FROM approvals WHERE requested_by=? AND decision IN ('approved','declined') "
+        rows = conn.execute("SELECT decision FROM approvals WHERE requested_by_id=? AND decision IN ('approved','declined') "
                             "AND decided_at>? AND decided_at<=?", (actor, since, end)).fetchall()
         return round(100 * sum(r[0] == "approved" for r in rows) / len(rows), 1) if rows else None
     if key == "failed_runs_7d":
-        return float(conn.execute("SELECT count(*) FROM attempts WHERE bot=? AND state='failed' "
+        return float(conn.execute("SELECT count(*) FROM attempts WHERE bot_id=? AND state='failed' "
                                   "AND coalesce(finished_at, created_at)>? AND coalesce(finished_at, created_at)<=?",
                                   (slug, since, end)).fetchone()[0])
     # The estimate from each run's measured token counts (backend/usage.py).
@@ -121,7 +121,7 @@ def kpi(conn, kpi_id):
     slug, key = parsed
     spec = METRICS[key]
     return {"id": kpi_id, "slug": f"{bot['slug']}-{key}", "goal_id": "", "name": spec["name"], "unit": spec["unit"],
-            "direction": spec["direction"], "cadence": "daily", "owner": H.bot_actor(slug),
+            "direction": spec["direction"], "cadence": "daily", "owner_id": H.bot_actor(slug),
             "definition": spec["definition"], "source_note": "Computed from Tico's own data", "definition_version": 1,
             "created_at": None, "created_by": "keeper", "updated_at": None, "target": None}
 

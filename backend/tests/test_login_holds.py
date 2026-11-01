@@ -58,11 +58,11 @@ def test_thirteen_queued_jobs_after_a_limit_start_one_probe_at_the_reset_not_thi
         c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
     ready(api, machine, ["ops", "finance"])
     for n in range(12):
-        post(api, "tasks", {"owner": "ops", "title": f"Review change {n}", "body": "Please review it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Review change {n}", "body": "Please review it."})
     first = claim(api, machine)
     assert limit(api, machine, first)["outcome"] == "failed"
     # Another bot signed in with the same login on this computer queues work too: 13 jobs wait on one login.
-    post(api, "tasks", {"owner": "finance", "title": "Close the month", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "finance", "title": "Close the month", "body": "Please do it."})
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, machine["runner_id"], "", "fake")
         assert hold["until"].startswith("2026-10-19T02:40:00") and hold["reset"]
@@ -89,7 +89,7 @@ def test_a_hold_survives_a_runner_restart_and_a_lost_probe_is_retried_as_the_sam
         c.execute("UPDATE runners SET capacity=8 WHERE id=?", (machine["runner_id"],))
     ready(api, machine, ["ops"])
     for n in range(3):
-        post(api, "tasks", {"owner": "ops", "title": f"Task {n}", "body": "Please do it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Task {n}", "body": "Please do it."})
     first = claim(api, machine)
     limit(api, machine, first, errors=("Quota exceeded. Check your plan and billing details.",))
     with api.app.state.store.read() as c:
@@ -129,9 +129,9 @@ def test_one_hold_covers_every_bot_on_the_login_and_a_persons_message_still_gets
     assign(api, machine, "ops")
     assign(api, machine, "finance")
     ready(api, machine, ["ops", "finance"])
-    post(api, "tasks", {"owner": "ops", "title": "First", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "ops", "title": "First", "body": "Please do it."})
     limit(api, machine, claim(api, machine), errors=("Usage limit",))
-    post(api, "tasks", {"owner": "finance", "title": "Close the month", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "finance", "title": "Close the month", "body": "Please do it."})
     ready(api, machine, ["ops", "finance"])
     assert claim(api, machine) is None                      # finance signs in with the same login on this computer
     at(monkeypatch, "2026-10-19T01:48:00.000000Z", api)
@@ -150,8 +150,8 @@ def test_try_now_on_a_shared_login_starts_one_probe_across_bots_and_a_second_lim
         c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
     ready(api, machine, ["ops", "finance"])
     for n in range(3):
-        post(api, "tasks", {"owner": "ops", "title": f"Ops {n}", "body": "Please do it."})
-        post(api, "tasks", {"owner": "finance", "title": f"Finance {n}", "body": "Please do it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Ops {n}", "body": "Please do it."})
+        post(api, "tasks", {"owner_id": "finance", "title": f"Finance {n}", "body": "Please do it."})
     limit(api, machine, claim(api, machine))
     at(monkeypatch, "2026-10-19T02:00:00.000000Z", api)
     ready(api, machine, ["ops", "finance"])
@@ -202,7 +202,7 @@ def test_a_held_login_sends_the_turn_to_a_ready_fallback_and_waits_only_when_non
         c.execute("UPDATE runners SET capacity=8 WHERE id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ["codex"])
     for n in range(3):
-        post(api, "tasks", {"owner": "ops", "title": f"Task {n}", "body": "Please do it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Task {n}", "body": "Please do it."})
     first = claim(api, machine)
     assert "primary_held" not in first["config"]
     limit(api, machine, first)
@@ -254,7 +254,7 @@ def test_a_same_login_named_fallback_uses_the_next_company_row_or_waits_without_
         c.execute("UPDATE bot_config SET config=json_patch(config,?) WHERE bot='ops'", (json.dumps(config),))
     signed_in(api, machine, ["ops"], ["codex", "claude"])
     for n in range(2):
-        post(api, "tasks", {"owner": "ops", "title": f"Same login work {n}", "body": "Please do it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Same login work {n}", "body": "Please do it."})
     limit(api, machine, claim(api, machine))
     at(monkeypatch, "2026-10-19T01:50:00.000000Z", api)
     with api.app.state.store.read() as c:
@@ -278,7 +278,7 @@ def test_a_bot_whose_fallback_is_off_or_not_signed_in_waits_out_the_hold(api, mo
         c.execute("UPDATE runners SET capacity=8 WHERE id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], [])
     for n in range(2):
-        post(api, "tasks", {"owner": "ops", "title": f"Task {n}", "body": "Please do it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Task {n}", "body": "Please do it."})
     limit(api, machine, claim(api, machine))
     at(monkeypatch, "2026-10-19T01:50:00.000000Z", api)
     signed_in(api, machine, ["ops"], [])
@@ -318,10 +318,10 @@ def events(api, machine, attempt, rows):
 
 def test_a_fallback_that_finishes_the_turn_keeps_the_spent_login_held_for_every_bot(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
-    post(api, "tasks", {"owner": "ops", "title": "Work 0", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Work 0", "body": "Please do it."})
     first = claim(api, machine)
     for n, bot in enumerate(("ops", "finance"), 1):
-        post(api, "tasks", {"owner": bot, "title": f"Work {n}", "body": "Please do it."})
+        post(api, "tasks", {"owner_id": bot, "title": f"Work {n}", "body": "Please do it."})
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t-" + first["id"]}, machine["token"])
     seq = events(api, machine, first, [("error", CLAUDE), ("diagnostic", "fake hit its usage limit; running this "
                                         "turn on codex (no fallback set; another provider signed in here)")])
@@ -341,7 +341,7 @@ def test_a_fallback_that_finishes_the_turn_keeps_the_spent_login_held_for_every_
 def test_a_fallback_login_whose_hold_ends_gets_one_probe_not_every_waiting_job(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     for n, bot in enumerate(("ops", "ops", "ops", "finance", "finance")):
-        post(api, "tasks", {"owner": bot, "title": f"Work {n}", "body": "Please do it."})
+        post(api, "tasks", {"owner_id": bot, "title": f"Work {n}", "body": "Please do it."})
     limit(api, machine, claim(api, machine))                                    # Claude (fake) held until 02:40
     with api.app.state.store.transaction() as c:
         login_holds.record(c, machine["runner_id"], "", "codex", "2026-10-19T01:50:00.000000Z")   # Codex to 02:20
@@ -441,8 +441,8 @@ def test_a_lane_leased_before_the_limit_cannot_clear_the_login_hold(api, monkeyp
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
     ready(api, machine, ["ops", "finance"])
-    post(api, "tasks", {"owner": "ops", "title": "Long work", "body": "Please do it."})
-    post(api, "tasks", {"owner": "finance", "title": "Close the month", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Long work", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "finance", "title": "Close the month", "body": "Please do it."})
     early, spent = claim(api, machine), claim(api, machine)
     at(monkeypatch, "2026-10-19T01:46:47.000000Z", api)
     limit(api, machine, spent)                                  # the other lane runs the login out
@@ -450,7 +450,7 @@ def test_a_lane_leased_before_the_limit_cannot_clear_the_login_hold(api, monkeyp
     with api.app.state.store.read() as c:
         assert login_holds.get(c, machine["runner_id"], "", "fake")["until"].startswith("2026-10-19T02:40:00")
     owner = early["bot"]
-    post(api, "tasks", {"owner": owner, "title": "Next", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": owner, "title": "Next", "body": "Please do it."})
     ready(api, machine, ["ops", "finance"])
     assert claim(api, machine) is None                          # no bot starts on the held login before the reset
 
@@ -458,7 +458,7 @@ def test_a_lane_leased_before_the_limit_cannot_clear_the_login_hold(api, monkeyp
 def test_a_turn_with_no_fallback_ready_after_all_settles_unstarted_and_the_bot_waits(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     for n in range(2):
-        post(api, "tasks", {"owner": "ops", "title": f"Work {n}", "body": "Please do it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Work {n}", "body": "Please do it."})
     limit(api, machine, claim(api, machine), errors=(QUOTA,))
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, machine["runner_id"], "", "fake")
@@ -491,7 +491,7 @@ def test_the_runners_report_of_a_fallback_that_never_started_requeues_the_job_an
     sent = json.loads((Path(__file__).resolve().parents[2] / "runner-rs/tests/fixtures/held_fallback_unstarted.json").read_text())
     machine = two_bots(api, monkeypatch)
     for n in range(2):
-        post(api, "tasks", {"owner": "ops", "title": f"Started nowhere {n}", "body": "Please do it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Started nowhere {n}", "body": "Please do it."})
     limit(api, machine, claim(api, machine), errors=(QUOTA,))
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, machine["runner_id"], "", "fake")
@@ -543,7 +543,7 @@ def test_a_named_fallback_that_is_not_ready_here_leaves_the_job_waiting_not_leas
     from backend import models_preset
     machine = two_bots(api, monkeypatch, runtimes=())
     for n in range(3):
-        post(api, "tasks", {"owner": "ops", "title": f"Work {n}", "body": "Please do it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Work {n}", "body": "Please do it."})
     limit(api, machine, claim(api, machine))
 
     def names(fallback):
@@ -560,7 +560,7 @@ def test_a_named_fallback_that_is_not_ready_here_leaves_the_job_waiting_not_leas
     signed_in(api, machine, ["ops", "finance"], ())
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 1
     # Once Codex signs in, the named fallback takes the next job.
     names({"harness": "codex", "model": "gpt-5.5"})
     signed_in(api, machine, ["ops", "finance"], ["codex"])
@@ -587,7 +587,7 @@ def test_a_fallbacks_quota_names_the_fallback_and_never_holds_the_primary(api, m
     # Oct 19 20:05Z: the Codex fallback said "Quota exceeded" while Claude was not limited, and the bot read
     # "claude API quota or billing limit" (Dev 279).
     machine = two_bots(api, monkeypatch)
-    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Work", "body": "Please do it."})
     first = fallback_turn(api, machine, [("diagnostic", "fake unavailable; running this turn on codex"),
                                          ("error", QUOTA)])
     with api.app.state.store.read() as c:
@@ -700,7 +700,7 @@ def test_a_primary_held_for_hours_with_its_tico_fallback_out_of_credit_waits_onl
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Work", "body": "Please do it."})
     hop = "fake hit its usage limit; running this turn on pi"
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"]}, machine["token"])
@@ -725,7 +725,7 @@ def test_a_primary_usage_limit_names_the_primary_and_its_window(api, monkeypatch
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Work", "body": "Please do it."})
     limit(api, machine, claim(api, machine))
     with api.app.state.store.read() as c:
         assert H.status(c, "ops")["focus"] == ("Primary fake plan usage limit (5-hour window) at 01:46; resumes at "
@@ -736,7 +736,7 @@ def test_a_primary_usage_limit_names_the_primary_and_its_window(api, monkeypatch
 
 def test_both_limits_in_one_window_keep_two_holds_each_with_its_own_retry(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
-    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Work", "body": "Please do it."})
     first = fallback_turn(api, machine, [("error", CLAUDE), ("diagnostic", "fake hit its usage limit; running this "
                                                                           "turn on codex"), ("error", QUOTA)])
     with api.app.state.store.read() as c:
@@ -754,7 +754,7 @@ def test_a_limit_keeps_the_provider_and_login_it_came_from_after_settings_and_ho
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Work", "body": "Please do it."})
     first = claim(api, machine)
     limit(api, machine, first, errors=(QUOTA,), profile_used="work")
     said = "Primary fake (the work login) API quota or billing limit"
@@ -783,7 +783,7 @@ def test_a_late_limit_from_a_turn_started_before_the_hold_keeps_the_live_try_now
     ready(api, machine, ['ops', 'finance'])
     for n in range(3):
         for bot in ('ops', 'finance'):
-            post(api, 'tasks', {'owner': bot, 'title': f'{bot} task {n}', 'body': 'Please review it.'})
+            post(api, 'tasks', {'owner_id': bot, 'title': f'{bot} task {n}', 'body': 'Please review it.'})
     first, late = claim(api, machine), claim(api, machine)
     post(api, f"attempts/{late['id']}/started", {'thread_id': 'late-original'}, machine['token'])
     at(monkeypatch, '2026-10-19T01:01:00.000000Z', api)
@@ -818,8 +818,8 @@ def test_a_model_at_capacity_holds_the_login_minutes_and_a_later_real_quota_is_s
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
-    post(api, "tasks", {"owner": "ops", "title": "More work", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Work", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "ops", "title": "More work", "body": "Please do it."})
     # The runner's plan-window reset hours away says nothing about a busy model.
     limit(api, machine, claim(api, machine), errors=("Selected model is at capacity. Please try a different model.",),
           limit_resets_at="2026-10-23T08:00:00Z")

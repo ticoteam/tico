@@ -256,7 +256,7 @@ def custom_page(item):
             "summary": "Configured by a bot",
             "access": "", "credentials": [], "declared_as": "",
             "writes": "allowed" if any(verb not in READ_VERBS
-                                       for connection in item["connections"] for verb in connection["can"]) else "never", "owner": "owner", "aliases": [], "queries": [], "query_count": 0,
+                                       for connection in item["connections"] for verb in connection["can"]) else "never", "owner_id": "owner", "aliases": [], "queries": [], "query_count": 0,
             "body": "", **item}   # who has it is Library › Tools' Access card
 
 
@@ -308,10 +308,10 @@ def install_integrations(app, store, auth, mutate):
 
     def named(c, page):
         """`owner: owner` is a role, so a shipped page never names anyone; serve the company owner's name."""
-        if str(page.get("owner", "")).strip().lower() != "owner":
+        if str(page.get("owner_id", "")).strip().lower() != "owner":
             return page
         row = c.execute("SELECT name FROM humans WHERE id=?", (auth.owner_id(c),)).fetchone() if auth.owner_id(c) else None
-        return page | {"owner": (row and row["name"]) or store.settings.owner_email or "owner"}
+        return page | {"owner_id": (row and row["name"]) or store.settings.owner_email or "owner"}
 
     def retained(service):
         return {**custom_page({"service": service, "title": service, "connections": [], "bots": []}),

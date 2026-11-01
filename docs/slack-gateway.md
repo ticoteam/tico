@@ -255,15 +255,15 @@ Tico needs undoing.
 Read the queue with `hub sql` or SQLite against the live database, read-only:
 
 ```sql
-SELECT event_id, channel, thread_ts, state, reason, processed
-FROM slack_events WHERE state NOT IN ('routed', 'recorded', 'denied') ORDER BY received;
+SELECT event_id, channel, thread_ts, state, reason, processed_at
+FROM slack_events WHERE state NOT IN ('routed', 'recorded', 'denied') ORDER BY received_at;
 
 SELECT message_id, bot, channel, thread_ts, state, attempts, next_attempt_at, slack_ts, error
 FROM slack_posts WHERE state NOT IN ('sent') ORDER BY created_at;
 
 -- what each reader has seen of each channel, and the last digest it got
-SELECT r.channel, r.reader, r.last_ts, r.last_run, r.digests,
-       (SELECT COUNT(*) FROM slack_events e WHERE e.channel=r.channel AND e.ts>r.last_ts AND e.deleted IS NULL) AS unread
+SELECT r.channel, r.reader, r.last_ts, r.last_run_at, r.digests,
+       (SELECT COUNT(*) FROM slack_events e WHERE e.channel=r.channel AND e.ts>r.last_ts AND e.deleted_at IS NULL) AS unread
 FROM slack_reads r ORDER BY r.reader, r.channel;
 ```
 

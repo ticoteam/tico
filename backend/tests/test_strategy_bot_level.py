@@ -132,7 +132,7 @@ def test_only_the_owner_turns_the_regular_checks_off_and_off_they_hold_still(api
     assert on["regular_checks"] is True
     assert get(api, f"goals/{goal['id']}")["goal"]["status"] != "red"           # worked out again at once
     with api.app.state.store.read() as c:
-        assert [r[0] for r in c.execute("SELECT actor FROM events WHERE action='strategy_bot.checks' ORDER BY ts")] == \
+        assert [r[0] for r in c.execute("SELECT actor FROM events WHERE action='strategy_bot.checks' ORDER BY created_at")] == \
             [OWNER, OWNER]
         assert strategy_bot.held_routine(c, {"id": strategy_bot.PASS}) is None
 
@@ -141,7 +141,7 @@ def test_no_vision_is_the_first_thing_it_asks_above_passive_and_saving_one_close
     """Spec test 3: with no vision, the Strategy Bot's first item above Passive asks for it, at the top of the owner's
     list, and it closes by itself once a vision is saved. At Passive it is never asked."""
     goal_manager(api)
-    post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
+    post(api, "kpis", {"name": "Unreported measure", "owner_id": "me", "cadence": "weekly"})
     sync(api)
     assert asks(api, OWNER) == []                                           # Passive: nothing asked
     raise_level(api, 2)
@@ -163,7 +163,7 @@ def test_why_proposals_reach_the_owner_as_one_item(api):
     item, never one per goal, above Passive; it closes once every one is settled."""
     strategy_token = with_strategy_bot(api, level=2)
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
-    goals = [post(api, "goals", {"title": title, "owner": "company"})["goal"]["id"] for title in ("Grow rentals", "Cut churn")]
+    goals = [post(api, "goals", {"title": title, "owner_id": "company"})["goal"]["id"] for title in ("Grow rentals", "Cut churn")]
     first = propose_why(api, goals[0], "More rentals is more landlords on Tico.", strategy_token)
     second = propose_why(api, goals[1], "Landlords who stay are the vision.", strategy_token)
     sync(api)                                                               # the second joins the same item
@@ -186,14 +186,14 @@ def test_no_daily_limit_in_one_persons_needs_you_most_important_first(api):
     and counts what it asked today per person."""
     strategy_token = with_strategy_bot(api, level=2)
     for n in range(7):
-        post(api, "kpis", {"name": f"Measure {n}", "owner": "me", "cadence": "weekly"})
+        post(api, "kpis", {"name": f"Measure {n}", "owner_id": "me", "cadence": "weekly"})
     sync(api)
     mine = asks(api, OWNER)
     assert len(mine) == 8 and mine[0]["kind"] == "vision"
     shown = get(api, "goals/needs-you")["items"]
     assert len(shown) == 8 and all(i.get("task") for i in shown) and shown[0]["kind"] == "vision"
-    post(api, "tasks", {"title": "One more question", "body": "Why?", "owner": OWNER}, token=strategy_token)
-    post(api, "tasks", {"title": "A question for Ben", "body": "Why?", "owner": "human:ben"}, token=strategy_token)
+    post(api, "tasks", {"title": "One more question", "body": "Why?", "owner_id": OWNER}, token=strategy_token)
+    post(api, "tasks", {"title": "A question for Ben", "body": "Why?", "owner_id": "human:ben"}, token=strategy_token)
     assert get(api, "strategy-bot")["asked_today"] == {OWNER: 9, "human:ben": 1}
     assert get(api, "strategy-bot", token=strategy_token)["asked_today"] == {OWNER: 9, "human:ben": 1}
     assert get(api, "strategy-bot", token="cara-test")["asked_today"] == {}                 # a member: only their own
@@ -332,10 +332,10 @@ def test_with_no_chosen_level_passive_pauses_the_note_and_withdraws_what_waits_a
     with store.transaction() as c:
         strategy_bot.reconcile(c)
     assert review_enabled(api)
-    goal_id = post(api, "goals", {"title": "Grow rentals", "owner": "company"})["goal"]["id"]
+    goal_id = post(api, "goals", {"title": "Grow rentals", "owner_id": "company"})["goal"]["id"]
     payload = {"evidence": "Activation fell from 40% to 10% this week.", "pick": 0, "options": [
         {"label": "Finance pauses the campaign", "actions": [
-            {"do": "create", "owner": "finance", "title": "Pause the signup campaign"}]}]}
+            {"do": "create", "owner_id": "finance", "title": "Pause the signup campaign"}]}]}
     waiting = post(api, "goal-proposals", {"kind": "recovery", "goal_id": goal_id, "reason": "Red for a week",
                                            "payload": payload}, token=strategy_token)["proposal"]
     assert waiting["status"] == "pending"
@@ -378,7 +378,7 @@ def test_lowering_to_passive_keeps_the_vision_and_why_asks_until_they_are_resolv
     """v3: at Passive nothing new is asked, but a vision or Why ask filed above it stays open and shown until its cause
     is resolved; only then does it close."""
     strategy_token = with_strategy_bot(api, level=2)
-    goal_id = post(api, "goals", {"title": "Grow rentals", "owner": "company"})["goal"]["id"]
+    goal_id = post(api, "goals", {"title": "Grow rentals", "owner_id": "company"})["goal"]["id"]
     why = propose_why(api, goal_id, "More rentals is more landlords on Tico.", strategy_token)
     sync(api)
     filed = {a["kind"]: a["id"] for a in asks(api, OWNER)}
@@ -387,8 +387,8 @@ def test_lowering_to_passive_keeps_the_vision_and_why_asks_until_they_are_resolv
     sync(api)
     assert {a["kind"]: a["id"] for a in asks(api, OWNER) if a["status"] == "open"} == filed
     assert {"vision", "why"} <= {i["kind"] for i in get(api, "goals/needs-you")["items"]}
-    post(api, "goals", {"title": "Cut churn", "owner": "company"})
-    post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
+    post(api, "goals", {"title": "Cut churn", "owner_id": "company"})
+    post(api, "kpis", {"name": "Unreported measure", "owner_id": "me", "cadence": "weekly"})
     sync(api)
     assert {a["id"] for a in asks(api)} == set(filed.values())               # nothing new at Passive
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
@@ -413,7 +413,7 @@ def test_with_regular_checks_off_a_due_kpi_pass_is_skipped(api):
 
     def due_at(day):
         with store.transaction() as c:
-            c.execute("UPDATE automations SET next_due=? WHERE id=?", (f"2026-09-{day}T07:00:00.000000Z", aid))
+            c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (f"2026-09-{day}T07:00:00.000000Z", aid))
         automations.tick(store, datetime(2026, 9, day, 8, tzinfo=timezone.utc))
         with store.read() as c:
             return (c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()[0],
@@ -442,7 +442,7 @@ def test_at_upgrade_a_due_monday_note_the_old_level_1_started_never_fires(api):
         routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (strategy_bot.KEY, json.dumps(
             {"on": True, "level": 1, "review_armed": H.now(), "review_settled": True})))
-        c.execute("UPDATE schedules SET next_due=NULL, last_fired_at='2026-09-01T00:00:00.000000Z' WHERE id=?", (REVIEW,))
+        c.execute("UPDATE schedules SET next_due_at=NULL, last_fired_at='2026-09-01T00:00:00.000000Z' WHERE id=?", (REVIEW,))
         strategy_bot.migrate(c)                                                   # as the server does at startup
     assert not review_enabled(api)
     Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 14, 17, tzinfo=timezone.utc))

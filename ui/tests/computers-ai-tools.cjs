@@ -24,7 +24,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     const now = Date.now(), at = ms => new Date(now + ms).toISOString();
     const tool = (name, runtime, version) => ({name, runtime, installed: true, version, managed: true, state: 'idle',
       wanted: true, pinned: false, update_available: false, detail: ''});
-    const box = {id: 'box', label: 'Team box', operator: 'ana', bots: ['helper', 'ops', 'writer'], platform: 'linux', version: '0.3.52',
+    const box = {id: 'box', label: 'Team box', owner_id: 'ana', bots: ['helper', 'ops', 'writer'], platform: 'linux', version: '0.3.52',
       turn_summary: '3 running · 1 starting · 37 waiting for shared login (oldest 2 h) · 5 queued',
       turn_counts: {running: 3, starting: 1, waiting: 37, queued: 5, waits: []},
       last_seen_at: at(-3000), needed_runtimes: ['claude', 'codex'], bot_runtimes: ['claude', 'codex'], harness_choices: {grok: false},
@@ -53,11 +53,11 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
         {bot: 'helper', profile: null, source: 'computer', runtime: 'claude', harness: 'claude', signed_in: true, problem: ''},
         {bot: 'ops', profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: true, problem: ''},
         {bot: 'writer', profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: true, problem: ''}]};
-    const empty = {id: 'empty', label: 'Spare server', operator: 'ana', bots: [], platform: 'linux', version: '0.3.53', last_seen_at: at(-2000),
+    const empty = {id: 'empty', label: 'Spare server', owner_id: 'ana', bots: [], platform: 'linux', version: '0.3.53', last_seen_at: at(-2000),
       readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}, harnesses: {}}, profiles: [], bot_connections: []};
     // Before its first report the server sends readiness_document(None) (backend/store.py).
-    const fresh = {id: 'fresh', label: 'Fresh Mac', operator: 'ana', bots: [], version: '', last_seen_at: at(-2000), readiness: {schema_version: 0, runtimes: {}, bots: {}}};
-    const revoked = {id: 'old', label: 'Old laptop', operator: 'ana', bots: [], platform: 'darwin', revoked_at: at(-86400000), last_seen_at: at(-86400000),
+    const fresh = {id: 'fresh', label: 'Fresh Mac', owner_id: 'ana', bots: [], version: '', last_seen_at: at(-2000), readiness: {schema_version: 0, runtimes: {}, bots: {}}};
+    const revoked = {id: 'old', label: 'Old laptop', owner_id: 'ana', bots: [], platform: 'darwin', revoked_at: at(-86400000), last_seen_at: at(-86400000),
       readiness: {runtimes: {claude: {installed: true, authenticated: 'ready'}}}};
     const me = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true};
     const writes = [];
@@ -76,7 +76,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json(['helper', 'ops', 'writer'].map(name => ({name, display_name: name[0].toUpperCase() + name.slice(1),
-        status: 'active', operator: 'ana', can_manage: true, users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', operator: 'ana'}})));
+        status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', owner_id: 'ana'}})));
       if (p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});

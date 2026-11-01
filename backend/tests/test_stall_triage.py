@@ -18,9 +18,9 @@ def ready(api, title="Recheck the cash warning", messages=(), private=None):
         task = H.task_create(c, H.human_actor("ana"), title, "Before the deadline.", "bot:finance", private=private)
         for actor, text in messages:
             H.task_comment(c, actor, task["id"], text, wake=False)
-        c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='finance'")
         row = H.task(c, task["id"])
-        c.execute("UPDATE tasks SET checkpoint_state=?, checkpoint_by='bot:finance', updated_at=? WHERE id=?",
+        c.execute("UPDATE tasks SET checkpoint_state=?, checkpoint_by_id='bot:finance', updated_at=? WHERE id=?",
                   (wake_rules.state_of(c, row), H.shift(H.now(), seconds=-400), task["id"]))
     return task["id"]
 
@@ -97,7 +97,7 @@ def test_a_task_waiting_on_a_person_or_a_task_is_parked_with_no_run_and_finished
     ST.run(store, [item], engine=engine(ST.WAITING, wait="person_1"))
     with store.read() as c:
         assert H.task(c, ask)["status"] == "waiting" and ST.verdict_of(c, ask)["outcome"] == "wait_set"
-        assert c.execute("SELECT count(*) FROM tasks WHERE owner=? AND title LIKE 'Can you reply%'", (sam,)).fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner_id=? AND title LIKE 'Can you reply%'", (sam,)).fetchone()[0] == 1
 
     done = ready(api, "Send the invoice", messages=[(sam, "Thanks, the invoice arrived and is paid.")])
     [item] = found(api, done)

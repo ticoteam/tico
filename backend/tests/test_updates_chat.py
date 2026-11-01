@@ -37,7 +37,7 @@ def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     for slug, name in (("sales", "Sales"), ("fixer", "Fixer")):
         bot(api, slug, name)
-    hidden = post(api, "tasks", {"title": "Quietly let the agency go", "body": "See notes", "owner": "fixer", "private": True})
+    hidden = post(api, "tasks", {"title": "Quietly let the agency go", "body": "See notes", "owner_id": "fixer", "private": True})
     with api.app.state.store.transaction() as c:
         restrict(c, "finance", people=["ana"], bots=["coo"])
         updates.post(c, bot_id(c, "sales"), "- Closed the Acme renewal", day="2026-09-29")
@@ -71,8 +71,8 @@ def test_the_default_order_is_a_goal_then_waits_on_you_then_newest(api, monkeypa
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     for slug, name in (("boss", "Manager"), ("analyst", "Analyst"), ("writer", "Writer"), ("crier", "Crier")):
         bot(api, slug, name)
-    post(api, "goals", {"owner": "boss", "title": "Launch in October"})
-    post(api, "tasks", {"title": "Approve the market sizing", "body": "See notes", "owner": "human:cara"}, token=token(api, "analyst"))
+    post(api, "goals", {"owner_id": "boss", "title": "Launch in October"})
+    post(api, "tasks", {"title": "Approve the market sizing", "body": "See notes", "owner_id": "human:cara"}, token=token(api, "analyst"))
     with api.app.state.store.transaction() as c:
         updates.post(c, bot_id(c, "boss"), "- Planned the launch", day="2026-09-28")
         updates.post(c, bot_id(c, "analyst"), "- Sized the market", day="2026-09-29")
@@ -93,7 +93,7 @@ def test_private_references_in_links_and_prose_never_reach_an_updates_chat_turn(
     from backend.tests.test_bot_contact import bot
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     bot(api, "fixer", "Fixer")
-    hidden = post(api, "tasks", {"title": "Private market plan", "body": "See notes", "owner": "fixer", "private": True})
+    hidden = post(api, "tasks", {"title": "Private market plan", "body": "See notes", "owner_id": "fixer", "private": True})
     rows = [("short_id", hidden["id"][:8]),
             ("singular_short_link", f"[task](#/task/{hidden['id'][:8]})"),
             ("plural_short_link", f"[task](#/tasks/{hidden['id'][:8]})"),

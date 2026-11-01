@@ -16,9 +16,9 @@ const pageHref = id => PAGE_ROUTE + encodeURIComponent(id);
 const pageBotName = x => x.bot && botRow(x.bot) ? botDisplayName(x.bot) : x.bot_name || x.bot || '';
 // `link: false` inside a card that is itself a link: the replacing page's title without its own link.
 function pageStatusHTML(p, {link = true} = {}) {
-  if (p.replaced_by) {
+  if (p.replaced_by_id) {
     const title = esc(p.replaced_by_title || 'a newer page');
-    return `<div class="pg-status pg-replaced">Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by))}">${title}</a>` : title}</div>`;
+    return `<div class="pg-status pg-replaced">Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by_id))}">${title}</a>` : title}</div>`;
   }
   const stale = Number.isInteger(p.stale_days);
   const by = String(p.updated_by || '');
@@ -201,7 +201,7 @@ function taskPagesAdopt(d, task) {
   // The pages pinned to the task (a page published with --task pins itself there), in their order.
   get('/v2/places/' + encodeURIComponent('task:' + id)).then(r => {
     if (d.tpEl !== slot) return;
-    const pins = (r.pins || []).filter(x => x.page && !x.page.replaced_by && !x.page.archived);   // a replaced page links on
+    const pins = (r.pins || []).filter(x => x.page && !x.page.replaced_by_id && !x.page.archived);   // a replaced page links on
     slot.hidden = !pins.length;
     slot.replaceChildren(...pins.map(x => window.pageCard(x.page, {size: x.size || 'medium'})));
   }).catch(() => {});

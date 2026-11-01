@@ -11,7 +11,7 @@ const SHOTS = process.env.TICO_UI_SHOTS || '';
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 
 const now = Date.now(), at = m => new Date(now - m * 60000).toISOString();
-const task = {id: 't-audit', title: 'Audit the billing page', owner: 'bot:ops', requester: 'human:ana', status: 'open',
+const task = {id: 't-audit', title: 'Audit the billing page', owner_id: 'bot:ops', requester_id: 'human:ana', status: 'open',
   lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-audit'};
 const MODELS = [
   {id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', harnesses: ['claude'], efforts: ['low', 'medium', 'high'], default_effort: 'high'},

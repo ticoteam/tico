@@ -19,7 +19,7 @@ const {unrouted} = require('./support/routes.cjs');
     const CLAUDE_URL = 'https://claude.com/cai/oauth/authorize?code=true&client_id=fixture';
 
     async function open(hosted) {
-      const box = {id: 'box', label: 'Server', operator: 'sam', bots: [], platform: 'linux', last_seen_at: at(-3000), readiness_at: at(-3000),
+      const box = {id: 'box', label: 'Server', owner_id: 'sam', bots: [], platform: 'linux', last_seen_at: at(-3000), readiness_at: at(-3000),
         needed_runtimes: ['claude', 'codex'], bot_runtimes: [], signed_out: {}, profiles: [],
         readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}, claude: {installed: true, authenticated: 'missing'}},
           harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude')}}};

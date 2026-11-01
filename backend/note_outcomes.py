@@ -14,12 +14,12 @@ def outcome(conn, record, actor='', owner=False):
             'Processing and delivery are pending.' if status == 'pending' else
             'Sent; no linked task outcome is available.' if sent else 'Not sent to a bot yet.'))
     task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
-    if not task or not (owner or actor and actor in (task['owner'],task['requester'])):
+    if not task or not (owner or actor and actor in (task['owner_id'],task['requester_id'])):
         return dict(base, status='sent', summary='Sent; the task outcome is unavailable to this account.')
     task = dict(task)
-    children = [dict(t) for t in conn.execute("SELECT id,title,status,owner,requester FROM tasks WHERE id IN (SELECT from_task FROM task_relations "
+    children = [dict(t) for t in conn.execute("SELECT id,title,status,owner_id,requester_id FROM tasks WHERE id IN (SELECT from_task FROM task_relations "
                 "WHERE kind='parent' AND to_task=?) ORDER BY created_at", (task_id,))
-                if owner or actor and actor in (t['owner'], t['requester'])]
+                if owner or actor and actor in (t['owner_id'], t['requester_id'])]
     # Quote the actual latest task note, never synthesize completion from a delivery receipt.
     note = task.get('note') or ''
     if task['status'] == 'waiting':
@@ -35,7 +35,7 @@ def outcome(conn, record, actor='', owner=False):
                 'waiting':'Waiting for a decision or follow-up.', 'done':'Review completed; no outcome summary was recorded.',
                 'closed':'Review closed; no outcome summary was recorded.'}
     complete = sum(t['status'] in ('done','closed') for t in children)
-    return dict(base, bot=task['owner'].removeprefix('bot:'), status=task['status'],
+    return dict(base, bot=task['owner_id'].removeprefix('bot:'), status=task['status'],
                 summary=note or fallback.get(task['status'],'No outcome reported yet.'),
                 updated_at=task['updated_at'], followups=len(children), completed_followups=complete,
                 open_followups=len(children)-complete,

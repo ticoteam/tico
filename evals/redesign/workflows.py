@@ -458,10 +458,10 @@ def feed_slack(org, msgs):
 def slack_diag(org, gateway):
     """What the gateway's offer pass saw for each stored channel message, read after the tick (diagnostic only)."""
     with org.store.read() as c:
-        rows = [dict(r) for r in c.execute("SELECT * FROM slack_events ORDER BY received, ts")]
+        rows = [dict(r) for r in c.execute("SELECT * FROM slack_events ORDER BY received_at, ts")]
         since = c.execute("SELECT MIN(created_at) FROM automations WHERE trigger_type='message' AND enabled=1 "
                           "AND deleted_at IS NULL AND flow LIKE '%slack:#%'").fetchone()[0]
-        autos = [dict(r) for r in c.execute("SELECT name,trigger_type,enabled,created_at,deleted_at,owner FROM automations "
+        autos = [dict(r) for r in c.execute("SELECT name,trigger_type,enabled,created_at,deleted_at,owner_id FROM automations "
                                             "WHERE flow LIKE '%slack:#%'")]
         senders = {}
         for r in rows:
@@ -540,7 +540,7 @@ def wf1_steps(org, f):
     do(org, f, "runs", W3, runs_of, org, f, "inbox")
     do(org, f, "assistant", W3, assistant_slug, org, DANA_ID)
     do(org, f, "switch", W3, inbox_read, org, DANA_MAIL)
-    f["lead_tasks"] = sql(org, "SELECT id,title,body,created_at FROM tasks WHERE owner=?", (LEAD_REF,))
+    f["lead_tasks"] = sql(org, "SELECT id,title,body,created_at FROM tasks WHERE owner_id=?", (LEAD_REF,))
     do(org, f, "slack_runs", W3, wf1_slack_runs, org, f)
 
 
@@ -685,10 +685,10 @@ def wf1_slack(f):
     wrong = {}
     for m in msgs:
         key = CHANNEL.get(m["channel"])
-        counts = {k: len(naming(per[k], m["ts"])) for k in per}
+        counts = {k: len(naming(per[k], m["created_at"])) for k in per}
         want = {k: (1 if k == key else 0) for k in per}
         if counts != want:
-            wrong[m["ts"]] = counts
+            wrong[m["created_at"]] = counts
     if not wrong:
         return True, "each Slack message ran its channel's automation once"
     states = {e.get("event_id"): e.get("state") for e in (got(f, "slack").body.get("events") or [])}
@@ -741,7 +741,7 @@ def wf2_steps(org, f):
     do(org, f, "needs_you", W2, org.api, "get", "/api/v2/needs-you", who=DANA, wave=W2)
     org.scheduler_pass()
     do(org, f, "lead_runs", W3, runs_of, org, f, "lead_auto")
-    f["titles"] = [r["title"] for r in sql(org, "SELECT title FROM tasks WHERE requester IN (?,?)",
+    f["titles"] = [r["title"] for r in sql(org, "SELECT title FROM tasks WHERE requester_id IN (?,?)",
                                            (CLAUDE_REF, OPENAI_REF))]
 
 
@@ -984,7 +984,7 @@ def wf4_open(org, f):
 
 
 def wf4_tasks(org):
-    return sql(org, "SELECT id,title,body,created_at FROM tasks WHERE owner=?", (LEAD_REF,))
+    return sql(org, "SELECT id,title,body,created_at FROM tasks WHERE owner_id=?", (LEAD_REF,))
 
 
 def wf4_steps(org, f):
@@ -1128,7 +1128,7 @@ def wf5_steps(org, f):
     do(org, f, "billing", W3, drain, org, BILLING, text="Retried the card; wrote to the customer.")
     org.scheduler_pass()
     do(org, f, "runs", W3, runs_of, org, f, "auto")
-    f["tasks"] = sql(org, "SELECT id,title,body FROM tasks WHERE owner=?", ("bot:" + BILLING,))
+    f["tasks"] = sql(org, "SELECT id,title,body FROM tasks WHERE owner_id=?", ("bot:" + BILLING,))
     do(org, f, "delivered", W3, deliver, org.app, receiver)
     f["seen"] = [(r.headers.get("webhook-id") or "", r.content.decode(errors="replace")) for r in receiver.seen]
 
@@ -1310,8 +1310,8 @@ def wf7_notices(f):
     notice, refs.held naming the bot (CONTRACT section 1)."""
     setup(f, "budget", "seed", "notices")   # "loop" is a list of turns, read by wf9_loop; it is not a reply
     held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs"])]
-    to_botops = [r for r in held if "botops" in str(r["to_actor"])]
-    to_health = [r for r in held if "health-monitor" in str(r["to_actor"])]
+    to_botops = [r for r in held if "botops" in str(r["recipient_id"])]
+    to_health = [r for r in held if "health-monitor" in str(r["recipient_id"])]
     return len(to_botops) == 1 and len(to_health) == 1 and len(held) == 2, \
         f"{len(held)} held notices; BotOps {len(to_botops)}, Health {len(to_health)}"
 
@@ -1425,7 +1425,7 @@ def hand_self(org):
         # A new title each turn: the product refuses a second open task with the same owner and text (422 duplicate),
         # which would end the loop by itself instead of by the turn budget.
         title = f"Next step {attempt.get('id', '')}"
-        made = org.api("post", "/api/v2/tasks", {"title": title, "body": "Scenario task.", "owner": OPENAI_REF},
+        made = org.api("post", "/api/v2/tasks", {"title": title, "body": "Scenario task.", "owner_id": OPENAI_REF},
                        who=token, wave=W2)
         if made.status >= 300:
             raise Unmet(W2, f"hand itself the next task: {made.status} {made.excerpt()}")
@@ -1507,7 +1507,7 @@ def wf9_still(f):
 
 def hub_holds(org):
     """The hub's held notices (kind notice, refs.held), as a reply."""
-    return Reply(200, sql(org, "SELECT to_actor, refs FROM messages WHERE kind='notice' AND refs LIKE ?",
+    return Reply(200, sql(org, "SELECT recipient_id, refs FROM messages WHERE kind='notice' AND refs LIKE ?",
                           ("%held%",)), W2)
 
 
@@ -1516,8 +1516,8 @@ def wf9_notices(f):
     naming the bot (CONTRACT section 1). They are hub messages, not Tico Team notices, so they are read from the hub."""
     setup(f, "budget", "auto", "notices")
     held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs"])]
-    to_botops = [r for r in held if "botops" in str(r["to_actor"])]
-    to_health = [r for r in held if "health-monitor" in str(r["to_actor"])]
+    to_botops = [r for r in held if "botops" in str(r["recipient_id"])]
+    to_health = [r for r in held if "health-monitor" in str(r["recipient_id"])]
     return len(to_botops) == 1 and len(to_health) == 1 and len(held) == 2, \
         f"{len(held)} held notices; BotOps {len(to_botops)}, Health {len(to_health)}"
 
@@ -1654,13 +1654,13 @@ def measure(org, f, start, end, ids, receiver, errors):
         at_ = when_of(row["created_at"])
         return at_ is not None and since <= at_ <= end
     tasks = Counter()
-    for row in sql(org, "SELECT owner,title,created_at FROM tasks"):
-        who = handler(org, f, row["owner"])
+    for row in sql(org, "SELECT owner_id,title,created_at FROM tasks"):
+        who = handler(org, f, row["owner_id"])
         if who and inside(row):
             tasks[f"{who} | {masked(row['title'])}"] += 1
     woken, after_comment = Counter(), Counter()
-    for row in sql(org, "SELECT bot, created_at FROM jobs"):
-        who = handler(org, f, row["bot"])
+    for row in sql(org, "SELECT bot_id, created_at FROM jobs"):
+        who = handler(org, f, row["bot_id"])
         if who and not who.startswith("inbox handler") and inside(row):
             woken[who] += 1
             after_comment[who] += inside(row, f["commented_at"])

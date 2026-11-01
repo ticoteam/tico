@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS support_tickets(
  id TEXT PRIMARY KEY, actor TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
  message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent TEXT NOT NULL DEFAULT '{}',
  hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages TEXT NOT NULL DEFAULT '[]',
- seen_id INTEGER NOT NULL DEFAULT 0, checked TEXT, request_key TEXT);
+ seen_id INTEGER NOT NULL DEFAULT 0, checked_at TEXT, request_key TEXT);
 CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created_at);
 """
 MAX_MESSAGE = 4000
@@ -446,7 +446,7 @@ class Support:
                 quarantined = H.is_bot(who.actor) and (H.bot(c, H.actor_id(who.actor)) or {}).get("state") == "quarantined"
             if not row:
                 raise Problem("not_found", "Approval not found", 404)
-            if row["requested_by"] != who.actor:
+            if row["requested_by_id"] != who.actor:
                 raise Problem("forbidden", "Only whoever asked for this approval may send it.", 403)
             if quarantined:
                 raise Problem("forbidden", "A quarantined bot sends nothing until a person clears it.", 403)
@@ -458,7 +458,7 @@ class Support:
             payload = row["payload"] or {}
             if H.lint_support(payload) or not H.support_text_matches(payload):
                 raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
-            person = Identity(row["decided_by"], "human")
+            person = Identity(row["decided_by_id"], "human")
             key = "approval:" + approval_id
             with self.store.read() as c:      # a Health Monitor report a person approved is still the Health Monitor's
                 health = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone() \
@@ -554,7 +554,7 @@ class Support:
         else:
             return False
         with self.store.transaction() as c:
-            c.execute("UPDATE support_tickets SET status=?, messages=COALESCE(?,messages), checked=? WHERE id=?",
+            c.execute("UPDATE support_tickets SET status=?, messages=COALESCE(?,messages), checked_at=? WHERE id=?",
                       (status, encode(messages) if messages is not None else None, H.now(), row["id"]))
         return True
 
@@ -574,7 +574,7 @@ class Support:
                 wait = FRESH_S
             else:
                 wait = CLOSED_FRESH_S if row["status"] == "closed" else QUIET_FRESH_S
-            if row["checked"] and row["checked"] > H.shift(now, seconds=-wait):
+            if row["checked_at"] and row["checked_at"] > H.shift(now, seconds=-wait):
                 continue
             if asked == ASKED:
                 break

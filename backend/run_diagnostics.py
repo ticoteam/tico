@@ -137,11 +137,11 @@ def stalled_runs(c, who, auth):
     from .stream_capture import require_run
     from .store import Problem
     rows = []
-    for r in c.execute("SELECT a.id,a.bot FROM attempts a JOIN attempt_diagnostics d ON d.attempt_id=a.id "
+    for r in c.execute("SELECT a.id,a.bot_id FROM attempts a JOIN attempt_diagnostics d ON d.attempt_id=a.id "
                        "WHERE a.state IN ('leased','running') AND d.stalled_at IS NOT NULL ORDER BY d.stalled_at LIMIT 200"):
         try:
             require_run(c, who, auth, r['id'])
         except Problem:
             continue
-        rows.append({'run': r['id'], 'bot': r['bot'], **metadata(c, r['id'])})
+        rows.append({'run': r['id'], 'bot': r['bot_id'], **metadata(c, r['id'])})
     return rows

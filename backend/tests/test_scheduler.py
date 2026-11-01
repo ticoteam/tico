@@ -17,10 +17,10 @@ def test_schedule_survives_restart_without_duplicate_work(api):
         aid = routines.create(c, H.KEEPER, 'coo', {'title': 'Review daily work', 'cron': '0 9 * * *',
                                                    'timezone': 'America/Los_Angeles', 'text': 'Review work'},
                               key='morning')['automation']
-        c.execute("UPDATE automations SET next_due=? WHERE id=?", ('2026-09-09T16:00:00.000000Z', aid))
+        c.execute("UPDATE automations SET next_due_at=? WHERE id=?", ('2026-09-09T16:00:00.000000Z', aid))
 
     def tasks(c):
-        return [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner='bot:coo' AND title='Review daily work' "
+        return [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner_id='bot:coo' AND title='Review daily work' "
                                         "ORDER BY created_at, rowid")]
     Scheduler(store, api.app.state.execution).tick(at)
     Scheduler(store, api.app.state.execution).tick(at)
@@ -31,7 +31,7 @@ def test_schedule_survives_restart_without_duplicate_work(api):
         # The day's update request (backend/updates.py) is a job of its own, not the routine's.
         assert c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE json_extract(m.refs,'$.update_request') IS NULL").fetchone()[0] == 1
-        assert c.execute("SELECT next_due FROM automations WHERE id=?", (aid,)).fetchone()[0] == '2026-09-11T16:00:00.000000Z'
+        assert c.execute("SELECT next_due_at FROM automations WHERE id=?", (aid,)).fetchone()[0] == '2026-09-11T16:00:00.000000Z'
     # A finished occurrence keeps its status; the next occurrence gets its own task and is deduplicated after restart.
     with store.transaction() as c:
         previous = H.task_update(c, 'bot:coo', fired[0], status=finished_status, note='Daily work reviewed.')
@@ -46,7 +46,7 @@ def test_schedule_survives_restart_without_duplicate_work(api):
 
 
 def test_due_reminder_deduplicates_across_scheduler_restart(api):
-    task = post(api, "tasks", {"owner": "coo", "title": "Review deadline", "body": "Review pending work", "due": "2026-09-10T15:00:00Z"})
+    task = post(api, "tasks", {"owner_id": "coo", "title": "Review deadline", "body": "Review pending work", "due_at": "2026-09-10T15:00:00Z"})
     store = api.app.state.store
     for _ in range(2):
         Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 10, 17, tzinfo=timezone.utc))
@@ -130,7 +130,7 @@ def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, mon
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    task = post(api, "tasks", {"owner": "ops", "title": "Review private work", "body": "x", "private": True})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Review private work", "body": "x", "private": True})
     finish(api, machine, claim(api, machine, "ops"))
     post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Continue this private request.'})
     store, execution = api.app.state.store, api.app.state.execution
@@ -149,13 +149,13 @@ def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, mon
     monkeypatch.setattr(execution, "_idle_claim", reassign_after_read)
     monkeypatch.setattr(execution, "candidate", select_again)
     assert post(api, "jobs/claim", {}, token=machine["token"])["attempt"] is None
-    assert selected and selected[0]['bot'] == 'ops'
+    assert selected and selected[0]['bot_id'] == 'ops'
     # The read's pick, its recheck under the writer, then one more pick that passes over the reassigned job.
     assert selections == [1, 1, 1]
     with store.read() as c:
         assert H.task(c, task['id'])['private']
-        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 1
-        assert not c.execute("SELECT 1 FROM attempts WHERE bot='ops' AND state IN ('leased','running')").fetchone()
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 1
+        assert not c.execute("SELECT 1 FROM attempts WHERE bot_id='ops' AND state IN ('leased','running')").fetchone()
 
 
 def test_database_failure_keeps_original_error_and_stops_work(tmp_path):
@@ -199,7 +199,7 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
         # The ordering oracle predates provenance checks. Give its task references real,
         # ordinary sources; missing sources are deliberately unclaimable now.
         for ident in ('held', 'other'):
-            c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,created_at,updated_at,private) "
+            c.execute("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,created_at,updated_at,private) "
                       "VALUES(?,?,'x','human:ana','bot:ops','open',?,?,0)", (ident, ident, H.now(), H.now()))
         rooms = {}
         for bot, kind in itertools.product(('ops', 'finance', 'cpo'), ('chat', 'task')):
@@ -222,11 +222,11 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
             msg = H.message(c, job['message_id'])
             conv = H.conversation(c, msg['conversation_id'])
             parked = c.execute('SELECT onboarding_state FROM bot_config WHERE bot=?', (job['bot'],)).fetchone()[0]
-            if not msg['from_actor'].startswith('human:') and parked in PARKED:
+            if not msg['sender_id'].startswith('human:') and parked in PARKED:
                 return False
             task = H.message_task_id(msg, conv)
-            if not (msg['from_actor'].startswith('human:') and conv['kind'] == 'chat' and task is None):
-                for held in c.execute("SELECT message_id FROM jobs WHERE bot=? AND state='uncertain'", (job['bot'],)):
+            if not (msg['sender_id'].startswith('human:') and conv['kind'] == 'chat' and task is None):
+                for held in c.execute("SELECT message_id FROM jobs WHERE bot_id=? AND state='uncertain'", (job['bot'],)):
                     other = H.message(c, held[0])
                     other_conv = H.conversation(c, other['conversation_id'])
                     if (task and H.message_task_id(other, other_conv) == task) or (not task and conv['kind'] == 'chat' and other['conversation_id'] == msg['conversation_id']):
@@ -234,7 +234,7 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
             return True
         # Compare the entire order, including tied and NULL timestamps, not just the first row.
         for _ in range(200):
-            rows = c.execute("SELECT j.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' ORDER BY CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,j.created_at,j.id").fetchall()
+            rows = c.execute("SELECT j.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' ORDER BY CASE WHEN m.sender_id LIKE 'human:%' THEN 0 ELSE 1 END,j.created_at,j.id").fetchall()
             expected = next((j for j in rows if old_claimable(j)), None)
             actual = execution.candidate(c, who, Claim(), execution.runner(c, who))
             assert (actual['id'] if actual else None) == (expected['id'] if expected else None)

@@ -120,7 +120,7 @@ def tickets(c, task_id):
         # The unary + keeps SQLite on the per-task index: without ANALYZE it picks task_events(field, ts) and reads
         # every status change on the server.
         "t.status='closed' AND (SELECT e.old FROM task_events e WHERE e.task_id=t.id AND +e.field='status' "
-        "ORDER BY e.ts DESC,e.rowid DESC LIMIT 1)='done',"
+        "ORDER BY e.created_at DESC,e.rowid DESC LIMIT 1)='done',"
         "EXISTS (SELECT 1 FROM task_steps d WHERE d.type_id=t.type_id AND d.status='done') "
         "FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id "
         "WHERE t.id IN (SELECT r.from_task FROM task_relations r WHERE r.to_task=? AND r.kind IN ('parent','blocks')) "
@@ -189,7 +189,7 @@ def sync(c, task_id):
     version = ',version=version+1' if 'version' in {r[1] for r in c.execute('PRAGMA table_info(tasks)')} else ''
     c.execute('UPDATE tasks SET done_at=?' + version + ' WHERE id=?',
               (H.now() if goal == 'Shipped' else None, task_id))
-    H._recount(c, row['owner'])
+    H._recount(c, row['owner_id'])
     H.event(c, H.KEEPER, 'task.update', task_id, {'step': step['id']})
 
 

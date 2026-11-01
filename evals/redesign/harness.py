@@ -199,8 +199,8 @@ class Org(World):
             access = _load_json(c, ACCESS) or {}
             _store(c, ACCESS, {**access, "allowed": sorted(set(access.get("allowed") or [])
                                                           | {"omar@acme.example", "priya@acme.example"})})
-            c.execute("UPDATE bot_config SET operator=? WHERE operator<>?", (DANA_ID, DANA_ID))
-            c.execute("UPDATE runners SET operator=? WHERE operator<>?", (DANA_ID, DANA_ID))   # the runner the mail publish checks
+            c.execute("UPDATE bot_config SET owner_id=? WHERE owner_id<>?", (DANA_ID, DANA_ID))
+            c.execute("UPDATE runners SET owner_id=? WHERE owner_id<>?", (DANA_ID, DANA_ID))   # the runner the mail publish checks
         if self.first_tick:   # startup's cutover ran before Dana was the owner: the first tick makes her built-ins
             from backend import redesign_migration
             redesign_migration.catch_up(self.store)
@@ -277,7 +277,7 @@ class Org(World):
 # ---------------------------------------------------------------------------------------------- shared steps
 def send(org, who, owner, title):
     """A task from `who` to `owner` (a bare slug or person id), as the sender creates it."""
-    return org.api("post", "/api/v2/tasks", {"title": title, "body": "Scenario task.", "owner": owner}, who=who,
+    return org.api("post", "/api/v2/tasks", {"title": title, "body": "Scenario task.", "owner_id": owner}, who=who,
                    wave=W2)
 
 
@@ -412,7 +412,7 @@ def hub_notices(org, slug, who=DANA):
     for room in rooms.body.get("conversations") or []:
         page = org.api("get", f"/api/v2/conversations/{room['id']}/messages", who=who, wave=W2)
         found += [m for m in (page.body.get("messages") or []) if isinstance(page.body, dict)
-                  and m.get("from_actor") == "keeper" and m.get("kind") == "notice"]
+                  and m.get("sender_id") == "keeper" and m.get("kind") == "notice"]
     return found
 
 

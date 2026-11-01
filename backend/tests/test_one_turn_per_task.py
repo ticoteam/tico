@@ -14,7 +14,7 @@ def ops_turns(api, task_id):
 
 def queued(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return [m for (m,) in c.execute("SELECT message_id FROM jobs WHERE bot=? AND state='queued' ORDER BY created_at",
+        return [m for (m,) in c.execute("SELECT message_id FROM jobs WHERE bot_id=? AND state='queued' ORDER BY created_at",
                                         (bot,))]
 
 

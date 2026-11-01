@@ -197,7 +197,7 @@ def recent(c, who, bot, conversation_id):
         if (refs.get("goal_action") or refs.get("maintenance") or refs.get("task") or refs.get("task_id")
                 or refs.get("task_started") or refs.get("task_report")):
             continue
-        sender = message.get("from_actor")
+        sender = message.get("sender_id")
         if sender == who.actor:
             turns.append({"person": _trim(message.get("body")), "bot": ""})
         elif sender == "bot:" + bot and turns:

@@ -163,7 +163,7 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
             post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token=ana["token"], expected=403)
             assert post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")["action"]["status"] == "done"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='human:cara' AND revoked IS NULL").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='human:cara' AND revoked_at IS NULL").fetchone()[0] == 1
     finish(api, botops, ana)
     # A member is refused, in words that say who to ask, and no card is left behind.
     cara = turn(api, botops, person="cara-test", text="Grant ops the Jira credential")
@@ -179,11 +179,11 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
     ben = turn(api, botops, person="ben-test", text="Take Jira away from ops")
     assert act(api, ben, "POST", f"credentials/{row['id']}/grants/{done.json()['id']}/revoke", {}).status_code == 200
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='bot:ops' AND revoked IS NULL").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='bot:ops' AND revoked_at IS NULL").fetchone()[0] == 0
     finish(api, botops, ben)
     # A member who stored a credential for their bot shares it with their other bot through BotOps, at once, and nobody else's.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot IN ('finance','cpo')")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot IN ('finance','cpo')")
     mine = post(api, "credential-set", {"env": "SENTRY_TOKEN", "for_bot": "cpo", "value": JIRA, "name": "Sentry"}, "cara-test")["id"]
     cara = turn(api, botops, person="cara-test", text="Give finance my Sentry token")
     given = act(api, cara, "POST", f"credentials/{mine}/grants", {"subject": "bot:finance"})

@@ -18,9 +18,9 @@ def seed_turns(c, start, end, parent=None, tag="t"):
         key = f"{tag}-{n}"
         reply = H.task_comment(c, "human:ana", parent["id"], "Request " + key, wake=False)
         aid = "run-" + key
-        c.execute("INSERT INTO jobs(id,message_id,bot,state,created_at,attempt_id) VALUES(?,?,'ops','completed',?,?)",
+        c.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,'ops','completed',?,?)",
                   ("job-" + key, reply["id"], H.now(), aid))
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
         c.execute("INSERT INTO turns(id,bot,started_at,message_id,task_id,exit) VALUES(?,'ops',?,?,?,'ok')",
                   (aid, H.now(), reply["id"], parent["id"]))
@@ -80,7 +80,7 @@ def test_message_page_stays_bounded_as_messages_grow(api, monkeypatch):
 def test_operations_does_not_query_each_computer(api):
     with api.app.state.store.transaction() as c:
         for n in range(6):
-            c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES(?,?, 'ana',?,?)",
+            c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES(?,?, 'ana',?,?)",
                       (f"rn{n}", f"Mac {n}", f"th{n}", H.now()))
     from backend.tests.test_task_privacy_reads import traced
     _, text = traced(api, lambda: get(api, "operations"))
@@ -100,9 +100,9 @@ def test_covering_indexes_return_the_same_rows(tmp_path):
         id_plan = " ".join(row[3] for row in conn.execute("EXPLAIN QUERY PLAN SELECT id FROM tasks"))
         assert "COVERING INDEX" in id_plan
         plain = [tuple(row) for row in conn.execute(
-            "SELECT id,requester,owner,guest,private FROM tasks WHERE private IS NOT 0 ORDER BY id")]
+            "SELECT id,requester_id,owner_id,guest,private FROM tasks WHERE private IS NOT 0 ORDER BY id")]
         covered = [tuple(row) for row in conn.execute(
-            "SELECT id,requester,owner,guest,private FROM tasks INDEXED BY tasks_private_parties "
+            "SELECT id,requester_id,owner_id,guest,private FROM tasks INDEXED BY tasks_private_parties "
             "WHERE private IS NOT 0 ORDER BY id")]
         assert plain == covered
         assert {row[0] for row in plain} == {hidden["id"]}
@@ -116,7 +116,7 @@ def test_covering_indexes_return_the_same_rows(tmp_path):
         asked = " ".join(row[3] for row in conn.execute(
             "EXPLAIN QUERY PLAN SELECT t.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
             "JOIN tasks t ON t.conversation_id=m.conversation_id "
-            "WHERE m.kind='ask' AND m.to_actor='human:ana' AND m.answered_by IS NULL"))
+            "WHERE m.kind='ask' AND m.recipient_id='human:ana' AND m.answered_by_id IS NULL"))
         assert "messages_open_ask" in asked
     finally:
         conn.close()

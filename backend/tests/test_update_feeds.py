@@ -103,7 +103,7 @@ def notes(api, slug="ops"):
 
 def jobs(api, slug="ops"):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (slug,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (slug,)).fetchone()[0]
 
 
 def ids(rows):

@@ -36,13 +36,13 @@ from .store import H, Problem, encode
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cards (
   id TEXT PRIMARY KEY, template TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}', title TEXT NOT NULL DEFAULT '',
-  made_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL);
+  made_by_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pins (
   id TEXT PRIMARY KEY, place TEXT NOT NULL, item TEXT NOT NULL, position INTEGER NOT NULL,
   size TEXT NOT NULL DEFAULT 'medium', made_by TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(place, item));
 CREATE INDEX IF NOT EXISTS pins_item ON pins(item);
 CREATE TABLE IF NOT EXISTS pin_places (
-  place TEXT PRIMARY KEY, audience TEXT, saved TEXT NOT NULL, saved_by TEXT NOT NULL);
+  place TEXT PRIMARY KEY, audience TEXT, saved_at TEXT NOT NULL, saved_by TEXT NOT NULL);
 """
 
 SIZES = ("small", "medium", "large")
@@ -223,7 +223,7 @@ def clean_settings(ctx, template, given):
 def kpi_record(ctx, kid):
     from . import goal_routes, kpis as K
     record = K.kpi(ctx.c, kid)
-    if not record or record.get("owner") in goal_routes._hidden_owners(ctx.c, ctx.auth, ctx.who):
+    if not record or record.get("owner_id") in goal_routes._hidden_owners(ctx.c, ctx.auth, ctx.who):
         return None
     return record
 
@@ -311,8 +311,8 @@ def automation_runs(ctx, s):
     groups = {"group:" + g for g in P.group_and_below(s["team"], ctx.roster)} if s["team"] else None
     keys = {AU._key(a) for a in actors or ()}
     names = {}
-    for row in ctx.c.execute("SELECT id, name, owner, grp, flow FROM automations WHERE deleted_at IS NULL"):
-        if groups is not None and row["grp"] not in groups and AU._key(row["owner"]) not in keys:
+    for row in ctx.c.execute("SELECT id, name, owner_id, group_id, flow FROM automations WHERE deleted_at IS NULL"):
+        if groups is not None and row["group_id"] not in groups and AU._key(row["owner_id"]) not in keys:
             continue
         if AU.may_change(ctx.c, ctx.who, {**AU.flow_of(row), "readonly": False}, chart):
             names[row["id"]] = row["name"]
@@ -335,9 +335,9 @@ def pages_for(ctx, team="", limit=5):
     from . import files as F
     bots = ctx.team_bots(team) if team else None
     rows = ctx.c.execute("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.archived=0 "
-                         "AND p.replaced_by IS NULL AND f.archived=0 AND f.state<>'deleted' "
+                         "AND p.replaced_by_id IS NULL AND f.archived=0 AND f.state<>'deleted' "
                          "ORDER BY f.last_activity_at DESC, f.id DESC LIMIT ?", (PAGE_SCAN,)).fetchall()
-    rows = [r for r in rows if bots is None or r["bot"] in bots]
+    rows = [r for r in rows if bots is None or r["bot_id"] in bots]
     F.prime_visible(ctx.c, rows)
     cache = ctx.memo("file_cache", dict)
     out = []
@@ -487,8 +487,8 @@ def may_manage(ctx, kind, ident):
     except Problem:
         return False
     if who.role == "bot":
-        return not who.via and who.actor in (row["owner"], row["requester"])
-    return ctx.person and (who.role == "owner" or who.actor in (row["owner"], row["requester"])
+        return not who.via and who.actor in (row["owner_id"], row["requester_id"])
+    return ctx.person and (who.role == "owner" or who.actor in (row["owner_id"], row["requester_id"])
                            or H.can_move(ctx.c, who.actor))
 
 
@@ -570,7 +570,7 @@ def ensure(ctx, kind, ident):
     if kind not in DEFAULTS or place_row(ctx.c, place):
         return
     now = H.now()
-    ctx.c.execute("INSERT INTO pin_places(place, audience, saved, saved_by) VALUES(?,?,?,?)",
+    ctx.c.execute("INSERT INTO pin_places(place, audience, saved_at, saved_by) VALUES(?,?,?,?)",
                   (place, None, now, ctx.who.actor))
     for pin in default_pins(kind, ident):
         cid = make_card(ctx, pin["card"]["template"], "", {"team": ident} if ident else {})
@@ -582,7 +582,7 @@ def make_card(ctx, template, title, settings):
         raise Problem("too_many", f"This team keeps {CARDS_MAX} cards: remove some first", 409)
     settings = clean_settings(ctx, template, settings)
     cid, now = H.new_id(), H.now()
-    ctx.c.execute("INSERT INTO cards(id,template,settings,title,made_by,created_at,updated_at,updated_by) "
+    ctx.c.execute("INSERT INTO cards(id,template,settings,title,made_by_id,created_at,updated_at,updated_by_id) "
                   "VALUES(?,?,?,?,?,?,?,?)", (cid, template, json.dumps(settings), (title or "").strip(), ctx.who.actor,
                                               now, now, ctx.who.actor))
     H.event(ctx.c, ctx.who.actor, "card.added", cid, {"template": template})
@@ -796,7 +796,7 @@ def edit_card(ctx, cid, title=None, settings=None):
         merged = {**json.loads(row["settings"]), **settings}
         fields["settings"] = json.dumps(clean_settings(ctx, row["template"], merged))
     if fields:
-        fields.update(updated_at=H.now(), updated_by=ctx.who.actor)
+        fields.update(updated_at=H.now(), updated_by_id=ctx.who.actor)
         ctx.c.execute("UPDATE cards SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), cid))
         H.event(ctx.c, ctx.who.actor, "card.changed", cid, {"fields": sorted(k for k in fields if k != "updated_at")})
     return card_view(ctx, card_row(ctx.c, cid))
@@ -828,7 +828,7 @@ def save_place(ctx, place, audience=None):
         if kind != "team":
             raise bad("Everyone sees the Dashboard")
         level = A.audience(audience.model_dump())
-        ctx.c.execute("UPDATE pin_places SET audience=?, saved=?, saved_by=? WHERE place=?",
+        ctx.c.execute("UPDATE pin_places SET audience=?, saved_at=?, saved_by=? WHERE place=?",
                       (None if level["everyone"] else json.dumps(level), H.now(), ctx.who.actor, place))
         H.event(ctx.c, ctx.who.actor, "place.audience", place, {"everyone": level["everyone"]})
     return place
@@ -859,7 +859,7 @@ def choices(ctx, team=""):
     from . import goal_routes
     hidden = goal_routes._hidden_owners(ctx.c, ctx.auth, ctx.who)
     kpis = [{"id": r["id"], "name": r["name"]} for r in ctx.c.execute(
-        "SELECT id, name, owner FROM kpis WHERE archived_at IS NULL ORDER BY name LIMIT 500") if r["owner"] not in hidden]
+        "SELECT id, name, owner_id FROM kpis WHERE archived_at IS NULL ORDER BY name LIMIT 500") if r["owner_id"] not in hidden]
     return {"templates": [{"id": k, "name": v["name"], "fields": [f for f in v["fields"]]} for k, v in TEMPLATES.items()],
             "teams": [{"id": gid, "name": g.get("name") or gid, "parent": g.get("parent") or None}
                       for gid, g in ctx.groups.items()],

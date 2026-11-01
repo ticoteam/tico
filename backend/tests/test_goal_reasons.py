@@ -85,7 +85,7 @@ def test_a_reader_who_may_not_read_the_measures_bot_reads_no_reason_and_gets_no_
     # Cara may not read the inbox bot (test_goal_cards). A suggestion to reuse its measure on her goal still shows to
     # her, as "a measure you cannot see"; the reason Ana gave for turning it down does not.
     hidden, secret = inbox_measure(api)
-    hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]
+    hers = post(api, "goals", {"title": "Keep customers", "owner_id": "cara"}, token="cara-test")["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": secret["id"], "target": {"kind": "maintain", "max": 3}}, hers["id"])
     post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "reject", "note": "Inbox only, not churn"})
     definition = propose(api, "kpi_definition", {"definition": "Within 3 days"}, kpi_id=secret["id"])

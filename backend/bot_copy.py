@@ -277,7 +277,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             writes = auth.bot_access(c, who, original)["write"]
             app_row = service.row(c)
             repo = repo_of(theirs["repo"] or "emp-" + H.bot(c, original)["slug"], app_row["org"] if app_row else "") if app_row else None
-            owner = theirs["operator"] if theirs["operator"] and H.human(c, theirs["operator"]) else ""
+            owner = theirs["owner_id"] if theirs["owner_id"] and H.human(c, theirs["owner_id"]) else ""
             names = {"copy": H.bot(c, bot)["display_name"], "original": H.bot(c, original)["display_name"],
                      "person": (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor),
                      "copy_slug": H.bot(c, bot)["slug"], "original_slug": H.bot(c, original)["slug"]}

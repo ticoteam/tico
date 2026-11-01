@@ -90,8 +90,8 @@ def failed_at(w, ticket_id, head):
 
 def waiver_events(w, ticket_id=None):
     import json
-    rows = w.sql("SELECT task_id, actor, new, ts FROM task_events WHERE field='qa_waiver'"
-                 + (" AND task_id=?" if ticket_id else "") + " ORDER BY ts, rowid", (ticket_id,) if ticket_id else ())
+    rows = w.sql("SELECT task_id, actor, new, created_at FROM task_events WHERE field='qa_waiver'"
+                 + (" AND task_id=?" if ticket_id else "") + " ORDER BY created_at, rowid", (ticket_id,) if ticket_id else ())
     return [{**r, "head": (json.loads(r["new"] or "{}") or {}).get("head")} for r in rows]
 
 
@@ -106,7 +106,7 @@ def qa_down_then_waive(run, w, team, i):
     if not hasattr(run, "qa_down"):
         run.qa_down, run.qa_started, run.ana = None, None, []
     qa = [b.slug for b in team.qa]
-    if run.qa_down is None and w.sql(f"SELECT 1 FROM tasks WHERE verdict IS NOT NULL AND owner IN "
+    if run.qa_down is None and w.sql(f"SELECT 1 FROM tasks WHERE verdict IS NOT NULL AND owner_id IN "
                                      f"({','.join('?' * len(qa))}) LIMIT 1", tuple("bot:" + s for s in qa)):
         run.qa_started = now
         run.qa_down = now + at(QA_DOWN_HOURS)
@@ -149,16 +149,16 @@ def judgments_at(w, check, head):
     "comments" when it finished with no verdict (`_verdict` in backend/verdict_moves.py). A check with no verdict judged
     the head it was filed for (its review_head, as `_judged_head` reads it)."""
     out = []
-    for e in w.sql("SELECT ts, lower(new) new FROM task_events WHERE task_id=? AND field='verdict'", (check["id"],)):
+    for e in w.sql("SELECT created_at, lower(new) new FROM task_events WHERE task_id=? AND field='verdict'", (check["id"],)):
         verdict, _, judged = str(e["new"] or "").partition(" ")
         if judged and head.startswith(judged):
-            out.append((w.H.parse_ts(e["ts"]), verdict))
+            out.append((w.H.parse_ts(e["created_at"]), verdict))
     if not check.get("verdict") and check["status"] == "done":
         judged = w.judged_head(check)
-        done = w.sql("SELECT max(ts) ts FROM task_events WHERE task_id=? AND field='status' AND new='done'",
+        done = w.sql("SELECT max(created_at) created_at FROM task_events WHERE task_id=? AND field='status' AND new='done'",
                      (check["id"],))
-        if judged and head.startswith(judged) and done and done[0]["ts"]:
-            out.append((w.H.parse_ts(done[0]["ts"]), "comments"))
+        if judged and head.startswith(judged) and done and done[0]["created_at"]:
+            out.append((w.H.parse_ts(done[0]["created_at"]), "comments"))
     return out
 
 

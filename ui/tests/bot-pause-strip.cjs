@@ -33,7 +33,7 @@ async function open(browser, role, hash) {
     if (p === '/api/v2/status') return json({bots: [{bot: 'ops', state: 'idle'}]});
     if (p === '/api/v2/bots/ops/pause-state') {
       const snapshot = {state: state.paused ? 'paused' : 'active', revision: state.revision,
-        can_control: manage, operator: 'Ana', paused_by: state.record || null, open_tasks: state.tasks || 0, company_paused: !!state.billing};
+        can_control: manage, owner_id: 'Ana', paused_by: state.record || null, open_tasks: state.tasks || 0, company_paused: !!state.billing};
       state.reads = (state.reads || 0) + 1;
       const held = state.holdNext;
       if (held) { delete state.holdNext; held.captured(); await held.wait; }

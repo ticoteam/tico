@@ -431,7 +431,7 @@ def test_only_recent_live_computers_keep_a_holder_record(app):
     for machine in (old, gone):
         post(app, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])
     with app.app.state.store.transaction() as c:
-        c.execute("UPDATE google_mail_holders SET seen=? WHERE runner_id=?",
+        c.execute("UPDATE google_mail_holders SET seen_at=? WHERE runner_id=?",
                   (time.time() - google_connect.HOLDER_SECONDS - 1, old["runner_id"]))
         c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), gone["runner_id"]))
     post(app, "connectors/mail/google/claim", {}, now["token"])

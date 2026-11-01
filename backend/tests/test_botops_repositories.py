@@ -142,7 +142,7 @@ def test_an_owner_or_admin_asking_botops_to_tick_run_workflows_gets_a_confirm_ca
         assert card.status_code == 200 and card.json()["needs_confirm"] is True, card.text
     assert effective(api) == [{"full_name": "Acme/product", "access": "write"}]
     row = _stored_card(api, card.json())
-    assert (row["owner"], row["method"], row["path"]) == ("human:" + name, "PUT", "/api/v2/bots/ops/repositories")
+    assert (row["owner_id"], row["method"], row["path"]) == ("human:" + name, "PUT", "/api/v2/bots/ops/repositories")
     assert row["description"] == "ops: " + words + ".", row
     done = post(api, f"assistant/actions/{card.json()['action']['id']}/confirm", {}, token=person)
     assert done["action"]["status"] == "done", done

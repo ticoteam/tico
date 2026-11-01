@@ -68,20 +68,20 @@ TRANSPORT = None
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS feed_updates(
   id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, feed TEXT NOT NULL, category TEXT NOT NULL,
-  template TEXT NOT NULL DEFAULT '', version TEXT NOT NULL, published TEXT NOT NULL, summary TEXT NOT NULL,
+  template TEXT NOT NULL DEFAULT '', version TEXT NOT NULL, published_at TEXT NOT NULL, summary TEXT NOT NULL,
   files TEXT NOT NULL DEFAULT '', source_url TEXT NOT NULL, version_url TEXT NOT NULL, action INTEGER NOT NULL,
-  reason TEXT NOT NULL, fetched TEXT NOT NULL);
+  reason TEXT NOT NULL, fetched_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS feed_updates_feed_seq ON feed_updates(feed, seq);
-CREATE TABLE IF NOT EXISTS feed_sources(feed TEXT PRIMARY KEY, fetched TEXT NOT NULL, snapshot TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS feed_sources(feed TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, snapshot TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS feed_walks(
-  feed TEXT PRIMARY KEY, next TEXT NOT NULL, snapshot TEXT NOT NULL DEFAULT '', pages INTEGER NOT NULL,
+  feed TEXT PRIMARY KEY, next_walk_at TEXT NOT NULL, snapshot TEXT NOT NULL DEFAULT '', pages INTEGER NOT NULL,
   items TEXT NOT NULL, started_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS feed_cursors(
-  bot TEXT NOT NULL, category TEXT NOT NULL, feed TEXT NOT NULL DEFAULT '', since TEXT NOT NULL, cursor INTEGER,
+  bot TEXT NOT NULL, category TEXT NOT NULL, feed TEXT NOT NULL DEFAULT '', cursor_at TEXT NOT NULL, cursor INTEGER,
   PRIMARY KEY(bot, category));
 CREATE TABLE IF NOT EXISTS feed_deliveries(
   bot TEXT NOT NULL, update_id TEXT NOT NULL, category TEXT NOT NULL DEFAULT '', note_id TEXT NOT NULL,
-  delivered TEXT NOT NULL, PRIMARY KEY(bot, update_id));
+  delivered_at TEXT NOT NULL, PRIMARY KEY(bot, update_id));
 """
 
 _state = {"swept": 0.0, "fetched": {}, "retry": {}}
@@ -127,7 +127,7 @@ def subscribe(c, bot, before, after):
     one turned off forgets its cursor, so turning it on again resumes from the newest once more, and cancels the
     notes of that category the bot has not picked up yet."""
     for category in set(after) - set(before):
-        c.execute("INSERT OR REPLACE INTO feed_cursors(bot,category,feed,since,cursor) VALUES(?,?,'',?,NULL)",
+        c.execute("INSERT OR REPLACE INTO feed_cursors(bot,category,feed,cursor_at,cursor) VALUES(?,?,'',?,NULL)",
                   (bot, category, H.now()))
         # Fetched on the next pass, so the resume point is minutes old rather than hours.
         for feed in [k for k in _state["fetched"] if k == category or k.startswith(category + ":")]:
@@ -331,7 +331,7 @@ def _walk(store, feed):
     """A catch-up a previous pass left part way: (next page, snapshot, entries found so far, pages read), or None."""
     with store.read() as c:
         row = c.execute("SELECT * FROM feed_walks WHERE feed=?", (feed,)).fetchone()
-    return (row["next"], row["snapshot"] or None, json.loads(row["items"]), row["pages"]) if row else None
+    return (row["next_walk_at"], row["snapshot"] or None, json.loads(row["items"]), row["pages"]) if row else None
 
 
 def fetch_tico(store, http):
@@ -401,23 +401,23 @@ def store_items(c, feed, items, snapshot=""):
         if c.execute("SELECT 1 FROM feed_updates WHERE id=?", (item["id"],)).fetchone():
             continue
         seq += 1
-        c.execute("INSERT INTO feed_updates(id,seq,feed,category,template,version,published,summary,files,source_url,"
-                  "version_url,action,reason,fetched) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (item["id"], seq, feed, item["category"], item["template"], item["version"], item["published"],
+        c.execute("INSERT INTO feed_updates(id,seq,feed,category,template,version,published_at,summary,files,source_url,"
+                  "version_url,action,reason,fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (item["id"], seq, feed, item["category"], item["template"], item["version"], item["published_at"],
                    item["summary"], item["files"], item["source_url"], item["version_url"], int(bool(item["action"])),
                    item["reason"], H.now()))
     floor = c.execute("SELECT min(cursor) FROM feed_cursors WHERE feed=? AND cursor IS NOT NULL", (feed,)).fetchone()[0]
     c.execute("DELETE FROM feed_updates WHERE feed=? AND seq<=(SELECT seq FROM feed_updates WHERE feed=? "
               "ORDER BY seq DESC LIMIT 1 OFFSET ?) AND seq<=coalesce(?,seq)", (feed, feed, KEEP, floor))
-    c.execute("INSERT OR REPLACE INTO feed_sources(feed,fetched,snapshot) VALUES(?,?,?)", (feed, H.now(), snapshot))
+    c.execute("INSERT OR REPLACE INTO feed_sources(feed,fetched_at,snapshot) VALUES(?,?,?)", (feed, H.now(), snapshot))
     c.execute("DELETE FROM feed_walks WHERE feed=?", (feed,))
 
 
 def save_walk(c, feed, items, walk):
     """Keep a catch-up that ran out of pages, to go on from on the next pass; nothing is stored until it ends."""
     following, snapshot, pages = walk
-    c.execute("INSERT INTO feed_walks(feed,next,snapshot,pages,items,started_at) VALUES(?,?,?,?,?,?) ON CONFLICT(feed) "
-              "DO UPDATE SET next=excluded.next,snapshot=excluded.snapshot,pages=excluded.pages,items=excluded.items",
+    c.execute("INSERT INTO feed_walks(feed,next_walk_at,snapshot,pages,items,started_at) VALUES(?,?,?,?,?,?) ON CONFLICT(feed) "
+              "DO UPDATE SET next_walk_at=excluded.next_walk_at,snapshot=excluded.snapshot,pages=excluded.pages,items=excluded.items",
               (feed, following, snapshot, pages, json.dumps(items), H.now()))
 
 
@@ -452,13 +452,13 @@ def deliver(c):
             continue
         if cursor["feed"] != feed:
             # A first fetch for this cursor, or the bot's template changed: resume from that feed's newest.
-            since = cursor["since"] if not cursor["feed"] else H.now()
-            c.execute("UPDATE feed_cursors SET feed=?,since=?,cursor=NULL WHERE bot=? AND category=?",
+            since = cursor["cursor_at"] if not cursor["feed"] else H.now()
+            c.execute("UPDATE feed_cursors SET feed=?,cursor_at=?,cursor=NULL WHERE bot=? AND category=?",
                       (feed, since, bot, category))
-            cursor.update(feed=feed, since=since, cursor=None)
+            cursor.update(feed=feed, cursor_at=since, cursor=None)
         if cursor["cursor"] is None:
-            fetched = c.execute("SELECT fetched FROM feed_sources WHERE feed=?", (feed,)).fetchone()
-            if not fetched or fetched["fetched"] < cursor["since"]:
+            fetched = c.execute("SELECT fetched_at FROM feed_sources WHERE feed=?", (feed,)).fetchone()
+            if not fetched or fetched["fetched_at"] < cursor["cursor_at"]:
                 continue
             newest = c.execute("SELECT coalesce(max(seq),0) FROM feed_updates WHERE feed=?", (feed,)).fetchone()[0]
             c.execute("UPDATE feed_cursors SET cursor=? WHERE bot=? AND category=?", (newest, bot, category))
@@ -471,7 +471,7 @@ def deliver(c):
             c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
                       (note_id, H.KEEPER, "bot:" + bot, note_text({**dict(row), "action": bool(row["action"])}, running),
                        H.now()))
-            c.execute("INSERT INTO feed_deliveries(bot,update_id,category,note_id,delivered) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO feed_deliveries(bot,update_id,category,note_id,delivered_at) VALUES(?,?,?,?,?)",
                       (bot, row["id"], category, note_id, H.now()))
             given.setdefault(bot, []).append(row["id"])
         if rows:

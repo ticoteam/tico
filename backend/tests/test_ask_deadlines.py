@@ -14,7 +14,7 @@ def _ask(c, title, default=None, days=0):
     H.task_update(c, "bot:ops", task["id"], status="waiting", waiting_on="human:ana", note=title)
     then = H.shift(H.now(), days=-days)
     c.execute("UPDATE messages SET created_at=? WHERE id=?", (then, said["id"]))
-    c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (then, task["id"]))
+    c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (then, task["id"]))
     c.execute("UPDATE tasks SET created_at=? WHERE id=?", (then, task["id"]))
     return task, said
 
@@ -32,7 +32,7 @@ def test_a_reversible_default_goes_ahead_after_the_teams_days_and_a_send_waits(a
     assert done["went_ahead"] == [safe_ask["id"]]
     with api.app.state.store.read() as c:
         answer = _answer(c, safe_ask)
-        assert answer["from_actor"] == H.KEEPER and answer["to_actor"] == "bot:ops"
+        assert answer["sender_id"] == H.KEEPER and answer["recipient_id"] == "bot:ops"
         assert "goes ahead" in answer["body"] and H._json(answer["refs"], {})["answer"]["answers"] == {"decision": ["Yes"]}
         assert H.task(c, safe["id"])["waiting_on"] is None
         assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (answer["id"],)).fetchone()   # Ops wakes on it
@@ -57,7 +57,7 @@ def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes
                               H.shift(H.now(), days=40)[:10], lint=False)
         for row in (handed, touched, later):
             c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-15), row["id"]))
-            c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), days=-15), row["id"]))
+            c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), days=-15), row["id"]))
         H.task_comment(c, "human:ana", touched["id"], "Still looking, give me a few days")
         H.task_comment(c, "human:ana", H.message_task_id(spoken), "Thinking about it")
         done = ask_deadlines.sweep(c)
@@ -76,7 +76,7 @@ def test_an_undated_ask_waits_for_the_batch_and_a_task_handed_to_a_person_closes
         card = H.task_update(c, "bot:ops", task["id"], status="waiting", waiting_on="human:ana",
                              note="Approve the venue for Friday? If yes, I will book it.")["asked_in"]
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-15), card["id"]))
-        c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), days=-15), card["id"]))
+        c.execute("UPDATE task_events SET created_at=? WHERE task_id=?", (H.shift(H.now(), days=-15), card["id"]))
         assert ask_deadlines.sweep(c)["closed"] == [card["id"]]
         back = H.task(c, task["id"])
         assert back["status"] == "open" and back["note"].startswith(

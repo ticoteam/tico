@@ -55,7 +55,7 @@ def held_reason(msg, conn=None):
     if refs.get(MARK) != RULE:
         return None
     from . import hubdb as H
-    bot = H.actor_id(msg.get("to_actor") or "")
+    bot = H.actor_id(msg.get("recipient_id") or "")
     if conn is not None:
         bot = (H.bot(conn, bot) or {}).get("slug", bot)
     return (f"held for {bot}'s next run; nothing runs it now. Add --needs-action (needs_action: true) to wake "
@@ -102,7 +102,7 @@ def continue_backlog(conn, bot):
                         f"{H.NOTE_WAITING_SQL} LIMIT 1", ("bot:" + bot,)).fetchone()
     if not left:
         return None
-    pending = conn.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
+    pending = conn.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
                            "AND j.state IN ('queued','leased') AND json_extract(m.refs,'$.wake')=?",
                            (bot, BACKLOG)).fetchone()
     if pending:

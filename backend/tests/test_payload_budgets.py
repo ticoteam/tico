@@ -34,22 +34,22 @@ def test_payloads_stay_under_their_budgets(api):
     store, auth = api.app.state.store, api.app.state.auth
     _, msg, attempt = setup_attempt(api)               # ana's chat with ops, its run under way
     cid = msg["conversation_id"]
-    task = post(api, "tasks", {"owner": "human:ana", "title": "Review the plan", "body": BODY})["task"]
+    task = post(api, "tasks", {"owner_id": "human:ana", "title": "Review the plan", "body": BODY})["task"]
     with store.transaction() as c:
         row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone())
         # 2,000 tasks: 500 on ana (her Needs you), the rest on bots.
         clone(c, "tasks", row, 499, title=lambda i: f"Review plan {i}")
-        clone(c, "tasks", row, 1500, owner=lambda i: "bot:ops", title=lambda i: f"Bot work {i}")
+        clone(c, "tasks", row, 1500, owner_id=lambda i: "bot:ops", title=lambda i: f"Bot work {i}")
         first = dict(c.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
         # 1,000 long replies before it; a person's message would queue a run of its own.
-        clone(c, "messages", {**first, "body": BODY, "from_actor": "bot:ops", "to_actor": "human:ana"}, 1000,
+        clone(c, "messages", {**first, "body": BODY, "sender_id": "bot:ops", "recipient_id": "human:ana"}, 1000,
               created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1))
         # 60 bots at work, each with a status line as a busy team's are (focus, task, last result, counts).
         bot = dict(c.execute("SELECT * FROM bots WHERE slug='ops'").fetchone())
         c.executemany(f"INSERT INTO bots({','.join(bot)}) VALUES({','.join('?' * len(bot))})",
                       [[f"bot-{i}" if k in ("id", "slug") else f"Bot {i}" if k == "display_name" else v for k, v in bot.items()]
                        for i in range(53)])
-        c.executemany("INSERT OR REPLACE INTO bot_status(bot,state,focus,task_id,since,last_turn_at,last_result,next_due,"
+        c.executemany("INSERT OR REPLACE INTO bot_status(bot,state,focus,task_id,changed_at,last_turn_at,last_result,next_due_at,"
                       "open_tasks,needs_human,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                       [(slug, "running", "Drafting the weekly report for the launch review and checking the numbers",
                         task["id"], H.now(), H.now(), "Filed the summary and asked finance to confirm the totals. " * 3,
@@ -165,7 +165,7 @@ def prepared_transitions(api, cid, count, text):
     with api.app.state.store.transaction() as c:
         first = dict(c.execute(
             "SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
-        clone(c, "messages", {**first, "from_actor": "bot:ops", "to_actor": "human:ana"}, count,
+        clone(c, "messages", {**first, "sender_id": "bot:ops", "recipient_id": "human:ana"}, count,
               created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1))
         messages = [row[0] for row in c.execute(
             "SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?", (cid, count)).fetchall()]
@@ -238,7 +238,7 @@ def test_a_settings_history_first_page_flags_the_transitions_past_its_limit(api)
 
 def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     store = api.app.state.store
-    task = post(api, "tasks", {"owner": "human:ana", "title": "Snoozed 0", "body": "x"})
+    task = post(api, "tasks", {"owner_id": "human:ana", "title": "Snoozed 0", "body": "x"})
     note = "🔔" * 500                                   # 500 characters, 2,000 bytes each
     with store.transaction() as c:
         row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone())

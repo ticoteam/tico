@@ -15,7 +15,7 @@ def strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('goal-manager','goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT OR IGNORE INTO bot_config(bot,config,operator) VALUES('goal-manager','{}','ana')")
+        c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id) VALUES('goal-manager','{}','ana')")
     return as_bot(api, "goal-manager")
 
 

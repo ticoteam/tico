@@ -221,18 +221,18 @@ def grouped(conn, task_ids, visible_sql="1"):
         # probe every page/visible-task pair through the composite relationship key.
         rows = conn.execute(
             "SELECT * FROM (SELECT r.from_task AS here, CASE WHEN r.kind='related' THEN 'both' ELSE 'out' END "
-            "AS direction, r.kind, r.created_at AS at, r.rowid AS rid, t.id, t.title, t.status, t.owner "
+            "AS direction, r.kind, r.created_at AS at, r.rowid AS rid, t.id, t.title, t.status, t.owner_id "
             "FROM task_relations r INDEXED BY task_relations_from CROSS JOIN tasks t ON t.id=r.to_task "
             f"WHERE r.from_task IN ({marks}) "
             "UNION ALL SELECT r.to_task, CASE WHEN r.kind='related' THEN 'both' ELSE 'in' END, r.kind, r.created_at, "
-            "r.rowid, t.id, t.title, t.status, t.owner "
+            "r.rowid, t.id, t.title, t.status, t.owner_id "
             "FROM task_relations r INDEXED BY task_relations_to CROSS JOIN tasks t ON t.id=r.from_task "
             f"WHERE r.to_task IN ({marks}) AND r.kind<>'parent') x "
             # The other end's visibility by primary key, not a list of every visible task.
             f"WHERE EXISTS (SELECT 1 FROM tasks WHERE tasks.id=x.id AND ({visible_sql})) ORDER BY at, rid",
             (*part, *part))
         for row in rows:
-            entry = {"id": row["id"], "title": row["title"], "status": row["status"], "owner": row["owner"],
+            entry = {"id": row["id"], "title": row["title"], "status": row["status"], "owner_id": row["owner_id"],
                      "direction": row["direction"]}
             out[row["here"]].setdefault(row["kind"], []).append(entry)
         if visible_sql == "1":
@@ -245,7 +245,7 @@ def grouped(conn, task_ids, visible_sql="1"):
                 f"WHERE r.from_task IN ({marks}) AND r.kind='parent' AND c.private=0 "
                 "AND (p.private IS NULL OR p.private<>0) "
                 f"AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id=r.to_task AND ({visible_sql}))", part):
-            out[row["from_task"]]["parent"] = [{"id": None, "title": PRIVATE_PARENT, "status": None, "owner": None,
+            out[row["from_task"]]["parent"] = [{"id": None, "title": PRIVATE_PARENT, "status": None, "owner_id": None,
                                                "direction": "out", "private": True}]
     return out
 
@@ -529,7 +529,7 @@ def _check_blocker(conn, actor, row, blocker_id):
     if is_descendant(conn, blocker_id, row["id"]):
         H.refuse(conn, actor, "kind", "A child task cannot be blocked by its own parent or ancestor")
     if H.task_private(conn, block) and (not H.task_private(conn, row) or not all(
-            H.task_private_readable(conn, party, block) for party in (row["owner"], row["requester"]))
+            H.task_private_readable(conn, party, block) for party in (row["owner_id"], row["requester_id"]))
     ) and not H.subtask_flows_up(conn, block, row):
         # Its own subtask for its guest may block it: the guest's answer comes back to it (hubdb.subtask_flows_up).
         H.refuse(conn, actor, "private", "A private dependency requires the same private audience")
@@ -549,7 +549,7 @@ def _blocker_gate(conn, actor, row, mover):
     _mine(conn, actor, row, mover)
     H = _H()
     mover = H.task_mover(conn, actor, row, mover)
-    if not H.task_represents(conn, actor, row["owner"]) and not mover and not H.task_manager_acts(conn, actor, row):
+    if not H.task_represents(conn, actor, row["owner_id"]) and not mover and not H.task_manager_acts(conn, actor, row):
         _need_mover(conn, actor, "blocked_by")
 
 
@@ -559,8 +559,8 @@ def requester_hears_block(conn, row, blocker, actor):
     on itself, nor on work it split off to a bot (a review, a delegated part: its own flow), nor on the requester (that
     is an ask, its own wake), nor when the requester made the change. A person requester sees it in Needs you."""
     H = _H()
-    req, owner, waits_on = row.get("requester"), row.get("owner"), (blocker or {}).get("owner")
-    split_off = H.is_bot(waits_on) and blocker.get("requester") == owner
+    req, owner, waits_on = row.get("requester_id"), row.get("owner_id"), (blocker or {}).get("owner_id")
+    split_off = H.is_bot(waits_on) and blocker.get("requester_id") == owner
     return bool(req and H.is_bot(req) and waits_on and req not in (owner, actor, waits_on)
                 and waits_on != owner and not split_off)
 
@@ -573,9 +573,9 @@ def _tell_requester(conn, actor, row, blocker):
     if not blocker or _engineering(conn, row) or not requester_hears_block(conn, row, blocker, actor):
         return
     parent = H.task(conn, parent_of(conn, row["id"]) or "")
-    if parent and check_kind(conn, row, parent) and _engineering(conn, parent) and parent["owner"] == row["requester"]:
+    if parent and check_kind(conn, row, parent) and _engineering(conn, parent) and parent["owner_id"] == row["requester_id"]:
         return                        # its builder hears once, on the ticket (check_blocked.notify)
-    H._wake(conn, row, row["requester"], f"Blocked: {row['title']}: waits on {blocker['title']}",
+    H._wake(conn, row, row["requester_id"], f"Blocked: {row['title']}: waits on {blocker['title']}",
             {"news": "task_blocked", "blocker": blocker["id"]}, quiet_bots=True)
 
 

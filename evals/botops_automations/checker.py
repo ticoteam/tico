@@ -51,7 +51,7 @@ def canon(flow):
 def validate(flow, owner, name):
     """None when the flow passes the save check, else the reason it is refused."""
     try:
-        F.check({"name": name, "owner": owner, "trigger": flow.get("trigger"), "steps": flow.get("steps") or [],
+        F.check({"name": name, "owner_id": owner, "trigger": flow.get("trigger"), "steps": flow.get("steps") or [],
                  "batch": flow.get("batch")})
     except Exception as exc:   # a malformed answer is a failed check, never a crash
         return str(exc) or type(exc).__name__
@@ -234,7 +234,7 @@ def check_case(case, observed):
         checks.append(_check("saved as the live version", changed, "the live flow did not change"))
         if not changed:
             return _verdict(case, checks)
-        flow, owner, name = live, before.get("owner", OWNER), before.get("name", "Seed")
+        flow, owner, name = live, before.get("owner_id", OWNER), before.get("name", "Seed")
     error = validate(flow, owner, name)
     checks.append(_check("valid flow (the save check)", error is None, error or ""))
     if "trigger" in expect:

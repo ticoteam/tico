@@ -35,7 +35,7 @@ def measure(c, goal, value):
 
 
 def checkin(c, goal, signal="at_risk", days=3):
-    c.execute("INSERT INTO goal_checkins(id, goal_id, ts, author, source_actor, body, signal) "
+    c.execute("INSERT INTO goal_checkins(id, goal_id, created_at, author, source_actor, body, signal) "
               "VALUES(?,?,?,?,?,?,?)", (H.new_id(), goal["id"], stamp(days), "human:ben", "human:ben",
                                        "The dependency is late.", signal))
 
@@ -149,13 +149,13 @@ def test_first_pass_colours_existing_blank_subgoals_and_records_each_automatic_c
         for child, colour in zip(children, expected):
             row = G.goal(c, child["id"])
             assert row["status"] == colour
-            assert row["status_source"] == "auto" and row["status_by"] == G.AUTO_ACTOR
+            assert row["status_source"] == "auto" and row["status_by_id"] == G.AUTO_ACTOR
             assert row["parent_id"] == parent["id"]
             events = status_events(c, child)
             assert len(events) == 1
             event = events[0]
             assert (event["old"], event["new"], event["status_source"]) == (None, colour, "auto")
-            assert event["actor"] == event["status_by"] == G.AUTO_ACTOR
+            assert event["actor"] == event["status_by_id"] == G.AUTO_ACTOR
             assert event["note"] == row["status_note"]
     assert post(api, "goals/refresh", {})["changed"] == []
     with api.app.state.store.read() as c:

@@ -16,12 +16,12 @@ def stuck(api, token="ana-test"):
 
 
 def test_botops_may_sweep_and_start_another_bots_task_and_other_bots_may_not(api, monkeypatch):
-    task = post(api, "tasks", {"owner": "cpo", "title": "Write the pricing brief", "body": "x"})
+    task = post(api, "tasks", {"owner_id": "cpo", "title": "Write the pricing brief", "body": "x"})
     age(api, task["id"])
     monkeypatch.setattr(H, "FLEET_MAINTAINER", "ops")
     token = bot_token(api, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed' WHERE bot='cpo'")
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='cpo'")
     assert task["id"] in stuck(api, token)
     r = api.post(f"/api/v2/tasks/{task['id']}/run-now", json={}, headers=headers(token))
     assert r.status_code == 200 and r.json()["queued"] is True, r.text

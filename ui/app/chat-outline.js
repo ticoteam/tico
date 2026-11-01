@@ -14,7 +14,7 @@ function chatOutlineSync(state) {
   const conv = $('#conv');
   if (!conv || V2C !== state) return;
   let btn = $('#conv-outline-btn');
-  const prompts = state.messages.filter(m => actorPerson(m.from_actor) && !m.refs?.goal_action).length;
+  const prompts = state.messages.filter(m => actorPerson(m.sender_id) && !m.refs?.goal_action).length;
   const show = !!state.conv && (prompts >= OUTLINE_MIN || !!state.nextBefore);
   if (!show) { if (btn) btn.hidden = true; return; }
   if (!btn) {

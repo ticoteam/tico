@@ -693,7 +693,7 @@ def spent_this_month(c, labels, at=None):
     month = at.astimezone(timezone.utc).strftime("%Y-%m-01T00:00:00")
     where = " OR ".join("json_extract(detail,'$.label') LIKE ?" for _ in labels)
     total = c.execute("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events "
-                      f"WHERE action='judge.spend' AND ts>=? AND ({where})",
+                      f"WHERE action='judge.spend' AND created_at>=? AND ({where})",
                       (month, *[f"{label}@%" for label in labels])).fetchone()[0]
     return round(float(total or 0), 4)
 

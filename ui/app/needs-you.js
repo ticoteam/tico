@@ -74,7 +74,7 @@ async function needsRecommend(button, ask, version) {
 // task rows' columns (task-list.js taskListRowHTML), with nothing to select and no status.
 function needRowHTML(it, ctx = {}) {
   const key = decideItemKey(it), stale = it.kind === 'stale';
-  const from = stale ? '' : taskRequester(it) || it.requester || '';
+  const from = stale ? '' : taskRequester(it) || it.requester_id || '';
   const name = stale ? 'Tico' : actorLabel(from) || 'Tico';
   const title = stale ? it.title || 'Stale tickets' : approvalTitle(it) || it.first_line || it.title || v2Firstline(it.body) || V2_KIND[it.kind] || 'Item';
   const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : it.kind === 'memory_tidy' ? 'Nightly memory tidy' : 'Question';
@@ -397,8 +397,8 @@ document.addEventListener('click', async ev => {
 // window's comment box, or the card's reply box) goes with Done as the outcome; otherwise nothing extra is sent.
 // Closing never takes one.
 function taskOutcomeNote(task, action, typed) {
-  if (!task || action.close || !String(task.owner || '').startsWith('human:') ||
-      !String(task.requester || '').startsWith('bot:')) return '';
+  if (!task || action.close || !String(task.owner_id || '').startsWith('human:') ||
+      !String(task.requester_id || '').startsWith('bot:')) return '';
   return String(typed || '').trim();
 }
 // The task window's typed outcome went with Done: it is not left behind to be sent again as a comment.

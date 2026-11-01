@@ -43,7 +43,7 @@ def state(api, aid):
 def notes(api, task_id):
     with api.app.state.store.read() as c:
         return [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs,'$.task')=? "
-                                        "AND from_actor=?", (task_id, H.KEEPER))]
+                                        "AND sender_id=?", (task_id, H.KEEPER))]
 
 
 def test_frees_only_proven_dead_starts_and_never_blindly_retries_a_turn_that_acted(api):
@@ -75,7 +75,7 @@ def test_frees_only_proven_dead_starts_and_never_blindly_retries_a_turn_that_act
     assert 'not retried' in notes(api, 'task-4')[0] and 'Bash' in notes(api, 'task-4')[0]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='job.held' AND target='attempt-4'").fetchone()[0] == 1
-        assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:botops'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:botops'").fetchone()[0] == 1
 
 
 def test_dead_turn_on_a_private_task_botops_cannot_read_is_held_without_a_botops_task(api):
@@ -93,7 +93,7 @@ def test_dead_turn_on_a_private_task_botops_cannot_read_is_held_without_a_botops
     assert state(api, 'attempt-0')['job'] == 'uncertain'
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='job.held' AND target='attempt-0'").fetchone()[0] == 1
-        assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:botops'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:botops'").fetchone()[0] == 0
 
 
 def test_leased_start_that_reported_a_tool_call_is_held_not_requeued(api):
@@ -137,7 +137,7 @@ def test_one_finding_per_incident_one_botops_task_and_owner_notice_only_when_due
 
     def owner_notices():
         with store.read() as c:
-            return c.execute("SELECT count(*) FROM messages WHERE to_actor='human:ana' AND kind='notice' "
+            return c.execute("SELECT count(*) FROM messages WHERE recipient_id='human:ana' AND kind='notice' "
                              "AND body LIKE '%warning level%'").fetchone()[0]
 
     fix(api)
@@ -157,7 +157,7 @@ def test_one_finding_per_incident_one_botops_task_and_owner_notice_only_when_due
         assert 'incident' in H.task_labels(H.task(c, second['task_id']))
     assert second['id'] == first['id'] and second['finding']['updated_at'] > found['updated_at']
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:botops' AND title LIKE 'Company turns incident%'"
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:botops' AND title LIKE 'Company turns incident%'"
                          ).fetchone()[0] == 1
     assert owner_notices() == 0
     age(minutes=-61)
@@ -183,7 +183,7 @@ def test_a_wait_that_needs_the_person_tells_the_owner_at_once(api):
     fix(api)
     fix(api)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE to_actor='human:ana' AND kind='notice' "
+        assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='human:ana' AND kind='notice' "
                          "AND body LIKE '%needs a login%'").fetchone()[0] == 1
 
 

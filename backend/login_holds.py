@@ -231,7 +231,7 @@ def record(c, runner_id, profile, runtime, hit, reset=None, attempt_id=None, bot
     since = old.get("since") if keep and old.get("since") else _iso(hit_at)
     hold = {"runner_id": runner_id, "profile": profile or "", "runtime": runtime, "since": since,
             "until": _iso(until), "streak": streak, "reset": bool(at) and not busy, "capacity": busy,
-            "attempt_id": attempt_id, "bot": bot, "error": (error or "")[:300], "probe_job": probe if keep else None,
+            "attempt_id": attempt_id, "bot_id": bot, "error": (error or "")[:300], "probe_job": probe if keep else None,
             "probe_at": old.get("probe_at") if keep else None}
     if old.get("cut") and keep:
         hold["cut"] = old["cut"]

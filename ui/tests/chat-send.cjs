@@ -40,7 +40,7 @@ const SALES = '0192f0c4-7b1e-7cc2-9d1a-3f5e8a6b2c10';   // a bot made after ids:
         if (answer === 'html') return route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Sign in</title>'});
         if (hold) await hold;
         sends.push(text);
-        return json({conversation: {id: 'c1'}, message: {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created_at: new Date().toISOString()}});
+        return json({conversation: {id: 'c1'}, message: {id: 'm' + sends.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()}});
       }
       return json(unrouted(p));
     });

@@ -177,7 +177,7 @@ async function tfAdd(d, files) {
 // Taking a file off a task: its owner, its requester, or someone who may move tasks (the server's rule).
 function tfCanRemove(d) {
   const t = d.liveTask;
-  return !!t && ([t.owner, t.requester].includes(myActor()) || canMove());
+  return !!t && ([t.owner_id, t.requester_id].includes(myActor()) || canMove());
 }
 async function tfRemove(d, fid, button) {
   const id = String(d.dataset.task || ''), opening = d.taskOpening;

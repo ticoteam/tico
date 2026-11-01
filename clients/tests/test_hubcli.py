@@ -257,7 +257,7 @@ class Stub(BaseHTTPRequestHandler):
         if self.path == "/api/v2/tasks/T1":
             return self.reply(200, {"task": {"id": "T1", "status": body.get("status"), "version": 4}})
         if self.path == "/api/v2/tasks" and body.get("check_model"):
-            return self.reply(200, {"task": {"id": "T2", "owner": body["owner"], "title": body["title"]}})
+            return self.reply(200, {"task": {"id": "T2", "owner_id": body["owner"], "title": body["title"]}})
         if self.path == "/api/v2/bots/writer/tools":
             return self.reply(200, {"ok": True, "dry_run": bool(body.get("dry_run"))})
         if self.path == "/api/v2/approvals":
@@ -319,14 +319,14 @@ class AgainstAStub(unittest.TestCase):
                             "--title", "Review PR 700", "--body", "https://github.com/ticoteam/tico/pull/700", env=self.env)
         self.assertEqual(code, 0, out)
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks")
-        self.assertEqual((posted["owner"], posted["check_model"], posted["check_role"], posted["relations"]),
+        self.assertEqual((posted["owner_id"], posted["check_model"], posted["check_role"], posted["relations"]),
                          ("bot:coo", "grok", "review", [{"task": "T1", "kind": "parent"}]))
         # With no value, the server picks the company's check model.
         code, out = run_hub("task", "child", "T1", "--check-model", "--role", "review", "--title", "Review PR 701",
                             env=self.env)
         self.assertEqual(code, 0, out)
         posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks"][-1]
-        self.assertEqual((posted["owner"], posted["check_model"]), ("bot:coo", "auto"))
+        self.assertEqual((posted["owner_id"], posted["check_model"]), ("bot:coo", "auto"))
 
     def test_decision_readout_reads_the_days_asked(self):
         code, out = run_hub("decision", "readout", "--days", "14", env=self.env)
@@ -567,7 +567,7 @@ def test_creation_qa_override_and_paths_survive_cli_and_mcp(monkeypatch, choice)
     args = hubcli.parser().parse_args(['task', 'create', '--owner', 'cpo', '--title', 'UI change',
         '--body', 'x', '--qa', choice, '--change-path', 'ui/page.js', '--qa-not-checkable-live'])
     remotecli.run(args)
-    hubtools.BY_NAME['hub_task_create']['fn'](api, {'owner': 'cpo', 'title': 'UI change', 'body': 'x',
+    hubtools.BY_NAME['hub_task_create']['fn'](api, {'owner_id': 'cpo', 'title': 'UI change', 'body': 'x',
         'qa': choice == 'yes', 'change_paths': ['ui/page.js'], 'qa_not_checkable_live': True})
     assert len(sent) == 2
     assert all(p['qa'] is (choice == 'yes') and p['change_paths'] == ['ui/page.js']

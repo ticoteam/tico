@@ -42,7 +42,7 @@ def trees(tmp_path, monkeypatch):
     monkeypatch.setenv('HUB_TASK_ID', '12345678abcdef')
     row = {'id': 'link1', 'link_id': 'link1', 'task_id': '12345678abcdef', 'path': 'tasks/12345678/org__product',
            'branch': 'tico/12345678-build', 'repo': 'org/product', 'full_name': 'org/product', 'default_branch': 'main',
-           'state': 'present', 'owner': 'bot:engineer', 'setup_command': 'touch setup-ran'}
+           'state': 'present', 'owner_id': 'bot:engineer', 'setup_command': 'touch setup-ran'}
     client = mock.Mock()
     client.get.return_value = {'repositories': [{**row, 'access': 'write'}]}
     client.post.return_value = {'link_id': row['id'], 'branch': row['branch'], 'path': row['path'],
@@ -69,7 +69,7 @@ def light(tmp_path, monkeypatch):
     monkeypatch.setenv('HUB_TASK_ID', '12345678abcdef')
     row = {'id': 'link1', 'link_id': 'link1', 'task_id': '12345678abcdef', 'path': 'tasks/12345678/org__product',
            'branch': 'tico/12345678-build', 'repo': 'org/product', 'full_name': 'org/product', 'default_branch': 'main',
-           'state': 'present', 'owner': 'bot:engineer', 'setup_command': None}
+           'state': 'present', 'owner_id': 'bot:engineer', 'setup_command': None}
     client = mock.Mock()
     client.get.return_value = {'repositories': [{**row, 'access': 'write'}]}
     return workspace, None, None, row, client
@@ -668,7 +668,7 @@ def test_reopen_just_before_remove_defers_and_per_bot_lock_blocks_turn(trees):
         saved['task_status'] = 'open'
         saved['state'] = 'removed'
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            with manager.bot_lock(row['owner']):
+            with manager.bot_lock(row['owner_id']):
                 pool.submit(manager.sync, [{**row, 'action': 'restore'}]).result(timeout=3)
                 assert not path.exists()
         manager.sync([{**row, 'action': 'restore'}])
@@ -1327,7 +1327,7 @@ def test_a_reserved_worktree_is_prepared_only_while_idle_and_a_failed_setup_is_r
     idle = [False]
     manager = W.Worktrees(workspace, client, idle=lambda: idle[0])
     action = {'link_id': 'link1', 'action': 'prepare', 'branch': row['branch'], 'path': row['path'],
-              'task_id': row['task_id'], 'repo': row['repo'], 'owner': 'engineer'}
+              'task_id': row['task_id'], 'repo': row['repo'], 'owner_id': 'engineer'}
     path = workspace / row['path']
     try:
         manager.sync([action])

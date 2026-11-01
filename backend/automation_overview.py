@@ -111,7 +111,7 @@ def _pick(rows, trigger="", owner="", ids=""):
     if len(wanted) > IDS_MAX:
         raise Problem("invalid", f"ids names at most {IDS_MAX} automations", 422)
     owner = F.owner_ref(owner) if owner else ""
-    return [(r, f) for r, f in rows if (not kinds or kind_of(f) in kinds) and (not owner or r["owner"] == owner)
+    return [(r, f) for r, f in rows if (not kinds or kind_of(f) in kinds) and (not owner or r["owner_id"] == owner)
             and (not wanted or r["id"] in wanted)]
 
 
@@ -205,7 +205,7 @@ def run_row(run, row, flow):
         state = None
     kind = kind_of(flow)
     return {"id": run["id"], "automation_id": row["id"], "automation_name": row["name"], "trigger": kind,
-            "owner": row["owner"], "version": run["version"], "trigger_ref": run["trigger_ref"],
+            "owner_id": row["owner_id"], "version": run["version"], "trigger_ref": run["trigger_ref"],
             "started_at": run["started_at"], "finished_at": run["finished_at"], "status": run["status"], "cost": run["cost"],
             "started_by": started_by((state or {}).get("payload"), run["trigger_ref"], kind),
             "outcome": outcome(run["status"], state, flow),
@@ -215,7 +215,7 @@ def run_row(run, row, flow):
 def system_row(run, row):
     status = _system_status(run)
     return {"id": SYSTEM_RUN + run["id"], "automation_id": row["id"], "automation_name": row["name"],
-            "trigger": "system", "owner": row["owner"], "version": row["version"], "trigger_ref": "system",
+            "trigger": "system", "owner_id": row["owner_id"], "version": row["version"], "trigger_ref": "system",
             "started_at": run["started_at"], "finished_at": run["finished_at"], "status": status, "cost": run["cost_usd"] or 0,
             "started_by": "Scheduled", "outcome": str(run["result"] or ("Done" if status == "ok" else ""))[:140],
             "step_count": None, "count": run["runs"] or 1}

@@ -6,7 +6,7 @@ const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const evidence = process.env.TICO_REVIEW_EVIDENCE;
-const row = (id, title, owner, review_state, privateMeeting = false) => ({id, title, owner, review_state, private: privateMeeting,
+const row = (id, title, owner, review_state, privateMeeting = false) => ({id, title, owner_id: owner, review_state, private: privateMeeting,
   kind: 'meeting', status: 'done', client: privateMeeting ? 'tico-recorder' : null, source: privateMeeting ? 'granola' : 'zoom', can_edit: true, started: '2026-10-01T14:00:00Z',
   notes: 'Review the plan and next steps.', turns: [{speaker: 'Sam', start_ms: 0, text: 'The plan is ready.'}],
   participants: [{name: 'Sam'}], outbox: {doc: [], task: [], feature: []}});
@@ -19,7 +19,7 @@ async function open(browser, viewport, scheme, role = 'owner') {
     row('two', 'Private source notes', 'ana@example.com', 'pending', true), row('three', 'Follow-up review', 'ana@example.com', 'pending'),
     row('other', 'Other person confidential', 'sam@example.com', 'pending')];
   let settings = {auto_share: null, review_default: 'review', effective_auto_share: false};
-  const pending = () => rows.filter(r => r.owner === 'ana@example.com' && r.review_state === 'pending');
+  const pending = () => rows.filter(r => r.owner_id === 'ana@example.com' && r.review_state === 'pending');
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -37,7 +37,7 @@ async function open(browser, viewport, scheme, role = 'owner') {
     if (p === '/api/v2/updates/unread') return json({unread: 0, meetings_pending: pending().length});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
-    if (p === '/api/v2/setup/getting-started') return json({items: [], complete: true, dismissed: true, tour_seen: true, cards_dismissed: [], owner: role === 'owner', empty: {}});
+    if (p === '/api/v2/setup/getting-started') return json({items: [], complete: true, dismissed: true, tour_seen: true, cards_dismissed: [], owner_id: role === 'owner', empty: {}});
     if (p === '/api/meetings/sources') return json({sources: []});
     if (p === '/api/v2/meetings/granola') return json({state: 'off', connected: false});
     if (p === '/api/v2/meetings/settings') {
@@ -49,7 +49,7 @@ async function open(browser, viewport, scheme, role = 'owner') {
     }
     if (p === '/api/v2/meetings') {
       const state = url.searchParams.get('review'), q = url.searchParams.get('q') || '';
-      const list = rows.filter(r => r.review_state === state && (state === 'live' || r.owner === 'ana@example.com') && r.title.toLowerCase().includes(q.toLowerCase()));
+      const list = rows.filter(r => r.review_state === state && (state === 'live' || r.owner_id === 'ana@example.com') && r.title.toLowerCase().includes(q.toLowerCase()));
       return json({meetings: list, count: list.length, pending_count: pending().length});
     }
     if (p.endsWith('/review') && method === 'POST') {
@@ -57,7 +57,7 @@ async function open(browser, viewport, scheme, role = 'owner') {
       const bulk = p === '/api/v2/meetings/review';
       const selected = bulk ? pending().filter(r => !body.ids || body.ids.includes(r.id)) : rows.filter(r => r.id === p.split('/').at(-2));
       for (const r of selected) {
-        assert.equal(r.owner, 'ana@example.com', 'writes only target own meetings');
+        assert.equal(r.owner_id, 'ana@example.com', 'writes only target own meetings');
         r.review_state = body.action.startsWith('approve') ? 'live' : body.action === 'restore' ? 'pending' : 'dismissed';
         if ('private' in body) r.private = body.private;
       }

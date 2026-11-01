@@ -240,7 +240,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const asked = page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/api/v2/tasks'), {timeout: t(10000)});
   await page.locator('dialog.gr-dlg [data-gr-propose]').click();
   const ask = (await asked).request().postDataJSON();
-  assert.deepEqual([ask.title, ask.owner], ['Propose growth ideas', 'engineering-lead'], `${tag}: the ask goes to the lead`);
+  assert.deepEqual([ask.title, ask.owner_id], ['Propose growth ideas', 'engineering-lead'], `${tag}: the ask goes to the lead`);
   await page.locator('dialog.gr-dlg').waitFor({state: 'detached', timeout: t(5000)});
   await page.evaluate(() => { delete S.emps.find(e => e.slug === 'engineering-lead').template; });
 

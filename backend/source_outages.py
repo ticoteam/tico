@@ -56,8 +56,8 @@ def sync(c, settings):
     from . import execution, login_holds, move_retry, performance
     seen = set()
     queued = [dict(r) for r in c.execute(
-        "SELECT j.bot,count(*) n,a.runner_id,b.config FROM jobs j JOIN assignments a ON a.bot=j.bot "
-        "JOIN bot_config b ON b.bot=j.bot WHERE j.state='queued' GROUP BY j.bot,a.runner_id,b.config")]
+        "SELECT j.bot_id,count(*) n,a.runner_id,b.config FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
+        "JOIN bot_config b ON b.bot=j.bot_id WHERE j.state='queued' GROUP BY j.bot_id,a.runner_id,b.config")]
     counts = {}
     for row in queued:
         config = H._json(row['config'], {}) or {}
@@ -87,7 +87,7 @@ def sync(c, settings):
     github = {}
     # Read the latest remembered move per ticket; stale moves neither count waiters nor keep an incident open.
     cutoff = H.shift(H.now(), seconds=-int(move_retry.RETRY_FOR.total_seconds()))
-    for (task_id,) in c.execute("SELECT DISTINCT task_id FROM task_events WHERE field=? AND ts>=?",
+    for (task_id,) in c.execute("SELECT DISTINCT task_id FROM task_events WHERE field=? AND created_at>=?",
                                 (move_retry.FIELD, cutoff)).fetchall():
         row = H.task(c, task_id)
         found = move_retry.remembered(c, dict(row), H.parse_ts(H.now()))
@@ -137,8 +137,8 @@ def batch_waiters(c, bot):
     from . import wake_presets
     groups = {}
     for row in c.execute("SELECT j.*,m.conversation_id,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE j.bot=? AND j.state='queued' AND j.attempt_id IS NULL AND j.redirect=0 "
-                         "AND m.from_actor=? AND m.kind='notice' AND m.deleted_at IS NULL "
+                         "WHERE j.bot_id=? AND j.state='queued' AND j.attempt_id IS NULL AND j.redirect=0 "
+                         "AND m.sender_id=? AND m.kind='notice' AND m.deleted_at IS NULL "
                          "AND coalesce(json_extract(m.refs,'$.quiet'),0)=0 "
                          "AND coalesce(json_extract(m.refs,'$.command'),0)=0 "
                          "ORDER BY j.created_at,j.rowid", (bot, H.KEEPER)).fetchall():

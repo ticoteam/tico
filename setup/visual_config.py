@@ -407,7 +407,7 @@ def worker(request, root=ROOT):
         journal = load(root)
         if journal["current"] != request["operation_id"] or journal["operations"][journal["current"]]["request"] != request:
             raise wire.Pending("operation_missing")
-        journal["operations"][journal["current"]]["owner"] = {"process": process_identity(os.getpid()),
+        journal["operations"][journal["current"]]["owner_id"] = {"process": process_identity(os.getpid()),
                                                                  "deadline": int(time.time()) + 150}
         save(root, journal)
         return reconcile(root, Docker(root), journal, journal["operations"][journal["current"]])
@@ -444,7 +444,7 @@ def status(root=ROOT):
     if operation:
         result["operation"] = {"operation_id": operation["request"]["operation_id"],
                                "revision": operation["request"]["revision"], "stage": operation["stage"],
-                               "mutation_pending": operation["mutation_pending"], "owner": operation.get("owner"),
+                               "mutation_pending": operation["mutation_pending"], "owner_id": operation.get("owner_id"),
                                "saved_configuration": hashlib.sha256(read_file(root / ".env", 262144, private=True)).hexdigest()
                                                       == operation["desired_sha256"]}
         # Current observations are diagnostic only; status never emits a proof

@@ -17,7 +17,7 @@ function slashBranchAllowed(slug) {
   const bot = botRow(slug);
   const original = bot?.shared_from || slug;
   return !!botRow(original)?.shared
-    && !(S.emps || []).some(e => e.shared_from === original && e.operator === S.me?.id);
+    && !(S.emps || []).some(e => e.shared_from === original && e.owner_id === S.me?.id);
 }
 function slashCommands(slug) {
   const state = V2C?.slug === slug ? V2C : null;

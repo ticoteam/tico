@@ -80,7 +80,7 @@ def fingerprint(c, row):
     links = sorted((p["id"], p.get("checks") or "", str((H._json(p.get("detail"), {}) or {}).get("head_sha") or ""),
                     json.dumps((H._json(p.get("detail"), {}) or {}).get("checks") or {}, sort_keys=True))
                    for p in review_gate.links(c, row))
-    newest = c.execute("SELECT max(rowid) FROM messages WHERE conversation_id=? AND from_actor<>? AND deleted_at IS NULL",
+    newest = c.execute("SELECT max(rowid) FROM messages WHERE conversation_id=? AND sender_id<>? AND deleted_at IS NULL",
                        (row.get("conversation_id") or "", H.KEEPER)).fetchone()[0]
     # Another wait that keeps a gate-held ticket on Blocked (a person's child, a blocker) clears without touching the
     # note or the PR, so whether one is live is part of what a retry waits to change.
@@ -110,7 +110,7 @@ def remember(c, actor, notice):
 
 def _latest(c, task_id):
     return c.execute("SELECT rowid, * FROM task_events WHERE task_id=? AND field IN ('step', ?) "
-                     "ORDER BY ts DESC, rowid DESC LIMIT 1", (task_id, FIELD)).fetchone()
+                     "ORDER BY created_at DESC, rowid DESC LIMIT 1", (task_id, FIELD)).fetchone()
 
 
 def remembered(c, row, at=None):
@@ -138,7 +138,7 @@ def pending(c, at=None):
     at = at or datetime.now(timezone.utc)
     since = (at - RETRY_FOR).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     out = []
-    for (task_id,) in c.execute("SELECT DISTINCT task_id FROM task_events WHERE field=? AND ts>=?",
+    for (task_id,) in c.execute("SELECT DISTINCT task_id FROM task_events WHERE field=? AND created_at>=?",
                                 (FIELD, since)).fetchall():
         row = H.task(c, task_id)
         found = remembered(c, row, at)
@@ -149,9 +149,9 @@ def pending(c, at=None):
         if failed and at - failed < OUTAGE_EVERY:
             continue                # a retry that raised waits, whatever refused the move
         if detail.get("outage"):
-            tried = H.parse_ts(detail.get("at") or last["ts"])
+            tried = H.parse_ts(detail.get("at") or last["created_at"])
             if tried is None:
-                raise ValueError(f"unreadable retry time: {detail.get('at') or last['ts']!r}")
+                raise ValueError(f"unreadable retry time: {detail.get('at') or last['created_at']!r}")
             if at - tried < OUTAGE_EVERY:
                 continue
         elif fingerprint(c, row) == detail.get("seen"):
@@ -202,7 +202,7 @@ def retry(store, service, row, detail):
                 {**detail, "seen": fingerprint(c, now_row), "at": H.now(), "state": "waiting"}, sort_keys=True))
             return False
         c.execute("RELEASE move_retry")
-        H._write_message(c, H.KEEPER, now_row["owner"],
+        H._write_message(c, H.KEEPER, now_row["owner_id"],
                          f"Tico moved this ticket to {detail['step']}: what refused the move earlier "
                          f"({CLEARS['outage' if detail.get('outage') else detail.get('kind')] if detail.get('kind') in CLEARS else 'the gate'}) "
                          "has cleared.",

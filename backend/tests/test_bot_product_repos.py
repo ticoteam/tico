@@ -26,10 +26,10 @@ def ready(api, gh, administration="write"):
     runner_token(api, "cmo")
     with api.app_state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)", (encode({"email": "ana@acme.example"}),))
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created_at) "
+        c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) "
                   "VALUES('m-cmo','keeper','bot:cmo','request','Make the services repository',?)", (H.now(),))
-        job = c.execute("SELECT id FROM jobs WHERE bot='cmo'").fetchone()["id"]
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
+        job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()["id"]
+        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'x-cmo','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
 
 
@@ -66,7 +66,7 @@ def test_a_bot_with_no_setting_creates_a_private_repo_gets_write_and_the_owner_i
         assert event["actor"] == "bot:cmo"
         assert json.loads(event["detail"])["bot_access"] == "write"
         assert json.loads(event["detail"])["owner_notified"] is True
-        notices = c.execute("SELECT from_actor,body FROM messages WHERE to_actor='human:ana' AND kind='notice'").fetchall()
+        notices = c.execute("SELECT sender_id,body FROM messages WHERE recipient_id='human:ana' AND kind='notice'").fetchall()
         assert [n["body"] for n in notices] == [
             "cmo created private repo tico-services (Acme/tico-services). cmo has write access to it."]
 
@@ -75,7 +75,7 @@ def test_a_bot_with_no_setting_creates_a_private_repo_gets_write_and_the_owner_i
     assert replay.status_code == 200 and replay.json() == result
     assert len(creates(gh)) == 1
     with api.app_state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM messages WHERE to_actor='human:ana' AND kind='notice'").fetchone()[0] == 1
+        assert c.execute("SELECT COUNT(*) FROM messages WHERE recipient_id='human:ana' AND kind='notice'").fetchone()[0] == 1
         assert c.execute("SELECT COUNT(*) FROM events WHERE action='github.product_repo_created'").fetchone()[0] == 1
 
 
@@ -163,7 +163,7 @@ def test_a_read_only_all_repos_creator_gets_write_to_the_new_repo_and_keeps_read
     with api.app_state.store.read() as c:
         detail = json.loads(c.execute("SELECT detail FROM events WHERE action='github.product_repo_created'").fetchone()[0])
         assert detail["bot_access"] == "write" and detail["moved_to_chosen"] is True
-        notice = c.execute("SELECT body FROM messages WHERE to_actor='human:ana' AND kind='notice'").fetchone()[0]
+        notice = c.execute("SELECT body FROM messages WHERE recipient_id='human:ana' AND kind='notice'").fetchone()[0]
     assert ("cmo has write access to it. It was on All ticked repos with read access, so it is now on Chosen repos: "
             "read on the 1 repository it reached and write on this one.") in notice
     assert notice.endswith(made.json()["note"].removeprefix("Created as a private empty repository. "))
@@ -266,7 +266,7 @@ def nothing_made(api, gh):
         assert c.execute("SELECT COUNT(*) FROM github_product_repo_operations").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM events WHERE action='github.product_repo_created'").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM repositories WHERE full_name='Acme/tico-services'").fetchone()[0] == 0
-        assert c.execute("SELECT COUNT(*) FROM messages WHERE to_actor='human:ana' AND kind='notice'").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM messages WHERE recipient_id='human:ana' AND kind='notice'").fetchone()[0] == 0
 
 
 def test_an_owner_origin_botops_turn_cannot_preview_or_create_a_product_repo(api, gh):
@@ -275,7 +275,7 @@ def test_an_owner_origin_botops_turn_cannot_preview_or_create_a_product_repo(api
     botops_turn(api)
     with api.app_state.store.transaction() as c:
         conversation = rooms.personal_room(c, "human:ana", "botops")
-        c.execute("UPDATE messages SET from_actor='human:ana',conversation_id=?,kind='say',"
+        c.execute("UPDATE messages SET sender_id='human:ana',conversation_id=?,kind='say',"
                   "body='Make the tico-services repository' WHERE id='m-botops'", (conversation["id"],))
         c.execute("INSERT INTO attempt_conversations VALUES('a2',?)", (conversation["id"],))
     turn = {**auth("botops-test"), "X-Tico-On-Behalf-Of": "turn"}

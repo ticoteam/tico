@@ -41,7 +41,7 @@ def as_manager(api):
 
 def quiet_task(api, title="Reconcile the Acme invoices", private=False, owner="bot:coo"):
     """A task its bot let go quiet three hours ago, with nothing running for the bot."""
-    made = api.post("/api/v2/tasks", json={"title": title, "body": "Details for " + title, "owner": owner}, headers=signed_in())
+    made = api.post("/api/v2/tasks", json={"title": title, "body": "Details for " + title, "owner_id": owner}, headers=signed_in())
     assert made.status_code == 200, made.text
     made = made.json()["task"]
     with api.app.state.store.transaction() as c:
@@ -58,7 +58,7 @@ def report(api):
 
 def checks(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,title,body,status FROM tasks WHERE owner=? ORDER BY created_at", (TM.ACTOR,))]
+        return [dict(r) for r in c.execute("SELECT id,title,body,status FROM tasks WHERE owner_id=? ORDER BY created_at", (TM.ACTOR,))]
 
 
 def test_it_is_built_in_active_and_outside_the_org_chart(environment):
@@ -74,7 +74,7 @@ def test_an_empty_report_opens_no_task_and_wakes_nothing(environment):
     assert report(api)["words"] == "Nothing to do"
     assert checks(api) == []
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot=?", (TM.SLUG,)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (TM.SLUG,)).fetchone()[0] == 0
 
 
 def test_a_quiet_task_opens_one_check_that_a_later_report_absorbs_and_a_private_task_never_appears(environment):

@@ -133,8 +133,8 @@ def ready(stream):
 def test_a_task_change_reaches_another_person_signed_and_never_a_non_party(api, live):
     ana, cara = live(), live("cara-test")
     ready(ana), ready(cara)
-    task = post(api, "tasks", {"owner": "ben", "title": "Review the launch copy", "body": "Please."})
-    secret = post(api, "tasks", {"owner": "ben", "title": "Review the salary bands", "body": "Please.", "private": True})
+    task = post(api, "tasks", {"owner_id": "ben", "title": "Review the launch copy", "body": "Please."})
+    secret = post(api, "tasks", {"owner_id": "ben", "title": "Review the salary bands", "body": "Please.", "private": True})
     moved = post(api, "tasks/" + task["id"], {"version": task["version"], "status": "doing"}, token="ben-test")
     seen = cara.until(lambda e: e["event"] == "tasks" and e["data"]["id"] == task["id"]
                       and e["data"]["task"]["status"] == "doing")
@@ -148,10 +148,10 @@ def test_a_task_change_reaches_another_person_signed_and_never_a_non_party(api, 
 
 @pytest.mark.slow
 def test_resume_from_after_or_last_event_id_sends_only_what_came_since(api, live):
-    first = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    first = post(api, "tasks", {"owner_id": "ben", "title": "Draft the agenda", "body": "Please."})
     with api.app.state.store.read() as c:
         cursor = E.latest(c)
-    second = post(api, "tasks", {"owner": "ben", "title": "Book the room", "body": "Please."})
+    second = post(api, "tasks", {"owner_id": "ben", "title": "Book the room", "body": "Please."})
     for stream in (live("ben-test", f"?topics=tasks&after={cursor}"),
                    live("ben-test", "?topics=tasks&after=0", {"Last-Event-ID": str(cursor)})):
         got = stream.until(task_event(second["id"]))
@@ -163,13 +163,13 @@ def test_resume_from_after_or_last_event_id_sends_only_what_came_since(api, live
 def test_task_and_party_send_only_those_tasks_and_a_partys_including_one_moved_away(api, live):
     with api.app.state.store.read() as c:
         cursor = E.latest(c)
-    bens = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
-    caras = post(api, "tasks", {"owner": "cara", "title": "Book the room", "body": "Please."})
-    handed = post(api, "tasks", {"owner": "ben", "title": "Order the lunch", "body": "Please."})
-    handed = post(api, "tasks/" + handed["id"], {"version": handed["version"], "owner": "cara"})
-    last = post(api, "tasks", {"owner": "cara", "title": "Print the badges", "body": "Please."})
+    bens = post(api, "tasks", {"owner_id": "ben", "title": "Draft the agenda", "body": "Please."})
+    caras = post(api, "tasks", {"owner_id": "cara", "title": "Book the room", "body": "Please."})
+    handed = post(api, "tasks", {"owner_id": "ben", "title": "Order the lunch", "body": "Please."})
+    handed = post(api, "tasks/" + handed["id"], {"version": handed["version"], "owner_id": "cara"})
+    last = post(api, "tasks", {"owner_id": "cara", "title": "Print the badges", "body": "Please."})
     party = live("ana-test", f"?topics=tasks&after={cursor}&party=human:ben")
-    party.until(lambda e: e["event"] == "tasks" and e["data"]["id"] == handed["id"] and e["data"]["task"]["owner"] == "human:cara")
+    party.until(lambda e: e["event"] == "tasks" and e["data"]["id"] == handed["id"] and e["data"]["task"]["owner_id"] == "human:cara")
     party.drain(1.0)
     sent = {e["data"]["id"] for e in party.seen if e["event"] == "tasks"}
     assert sent == {bens["id"], handed["id"]}
@@ -182,11 +182,11 @@ def test_task_and_party_send_only_those_tasks_and_a_partys_including_one_moved_a
 
 @pytest.mark.slow
 def test_a_client_further_behind_than_the_log_keeps_is_told_to_reset(api, live):
-    post(api, "tasks", {"owner": "ben", "title": "Clear the old work", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ben", "title": "Clear the old work", "body": "Please."})
     with api.app.state.store.read() as c:
         old = E.latest(c)
     assert E.sweep(api.app.state.store, H.shift(H.now(), hours=E.KEEP_HOURS + 1)) > 0
-    post(api, "tasks", {"owner": "ben", "title": "Plan the new work", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ben", "title": "Plan the new work", "body": "Please."})
     stream = live("ben-test", "?after=1")
     reset = stream.until(topic("reset"))
     assert reset["data"]["seq"] > old
@@ -207,7 +207,7 @@ def test_a_stream_ends_with_expired_when_sign_in_lapses_and_ends_on_its_own(api,
         return real(headers, *args, **kwargs)
     monkeypatch.setattr(api.app.state.auth, "authenticate", lapsed)
     # Re-checked at the next read (or keepalive), whichever comes first.
-    post(api, "tasks", {"owner": "ben", "title": "After sign-out", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ben", "title": "After sign-out", "body": "Please."})
     stream.until(topic("expired"))
     assert "After sign-out" not in json.dumps(stream.seen)
     monkeypatch.setattr(api.app.state.auth, "authenticate", real)
@@ -330,7 +330,7 @@ def test_a_task_link_rewritten_with_the_same_values_logs_nothing_and_a_change_to
     a worktree heartbeat rewrote closed tasks' links every few minutes, and each write rebuilt every open board."""
     store = api.app.state.store
     setup_attempt(api)
-    task = post(api, "tasks", {"owner": "ben", "title": "Review the links", "body": "Please."})
+    task = post(api, "tasks", {"owner_id": "ben", "title": "Review the links", "body": "Please."})
     with store.transaction() as c:
         c.execute("INSERT INTO task_links(id,task_id,kind,url,state,computer_id,created_at) "
                   "VALUES('wt1',?,'worktree','u','present','rc1',?)", (task["id"], H.now()))
@@ -405,7 +405,7 @@ def test_a_read_with_tasks_and_bots_asks_for_the_viewers_bot_access_once(api, mo
     auth, store = api.app.state.auth, api.app.state.store
     with store.read() as c:
         cursor = E.latest(c)
-    post(api, "tasks", {"owner": "ben", "title": "Count the asks", "body": "Please."})
+    post(api, "tasks", {"owner_id": "ben", "title": "Count the asks", "body": "Please."})
     with store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
     real, asked = auth.bot_accesses, []

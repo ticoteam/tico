@@ -85,7 +85,7 @@ def later(c, bot, event):
 
 def held(c, bot, key, task):
     """Whether this key's task is a held ticket that has not been handed to the bot."""
-    if not task or task["owner"] == "bot:" + bot:
+    if not task or task["owner_id"] == "bot:" + bot:
         return False
     row = c.execute("SELECT held FROM watcher_triage WHERE bot=? AND key=?", (bot, key)).fetchone()
     return bool(row and row["held"])
@@ -93,9 +93,9 @@ def held(c, bot, key, task):
 
 def person_for(c, bot):
     """Who sees a held ticket: the bot's operator, else the default person."""
-    row = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone() \
+    row = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (bot,)).fetchone() \
         if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bot_config'").fetchone() else None
-    for pid in ((row["operator"] if row else "") or "", H.default_human(c)):
+    for pid in ((row["owner_id"] if row else "") or "", H.default_human(c)):
         if pid and H.human(c, pid):
             return H.human_actor(pid)
     return None

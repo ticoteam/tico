@@ -13,7 +13,7 @@ def hook(api, url, body=b'{"order": 42}', headers=None):
 
 def listener(api, trigger_id, bot="ops", text="Ship it.", name="New order"):
     """An automation on the webhook whose Bot turn hands `bot` the call, the way a routine on `webhook.<id>` did."""
-    return post(api, "automations", {"name": name, "owner": "person:ana", "trigger": {"type": "webhook", "id": trigger_id},
+    return post(api, "automations", {"name": name, "owner_id": "person:ana", "trigger": {"type": "webhook", "id": trigger_id},
                                      "steps": [{"id": "work", "type": "bot_turn", "bot": bot,
                                                 "prompt": text + " {{webhook.content}}"}]})["id"]
 
@@ -50,7 +50,7 @@ def test_a_delivery_runs_each_listening_automation_once_and_only_with_the_secret
     assert again.status_code == 200 and again.json()["duplicate"] is True
     assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1
     tasks = turns(api)
-    assert len(tasks) == 1 and tasks[0]["owner"] == "bot:ops"
+    assert len(tasks) == 1 and tasks[0]["owner_id"] == "bot:ops"
     body = tasks[0]["body"]
     assert body.startswith("Ship it.") and '"order": 42' in body and "<data n=" in body
 

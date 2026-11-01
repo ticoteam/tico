@@ -33,13 +33,13 @@ from .store import Problem
 CLASSES = ("direct", "confirm", "person")
 # Who may change a setting: the check made before the route's own, so a refusal names who can.
 WHO = {
-    "owner": "the owner",
+    "owner_id": "the owner",
     "admin": "the owner or an admin",
     "mover": "the owner and people on a team that moves tasks",
     "bot": "the bot's owners, its operator, the people above it, an admin or the owner",
     "self": "each person, for themselves",
     "creator": "the person who made it, an admin or the owner",
-    "operator": "the computer's operator, an admin or the owner",
+    "owner_id": "the computer's operator, an admin or the owner",
     "anyone": "anyone on the team",
 }
 TARGETS = ("bot", "computer", "person", "id")

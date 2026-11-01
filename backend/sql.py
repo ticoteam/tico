@@ -107,7 +107,7 @@ DERIVED = {
                      outcome, did_nothing, rotated
               FROM {turns} WHERE started_at IS NOT NULL
               UNION ALL
-              SELECT coalesce(a.started_at, a.created_at), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+              SELECT coalesce(a.started_at, a.created_at), a.bot_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
               FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
         GROUP BY 1, 2, 3, 4"""),
     # Runs per week, bot and wake rule (backend/rules.py): the rule that woke the run, with its tokens and how many did
@@ -341,7 +341,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
         "approvals": ("(task_id IS NULL OR " + by_task + ") AND " + by_message + " AND (" +
-                      ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE to_actor={me})") + ")"),
+                      ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
         "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"), "bot_status_history": bots_visible("bot"),
         "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_control": bots_visible("bot"),
@@ -418,7 +418,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "market_pages": "1",
         "docs": "id IS NOT NULL", "doc_versions": "doc_id IN (SELECT id FROM docs)",
         "linked_docs": "id IS NOT NULL",
-        "bot_files": (file_gate + " AND " + (f"bot={q(H.actor_id(who.actor))} AND " if bot else "")
+        "bot_files": (file_gate + " AND " + (f"bot={q(H.actor_id(who.actor))} AND " if bot_id else "")
                       + f"(CASE WHEN scope LIKE 'task:%' THEN substr(scope,6) IN (SELECT id FROM tasks) "
                         "WHEN scope LIKE 'conversation:%' THEN substr(scope,14) IN (SELECT id FROM conversations) "
                         f"ELSE {bots_visible('bot')} END)"),
@@ -428,8 +428,8 @@ def guarded(c, auth, who, inner, function, columns=None):
         "blobs": blob_gate + " AND (" + ("" if bot else f"owner={me} OR ") +
                  "id IN (SELECT blob_id FROM message_assets) OR id IN (SELECT blob_id FROM task_assets) "
                  "OR id IN (SELECT blob_id FROM media_assets))",
-        "archives": "1" if owner else "0" if bot else f"owner={me}",
-        "connector_snapshots": "1" if owner else "0" if bot else f"owner={q(person)}",
+        "archives": "1" if owner_id else "0" if bot else f"owner={me}",
+        "connector_snapshots": "1" if owner_id else "0" if bot else f"owner={q(person)}",
         "service_jobs": "1" if owner else "0" if bot else f"requested_by={me}",
         # Mail copies are read through /api/v2/mail. SQL stays owner-only.
         "mail_mailboxes": "1" if owner else "0",
@@ -443,7 +443,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         rules[table] += " AND (task_id IS NULL OR " + by_task + ")"
         # Untagged free-form status can retain the previous private turn's content.
         rules[table] += (" AND NOT EXISTS (SELECT 1 FROM " + inner("tasks") +
-                         " t WHERE (t.owner='bot:'||bot OR t.requester='bot:'||bot) "
+                         " t WHERE (t.owner_id='bot:'||bot_id OR t.requester_id='bot:'||bot_id) "
                          "AND (t.private IS NULL OR t.private<>0) AND NOT " +
                          function("task") + "(t.id))")
     for table in ("docs", "doc_versions", "linked_docs", "market_pages"):
@@ -850,11 +850,11 @@ def install_sql(app, store, auth):
                 principal = who
                 if who.role == "runner":
                     # Only a personal Mac reads SQL with its registering person's rights.
-                    row = c.execute("SELECT operator,platform FROM runners WHERE id=?", (who.runner_id,)).fetchone()
+                    row = c.execute("SELECT owner_id,platform FROM runners WHERE id=?", (who.runner_id,)).fetchone()
                     if not str(row["platform"] or "").startswith("darwin"):
                         raise Problem("forbidden", "Only a Mac's runner credential reads as its operator; "
                                                    "use a personal API token", 403)
-                    principal = auth.identity_for_actor(c, "human:" + row["operator"])
+                    principal = auth.identity_for_actor(c, "human:" + row["owner_id"])
                     detail["as"] = principal.actor
                 cap, seconds = LIMITS[principal.role]
                 if body.max_rows:

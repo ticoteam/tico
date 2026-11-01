@@ -110,7 +110,7 @@ def run_case(server, case, owner, quiet=60, timeout=900):
                 continue
             seen.add(message["id"])
             last = time.monotonic()
-            if message["from_actor"] == f"bot:{BOT}":
+            if message["sender_id"] == f"bot:{BOT}":
                 replies.append(message["body"])
     observed = observe(server, aid, owner) if aid else made(server, before, owner)
     return {**checker.check_case(case, observed), "replies": replies, "observed": observed}
