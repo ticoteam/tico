@@ -90,7 +90,7 @@ def test_a_checkout_with_changes_is_refused_and_left_alone(repos):
     (checkout / "app.py").write_text("my local edit")
     before = head(checkout)
     result, calls = run_apply(checkout, state)
-    assert result["state"] == "blocked" and "1 changed file" in result["error"] and "(app.py)" in result["error"]
+    assert result["state"] == "blocked" and "1 changed file" in result["error"] and result["error"].endswith("updates itself: app.py")
     assert (checkout / "app.py").read_text() == "my local edit" and head(checkout) == before
     assert calls.restarts == 0 and ru.read_status(state)["state"] == "blocked"
     assert sh(checkout, "git", "branch", "--show-current") == "main"
@@ -106,7 +106,7 @@ def test_a_blocked_update_names_the_first_three_changed_files(repos):
     result, calls = run_apply(checkout, state)
     error = result["error"]
     assert result["state"] == "blocked" and "5 changed files" in error
-    assert "(notes/a.txt, notes/b.txt, notes/c.txt, and 2 more)" in error
+    assert error.endswith("updates itself: notes/a.txt, notes/b.txt, notes/c.txt, and 2 more")
     assert "notes/d.txt" not in error and "notes/e.txt" not in error and calls.restarts == 0
 
 

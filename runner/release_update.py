@@ -336,8 +336,9 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
         # "XY path" lines: the status letters and the space come off; a rename keeps its "old -> new" as it is.
         named = ", ".join(line[3:] for line in dirty[:3])
         more = f", and {len(dirty) - 3} more" if len(dirty) > 3 else ""
-        return say("blocked", f"the checkout has {len(dirty)} changed file{'s' if len(dirty) != 1 else ''} "
-                              f"({named}{more}); commit or stash them and the runner updates itself")
+        # The names go last: say() cuts the error at 300 characters, and the instruction must survive that.
+        return say("blocked", f"the checkout has {len(dirty)} changed file{'s' if len(dirty) != 1 else ''}; "
+                              f"commit or stash them and the runner updates itself: {named}{more}")
     fetched = g("fetch", "--quiet", "origin", f"refs/tags/{tag}:refs/tags/{tag}", timeout=120)
     if fetched.returncode:
         return say("failed", fetched.stderr if disk_space_error(fetched.stderr) else
