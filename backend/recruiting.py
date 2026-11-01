@@ -84,6 +84,8 @@ LETTERS = frozenset(short for _, short in SHORT)
 def _name_words(text):
     """(stem, word) for each word of a job's name, two letters and up: "QA", "HR" and "UX" name the work."""
     text = str(text or "").lower().replace("'", "")
+    # What follows the job says how it is held, not what it is: "UX Designer (Contract)", "Rust engineer - remote".
+    text = re.split(r"\s+[-\u2013\u2014|]\s+|,|\|", re.sub(r"\([^)]*\)", " ", text))[0]
     for full, short in SHORT:
         text = re.sub(rf"\b{full}\b", lambda found, short=short: f"{short} {found.group(0)}", text)
     text = re.sub(r"\baccounting\b", "bookkeeping", text)      # the books, not a client account ("Account Manager")
@@ -103,7 +105,9 @@ def _kind(title):
     words = [word for stem, word in _name_words(title) if stem not in RANKS]
     if not words or words[-1] not in ROLE_WORDS:
         return ""
-    return "representative" if words[-1] in ("rep", "reps") else _name_stem(words[-1])
+    # A rep is a representative, and a developer the same kind of job as an engineer (the catalog names engineers).
+    return {"rep": "representative", "reps": "representative", "developer": "engineer",
+            "developers": "engineer"}.get(words[-1]) or _name_stem(words[-1])
 
 
 def _work(title):
