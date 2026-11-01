@@ -3734,7 +3734,7 @@ class Execution:
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,
                             # The thread's root and audience class key the turn's session (clients/sessions.py).
                             # A message in a sub-thread names the message it hangs off: the runner sends it back
-                            # with the completion, and the reply lands in that sub-thread (threads.reply_destination).
+                            # with the completion, and the reply lands in that sub-thread (Execution._say_reply).
                             "message": ({**msg, "parent_message_id": (conv or {}).get("parent_message_id")}
                                         if msg else msg),
                             "conversation": thread_payload(c, conv, msg), "task": task,
