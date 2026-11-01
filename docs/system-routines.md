@@ -39,6 +39,7 @@ The list refreshes when you open the tab and at most once a minute while it stay
 |---|---|---|
 | Task rule | Members of its department, including humans and bots in nested teams; the owner or an admin for any department | On or off, **Edit**, and schedule presets |
 | **Stale ticket review**, **Nightly learnings**, **Still wanted?**, **KPI stale asks**, **Ask go-ahead** | Owner or admin | On or off, schedule presets, **Run now** |
+| **Nightly memory tidy** | Owner or admin | On or off, schedule preset, **Pilot list** |
 | **Health scan** | Owner only | On or off, schedule presets, **Run now** |
 | **Task Manager report** | Owner or admin | On or off, schedule presets, **Run now** |
 | **Start fresh when the topic changes**, **Stalled task check** | Owner or admin | On or off |
@@ -58,12 +59,23 @@ Choose from the presets offered on the row:
 | **Task Manager report** | Hourly on weekdays 08:00 to 18:00 (the default), Hourly, Every 4 hours, Daily at a time |
 | **Stale ticket review** | Hourly, Every 4 hours, Daily at a time |
 | **Nightly learnings** | Nightly at a time; initially 03:00 |
+| **Nightly memory tidy** | Nightly at a time; initially 03:30 |
 
 Daily times use Pacific time. Leave the time field or press Enter to save it. These rows offer no cron expressions or custom intervals.
 
 **Run now** appears only on the seven scheduled built-ins in the permissions table. Switch the job on first. It runs through the same checks and caps as its scheduled run, then shows the result on the row. A job asking Decide shows **Running…** while it works. Task rules, **Start fresh when the topic changes** and **Stalled task check** have no **Run now** button.
 
 Nightly learnings runs once per night. A failed, capped, or unconfigured night waits until the next night unless an authorized person uses **Run now**.
+
+## Nightly memory tidy pilot
+
+**Nightly memory tidy** is a pilot for up to three bots. It is off by default. An owner or admin turns it on with its
+switch in **Settings > System**. Then the **Pilot list** button names each bot and gives it a pass model and a reasoning
+effort. The only effort offered is low. The list offers only models enabled in **Settings > Computers > Models**, and it
+never offers a Haiku-tier model. Saving the list changes no bot's everyday or task model.
+
+No pass runs yet. A scheduled night starts none, and **Run now** is disabled with the reason "Nightly memory tidy passes
+are not available yet". The pilot dialog says it stops at $50; no spend happens until a pass runs.
 
 ## Task rules
 
@@ -131,6 +143,7 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Books watch** | Reads runway, unusual spend, duplicate charges and price increases in plain code and opens one "Watch" task for the [Bookkeeper](bookkeeper.md) only when something new is found. Not a switch: the Bookkeeper's pause stops it. | Daily |
 | **Rules digest** | Once a week, opens the Bookkeeper's "Rules digest" task for the posting rules made in the last seven days. No new rules is a quiet run. Not a switch. | Weekly |
 | **Nightly learnings** (AI) | Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember. See [Learnings](learnings.md). | Nightly at 03:00 |
+| **Nightly memory tidy** (AI, pilot, off) | Tidies the memory of the pilot bots, once a pass exists. See [Nightly memory tidy pilot](#nightly-memory-tidy-pilot). | Nightly at 03:30, when on |
 | **Due reminders** | Tells a bot when one of its tasks reaches its due time. | Every 10 seconds |
 | **Ask go-ahead** | A bot's question past its deadline goes ahead on its default answer, or expires. | Hourly |
 | **Approval expiry** | Takes approvals and asks nobody will act on out of Needs you. | Hourly |

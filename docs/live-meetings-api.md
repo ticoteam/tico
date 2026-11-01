@@ -121,6 +121,12 @@ meeting id). It selects the meeting directly, including an ended meeting. The li
 access: normal sign-in and meeting visibility checks still apply. The filed meeting link remains
 `<instance-base>/#/meetings?meeting=<imported_meeting_id>`.
 
+The Tico Recorder's **Open in Tico** button uses this link. The button shows for a meeting saved to a Tico instance,
+including paused and ended meetings. It is hidden for a local-only meeting or a removed connection. The Recorder's
+sharing popover states who can see the meeting as it happens: "Everyone signed in to <company> can see this meeting as
+it happens" for a team meeting, and "Only you and people you add in Tico can see this meeting" for a private one. The
+notice follows the server's confirmed visibility; a refused change keeps the notice it had.
+
 ## Events
 
 SSE frames use `id: <event_id>`, `event: <type>`, and JSON `data:`. These payloads are the v1 event
