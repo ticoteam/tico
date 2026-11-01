@@ -247,8 +247,6 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS messages_to_delivered ON messages(to_actor, delivered_at);
 CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id, created);
-CREATE INDEX IF NOT EXISTS tasks_owner_status ON tasks(owner, status);
-CREATE INDEX IF NOT EXISTS tasks_requester_status ON tasks(requester, status);
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS deltas_turn ON deltas(turn_id, seq);
 CREATE INDEX IF NOT EXISTS refusals_actor_ts ON refusals(actor, ts);
@@ -950,6 +948,16 @@ ALTER TABLE kpis ADD COLUMN loop_step INTEGER;
 """
 
 
+# Redundant task indexes, dropped from every database that still has them. The covering tasks_owner_status_cover and
+# tasks_requester_status_cover answer every owner and requester status read, and tasks_private is a strict prefix of
+# tasks_private_parties (same WHERE), so these three only add write cost.
+TASK_INDEX_PRUNE_SCHEMA = """
+DROP INDEX IF EXISTS tasks_owner_status;
+DROP INDEX IF EXISTS tasks_requester_status;
+DROP INDEX IF EXISTS tasks_private;
+"""
+
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -971,7 +979,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
               LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
               POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA,
-              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA]
+              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA,
+              TASK_INDEX_PRUNE_SCHEMA]
 
 
 class Refused(Exception):
@@ -1415,11 +1424,9 @@ def migrate(conn, adopt_legacy=False):
     add_column(conn, "tasks", "rule_due_id", "TEXT")
     task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
     if "private" in task_columns:
-        # The few private tasks, which every privacy-checked read loads (backend/privacy_index.py).
-        conn.execute("CREATE INDEX IF NOT EXISTS tasks_private ON tasks(id) WHERE private IS NOT 0")
         if "guest" in task_columns:
-            # That id-only index still fetches each private task's body. privacy_index reads only these
-            # columns, and the predicate matches its query word for word, so the scan never opens a body.
+            # The few private tasks, which every privacy-checked read loads (backend/privacy_index.py). The predicate
+            # matches privacy_index's query word for word and the index holds only these columns, so no body is read.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_parties ON tasks("
                          "id, requester, owner, guest, private) WHERE private IS NOT 0")
             # A bot's private tasks for its status rows (task_privacy.status_tasks_sql) with the two columns it reads

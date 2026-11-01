@@ -105,7 +105,7 @@ class Schema(HubCase):
         self.assertLessEqual({"messages_to_delivered", "messages_conversation",
                               "messages_reply_kind", "messages_from_kind", "tasks_carried_by",
                               "messages_pending_conversation", "bot_file_versions_blob_media",
-                              "tasks_owner_status", "tasks_requester_status", "events_ts"},
+                              "tasks_owner_status_cover", "tasks_requester_status_cover", "events_ts"},
                              indexes)
 
     def test_existing_database_gains_reply_and_carried_task_indexes(self):
@@ -128,6 +128,20 @@ class Schema(HubCase):
                  "AND answered_by IS NULL AND deleted_at IS NULL", "messages_pending_conversation")):
             plan = " ".join(r[3] for r in migrated.execute("EXPLAIN QUERY PLAN " + query))
             self.assertIn(index, plan)
+
+    def test_existing_database_drops_the_redundant_task_indexes(self):
+        # A database published before TASK_INDEX_PRUNE_SCHEMA still has the two plain status indexes and tasks_private.
+        self.conn.execute("CREATE INDEX tasks_owner_status ON tasks(owner, status)")
+        self.conn.execute("CREATE INDEX tasks_requester_status ON tasks(requester, status)")
+        self.conn.execute("CREATE INDEX tasks_private ON tasks(id) WHERE private IS NOT 0")
+        self.conn.execute(f"PRAGMA user_version={len(H.MIGRATIONS) - 1}")
+        self.conn.commit()
+        H.migrate(self.conn)
+        indexes = {r["name"] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        self.assertFalse({"tasks_owner_status", "tasks_requester_status", "tasks_private"} & indexes)
+        self.assertLessEqual({"tasks_owner_status_cover", "tasks_requester_status_cover", "tasks_private_parties"},
+                             indexes)
+        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
 
     def test_existing_database_gains_the_media_version_lookup_index(self):
         self.conn.execute("DROP INDEX bot_file_versions_blob_media")

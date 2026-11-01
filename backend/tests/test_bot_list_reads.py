@@ -305,8 +305,8 @@ def test_status_task_read_seeks_each_bots_tasks_on_a_big_task_table(api):
     with store.read_transaction() as c:
         plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + status_tasks_sql(f" IN ({marks})"),
                                             [*("bot:" + b for b in bots)] * 4)]
-    assert any(line.startswith("SEARCH tasks USING") and "tasks_owner_status" in line for line in plan), plan
-    assert any(line.startswith("SEARCH tasks USING") and "tasks_requester_status" in line for line in plan), plan
+    assert any(line.startswith("SEARCH tasks USING") and "tasks_owner_status_cover" in line for line in plan), plan
+    assert any(line.startswith("SEARCH tasks USING") and "tasks_requester_status_cover" in line for line in plan), plan
     assert not [line for line in plan if line.startswith("SCAN tasks") and "tasks_private_" not in line], plan
 
 
