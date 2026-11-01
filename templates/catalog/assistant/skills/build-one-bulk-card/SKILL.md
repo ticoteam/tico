@@ -13,7 +13,7 @@ description: "Puts several changes a human must confirm onto one Confirm card, g
 
 ## Steps
 
-1. Read the list from the record: `hub task list` and `hub task list --all` for their tasks, and the questions and approvals put to them. Work from what is there, not from memory.
+1. Read the list from the record: `hub message list` for the approvals and questions put to them (an approval's id is its notice's `refs.approval`), and `hub task list` or `hub task list --all` for their tasks. Work from what is there, not from memory.
 2. Drop what you should not propose. Leave out anything that needs their judgement, and any approval they did not name. Say why in the reply.
 3. Group the rest by kind and age: "11 publish approvals from before the reset", "6 questions from one bot", "20 tasks with no activity for 60 days".
 4. Build one batch of up to 100 steps. Each step is a path and a body:

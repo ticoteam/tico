@@ -12,6 +12,9 @@ Done when: the one-sentence cause and its evidence are on the task, the smallest
 
 ## 1. Establish what actually happened
 
+If the task names no bot, find the failed run first (`hub automation recent-runs --range 24h --status failed`): each row
+names its routine and owner (`bot:<slug>`), and that owner is the bot to diagnose. Then read the record:
+
     hub task show <id>
     hub task list --owner <slug>
     hub bot status list

@@ -45,6 +45,10 @@ The title is the ask in one line. The body has, in this order:
 3. **What the owner needs to start**: the link, the account, the file, the answer they would
    otherwise have to come back and ask you for.
 4. **What good looks like**, in one line, so the owner knows when they are finished.
+5. **Gaps**: one line naming what the record does not say, for example "source not named". Write "none" if there are none.
+   Never name a source the record does not name for this ask.
+
+A create that returned an id is filed. Never file the same ask again to check it.
 
 Leave out anything you are guessing at. A gap you name is workable; a gap you fill with an
 assumption is a wrong result nobody catches.

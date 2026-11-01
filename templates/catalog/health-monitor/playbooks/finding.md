@@ -20,7 +20,8 @@ on the task and mark it done. (A local finding from your watcher is not on that 
 Done when: the BotOps task exists under this task, its id is in the note, and the task is marked done.
 
 ## tico-bug: report it
-1. `hub health-monitor report <key>` (`skills/decide-a-tico-bug-report/SKILL.md`). It answers with one of:
+1. `hub health-monitor report <signature>`, with the `Signature:` value from the task (`hm-...`), never the `Check:` name
+   (`skills/decide-a-tico-bug-report/SKILL.md`). It answers with one of:
    - `ticket`: filed with the redacted diagnostics bundle. The ticket is the owner's; replies show on their Support page.
    - `comment: true`: the signature already had a ticket, and a "seen again" message went on it.
    - `again: true`: already reported. With an approval id it is still waiting for a person; otherwise nothing new to add.

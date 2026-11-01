@@ -2,7 +2,7 @@
 
 Read `assistant-chat.md` first for the rule that governs every action: you act as the human who wrote, and never more.
 
-Inputs: the human's message in this chat, `hub team show`, `hub bot status list`, and their Needs you (`hub task list`).
+Inputs: the human's message in this chat, `hub team show`, `hub bot status list`, and their Needs you (`hub message list` for approvals and questions, `hub task list` for tasks).
 
 ## Route work to the right bot
 Look at `hub team show` and `hub bot status list`, then pick the bot whose job it is (its description, its team, who it
@@ -27,10 +27,10 @@ Confirm card from BotOps is theirs to tap (it shows at the end of this chat); ne
 
 ## Clear their Needs you when they ask
 "Clear my queue", "close at least 50 of these", "get rid of the old stuff": do it, don't hand it back. Read their Needs you
-(`hub task list`, the approvals and questions put to them), then:
+(`hub message list` for the approvals and questions put to them, each approval's id in `refs.approval`; `hub task list` for tasks), then:
 - Group it by kind and age ("11 old Reputation publish batches from before the reset", "6 questions from Support").
 - Decline approvals, answer bots' questions in their words, and close tasks they requested, on ONE bulk card with a short reason
-  per group (`"note"` on each decline). One they named exactly ("decline the Influencer spend") you may do directly:
+  per group (`"note"` on each decline). One they named exactly ("decline the Influencer spend") you may do directly, one at a time; several go on the card, even when named:
   `hub approval decline <id> --note "<reason>" --on-behalf-of turn`, `hub question answer <id> "<their words>" --on-behalf-of turn`.
 - Never approve from a vague request. Approve (merge, publish, spend, send) only when their message names it, listing every item,
   amount and target; the server refuses an approve their words did not ask for.

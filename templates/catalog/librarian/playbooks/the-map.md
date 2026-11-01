@@ -20,7 +20,7 @@ One line per internal doc, grouped by folder, in path order:
     - `sales/pricing.md` (v4, 2026-09-12): Plans, prices and discount limits. Read for any "how much" question.
     - `sales/objections.md` (v2, 2026-08-30): The five objections and the approved reply to each.
 
-- The summary says **what the doc answers**, not what it is called, in one sentence, from its text.
+- The summary says **what the doc answers**, not what it is called, in one sentence, from its text: the topics it answers, not its figures.
 - Include the version and the updated date from `hub doc list`, so a refresh can tell which docs
   changed since it last read them: a line whose version matches the list needs no reread.
 - Skip `_librarian/` itself and `FAQ.md`. The server removes an archived source

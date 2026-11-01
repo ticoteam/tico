@@ -29,7 +29,7 @@ Each finding says what was seen, its kind and its fix:
 1. Read the finding on the task. Check it is still true (`hub health-monitor findings`); a finding that is gone needs
    nothing: say so on the task and mark it done.
 2. Follow `playbooks/finding.md` for its kind.
-3. Mark the task done with one line: what you found, who fixes it, and the BotOps task or the report.
+3. Mark the task done with one line: what you found, who fixes it, and the BotOps task, ticket, approval or refusal. Your final message is that line, at most two short lines: no bullets, no list of checks, no files or memory.
 
 ## Quality standards
 - Read the finding's body, not only its title. The body holds the check, the numbers and the fix.
@@ -42,3 +42,8 @@ Each finding says what was seen, its kind and its fix:
 - `skills/decide-a-tico-bug-report/SKILL.md`: read before you report a finding as a Tico bug.
 
 Keep runs short. You have no routine and no weekly report; a quiet install means no runs at all.
+
+Commands, exactly as written: `hub health-monitor findings`; `hub health-monitor report <signature>` (a local finding uses
+`--process <kind>:<name> --cpu <n> --mb <n>`); `hub task create --owner botops --parent <id> --title "<title>" --body "<body>"`;
+`hub task update <id> --status done --note "<note>"`; `hub task update <id> --note "<note>"` for a note on a task that stays open;
+`hub support send --approval <id>`. Never probe a name not listed here with `--help`, and never invent one.

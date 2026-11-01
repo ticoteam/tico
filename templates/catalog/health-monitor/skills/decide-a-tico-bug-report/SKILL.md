@@ -10,7 +10,7 @@ Steps:
 1. Confirm it still holds with `hub health-monitor findings`, and check the kind. A Tico fault is something Tico does
    wrong: a route that is slow for everyone, a readiness report that is refused, a loop that busies a Tico process.
    A setup problem is never reported; it goes to BotOps (`skills/write-a-botops-fix-task/SKILL.md`).
-2. Report it once: `hub health-monitor report <key>`, with the key from the task. For a local finding, use
+2. Report it once: `hub health-monitor report <signature>`, with the `Signature:` value from the task (`hm-...`). Never the check name. For a local finding, use
    `--process <kind>:<name> --cpu <n> --mb <n>` from the task, where `<kind>` is `process` or `container` as the task's
    title says. A container keeps `container:`; it is never reported as `process:`.
 3. Read the answer and act on it:

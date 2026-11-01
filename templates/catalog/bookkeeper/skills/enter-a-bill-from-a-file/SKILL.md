@@ -29,8 +29,9 @@ Steps:
    vendor's usual expense account, or you ask. The search rows do not carry a draft's lines. If you cannot read them,
    the draft stays a draft and the question goes to one person. A failed check leaves a draft and one question.
 7. Create or update, then approve only when step 6 passes:
-   - New bill: `bill_create` (`origin: "email"`, the file in `attachments`), then `bill_approve`. Key the actions from
-     the file: `--operation-id bill-entry:<file id>`.
+   - New bill: `bill_create` (`origin: "email"`, the file in `attachments`), then `bill_approve`. Its fields are
+     `vendor_id`, `bill_date` (not `date`), `due_date` or `terms_days`, and `lines` with `account_id` and `amount` in
+     minor units (playbooks/commands.md). Key the actions from the file: `--operation-id bill-entry:<file id>`.
    - Draft: `bill_update` with its `bill_id` and only what is wrong, then `bill_approve` with the same `bill_id`. Key
      them from the bill: `--operation-id bill-update:<bill id>` and `--operation-id bill-approve:<bill id>`.
 8. Note on the task: vendor, number, total, due date, and what was left for a person.

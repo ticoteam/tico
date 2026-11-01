@@ -34,7 +34,7 @@ Keep the rows whose owner is a human (`human:...`). For each, check whether what
 | --- | --- |
 | create or register a bot or record | `hub bot status list` or `hub api GET bots/<slug>` shows it |
 | add a person | `hub human list` shows them |
-| paste or set a credential | `hub credential list` shows it for that bot |
+| paste or set a credential | `hub credential list` shows it in that bot's row (it has no filter: read the bots column) |
 | turn something on, pick a computer | `hub bot status list` shows it on |
 | decide something | their answer is on the task, or a newer task or message supersedes it |
 
@@ -49,4 +49,4 @@ task for something that an open one already covers.
 
 ## 3. Finish
 
-One line: how many stuck tasks you moved and how many of your own you closed.
+Your final answer is one line only: `Sweep: moved <n> stuck task(s), closed <m> of your own.`

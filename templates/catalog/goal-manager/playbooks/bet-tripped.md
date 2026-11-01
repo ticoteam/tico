@@ -18,8 +18,9 @@ number**: the evidence is the reading, the market change or the date in the task
   or the date).
 - `hub strategy show`: the bet's statement, why, rules out, wrong-if and cites, and its goals under `goals_by_bet`
   with `health_by_bet`.
-- A KPI trip: `hub kpi show <kpi id>`, the last few readings with their evidence. One reading past the line after a
-  run of good ones may be noise or a partial period; say so.
+- A KPI trip: `hub kpi show <kpi id>`, the last few readings with their evidence. Compare each reading with the line yourself:
+  only a reading past the line is part of the trip (9 is not below 8). One reading past the line after a run of good ones may
+  be noise or a partial period; say so.
 - A market trip: `hub market show <id>` for the cited entity, and `hub market delta` for what changed and its source.
 - A sentence bet past its check-by date: the goals that serve it and anything in the market or the readings that
   speaks to the sentence. Often there is nothing, and that is the finding.
@@ -48,7 +49,13 @@ task.
 
 ## 3. Finish
 
-`hub task update <id> --status done --note "<the bet, what tripped, your pick>"`. Add one line to `state.md` (the
-bet, the trip, the card), and commit this repository. Nothing else: no goals proposed, no other bets touched.
+A `proposal create` that returns its id has filed the card: finish then. Do not list the proposals again to confirm it,
+and do not reopen the task.
 
-**Done when:** one pending `strategy_draft` card for this bet exists (or one was already pending, and this task says so), the task is done with its note, and `state.md` has the line.
+1. `hub task update <id> --status done --note "<the bet, what tripped, your pick>"`.
+2. Add one line to `state.md` (the bet, the trip, the card), and commit this repository. Nothing else: no goals proposed,
+   no other bets touched.
+3. Reply in 2 to 3 short lines, in this order: the bet by its statement; what tripped, quoting only the readings past the line,
+   with their dates; your pick; and that the owner decides. No bullets. Do not say what you closed, recorded or committed; nothing else.
+
+**Done when:** one pending `strategy_draft` card for this bet exists (or one was already pending, and this task says so), the task is done with its note, `state.md` has the line, and the reply is written.

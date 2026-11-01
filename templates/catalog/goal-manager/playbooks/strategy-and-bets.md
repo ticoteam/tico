@@ -43,3 +43,4 @@ goal, a KPI or the strategy. An org change the owner asked for through their Ass
 Ask a human a question with `hub task create --owner <person>`, another bot with `hub question ask`; answer a bot's question with
 `hub question answer`. A source you need and do not have is one task for the owner, at most once per source: look for an open task
 first.
+The exact arguments, by job, are in `playbooks/commands.md`.

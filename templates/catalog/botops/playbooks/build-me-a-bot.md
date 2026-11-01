@@ -9,11 +9,22 @@ as theirs, "via BotOps". If a friendly tool refuses for permissions, retry the s
 `hub_api`. If that also refuses, say why in one line and who can change it. Never send them to
 Settings for something a command does.
 
-The job is done when **the bot is live**: built, on a computer, turned on, logged in to what it needs,
-its setup started. A test run is optional: run one when the connection is unproven and the human is
-not waiting on it. The human reads one message at the end.
+The job is done when **the bot is taken live**: built (step 2), turned on with `hub bot go-live` (step 6), and that
+answer read. A credential still missing never holds it back. A test run is optional: run one when the connection is
+unproven and the human is not waiting on it. The human reads one message at the end.
 
 Inputs: the human's chat request naming the bot and its job, with any name, template or setup answers they gave.
+
+## Checklist
+
+All of these before the job is done:
+
+- [ ] Registered and built (steps 1-2), with its slug.
+- [ ] Each credential card opened (step 3). A missing one is a follow-up, not a stop.
+- [ ] Routines set (step 5).
+- [ ] `hub bot go-live` run and its answer read (step 6).
+- [ ] Tasks you filed are closed (step 8).
+- [ ] One report sent (step 9).
 
 ## The flow
 
@@ -47,7 +58,7 @@ Inputs: the human's chat request naming the bot and its job, with any name, temp
    one specific blocker.
 6. **Take it live.** `hub bot go-live <slug>` (`hub_bot_go_live` over MCP; it takes no routine list, because
    step 5 already set them): it puts the bot on a computer (the only one, or the
-   least busy), turns it on and starts its setup with them. A bot you just built goes on your computer first,
+   least busy), turns it on and starts its setup with them, even while a credential is still missing. Going live never turns on a routine a person turned off (step 5), so a no-schedule request stays off. A bot you just built goes on your computer first,
    because its history is only in your workspace until that computer publishes it to GitHub; once GitHub has
    it, it can move with `hub bot place <slug> --computer <name>`. A `history_elsewhere` refusal names the
    computer to use: run go-live again with that `--computer`. On `waiting_for_repository`, remember that
@@ -104,7 +115,7 @@ off) happen at once, and each can be undone from Settings > Bots history.
   `hub api POST access/people/<person id> '{"inbox_bot": "<bot>", "mailbox": "<address>"}'`.
   Change the `Mailbox:` line in its `AGENT.md`
   and its `gmail` identity in `bot.yaml` to match.
-- Anything else in the app: `hub api <METHOD> <path> ['{json}']`, as them, with their rights.
+- Anything else in the app: `hub api GET <path>`, or `hub api POST <path> '{json}'` (PUT, PATCH and DELETE the same way), as them, with their rights.
 
 ## When it goes sideways
 

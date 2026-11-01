@@ -19,9 +19,9 @@ description: "Files one task for a bot, BotOps or a person that its owner can st
    - a new bot, a broken bot, or a change to a bot's instructions or schedule: `--owner botops`, with `--request-id turn` when the human asked for it in this chat;
    - a decision, a price, a promise or an exception: `--owner human:<person id>`, with the question as the first line of the body.
 4. Write the title as the ask in one line.
-5. Write the body in this order: the requester's own words, quoted; why now, if there is a reason or a date; what the owner needs to start (the link, the account, the file, the answer); what done looks like, in one line.
-6. Mark each gap as a gap, for example "The source export is not known yet." Never fill a gap with an assumption.
-7. Create it: `hub task create --owner <owner> --title "<ask>" --body "<body>"`.
+5. Write the body in this order: the requester's own words, quoted; why now, if there is a reason or a date; what the owner needs to start (the link, the account, the file, the answer); what done looks like, in one line; and a `Gaps:` line, never empty: what the record does not say (for example "source not named"), or "none".
+6. Mark each gap as a gap, for example "The source export is not known yet." Never fill a gap with an assumption. A bot's description is not this ask's source: name a source only when the record names it for this ask.
+7. Create it: `hub task create --owner <owner> --title "<ask>" --body "<body>"`. A create that returned an id is filed; never file the same ask again to check it.
 8. Tell the requester in one sentence what you filed and where.
 
 ## Checks before you finish

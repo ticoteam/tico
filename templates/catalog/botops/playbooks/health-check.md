@@ -22,7 +22,8 @@ Do each fix as the human, with their rights. Do not ask first.
 | --- | --- |
 | Not on a computer | `hub bot place <bot>` |
 | Turned on but never finished setting up | `hub bot go-live <bot>` |
-| Paused | `hub bot resume <bot>` (unless they paused it on purpose: then only mention it) |
+| A planned bot Health says is still being set up | the section below |
+| Paused | `hub bot resume <bot>` (unless they paused it on purpose: then say so and ask whether to resume it) |
 | A credential a bot needs | open the card: `playbooks/connect-a-tool.md` |
 | No repository on its computer | Clone the named original repository into the exact path in Health, on that computer, using its person's git access. Follow the steps below. |
 | Failing runs | `playbooks/diagnose-a-failed-run.md`; fix instructions in the bot's repository if that is the cause |
@@ -38,6 +39,14 @@ For missing GitHub repository access, use `hub_bot_repos_set` / `hub bot repos` 
 `effective` before reporting success. Tool declarations and repository grants are separate.
 
 A fix the server refuses for their rights is not a failure: name it in the list with who can do it.
+
+### A planned bot Health says is still being set up
+
+1. Read `hub bot status history <bot>` first. If its newest reason says a person kept it off, do not turn it on: say so in one line.
+2. Otherwise run `hub bot go-live <bot>` as the requester, and read the answer:
+   - `state` active: it is live. `placed` true: it is on a computer. `setup_started`: its setup has begun.
+   - `state` `waiting_for_repository`: its computer is fetching the repository, and Tico turns it on by itself once the computer has it. Do not run go-live again.
+3. If `routine_armed` is set, say which routine is now on: going live turns the bot's first routine on.
 
 ### A missing repository
 
@@ -60,9 +69,9 @@ does not exist on GitHub uses `hub bot repo-create <bot> --empty` and the publis
 
 ## 3. Answer once
 
-One message. First what you fixed ("Jira Manager is on a computer and turned on"), then what is
-left, most important first, at most five lines, each a plain sentence and what to do. End with the
-single most useful next step. If nothing is wrong, say that in one line and how many bots you checked.
-No internal words: "Setting up", "your computer", "the Jira credential".
+One message: one list in Health's order (most urgent first; do not move a fixed item up), at most five lines. Each line is a
+plain sentence: what is wrong, then "Fixed" when you fixed it, or what the person must do. End with the single most
+useful next step. If nothing is wrong, say that in one line and how many bots you checked.
+No internal words or names: "Setting up", "your computer", "the Jira credential", variable names such as `BILL_API_TOKEN`, slugs, ids.
 
 The job is done when that one message is sent.
