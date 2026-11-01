@@ -1,0 +1,92 @@
+{
+  "body": {
+    "actors": {
+      "bot:ops": "ops"
+    },
+    "bot": "ops",
+    "can_manage": true,
+    "files": [
+      {
+        "action": "created",
+        "actor": "bot:ops",
+        "actor_name": "ops",
+        "archived": false,
+        "bot": "ops",
+        "duration_ms": null,
+        "first_activity_at": "<time>",
+        "github_url": null,
+        "height": null,
+        "id": "<page>",
+        "kind": "document",
+        "last_activity_at": "<time>",
+        "locator": "tico_blob",
+        "media_state": "none",
+        "mime": "text/html",
+        "name": "weekly.html",
+        "note": "",
+        "open": {
+          "type": "tico",
+          "url": "/api/v2/files/<page>"
+        },
+        "poster_blob_id": null,
+        "provider": "",
+        "provider_label": "",
+        "scope": "conversation",
+        "size": 98,
+        "source": "",
+        "state": "ready",
+        "synced": true,
+        "task_id": null,
+        "task_title": null,
+        "thumb_blob_id": null,
+        "title": "Launch weekly",
+        "version": 1,
+        "width": null,
+        "working": false
+      },
+      {
+        "action": "created",
+        "actor": "bot:ops",
+        "actor_name": "ops",
+        "archived": false,
+        "bot": "ops",
+        "duration_ms": null,
+        "first_activity_at": "<time>",
+        "github_url": null,
+        "height": null,
+        "id": "<file>",
+        "kind": "document",
+        "last_activity_at": "<time>",
+        "locator": "tico_blob",
+        "media_state": "none",
+        "mime": "text/markdown",
+        "name": "plan.md",
+        "note": "",
+        "open": {
+          "type": "tico",
+          "url": "/api/v2/files/<file>"
+        },
+        "poster_blob_id": null,
+        "provider": "",
+        "provider_label": "",
+        "scope": "conversation",
+        "size": 22,
+        "source": "",
+        "state": "ready",
+        "synced": true,
+        "task_id": null,
+        "task_title": null,
+        "thumb_blob_id": null,
+        "title": "plan.md",
+        "version": 1,
+        "width": null,
+        "working": false
+      }
+    ],
+    "has_more": false,
+    "next_cursor": "<volatile>",
+    "total": 2
+  },
+  "request": "GET /api/v2/bots/ops/files",
+  "status": 200
+}

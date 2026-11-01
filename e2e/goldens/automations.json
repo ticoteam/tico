@@ -1,0 +1,44 @@
+{
+  "body": {
+    "automations": [
+      {
+        "builtin": false,
+        "can_edit": true,
+        "can_pause": true,
+        "created": "<time>",
+        "created_by": "human:ana",
+        "enabled": true,
+        "id": "<automation>",
+        "kind": "schedule",
+        "last_run": null,
+        "name": "Morning check",
+        "next_run": "<time>",
+        "owner": "person:ana",
+        "pending": 0,
+        "problems": [],
+        "steps": [
+          {
+            "args": {
+              "bot": "ops",
+              "text": "Look"
+            },
+            "do": "wake_bot",
+            "enabled": true,
+            "id": "tell",
+            "type": "action"
+          }
+        ],
+        "trigger": {
+          "cron": "0 9 * * *",
+          "type": "schedule",
+          "tz": "UTC"
+        },
+        "updated": "<time>",
+        "version": 1
+      }
+    ],
+    "next": null
+  },
+  "request": "GET /api/v2/automations",
+  "status": 200
+}

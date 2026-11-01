@@ -1,0 +1,258 @@
+{
+  "body": {
+    "actors": {
+      "bot:ops": "ops",
+      "human:ana": "Ana"
+    },
+    "conversation": {
+      "closed_at": null,
+      "created": "<time>",
+      "id": "<conversation>",
+      "kind": "chat",
+      "last_message_at": "<time>",
+      "owner_actor": "human:ana",
+      "participant_names": [
+        "Ana",
+        "ops"
+      ],
+      "participants": [
+        "human:ana",
+        "bot:ops"
+      ],
+      "participants_json": "[\"human:ana\", \"bot:ops\"]",
+      "room_key": "ops",
+      "scope": "personal",
+      "subject": "Chat with ops",
+      "task_id": null
+    },
+    "has_more": false,
+    "messages": [
+      {
+        "answered_by": null,
+        "body": "Plan the launch.",
+        "conversation_id": "<conversation>",
+        "created": "<time>",
+        "deleted_at": null,
+        "delivered_at": "<time>",
+        "edited_at": null,
+        "expires_at": null,
+        "from_actor": "human:ana",
+        "from_actor_name": "Ana",
+        "hidden_at": null,
+        "id": "<chat_message>",
+        "in_reply_to": null,
+        "kind": "say",
+        "public": 0,
+        "read_at": null,
+        "refs": {
+          "rule": "person_message"
+        },
+        "refs_json": "{\"rule\": \"person_message\"}",
+        "run": {
+          "attempt_id": "<id1>",
+          "job_id": "<chat_message>",
+          "state": "started_run"
+        },
+        "superseded_at": null,
+        "to_actor": "bot:ops",
+        "to_actor_name": "ops",
+        "wait_s": null
+      },
+      {
+        "answered_by": null,
+        "body": "Add the budget.",
+        "conversation_id": "<conversation>",
+        "created": "<time>",
+        "deleted_at": null,
+        "delivered_at": null,
+        "edited_at": null,
+        "expires_at": null,
+        "from_actor": "human:ana",
+        "from_actor_name": "Ana",
+        "hidden_at": null,
+        "id": "<reply_message>",
+        "in_reply_to": null,
+        "kind": "say",
+        "public": 0,
+        "read_at": null,
+        "refs": {
+          "rule": "person_message"
+        },
+        "refs_json": "{\"rule\": \"person_message\"}",
+        "superseded_at": null,
+        "to_actor": "bot:ops",
+        "to_actor_name": "ops",
+        "wait_s": null
+      },
+      {
+        "answered_by": null,
+        "body": "Third note.",
+        "conversation_id": "<conversation>",
+        "created": "<time>",
+        "deleted_at": null,
+        "delivered_at": null,
+        "edited_at": null,
+        "expires_at": null,
+        "from_actor": "human:ana",
+        "from_actor_name": "Ana",
+        "hidden_at": null,
+        "id": "<direct_message>",
+        "in_reply_to": null,
+        "kind": "say",
+        "public": 0,
+        "read_at": null,
+        "refs": {
+          "rule": "person_message"
+        },
+        "refs_json": "{\"rule\": \"person_message\"}",
+        "superseded_at": null,
+        "to_actor": "bot:ops",
+        "to_actor_name": "ops",
+        "wait_s": null
+      },
+      {
+        "answered_by": null,
+        "body": "Draft the launch plan: done. Drafted.",
+        "conversation_id": "<conversation>",
+        "created": "<time>",
+        "deleted_at": null,
+        "delivered_at": null,
+        "edited_at": null,
+        "expires_at": null,
+        "from_actor": "keeper",
+        "hidden_at": null,
+        "id": "<id2>",
+        "in_reply_to": null,
+        "kind": "notice",
+        "public": 0,
+        "read_at": null,
+        "ref_tasks": {
+          "<task>": {
+            "owner": "bot:ops",
+            "owner_name": "ops",
+            "status": "closed",
+            "title": "Draft the launch plan"
+          }
+        },
+        "refs": {
+          "quiet": true,
+          "task": "<task>",
+          "task_report": "done"
+        },
+        "refs_json": "{\"quiet\": true, \"task\": \"<task>\", \"task_report\": \"done\"}",
+        "superseded_at": null,
+        "to_actor": "human:ana",
+        "to_actor_name": "Ana",
+        "wait_s": null
+      },
+      {
+        "answered_by": null,
+        "body": "Started task: Check the vendor list",
+        "conversation_id": "<conversation>",
+        "created": "<time>",
+        "deleted_at": null,
+        "delivered_at": null,
+        "edited_at": null,
+        "expires_at": null,
+        "from_actor": "keeper",
+        "hidden_at": null,
+        "id": "<id3>",
+        "in_reply_to": null,
+        "kind": "notice",
+        "public": 0,
+        "read_at": null,
+        "ref_tasks": {
+          "<open_task>": {
+            "owner": "bot:ops",
+            "owner_name": "ops",
+            "status": "open",
+            "title": "Check the vendor list"
+          }
+        },
+        "refs": {
+          "quiet": true,
+          "task": "<open_task>",
+          "task_started": true
+        },
+        "refs_json": "{\"quiet\": true, \"task\": \"<open_task>\", \"task_started\": true}",
+        "superseded_at": null,
+        "to_actor": "human:ana",
+        "to_actor_name": "Ana",
+        "wait_s": null
+      },
+      {
+        "answered_by": null,
+        "body": "Write the plan",
+        "conversation_id": "<conversation>",
+        "created": "<time>",
+        "deleted_at": null,
+        "delivered_at": null,
+        "edited_at": null,
+        "expires_at": null,
+        "from_actor": "human:ana",
+        "from_actor_name": "Ana",
+        "hidden_at": null,
+        "id": "<id4>",
+        "in_reply_to": null,
+        "kind": "say",
+        "public": 0,
+        "read_at": null,
+        "refs": {
+          "rule": "person_message"
+        },
+        "refs_json": "{\"rule\": \"person_message\"}",
+        "superseded_at": null,
+        "to_actor": "bot:ops",
+        "to_actor_name": "ops",
+        "wait_s": null
+      },
+      {
+        "answered_by": null,
+        "answers": [
+          "<chat_message>"
+        ],
+        "body": "Drafted the launch plan.",
+        "conversation_id": "<conversation>",
+        "created": "<time>",
+        "deleted_at": null,
+        "delivered_at": null,
+        "edited_at": null,
+        "expires_at": null,
+        "from_actor": "bot:ops",
+        "from_actor_name": "ops",
+        "hidden_at": null,
+        "id": "<id5>",
+        "in_reply_to": "<chat_message>",
+        "kind": "say",
+        "public": 0,
+        "read_at": null,
+        "refs": {
+          "answers": [
+            "<chat_message>"
+          ],
+          "run": {
+            "attempt_id": "<id1>",
+            "job_id": "<chat_message>"
+          },
+          "turn_id": "<id1>"
+        },
+        "refs_json": "{\"answers\":[\"<chat_message>\"],\"run\":{\"attempt_id\":\"<id1>\",\"job_id\":\"<chat_message>\"},\"turn_id\":\"<id1>\"}",
+        "run": {
+          "attempt_id": "<id1>",
+          "did": [],
+          "job_id": "<chat_message>",
+          "steps": 0,
+          "took_s": "<volatile>",
+          "tool_calls": 0
+        },
+        "superseded_at": null,
+        "to_actor": "human:ana",
+        "to_actor_name": "Ana",
+        "wait_s": null
+      }
+    ],
+    "next_before": "<volatile>"
+  },
+  "request": "GET /api/v2/conversations/<conversation>/messages",
+  "status": 200
+}

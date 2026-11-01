@@ -1,0 +1,55 @@
+{
+  "body": {
+    "actors": {
+      "human:ana": "Ana"
+    },
+    "kpi": {
+      "archived_at": null,
+      "archived_by": null,
+      "cadence": "daily",
+      "created": "<time>",
+      "created_by": "human:ana",
+      "definition": "",
+      "definition_version": 1,
+      "direction": "up",
+      "goal_id": "",
+      "growth_role": null,
+      "id": "<kpi>",
+      "loop_name": null,
+      "loop_step": null,
+      "name": "Activation",
+      "owner": "human:ana",
+      "owner_name": "Ana",
+      "parent_kpi_id": null,
+      "slug": "activation",
+      "source_note": "",
+      "stage": null,
+      "target": null,
+      "unit": "%",
+      "updated": "<time>"
+    },
+    "readings": [
+      {
+        "actor": "human:ana",
+        "actor_name": "Ana",
+        "collected_at": "<time>",
+        "created": "<time>",
+        "definition_version": 1,
+        "evidence": "https://bi.example/q/1",
+        "id": "<id1>",
+        "kpi_id": "<kpi>",
+        "note": "",
+        "period_end": "<time>",
+        "period_start": "<time>",
+        "quality": "measured",
+        "source": "",
+        "superseded_by": null,
+        "supersedes": null,
+        "ts": "<time>",
+        "value": 41.0
+      }
+    ]
+  },
+  "request": "GET /api/v2/kpis/<kpi>/readings",
+  "status": 200
+}

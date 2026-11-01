@@ -1,0 +1,117 @@
+{
+  "body": {
+    "actor": "human:ana",
+    "actor_name": "Ana",
+    "actors": {
+      "bot:ops": "ops",
+      "human:ana": "Ana"
+    },
+    "conversations": [
+      {
+        "closed_at": null,
+        "created": "<time>",
+        "id": "<conversation>",
+        "kind": "chat",
+        "last_message_at": "<time>",
+        "owner_actor": "human:ana",
+        "participant_names": [
+          "Ana",
+          "ops"
+        ],
+        "participants": [
+          "human:ana",
+          "bot:ops"
+        ],
+        "participants_json": "[\"human:ana\", \"bot:ops\"]",
+        "room_key": "ops",
+        "scope": "personal",
+        "subject": "Chat with ops",
+        "task_id": null
+      },
+      {
+        "closed_at": null,
+        "created": "<time>",
+        "id": "<id1>",
+        "kind": "notice",
+        "last_message_at": "<time>",
+        "owner_actor": null,
+        "participant_names": [
+          "ops",
+          "Ana"
+        ],
+        "participants": [
+          "bot:ops",
+          "human:ana"
+        ],
+        "participants_json": "[\"bot:ops\", \"human:ana\"]",
+        "room_key": null,
+        "scope": "direct",
+        "subject": "",
+        "task_id": null
+      },
+      {
+        "closed_at": null,
+        "created": "<time>",
+        "id": "<id2>",
+        "kind": "task",
+        "last_message_at": "<time>",
+        "owner_actor": null,
+        "participant_names": [
+          "Ana",
+          "ops"
+        ],
+        "participants": [
+          "human:ana",
+          "bot:ops"
+        ],
+        "participants_json": "[\"human:ana\", \"bot:ops\"]",
+        "room_key": null,
+        "scope": "task",
+        "subject": "Check the vendor list",
+        "task_id": "<open_task>"
+      },
+      {
+        "closed_at": null,
+        "created": "<time>",
+        "id": "<id3>",
+        "kind": "task",
+        "last_message_at": "<time>",
+        "owner_actor": null,
+        "participant_names": [
+          "Ana"
+        ],
+        "participants": [
+          "human:ana"
+        ],
+        "participants_json": "[\"human:ana\"]",
+        "room_key": null,
+        "scope": "task",
+        "subject": "Draft the launch plan",
+        "task_id": "<task>"
+      },
+      {
+        "closed_at": null,
+        "created": "<time>",
+        "id": "<id4>",
+        "kind": "notice",
+        "last_message_at": "<time>",
+        "owner_actor": null,
+        "participant_names": [
+          "keeper",
+          "Ana"
+        ],
+        "participants": [
+          "keeper",
+          "human:ana"
+        ],
+        "participants_json": "[\"keeper\", \"human:ana\"]",
+        "room_key": null,
+        "scope": "direct",
+        "subject": "",
+        "task_id": null
+      }
+    ]
+  },
+  "request": "GET /api/v2/conversations",
+  "status": 200
+}

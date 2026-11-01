@@ -1,0 +1,24 @@
+{
+  "body": {
+    "bots": [
+      {
+        "bot": "ops",
+        "bot_state": "active",
+        "focus": "",
+        "last_result": null,
+        "last_stop": null,
+        "last_turn_at": "<time>",
+        "needs_human": 1,
+        "next_due": null,
+        "open_tasks": 1,
+        "since": "<time>",
+        "state": "idle",
+        "task_id": "",
+        "updated_at": "<time>"
+      }
+    ],
+    "updating": null
+  },
+  "request": "GET /api/v2/status",
+  "status": 200
+}

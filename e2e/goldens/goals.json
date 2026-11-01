@@ -1,0 +1,42 @@
+{
+  "body": {
+    "actors": {
+      "human:ana": "Ana"
+    },
+    "chain": [],
+    "company": [],
+    "goals": [
+      {
+        "bet_id": null,
+        "body": "",
+        "created": "<time>",
+        "created_by": "human:ana",
+        "id": "<goal>",
+        "last_read_at": null,
+        "last_read_by": null,
+        "owner": "human:ana",
+        "owner_name": "Ana",
+        "parent_id": null,
+        "rank": 0,
+        "status": "green",
+        "status_at": "<time>",
+        "status_by": "bot:goal-manager",
+        "status_note": "Activation 41% vs 40% needed on pace",
+        "status_source": "auto",
+        "suggest_at": null,
+        "suggest_note": null,
+        "suggest_status": null,
+        "title": "Raise activation",
+        "updated": "<time>",
+        "why": "",
+        "why_at": null,
+        "why_by": null
+      }
+    ],
+    "owner": "human:ana",
+    "owner_name": "Ana",
+    "reports": []
+  },
+  "request": "GET /api/v2/goals",
+  "status": 200
+}

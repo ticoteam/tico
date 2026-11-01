@@ -1,0 +1,58 @@
+{
+  "body": {
+    "actors": {
+      "human:ana": "Ana"
+    },
+    "kpis": [
+      {
+        "archived_at": null,
+        "archived_by": null,
+        "auto": false,
+        "cadence": "daily",
+        "created": "<time>",
+        "created_by": "human:ana",
+        "definition": "",
+        "definition_version": 1,
+        "direction": "up",
+        "freshness": "fresh",
+        "goals": [
+          {
+            "goal_id": "<goal>",
+            "kind": "improve"
+          }
+        ],
+        "id": "<kpi>",
+        "latest": {
+          "actor": "human:ana",
+          "actor_name": "Ana",
+          "collected_at": "<time>",
+          "definition_version": 1,
+          "evidence": "https://bi.example/q/1",
+          "id": "<id1>",
+          "note": "",
+          "period_end": "<time>",
+          "period_start": "<time>",
+          "quality": "measured",
+          "source": "",
+          "supersedes": null,
+          "value": 41.0
+        },
+        "name": "Activation",
+        "owner": "human:ana",
+        "owner_name": "Ana",
+        "readings": 1,
+        "reason": "Activation 41%",
+        "slug": "activation",
+        "source_note": "",
+        "spark": [
+          41.0
+        ],
+        "status": "none",
+        "unit": "%",
+        "updated": "<time>"
+      }
+    ]
+  },
+  "request": "GET /api/v2/kpis",
+  "status": 200
+}
