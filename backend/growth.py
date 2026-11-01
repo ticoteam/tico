@@ -30,7 +30,18 @@ from .store import Problem
 
 IDEA_TYPE = "idea"
 IDEA_TYPE_NAMES = ("Idea", "Growth idea")
-IDEA_STEPS = {"open": "Idea", "doing": "Testing"}
+# The Idea type's steps, in board order: (growth status or task status, step name, task status). The idea's growth
+# status moves its task to the step of the same key; a hand close lands on Closed, ahead of the verdict steps.
+IDEA_STEPS = (("idea", "Idea", "open"), ("testing", "Testing", "doing"), ("paused", "Paused", "waiting"),
+              ("review", "Review", "review"), ("ready", "Ready", "ready"), ("done", "Done", "done"),
+              ("closed", "Closed", "closed"), ("won", "Won", "closed"), ("lost", "Lost", "closed"),
+              ("inconclusive", "Inconclusive", "closed"), ("dropped", "Dropped", "closed"))
+# The first two keep the ids an earlier seed gave them.
+STEP_IDS = {"idea": f"{IDEA_TYPE}-open", "testing": f"{IDEA_TYPE}-doing"}
+
+
+def step_id(key):
+    return STEP_IDS.get(key, f"{IDEA_TYPE}-{key}")
 TERMINAL = ("won", "lost", "inconclusive", "dropped")
 ROLES = ("north_star", "input", "guardrail")
 STAGES = ("reach", "acquire", "activate", "retain", "refer")
@@ -48,18 +59,24 @@ OWNER_PATCH = {"why", "stage", "budget_month"}       # what the bot that owns a 
 
 
 def ensure(c):
-    """The built-in Idea task type, once: its own id, named Idea unless a team's own type already has that name."""
-    if H._one(c, "SELECT id FROM task_types WHERE id=?", (IDEA_TYPE,)):
-        return IDEA_TYPE
-    taken = {r[0].lower() for r in c.execute("SELECT name FROM task_types")}
-    name = next((n for n in IDEA_TYPE_NAMES if n.lower() not in taken), None)
-    if not name:
-        return None
-    now = H.now()
-    c.execute("INSERT INTO task_types (id, name, created, updated) VALUES (?,?,?,?)", (IDEA_TYPE, name, now, now))
-    for position, status in enumerate(H.STEP_STATUSES):
-        c.execute("INSERT OR IGNORE INTO task_steps (id, type_id, name, position, status) VALUES (?,?,?,?,?)",
-                  (f"{IDEA_TYPE}-{status}", IDEA_TYPE, IDEA_STEPS.get(status, status.title()), position, status))
+    """The built-in Idea task type and its steps: its own id, named Idea unless a team's own type already has that
+    name. A step missing from an older seed is added; one a team renamed keeps its name."""
+    if not H._one(c, "SELECT id FROM task_types WHERE id=?", (IDEA_TYPE,)):
+        taken = {r[0].lower() for r in c.execute("SELECT name FROM task_types")}
+        name = next((n for n in IDEA_TYPE_NAMES if n.lower() not in taken), None)
+        if not name:
+            return None
+        now = H.now()
+        c.execute("INSERT INTO task_types (id, name, created, updated) VALUES (?,?,?,?)", (IDEA_TYPE, name, now, now))
+    names = {r[0].lower() for r in c.execute("SELECT name FROM task_steps WHERE type_id=?", (IDEA_TYPE,))}
+    have = {r[0] for r in c.execute("SELECT id FROM task_steps WHERE type_id=?", (IDEA_TYPE,))}
+    for position, (key, name, status) in enumerate(IDEA_STEPS):
+        sid = step_id(key)
+        if sid in have:
+            c.execute("UPDATE task_steps SET position=? WHERE id=?", (position, sid))
+        elif name.lower() not in names:
+            c.execute("INSERT INTO task_steps (id, type_id, name, position, status) VALUES (?,?,?,?,?)",
+                      (sid, IDEA_TYPE, name, position, status))
     return IDEA_TYPE
 
 
@@ -669,19 +686,40 @@ def idea_start(c, auth, who, task_id, body):
     if body.judged_kpi_id:
         fields["judged_kpi_id"] = _kpi_ref(c, body.judged_kpi_id, "judged_kpi_id")
     _set_idea(c, who.actor, row["task_id"], fields, "growth.idea.start")
+    _step(c, who.actor, row["task_id"], "testing")
     return row["task_id"]
 
 
-def _close(c, actor, task_id, note):
-    """Close the idea's task as the caller, or as Tico when the task rules leave that to its requester."""
-    c.execute("SAVEPOINT growth_idea_close")
+def _as_caller_or_tico(c, write):
+    """Run a task write as the caller, or as Tico when the task rules leave it to someone else: the growth route has
+    already checked that the caller may run this idea."""
+    c.execute("SAVEPOINT growth_idea_task")
     try:
-        H.task_close(c, actor, task_id, note=note, quiet=True)
-        c.execute("RELEASE growth_idea_close")
+        write(None)
+        c.execute("RELEASE growth_idea_task")
     except H.Refused:
-        c.execute("ROLLBACK TO growth_idea_close")
-        c.execute("RELEASE growth_idea_close")
-        H.task_close(c, H.KEEPER, task_id, note=note, quiet=True)
+        c.execute("ROLLBACK TO growth_idea_task")
+        c.execute("RELEASE growth_idea_task")
+        write(H.KEEPER)
+
+
+def _step(c, actor, task_id, key, note=""):
+    """Move the idea's task to the step its growth status names; a step the team deleted leaves the task where it is."""
+    sid = step_id(key)
+    row = H._one(c, "SELECT type_id, step_id FROM tasks WHERE id=?", (task_id,)) or {}
+    if row.get("type_id") != IDEA_TYPE or row.get("step_id") == sid or not H._one(
+            c, "SELECT 1 FROM task_steps WHERE id=?", (sid,)):
+        return
+    _as_caller_or_tico(c, lambda keeper: H.task_update(c, keeper or actor, task_id, step=sid, note=note or None,
+                                                       quiet=True))
+
+
+def _close(c, actor, task_id, note, key):
+    """Close the idea's task on its verdict's step."""
+    have = H._one(c, "SELECT 1 FROM task_steps WHERE id=?", (step_id(key),))
+    row = H._one(c, "SELECT type_id FROM tasks WHERE id=?", (task_id,)) or {}
+    sid = step_id(key) if have and row.get("type_id") == IDEA_TYPE else None
+    _as_caller_or_tico(c, lambda keeper: H.task_close(c, keeper or actor, task_id, note=note, quiet=True, step=sid))
 
 
 def idea_verdict(c, auth, who, task_id, body):
@@ -693,11 +731,14 @@ def idea_verdict(c, auth, who, task_id, body):
     if body.status != "paused":
         fields.update(verdict_at=H.now(), verdict_by=who.actor)
     _set_idea(c, who.actor, row["task_id"], fields, "growth.idea.verdict")
+    if body.status == "paused":
+        _step(c, who.actor, row["task_id"], "paused", "Test paused")
     if body.status in TERMINAL:
         task = H.task(c, row["task_id"]) or {}
-        if task.get("status") not in ("closed", "declined"):
+        if task.get("status") != "declined":
+            # A task already closed by hand still moves to the verdict's step.
             note = f"Verdict: {body.status}" + (f". {body.result}" if body.result else "")
-            _close(c, who.actor, row["task_id"], note[:1000])
+            _close(c, who.actor, row["task_id"], note[:1000], body.status)
         H.hook(c, "growth.verdict", row["task_id"],
                lambda: {"task_id": row["task_id"], "title": row["title"], "status": body.status,
                         "verdict_by": who.actor}, who.actor, revision=0)
@@ -793,10 +834,11 @@ def install(app, store, auth, mutate, task_create):
 
     @app.get("/api/v2/growth/channels")
     def growth_channels(request: Request, include_retired: bool = False):
-        """The channels, by sort then name."""
-        reader(request.state.identity)
+        """The channels, by sort then name. `may_edit`: the caller adds and changes any channel (owner or admin)."""
+        who = request.state.identity
+        reader(who)
         with store.read() as c:
-            return {"channels": channels(c, include_retired)}
+            return {"channels": channels(c, include_retired), "may_edit": admin(auth, who)}
 
     @app.get("/api/v2/growth/channels/{slug}")
     def growth_channel(request: Request, slug: str):
@@ -850,10 +892,12 @@ def install(app, store, auth, mutate, task_create):
 
     @app.get("/api/v2/growth/sources")
     def growth_sources(request: Request, include_retired: bool = False):
-        """Where each number's truth lives, and the things two live sources both claim."""
-        reader(request.state.identity)
+        """Where each number's truth lives, and the things two live sources both claim. `may_edit`: the caller
+        changes sources (owner or admin)."""
+        who = request.state.identity
+        reader(who)
         with store.read() as c:
-            return sources(c, include_retired)
+            return {**sources(c, include_retired), "may_edit": admin(auth, who)}
 
     @app.post("/api/v2/growth/sources")
     def growth_source_add(request: Request, body: M.GrowthSourceCreate):
@@ -965,10 +1009,12 @@ def install(app, store, auth, mutate, task_create):
 
     @app.get("/api/v2/growth/settings")
     def growth_settings(request: Request):
-        """The unit counted, the default revenue and margin, the verdict win rate and the framework."""
-        reader(request.state.identity)
+        """The unit counted, the default revenue and margin, the verdict win rate and the framework. `may_edit`: the
+        caller changes them (owner or admin)."""
+        who = request.state.identity
+        reader(who)
         with store.read() as c:
-            return settings(c)
+            return {**settings(c), "may_edit": admin(auth, who)}
 
     @app.put("/api/v2/growth/settings")
     def growth_settings_update(request: Request, body: M.GrowthSettingsUpdate):

@@ -89,6 +89,13 @@ def test_channel_and_cohort_permissions(api):
     assert get(api, "growth/channels?include_retired=true", token="cara-test")["channels"][0]["retired_at"]
 
 
+def test_lists_and_settings_say_whether_the_caller_may_edit(api):
+    ops = bot(api, "ops")
+    for path in ("growth/channels", "growth/sources", "growth/settings"):
+        assert get(api, path)["may_edit"] is True and get(api, path, token="ben-test")["may_edit"] is True, path
+        assert get(api, path, token="cara-test")["may_edit"] is False and get(api, path, token=ops)["may_edit"] is False
+
+
 def test_sources_list_conflicts_and_only_admins_write(api):
     post(api, "growth/sources", {"truth_for": "Revenue", "system": "Stripe", "reach_kind": "mcp"}, token=bot(api, "ops"),
          expected=403)
@@ -139,10 +146,18 @@ def test_idea_test_and_verdict_close_the_task_and_count_as_bet_evidence(api):
                                                       "change": "10% off Saturdays", "stop_if": "Refunds pass 5%",
                                                       "min_events": 40}, token=ops)["idea"]
     assert (started["status"], started["test_to"], started["min_events"]) == ("testing", "2026-11-14", 40)
+
+    def step():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?",
+                             (tid,)).fetchone()[0]
+    assert step() == "Testing"
     paused = post(api, f"growth/ideas/{tid}/verdict", {"status": "paused"}, token=ops)["idea"]
+    assert step() == "Paused"
     assert paused["verdict_at"] is None and paused["task_status"] != "closed"
     won = post(api, f"growth/ideas/{tid}/verdict", {"status": "won", "result": "Bookings up 14%", "learning": "Price "
                "matters on weekends", "bet_effect": "supports", "confidence": "high"}, token=ops)["idea"]
+    assert step() == "Won"
     # The bet is live but unpublished: only the owner reads its words (strategy.view's rule).
     assert won["verdict_by"] == "bot:ops" and won["task_status"] == "closed" and won["bet_title"] is None
     assert get(api, f"growth/ideas/{tid}")["idea"]["bet_title"] == "Homeowners book online"
