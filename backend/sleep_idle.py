@@ -55,7 +55,7 @@ MINUTES_MAX = 24 * 60            # the listener's own ceiling; 0 there means nev
 POLICY_FOR = 60                  # seconds a cell's listener answer is kept
 POLICY = {"at": None, "minutes": None}
 NOT_NOW = ("busy", "cooldown")   # HQ refusals that are no failure
-STREAM = "/api/v2/stream"        # an open stream says nothing about a person being there
+STREAM = "/api/v2/events"        # an open stream says nothing about a person being there
 # Outgoing sends: a row waiting for its next try (`next_attempt`, NULL = now) keeps the server up only when that try is
 # near; one Svix-style retry ten hours away must not. `sending` always does.
 SENDS = {"slack_posts": "state IN ('ready','retry','rate_limited')",
