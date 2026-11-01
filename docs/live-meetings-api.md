@@ -79,7 +79,11 @@ fields are listed below.
 Initial Recorder setup calls connect once with a stable client id, then sends initial transcript
 and later transcript segments through the same ordered chunk route. A retry reuses the same client
 id, chunk sequence, and idempotency key/body pair. Corrections use a new revision number; they never
-replace the history of a previously acknowledged chunk. Event IDs are monotonic per meeting and each
+replace the history of a previously acknowledged chunk. A person's edit of a line already shared live is
+sent the same way, as that line's next revision with the new text. Removing a line sends the text `[removed]`,
+which Tico shows in place of the line; editing a removed line sends its text again and brings it back. A person's
+edit is kept against later automatic corrections from the finished audio. Recorder refuses edits once the
+meeting has ended in Tico. Event IDs are monotonic per meeting and each
 event is committed with the state change it describes. Reconnect from the last fully processed id to
 replay without gaps or duplicate effects.
 
