@@ -395,7 +395,10 @@ def main():
                         "-o", os.environ["BENCH_SAMPLE"]]
     child = subprocess.Popen(command, cwd=str(ROOT),
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-    ready = json.loads(child.stdout.readline() or "{}")
+    line = child.stdout.readline()
+    while line and not line.startswith("{"):
+        line = child.stdout.readline()
+    ready = json.loads(line or "{}")
     if "port" not in ready:
         child.kill()
         raise SystemExit("the server process did not start")
@@ -405,7 +408,7 @@ def main():
         child.stdin.close()
         tail = child.stdout.read()
         child.wait(timeout=300)
-    lines = [line for line in tail.splitlines() if line.strip()]
+    lines = [line for line in tail.splitlines() if line.startswith("{")]   # the sampler prints its own lines too
     result["server_profile"] = json.loads(lines[-1]).get("profile") if lines else None
     result.update({"platform": platform.platform(), "python": sys.version.split()[0], "cpu_count": os.cpu_count(),
                    "load_average": os.getloadavg(), "parameters": {k: str(v) for k, v in vars(args).items()},

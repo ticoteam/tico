@@ -2,12 +2,12 @@
 # Temporary (threads/perf): sample the benchmark server's GIL holder with py-spy and print the top frames.
 set -u
 BENCH_SAMPLE=/tmp/stacks.txt python3 scripts/benchmark_threads.py "$@" > /tmp/bench.json 2>/tmp/bench.err
-head -c 600 /tmp/stacks.txt; echo
+
 tail -5 /tmp/bench.err
 python3 - <<'PY'
 import collections, json
 self_, incl, total = collections.Counter(), collections.Counter(), 0
-for line in open("/tmp/stacks.txt"):
+for line in open("/tmp/stacks.txt", errors="replace"):
     stack, _, n = line.rstrip().rpartition(" ")
     n = int(n)
     frames = stack.split(";")
