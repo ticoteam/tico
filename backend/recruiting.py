@@ -100,19 +100,20 @@ ALIASES = tuple((re.compile(pattern), short) for pattern, short in (
     (r"\bcfo\b", "chief finance officer"), (r"\bcoo\b", "chief operations officer"),
     (r"\bcro\b", "chief revenue officer"), (r"\bpmm\b", "product marketing manager"),
     (r"\bsoftware (?:development )?engineer in test\b|\bsdets?\b", "qa engineer"),
+    (r"\bsoftware development\b", "software"),
     (r"\b(?<!qa )test(?:ing|ers?)?\b", "qa \\g<0>"), (r"\bappsec\b", "application security"),
     (r"\b(?:developer relations|devrel)(?:\s+(?:engineer|manager|lead|specialist)s?)?\b", "developer advocate"),
     (r"\b(?:ppc|sem|paid search|paid social|paid acquisition|user acquisition|performance marketing)\b", "paid media"),
     (r"\bmarketers?\b", "marketing"),
     (r"\b(?:content|copy|blog)\s*writers?\b|\bcopywriters?\b", "content writing"),
-    (r"\bcommunications?\b", "pr \\g<0>"), (r"\b(?:online )?reviews?\b", "reputation \\g<0>"),
+    (r"\bcommunications?\b", "pr \\g<0>"), (r"\b(?<!code )(?:online )?reviews?\b", "reputation \\g<0>"),
     (r"\bmachine learning\b", "ml"), (r"\bdata scien(?:ce|tists?)\b", "\\g<0> analytics"), (r"\baccounts? payable\b", "payable"),
     (r"\baccounts? receivable\b", "receivable"), (r"\bops\b", "operations"),
     (r"\b(?:lifecycle|retention|crm) marketing\b", "email marketing \\g<0>"),
     (r"\bfield marketing\b", "event \\g<0>"), (r"\bmarketing analy(?:st|tics)\b", "marketing operations \\g<0>"),
     (r"\b(?:build|ci(?:/cd)?|continuous (?:integration|delivery|deployment)|platform|infrastructure|cloud)\b(?= engineer)",
      "devops \\g<0>"),
-    (r"\bcode reviewers?\b", "senior software engineer"),
+    (r"\bcode review(?:ers?|\s+engineers?)\b", "senior software engineer"),
     (r"\b(?:documentation|docs) (?:engineer|writer|specialist)s?\b", "technical writer")))
 
 
@@ -244,9 +245,13 @@ def _title(title):
     named = _name_words(title)
     words = {word for _, word in named}
     work = _work(title)
+    pins = {PINS[word] for word in words if word in PINS}
+    kind_department = DEPARTMENT_WORDS.get(named[-1][1], "") if named else ""
+    if pins and kind_department:
+        pins.add(kind_department)           # "Product Security Engineer" is an engineer: Engineering's cards may be it
     return {"words": R._words(title), "work": work, "specific": work - GENERIC, "stems": {s for s, _ in named} - RANKS,
-            "heads": bool(words & HEAD_WORDS), "kind": _kind(title),
-            "pins": {PINS[word] for word in words if word in PINS}}
+            "heads": bool(words & HEAD_WORDS), "kind": _kind(title), "pins": pins,
+            "departments": {DEPARTMENT_WORDS[word] for word in words if word in DEPARTMENT_WORDS}}
 
 
 def _ranked(card):
@@ -262,10 +267,13 @@ def _fit(card, t):
         return 0
     name = {stem for stem, _ in _name_words(card["name"])}
     kind = t["kind"]
-    if kind and not SAME_KIND.get(kind, {kind}) & name and not (_ranked(card) and name & t["specific"]):
+    ranked_here = _ranked(card) and name & t["specific"] and (not t["departments"] or card["department"] in t["departments"])
+    if kind and not SAME_KIND.get(kind, {kind}) & name and not ranked_here:
         # A designer is not the UX Writer, an engineer not a specialist; a job of one kind may be a template named by
         # rank on the work itself ("Release Engineer" is the Release Manager, "Social Media Coordinator" the Social
-        # Media Manager), never on a field ("Product Designer" is not the Product Manager) nor a head's.
+        # Media Manager), never on a field ("Product Designer" is not the Product Manager) nor a head's, and only in the
+        # departments its words name ("Software Development Engineer" is not the Learning and Development Specialist;
+        # "Brand Designer" may be Marketing's Brand Manager).
         return 0
     if t["heads"] and card.get("lead"):
         # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of People,
@@ -698,12 +706,14 @@ def _may_hire(auth, c, who, row):
 
 def top_card(auth, onboarding, c, who, row):
     """The raw card of the template Recruit ranks first for the seat, or None when none fits it (no Strong or Good match,
-    nor in the department the job is in: a "Rust engineer" is Engineering's). A cloud agent's add to a seat builds its bot
+    unless the seat is a coding job, which builds from its department's first). A cloud agent's add to a seat builds its bot
     from this card, since a bot's repository is built from a template."""
     found = candidates(auth, onboarding, c, who, row["id"])
     ranked = found["candidates"]
     _, cards = _recruitable(onboarding)
-    fits = ranked and (ranked[0]["match"] or (found["department"] and ranked[0]["department_id"] == found["department"]))
+    # A coding seat with no Strong or Good template ("Engineer") still builds from Engineering's first: the agent writes
+    # the code, the template only gives the bot its repository.
+    fits = ranked and (ranked[0]["match"] or (found["agents"] and ranked[0]["department_id"] == found["department"]))
     template = ranked[0]["template"] if fits else ""   # a template that does not fit is not one
     return next((card["raw"] for card in cards if card["template"] == template), None)
 

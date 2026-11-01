@@ -172,7 +172,9 @@ def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_jo
                             ("Release Engineer", "release-notes"), ("Developer Relations Engineer", "developer-advocate"),
                             ("DevRel", "developer-advocate"), ("Documentation Engineer", "docs-writer"),
                             ("Code Reviewer", "pr-reviewer"), ("Software Engineer", "pr-reviewer"),
-                            ("Tax accountant", "tax"), ("Key account manager", "account-manager")):
+                            ("Tax accountant", "tax"), ("Key account manager", "account-manager"),
+                            ("Software Development Engineer", "pr-reviewer"), ("Code Review Engineer", "pr-reviewer"),
+                            ("Product Security Engineer", "security-engineer")):
         assert (recruiting._best_card(cards, title) or {}).get("template") == template, title
     for title in ("Influencer Marketing Manager", "Partner Marketing Manager", "Affiliate Marketing Manager",
                   "Marketing Coordinator", "Digital Marketing Manager", "Backend Engineer", "Go Developer",
@@ -208,6 +210,15 @@ def test_strong_is_the_template_that_is_the_job_and_a_coding_job_has_the_cloud_a
     influencer = found("Influencer Marketing Manager")
     assert {c["department_id"] for c in influencer["candidates"][:5]} == {"marketing"}
     assert all(c["match"] != "strong" for c in influencer["candidates"])
+
+    # A cloud agent's add builds from the top template: one that fits, or Engineering's first for a coding seat.
+    def top(title):
+        seat = post(api, "seats", {"title": title, "reports_to": "coo", "description": ""})
+        with api.app.state.store.read() as c:
+            row = c.execute("SELECT * FROM seats WHERE id=?", (seat["id"],)).fetchone()
+            card = recruiting.top_card(api.app.state.auth, api.app.state.onboarding, c, Identity("human:ana", "owner"), row)
+        return card and card["department"]
+    assert top("Engineer") == "engineering" and top("Tech Lead") is None
 
 
 def test_a_model_draft_opens_in_the_catalog_s_voice():
