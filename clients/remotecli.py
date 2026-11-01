@@ -829,6 +829,10 @@ def run(args, who=None):
         page = client.get(f"conversations/{args.conversation}/messages", before=args.before, since=args.since)
         return {"conversation": page.get("conversation"), "messages": page.get("messages", []),
                 "has_more": bool(page.get("has_more")), "next_before": page.get("next_before")}
+    if fn == "thread link-slack":                  # the MCP tool of the same name: the CLI and MCP run one function
+        from clients import hubtools
+        return hubtools.BY_NAME["hub_thread_link_slack"]["fn"](client, {
+            "thread": args.thread, "channel": args.channel, "history": args.history, "off": args.off, "operation_id": key})
     if cmd == "automation":
         return automation(client, args)
     if cmd == "release":

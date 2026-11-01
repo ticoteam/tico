@@ -215,7 +215,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36",
         "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
         "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field",
-        "roadmaps_explicit_public_text", "strategy-bot", "task_session_default", "usage-count"]
+        "roadmaps_explicit_public_text", "strategy-bot", "task_session_default", "threads-migration", "usage-count"]
 
 
 def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, world):
@@ -513,8 +513,9 @@ def test_direct_refs_cannot_override_denied_conversation_task(api, world, unknow
         hidden = H.task_create(c, 'human:ben', 'Hidden conversation source', '', 'bot:finance', private=True, lint=False)
         c.execute('UPDATE conversations SET task_id=? WHERE id=?',
                   ('unknown-fixture-task' if unknown else hidden['id'], room))
-    # The attempt's room grant is still valid, isolating the provenance denial.
-    assert query(api, 'SELECT id FROM conversations WHERE id=?', world['attempt']['token'], params=[room])['rows'] == [[room]]
+    # The attempt's room grant no longer opens a room of a task the bot may not read: SQL fences it as the API does
+    # (threads.readable_sql). ReadIndex below still checks the provenance denial on its own.
+    assert query(api, 'SELECT id FROM conversations WHERE id=?', world['attempt']['token'], params=[room])['rows'] == []
     with store.read() as c:
         who = Identity('bot:ops', 'bot', attempt_id=world['attempt']['id'])
         fast, recursive = ReadIndex(c, who), ReadIndex(c, who)
@@ -676,14 +677,15 @@ def test_carried_private_tasks_and_unknown_plain_rooms_stay_hidden(api, world):
     with store.transaction() as c:
         c.execute('UPDATE conversations SET task_id=? WHERE id=?',
                   (hidden['id'], world['ana_room']))
-    # A valid room grant cannot expose plain messages from a denied private task.
-    assert rows('conversations', world['ana_room']) == [[world['ana_room']]]
+    # A valid room grant cannot expose a denied private task's room or its plain messages (threads.readable_sql
+    # fences the room as Auth.conversation does).
+    assert rows('conversations', world['ana_room']) == []
     assert rows('messages', msg['id']) == []
     with store.transaction() as c:
         c.execute('UPDATE conversations SET task_id=? WHERE id=?',
                   ('unknown-fixture-task', world['ana_room']))
-    # The room grant remains valid, so the plain-message provenance gate must deny.
-    assert rows('conversations', world['ana_room']) == [[world['ana_room']]]
+    # Nor an unknown task's.
+    assert rows('conversations', world['ana_room']) == []
     assert rows('messages', msg['id']) == []
 
 

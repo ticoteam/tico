@@ -2269,10 +2269,11 @@ STABLE.extend([
     ('/api/v2/bots/{bot}/rules', 'get', 'Rules', 'getBotRules', 'A bot\'s Rules tab: its settings as sentences, then internal and external rules, each paged by its own cursor', None),
     ('/api/v2/rules/stats', 'get', 'Rules', 'getRuleCheckStats', 'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on', None),
     ('/api/v2/rules/check', 'post', 'Rules', 'checkRuleDraft', 'A bot checks a draft as the write it will be; sending that exact draft then costs no second check', None),
-    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The holds on one review task, as its reviewer or the author bot reads them: summaries, a page at a time (next_cursor)', None),
-    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output: only the author bot and the reviewer read it', None),
+    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The held writes the caller may read, as summaries, a page at a time: a review task\'s holds (task), a conversation\'s held writes (thread), or every held write the caller may read', None),
+    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer reads the rest', None),
     ('/api/v2/rule-holds/{hold_id}/keep', 'post', 'Rules', 'keepRuleHold', 'The reviewer keeps it blocked', None),
-    ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce', None),
+    ('/api/v2/rule-holds/{hold_id}/withdraw', 'post', 'Rules', 'withdrawRuleHold', 'The author takes a held write back to edit and resend it; nothing is sent', None),
+    ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce; for a person\'s write that is the rule\'s author, its editors or an admin', None),
     ('/api/v2/rule-holds/{hold_id}/appeal', 'post', 'Rules', 'appealRuleHold', 'The author bot asks the reviewer to look, with why', None),
 ])
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
@@ -2321,6 +2322,26 @@ SCHEMAS['ComputerSubscriptionList'] = obj({
     'capable': items({'type': 'string'})})
 SCHEMAS['ComputerSubscriptionResult'] = obj({
     'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 'n', 'stopped': 'i', 'sessions_reset': 'i'})
+
+TAGS['Slack links'] = ("A thread's link to a Slack channel, both ways (docs/slack.md): asked for by an admin, checked by the "
+                       "gateway, then active, suspended or refused. Admins only.")
+STABLE.extend([
+    ('/api/v2/slack/links', 'get', 'Slack links', 'listSlackLinks', 'The Slack links of a thread (`thread`), newest first, '
+     'up to `limit` (at most 100); unlinked ones are left out', 'SlackLinkList'),
+    ('/api/v2/slack/links', 'post', 'Slack links', 'requestSlackLink', 'Ask for a thread to be linked to a Slack channel '
+     '(`#name` or its id): the gateway checks it and activates or refuses it later; `history` also brings in its earlier '
+     'messages', 'SlackLink'),
+    ('/api/v2/slack/links/{link_id}', 'delete', 'Slack links', 'unlinkSlackLink', 'Stop a Slack link: nothing more is sent '
+     'to the channel after this; answers the link, now unlinked', 'SlackLink'),
+    ('/api/v2/slack/links/{link_id}/resume', 'post', 'Slack links', 'resumeSlackLink', 'Check a suspended or refused link '
+     'again; any other state answers 409', 'SlackLink'),
+])
+SCHEMAS['SlackLink'] = obj({
+    'id': 's', 'thread_id': 's', 'channel': obj({'id': 's', 'name': 's', 'private': 'b'}),
+    'audience': 's', 'state': {'enum': ['requested', 'active', 'suspended', 'refused', 'unlinked']}, 'reason': 's',
+    'history': obj({'state': {'enum': ['off', 'pending', 'running', 'done', 'failed']}, 'count': 'i'}),
+    'linked_by': 's', 'created_at': 's', 'updated_at': 's'})
+SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink'))})
 
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "

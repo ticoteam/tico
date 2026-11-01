@@ -10,7 +10,7 @@ declared_as: |
   - service: slack
     identity: the company workspace
     can: [read]                     # add `post` to write to channels and DM people
-    channels: [marketing]           # optional read allow-list; omit only for broad roles
+    channels: [marketing]           # optional: read these too, on top of the channels that list this bot as a reader
     dms: false                      # optional: refuse the shared DM inbox
     env: SLACK_BOT_TOKEN
 writes: allowed
@@ -53,7 +53,7 @@ $HUB_DIR/connectors/slack.py reply --as <slug> --to person@example.com --thread 
 $HUB_DIR/connectors/slack.py file --as <slug> --id F0123ABCD   # a shared screenshot or log, from its [file F...] line
 ```
 
-Inside a hosted turn `HUB_BOT` stands in for `--as`. Exit codes: `0` ok, `1` failure
+Inside a hosted turn the bot is the one its `HUB_TOKEN` belongs to, and its scope applies with or without `HUB_BOT`. `--as` or `HUB_BOT` may only name that same bot. Exit codes: `0` ok, `1` failure
 (token, network, Slack), `2` a hub policy refused it. `--json` gives errors as
 `{"ok": false, "error", "hint"}`.
 

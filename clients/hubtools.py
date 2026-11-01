@@ -5009,6 +5009,38 @@ def slack_channel_import(api, args):
     return _as_person(api).post("slack/channels/import", {}, key=_key(args))
 
 
+@tool("hub_thread_link_slack", "Link a thread to a Slack channel, list its Slack links, or take them away, as the person who "
+      "asked you (an owner or an admin). With a channel, asks for the link: Tico checks the channel and the thread, then "
+      "activates it or refuses it, and `state` says which (the thread alone shows it again). `history` with a channel also "
+      "brings in the channel's earlier messages. `off` takes the thread's Slack links away. With neither, lists them.",
+      {"thread": _s("The thread's id: the root of a company or members thread"),
+       "channel": _CHANNEL,
+       "history": {"type": "boolean", "default": False, "description": "With a channel: bring in its earlier messages too"},
+       "off": {"type": "boolean", "default": False, "description": "Take the thread's Slack link away"}},
+      required=("thread",), writes=True)
+def thread_link_slack(api, args):
+    """`hub thread link-slack` runs this same tool (clients/remotecli.py), so the CLI and MCP cannot differ."""
+    thread = str(args.get("thread") or "").strip()
+    channel = str(args.get("channel") or "").strip()
+    history, off = bool(args.get("history")), bool(args.get("off"))
+    if not thread:
+        raise APIError("usage", "Give the thread's id")
+    if off and (channel or history):
+        raise APIError("usage", "--off takes the thread's Slack link away: it takes no channel and no --history")
+    if history and not channel:
+        raise APIError("usage", "--history brings in a channel's earlier messages: name the channel too")
+    person = _as_person(api)
+    if channel:
+        return person.post("slack/links", {"thread_id": thread, "channel": channel, "history": history}, key=_key(args))
+    listing = person.get("slack/links", thread=thread, limit=100)
+    if not off:
+        return listing
+    if not listing["links"]:
+        raise APIError("not_found", "This thread has no Slack link to take away")
+    return {"links": [person.call("DELETE", "slack/links/" + quote(link["id"], safe=""), None, _key(args, ":" + link["id"]))
+                      for link in listing["links"]]}
+
+
 @tool("hub_credential_request", "Open a card in the conversation for the person to type a secret into: what it is for, the format, "
       "where to get one. The value goes straight to Credentials and is granted to the bot; you never see it. You are woken when "
       "it is saved: then test the connection and report, or open the card again if it fails. Use this whenever a bot needs a "
@@ -6755,6 +6787,9 @@ def _present(values):
 
 
 RULE_VERSION = {"type": "integer", "minimum": 1, "description": "The rule's version as you read it"}
+RULE_WHERE = {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": "Where it applies, any of: "
+              "thread:<id> (a conversation), team:<group>, kind:dm (a direct chat), has_outside_members. Empty or left "
+              "out: everywhere"}
 
 
 @tool("hub_rules_list", "The org rules in force, newest first, paged: internal (between teammates) and external "
@@ -6828,11 +6863,11 @@ def rules_ask(api, args):
                                "section": _s("The section it is in"), "quote": _s("The exact words")},
                 "required": ["file_id", "quote"]},
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
-       "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
+       "where": RULE_WHERE, "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
       required=("kind", "text"), writes=True)
 def rules_add(api, args):
-    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "source_id", "cite",
-                                              "if_broken", "reviewer")})
+    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "where", "source_id",
+                                              "cite", "if_broken", "reviewer")})
     who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
     return who.post("rules", body, key=_key(args))
 
@@ -6840,11 +6875,11 @@ def rules_add(api, args):
 @tool("hub_rules_edit", "Edit an org rule: only the fields sent, against the version you read. A bot cannot edit.",
       {"id": _s("The rule's id"), "version": RULE_VERSION, "text": _s("The rule in one sentence"),
        "description": _s("Longer text"), "who": _rule_scope("Who follows it"), "with": _rule_scope("Internal: with whom"),
-       "source_id": _s("External: the From, by name or id"),
+       "source_id": _s("External: the From, by name or id"), "where": RULE_WHERE,
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]}, "reviewer": _s("A reviewer")},
       required=("id", "version"), writes=True)
 def rules_edit(api, args):
-    body = _present({k: args.get(k) for k in ("version", "text", "description", "who", "with", "source_id",
+    body = _present({k: args.get(k) for k in ("version", "text", "description", "who", "with", "where", "source_id",
                                               "if_broken", "reviewer")})
     return _as_person(api).post(f"rules/{args['id']}", body, key=_key(args))
 

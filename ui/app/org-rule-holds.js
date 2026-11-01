@@ -1,9 +1,10 @@
 /* ui/app/org-rule-holds.js — What org rule checks show (backend/org_rule_check.py, docs/rules-plan.md §3, board Held):
    on a review task (tagged rule-review) each held output with its rule and the reviewer's three actions, Keep blocked,
-   Send anyway and Edit rule; the one-line note a person sees in a chat when a bot's reply was held; and the checks line
-   in the Rules page header ("Checks on · 12 today · 0 unchecked · $48 left"). GET /api/v2/rule-holds?task=<id> lists a
-   task's holds a page at a time, as summaries; each card's text (and the reviewer's nonce) is read from
-   GET /api/v2/rule-holds/<hold>. Both answer only the reviewer and the author bot.
+   Send anyway and Edit rule; the one-line note a person sees in a chat when a bot's reply was held; a person's own held
+   message in their chat (the rule, Edit and resend, or Send anyway for an editor of the rule); and the checks line in
+   the Rules page header ("Checks on · 12 today · 0 unchecked · $48 left · $3 on people").
+   GET /api/v2/rule-holds?task=<id> lists a task's holds a page at a time, as summaries; each card's text (and the
+   reviewer's nonce) is read from GET /api/v2/rule-holds/<hold>. Both answer only the reviewer and the author bot.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -65,11 +66,13 @@ function ruleHoldHTML(h) {
     ${decided ? `<p class="muted rh-done">${decided}</p>` : reviewer ? `<div class="rh-acts">
       ${rule ? `<a class="ghost small rh-btn" href="${esc(ruHref(rule.kind, {rule: rule.id}))}">Edit rule</a>` : ''}
       ${h.can_send ? `<button class="ghost small" type="button" data-hold-send="${esc(h.nonce || '')}">Send anyway</button>` : ''}
-      <span class="spacer"></span><button class="primary small" type="button" data-hold-keep>Keep blocked</button></div>` : ''}
+      <span class="spacer"></span><button class="primary small" type="button" data-hold-keep>Keep blocked</button></div>`
+      : h.can_withdraw ? `<div class="rh-acts"><span class="spacer"></span><button class="primary small" type="button" data-hold-edit>Edit and resend</button></div>` : ''}
     <p class="rh-err" role="status" hidden></p>
   </article>`;
 }
-function ruleHoldsWire(slot, id) {
+// `after(card, hold, path)` runs once an action is taken; a task's cards redraw in place, a chat's leave the thread.
+function ruleHoldsWire(slot, id, after = card => ruleHoldRedraw(slot, id, card)) {
   slot.querySelectorAll('[data-hold]:not([data-wired])').forEach(card => {
     card.dataset.wired = '1';
     const hid = card.dataset.hold, err = $('.rh-err', card);
@@ -78,7 +81,7 @@ function ruleHoldsWire(slot, id) {
       err.hidden = true;
       try {
         await post('/v2/rule-holds/' + encodeURIComponent(hid) + '/' + path, body);
-        await ruleHoldRedraw(slot, id, card);
+        await after(card, hid, path);
       } catch (e) {
         err.textContent = e.message; err.hidden = false;
         card.querySelectorAll('button').forEach(b => { b.disabled = false; });
@@ -86,6 +89,7 @@ function ruleHoldsWire(slot, id) {
       }
     };
     $('[data-hold-keep]', card)?.addEventListener('click', ev => act('keep', {}, ev.currentTarget));
+    $('[data-hold-edit]', card)?.addEventListener('click', ev => act('withdraw', {}, ev.currentTarget));
     $('[data-hold-send]', card)?.addEventListener('click', ev => act('send', {nonce: ev.currentTarget.dataset.holdSend}, ev.currentTarget));
   });
 }
@@ -97,6 +101,46 @@ function ruleHeldNoteHTML(m) {
     esc(plainActors(m.body))}<div class="chat-meta"><time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time></div></div>`;
 }
 
+// ----------------------------------------------------------------- a person's own held message, in their chat
+// The holds a chat shows under its messages: the person's own held writes (with the rule, and Edit and resend), and those
+// an editor of the rule may send or keep. A held send is shown at once from its answer; the list is read when the chat
+// is drawn (ui/app/chat.js v2ChatRender), so a reopened chat still shows what is held.
+async function ruleChatHoldsLoad(state) {
+  const thread = state.conv?.id;
+  if (!thread) return;
+  let page = {holds: []};
+  try { page = await get('/v2/rule-holds?thread=' + encodeURIComponent(thread), {fresh: true}); } catch { return; }
+  const holds = (await Promise.all((page.holds || []).map(h =>
+    get('/v2/rule-holds/' + encodeURIComponent(h.id), {fresh: true}).catch(() => null)))).filter(Boolean);
+  if (V2C !== state || state.conv?.id !== thread) return;
+  // A hold shown since the list was asked for stays until the list is read again.
+  state.holds = [...(state.holds || []).filter(h => !holds.some(x => x.id === h.id)), ...holds];
+  v2ChatRender(state);
+}
+// A held send, as its answer gives it: its card under the chat, and the text back in the box once Edit and resend is taken.
+function ruleChatHeld(state, hold) {
+  state.holds = [hold, ...(state.holds || []).filter(h => h.id !== hold.id)];
+  if (V2C === state) v2ChatRender(state);
+}
+// A chat's cards: an action takes its card out of the thread; Edit and resend also puts the text back in this bot's box.
+function ruleChatWire(state, thread) {
+  ruleHoldsWire(thread, state.conv?.id, (card, hid, path) => {
+    const hold = (state.holds || []).find(h => h.id === hid);
+    state.holds = (state.holds || []).filter(h => h.id !== hid);
+    if (path === 'withdraw' && hold?.text && !hold.text_cut) ruleRestoreDraft(state.slug, hold.text);
+    if (V2C === state) v2ChatRender(state);
+  });
+}
+function ruleRestoreDraft(slug, text) {
+  if (BOT_PILL?.slug !== slug) return;
+  const box = pq(BOT_PILL, '.p-text');
+  if (!box) return;
+  box.value = text;
+  box.dispatchEvent(new Event('input', {bubbles: true}));
+  pillButtons(BOT_PILL);
+  box.focus();
+}
+
 // ----------------------------------------------------------------- the Rules page header
 // "Checks on · N today · N unchecked · $N left", or "Checks off". Mounted into the Rules page's header (ui/app/org-rules.js)
 // whenever that page is drawn; a person who may not read the stats sees nothing.
@@ -105,7 +149,17 @@ function ruleChecksLineText(s) {
   if (!s.on) return 'Checks off';
   const parts = ['Checks on', `${s.checks_today} today`, `${s.unchecked_today} unchecked`];
   if (s.usd_left != null) parts.push(`$${Math.round(s.usd_left)} left`);
+  if (s.people_usd > 0) parts.push(`$${Number(s.people_usd.toFixed(2))} on people`);
   return parts.join(' · ');
+}
+// Whether checks are on, for a composer's "Checking…": read at most once a minute, and off when the stats are not read.
+let RH_ON = {at: 0, on: false};
+async function ruleChecksOn() {
+  if (Date.now() - RH_ON.at < 60000) return RH_ON.on;
+  let on = false;
+  try { on = !!(await get('/v2/rules/stats', {fresh: true})).on; } catch { on = false; }
+  RH_ON = {at: Date.now(), on};
+  return on;
 }
 // Called by pageRules once it has drawn its header.
 async function ruleChecksMount(head) {

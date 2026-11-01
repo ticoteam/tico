@@ -1142,6 +1142,8 @@ class Store:
             c.executescript(_task_rules.SCHEMA)
             from . import audit_log as _audit_log
             c.executescript(_audit_log.SCHEMA)
+            from . import teammate_access as _teammate_access
+            _teammate_access.ensure(c)              # people's and groups' See/Read/Write (docs/permissions.md)
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
@@ -1214,6 +1216,8 @@ class Store:
             c.executescript(_invariants.SCHEMA)
             from . import slack_channels as _slack_channels
             c.executescript(_slack_channels.SCHEMA)
+            from . import slack_threads as _slack_threads
+            _slack_threads.ensure(c)
             from . import flight as _flight
             c.executescript(_flight.SCHEMA)
             for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER")):

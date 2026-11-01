@@ -190,3 +190,15 @@ def test_rules_due_takes_the_next_window_and_list_is_the_same_view(api):
     upcoming = cli(api, "ana-test", "due", "--next", "30d")
     assert [d["id"] for d in upcoming["due"]] == [due["id"]]
     assert cli(api, "ana-test", "due", "list", "--next", "30d")["due"] == upcoming["due"]
+
+
+def test_the_cli_and_the_mcp_set_and_clear_where_a_rule_applies(api):
+    org(api)
+    added = cli(api, "ana-test", "add", "--kind", "internal", "--text", "Support writes are reviewed.", "--everyone",
+                "--where", "team:support", "--where", "kind:dm")
+    assert set(added["where"]) == {"team:support", "kind:dm"}
+    edited = cli(api, "ana-test", "edit", added["id"], "--version", str(added["version"]),
+                 "--where", "has_outside_members")
+    assert edited["where"] == ["has_outside_members"]
+    _, cleared = mcp(api, "hub_rules_edit", {"id": added["id"], "version": edited["version"], "where": []})
+    assert cleared["where"] == []

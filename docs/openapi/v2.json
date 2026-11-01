@@ -161,6 +161,10 @@
     {
       "name": "Model subscriptions",
       "description": "The company's saved model logins and keys, given to computers per runtime. A value is sent only to add or reconnect one; no answer carries it."
+    },
+    {
+      "name": "Slack links",
+      "description": "A thread's link to a Slack channel, both ways (docs/slack.md): asked for by an admin, checked by the gateway, then active, suspended or refused. Admins only."
     }
   ],
   "paths": {
@@ -21590,16 +21594,39 @@
     },
     "/api/v2/rule-holds": {
       "get": {
-        "summary": "The holds on one review task, as its reviewer or the author bot reads them: summaries, a page at a time (next_cursor)",
+        "summary": "The held writes the caller may read, as summaries, a page at a time: a review task's holds (task), a conversation's held writes (thread), or every held write the caller may read",
         "operationId": "listRuleHolds",
         "parameters": [
           {
             "name": "task",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Task"
+            }
+          },
+          {
+            "name": "thread",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Thread"
             }
           },
           {
@@ -21666,7 +21693,7 @@
     },
     "/api/v2/rule-holds/{hold_id}": {
       "get": {
-        "summary": "One held output: only the author bot and the reviewer read it",
+        "summary": "One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer reads the rest",
         "operationId": "getRuleHold",
         "parameters": [
           {
@@ -21854,7 +21881,7 @@
     },
     "/api/v2/rule-holds/{hold_id}/send": {
       "post": {
-        "summary": "The reviewer sends it anyway, once, with the hold's nonce",
+        "summary": "The reviewer sends it anyway, once, with the hold's nonce; for a person's write that is the rule's author, its editors or an admin",
         "operationId": "sendRuleHold",
         "parameters": [
           {
@@ -21882,6 +21909,75 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/HoldSend"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Rules"
+        ]
+      }
+    },
+    "/api/v2/rule-holds/{hold_id}/withdraw": {
+      "post": {
+        "summary": "The author takes a held write back to edit and resend it; nothing is sent",
+        "operationId": "withdrawRuleHold",
+        "parameters": [
+          {
+            "name": "hold_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Hold Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HoldEmpty"
               }
             }
           }
@@ -24175,6 +24271,251 @@
             },
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
+        ]
+      }
+    },
+    "/api/v2/slack/links": {
+      "get": {
+        "summary": "The Slack links of a thread (`thread`), newest first, up to `limit` (at most 100); unlinked ones are left out",
+        "operationId": "listSlackLinks",
+        "parameters": [
+          {
+            "name": "thread",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Thread"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackLinkList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Slack links"
+        ]
+      },
+      "post": {
+        "summary": "Ask for a thread to be linked to a Slack channel (`#name` or its id): the gateway checks it and activates or refuses it later; `history` also brings in its earlier messages",
+        "operationId": "requestSlackLink",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Slack links"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/slack/links/{link_id}": {
+      "delete": {
+        "summary": "Stop a Slack link: nothing more is sent to the channel after this; answers the link, now unlinked",
+        "operationId": "unlinkSlackLink",
+        "parameters": [
+          {
+            "name": "link_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Link Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Slack links"
+        ]
+      }
+    },
+    "/api/v2/slack/links/{link_id}/resume": {
+      "post": {
+        "summary": "Check a suspended or refused link again; any other state answers 409",
+        "operationId": "resumeSlackLink",
+        "parameters": [
+          {
+            "name": "link_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Link Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Slack links"
         ]
       }
     },
@@ -46456,6 +46797,34 @@
         "type": "object",
         "title": "LinkEdit"
       },
+      "LinkRequest": {
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Thread Id"
+          },
+          "channel": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Channel"
+          },
+          "history": {
+            "type": "boolean",
+            "title": "History",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "thread_id",
+          "channel"
+        ],
+        "title": "LinkRequest"
+      },
       "LinkedDoc": {
         "type": "object",
         "properties": {
@@ -50041,6 +50410,14 @@
               }
             ],
             "title": "Reviewer"
+          },
+          "where": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Where"
           }
         },
         "additionalProperties": false,
@@ -50170,6 +50547,21 @@
               }
             ],
             "title": "Reviewer"
+          },
+          "where": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Where"
           }
         },
         "additionalProperties": false,
@@ -51189,6 +51581,111 @@
         ],
         "title": "ServiceKeyCreate",
         "description": "A service key (backend/service_keys.py): the label names the system that holds it, on every\ntask it files. `tasks` files tasks; `update` checks for, starts and follows an update of this install."
+      },
+      "SlackLink": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "private": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "private"
+            ],
+            "additionalProperties": true
+          },
+          "audience": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "requested",
+              "active",
+              "suspended",
+              "refused",
+              "unlinked"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "history": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "enum": [
+                  "off",
+                  "pending",
+                  "running",
+                  "done",
+                  "failed"
+                ]
+              },
+              "count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "count",
+              "state"
+            ],
+            "additionalProperties": true
+          },
+          "linked_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "audience",
+          "channel",
+          "created_at",
+          "history",
+          "id",
+          "linked_by",
+          "reason",
+          "state",
+          "thread_id",
+          "updated_at"
+        ],
+        "additionalProperties": true
+      },
+      "SlackLinkList": {
+        "type": "object",
+        "properties": {
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SlackLink"
+            }
+          }
+        },
+        "required": [
+          "links"
+        ],
+        "additionalProperties": true
       },
       "SleepSet": {
         "properties": {
