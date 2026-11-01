@@ -1041,8 +1041,12 @@ Backups are on from the first start. Inside the server container, Litestream cop
 | `TICO_BACKUP=off` | nowhere | nothing |
 
 Without a bucket the server logs a warning at start and every hour, and the config payload
-(`GET /api/v2/config`) carries `backup: {mode, last_replicated_at, target_kind, warning}` with `mode` one of
-`remote`, `local-only` or `off`, so the app can show it to the owner. Point it at a bucket when you can:
+(`GET /api/v2/config`) carries `backup: {mode, last_replicated_at, reason, behind_since, checked_at, unsent_files, target_kind, warning}`
+with `mode` one of `remote`, `local-only` or `off`, so the app can show it to the owner. A copy is behind when Litestream
+holds a change the backup location lacks, and `behind_since` is when that began. Health warns once that has lasted longer
+than the greater of 10 minutes and 10 sync intervals, and marks it bad past the greater of an hour and that. A quiet
+database is never behind, however old its last copy. `checked_at` is when the loop last read the backup location; once it is older than the same warning time, Health warns that the location may be unreachable. It reports a stuck backup when more files pile up in
+Litestream's local level-0 folder (`unsent_files`) than a healthy install holds between uploads: more than 1,000, or two sync intervals' worth of one-second files (`TICO_BACKUP_SYNC_INTERVAL`) when that is more. Restart the server first. Point it at a bucket when you can:
 
 ```
 TICO_BACKUP_URL=s3://my-bucket/tico
@@ -1088,6 +1092,31 @@ starts with an empty volume it first restores; if the restore fails (wrong key, 
 to exist, or the backup cannot be read at all, it refuses to start and says why, instead of creating an empty team
 and replicating it over your backup. A genuinely new install (nothing anywhere) starts as usual. To begin a new
 team over an existing backup on purpose, set `TICO_INITIALIZE_EMPTY=1` (or run `server --initialize-empty`).
+
+**A stuck copy moves to a new generation.** The copy is kept in generations: the backup location itself holds the first,
+and a new one is a folder `gen-<UTC time>/` beside it (for example `gen-20261101T120000Z/`). `environment.json` names the
+current generation in its `generation` field; a backup without that field is the first one. The server starts a new
+generation when the copy is stuck: its local state holds more than 5,000 copies (a healthy install keeps about 200), and
+the replica has not received a new copy for 20 minutes while the database kept changing. Both limits grow with
+`TICO_BACKUP_SYNC_INTERVAL`: three sync intervals of copies, and two sync intervals without a new one, when that is more
+than the numbers above (an hourly sync allows 10,800 copies and two hours). It then stops Litestream, the
+container restarts, and the new generation starts from the database. The copy it had stays where it is, and the other
+fields of `environment.json` are kept. To ask for a new generation by hand, create `/data/.tico-backup-heal` in the
+server's data volume and run `docker compose restart server`. A new generation is started at most once every 6 hours. A
+request inside that window is dropped and the server log says so; a copy that is still stuck when the window ends asks
+again. A request waits only while the backup location cannot be read. If a switch to a new generation was interrupted, the
+server keeps running and Litestream waits, retrying the backup location every 30 seconds, then every 5 minutes, until it
+can be read; then the switch finishes. A stop of the container ends the wait.
+
+The data volume also holds `/data/.tico-backup-generation`, the generation the database is in. A start reads that file
+and not the backup location, so an unreachable bucket cannot hold it up. Before Litestream starts, the server reads
+`environment.json` and corrects both the file and the Litestream config to match. If the file is missing, the server
+takes the generation from `environment.json` in the same way; only when that cannot be read on a volume that has a
+database does it use the root layout, as before generations existed. If the file cannot be read, the start stops and
+says so. Once the backup location is reachable, fix the file or remove it, and the next start reads `environment.json`
+again. `restore` and a first start that restores read the current generation, so after a new one they return the newest
+data; if the current generation cannot be read they stop rather than read an older copy. Older generations are kept, and
+nothing deletes them automatically.
 
 <a id="restore"></a>
 
@@ -1155,8 +1184,9 @@ docker compose run --rm --no-deps server restore --force
 docker compose up -d
 ```
 
-Tico keeps the current database as `hub.sqlite.before-restore.<time>` and each different key file as
-`<file>.before-restore.<time>` beside the restored files. The install's permanent id
+Tico keeps the current database as `hub.sqlite.before-restore.<time>`, with its write-ahead log as
+`hub.sqlite.before-restore.<time>-wal` (and `-shm`), so the kept copy opens with every commit it had. Each different key
+file is kept as `<file>.before-restore.<time>` beside the restored files. The install's permanent id
 (`TICO_ENVIRONMENT_ID`) is stored in the database, so it comes back with the restore and the Macs and runners
 already enrolled keep working.
 

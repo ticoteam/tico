@@ -156,13 +156,56 @@ def test_a_computer_stops_on_all_its_queued_work_not_what_the_viewer_may_read(en
     assert issue["title"] == "Owner Mac stopped checking in" and issue["needs_person"]
 
 
-def test_backups_local_only_and_stale(environment, monkeypatch):
+def test_backups_are_judged_by_how_long_they_have_been_behind_not_by_the_copy_age(environment, monkeypatch):
     api = environment()
     old = H.shift(H.now(), hours=-30)
-    with_backup(monkeypatch, {"mode": "remote", "last_replicated_at": old, "target_kind": "s3"})
-    assert health_of(api)[1]["backups"]["status"] == "warn"
+    # A quiet database: its newest copy is a day old, and nothing is behind it.
+    with_backup(monkeypatch, {"mode": "remote", "last_replicated_at": old, "behind_since": None, "target_kind": "s3"})
+    assert health_of(api)[1]["backups"]["status"] == "ok"
+    with_backup(monkeypatch, {"mode": "remote", "last_replicated_at": old, "behind_since": old, "target_kind": "s3"})
+    assert health_of(api)[1]["backups"]["status"] == "bad"
     with_backup(monkeypatch, {"mode": "off"})
     assert health_of(api)[1]["backups"]["status"] == "bad"
+
+
+def test_lag_is_judged_by_how_long_it_has_lasted_against_the_sync_interval(monkeypatch):
+    from types import SimpleNamespace
+
+    from backend import health
+    remote = SimpleNamespace(loopback=False)
+    status_at = lambda minutes: health._backups(
+        {"backup": {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now(),
+                    "behind_since": H.shift(H.now(), minutes=-minutes)}}, remote)["status"]
+    monkeypatch.delenv("TICO_BACKUP_SYNC_INTERVAL", raising=False)
+    assert [status_at(m) for m in (5, 15, 120)] == ["ok", "warn", "bad"]
+    # Ten sync intervals is the warning time: ten minutes at 1m, a hundred minutes at 10m.
+    monkeypatch.setenv("TICO_BACKUP_SYNC_INTERVAL", "10m")
+    assert [status_at(m) for m in (30, 90, 110)] == ["ok", "ok", "bad"]
+
+
+def test_a_replica_with_no_database_file_says_copies_are_not_arriving():
+    from types import SimpleNamespace
+
+    from backend import health, replication
+    backup = {"mode": "remote", "target_kind": "s3", "last_replicated_at": None, "reason": replication.NO_RECENT_COPY}
+    check = health._backups({"backup": backup}, SimpleNamespace(loopback=False))
+    assert check["status"] == "warn" and check["summary"] == replication.NO_RECENT_COPY
+    assert health._backups({"backup": {"mode": "remote", "last_replicated_at": None}},
+                           SimpleNamespace(loopback=False))["summary"] == "Set up, but nothing has been copied yet."
+    behind = {**backup, "behind_since": H.shift(H.now(), hours=-2)}
+    assert health._backups({"backup": behind}, SimpleNamespace(loopback=False))["status"] == "bad"
+
+
+def test_a_pile_up_of_local_files_is_a_stuck_backup():
+    from types import SimpleNamespace
+
+    from backend import health
+    remote = {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now()}
+    check = lambda **extra: health._backups({"backup": {**remote, **extra}}, SimpleNamespace(loopback=False))
+    assert check(unsent_files=1000)["status"] == "ok"
+    stuck = check(unsent_files=27914)
+    assert stuck["status"] == "warn" and "27,914 unsent files" in stuck["summary"] and stuck["fixes"]
+    assert check(unsent_files=27914, behind_since=H.shift(H.now(), hours=-3))["status"] == "bad"
 
 
 def test_others_see_counts_not_details(environment):
@@ -1141,3 +1184,31 @@ def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(env
         G.pr_signal(c, 'pull_request_review', {'action': 'submitted', 'pull_request': {'html_url': urls[1]},
                     'review': {'id': 1, 'state': 'approved', 'commit_id': '2' * 40, 'user': {'login': 'reviewer'}}})
     assert 'aged_prs' not in health_of(api)[1]
+
+
+def test_a_status_the_loop_has_not_checked_for_too_long_is_a_warning_then_bad(monkeypatch):
+    from types import SimpleNamespace
+
+    from backend import health
+    remote = SimpleNamespace(loopback=False)
+    backup = lambda checked: {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now(), "checked_at": checked}
+    check_at = lambda minutes: health._backups({"backup": backup(H.shift(H.now(), minutes=-minutes))}, remote)
+    monkeypatch.delenv("TICO_BACKUP_SYNC_INTERVAL", raising=False)
+    assert check_at(5)["status"] == "ok"
+    stale = check_at(15)
+    assert stale["status"] == "warn" and stale["summary"].startswith("Backup status not checked since ")
+    assert check_at(120)["status"] == "bad"
+
+
+def test_a_pile_up_is_judged_against_two_sync_intervals_of_local_files(monkeypatch):
+    from types import SimpleNamespace
+
+    from backend import health
+    remote = {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now()}
+    check = lambda unsent: health._backups({"backup": {**remote, "unsent_files": unsent}}, SimpleNamespace(loopback=False))
+    monkeypatch.setenv("TICO_BACKUP_SYNC_INTERVAL", "1m")
+    assert check(1000)["status"] == "ok" and check(1001)["status"] == "warn"
+    monkeypatch.setenv("TICO_BACKUP_SYNC_INTERVAL", "1h")    # a busy database writes about 3,600 files an hour; the limit is 7,200
+    assert check(3600)["status"] == "ok" and check(7200)["status"] == "ok"
+    stuck = check(7201)
+    assert stuck["status"] == "warn" and "7,201 unsent files" in stuck["summary"]

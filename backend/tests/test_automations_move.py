@@ -51,9 +51,11 @@ def old_install(tmp_path, *, routines=True):
 
 
 def files(path):
-    """Every file of the database (main, -wal, -shm, journal) by name, with its hash."""
+    """Every file of the database (main, -wal, journal) by name, with its hash. Not -shm: it is SQLite's shared-memory
+    index, which every reader updates, and connections leave it on disk at close (hubdb.leave_wal_for_litestream)."""
     path = Path(path)
-    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(path.parent.glob(path.name + "*"))}
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(path.parent.glob(path.name + "*"))
+            if not p.name.endswith("-shm")}
 
 
 def start(settings, **changes):
