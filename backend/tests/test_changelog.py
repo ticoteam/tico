@@ -28,11 +28,6 @@ REVISED = {
     "0.3.24": "8d55fe27e343e06a5661cb7b074efba1b81c956c",
     "0.3.58": "95018df598f1d5305f0bdfb094b150ec87958b2a",
     "0.3.64": "bea6bd0adaa4856422b44119370878d3dceb79c2",
-    "0.4.7": "989ddcfaf2d7b4a17884ee8300dfba754ab8ee42",
-    "0.4.8": "989ddcfaf2d7b4a17884ee8300dfba754ab8ee42",
-    "0.4.9": "989ddcfaf2d7b4a17884ee8300dfba754ab8ee42",
-    "0.4.12": "989ddcfaf2d7b4a17884ee8300dfba754ab8ee42",
-    "0.4.15": "989ddcfaf2d7b4a17884ee8300dfba754ab8ee42",
 }
 
 NOTES = """# Changelog
