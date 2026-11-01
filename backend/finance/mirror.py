@@ -2150,6 +2150,9 @@ def _payment_planner(kind: str) -> handlers.Planner:
         if kind == "bill" and who != SYSTEM and not documents.sees_doc(ctx, who, kind, doc):
             raise FinanceError(NOT_FOUND, "no such bill")          # the same refusal as a missing bill
         documents.need_status(kind, doc, documents.OPEN[kind], "only an open one is paid")
+        waits = documents.payment_waits(ctx, doc) if kind == "bill" else ""
+        if waits:
+            raise denied(waits)
         if kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None:
             raise FinanceError(CONFLICT, "a payment for this bill is live; it settles the bill when it clears")
         ref = SX.ref_for_local(ctx.c, cid, table, str(doc["id"]))

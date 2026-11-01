@@ -5,9 +5,12 @@ import pytest
 
 from backend import hubdb as H
 from backend.finance import actions as FA
+from backend.finance import payments as FP
 from backend.finance import reads as FR
+from backend.finance.context import load
 from backend.finance.core import qbo as Q
 from backend.finance.core.errors import FinanceError
+from backend.finance.store import banking as SK
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, store)
 
@@ -222,6 +225,33 @@ def test_an_order_past_a_hold_payment_budget_is_held_and_its_bill_waits_to_be_pa
         paid = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 80_000, "money_account_id": money,
                                                 "obligation": f"bill:{billed.result['bill_id']}",
                                                 "account_id": account(c, "2000")})
+        assert paid.status == "denied" and "waits until it fits" in str(paid.reason), paid
+
+
+def test_a_queued_bill_payment_past_a_hold_payment_budget_waits_and_marking_the_bill_paid_is_refused(books):
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        budget = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"),
+                                                 "amount": 100_000, "at_limit": "hold_payment", "parent_id": None})
+        assert budget.status == "committed", budget
+        money = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        rid = str(act(c, OWNER, "recipient_add", {"name": "Acme Supplies", "method": "ach",
+                                                  "account_number": "000099998888",
+                                                  "routing_number": "000000000"}).result["recipient_id"])
+        vendor = _vendor(c, recipient_id=rid)
+        po = _order(c, vendor, [_line(c, 80_000)])
+        bill = str(_bill(c, vendor, [{"po_line_id": _po_lines(c, po)[0], "amount": 80_000}]).result["bill_id"])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+        queued = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 80_000, "money_account_id": money,
+                                                  "obligation": f"bill:{bill}", "account_id": account(c, "2000")})
+        assert queued.status == "committed", queued
+        pid = str(queued.result["payment_id"])
+        assert act(c, OWNER, "budget_update", {"budget_id": budget.result["budget_id"],
+                                               "amount": 50_000}).status == "committed"
+        # Queued at Mercury, the payment waits (no send, no approval asked of a person) until the budget fits.
+        assert FP.recheck(load(c, AT), SK.get(c, "fin_payments", pid)) == "wait"
+        assert SK.get(c, "fin_payments", pid)["status"] == "queued"
+        paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bill})
         assert paid.status == "denied" and "waits until it fits" in str(paid.reason), paid
 
 

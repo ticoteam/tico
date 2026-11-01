@@ -609,7 +609,10 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     elif str(pay["obligation"] or "").startswith("bill:"):
         # A bill's payment holds no budget (the bill spent it): its bill's budgets are judged again as at the action,
         # so one lowered past its actuals since asks a person first (never refused: the bill is owed either way).
-        from .documents import bill_budget
+        from .documents import bill_budget, payment_waits
+        bill = SK.get(ctx.c, "fin_bills", str(pay["obligation"]).removeprefix("bill:"))
+        if bill is not None and payment_waits(ctx, bill):
+            return "wait"               # a purchase order's bill is paid once its budget fits (never held for a person)
         asks = bill_budget(ctx, str(pay["obligation"]).removeprefix("bill:"))
         # Approved for this budget at the action: it goes, even if that budget dropped further since (the person
         # approved paying this bill past it). A different budget now over asks again, unless the payer may approve.

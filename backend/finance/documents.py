@@ -881,10 +881,19 @@ def bill_payment(ctx: Ctx, who: str, obligation: str, rec: Any, amount: int, lin
         raise invalid("a bill's payment posts to accounts payable (the bill recorded the expense)")
     if not _pays_vendor(ctx, bill, rec):
         raise denied("that recipient is not this bill's vendor")
+    waits = payment_waits(ctx, bill)
+    if waits:
+        raise denied(waits)
+    return _bill_budget_gate(ctx, bill)
+
+
+def payment_waits(ctx: Ctx, bill: Any) -> str:
+    """Why a bill ordered by a purchase order is not paid now: its budget is past its amount at hold_payment, so its
+    payment waits until the budget fits again. "" when the payment may go ahead. Every payment path asks this."""
     _, bid = _bill_worst(ctx, bill)
     if bid and ctx.budgets()[bid].at_limit == "hold_payment" and SP.bill_orders(ctx.c, str(bill["id"])):
-        raise denied(f"the {ctx.budgets()[bid].name} budget is past its amount: this bill's payment waits until it fits")
-    return _bill_budget_gate(ctx, bill)
+        return f"the {ctx.budgets()[bid].name} budget is past its amount: this bill's payment waits until it fits"
+    return ""
 
 
 def _sees_doc(ctx: Ctx, who: str, kind: str, doc: Any) -> bool:
@@ -1363,6 +1372,9 @@ def _pay(kind: str) -> Any:
         V.only(p, (f"{kind}_id", "amount", "date", "feed_id", "money_account_id", "account_id"))
         doc = _doc(ctx, kind, V.text(p, f"{kind}_id", 80))
         _need_status(kind, doc, OPEN[kind], "only an open one is paid")
+        waits = payment_waits(ctx, doc) if kind == "bill" else ""
+        if waits:
+            raise denied(waits)
         if kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None:
             raise FinanceError(CONFLICT, "a payment for this bill is live; it settles the bill when it clears")
         left = _left(kind, doc)
