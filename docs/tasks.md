@@ -873,6 +873,12 @@ an open task, holds its ticket at its step with the check's reason ("QA blocked:
 test run, waiting on Ana"), and the ticket's builder gets one notice in the ticket's room for that
 hold. When the check works again, the ticket returns to its step.
 
+When a task is Blocked by waits Tico tracks, its reason names the open hold or holds and updates when
+they change. A question to a person belongs to the task that asked it: ending a parent task does not
+withdraw a question on an open child. When a question is withdrawn, its asker is told why. Clearing
+the last tracked hold reopens a bot-owned task; an engineering ticket returns to the step it left.
+An owner-written Blocked reason remains manual.
+
 A task filed to DevOps or a person about a blocker can name it: `--blocker <repo> <status> <endpoint>`,
 for example `--blocker acme/app 403 workflow_dispatch`. When an open ask names the same repository, HTTP
 status and endpoint, the new task is not a second ask: it stays with the bot that filed it, blocked by
