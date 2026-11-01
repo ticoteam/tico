@@ -50873,6 +50873,17 @@
             ],
             "title": "Notify Browser"
           },
+          "email_digest": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Digest"
+          },
           "slack_muted_bots": {
             "anyOf": [
               {

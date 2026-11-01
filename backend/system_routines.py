@@ -149,6 +149,8 @@ ACTIONS = {
     "wake_stalled": ("wake the bot on a task nothing is moving", ("stalled", "wake", "tasks")),
     "nudge_asks": ("nudge a person once in their thread when a bot's ask to them stays unanswered for a day",
                    ("ask", "follow up", "nudge", "remind", "thread", "unanswered")),
+    "email_digest": ("email a person once an hour the threads they follow on digest that have new messages: titles, "
+                     "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
     "unstrand": ("send bot tasks waiting on nothing back to work", ("waiting", "tasks")),
     "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
@@ -235,6 +237,10 @@ JOBS = [
         "Nudges a person once, in their thread, when a bot's ask to them stays unanswered for a day. Plain code: no "
         "model is called, and nothing to nudge is a quiet run.",
         REMINDERS, "Every 15 minutes", 900, then=("nudge_asks",)),
+    Job("thread_digest", "Email digest",
+        "Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread "
+        "count and a link, never the messages. Nothing unread is a quiet run.",
+        REMINDERS, "Hourly", 3600, then=("email_digest",)),
     Job("still_needed", "Unanswered questions",
         "On weekday mornings, sends questions unanswered for two business days back to their bots.",
         REMINDERS, "Hourly", 3600, then=("resend_questions",)),
@@ -344,7 +350,7 @@ CONTROLS = {
 
 QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
               "engineering_exceptions", "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest", "thread_followups")   # last runs read by backend/scheduler.py (QUICK and FIXED)
+              "bookkeeper_rules_digest", "thread_followups", "thread_digest")   # last runs read by backend/scheduler.py (QUICK and FIXED)
 
 
 def zone():

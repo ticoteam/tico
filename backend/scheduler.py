@@ -161,6 +161,15 @@ def run_thread_followups(store, auth, at, failures=None):
         run.did(SR.words_of(nudged, "follow-up", "Nothing to follow up"), quiet=not nudged)
 
 
+def run_thread_digest(store, auth, at, failures=None):
+    # One email an hour to each person with threads to list on digest (backend/thread_digest.py). Nothing unread is a
+    # quiet run: no mail and no write.
+    from . import thread_digest
+    with SR.recording(store, "thread_digest", failures, "helper") as run:
+        sent = thread_digest.sweep(store, thread_digest.sender_for(auth))
+        run.did(SR.words_of(sent, "digest", "No digests to send"), quiet=not sent)
+
+
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
          "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check}
@@ -169,7 +178,8 @@ QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_sca
 # six a person switches). The Bookkeeper's pause is their off switch.
 FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
          "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7)),
-         "thread_followups": (run_thread_followups, timedelta(minutes=15))}
+         "thread_followups": (run_thread_followups, timedelta(minutes=15)),
+         "thread_digest": (run_thread_digest, timedelta(hours=1))}
 
 
 def run_now(store, auth, key, actor):

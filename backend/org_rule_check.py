@@ -919,8 +919,8 @@ def _reader_sql(who):
 
 
 def held_for(c, who, operations):
-    """The held writes of these operations that this person reads as their reviewer or as the person it is held for,
-    oldest first, each with its `role`. The owner's and Admins' fallback is not listed: a hold with no reviewer is for
+    """The held writes of these operations that this person reads as their reviewer, as their author, or as the person
+    it is held for, oldest first, each with its `role`. The owner's and Admins' fallback is not listed: a hold with no reviewer is for
     their review page, not a person's list."""
     marks = ",".join("?" * len(operations))
     rows = c.execute(f"SELECT id, author, reviewer, created FROM org_rule_holds WHERE state='held' AND operation IN "
@@ -928,7 +928,7 @@ def held_for(c, who, operations):
     out = []
     for row in rows:
         role = _reader(who, dict(row), c)
-        if role in ("reviewer", "represented"):
+        if role in ("reviewer", "represented", "author"):     # author: a person's own held post
             out.append({**dict(row), "role": role})
     return out
 

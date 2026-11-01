@@ -3129,6 +3129,7 @@ export type PersonAssistant = {
 
 export type PersonUpdate = {
   about?: string | null;
+  email_digest?: boolean | null;
   github?: string | null;
   goals?: string | null;
   left?: boolean | null;
