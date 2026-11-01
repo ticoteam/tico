@@ -70,7 +70,7 @@ class Zoom(Importer):
     def auth(self):
         return {"Authorization": "Bearer " + self.token()}
 
-    def get(self, path, **query):
+    def get(self, path, /, **query):
         url = API + path + ("?" + urllib.parse.urlencode({k: v for k, v in query.items() if v not in (None, "")})
                             if query else "")
         try:

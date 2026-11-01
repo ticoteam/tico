@@ -9,7 +9,8 @@
 Stages, their movers, the owner and the budget come from pipeline.yaml at the repository root. A project is a folder per
 stage (projects/<slug>/<stage>/<asset>). An asset may have a provenance sidecar: the same file name with `.json` added,
 holding `cost_usd`. A self-moved stage is done when its folder holds a `.done` file. The budget raised by the owner is in
-projects/<slug>/budget.json. Approval is `hub file approved <path>`: exit 0 when approved, 1 when not.
+projects/<slug>/budget.json. Approval is `hub file approved <path>`: exit 0 when approved, 1 when its answer says
+`"approved": false`. Any other result stops the pipeline with an error, since a failed call also exits 1.
 Standard library only.
 """
 import argparse
@@ -159,22 +160,32 @@ def approved_by(mover):
     return mover if mover.startswith("bot:") else "human"
 
 
+def answer_of(text):
+    """The JSON object a command printed, or {} when it printed none."""
+    try:
+        value = json.loads(text or "")
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def approval(asset, mover="owner"):
-    """(approved, detail) from `hub file approved --by`: exit 0 approved, 1 not approved, anything else is a failure."""
-    command = ["hub", "file", "approved", rel(asset), "--by", approved_by(mover)]
+    """(approved, detail) from `hub file approved --by`. Exit 0: approved. Exit 1 with an answer that says
+    `"approved": false`: not approved. Anything else raises Problem. The CLI also exits 1 when a call fails (Tico
+    unreachable, an unexpected error), so the code alone is not a verdict: a failed call is never read as pending."""
+    path = rel(asset)
+    command = ["hub", "file", "approved", path, "--by", approved_by(mover)]
     try:
         done = subprocess.run(command, cwd=REPO, capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise Problem(f"hub file approved could not run: {exc}") from None
+        raise Problem(f"hub file approved could not run for {path}: {exc}") from None
+    answer = answer_of(done.stdout)
     if done.returncode == 0:
-        try:
-            detail = json.loads(done.stdout)
-        except ValueError:
-            detail = {}
-        return True, detail if isinstance(detail, dict) else {}
-    if done.returncode == 1:
+        return True, answer
+    if done.returncode == 1 and answer.get("approved") is False:
         return False, {}
-    raise Problem(f"hub file approved exited {done.returncode}: {(done.stderr or done.stdout).strip()[:200]}")
+    output = (done.stderr.strip() or done.stdout.strip())[-500:] or "no output"
+    raise Problem(f"hub file approved exited {done.returncode} for {path}, so its approval is unknown: {output}")
 
 
 # ----------------------------------------------------------------------------- what to do next

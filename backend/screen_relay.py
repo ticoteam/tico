@@ -73,7 +73,7 @@ class RemoteRegistry:
             self.healthy = False
             raise Problem("screen_relay_unavailable", "The screen relay is unavailable. Try again shortly.", 503) from None
 
-    def _command(self, op, **fields):
+    def _command(self, op, /, **fields):
         if not self.healthy:
             raise Problem("screen_relay_unavailable", "The screen relay is unavailable. Try again shortly.", 503)
         self.sequence += 1
