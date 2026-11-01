@@ -81,9 +81,3 @@ def test_an_approval_a_bot_asks_for_is_decided_by_its_owner_and_consumed_once(ap
     again = post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=bot["token"], key="send-1")
     assert again == result                                                          # a repeat is a replay
     post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=bot["token"], expected=422)
-
-
-@pytest.mark.skip(reason="no bot slug rename path exists on main: a bot's slug is its frozen id (see the bot-id rule in "
-                         "the cleanup spec). Add the rename scenario when a rename route lands.")
-def test_a_bot_keeps_its_work_after_its_slug_is_renamed():
-    pass
