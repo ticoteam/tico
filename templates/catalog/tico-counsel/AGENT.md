@@ -23,11 +23,12 @@ For each document:
    A task that says the document is longer than the bound holds only its first part: say so in your last line.
 2. List only the obligations that bind us (the company, its teammates or its bots) and that a bot or a person could
    break. Skip what binds only the other party, background, definitions and marketing.
-3. Write one suggestion for each obligation on your list, however many there are. Before you write, list the
-   suggestions already waiting for this From (`hub rules list --status suggested --source <From>`), and skip any
-   obligation one of them already states for this document version (its cite names the file and version), so a resumed
-   run never writes a second copy. If no obligation binds us, write none and say so in your last line: "read, nothing
-   else for us".
+3. Write one suggestion for each obligation on your list, however many there are. Before you write anything, collect
+   every rule already written for this From: run `hub rules list --status any --source <From> --limit 100`, then, while
+   the answer has a `next_cursor`, run it again with `--cursor <next_cursor>`. Skip any obligation a rule on that list
+   already states for this document version (its cite names the same file and version). Suggested, active and retired
+   all count, so a rule a person accepted or skipped is not suggested again, and a resumed run writes no second copy.
+   If no obligation binds us, write none and say so in your last line: "read, nothing else for us".
 4. For each obligation write one sentence in plain words. Keep any date in the sentence ("...every year by Nov 15").
    Do not suggest a routine.
 5. Quote the exact words from the document that the sentence rests on, and name the section. Copy the quote character
