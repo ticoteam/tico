@@ -23,14 +23,15 @@ Posting is gated in code, not in prompts:
 
 Channel reads are scoped to the channels whose list entry names the bot as a reader, plus any the employee's Slack
 access entry declares under `channels:`. Without `channels:` a bot reads only the channels that name it as a reader.
-`history` uses `--as <slug>`, or `HUB_BOT` (older: `HUB_EMPLOYEE`) inside a hosted run, and refuses any channel outside
-the scope before calling Slack.
+`history` checks the bot that the run's `HUB_TOKEN` belongs to (Tico says whose token it is), so a bot run needs no
+`HUB_BOT`; `--as <slug>` serves a person's terminal, and `HUB_BOT` (older: `HUB_EMPLOYEE`) may only name that same bot.
+It refuses any channel outside the scope before calling Slack.
 
 The channel list lives in Tico's database. In a hosted run (`HUB_API_URL` and `HUB_TOKEN`) this script reads it from
 the hub; the old registry/slack-channels.yaml is read too, until an owner or admin imports it in Settings.
 
-DM reads can likewise be disabled with `dms: false`. `inbox` uses `--as <slug>` or
-`HUB_BOT` and refuses before calling Slack when that flag is present.
+DM reads can likewise be disabled with `dms: false`. `inbox` is checked the same way as `history` and refuses before
+calling Slack when that flag is present.
 
 DMs are gated the same way, plus one more rule: a bot may only DM a company human.
   - the employee needs the same `post` verb on its slack access entry
@@ -454,6 +455,39 @@ def declared_tools(manifest):
 
 def bot_from_env():
     return (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip()
+
+
+def hub_bot():
+    """The bot this run's HUB_TOKEN belongs to, as the hub says (GET /api/v2/me), kept for the process. A bot's turn
+    token or agent credential names its bot with or without HUB_BOT. "" for a person's token, for a token that is not
+    a bot's (a runner, a service key), and for a run with no hub credential (a person's terminal, Slack token only).
+    A run with a hub credential that the hub cannot identify is refused: nothing can say whose scope applies."""
+    if "hub_bot" in _CACHE:
+        return _CACHE["hub_bot"]
+    if not (os.environ.get("HUB_API_URL") and os.environ.get("HUB_TOKEN")):
+        return ""
+    me = HUB_GET("me")
+    actor = str(me.get("actor") or "").strip() if isinstance(me, dict) else ""
+    if not actor:
+        raise Refused("Tico couldn't say which identity this run's HUB_TOKEN is, so nothing was read from Slack.",
+                      "A run asks Tico who it is with HUB_API_URL and HUB_TOKEN; try again once Tico answers.")
+    bot = actor[len("bot:"):].strip() if me.get("role") == "bot" and actor.startswith("bot:") else ""
+    _CACHE["hub_bot"] = bot
+    return bot
+
+
+def scope_slug(as_slug=None):
+    """The bot whose Slack scope a read is checked against, or "" for none. A bot's token decides it: a bot run is
+    checked as its own bot with or without HUB_BOT, and an --as or HUB_BOT that names another bot is refused. A
+    person's run checks --as or HUB_BOT as it always has, and nothing when neither is set."""
+    named = (as_slug or bot_from_env()).strip()
+    bot = hub_bot()
+    if bot:
+        if named and named != bot:
+            raise Refused(f"This run is {bot}, so it may not read Slack as {named}.",
+                          "A bot reads Slack only within its own scope: drop --as and HUB_BOT.")
+        return bot
+    return named
 
 
 def slack_access(manifest, slug):
@@ -1082,7 +1116,7 @@ def shape(m, channel_id, users, team_url, tz, thread_ts=None):
 
 def cmd_history(args):
     refs = [r for chunk in args.channel for r in str(chunk).split(",") if r.strip()]
-    slug = (args.as_slug or bot_from_env()).strip()
+    slug = scope_slug(args.as_slug)
     if slug:
         manifest = load_manifest(slug)
         check_history_scope(manifest, slug, refs)
@@ -1105,7 +1139,7 @@ def cmd_history(args):
 
 
 def cmd_post(args):
-    slug = args.as_slug.strip()
+    slug = scope_slug(args.as_slug)
     manifest = load_manifest(slug)
     check_can_post(manifest, slug)
     check_not_onboarding(slug)
@@ -1135,7 +1169,7 @@ def split_refs(values):
 
 def cmd_dm(args):
     """DM a company human. Every gate below runs before the first network call."""
-    slug = args.as_slug.strip()
+    slug = scope_slug(args.as_slug)
     manifest = load_manifest(slug)
     check_can_post(manifest, slug)                              # (a) the employee may write
     check_not_onboarding(slug)
@@ -1194,7 +1228,7 @@ def conversation_people(conv, directory, me):
 
 
 def cmd_inbox(args):
-    slug = (args.as_slug or bot_from_env()).strip()
+    slug = scope_slug(args.as_slug)
     if slug:
         manifest = load_manifest(slug)
         check_inbox_scope(manifest, slug)
@@ -1254,7 +1288,7 @@ def cmd_inbox(args):
 
 def cmd_file(args):
     """Download a file a person shared: files.info (files:read), then url_private with the bot token."""
-    slug = (args.as_slug or bot_from_env()).strip()
+    slug = scope_slug(args.as_slug)
     manifest = load_manifest(slug) if slug else None
     if slug:
         slack_access(manifest, slug)

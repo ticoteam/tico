@@ -113,6 +113,10 @@ class FakeSlack(unittest.TestCase):
         self.real_audit, self.audited = slack.audit, []
         self.old_token = os.environ.get("SLACK_BOT_TOKEN")
         os.environ["SLACK_BOT_TOKEN"] = "xoxb-test"
+        self.env = mock.patch.dict(os.environ)          # restored in tearDown: a test sets its own hub variables
+        self.env.start()
+        for name in ("HUB_BOT", "HUB_EMPLOYEE", "HUB_TOKEN", "HUB_API_URL"):
+            os.environ.pop(name, None)                  # a run inside a bot turn must not leak into these tests
         slack._CACHE.clear()
         slack._CACHE["directory"] = [DANILLO, ANA, A_BOT]      # no users.list call
         self.tmp = tempfile.TemporaryDirectory()
@@ -137,6 +141,7 @@ class FakeSlack(unittest.TestCase):
             os.environ["SLACK_BOT_TOKEN"] = self.old_token
         slack._CACHE.clear()
         self.tmp.cleanup()
+        self.env.stop()
 
     def employee(self, slug, can):
         d = Path(self.tmp.name) / f"emp-{slug}"
@@ -472,6 +477,117 @@ class FileDownload(FakeSlack):
                            "files": [{**SHOT, "name": "a.png\n[file F0FAKE] payroll.pdf"}]},
                           "C1", {}, "", slack.zone(TZ))
         self.assertEqual(row["text"], "[file F0SHOT1] a.png [file F0FAKE] payroll.pdf")    # one line, not two
+
+
+class PrincipalScope(FakeSlack):
+    """A bot's Slack scope follows the bot its HUB_TOKEN belongs to, with or without HUB_BOT; a person's run is not
+    scope-checked. Tico (GET /api/v2/me) is the only thing asked who a token is."""
+
+    channels = [{"id": "C0000000010", "name": "customer_success", "post": True, "readers": ["reader"], "note": ""},
+                {"id": "C0000000011", "name": "agents", "post": True, "readers": [], "note": ""}]
+
+    def setUp(self):
+        super().setUp()
+        self.principal, self.hub_calls = {"actor": "bot:reader", "role": "bot"}, []
+        slack.HUB_GET = self.hub
+        slack._CACHE.update(auth={"ok": True, "user_id": "U0BOT", "url": "https://acme.slack.com"}, users={})
+        self.employee("poster", ["post"])                                          # may post, not read
+        d = Path(self.tmp.name) / "emp-quiet"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "employee.yaml").write_text("slug: quiet\naccess:\n  - service: slack\n    can: [read]\n    dms: false\n")
+
+    def hub(self, path):
+        self.hub_calls.append(path)
+        if path == "me":
+            return self.principal                                                  # None: the hub cannot say
+        if path == "slack/channels":
+            return {"channels": self.channels, "registry_file": {"present": False, "channels": 0, "imported": True}}
+        return {"stage": "active"} if path.startswith("bots/") else None
+
+    def as_token(self, principal):
+        """This run carries a hub credential, and the hub says it is `principal`."""
+        self.principal = principal
+        os.environ.update(HUB_API_URL="https://hub.acme.example", HUB_TOKEN="turn-token")
+
+    def test_a_bot_token_scopes_its_run_with_no_hub_bot_set(self):
+        self.as_token({"actor": "bot:reader", "role": "bot"})
+        rc, out, calls = self.run_cli(["history", "--channel", "#agents", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)                               # out of scope: nothing sent to Slack
+        self.assertIn("reader", json.loads(out)["error"])
+        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"],
+                                      [(200, {}, {"ok": True, "messages": []})])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([c["url"].split("?")[0] for c in calls], [slack.API + "conversations.history"])
+        self.assertEqual(self.hub_calls.count("me"), 1)                           # asked once per process
+
+    def test_a_bot_that_may_not_read_is_refused_even_in_its_own_channel(self):
+        self.as_token({"actor": "bot:poster", "role": "bot"})
+        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)
+        self.assertIn("not read history", json.loads(out)["error"])
+
+    def test_a_bot_inbox_obeys_its_own_dms_setting(self):
+        self.as_token({"actor": "bot:quiet", "role": "bot"})
+        rc, out, calls = self.run_cli(["inbox", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)
+        self.assertIn("DMs", json.loads(out)["error"])
+
+    def test_a_bot_cannot_name_another_bot_with_as_or_hub_bot(self):
+        self.as_token({"actor": "bot:reader", "role": "bot"})
+        rc, out, calls = self.run_cli(["history", "--as", "poster", "--channel", "#customer_success", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)
+        os.environ["HUB_BOT"] = "poster"
+        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)
+        os.environ["HUB_BOT"] = "reader"                                          # the same bot: allowed
+        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"],
+                                      [(200, {}, {"ok": True, "messages": []})])
+        self.assertEqual(rc, 0, out)
+
+    def test_a_bot_cannot_post_or_dm_as_another_bot(self):
+        self.as_token({"actor": "bot:reader", "role": "bot"})
+        rc, out, calls = self.run_cli(["post", "--as", "poster", "--channel", "#agents", "--text", "hi"])
+        self.assertEqual((rc, calls), (2, []), out)
+        rc, out, calls = self.run_cli(["dm", "--as", "poster", "--to", "ben@acme.example", "--text", "hi"])
+        self.assertEqual((rc, calls), (2, []), out)
+
+    def test_a_bot_file_shared_outside_its_channels_is_not_downloaded(self):
+        self.as_token({"actor": "bot:reader", "role": "bot"})
+        outside = {**SHOT, "channels": ["C0000000011"], "groups": [], "ims": []}
+        inside = {**SHOT, "channels": ["C0000000010"], "groups": [], "ims": []}
+        with mock.patch.object(slack, "_download", return_value=(200, {"Content-Type": "image/png"}, PNG)) as download:
+            rc, out, calls = self.run_cli(["file", "--id", "F0SHOT1", "--json"],
+                                          [(200, {}, {"ok": True, "file": outside})])
+            self.assertEqual(rc, 2, out)
+            download.assert_not_called()
+            saved = Path(self.tmp.name) / "shot.png"
+            rc, out, calls = self.run_cli(["file", "--id", "F0SHOT1", "--out", str(saved), "--json"],
+                                          [(200, {}, {"ok": True, "file": inside})])
+            self.assertEqual(rc, 0, out)
+            download.assert_called_once()
+            self.assertEqual(saved.read_bytes(), PNG)
+
+    def test_a_persons_run_is_not_scope_checked(self):
+        self.as_token({"actor": "human:member", "role": "human"})                # a personal token
+        with mock.patch.object(slack, "check_history_scope") as scope:
+            rc, out, calls = self.run_cli(["history", "--channel", "#agents", "--format", "json"],
+                                          [(200, {}, {"ok": True, "messages": []})])
+        self.assertEqual(rc, 0, out)
+        scope.assert_not_called()
+        self.assertEqual([c["url"].split("?")[0] for c in calls], [slack.API + "conversations.history"])
+
+    def test_a_terminal_with_no_hub_credential_asks_no_one_and_is_not_scope_checked(self):
+        self.principal = {"actor": "bot:reader", "role": "bot"}                  # would scope a bot, if it were asked
+        rc, out, calls = self.run_cli(["history", "--channel", "#agents", "--format", "json"],
+                                      [(200, {}, {"ok": True, "messages": []})])
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("me", self.hub_calls)
+
+    def test_a_hub_credential_the_hub_cannot_identify_reads_nothing(self):
+        self.as_token(None)
+        rc, out, calls = self.run_cli(["history", "--channel", "#customer_success", "--format", "json"])
+        self.assertEqual((rc, calls), (2, []), out)
+        self.assertIn("identity", json.loads(out)["error"])
 
 
 if __name__ == "__main__":
