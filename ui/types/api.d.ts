@@ -2756,6 +2756,12 @@ export type MeetingSearch = {
   results: Array<unknown>;
 };
 
+export type MemoryTidyPilot = {
+  bot: string;
+  effort?: "low";
+  model: string;
+};
+
 export type Message = {
   answer?: ReviewAnswer;
   answers?: Array<string | ReviewAnswer>;
@@ -3913,6 +3919,7 @@ export type Suggestion = {
 export type SystemRoutineUpdate = {
   at?: string | null;
   on?: boolean | null;
+  pilots?: Array<MemoryTidyPilot> | null;
   preset?: "15m" | "hourly" | "4h" | "daily" | "business" | null;
 };
 
