@@ -13,6 +13,10 @@ def test_task_turns_get_their_own_session_unless_the_bot_opts_out():
     assert sessions.lane({"session": "bot"}, "ops", "t1", "c1") == sessions.MAIN_LANE
     assert sessions.session_key({"session": "task"}, "ops", None, "c1") == "conversation:c1"
     assert sessions.session_key({}, "botops", None, "c1") == "conversation:c1"
+    # A stateless bot's task keeps its own session even on `session: bot`; its chat keeps the bot's thread.
+    assert sessions.session_key({"stateless": True, "session": "bot"}, "ops", "t1", "c1") == "task:t1"
+    assert sessions.lane({"stateless": True, "session": "bot"}, "ops", "t1", "c1") == "task:t1"
+    assert sessions.session_key({"stateless": True, "session": "bot"}, "ops", None, "c1") == sessions.BOT_THREAD
 
 
 def test_the_old_written_bot_default_is_cleared_once(api):

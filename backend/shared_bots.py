@@ -42,7 +42,9 @@ def source_of(config):
 
 def follow(c, bot, config, rows=None):
     """A branch's config with the original's behaviour in it; any other bot's config as it is.
-    `rows(slug)` answers from bot_config rows already read (backend/bot_rows.py)."""
+    `rows(slug)` answers from bot_config rows already read (backend/bot_rows.py). A stateless bot's config carries
+    `stateless` whether or not its template is in the row (H.with_stateless)."""
+    config = H.with_stateless(config)
     source = source_of(config)
     if not source:
         return config

@@ -4795,6 +4795,16 @@ def stateless(config):
     return config.get("template") in STATELESS_BY_TEMPLATE
 
 
+def with_stateless(config):
+    """A copy of `config` with `stateless` set when stateless() says so by the template too. The session keys
+    (clients/sessions.py) read only that key, and the runner's attempt config carries it, so a config read without
+    its template (a branch's, or a bot's raw row) keys its sessions as the runner does."""
+    config = dict(config or {})
+    if stateless(config):
+        config["stateless"] = True
+    return config
+
+
 # How far up a session root is looked for: deeper trees are rare, and the cap bounds the walk.
 SESSION_ROOT_DEPTH = 20
 
@@ -7822,7 +7832,8 @@ def _session_lanes(conn, row):
     if _has_table(conn, "bot_config"):
         found = _one(conn, "SELECT config_json FROM bot_config WHERE bot=?", (slug,))
         config = _json(found["config_json"], {}) if found else {}
-    root = session_root(conn, slug, row["id"], config)
+    from .shared_bots import follow   # the followed config is the one the runner keys sessions on
+    root = session_root(conn, slug, row["id"], follow(conn, slug, config))
     return ["task:" + row["id"], "task:" + root], root
 
 

@@ -1242,3 +1242,27 @@ def test_two_people_reading_one_version_each_suggest_and_each_finish(api):
                    text="Delete raw logs after 30 days.").status_code == 200
     finish(api, r, attempt)
     assert task_state(api, first["task_id"])["status"] == task_state(api, second["task_id"])["status"] == "done"
+
+
+def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on_session_bot(api):
+    """`session: bot` keys a turn on the bot's one thread, but a stateless bot's task keeps its own session: the server
+    gives the turn its task's lane, links its session and accepts its checkpoint, as the runner keys it."""
+    from backend.tests.test_api import assign, claim, runner
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES('tico-counsel', 'Counsel', 'active')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES('tico-counsel', ?, '', 'ana')",
+                  (json.dumps({"template": "tico-counsel", "session": "bot"}),))
+        task = H.task_create(c, "human:ana", "Read the synthetic contract", "Use only fixture text.",
+                             "bot:tico-counsel", lint=False)["id"]
+    r = runner(api)
+    assign(api, r, "tico-counsel")
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"tico-counsel": True},
+                                    "capabilities": ["task_lanes_v2", "session_roots_v1"]}, token=r["token"])
+    turn = claim(api, r, "tico-counsel")
+    assert (turn["lane"], turn["task"]["session_task_id"]) == ("task:" + task, task)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-counsel"}, token=r["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Read the clauses."},
+         token=r["token"])
+    assert get(api, "tasks/" + task)["task"]["checkpoint"] == "Read the clauses."
+    with api.app.state.store.read() as c:
+        assert [link["url"] for link in H.task_links(c, task) if link["kind"] == "session"] == ["session:tico-counsel/t-counsel"]
