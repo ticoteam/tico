@@ -871,16 +871,23 @@ CREATE TABLE IF NOT EXISTS task_run_models (
 
 # Browser exits (backend/browser_exit.py): a computer's owner shares its internet with chosen bots under a daily byte
 # cap; a bot browses through one such computer; what went through, per day, bot and hostname, is kept 30 days.
+# `generation` fences the relay's grants read before a change: an exit's policy (bumped with each change and when the
+# computer is removed), a bot's selection (its exit, cleared to NULL rather than deleted so the number only grows, and
+# the computer it runs on, bumped in the same transaction as the assignment by browser_exit.TRIGGERS, which
+# store.initialize creates once the execution tables exist). The relay's usage batches are recorded once each
+# (`browser_exit_batches`).
 BROWSER_EXITS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS browser_exits (
   runner_id TEXT PRIMARY KEY, sharing INTEGER NOT NULL DEFAULT 0, bots_json TEXT NOT NULL DEFAULT '[]',
-  daily_cap_bytes INTEGER NOT NULL DEFAULT 5000000000, changed_by TEXT, changed_at TEXT);
+  daily_cap_bytes INTEGER NOT NULL DEFAULT 5000000000, generation INTEGER NOT NULL DEFAULT 1,
+  changed_by TEXT, changed_at TEXT);
 CREATE TABLE IF NOT EXISTS bot_browser_exits (
-  bot TEXT PRIMARY KEY, runner_id TEXT NOT NULL, set_by TEXT, set_at TEXT);
+  bot TEXT PRIMARY KEY, runner_id TEXT, generation INTEGER NOT NULL DEFAULT 1, set_by TEXT, set_at TEXT);
 CREATE TABLE IF NOT EXISTS browser_exit_usage (
   runner_id TEXT NOT NULL, day TEXT NOT NULL, bot TEXT NOT NULL, host TEXT NOT NULL,
   bytes INTEGER NOT NULL DEFAULT 0, tunnels INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(runner_id, day, bot, host));
 CREATE INDEX IF NOT EXISTS browser_exit_usage_day ON browser_exit_usage(day);
+CREATE TABLE IF NOT EXISTS browser_exit_batches (id TEXT PRIMARY KEY, at TEXT NOT NULL);
 """
 
 

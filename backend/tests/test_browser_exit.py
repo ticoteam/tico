@@ -6,23 +6,27 @@ import pytest
 
 from backend import browser_exit as BE
 from backend.store import Problem
-from backend.tests.test_api import api, as_member, assign, get, post, runner  # noqa: F401  (the api fixture)
+from backend.tests.test_api import api, as_member, assign, get, post, restrict, runner  # noqa: F401  (the api fixture)
 
 
 class Relay:
     """Stands in for screen_relay.RemoteRegistry's exit operations."""
 
     def __init__(self):
-        self.answers, self.grants, self.pushed, self.closed = [], [], [], []
+        self.answers, self.grants, self.pushed, self.closed, self.fenced = [], [], [], [], []
+        self.lease = "lease-1"
 
-    def exit_generation_of(self, rid):
-        return len([p for p in self.pushed if p == rid])
+    def exit_epoch(self):
+        return self.lease
 
     def push_exit_policy(self, rid):
         self.pushed.append(rid)
 
-    def exit_grant(self, grant):
-        self.grants.append(grant)
+    def push_bot_generation(self, bot, reason):
+        self.fenced.append((bot, reason))
+
+    def exit_grant(self, grant, epoch):
+        self.grants.append((grant, epoch))
         return self.answers.pop(0) if self.answers else {"ticket": "a" * 64}
 
     def exit_close(self, bot=None, exit=None, reason=""):
@@ -32,7 +36,7 @@ class Relay:
 @pytest.fixture
 def relay(api, monkeypatch):
     fake, sessions = Relay(), api.app.state.store.screen_sessions
-    for name in ("exit_generation_of", "push_exit_policy", "exit_grant", "exit_close"):
+    for name in ("exit_epoch", "push_exit_policy", "push_bot_generation", "exit_grant", "exit_close"):
         monkeypatch.setattr(sessions, name, getattr(fake, name))
     return fake
 
@@ -78,6 +82,19 @@ def test_only_the_computers_owner_shares_its_internet_and_an_admin_may_only_turn
     assert row["browser_exit"]["sharing"] and "used_today_bytes" not in row["browser_exit"]
 
 
+def test_a_member_sees_only_the_shared_bots_they_may_see(api, relay):
+    caras, _ = laptop(api)
+    rid = caras["runner_id"]
+    share(api, rid, bots=["ops", "finance"])
+    as_member(api, "ben@acme.example")
+    with api.app.state.store.transaction() as c:
+        restrict(c, "finance", people=["ana"])
+    assert get(api, f"computers/{rid}/browser-exit", token="ben-test")["bots"] == ["ops"]
+    row = next(m for m in get(api, "operations", token="ben-test")["computers"] if m["id"] == rid)
+    assert row["browser_exit"]["bots"] == ["ops"]         # the same as the Computers listing
+    assert get(api, f"computers/{rid}/browser-exit", token="cara-test")["bots"] == ["ops", "finance"]
+
+
 def test_a_bot_browses_only_through_a_computer_that_shares_with_it_and_a_change_closes_its_connections(api, relay):
     caras, server = laptop(api)
     rid = caras["runner_id"]
@@ -92,9 +109,21 @@ def test_a_bot_browses_only_through_a_computer_that_shares_with_it_and_a_change_
     ops = next(e for e in api.get("/api/employees", headers={"Authorization": "Bearer ana-test"}).json()
                if e["name"] == "ops")
     assert ops["browser_exit"] == rid
-    assert relay.closed == []
+    assert relay.fenced == [("ops", "browser exit changed")]
+    gen = _bot_generation(api, "ops")
+    post(api, "bots/ops/browser-exit", {"runner_id": rid})                  # the same exit: nothing changes
+    assert (_bot_generation(api, "ops"), len(relay.fenced)) == (gen, 1)
     post(api, "bots/ops/browser-exit", {"runner_id": None})
-    assert relay.closed == [("ops", None, "browser exit changed")]
+    assert relay.fenced[-1] == ("ops", "browser exit changed") and _bot_generation(api, "ops") == gen + 1
+    assert get(api, "bots/ops/browser-exit")["browser_exit"] is None
+    # Moving the bot to another computer fences its grants too, in the same transaction.
+    post(api, "bots/ops/browser-exit", {"runner_id": rid})
+    gen = _bot_generation(api, "ops")
+    spare = runner(api, operator="ana", label="Spare server")
+    with api.app.state.store.read() as c:
+        moved = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()[0]
+    assign(api, spare, "ops", generation=moved)
+    assert _bot_generation(api, "ops") == gen + 1
 
 
 def test_every_tunnel_fails_closed_with_words_that_name_the_exit(api, relay):
@@ -124,18 +153,20 @@ def test_every_tunnel_fails_closed_with_words_that_name_the_exit(api, relay):
             ("unavailable", 503, "browser_exit_unavailable", "Cara's MacBook")]:
         relay.answers = [answer]
         refused(status, code, words)
-    # A policy change between the read and the grant is read again once.
+    # A policy change or a new relay lease between the read and the grant: read again once.
     relay.answers = ["exit_stale"]
     granted = tunnel(api, server)
     assert granted["ticket"] == "a" * 64 and granted["exit"] == {"runner_id": rid, "name": "Cara's MacBook"}
-    grant = relay.grants[-1]
+    grant, epoch = relay.grants[-1]
     assert (grant["exit"], grant["runner_id"], grant["bot"], grant["port"]) == (rid, server["runner_id"], "ops", 443)
+    # The stored generations: the policy was written three times, the bot's exit set once.
     assert grant["policy"] == {"generation": 3, "sharing": True, "bots": ["ops"], "cap": BE.DEFAULT_CAP}
+    assert (grant["bot_generation"], epoch) == (_bot_generation(api, "ops"), "lease-1")
     # Over the day's cap by recorded bytes: refused here, the relay never asked.
     asked = len(relay.grants)
     with api.app.state.store.transaction() as c:
         BE.record(c, [{"exit": rid, "day": BE.today(), "bot": "ops", "host": "www.acme.example",
-                       "bytes": BE.DEFAULT_CAP}])
+                       "bytes": BE.DEFAULT_CAP, "tunnels": 1}])
     refused(429, "browser_exit_over_cap", "Cara's MacBook reached its daily limit")
     assert len(relay.grants) == asked
     # A removed exit says so, and its tunnels close.
@@ -148,12 +179,15 @@ def test_the_owner_sees_what_went_through_per_day_and_old_days_go(api, relay):
     caras, _ = laptop(api)
     rid = caras["runner_id"]
     old = "2000-01-01"
-    with api.app.state.store.transaction() as c:
-        BE.record(c, [{"exit": rid, "day": BE.today(), "bot": "ops", "host": "WWW.acme.example", "bytes": 700},
-                      {"exit": rid, "day": BE.today(), "bot": "ops", "host": "www.acme.example", "bytes": 300},
-                      {"exit": rid, "day": BE.today(), "bot": "ops", "host": "cdn.acme.example", "bytes": 5},
-                      {"exit": rid, "day": old, "bot": "ops", "host": "www.acme.example", "bytes": 9},
-                      {"exit": rid, "bot": "ops"}])                                          # malformed: skipped
+    row = {"exit": rid, "runner_id": "bot-computer", "day": BE.today(), "bot": "ops"}
+    batch = {"id": "b1", "rows": [{**row, "host": "WWW.acme.example", "bytes": 700, "tunnels": 0},  # still open
+                                  {**row, "host": "www.acme.example", "bytes": 300, "tunnels": 2},
+                                  {**row, "host": "cdn.acme.example", "bytes": 5, "tunnels": 1},
+                                  {**row, "day": old, "host": "www.acme.example", "bytes": 9, "tunnels": 1},
+                                  {"exit": rid, "bot": "ops"}]}                              # malformed: skipped
+    for _ in range(2):          # the relay resends a batch until acknowledged: recorded once
+        with api.app.state.store.transaction() as c:
+            assert BE.record_batch(c, batch) == "b1"
     get(api, f"computers/{rid}/browser-exit/usage", token="ben-test")                       # an admin
     as_member(api, "ben@acme.example")
     get(api, f"computers/{rid}/browser-exit/usage", token="ben-test", expected=403)
@@ -164,6 +198,12 @@ def test_the_owner_sees_what_went_through_per_day_and_old_days_go(api, relay):
     with api.app.state.store.transaction() as c:
         BE.prune(c)
         assert not c.execute("SELECT 1 FROM browser_exit_usage WHERE day=?", (old,)).fetchone()
+
+
+def _bot_generation(api, bot):
+    with api.app.state.store.read() as c:
+        return BE.bot_generation(c, bot)
+
 
 
 def test_the_relay_lets_an_exit_link_in_only_while_its_owner_shares(api, relay):
@@ -179,3 +219,34 @@ def test_the_relay_lets_an_exit_link_in_only_while_its_owner_shares(api, relay):
     assert link(caras) == {"allowed": True, "runner_id": caras["runner_id"]}
     with pytest.raises(Problem):
         link(server)
+
+
+def test_a_push_the_relay_missed_or_lost_to_a_new_lease_is_sent_again_and_older_reads_are_refused(api, monkeypatch):
+    sessions = api.app.state.store.screen_sessions
+    caras, _ = laptop(api)
+    rid = caras["runner_id"]
+    sent, down = [], [True]
+
+    def command(op, **fields):
+        if down[0]:
+            raise Problem("browser_exit_unavailable", "The relay is unavailable. Try again shortly.", 503)
+        sent.append((op, fields.get("runner_id") or fields.get("bot")))
+        return {"closed": 0}
+    monkeypatch.setattr(sessions, "_exit_command", command)
+    share(api, rid)
+    post(api, "bots/ops/browser-exit", {"runner_id": rid})
+    assert sent == []                                       # both pushes failed; the writes stand
+    down[0] = False
+    sessions._exit_reconcile()
+    assert sorted(sent) == [("exit_close", "ops"), ("exit_policy", rid)]
+    sent.clear()
+    sessions._exit_reconcile()
+    assert sent == []                                       # nothing new
+    # A new lease (what start() does): the relay forgot, so everything goes again, and a grant read before is refused.
+    old = sessions.exit_epoch()
+    sessions.lease = "b" * 32
+    sessions.exit_pushed.clear()
+    sessions.bot_pushed.clear()
+    assert sessions.exit_grant({}, old) == "exit_stale"
+    sessions._exit_reconcile()
+    assert sorted(sent) == [("exit_close", "ops"), ("exit_policy", rid)]

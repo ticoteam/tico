@@ -1,5 +1,5 @@
 """A browser exit through the real Rust relay: the exit computer's link, a tunnel granted by Python, both ends paired
-by their one-use tickets, bytes both ways, the day's log written from the relay's report, and the link dropped when
+by their one-use tickets, bytes both ways, the day's log written from the relay's usage batches, and the link dropped when
 the owner stops sharing. Fictional identities, owned loopback services; build relay-rs first (see
 backend/tests/test_screen_relay_contract.py) and run with -m slow -n 0."""
 
@@ -54,7 +54,9 @@ def test_a_tunnel_through_the_relay_carries_bytes_is_logged_and_stops_with_shari
                 with pytest.raises(Exception):      # a ticket opens its end once
                     with service.websocket(f"{base}/ws?ticket={grant['ticket']}"):
                         pass
-            service.eventually(lambda: get(api, f"computers/{rid}/browser-exit/usage", token="cara-test")["rows"])
+            # Bytes arrive with the relay's heartbeats while the tunnel is open; the closed tunnel is counted after.
+            service.eventually(lambda: [r["tunnels"] for r in get(
+                api, f"computers/{rid}/browser-exit/usage", token="cara-test")["rows"]] == [1])
             assert get(api, f"computers/{rid}/browser-exit/usage", token="cara-test")["rows"][0] == {
                 "day": today(),
                 "bot": "ops", "host": "www.acme.example", "bytes": 11, "tunnels": 1}

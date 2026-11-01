@@ -309,7 +309,8 @@ What the sharing computer allows:
   (including its home's public address, as Tico's relay sees it), its home network (`10.*`, `172.16-31.*`,
   `192.168.*`), loopback, link-local, `100.64.0.0/10`, multicast, private IPv6 and the other special-purpose ranges
   IANA lists, and checks the address it actually connects to.
-- Up to the daily cap. Crossing it closes that day's connections through it until midnight UTC.
+- Up to the daily cap. Crossing it closes that day's connections through it until midnight UTC. Bytes count on the UTC
+  day they pass, so a connection open across midnight counts on both days.
 
 When the computer is offline, stops sharing with the bot, was removed or reached its cap, the bot's browser connection
 fails, and the proxy's answer says why ("Ana's MacBook is offline"; also at the `TICO_BROWSER_PROXY` address in a

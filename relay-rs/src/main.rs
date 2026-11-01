@@ -290,12 +290,15 @@ enum Action {
     ExitGrant {
         grant: exit::Grant,
     },
-    /// Close one bot's tunnels and/or one exit's.
+    /// Close one bot's tunnels and/or one exit's. With `bot_generation`, the bot's selection changed: only its
+    /// tunnels from older generations close, and older grants are refused from now on.
     ExitClose {
         #[serde(default)]
         bot: Option<String>,
         #[serde(default)]
         exit: Option<String>,
+        #[serde(default)]
+        bot_generation: Option<u64>,
         reason: String,
     },
 }
@@ -337,8 +340,9 @@ async fn command(
             }
             hub.exits.acknowledge(&exit_ack);
             hub.lease.as_mut().unwrap().1 = Instant::now();
+            let usage = hub.exits.usage_batch();
             json!({"reports": hub.reports.values().take(256).collect::<Vec<_>>(),
-                   "tunnels": hub.exits.pending_reports()})
+                   "exit_usage": usage})
         }
         Action::ExitPolicy { runner_id, policy } => {
             if runner_id.is_empty()
@@ -360,11 +364,26 @@ async fn command(
             }
             exit::grant(&app, &mut hub.exits, grant)?
         }
-        Action::ExitClose { bot, exit, reason } => {
-            if reason.len() > 100 || bot.is_none() && exit.is_none() {
+        Action::ExitClose {
+            bot,
+            exit,
+            bot_generation,
+            reason,
+        } => {
+            if reason.len() > 100
+                || bot.is_none() && exit.is_none()
+                || bot_generation.is_some() && (bot.is_none() || exit.is_some())
+                || bot.as_ref().is_some_and(|b| b.len() > 128)
+            {
                 return Err(error(StatusCode::BAD_REQUEST, "invalid exit close"));
             }
-            json!({"closed": hub.exits.close_matching(bot.as_deref(), exit.as_deref(), &reason)})
+            let closed = match (bot.as_deref(), bot_generation) {
+                (Some(bot), Some(generation)) => hub.exits.fence_bot(bot, generation, &reason),
+                _ => hub
+                    .exits
+                    .close_matching(bot.as_deref(), exit.as_deref(), &reason),
+            };
+            json!({"closed": closed})
         }
         Action::Mode {
             runner_id,
@@ -846,12 +865,52 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
     axum::serve(listener, routes)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            stopping().await;
             app.hub
                 .lock()
                 .unwrap()
                 .close_all(Close::new(1012, "relay stopped"));
+            // Python collects the last browser-exit usage in its next heartbeats (every 2 s) and acknowledges it in the
+            // one after; the control listener keeps serving until then, so a restart doesn't refill an exit's cap.
+            let deadline = Instant::now() + DRAIN;
+            while Instant::now() < deadline {
+                {
+                    let mut hub = app.hub.lock().unwrap();
+                    hub.sweep();
+                    if hub.lease.is_none() || hub.exits.drained() {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            // Upgraded sockets are not waited for; a connection that lingers doesn't hold the stop up.
+            tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                std::process::exit(0);
+            });
         })
         .await?;
     Ok(())
+}
+
+/// How long a stopping relay waits for Python to collect the browser-exit usage still in memory.
+const DRAIN: Duration = Duration::from_secs(6);
+
+/// Ctrl-C, or SIGTERM from a container stop.
+async fn stopping() {
+    #[cfg(unix)]
+    {
+        let Ok(mut term) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        else {
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = term.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
 }

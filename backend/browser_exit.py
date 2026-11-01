@@ -7,9 +7,11 @@ daily byte cap (`browser_exits`); a person who manages a bot then points it at o
 
 The relay (relay-rs/src/exit.rs) moves the bytes. This module decides: each tunnel a bot computer asks for is checked
 here (the bot is on that computer, its exit still shares with it), then granted at the relay with the exit's policy as
-read now and a generation that fences an older read (screen_relay.RemoteRegistry). Nothing is written per tunnel; the
-relay reports closed tunnels in its heartbeat and they are added up per exit, day, bot and hostname
-(`browser_exit_usage`), kept 30 days.
+read now. Two durable generations fence an older read: the exit's policy generation and the bot's selection generation
+(its exit and the computer it runs on; hubdb triggers bump it with the assignment). A grant is also bound to the relay
+lease it was read under (screen_relay.RemoteRegistry). Nothing is written per tunnel; the relay sends the bytes moved,
+open tunnels included, in its heartbeat, each on the UTC day they moved, and they are added up per exit, day, bot and
+hostname (`browser_exit_usage`), kept 30 days.
 
 Every refusal fails closed and names the exit computer, and its code starts `browser_exit` (the runner shows the detail
 as it is: runner-rs/src/browser_exit.rs).
@@ -33,6 +35,22 @@ LINK_PATH = "/api/v2/runners/me/browser-exit/ws"
 _HOST = re.compile(r"[A-Za-z0-9._-]{1,253}|[0-9A-Fa-f:.]{2,45}")
 
 
+# Bumps a bot's selection generation in the same transaction as any change to the computer it runs on, whichever
+# code path writes the assignment, and an exit's policy generation when its computer is removed.
+TRIGGERS = """
+CREATE TRIGGER IF NOT EXISTS bot_browser_exit_assigned AFTER INSERT ON assignments BEGIN
+  UPDATE bot_browser_exits SET generation=generation+1 WHERE bot=NEW.bot; END;
+CREATE TRIGGER IF NOT EXISTS bot_browser_exit_moved AFTER UPDATE OF runner_id ON assignments
+  WHEN OLD.runner_id IS NOT NEW.runner_id BEGIN
+  UPDATE bot_browser_exits SET generation=generation+1 WHERE bot=NEW.bot; END;
+CREATE TRIGGER IF NOT EXISTS bot_browser_exit_unassigned AFTER DELETE ON assignments BEGIN
+  UPDATE bot_browser_exits SET generation=generation+1 WHERE bot=OLD.bot; END;
+CREATE TRIGGER IF NOT EXISTS browser_exit_computer_removed AFTER UPDATE OF revoked_at ON runners
+  WHEN OLD.revoked_at IS NOT NEW.revoked_at BEGIN
+  UPDATE browser_exits SET generation=generation+1 WHERE runner_id=NEW.id; END;
+"""
+
+
 def today():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -50,13 +68,13 @@ def _bots(value):
 
 
 def policy(c, rid):
-    """The computer's sharing as stored, and off for a removed or unknown computer."""
-    row = c.execute("SELECT e.sharing,e.bots_json,e.daily_cap_bytes,r.revoked_at FROM runners r "
+    """The computer's sharing as stored, and off for a removed or unknown computer, with its generation."""
+    row = c.execute("SELECT e.sharing,e.bots_json,e.daily_cap_bytes,e.generation,r.revoked_at FROM runners r "
                     "LEFT JOIN browser_exits e ON e.runner_id=r.id WHERE r.id=?", (rid,)).fetchone()
     if not row:
-        return {"sharing": False, "bots": [], "daily_cap_bytes": DEFAULT_CAP}
+        return {"sharing": False, "bots": [], "daily_cap_bytes": DEFAULT_CAP, "generation": 0}
     return {"sharing": bool(row["sharing"]) and not row["revoked_at"], "bots": _bots(row["bots_json"]),
-            "daily_cap_bytes": int(row["daily_cap_bytes"] or DEFAULT_CAP)}
+            "daily_cap_bytes": int(row["daily_cap_bytes"] or DEFAULT_CAP), "generation": int(row["generation"] or 0)}
 
 
 def policies(c):
@@ -87,8 +105,20 @@ def bot_exit(c, bot):
     return row["runner_id"] if row else None
 
 
+def bot_generation(c, bot):
+    row = c.execute("SELECT generation FROM bot_browser_exits WHERE bot=?", (bot,)).fetchone()
+    return int(row[0]) if row else 0
+
+
+def generations(c):
+    """({exit runner_id: policy generation}, {bot: selection generation}): what the relay should have."""
+    return ({r[0]: int(r[1]) for r in c.execute("SELECT runner_id,generation FROM browser_exits")},
+            {r[0]: int(r[1]) for r in c.execute("SELECT bot,generation FROM bot_browser_exits")})
+
+
 def bot_exits(c):
-    return {r["bot"]: r["runner_id"] for r in c.execute("SELECT bot,runner_id FROM bot_browser_exits")}
+    return {r["bot"]: r["runner_id"] for r in c.execute(
+        "SELECT bot,runner_id FROM bot_browser_exits WHERE runner_id IS NOT NULL")}
 
 
 def for_turn(c, bot):
@@ -120,22 +150,36 @@ def valid_host(host):
     return isinstance(host, str) and bool(_HOST.fullmatch(host)) and ".." not in host
 
 
-def record(c, reports):
-    """Add the relay's closed-tunnel reports to the per-day log, then drop days past retention."""
-    for r in reports:
+def record(c, rows):
+    """Add the relay's usage rows (bytes moved and tunnels closed, per exit, day, bot and hostname) to the per-day log.
+    A malformed row is skipped."""
+    for r in rows:
         try:
             rid, day, bot, host = str(r["exit"]), str(r["day"]), str(r["bot"]), str(r["host"]).lower()[:253]
-            n = max(0, int(r["bytes"]))
-        except (KeyError, TypeError, ValueError):
+            n, tunnels = max(0, int(r["bytes"])), max(0, int(r.get("tunnels", 0)))
+        except (AttributeError, KeyError, TypeError, ValueError):
             continue
-        c.execute("INSERT INTO browser_exit_usage(runner_id,day,bot,host,bytes,tunnels) VALUES(?,?,?,?,?,1) "
-                  "ON CONFLICT(runner_id,day,bot,host) DO UPDATE SET bytes=bytes+excluded.bytes,tunnels=tunnels+1",
-                  (rid, day, bot, host, n))
+        c.execute("INSERT INTO browser_exit_usage(runner_id,day,bot,host,bytes,tunnels) VALUES(?,?,?,?,?,?) "
+                  "ON CONFLICT(runner_id,day,bot,host) DO UPDATE SET bytes=bytes+excluded.bytes,"
+                  "tunnels=tunnels+excluded.tunnels", (rid, day, bot, host, n, tunnels))
+
+
+def record_batch(c, batch):
+    """Record one of the relay's usage batches, once: it resends a batch until acknowledged, and an acknowledgement
+    can be lost. Returns the id to acknowledge, or None."""
+    if not isinstance(batch, dict) or not isinstance(batch.get("id"), str) or not 0 < len(batch["id"]) <= 64:
+        return None
+    if c.execute("INSERT OR IGNORE INTO browser_exit_batches(id,at) VALUES(?,?)", (batch["id"], H.now())).rowcount:
+        record(c, batch.get("rows") if isinstance(batch.get("rows"), list) else [])
+    return batch["id"]
 
 
 def prune(c):
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)).strftime("%Y-%m-%d")
-    c.execute("DELETE FROM browser_exit_usage WHERE day<?", (cutoff,))
+    """Drop days past retention, and batch ids no relay still resends."""
+    now = datetime.now(timezone.utc)
+    c.execute("DELETE FROM browser_exit_usage WHERE day<?",
+              ((now - timedelta(days=RETENTION_DAYS)).strftime("%Y-%m-%d"),))
+    c.execute("DELETE FROM browser_exit_batches WHERE at<?", ((now - timedelta(days=2)).isoformat(),))
 
 
 def authorize_link(store, auth, execution, body):
@@ -161,7 +205,11 @@ def install(app, store, auth, mutate, execution, sessions):
 
     def view(c, who, runner):
         p = policy(c, runner["id"])
+        p.pop("generation")
         manage = auth.bot_admin(who) or is_owner(who, runner)
+        if not manage:      # the bots this member may not see stay out, as in the Computers listing
+            unseen = {bot for bot, a in auth.bot_accesses(c, who).items() if not a["see"]}
+            p["bots"] = [b for b in p["bots"] if b not in unseen]
         return {**p, "computer": {"id": runner["id"], "label": runner["label"]},
                 "used_today_bytes": used(c, runner["id"]) if manage else None,
                 "may_change": is_owner(who, runner), "may_turn_off": manage}
@@ -204,7 +252,7 @@ def install(app, store, auth, mutate, execution, sessions):
             c.execute("INSERT INTO browser_exits(runner_id,sharing,bots_json,daily_cap_bytes,changed_by,changed_at) "
                       "VALUES(?,?,?,?,?,?) ON CONFLICT(runner_id) DO UPDATE SET sharing=excluded.sharing,"
                       "bots_json=excluded.bots_json,daily_cap_bytes=excluded.daily_cap_bytes,"
-                      "changed_by=excluded.changed_by,changed_at=excluded.changed_at",
+                      "generation=generation+1,changed_by=excluded.changed_by,changed_at=excluded.changed_at",
                       (rid, int(body.sharing), json.dumps(bots), cap, who.actor, H.now()))
             H.event(c, who.actor, "runner.browser_exit", rid,
                     {"sharing": body.sharing, "bots": bots, "daily_cap_bytes": cap})
@@ -268,7 +316,9 @@ def install(app, store, auth, mutate, execution, sessions):
                 raise Problem("forbidden", "You cannot manage this bot", 403)
             before.append(bot_exit(c, bot))
             if body.runner_id is None:
-                c.execute("DELETE FROM bot_browser_exits WHERE bot=?", (bot,))
+                # Cleared, not deleted: the selection generation only grows, so an older grant stays fenced.
+                c.execute("UPDATE bot_browser_exits SET runner_id=NULL,generation=generation+(runner_id IS NOT NULL),"
+                          "set_by=?,set_at=? WHERE bot=?", (who.actor, H.now(), bot))
             else:
                 runner = _computer(c, body.runner_id)
                 if not runner:
@@ -278,13 +328,14 @@ def install(app, store, auth, mutate, execution, sessions):
                     raise Problem("browser_exit_not_shared",
                                   f"{runner['label']} doesn't share its internet with this bot", 409)
                 c.execute("INSERT INTO bot_browser_exits(bot,runner_id,set_by,set_at) VALUES(?,?,?,?) "
-                          "ON CONFLICT(bot) DO UPDATE SET runner_id=excluded.runner_id,set_by=excluded.set_by,"
+                          "ON CONFLICT(bot) DO UPDATE SET runner_id=excluded.runner_id,"
+                          "generation=generation+(runner_id IS NOT excluded.runner_id),set_by=excluded.set_by,"
                           "set_at=excluded.set_at", (bot, body.runner_id, who.actor, H.now()))
             H.event(c, who.actor, "bot.browser_exit", bot, {"runner_id": body.runner_id})
             return {"browser_exit": for_turn(c, bot)}
         result = mutate(request, body, work)
-        if before and before[0] and before[0] != body.runner_id:
-            sessions.exit_close(bot=bot, reason="browser exit changed")
+        if before and before[0] != body.runner_id:
+            sessions.push_bot_generation(bot, "browser exit changed")
         return result
 
     def refuse(code, detail, status):
@@ -297,7 +348,8 @@ def install(app, store, auth, mutate, execution, sessions):
         who = request.state.identity
         if not valid_host(body.host) or body.port not in PORTS:
             refuse("refused", "Only hostnames on ports 80 and 443 go through a browser exit", 400)
-        for _ in range(2):      # once more when a policy change fenced the first read
+        for _ in range(2):      # once more when a policy change or a new relay lease fenced the first read
+            epoch = sessions.exit_epoch()     # before the read: a grant read under an older lease is never sent
             with store.read() as c:
                 runner = execution.runner(c, who) if who.role == "runner" else None
                 if not runner:
@@ -312,8 +364,7 @@ def install(app, store, auth, mutate, execution, sessions):
                 name = (exit_row["label"] if exit_row else "") or "The exit computer"
                 if not exit_row or exit_row["revoked_at"]:
                     refuse("removed", f"{name} was removed from Tico", 409)
-                gen = sessions.exit_generation_of(exit_rid)   # before the read: a newer policy fences this one at the relay
-                p = policy(c, exit_rid)
+                p, bot_gen = policy(c, exit_rid), bot_generation(c, body.bot)
                 if not (p["sharing"] and body.bot in p["bots"]):
                     refuse("not_shared", f"{name} doesn't share its internet with this bot", 403)
                 day = today()
@@ -323,8 +374,9 @@ def install(app, store, auth, mutate, execution, sessions):
             tunnel = H.new_id()
             code = sessions.exit_grant({
                 "id": tunnel, "runner_id": runner["id"], "exit": exit_rid, "bot": body.bot, "host": body.host.lower(),
-                "port": body.port, "day": day, "used": spent,
-                "policy": {"generation": gen, "sharing": p["sharing"], "bots": p["bots"], "cap": p["daily_cap_bytes"]}})
+                "port": body.port, "day": day, "used": spent, "bot_generation": bot_gen,
+                "policy": {"generation": p["generation"], "sharing": p["sharing"], "bots": p["bots"],
+                           "cap": p["daily_cap_bytes"]}}, epoch)
             if isinstance(code, dict):
                 return {"tunnel_id": tunnel, "ticket": code["ticket"], "exit": {"runner_id": exit_rid, "name": name}}
             if code != "exit_stale":

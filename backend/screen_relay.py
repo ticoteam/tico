@@ -60,10 +60,9 @@ class RemoteRegistry:
                                  headers={"Authorization": "Bearer " + store.settings.screen_relay_key})
         self.lease, self.boot, self.sequence = "", "", 0
         self.generations, self.acks = {}, []
-        # Browser exits (backend/browser_exit.py): per exit computer, the generation of the policy last pushed, and
-        # the closed-tunnel reports recorded and not yet acknowledged.
-        self.exit_generations, self.exit_acks = {}, []
-        self.exit_lock = threading.Lock()   # pushes one at a time, so the newest read is pushed last
+        # Browser exits (backend/browser_exit.py): the policy and bot-selection generations this lease's relay has
+        # (pushed again after a new lease, and until a push succeeds), and the usage batch to acknowledge.
+        self.exit_pushed, self.bot_pushed, self.exit_acks = {}, {}, []
         self.pruned = 0.0
         self.healthy, self.superseded = False, False
 
@@ -109,7 +108,8 @@ class RemoteRegistry:
             answer = self._request("/control/v1/start", {"challenge": hello["challenge"], "lease": lease})
             self.lease, self.boot, self.sequence = lease, answer["boot"], 0
             self.generations.clear()
-            self.exit_generations.clear()   # a new lease clears the relay's exit policies too
+            self.exit_pushed.clear()    # a new lease clears the relay's exit policies and bot generations too
+            self.bot_pushed.clear()
             self.healthy = True
         self._reconcile()
 
@@ -154,7 +154,8 @@ class RemoteRegistry:
             return self._command("pending", runner_id=runner_id)["sessions"]
 
     # ------------------------------------------------------------------ browser exits (relay-rs/src/exit.rs)
-    EXIT_REFUSALS = ("exit_offline", "exit_not_shared", "exit_over_cap", "exit_busy", "exit_stale")
+    EXIT_REFUSALS = ("exit_offline", "exit_not_shared", "exit_over_cap", "exit_busy", "exit_stale",
+                     "stale exit policy")
 
     def _exit_command(self, op, /, **fields):
         """An exit operation: its answer, or the relay's refusal code as a string. Anything else is the relay
@@ -181,30 +182,70 @@ class RemoteRegistry:
             raise Problem("browser_exit_unavailable", "The relay restarted. Try again shortly.", 503)
         return answer
 
-    def exit_generation_of(self, runner_id):
+    def exit_epoch(self):
+        """The relay lease a grant is read under (see exit_grant)."""
         with self.lock:
-            return self.exit_generations.get(runner_id, 0)
+            return self.lease
 
     def push_exit_policy(self, runner_id):
-        """Send the exit computer's stored policy, read now, under a newer generation. Best effort: a relay that misses
-        it learns the policy with the next grant, which carries what is stored then."""
+        """Send the exit computer's stored policy and its generation; the relay keeps the newest. A push that fails is
+        logged and sent again by the next tick (_exit_reconcile); a grant carries the stored policy meanwhile."""
         from . import browser_exit
-        with self.exit_lock:
-            with self.store.read() as c:
-                p = browser_exit.policy(c, runner_id)
-            with self.lock:
-                generation = self.exit_generations[runner_id] = self.exit_generations.get(runner_id, 0) + 1
-                try:
-                    answer = self._exit_command("exit_policy", runner_id=runner_id, policy={
-                        "generation": generation, "sharing": p["sharing"], "bots": p["bots"],
-                        "cap": p["daily_cap_bytes"]})
-                    return answer.get("closed", 0) if isinstance(answer, dict) else 0
-                except Problem:
-                    return 0
-
-    def exit_grant(self, grant):
-        """The relay's answer to one tunnel ({"ticket"}), or its refusal code."""
+        with self.store.read() as c:
+            p = browser_exit.policy(c, runner_id)
         with self.lock:
+            epoch = self.lease
+            try:
+                answer = self._exit_command("exit_policy", runner_id=runner_id, policy={
+                    "generation": p["generation"], "sharing": p["sharing"], "bots": p["bots"],
+                    "cap": p["daily_cap_bytes"]})
+            except Problem:
+                log.warning("browser exit policy for %s not pushed to the relay; retrying", runner_id)
+                return 0
+            if answer == "stale exit policy" or isinstance(answer, dict):     # the relay has this one or newer
+                if self.lease == epoch:
+                    self.exit_pushed[runner_id] = max(self.exit_pushed.get(runner_id, 0), p["generation"])
+                return answer.get("closed", 0) if isinstance(answer, dict) else 0
+            log.warning("browser exit policy for %s refused by the relay (%s); retrying", runner_id, answer)
+            return 0
+
+    def push_bot_generation(self, bot, reason):
+        """Tell the relay the bot's selection changed (its exit, or the computer it runs on): grants read before are
+        refused and its tunnels opened under them close. Retried by the next tick when it fails."""
+        from . import browser_exit
+        with self.store.read() as c:
+            generation = browser_exit.bot_generation(c, bot)
+        with self.lock:
+            epoch = self.lease
+            try:
+                answer = self._exit_command("exit_close", bot=bot, bot_generation=generation, reason=reason)
+            except Problem:
+                log.warning("browser exit change for %s not pushed to the relay; retrying", bot)
+                return 0
+            if isinstance(answer, dict) and self.lease == epoch:
+                self.bot_pushed[bot] = max(self.bot_pushed.get(bot, 0), generation)
+            return answer.get("closed", 0) if isinstance(answer, dict) else 0
+
+    def _exit_reconcile(self, batch=32):
+        """Push what the relay is missing: generations committed but not pushed under this lease (a failed push, a
+        new lease, a bot moved to another computer)."""
+        from . import browser_exit
+        with self.store.read() as c:
+            exits, bots = browser_exit.generations(c)
+        with self.lock:
+            exits = [rid for rid, g in exits.items() if g > self.exit_pushed.get(rid, 0)][:batch]
+            bots = [bot for bot, g in bots.items() if g > self.bot_pushed.get(bot, 0)][:batch]
+        for rid in exits:
+            self.push_exit_policy(rid)
+        for bot in bots:
+            self.push_bot_generation(bot, "browser exit changed")
+
+    def exit_grant(self, grant, epoch):
+        """The relay's answer to one tunnel ({"ticket"}), or its refusal code. `epoch` is the lease the grant was read
+        under: after a new lease the relay's generations start again, so an older read is read again (exit_stale)."""
+        with self.lock:
+            if self.lease != epoch:
+                return "exit_stale"
             try:
                 return self._exit_command("exit_grant", grant=grant)
             except Problem:
@@ -248,7 +289,7 @@ class RemoteRegistry:
                 return
         with self.lock:
             answer = self._command("heartbeat", ack=self.acks, exit_ack=self.exit_acks)
-            reports, tunnels = answer["reports"], answer.get("tunnels") or []
+            reports, usage = answer["reports"], answer.get("exit_usage")
             self.acks, self.exit_acks = [], []
         # Never take the store lock while holding the control lock: admission takes them in the other order.
         from . import browser_exit
@@ -256,14 +297,16 @@ class RemoteRegistry:
         with self.store.transaction() as c:
             for report in reports:
                 self._record(c, report)
-            browser_exit.record(c, tunnels)
+            recorded = browser_exit.record_batch(c, usage)
             if prune:
                 browser_exit.prune(c)
         if prune:
             self.pruned = time.monotonic()
         with self.lock:
             self.acks.extend(report["id"] for report in reports)
-            self.exit_acks.extend(str(t.get("id")) for t in tunnels)
+            if recorded:
+                self.exit_acks.append(recorded)
+        self._exit_reconcile()
 
     async def run(self, stop):
         try:

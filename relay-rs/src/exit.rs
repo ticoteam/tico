@@ -3,6 +3,10 @@
 //! the live state, pairs the bot computer's socket with the exit computer's, moves their opaque bytes (TLS end to end)
 //! and counts them against the exit's daily cap.
 //!
+//! Two generations fence Python's reads, both durable in Python's database: an exit's policy generation (its sharing,
+//! bots and cap) and a bot's selection generation (its chosen exit and the computer it runs on). A grant read before
+//! either changed is refused (`exit_stale`), and a newer one closes the tunnels opened under the older.
+//!
 //! Three sockets, all dialled out by runners:
 //! - `/api/v2/runners/me/browser-exit/ws`: the exit computer's link, held while its owner shares. Its runner token is
 //!   checked by Python. The relay sends one JSON `open` message per tunnel down it.
@@ -27,7 +31,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -41,7 +45,8 @@ const TUNNEL_WRITE: Duration = Duration::from_secs(60);
 const LINK_PING: Duration = Duration::from_secs(20);
 const TUNNELS: usize = 4096;
 const TUNNELS_PER_EXIT: usize = 256;
-const REPORTS: usize = 16384;
+/// Usage rows waiting for Python; past this no new tunnel opens, so no byte goes uncounted.
+const USAGE_ROWS: usize = 16384;
 pub(super) const FRAME: usize = 1 << 20;
 pub(super) const REPORT_BATCH: usize = 256;
 
@@ -60,17 +65,48 @@ impl Policy {
     }
 }
 
-/// One closed tunnel, for Python's per-day log of hostnames and bytes. Retried until acknowledged.
-#[derive(Clone, Debug, Serialize)]
-pub(super) struct TunnelReport {
-    pub id: String,
+/// Bytes moved and tunnels closed for one exit, bot computer, bot and hostname on one UTC day, since the last batch:
+/// a row of Python's per-day log, which adds it up.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub(super) struct UsageRow {
     pub exit: String,
     pub runner_id: String,
     pub bot: String,
     pub host: String,
     pub day: String,
     pub bytes: u64,
-    pub code: u16,
+    pub tunnels: u64,
+}
+
+/// Usage rows sent in every heartbeat until Python acknowledges the id; Python records an id once.
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct UsageBatch {
+    pub id: String,
+    pub rows: Vec<UsageRow>,
+}
+
+/// exit, bot computer, bot, host, day.
+type UsageKey = (String, String, String, String, String);
+
+/// The UTC date of `unix_days` days after 1970-01-01, as YYYY-MM-DD (the civil-from-days algorithm).
+pub(super) fn civil_date(unix_days: i64) -> String {
+    let z = unix_days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn utc_today() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    civil_date((secs / 86_400) as i64)
 }
 
 struct Link {
@@ -84,13 +120,24 @@ struct Tunnel {
     runner_id: String,
     bot: String,
     host: String,
-    day: String,
+    bot_generation: u64,
     client_ticket: Option<String>,
     exit_ticket: Option<String>,
     client: Option<oneshot::Sender<WebSocket>>,
     exit_side: Option<oneshot::Sender<WebSocket>>,
     cancel: watch::Sender<Option<Close>>,
-    bytes: u64,
+}
+
+impl Tunnel {
+    fn usage_key(&self, day: String) -> UsageKey {
+        (
+            self.exit.clone(),
+            self.runner_id.clone(),
+            self.bot.clone(),
+            self.host.clone(),
+            day,
+        )
+    }
 }
 
 #[derive(Default)]
@@ -98,11 +145,19 @@ pub(super) struct Exits {
     policies: HashMap<String, Policy>,
     links: HashMap<String, Link>,
     tunnels: HashMap<String, Tunnel>,
-    /// Per exit: the UTC day and the bytes counted that day. Kept across a Python restart (it only ever counts real
-    /// bytes); a fresh relay starts each exit from the bytes Python has recorded.
+    /// Per bot, the oldest selection generation still admitted.
+    bot_generations: HashMap<String, u64>,
+    /// Per exit: the relay's UTC day and the bytes counted that day. Kept across a Python restart (it only ever counts
+    /// real bytes); a fresh relay starts each exit from the bytes Python has recorded. Only the relay's own clock
+    /// moves it to a new day, so a grant read on another day never resets it.
     budgets: HashMap<String, (String, u64)>,
-    pub reports: BTreeMap<String, TunnelReport>,
+    /// Bytes and closed tunnels not yet in a batch, each on the UTC day it happened.
+    usage: BTreeMap<UsageKey, (u64, u64)>,
+    batch: Option<UsageBatch>,
     serial: u64,
+    /// The day to count on instead of the clock's (tests).
+    #[cfg(test)]
+    day: Option<String>,
 }
 
 /// A grant Python asks for: the tunnel, and the exit's policy as Python read it.
@@ -116,6 +171,9 @@ pub(super) struct Grant {
     pub port: u16,
     pub day: String,
     pub used: u64,
+    /// The bot's selection generation as Python read it.
+    #[serde(default)]
+    pub bot_generation: u64,
     pub policy: Policy,
 }
 
@@ -149,24 +207,27 @@ pub(super) fn valid_host(host: &str) -> bool {
 }
 
 impl Exits {
+    fn today(&self) -> String {
+        #[cfg(test)]
+        if let Some(day) = &self.day {
+            return day.clone();
+        }
+        utc_today()
+    }
+
+    fn count(&mut self, key: UsageKey, bytes: u64, tunnels: u64) {
+        if self.usage.len() < USAGE_ROWS || self.usage.contains_key(&key) {
+            let row = self.usage.entry(key).or_default();
+            row.0 += bytes;
+            row.1 += tunnels;
+        }
+    }
+
     pub(super) fn close(&mut self, tid: &str, close: Close) {
         if let Some(t) = self.tunnels.remove(tid) {
-            let _ = t.cancel.send(Some(close.clone()));
-            if self.reports.len() < REPORTS {
-                self.reports.insert(
-                    tid.to_owned(),
-                    TunnelReport {
-                        id: tid.to_owned(),
-                        exit: t.exit,
-                        runner_id: t.runner_id,
-                        bot: t.bot,
-                        host: t.host,
-                        day: t.day,
-                        bytes: t.bytes,
-                        code: close.code,
-                    },
-                );
-            }
+            let _ = t.cancel.send(Some(close));
+            let key = t.usage_key(self.today());
+            self.count(key, 0, 1);
         }
     }
 
@@ -197,10 +258,26 @@ impl Exits {
         }
     }
 
-    /// A new Python process: its generations start again, so the policies it pushed before go.
+    /// A new Python lease: it pushes its policies and generations again, and every grant carries them. Usage and the
+    /// day's budgets stay: they are bytes that moved.
     pub(super) fn restart(&mut self, close: Close) {
         self.close_all(close);
         self.policies.clear();
+        self.bot_generations.clear();
+    }
+
+    /// From `generation` on only grants of that bot read at it or later are admitted; tunnels opened under an older
+    /// one close (its exit changed, or it moved to another computer).
+    pub(super) fn fence_bot(&mut self, bot: &str, generation: u64, reason: &str) -> usize {
+        let min = self.bot_generations.entry(bot.to_owned()).or_default();
+        if generation <= *min {
+            return 0;
+        }
+        *min = generation;
+        self.close_where(
+            |t| t.bot != bot || t.bot_generation >= generation,
+            Close::new(4403, reason),
+        )
     }
 
     /// Install `policy` unless a newer one is already here, then close what it no longer allows.
@@ -240,18 +317,29 @@ impl Exits {
         )
     }
 
-    /// Count `n` bytes against the tunnel and its exit's day. Past the cap every tunnel through that exit closes.
-    pub(super) fn spend(&mut self, tid: &str, n: u64) -> std::result::Result<(), Close> {
-        let Some(t) = self.tunnels.get_mut(tid) else {
-            return Err(Close::new(1000, ""));
-        };
-        t.bytes += n;
-        let exit = t.exit.clone();
-        let cap = self.policies.get(&exit).map_or(0, |p| p.cap);
+    /// The exit's budget for the relay's today: a new day starts at zero.
+    fn budget(&mut self, exit: &str) -> &mut (String, u64) {
+        let today = self.today();
         let budget = self
             .budgets
-            .entry(exit.clone())
-            .or_insert_with(|| (t.day.clone(), 0));
+            .entry(exit.to_owned())
+            .or_insert_with(|| (today.clone(), 0));
+        if budget.0 != today {
+            *budget = (today, 0);
+        }
+        budget
+    }
+
+    /// Count `n` bytes against the tunnel's exit on the day they move. Past the cap every tunnel through that exit
+    /// closes.
+    pub(super) fn spend(&mut self, tid: &str, n: u64) -> std::result::Result<(), Close> {
+        let Some(t) = self.tunnels.get(tid) else {
+            return Err(Close::new(1000, ""));
+        };
+        let (key, exit) = (t.usage_key(self.today()), t.exit.clone());
+        self.count(key, n, 0);
+        let cap = self.policies.get(&exit).map_or(0, |p| p.cap);
+        let budget = self.budget(&exit);
         budget.1 += n;
         if budget.1 > cap {
             let close = Close::new(4429, "exit_over_cap");
@@ -273,8 +361,12 @@ impl Exits {
         {
             return Err(error(StatusCode::BAD_REQUEST, "invalid exit grant"));
         }
-        if self.tunnels.contains_key(&g.id) || self.reports.contains_key(&g.id) {
+        if self.tunnels.contains_key(&g.id) {
             return Err(error(StatusCode::CONFLICT, "conflicting grant"));
+        }
+        let oldest = self.bot_generations.get(&g.bot).copied().unwrap_or(0);
+        if g.bot_generation < oldest {
+            return Err(error(StatusCode::CONFLICT, "exit_stale"));
         }
         match self.policies.get(&g.exit) {
             Some(p) if p.generation > g.policy.generation => {
@@ -293,26 +385,28 @@ impl Exits {
         let Some(link) = self.links.get(&g.exit) else {
             return Err(error(StatusCode::CONFLICT, "exit_offline"));
         };
-        let budget = match self.budgets.get(&g.exit) {
-            Some((day, used)) if *day == g.day => (day.clone(), (*used).max(g.used)),
-            _ => (g.day.clone(), g.used),
-        };
-        let over = budget.1 >= cap;
-        self.budgets.insert(g.exit.clone(), budget);
-        if over {
+        let link_open = link.open.clone();
+        // What Python recorded counts only for the day it was read on; it never lowers what is counted here.
+        let today = self.today();
+        let budget = self.budget(&g.exit);
+        if g.day == today {
+            budget.1 = budget.1.max(g.used);
+        }
+        if budget.1 >= cap {
             return Err(error(StatusCode::TOO_MANY_REQUESTS, "exit_over_cap"));
         }
         if self.tunnels.len() >= TUNNELS
-            || self.reports.len() + self.tunnels.len() >= REPORTS
+            || self.usage.len() + self.tunnels.len() >= USAGE_ROWS
             || self.tunnels.values().filter(|t| t.exit == g.exit).count() >= TUNNELS_PER_EXIT
         {
             return Err(error(StatusCode::TOO_MANY_REQUESTS, "exit_busy"));
         }
         let (client_ticket, exit_ticket) = (id() + &id(), id() + &id());
         let open = json!({"op": "open", "id": g.id, "host": g.host, "port": g.port, "ticket": exit_ticket}).to_string();
-        if link.open.send(open).is_err() {
+        if link_open.send(open).is_err() {
             return Err(error(StatusCode::CONFLICT, "exit_offline"));
         }
+        self.fence_bot(&g.bot, g.bot_generation, "browser exit changed");
         let (ctx, crx) = oneshot::channel();
         let (etx, erx) = oneshot::channel();
         let (cancel, cancelled) = watch::channel(None);
@@ -323,13 +417,12 @@ impl Exits {
                 runner_id: g.runner_id.clone(),
                 bot: g.bot.clone(),
                 host: g.host.clone(),
-                day: g.day.clone(),
+                bot_generation: g.bot_generation,
                 client_ticket: Some(client_ticket.clone()),
                 exit_ticket: Some(exit_ticket),
                 client: Some(ctx),
                 exit_side: Some(etx),
                 cancel,
-                bytes: 0,
             },
         );
         Ok((client_ticket, crx, erx, cancelled))
@@ -353,13 +446,45 @@ impl Exits {
     }
 
     pub(super) fn acknowledge(&mut self, ids: &[String]) {
-        for tid in ids {
-            self.reports.remove(tid);
+        if self.batch.as_ref().is_some_and(|b| ids.contains(&b.id)) {
+            self.batch = None;
         }
     }
 
-    pub(super) fn pending_reports(&self) -> Vec<TunnelReport> {
-        self.reports.values().take(REPORT_BATCH).cloned().collect()
+    /// The batch for this heartbeat: the unacknowledged one, or the usage counted since, open tunnels included, so a
+    /// restart loses at most one heartbeat's bytes.
+    pub(super) fn usage_batch(&mut self) -> Option<UsageBatch> {
+        if self.batch.is_none() && !self.usage.is_empty() {
+            let keys = self
+                .usage
+                .keys()
+                .take(REPORT_BATCH)
+                .cloned()
+                .collect::<Vec<_>>();
+            let rows = keys
+                .into_iter()
+                .map(|key| {
+                    let (bytes, tunnels) = self.usage.remove(&key).unwrap_or_default();
+                    let (exit, runner_id, bot, host, day) = key;
+                    UsageRow {
+                        exit,
+                        runner_id,
+                        bot,
+                        host,
+                        day,
+                        bytes,
+                        tunnels,
+                    }
+                })
+                .collect();
+            self.batch = Some(UsageBatch { id: id(), rows });
+        }
+        self.batch.clone()
+    }
+
+    /// Whether every byte counted has reached Python.
+    pub(super) fn drained(&self) -> bool {
+        self.usage.is_empty() && self.batch.is_none()
     }
 
     #[cfg(test)]
@@ -652,6 +777,14 @@ mod tests {
         }
     }
 
+    /// Exits counting on 2026-11-01.
+    fn exits() -> Exits {
+        Exits {
+            day: Some("2026-11-01".into()),
+            ..Exits::default()
+        }
+    }
+
     fn grant(tid: &str, bot: &str, generation: u64, used: u64) -> Grant {
         Grant {
             id: tid.into(),
@@ -662,6 +795,7 @@ mod tests {
             port: 443,
             day: "2026-11-01".into(),
             used,
+            bot_generation: 1,
             policy: policy(generation, &["ops"], 1000),
         }
     }
@@ -675,7 +809,7 @@ mod tests {
 
     #[test]
     fn a_tunnel_is_refused_unless_the_exit_shares_with_the_bot_is_connected_and_under_its_cap() {
-        let mut exits = Exits::default();
+        let mut exits = exits();
         assert_eq!(code(exits.admit(&grant("t1", "ops", 1, 0))), "exit_offline");
         let mut opens = exits.connect_link("laptop");
         assert_eq!(
@@ -689,7 +823,12 @@ mod tests {
             code(exits.admit(&grant("t4", "ops", 1, 1000))),
             "exit_over_cap"
         );
-        // A later day starts from what Python recorded for it.
+        // Python's count is read for its own day: one from yesterday never resets today's.
+        let mut yesterday = grant("t5", "ops", 1, 10);
+        yesterday.day = "2026-10-31".into();
+        assert_eq!(code(exits.admit(&yesterday)), "exit_over_cap");
+        // The relay's next day starts at zero.
+        exits.day = Some("2026-11-02".into());
         let mut tomorrow = grant("t5", "ops", 1, 10);
         tomorrow.day = "2026-11-02".into();
         assert_eq!(code(exits.admit(&tomorrow)), "ok");
@@ -703,7 +842,7 @@ mod tests {
 
     #[test]
     fn an_older_policy_never_replaces_a_newer_one_and_a_stale_grant_is_refused() {
-        let mut exits = Exits::default();
+        let mut exits = exits();
         let _opens = exits.connect_link("laptop");
         exits
             .set_policy("laptop", policy(3, &["ops"], 1000))
@@ -718,7 +857,7 @@ mod tests {
 
     #[test]
     fn taking_a_bot_off_or_turning_sharing_off_closes_its_tunnels_and_the_link() {
-        let mut exits = Exits::default();
+        let mut exits = exits();
         let _opens = exits.connect_link("laptop");
         exits.admit(&grant("t1", "ops", 1, 0)).unwrap();
         let mut cancel = exits.tunnels["t1"].cancel.subscribe();
@@ -733,7 +872,7 @@ mod tests {
                 .map(|c| c.reason.clone()),
             Some("exit_not_shared".into())
         );
-        assert_eq!(exits.reports["t1"].bot, "ops");
+        assert_eq!(exits.usage_batch().unwrap().rows[0].tunnels, 1);
         let mut off = policy(3, &["sales"], 1000);
         off.sharing = false;
         exits.set_policy("laptop", off).unwrap();
@@ -742,17 +881,15 @@ mod tests {
 
     #[test]
     fn bytes_past_the_daily_cap_close_every_tunnel_through_that_exit() {
-        let mut exits = Exits::default();
+        let mut exits = exits();
         let _opens = exits.connect_link("laptop");
         exits.admit(&grant("t1", "ops", 1, 900)).unwrap();
         exits.admit(&grant("t2", "ops", 1, 0)).unwrap();
         assert!(exits.spend("t1", 60).is_ok());
         assert_eq!(exits.spend("t2", 60).unwrap_err().reason, "exit_over_cap");
         assert!(exits.tunnels.is_empty());
-        assert_eq!(
-            (exits.reports["t1"].bytes, exits.reports["t2"].bytes),
-            (60, 60)
-        );
+        let rows = exits.usage_batch().unwrap().rows;
+        assert_eq!((rows.len(), rows[0].bytes, rows[0].tunnels), (1, 120, 2));
         assert_eq!(
             code(exits.admit(&grant("t3", "ops", 1, 0))),
             "exit_over_cap"
@@ -760,8 +897,91 @@ mod tests {
     }
 
     #[test]
+    fn bytes_count_on_the_utc_day_they_move_and_a_new_day_has_a_fresh_cap() {
+        let mut exits = exits();
+        let _opens = exits.connect_link("laptop");
+        exits.admit(&grant("t1", "ops", 1, 900)).unwrap();
+        exits.spend("t1", 90).unwrap();
+        exits.day = Some("2026-11-02".into());
+        // Past midnight the open tunnel goes on under the new day's cap, and its bytes count there.
+        exits.spend("t1", 500).unwrap();
+        exits.close("t1", Close::new(1000, ""));
+        let rows = exits.usage_batch().unwrap().rows;
+        let days = rows
+            .iter()
+            .map(|r| (r.day.as_str(), r.bytes, r.tunnels))
+            .collect::<Vec<_>>();
+        assert_eq!(days, [("2026-11-01", 90, 0), ("2026-11-02", 500, 1)]);
+    }
+
+    #[test]
+    fn usage_goes_to_python_in_batches_resent_until_acknowledged_open_tunnels_included() {
+        let mut exits = exits();
+        let _opens = exits.connect_link("laptop");
+        exits.admit(&grant("t1", "ops", 1, 0)).unwrap();
+        exits.spend("t1", 7).unwrap();
+        assert!(!exits.drained());
+        let first = exits.usage_batch().unwrap();
+        assert_eq!((first.rows[0].bytes, first.rows[0].tunnels), (7, 0));
+        exits.spend("t1", 5).unwrap();
+        assert_eq!(
+            exits.usage_batch().unwrap().id,
+            first.id,
+            "resent as it was"
+        );
+        exits.acknowledge(&["another".into()]);
+        assert_eq!(exits.usage_batch().unwrap().id, first.id);
+        exits.acknowledge(std::slice::from_ref(&first.id));
+        let second = exits.usage_batch().unwrap();
+        assert_ne!(second.id, first.id);
+        assert_eq!(second.rows[0].bytes, 5);
+        exits.acknowledge(&[second.id]);
+        assert!(exits.drained() && exits.usage_batch().is_none());
+        // A new Python lease keeps the day's count: the cap is not refilled.
+        exits.restart(Close::new(1012, "server restarted"));
+        assert_eq!(exits.budgets["laptop"], ("2026-11-01".into(), 12));
+    }
+
+    #[test]
+    fn a_bots_newer_selection_refuses_older_grants_and_closes_older_tunnels() {
+        let mut exits = exits();
+        let _opens = exits.connect_link("laptop");
+        exits.admit(&grant("t1", "ops", 1, 0)).unwrap();
+        let mut cancel = exits.tunnels["t1"].cancel.subscribe();
+        let mut newer = grant("t2", "ops", 1, 0);
+        newer.bot_generation = 2;
+        exits.admit(&newer).unwrap();
+        assert!(
+            cancel.borrow_and_update().is_some(),
+            "the older tunnel closed"
+        );
+        assert!(exits.tunnels.contains_key("t2"));
+        assert_eq!(code(exits.admit(&grant("t3", "ops", 1, 0))), "exit_stale");
+        // Python's push after the bot's exit changed.
+        assert_eq!(exits.fence_bot("ops", 3, "browser exit changed"), 1);
+        assert_eq!(exits.fence_bot("ops", 2, "browser exit changed"), 0);
+        newer.id = "t4".into();
+        assert_eq!(code(exits.admit(&newer)), "exit_stale");
+        exits.restart(Close::new(1012, "server restarted"));
+        let _opens = exits.connect_link("laptop");
+        assert_eq!(
+            code(exits.admit(&newer)),
+            "ok",
+            "a new lease's grants carry the generation again"
+        );
+    }
+
+    #[test]
+    fn dates_are_utc_civil_dates() {
+        assert_eq!(civil_date(0), "1970-01-01");
+        assert_eq!(civil_date(11_016), "2000-02-29");
+        assert_eq!(civil_date(20_758), "2026-11-01");
+        assert_eq!(utc_today().len(), 10);
+    }
+
+    #[test]
     fn a_ticket_opens_its_own_side_once() {
-        let mut exits = Exits::default();
+        let mut exits = exits();
         let _opens = exits.connect_link("laptop");
         let (ticket, ..) = exits.admit(&grant("t1", "ops", 1, 0)).unwrap();
         let exit_ticket = exits.tunnels["t1"].exit_ticket.clone().unwrap();
@@ -794,7 +1014,7 @@ mod tests {
     }
 
     /// The whole path over real sockets: the exit's link (its token checked by a stand-in Python), a grant, both
-    /// tunnel ends, the exit's status, bytes both ways, and the closed tunnel's report with its byte count.
+    /// tunnel ends, the exit's status, bytes both ways, and the usage with its byte count.
     #[tokio::test]
     async fn bytes_flow_between_the_two_computers_and_the_closed_tunnel_is_reported() {
         use crate::{gateway, Hub};
@@ -898,18 +1118,21 @@ mod tests {
         // The ticket was used: nobody else joins.
         assert!(tokio_tungstenite::connect_async(client_url).await.is_err());
         client.send(M::Close(None)).await.unwrap();
-        let mut report = None;
         for _ in 0..200 {
-            report = app.hub.lock().unwrap().exits.reports.get("t1").cloned();
-            if report.is_some() {
+            if app.hub.lock().unwrap().exits.tunnels.is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        let report = report.expect("closed tunnel reported");
+        let rows = app.hub.lock().unwrap().exits.usage_batch().unwrap().rows;
         assert_eq!(
-            (report.bytes, report.host.as_str(), report.bot.as_str()),
-            (11, "www.acme.example", "ops")
+            (
+                rows[0].bytes,
+                rows[0].tunnels,
+                rows[0].host.as_str(),
+                rows[0].bot.as_str()
+            ),
+            (11, 1, "www.acme.example", "ops")
         );
     }
 }
