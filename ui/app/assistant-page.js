@@ -75,7 +75,7 @@ async function pageAssistant() {
 // Each message leaves the box at once and waits in P.outbox until the server has it; a Return while one is out queues
 // behind it. A failed send puts it, and everything queued after it, back in the box ahead of whatever is typed there.
 async function assistantSend(P, text, queued = null) {
-  const out = queued || {text: String(text || '').trim(), files: P.files.slice(), scope: sessionScope(pq(P, '.p-text'))};
+  const out = queued || {text: String(text || '').trim(), typed: pq(P, '.p-text').value, files: P.files.slice(), scope: sessionScope(pq(P, '.p-text'))};
   if (!queued) {
     if (!out.text && !out.files.length) return;
     (P.outbox ||= []).push(out);
@@ -113,7 +113,7 @@ async function assistantSend(P, text, queued = null) {
 }
 function assistantRestore(P, outs) {
   const box = pq(P, '.p-text');
-  box.value = [...outs.map(o => o.text), box.value.trim()].filter(Boolean).join('\n\n');
+  box.value = [...outs.map(o => o.typed ?? o.text), box.value.trim()].filter(x => x.trim()).join('\n\n');   // as typed
   box.dispatchEvent(new Event('input', {bubbles: true}));
   P.files.unshift(...outs.flatMap(o => o.files));
   pillChips(P); pillButtons(P); chatDraftSave(P);

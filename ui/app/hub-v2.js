@@ -278,12 +278,13 @@ function agentQuiet(slug) {
   return !(S.status?.health_issues || []).some(i => i.kind === 'agent' && i.bot === slug) && !!S.emps.find(x => x.name === slug)?.agent?.credential;
 }
 function pausedRender() {
-  const el = $('#conv-paused'); if (!el || !V2C) return;
-  const text = pausedNotice(V2C.slug);
-  const agent = text ? '' : agentNotice(V2C.slug);
+  // The Assistant's chat (V2C), or a bot page, whose Home and DM are threads (ui/app/bot-page.js).
+  const el = $('#conv-paused'), slug = V2C?.slug || (typeof BOT !== 'undefined' && BOT?.slug); if (!el || !slug) return;
+  const text = pausedNotice(slug);
+  const agent = text ? '' : agentNotice(slug);
   patchLiveHTML(el, text || agent); el.hidden = !(text || agent);
-  el.classList.toggle('agent', !text && !!agent && agentQuiet(V2C.slug));
-  const resume = el.querySelector('[data-quarantine-resume]'), slug = V2C.slug;
+  el.classList.toggle('agent', !text && !!agent && agentQuiet(slug));
+  const resume = el.querySelector('[data-quarantine-resume]');
   if (resume) resume.onclick = async () => {
     resume.disabled = true;
     try {

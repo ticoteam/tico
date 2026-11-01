@@ -96,7 +96,9 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
       await page.locator('#chat-composer .p-chips > *').first().waitFor();
       await box.press('Enter');
       await page.waitForFunction(() => !document.querySelector('#chat-composer .p-chips')?.children.length);
-      assert.equal(sent[1].path, '/api/v2/uploads/assistant/messages', 'owner: a picture goes up as an upload');
+      // The box empties as the message leaves; the upload itself follows.
+      for (let i = 0; i < 100 && sent.length < 2; i++) await page.waitForTimeout(50);
+      assert.equal(sent[1]?.path, '/api/v2/uploads/assistant/messages', 'owner: a picture goes up as an upload');
       assert.match(sent[1].body, /name="text"\r\n\r\nAttached files\./);
       assert.match(sent[1].body, /filename="[^"]*\.png"/);
       // Earlier chats: closed, loaded when opened, read-only, older pages on request.
@@ -132,6 +134,7 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
       await page.locator('#chat-composer .p-text').press('Enter');
       await page.waitForFunction(() => !document.querySelector('#chat-composer .p-text').value);
       await page.waitForFunction(() => !document.querySelector('#chat-composer .p-chips')?.children.length);
+      for (let i = 0; i < 100 && !sent.length; i++) await page.waitForTimeout(50);
       assert.deepEqual(sent.map(s => s.path), ['/api/v2/uploads/assistant/messages'], 'admin: words and the picture together');
       // A helper's own page still opens for an admin, with its Home but no DM: the Assistant hands it its work.
       for (const helper of ['botops', 'goal-manager']) {

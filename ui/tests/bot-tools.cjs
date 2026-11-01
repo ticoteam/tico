@@ -247,7 +247,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       const scheme = 'dark';
       const {page, errors, context} = await open(browser, {width: 390, height: 844}, {colorScheme: scheme});
       await page.goto('https://tico-ui.test/#/bot/cmo');
-      await page.locator('#conv').waitFor();
+      await page.locator('#bot-thread').waitFor();
       assert.equal(await page.locator('#pane-tasks').isVisible(), false, 'chat alone');
       assert.equal(await page.locator('#bot-tool-strip').isVisible(), false, 'no room for the tools beside the name');
       if (shots) await page.screenshot({path: path.join(shots, `bot-page-phone-chat-${scheme}.png`)});

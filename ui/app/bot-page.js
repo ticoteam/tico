@@ -385,6 +385,7 @@ async function pageBot(slug, tab) {
     ${limited ? '' : `<div class="bot-talk-bar">${talkTabs.length > 1 ? `<div class="bot-talk-switch" role="tablist" aria-label="Home or DM">${talkTabs.map(t =>
       `<button type="button" role="tab" data-talk="${t}">${BOT_TAB_LABELS[t]}</button>`).join('')}</div>` : ''}<span class="spacer"></span>
       <a class="bot-threads-link" href="${THREADS_ROUTE}?with=${encodeURIComponent('bot:' + slug)}">Threads with ${esc(e.display_name || slug)}</a><span class="bot-talk-acts"></span></div>`}
+    <div id="conv-paused" class="conv-paused" role="status" hidden></div>
     <div class="bot-thread" id="bot-thread"></div>
   </div>
 
@@ -577,6 +578,7 @@ async function pageBot(slug, tab) {
 
   moreClampWatch();
   showBotTab(tab);
+  pausedRender();
 }
 // A desktop is wide enough for both: chat on the left, the bot's tasks on the right, each scrolling
 // on its own (#514). A phone keeps one at a time behind the Chat | Tasks switch.
