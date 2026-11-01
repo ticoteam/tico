@@ -1,5 +1,7 @@
 """A bot back from a quarantine is told the refusal that stopped it, and its manager bot can write to it meanwhile."""
 
+import json
+
 import pytest
 
 from backend import hubdb as H
@@ -85,3 +87,19 @@ def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):
         H.quarantine(c, "cpo", "10 repeated refusals today")
     with api.app.state.store.transaction() as c:
         assert H.note_create(c, "bot:ops", "bot:cpo", "The roadmap label needs an approval.")
+
+
+def test_quarantine_batch_and_single_read_pick_the_same_newest_event_on_a_tied_time(api):
+    """Two quarantine events with the same `ts`: the batch and the single-row read both take the one inserted last."""
+    from backend.read_cache import one
+    store = api.app.state.store
+    with store.transaction() as c:
+        for event_id, reason in (("older", "first"), ("newer", "second")):
+            c.execute("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(?,?,?,?,?,?)",
+                      (event_id, "2026-11-01T10:00:00Z", "owner", "quarantine", "bot:tied",
+                       json.dumps({"reason": reason})))
+    with store.read_transaction() as c:
+        H.prime_quarantines(c, ["tied"])
+        batched = json.loads(one(c, H.QUARANTINE_DETAIL_SQL, ("bot:tied",))["detail_json"])["reason"]
+        single = json.loads(c.execute(H.QUARANTINE_DETAIL_SQL, ("bot:tied",)).fetchone()["detail_json"])["reason"]
+    assert batched == single == "second"

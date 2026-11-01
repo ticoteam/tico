@@ -815,7 +815,7 @@ def create_app(settings=None):
                                 # read-back it answered.
                                 return {**record, "assistant": request.state.identity.task_actor,
                                         **goal_read_back.agreement(c, request.state.identity, record["cited"],
-                                                                   request.method, request.url.path, raw)}
+                                                                   request.method, request.url.path, raw, auth=auth)}
                             record = assistant_instruction(c, request.state.identity, asked)
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
                             if setting:
@@ -6820,9 +6820,9 @@ def create_app(settings=None):
             return result
 
     def computer_rows(c, who):
-        from .performance import load_status
+        from .performance import load_statuses
         from . import usage_limits
-        from .start_places import summary as turn_counts, describe as describe_turns
+        from .start_places import summaries, describe as describe_turns
         online = {r["id"] for r in _online_runners(c)}
         everyone = who.role == "owner" or auth.bot_admin(who)
         mine = H.actor_id(who.actor)
@@ -6832,8 +6832,12 @@ def create_app(settings=None):
         rows = []
         # One Default for the whole listing: each computer's summary reuses pools/groups/spend memos.
         limits = usage_limits.company(c)
-        for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"):
-            counts = turn_counts(c, r["id"], settings, limits)
+        runners = list(c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"))
+        # One pass for every computer's turn counts and load (not one summary and one load per computer).
+        turn_counts = summaries(c, [r["id"] for r in runners], settings, limits)
+        loads = load_statuses(c, [r["id"] for r in runners])
+        for r in runners:
+            counts = turn_counts[r["id"]]
             turns = {"turn_counts": counts, "turn_summary": describe_turns(counts)}
             detailed = everyone or r["operator"] == mine or r["accepts_member_bots"]
             if not detailed:
@@ -6841,7 +6845,7 @@ def create_app(settings=None):
                     # Discovery and load do not grant access to repositories, logs or operator identity.
                     rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
                                  "platform": r["platform"] or "", "accepts_member_bots": False,
-                                 **load_status(c, r["id"]), **turns})
+                                 **loads[r["id"]], **turns})
                 continue
             bots = [bot for bot in placed.get(r["id"]) or [] if (readable.get(bot) or {}).get("see")]
             rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
@@ -6849,7 +6853,7 @@ def create_app(settings=None):
                          "accepts_member_bots": bool(r["accepts_member_bots"]), "bots": bots,
                          "turns_at_once": r["turns_at_once"], "turn_limit": start_places.turn_limit(r),
                          **screen_listing(r), **performance_listing(r), **views.computer_details(c, r, who, auth),
-                         **load_status(c, r["id"]), **turns})
+                         **loads[r["id"]], **turns})
         return rows
 
     @app.get("/api/v2/computers")
@@ -7834,6 +7838,8 @@ def create_app(settings=None):
     install_bot_task_tabs(app, store, auth, mutate, settings, task_views)
     from .cards import install as install_cards
     install_cards(app, store, auth, mutate, settings, task_view)
+    from . import memory_tidy_cards
+    memory_tidy_cards.install(app, store, auth, mutate)
     turn_work.install(app, store, auth)
     from . import run_view
     run_view.install(app, store, auth)

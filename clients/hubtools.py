@@ -1672,7 +1672,7 @@ def kpi_log(api, args):
 @tool("hub_proposal_create", "Propose a change you may not make yourself, for the owner to confirm: clearer "
       "goal wording (goal_wording: payload title/body), a KPI for a goal (goal_kpi: payload kpi or kpi_id, and "
       "target), a new definition (kpi_definition), a target (kpi_target: payload is the target fields), or a "
-      "flag (flag: payload issue vague|duplicate|unmeasured), or, where the Strategy Bot "
+      "flag (flag: payload issue vague|duplicate), or, where the Strategy Bot "
       "is on, a goal's Why (goal_why: "
       "payload why, one line tying the goal to the company's vision), or, "
       "from the Strategy Bot at level 2 or 3, a red or "
@@ -5163,7 +5163,8 @@ def message_redact(api, args):
       "product answered, the bot and the version. No secrets, no other people's details.",
       {"message": _s("What happened and what is missing, in plain words")}, required=("message",), writes=True)
 def support_file(api, args):
-    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True}, key=_key(args))
+    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True,
+                                                    "source": "botops"}, key=_key(args))
 
 
 

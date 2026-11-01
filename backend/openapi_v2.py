@@ -1612,6 +1612,7 @@ SCHEMAS.update({
         "teammates": items(obj({"teammate": "s", "kind": "s", "team": "n", "reports_to": "n",
                                 "default": {"type": "string", "enum": ["everything", "team_expenses", "own_expenses",
                                                                        "none"]},
+                                "default_team": "n",
                                 "grants": items({"type": "object", "additionalProperties": True}),
                                 "rights": {"type": ["array", "null"], "items": {"type": "string"}},
                                 "may_grant": "b"})),
@@ -2302,6 +2303,27 @@ SCHEMAS['ComputerSubscriptionList'] = obj({
     'capable': items({'type': 'string'})})
 SCHEMAS['ComputerSubscriptionResult'] = obj({
     'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 'n', 'stopped': 'i', 'sessions_reset': 'i'})
+
+
+# Independent reviewer cards: task closure never changes this audience or lifetime.
+TAGS['Memory tidy'] = "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
+STABLE.extend([
+    ('/api/v2/memory-tidy/cards', 'get', 'Memory tidy', 'listMemoryTidyCards',
+     'The named reviewer’s open cards; diffs are fetched on opening a card. Human and bot reviewers.', 'MemoryTidyCards'),
+    ('/api/v2/memory-tidy/cards/{ident}', 'get', 'Memory tidy', 'getMemoryTidyCard',
+     'A named reviewer’s card with its checked diff, including after both pass tasks close.', 'MemoryTidyCardResult'),
+    ('/api/v2/memory-tidy/cards/{ident}/decide', 'post', 'Memory tidy', 'decideMemoryTidyCard',
+     'Discard an open card without repository changes. Keep returns 409 until its separate implementation is available.', 'MemoryTidyCardResult'),
+])
+SCHEMAS['MemoryTidyCard'] = obj({
+    'id': 's', 'kind': {'enum': ['memory_tidy']}, 'bot': 's', 'reviewer': 's', 'requester': 's', 'title': 's',
+    'memory_commit': 's', 'model': 's', 'cost_usd': {'type': 'number', 'description': 'Filing-ledger list-price estimate, including subscription usage.'},
+    'diary': 's', 'diff': {'type': 'string', 'description': 'Checked unified diff; present on detail reads and decisions, omitted from lists.'},
+    'created': 's', 'expires': 's', 'status': {'enum': ['open', 'withdrawn', 'discarded', 'kept']}, 'reason': 's', 'keep_available': 'b',
+}, required=['id', 'kind', 'bot', 'reviewer', 'requester', 'title', 'memory_commit', 'model', 'cost_usd', 'diary',
+             'created', 'expires', 'status', 'reason', 'keep_available'])
+SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
+SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
 
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
