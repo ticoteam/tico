@@ -185,8 +185,10 @@ ahead of time so it doesn't try.
   - No active rule at all: one `SELECT ... LIMIT 1` and nothing else, no roster read and no engine.
 - **One gate helper** judges every bot-authored string a teammate or the public will read. The HTTP routes, the hubdb
   writers and the automation writers all call it. A write is a bot's when the actor is a bot, or when `task_actor` is
-  a bot or `via` is `botops` (BotOps writes as the person; it's still checked as BotOps). Only a person's own typed
-  writes, and their Assistant's, are exempt.
+  a bot or `via` is `botops`. A person's writes are checked too, as that person: their own typed writes, the
+  Assistant's writes as them (`via: assistant`), and BotOps's writes for them (`via: botops`). `check_as(principal,
+  sender, via)` judges each against the rules that cover the person (Who), and a hold is the person's, with its
+  sender and route kept (`provenance`).
 - **Where it hooks (phase 1):**
   - a bot's reply at run completion. `POST /api/v2/attempts/{aid}/complete` preflights the body *before* `mutate`
     (as `POST /api/v2/messages` does for ask ingest), and `execution.complete` applies the verdict next to
@@ -195,6 +197,10 @@ ahead of time so it doesn't try.
     tool steps, not the reply text, until the verdict says deliver. On Block or Escalate the text lives only on the
     `org_rule_holds` row; `final_text`, `result_json`, the run log and the bot session show the one-line note. The
     privacy withhold keeps text on the attempt; this doesn't.
+  - thread writes ([Threads](threads.md)): a post into a thread (`POST /api/v2/threads/{id}/messages`, a sub-thread reply
+    included), a thread started with a first message (`POST /api/v2/threads`), and an edit (`PATCH /api/v2/messages/{id}`)
+    are judged as a message to a person is, before the write; on Block the message is held and does not reach the thread
+    until a reviewer releases it (`message.held` tells the owners and admins);
   - `hub message send` (`POST /api/v2/messages`, and `POST /api/v2/chat/{bot}` through the same check and write),
     task comments, task create and owner change: the routes `ask_ingest` already gates;
   - task questions (`POST /api/v2/task-questions`): title, body, question and why as one output to the person asked;
@@ -237,7 +243,25 @@ ahead of time so it doesn't try.
   - Mail: To and Cc addresses that match roster people are recipients for With; other addresses match only rules
     with With empty.
   - No matching rule means no Decide call, which is most outputs.
-  - A person's own writes are never checked, including what their Assistant writes as them (`refs.via`).
+  - A person's writes are checked as that person, including what their Assistant or BotOps writes for them.
+    A person's hold is read by the person who wrote it, on any token, and by the editors of its rule and the Admins
+    (`_person_reviewer`); a bot's Assistant or BotOps reads nothing of it. Send anyway replays it as the person.
+    Edit and resend withdraws the hold (`POST /api/v2/rule-holds/{id}/withdraw`) and sends it again as a new check.
+  - Where a person's chat message lands: the chat route names no conversation, so the check uses the open direct chat
+    with that bot as the thread (`chat_place`). A held message is listed by its thread
+    (`GET /api/v2/rule-holds?thread=`), which the chat draws under its messages.
+  - **`where:`** narrows a rule to some places: `thread:<conversation id>`, `team:<group>` (the sender's or the
+    conversation owner's group chain), `kind:dm` (a direct chat, or a write with no conversation), and
+    `has_outside_members` (someone in it is outside the roster, or is a Slack or federated actor). A write meets the
+    rule when one of its terms holds. A message has the place of its thread (`conversations.id` is the thread id, with
+    its root, audience and members read from the thread); a task comment has its task's conversation. The Rules panel
+    sets one choice (anywhere, direct chats, outside, a team, or a thread). Its thread list is the threads sidebar
+    (`GET /api/v2/threads`: root threads the viewer belongs to or follows, the public company and team ones, and DMs; 200
+    at most), so a readable thread outside those is set by id through the API and CLI.
+    The API and CLI take several terms. A rule with no `where:` applies wherever its Who matches. Mail and drafts have
+    no place, so a `where:` rule never matches them.
+  - People's checks are charged to the same monthly budget as bots' (`rules_monthly_usd`) and counted on the Rules
+    page next to its spend ("$3 on people"). A person has a daily cap of their own (`decisions_daily_calls_human`).
 - **What's judged:** the whole output, short or long. Screening's 200-character minimum, 20k cut and `free_text`
   extraction are injection heuristics and aren't reused ("My favorite color is blue" must be checked). One output is
   one call. An output that doesn't fit Decide's state limit (120k) is held, not passed; it isn't on the fail-open
@@ -461,7 +485,8 @@ government rules with citations into the same Suggested tab. Tico works fully wi
 - **Settings as sentences:** each one matches the live setting, and editing from the tab goes through the setting's own
   permission check.
 - **Matching:** a comment whose requester is in With and owner isn't (checked); a bot whose group comes from its
-  manager; the Assistant writing as a person under an all-bots rule (not checked); `--mine` for a derived group.
+  manager; the Assistant writing as a person is checked as that person (Who covers the person); `--mine` for a derived
+  group.
 - **Checks:**
   - No matching rule → no Decide call.
   - A short break ("My favorite color is blue") and a break at the end of a long output are both caught.

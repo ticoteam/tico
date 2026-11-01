@@ -36,6 +36,7 @@ from .roadmaps import exact_approval
 from . import login_holds
 from . import cloud_access
 from . import counsel
+from . import thread_api
 from . import step_age
 from . import bot_stops, turn_budgets, proposals, task_caps
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
@@ -716,7 +717,7 @@ def create_app(settings=None):
                 size = request.headers.get("content-length", "0")
                 if not size.isdigit():
                     raise Problem("content_length", "Invalid Content-Length", 400)
-                upload = request.url.path in ("/api/notes", "/api/send", "/api/v2/uploads/tasks", "/api/v2/uploads/assistant/messages", "/api/v2/meetings/import") or re.fullmatch(r"/api/(?:meetings/[^/]+/send|v2/uploads/chat/[^/]+)", request.url.path)
+                upload = request.url.path in ("/api/notes", "/api/send", "/api/v2/uploads/tasks", "/api/v2/uploads/assistant/messages", "/api/v2/meetings/import") or re.fullmatch(r"/api/(?:meetings/[^/]+/send|v2/uploads/chat/[^/]+|v2/uploads/threads/[^/]+/messages)", request.url.path)
                 docs_import = (request.url.path in ("/api/v2/docs/import", "/api/v2/market/import")
                                and request.state.identity.role in ("human", "owner", "bot"))
                 # A bot's computer publishes files up to 25 MB as raw bytes (backend/files.py).
@@ -2855,9 +2856,27 @@ def create_app(settings=None):
             out |= set(conv.get("participants") or [])
         return sorted(out)
 
-    def rule_check(who, operation, output, audience, obj="", context=None):
-        """The check for one bot write, or None (a person's write, nothing to judge, a write the caller cannot make:
-        the write itself refuses that)."""
+    def rule_message_place(body):
+        """A message's place, as `where:` reads it: its conversation (none for a direct chat, which is a DM)."""
+        return lambda c, author, recipients: org_rule_check.place_for(c, author, recipients, body.conversation_id or "")
+
+    def chat_place(who, bot):
+        """A person's chat with a bot is the direct chat it lands in: its conversation id is the thread `where:` names.
+        The chat route names no conversation, so the check finds the open chat (none yet: a DM with no thread)."""
+        return lambda c, author, recipients: org_rule_check.place_for(
+            c, author, recipients, (views.direct_chat(c, who.actor, bot) or {}).get("id") or "")
+
+    def task_place(who, tid):
+        """A task comment's place: its task's conversation, the thread its comments are in (`where: thread:<id>`)."""
+        def place(c, author, recipients):
+            row = H.task(c, auth.resolve_task(c, who, tid))
+            return org_rule_check.place_for(c, author, recipients, (row or {}).get("conversation_id") or "")
+        return place
+
+    def rule_check(who, operation, output, audience, obj="", context=None, place=None):
+        """The check for one write by a person or a bot, or None (nothing to judge, a write the caller cannot make: the
+        write itself refuses that). `place`: the write's place, or a function of (c, author, recipients) that reads
+        it."""
         if not output or not org_rule_check.author_of(who, settings.assistant_bot):
             return None
         with store.read() as c:
@@ -2867,7 +2886,8 @@ def create_app(settings=None):
                 recipients = audience(c)
             except Problem:
                 return None
-        return org_rule_check.preflight(store, app.state.judge, who, operation, output, recipients, context, obj)
+        return org_rule_check.preflight(store, app.state.judge, who, operation, output, recipients, context, obj,
+                                        place=place)
 
     def rule_public(body):
         """Whether a task write makes the task public: the whole company reads it."""
@@ -3011,10 +3031,12 @@ def create_app(settings=None):
             ask_ingest.withdraw_loose(c, who.actor, message["id"], ingest["person"])
         return {**message, **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
 
-    def message_checks(who, body, retry=False):
+    def message_checks(who, body, retry=False, place=None):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
-        does a saved retry, `retry`: `mutate` replays its answer without the write)."""
-        rc = rule_check(who, "message", body.text, lambda c: rule_message_audience(c, who, body))
+        does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
+        the route does not name a conversation (`rule_message_place`)."""
+        rc = rule_check(who, "message", body.text, lambda c: rule_message_audience(c, who, body),
+                        place=place or rule_message_place(body))
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
     @app.post("/api/v2/messages")
@@ -3069,7 +3091,7 @@ def create_app(settings=None):
                                attachments=body.attachments, delivery=body.delivery, defer_for=body.defer_for)
         # A bot's message here is a message like any other: the same checks and write as `/messages`, held or warned
         # the same way, and replayed by Send anyway as one.
-        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who))
+        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who), place=chat_place(who, bot))
 
         def work(c):
             cleared = topic_change.apply(c, settings, who, bot, topic)
@@ -3515,7 +3537,9 @@ def create_app(settings=None):
             if sent.to != target:
                 # The recipient changed after the check: delivered unchecked (no engine call in the write), recorded.
                 author = org_rule_check.author_of(who, settings.assistant_bot)
-                check = org_rule_check.changed(c, rc, author, "message", rule_message_audience(c, who, sent))
+                recipients = rule_message_audience(c, who, sent)
+                place = org_rule_check.place_for(c, author, recipients, sent.conversation_id or "") if author else None
+                check = org_rule_check.changed(c, rc, author, "message", recipients, place=place)
             if ingest and sent.to != target:
                 ask_ingest.skipped(c, ingest, "target")      # judged for the first recipient, delivered to another
             out = message_write(c, who, sent, check, ingest if sent.to == target else None)
@@ -4998,7 +5022,7 @@ def create_app(settings=None):
                           422)
         rc = rule_check(who, "comment", body.text, lambda c: rule_task_audience(
             c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text,
-            *([rule_target(c, who, body.ask.who)] if body.ask and body.ask.who else [])))
+            *([rule_target(c, who, body.ask.who)] if body.ask and body.ask.who else [])), place=task_place(who, tid))
         ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else comment_ingest(who, tid, body)
         result = ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: comment_write(
             c, who, tid, body, ingest, rc, request.state.identity)))
@@ -5109,7 +5133,8 @@ def create_app(settings=None):
         if body.ask is not None or body.attachments:
             raise Problem("validation", "An edit changes only a plain comment's text", 422)
         rc = rule_check(who, "comment_edit", body.text, lambda c: rule_task_audience(
-            c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text), obj=mid)
+            c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text), obj=mid,
+            place=task_place(who, tid))
         return mutate(request, body, lambda c: comment_edit_write(c, who, tid, mid, body, rc),
                       check=lambda c: own_comment(c, who, tid, mid, allow_deleted=True))
 
@@ -7920,6 +7945,7 @@ def create_app(settings=None):
     org_rule_check.AUDIENCE.update(rule_audiences())
     org_rule_check.AUDIENCE["automation"] = replay_audience
     org_rule_check.install(app, store, auth, mutate)
+    thread_api.install(app, store, auth, mutate, rule_check)     # thread routes (§3.4); /threads/search before /threads/{id}
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
     profiles.install(app, store, auth, mutate, settings_admin)

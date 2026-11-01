@@ -2,7 +2,10 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
+from backend import threads
+from backend.models import Completion
 from backend.store import H, encode
 from backend.tests.test_api import api, setup_attempt, post, get, ready, claim, runner, assign, headers
 
@@ -232,3 +235,60 @@ def test_a_runs_confirmed_thread_replaces_the_one_it_started_on_and_only_while_i
     finish(api, r, attempt)
     post(api, path + "thread", {"thread_id": "late-thread"}, r["token"], expected=409)
     assert threads()[1] == ("new-thread", "new-thread")
+
+
+def test_a_completion_may_name_the_sub_thread_message_its_reply_goes_under():
+    # The runner sends the parent of a reply made in a sub-thread; a reply in the main thread sends none.
+    named = Completion(outcome="completed", last_seq=0, text="Done.", parent_message_id="m-parent")
+    assert named.parent_message_id == "m-parent"
+    assert Completion(outcome="completed", last_seq=0, text="Done.").parent_message_id is None
+    with pytest.raises(ValidationError):
+        Completion(outcome="completed", last_seq=0, parent_message="m-parent")
+
+
+def test_a_reply_under_a_named_parent_lands_in_its_sub_thread_and_the_parent_row_shows_it(api):
+    # The runner names the message its reply answers. The reply goes under that message in the attempt's own thread,
+    # and the main thread's row for it links to the sub-thread.
+    r = runner(api, "ana")
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    with api.app.state.store.transaction() as c:
+        root = threads.create(c, "human:ana", title="Launch", audience="members", members=["bot:ops"])
+        parent = threads.post(c, "human:ana", root["id"], "Which date for the launch?")
+        threads.post(c, "human:ana", root["id"], "Pick the date", to_actor="bot:ops")
+    attempt = claim(api, r)
+    start(api, r, attempt)
+    done = post(api, f"attempts/{attempt['id']}/complete",
+                {"outcome": "completed", "last_seq": 0, "text": "Oct 20.", "parent_message_id": parent["id"]},
+                r["token"], key="completion")
+    reply = done["message"]
+    with api.app.state.store.read() as c:
+        sub = H.conversation(c, reply["conversation_id"])
+        assert sub["parent_message_id"] == parent["id"] and sub["root_id"] == root["id"]
+        timeline = threads.timeline(c, threads.actor_viewer(c, "human:ana"), root["id"])["messages"]
+    row = next(m for m in timeline if m["id"] == parent["id"])
+    assert row["sub_thread"]["id"] == sub["id"]
+
+
+@pytest.mark.parametrize("parent", ["other-thread", "unknown"])
+def test_a_parent_the_attempt_cannot_reach_leaves_the_reply_in_its_thread(api, parent):
+    # The completion's parent is client-supplied. Only a message in the attempt's own thread that the bot can read
+    # moves the reply; anything else keeps it where the message was.
+    r = runner(api, "ana")
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    with api.app.state.store.transaction() as c:
+        root = threads.create(c, "human:ana", title="Launch", audience="members", members=["bot:ops"])
+        other = threads.create(c, "human:ana", title="Finance", audience="members", members=[])
+        outside = threads.post(c, "human:ana", other["id"], "Budget numbers")
+        threads.post(c, "human:ana", root["id"], "Pick the date", to_actor="bot:ops")
+    attempt = claim(api, r)
+    start(api, r, attempt)
+    named = outside["id"] if parent == "other-thread" else "unknown-message"
+    done = post(api, f"attempts/{attempt['id']}/complete",
+                {"outcome": "completed", "last_seq": 0, "text": "Oct 20.", "parent_message_id": named},
+                r["token"], key="completion")
+    assert done["message"]["conversation_id"] == root["id"]
+    with api.app.state.store.read() as c:
+        timeline = threads.timeline(c, threads.actor_viewer(c, "human:ana"), root["id"])["messages"]
+    assert not any(m.get("sub_thread") for m in timeline)

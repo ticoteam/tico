@@ -3151,7 +3151,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
              actor, revision=0)
     if warnings:
         event(conn, actor, "message.lint", msg["id"], {"problems": warnings})
-        return {**msg, "warnings": warnings}
+        return {**msg, "warnings": list(msg.get("warnings") or []) + warnings}
     return msg
 
 
@@ -3435,7 +3435,8 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         ":in_reply_to, :created, :delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, "
         ":restricted, :legacy_audience)", row)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created"], conv["id"]))
-    threads.record(conn, message(conn, row["id"]), conv)
+    # A mention outside the audience grants nothing and warns the author (contract §2): carried on the result.
+    mention_warnings = (threads.record(conn, message(conn, row["id"]), conv) or {}).get("warnings") or []
     # Notes, comments and runner final replies all pass here, including quiet ones
     # and checks requested by a person. Only the check owner may supply its verdict.
     if kind in ("say", "notice") and wake_rules.VERDICT_FIELDS.search(str(body or "")):
@@ -3448,7 +3449,8 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
-    return message(conn, row["id"])
+    written = message(conn, row["id"])
+    return {**written, "warnings": mention_warnings} if mention_warnings else written
 
 
 def feed(conn, target, body, conv, refs=None):
@@ -9315,10 +9317,11 @@ UNREAD_INDEX = "CREATE INDEX IF NOT EXISTS messages_unread_to ON messages(to_act
 # mention, a DM), still waiting. The addressee's row follows the message's delivered_at/read_at. The terms repeat the
 # partial index message_deliveries_waiting word for word, or SQLite does not use it.
 WAITING_TERMS = "d.state IN ('pending','delivered','capped','held')"
-UNREAD_PAGE_SQL = ("SELECT m.rowid AS _seq, m.* FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
-                   "WHERE d.recipient=? AND " + WAITING_TERMS + " AND m.deleted_at IS NULL "
-                   "AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? AND (d.created_at<? OR m.rowid<?) "
-                   "ORDER BY d.created_at DESC, m.rowid DESC LIMIT ?")
+# Paged on the delivery's own (created_at, rowid), which the waiting index holds in order: no sort.
+UNREAD_PAGE_SQL = ("SELECT d.rowid AS _seq, d.created_at AS _at, m.* FROM message_deliveries d "
+                   "JOIN messages m ON m.id=d.message_id WHERE d.recipient=? AND " + WAITING_TERMS + " "
+                   "AND m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? "
+                   "AND (d.created_at<? OR d.rowid<?) ORDER BY d.created_at DESC, d.rowid DESC LIMIT ?")
 
 
 def inbox_pages(conn, actor, at=None, size=100):
@@ -9332,9 +9335,9 @@ def inbox_pages(conn, actor, at=None, size=100):
         rows = _rows(conn.execute(UNREAD_PAGE_SQL, (actor, at, created, created, seq, size)))
         if not rows:
             return
-        created, seq = rows[-1]["created"], rows[-1]["_seq"]
+        created, seq = rows[-1]["_at"], rows[-1]["_seq"]
         for row in rows:
-            del row["_seq"]
+            del row["_seq"], row["_at"]
             row["refs"] = _json(row.get("refs_json"), {}) or {}
         yield rows
         if len(rows) < size:

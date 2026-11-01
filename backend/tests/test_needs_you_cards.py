@@ -98,7 +98,7 @@ def test_do_what_you_recommend_answers_and_closes_the_card(api):
     card = next(i for i in get(api, "needs-you")["items"] if i["id"] == tool["id"])
     assert card["recommend"]["do"] == "Go with Apollo" and card["need"] == "decide"
     post(api, "needs-you/recommended", {"ask": plain["id"]}, expected=409)        # no recommendation to take
-    post(api, "needs-you/recommended", {"ask": asked["id"]}, token="ben-test", expected=403)
+    post(api, "needs-you/recommended", {"ask": asked["id"]}, token="ben-test", expected=404)   # unreadable: 404, never 403
     post(api, "needs-you/recommended", {"ask": asked["id"]})
     with api.app.state.store.read() as c:
         said = c.execute("SELECT body FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchone()

@@ -25,7 +25,7 @@ and the decision model deciding who a DM or a mention is for. The code is
 | A guest, a deactivated account, a sender whose verified email is not on `registry/people.yaml` or not admitted by `registry/hub-access.yaml` | Refused silently: no reply, the reason on the event. |
 
 A DM is a front door to whichever bot the message is for, never a human's private Tico
-room (`docs/conversation.md`); those rooms are untouched. The human's profile in Tico
+thread (`docs/threads.md`); those threads are untouched. The human's profile in Tico
 (`#/person/<id>/slack`) shows those DMs, including their replies. A bot that messages a
 human in Tico (Legal saying something to Thomaz) is posted through the same Tico Slack
 app into their DM, so it shows up there too.

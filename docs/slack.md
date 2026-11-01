@@ -38,7 +38,7 @@ list in Tico's database, not a file:
 - **By asking BotOps.** "Let the support bot read #customer_success": BotOps adds it as the person who asked,
   so a member is told who to ask. The MCP tools are `hub_slack_channel_add`, `_list`, `_remove` and `_import`.
 
-A reader gets what is new in the channel about once an hour, as a message in its own conversation
+A reader gets what is new in the channel about once an hour, as a message in its own thread
 ([slack-gateway.md](slack-gateway.md)). A bot's own `history` reads through `connectors/slack.py` follow the same
 list and its `tools:` entry. Channels shared outside the workspace are always refused, whatever the list says.
 
@@ -49,7 +49,7 @@ file is ignored. A public install has no such file and needs none.
 ## What humans can do
 
 - DM Tico to ask for anything; the router picks the right bot, or asks one clarifying question.
-- Ask BotOps for a change in a DM: it acts with your rights, as in your Tico chat. A request in a channel or thread
+- Ask BotOps for a change in a DM: it acts with your rights, as in your Tico DM. A request in a channel or thread
   only gets an answer; BotOps changes nothing for you from there.
 - `@Tico` in a channel; mention it again in the thread to continue.
 - Reply in a thread a bot already talks in; no mention needed.
@@ -93,5 +93,5 @@ bot's messages in Tico, or mute only some bots in the **Muted** row under it. Th
 `POST /api/v2/humans/<id>`.
 
 While you are talking to a bot in Slack, it still answers there: when your latest message in that
-chat came from Slack within the last day, the bot's messages in it go to Slack. Task results have
+DM came from Slack within the last day, the bot's messages in it go to Slack. Task results have
 their own switch above.

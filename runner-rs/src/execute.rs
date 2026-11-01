@@ -259,6 +259,14 @@ pub fn clear_epoch(attempt: &Value, key: &str) -> Option<(String, i64)> {
     (!conversation_id.is_empty()).then_some((conversation_id, epoch))
 }
 
+/// The message a reply goes under when the message it answers sits in a sub-thread: that sub-thread's parent message,
+/// which the Hub sends with the conversation (the message row has no parent). None for a main-thread message, or from a
+/// Hub that sends no parent (docs/threads.md).
+pub fn reply_parent(attempt: &Value) -> Option<String> {
+    let parent = text_of(&attempt["conversation"]["parent_message_id"]);
+    (!parent.is_empty()).then_some(parent)
+}
+
 pub fn input_text(message: &Value, late: bool) -> String {
     let instruction = if message["kind"] == "ask" {
         format!("A sender is waiting for this question. Answer using hub question answer {} before continuing your current request.", text_of(&message["id"]))
@@ -2321,6 +2329,10 @@ impl Runner {
         // events but does not become the task's checkpoint (backend/execution.py complete).
         let unsafe_yield = drove.yielded && drove.outcome != "completed";
         completion.insert("text".into(), json!(if unsafe_yield { "" } else { reply.as_str() }));
+        // A reply to a message in a sub-thread goes under that message, so the Hub keeps it in the sub-thread.
+        if let Some(parent) = reply_parent(&attempt) {
+            completion.insert("parent_message_id".into(), json!(parent));
+        }
         completion.insert("tokens_in".into(), drove.tokens.get("input").cloned().unwrap_or(Value::Null));
         completion.insert("tokens_out".into(), drove.tokens.get("output").cloned().unwrap_or(Value::Null));
         if !carried.is_empty() {
@@ -2711,6 +2723,16 @@ mod tests {
         assert_eq!(clear_epoch(&attempt, "task:t1"), Some(("c-ben".into(), 0)));
         // A Hub from before either field: today's resume.
         assert_eq!(clear_epoch(&json!({"conversation": {"id": "c-ben"}}), "bot"), None);
+    }
+
+    #[test]
+    fn a_reply_to_a_sub_thread_message_goes_under_that_message() {
+        // A conversation that is a sub-thread names the message it sits under; the main thread names none.
+        let sub = json!({"conversation": {"id": "c2", "parent_message_id": "m1"}, "message": {"id": "m2"}});
+        assert_eq!(reply_parent(&sub), Some("m1".into()));
+        assert_eq!(reply_parent(&json!({"conversation": {"id": "c1", "parent_message_id": ""}})), None);
+        // A Hub from before sub-threads sends no field at all: the reply stays in the main thread, as it always did.
+        assert_eq!(reply_parent(&json!({"conversation": {"id": "c1"}})), None);
     }
 
     #[test]
