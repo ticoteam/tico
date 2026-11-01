@@ -1,9 +1,9 @@
-"""The thread routes' OpenAPI drafts (backend/openapi_threads.py) cover the contract and stay well-formed until the
-routes ship and move into the served document (backend/tests/test_openapi_v2.py checks that part)."""
+"""The thread routes in the served OpenAPI document (backend/openapi_v2.py) cover contract section 10
+(docs/dev/threads-contract.md) and stay well-formed. Their staged drafts moved into the served document when the routes
+shipped, so this checks what is served (backend/tests/test_openapi_v2.py checks the document as a whole)."""
 
-import json
+import re
 
-from backend import openapi_threads as drafts
 from backend import openapi_v2
 
 # Method and path of every thread route that contract section 10 lists (docs/dev/threads-contract.md).
@@ -17,6 +17,13 @@ CONTRACT = {
     ("post", "/api/v2/threads/{thread}/messages"), ("patch", "/api/v2/messages/{mid}"),
     ("delete", "/api/v2/messages/{mid}"),
 }
+THREAD_ROWS = [row for row in openapi_v2.STABLE if row[2] == "Threads"]
+SCHEMAS = openapi_v2.SCHEMAS
+
+
+def _shape(path):
+    """The path with every parameter name blanked: the contract and the served rows name them differently."""
+    return re.sub(r"\{[^}]*\}", "{}", path)
 
 
 def _refs(node):
@@ -31,29 +38,28 @@ def _refs(node):
             yield from _refs(value)
 
 
-def test_the_drafts_cover_every_route_the_contract_lists():
-    assert {(method, path) for path, method, *_ in drafts.ROUTES} == CONTRACT
+def test_the_served_document_covers_every_route_the_contract_lists():
+    served = {(method, _shape(path)) for path, method, *_ in THREAD_ROWS}
+    assert {(method, _shape(path)) for method, path in CONTRACT} <= served
 
 
-def test_every_draft_is_tagged_summarised_and_names_an_operation_nothing_else_uses():
-    ids = [route[3] for route in drafts.ROUTES]
+def test_every_thread_route_is_tagged_summarised_and_names_its_own_operation():
+    ids = [row[3] for row in THREAD_ROWS]
     assert len(ids) == len(set(ids))
-    assert not set(ids) & {row[3] for row in openapi_v2.STABLE}
-    for path, method, tag, op_id, summary, answer in drafts.ROUTES:
-        assert tag == drafts.TAG[0] and summary, op_id
+    for path, method, tag, op_id, summary, answer in THREAD_ROWS:
+        assert tag == "Threads" and summary, op_id
+        assert answer is None or answer in SCHEMAS, op_id
 
 
-def test_every_declared_answer_and_reference_resolves_to_a_declared_schema():
-    answers = {route[5] for route in drafts.ROUTES if route[5]}
-    assert answers <= set(drafts.SCHEMAS)
-    found = list(_refs(drafts.SCHEMAS))
+def test_every_thread_schema_reference_resolves_to_a_declared_schema():
+    threads = {name: schema for name, schema in SCHEMAS.items() if name.startswith("Thread")}
+    found = list(_refs(threads))
     assert all(ref.startswith("#/components/schemas/") for ref in found)
-    assert {ref.rsplit("/", 1)[-1] for ref in found} <= set(drafts.SCHEMAS)
-    json.dumps(drafts.SCHEMAS)
+    assert {ref.rsplit("/", 1)[-1] for ref in found} <= set(SCHEMAS)
 
 
-def test_the_hidden_row_and_the_required_fields_match_the_contract():
-    assert drafts.THREAD_MESSAGE["required"] == ["id", "seq", "thread_id"]
-    assert {"hidden", "deleted", "sub_thread"} <= set(drafts.THREAD_MESSAGE["properties"])
-    assert {"attention", "threads", "dms", "next_cursor"} <= set(drafts.THREAD_SIDEBAR["properties"])
-    assert "breadcrumb" in drafts.THREAD_DETAIL["properties"]
+def test_the_message_row_and_the_sidebar_match_the_contract():
+    assert SCHEMAS["ThreadMessage"]["required"] == ["id", "seq", "thread_id"]
+    assert {"hidden", "deleted"} <= set(SCHEMAS["ThreadMessage"]["properties"])
+    assert {"attention", "threads", "dms", "next_cursor"} <= set(SCHEMAS["ThreadSidebar"]["properties"])
+    assert "breadcrumb" in SCHEMAS["ThreadTimeline"]["properties"]

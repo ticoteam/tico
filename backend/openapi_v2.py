@@ -2349,7 +2349,7 @@ SCHEMAS.update({
                          "next_cursor": "n"}, required=["hits", "next_cursor"]),
     "ThreadMessage": obj({"id": "s", "conversation_id": "s", "thread_id": "s", "seq": "i", "from_actor": "s",
                           "to_actor": "n", "kind": "s", "body": "n", "created": "s", "edited_at": "n",
-                          "revision": "i", "refs": "o", "deleted": "b"}, required=["id", "thread_id"]),
+                          "revision": "i", "refs": "o", "deleted": "b", "hidden": "b"}, required=["id", "seq", "thread_id"]),
     "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items({"type": "object"}),
                            "messages": items({"type": "object"}), "next_cursor": "n"},
                           required=["thread", "messages"]),

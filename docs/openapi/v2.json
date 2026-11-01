@@ -57777,10 +57777,14 @@
           },
           "deleted": {
             "type": "boolean"
+          },
+          "hidden": {
+            "type": "boolean"
           }
         },
         "required": [
           "id",
+          "seq",
           "thread_id"
         ],
         "additionalProperties": true
