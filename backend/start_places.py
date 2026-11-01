@@ -66,6 +66,8 @@ def computer_hold(c, runner_id, now=None, status=None):
     latest = status['latest_sample']
     if latest is None:
         # Samples past retention are gone, but a computer that reported before still reports nothing now.
+        if not on(c, runner_id):
+            return None
         seen = c.execute("SELECT last_sampled_at FROM runners WHERE id=?", (runner_id,)).fetchone()
         return (NOT_REPORTING, NOT_REPORTING) if seen and seen[0] else None
     if latest['stale']:
