@@ -60,19 +60,100 @@ def test_an_unread_dm_is_listed_until_it_is_read(api):
     assert needs(api, "thread_dm") == []
 
 
-def test_a_held_message_replaces_the_mention_until_released(api):
-    tid = members_thread(api)
-    message = say(api, tid, "Ana, the offer letter.", to_actor="human:ana")
+def hold(api, reviewer="human:ana", author="bot:finance", operation="reply", state="held"):
+    """A held write as org_rule_check stores it (its verdict and payload are not read by the list)."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE message_deliveries SET state='held' WHERE message_id=? AND recipient='human:ana'",
-                  (message["id"],))
-    assert needs(api, "thread_mention") == []
-    assert [i["conversation_id"] for i in needs(api, "thread_held")] == [tid]
+        hid = H.new_id()
+        c.execute("INSERT INTO org_rule_holds(id, operation, payload_json, author, destinations_json, rule_ids_json, "
+                  "verdict_json, nonce, state, reviewer, task_id, created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (hid, operation, "{}", author, "[]", "[]", "{}", "nonce", state, reviewer, None, H.now()))
+    return hid
+
+
+def test_a_held_message_is_listed_to_its_reviewer_until_it_is_released(api):
+    hid = hold(api)
+    assert [i["id"] for i in needs(api, "thread_held")] == [hid]
+    assert needs(api, "thread_held", token="cara-test") == []        # the reviewer alone reads a hold
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE message_deliveries SET state='delivered' WHERE message_id=? AND recipient='human:ana'",
-                  (message["id"],))
+        c.execute("UPDATE org_rule_holds SET state='sent' WHERE id=?", (hid,))
     assert needs(api, "thread_held") == []
+
+
+def test_a_held_message_outside_a_thread_write_is_not_listed(api):
+    hold(api, operation="mail")
+    assert needs(api, "thread_held") == []
+
+
+def test_a_bots_mention_of_the_person_is_listed_and_its_plain_post_is_not(api):
+    setup_attempt(api, "finance")
+    tid = members_thread(api)
+    say(api, tid, "Numbers are ready.", actor="bot:finance")
+    assert needs(api, "thread_mention") == []
+    say(api, tid, "@ana the Q3 numbers are ready.", actor="bot:finance")
     assert [i["conversation_id"] for i in needs(api, "thread_mention")] == [tid]
+
+
+def test_an_unread_dm_shows_only_the_message_the_person_can_read(api):
+    """A later message the person cannot read must not set the item's sender or time. Ben is a plain member here: the
+    owner reads every migrated shared room, so Ana could read the hidden message too."""
+    as_member(api, "ben@acme.example")
+    with api.app.state.store.transaction() as c:
+        dm = threads.dm(c, "human:cara", ["human:ben"], title="Lease")["id"]
+    visible = say(api, dm, "Call me when you can.")
+    with api.app.state.store.transaction() as c:
+        hidden = threads.post(c, "human:cara", dm, "Ana's offer is confidential.")
+        c.execute("UPDATE messages SET legacy_audience='shared:nobody', restricted=1 WHERE id=?", (hidden["id"],))
+    item = needs(api, "thread_dm", token="ben-test")[0]
+    assert item["created"] == visible["created"]
+
+
+def test_a_group_dm_is_listed_like_a_two_person_one(api):
+    with api.app.state.store.transaction() as c:
+        group = threads.dm(c, "human:cara", ["human:ana", "human:ben"], title="Offer")["id"]
+    say(api, group, "Ana and Ben, sign by Friday.")
+    assert [i["conversation_id"] for i in needs(api, "thread_dm")] == [group]
+
+
+def test_a_participants_dm_is_listed_like_a_personal_one(api):
+    """A DM from a migrated room carries the participants audience; it reads and lists through its root the same way."""
+    with api.app.state.store.transaction() as c:
+        dm = threads.dm(c, "human:cara", ["human:ana"], title="Offer")["id"]
+        c.execute("UPDATE conversations SET audience='participants' WHERE id=?", (dm,))
+    say(api, dm, "Sign by Friday.")
+    assert [i["conversation_id"] for i in needs(api, "thread_dm")] == [dm]
+
+
+def test_every_thread_item_is_reachable_through_the_pages_of_needs_you(api):
+    tids = [members_thread(api, title=f"Note {i}") for i in range(51)]
+    for tid in tids:
+        say(api, tid, "@ana please look.")
+    seen, cursor = [], None
+    while True:
+        page = get(api, "needs-you?limit=50" + (f"&cursor={cursor}" if cursor else ""))
+        seen += [i["conversation_id"] for i in page["items"] if i["kind"] == "thread_mention"]
+        cursor = page.get("next")
+        if not cursor:
+            break
+    assert sorted(seen) == sorted(tids)
+
+
+def needs_changes(api, person):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT COUNT(*) FROM changes WHERE topic='needs' AND subject_id=?", (person,)).fetchone()[0]
+
+
+def test_a_thread_change_marks_the_persons_needs_list_to_be_read_again(api):
+    tid = members_thread(api)
+    before = needs_changes(api, "human:ana")
+    say(api, tid, "@ana look.")
+    after_post = needs_changes(api, "human:ana")
+    with api.app.state.store.transaction() as c:
+        threads.mark_all_read(c, ana_viewer(api), tid)
+    after_read = needs_changes(api, "human:ana")
+    hid = hold(api)
+    after_hold = needs_changes(api, "human:ana")
+    assert before < after_post < after_read < after_hold, (before, after_post, after_read, after_hold)
+    assert hid
 
 
 def test_a_paused_thread_is_listed_to_its_manager_only(api):

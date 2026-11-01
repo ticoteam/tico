@@ -208,6 +208,17 @@ TRIGGERS = [
      + _needs("ask", "NEW.to_actor", where="NEW.kind='ask'")),
     ("changes_messages_delete", "DELETE", "messages", None,
      _row("messages", "delete", "OLD.id", conversation="OLD.conversation_id")),
+    # A person's Needs you list moves when a thread item reaches them or its delivery changes state (read, held,
+    # capped), when they read a thread (their follower's read point), and when a write held for review is created or
+    # decided. A `needs` row says only that the list may have moved: the list is read again from its marks.
+    ("changes_message_deliveries_insert", "INSERT", "message_deliveries", "NEW.mode<>'none'",
+     _needs("thread", "NEW.recipient")),
+    ("changes_message_deliveries_update", "UPDATE", "message_deliveries", f"NEW.mode<>'none' AND {_changed('state')}",
+     _needs("thread", "NEW.recipient")),
+    ("changes_thread_followers_update", "UPDATE", "thread_followers", _changed("last_read_seq"),
+     _needs("thread", "NEW.actor")),
+    ("changes_org_rule_holds_insert", "INSERT", "org_rule_holds", None, _needs("hold", "NEW.reviewer")),
+    ("changes_org_rule_holds_update", "UPDATE", "org_rule_holds", _changed("state"), _needs("hold", "NEW.reviewer")),
     ("changes_chat_goals_insert", "INSERT", "chat_goals", None,
      _row("messages", "goal", "NEW.id", conversation="NEW.conversation_id", bot="NEW.bot")),
     ("changes_chat_goals_update", "UPDATE", "chat_goals", None,

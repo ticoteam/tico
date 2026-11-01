@@ -1,17 +1,21 @@
 """Needs attention (spec 3.6): the thread items on a person's Needs you list.
 
-Read from the inbox (`message_deliveries`) and the thread counters, in SQL, each row checked against the per-message
-rule (`threads.readable`) before it is listed. An item clears by what the person does, not by a click:
+Read from the inbox (`message_deliveries`), the thread counters and the writes held for review (`org_rule_holds`), each
+row checked against the per-message rule (`threads.readable`) before it is listed. An item clears by what the person
+does, not by a click:
 - a mention or an ask is open until the person posts in its thread after it (or it is deleted);
 - an unread DM is open until the person reads past its last message from a person or one addressed to them;
-- a message held for the person is open until a reviewer releases it (its delivery leaves `held`);
+- a write held for review is open until its reviewer releases it (the hold leaves `held`);
 - a capped thread (the loop guard, spec 4.5) is open until its capped deliveries resume.
-Bot posts that name nobody are activity, not attention; a bot's ask counts (it is the thread's question to the person).
+A bot's mention of the person and a bot's ask are the thread's questions to the person and count; a bot's post that
+names nobody is activity, not attention.
+
+Every item is listed. The caller pages the whole list (views.needs_items), so nothing is cut here.
 """
 from . import hubdb as H
 
-ITEM_LIMIT = 50      # items per list; the rest wait behind them in Needs you's own paging
 ADDRESSED = ("mention", "ask", "assign", "addressed")
+HELD_OPERATIONS = ("message", "reply")      # the writes a thread post is checked as (backend/org_rule_check.py)
 
 
 def _clip(text, n=160):
@@ -39,68 +43,71 @@ def items(c, auth, who, skip=()):
         first = _clip((row["body"] or "").strip().splitlines()[0] if (row["body"] or "").strip() else "")
         out.append(_item(kind, row["id"], row["conversation_id"], first or _clip(row["subject"] or "Thread"),
                          row["created"], row["from_actor"], message_id=row["id"], first_line=first))
-    for row in _unread_dms(c, me):
-        if threads.readable(c, viewer, row["id"]):
-            out.append(_item("thread_dm", row["id"], row["id"], _clip(row["subject"] or "Direct message"),
-                             row["created"], row["from_actor"]))
-    for row in _held(c, me):
-        if threads.readable(c, viewer, row["message_id"]):
-            out.append(_item("thread_held", row["id"], row["conversation_id"], "A message to you is held for review",
-                             row["created"]))
+    for row in _unread_dms(c, viewer, me):
+        out.append(_item("thread_dm", row["id"], row["id"], _clip(row["subject"] or "Direct message"),
+                         row["created"], row["from_actor"]))
+    for row in _holds(c, me):
+        out.append(_item("thread_held", row["id"], None, "A message is held for your review", row["created"],
+                         row["author"]))
     for row in _capped(c):
         root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
         if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
             out.append(_item("thread_capped", row["root_id"], row["root_id"],
                              _clip(root["subject"] or "Thread") + ": bot replies paused", row["since"]))
-    return sorted(out, key=lambda it: str(it["created"] or ""))[:ITEM_LIMIT]     # the oldest wait longest
+    return sorted(out, key=lambda it: str(it["created"] or ""))
 
 
 def _addressed(c, me):
-    """Messages a person may have to answer: a person's, or a bot's ask, that name this person and that they have not
-    answered since in the same thread. Bot replies that name them are not theirs to answer."""
+    """Messages a person may have to answer: a person's, a bot's ask, or a message that names this person, that they
+    have not answered since in the same thread. A bot's plain post, one that names nobody, is not theirs to answer."""
     return [dict(r) for r in c.execute(
         "SELECT m.id, m.conversation_id, m.from_actor, m.kind, m.body, m.created, cv.subject FROM message_deliveries d "
         "JOIN messages m ON m.id=d.message_id JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed') "
         "AND d.state IN ('pending','delivered','read') AND m.from_actor<>? "
-        "AND (m.from_actor LIKE 'human:%' OR m.kind='ask') AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
+        "AND (m.from_actor LIKE 'human:%' OR m.kind='ask' OR d.reason='mention') "
+        "AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
         "AND (m.kind<>'ask' OR m.answered_by IS NULL) "
         "AND cv.task_id IS NULL AND cv.closed_at IS NULL AND cv.archived_at IS NULL "
         "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.from_actor=? "
         "AND r.created>m.created AND r.deleted_at IS NULL) "
-        "ORDER BY m.created LIMIT ?", (me, me, me, ITEM_LIMIT * 2)).fetchall()]
+        "ORDER BY m.created", (me, me, me)).fetchall()]
 
 
-def _unread_dms(c, me):
-    """Direct messages with a message from a person (or addressed to this person) past the person's read point."""
+def _unread_dms(c, viewer, me):
+    """Direct messages with a message past the person's read point that they may read, from a person or addressed to
+    them. The item takes that message's sender and time: a later message they cannot read sets neither."""
+    from . import threads
     out = []
-    candidates = c.execute(
-        "SELECT cv.id, cv.subject, f.last_read_seq FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id "
-        "WHERE f.actor=? AND f.following=1 AND f.notify<>'muted' AND cv.audience='personal' "
-        "AND cv.closed_at IS NULL AND cv.archived_at IS NULL AND cv.last_unread_seq>f.last_read_seq "
-        "ORDER BY cv.last_unread_seq DESC LIMIT ?", (me, ITEM_LIMIT * 2)).fetchall()
-    for row in candidates:
-        hit = c.execute(
-            "SELECT m.from_actor, m.created FROM messages m WHERE m.conversation_id=? AND m.seq>? "
-            "AND m.from_actor<>? AND (m.from_actor LIKE 'human:%' OR m.to_actor=?) AND m.deleted_at IS NULL "
-            "ORDER BY m.seq DESC LIMIT 1", (row["id"], row["last_read_seq"], me, me)).fetchone()
-        if hit:
-            out.append({"id": row["id"], "subject": row["subject"], "from_actor": hit["from_actor"],
-                        "created": hit["created"]})
-        if len(out) >= ITEM_LIMIT:
-            break
+    for cv in c.execute(
+            "SELECT cv.id, cv.subject, f.last_read_seq FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id "
+            "WHERE f.actor=? AND f.following=1 AND f.notify<>'muted' "
+            "AND (cv.audience='personal' OR (cv.audience='participants' AND cv.parent_id IS NULL)) "
+            "AND cv.closed_at IS NULL AND cv.archived_at IS NULL AND cv.last_unread_seq>f.last_read_seq "
+            "ORDER BY cv.last_unread_seq DESC", (me,)).fetchall():
+        if not threads.readable(c, viewer, cv["id"]):
+            continue
+        for m in c.execute(
+                "SELECT m.* FROM messages m WHERE m.conversation_id=? AND m.seq>? AND m.from_actor<>? "
+                "AND (m.from_actor LIKE 'human:%' OR m.to_actor=?) AND m.deleted_at IS NULL ORDER BY m.seq DESC",
+                (cv["id"], cv["last_read_seq"], me, me)):
+            if threads.readable(c, viewer, dict(m)):
+                out.append({"id": cv["id"], "subject": cv["subject"], "from_actor": m["from_actor"],
+                            "created": m["created"]})
+                break
     return out
 
 
-def _held(c, me):
+def _holds(c, me):
+    """Writes held for review that this person reviews. Only the reviewer reads a hold (org_rule_check._reader), so
+    the item is listed to the reviewer alone, and it clears when the hold is decided."""
     return [dict(r) for r in c.execute(
-        "SELECT d.id, d.message_id, m.conversation_id, m.created FROM message_deliveries d "
-        "JOIN messages m ON m.id=d.message_id WHERE d.recipient=? AND d.state='held' "
-        "ORDER BY d.created_at LIMIT ?", (me, ITEM_LIMIT)).fetchall()]
+        "SELECT id, author, created FROM org_rule_holds WHERE state='held' AND reviewer=? AND operation IN (?,?) "
+        "ORDER BY created, id", (me, *HELD_OPERATIONS)).fetchall()]
 
 
 def _capped(c):
     """Threads whose bot wakes the loop guard held back, one row per thread (its oldest held wake)."""
     return [dict(r) for r in c.execute(
         "SELECT d.root_id, MIN(d.created_at) AS since FROM message_deliveries d WHERE d.state='capped' "
-        "AND d.root_id IS NOT NULL GROUP BY d.root_id ORDER BY since LIMIT ?", (ITEM_LIMIT,)).fetchall()]
+        "AND d.root_id IS NOT NULL GROUP BY d.root_id ORDER BY since").fetchall()]
