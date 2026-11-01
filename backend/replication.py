@@ -1111,6 +1111,9 @@ def _reset_local_state(config, db, binary, env, now, pending=False, sleep=time.s
         try:
             shutil.rmtree(state)
         except OSError as exc:
+            if pending:    # the old folder's state must not reach Litestream; the cache stays old for the next start
+                raise GenerationSwitchFailed("the local Litestream state could not be removed (" + str(exc)[:160]
+                                             + ")") from None
             return ("tico: the backup location is empty but Litestream's stale local state could not be removed: "
                     + str(exc)[:200]), False
         return "tico: the backup location is empty; removed Litestream's stale local state (" + state.name + ")", False

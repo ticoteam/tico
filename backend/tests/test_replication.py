@@ -1258,6 +1258,22 @@ def test_a_switch_a_crash_left_unfinished_is_finished_with_the_cache_written_las
     assert replication.read_generation_cache(db.parent) == GENERATION and not state.exists()
 
 
+def test_an_unfinished_switch_whose_old_state_cannot_be_removed_stops_the_start_and_keeps_the_cache(
+        tmp_path, monkeypatch):
+    old = "gen-20261031T000000Z"
+    config, db, state, backup, env = backup_setup(tmp_path, copies=replication.LOCAL_STUCK_FILES + 1,
+                                                  environment='{"generation": "%s"}' % GENERATION)
+    replication.write_generation_cache(db.parent, old)     # the commit landed, the cache and the local state did not
+    monkeypatch.setattr(replication.subprocess, "run", Listing("[]"))
+
+    def failing(path, *args, **kwargs):
+        raise PermissionError("read-only volume")
+    monkeypatch.setattr(replication.shutil, "rmtree", failing)
+    with pytest.raises(replication.GenerationSwitchFailed):
+        replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW)
+    assert replication.read_generation_cache(db.parent) == old and state.is_dir()   # the next start tries again
+
+
 class Recovering:
     """Stands in for `litestream ltx` on a backup location that cannot be read for its first `failures` calls, then prints
     `stdout`."""
