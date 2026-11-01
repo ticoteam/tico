@@ -1,6 +1,6 @@
 # Answer a question
 
-Every question, from a human in Ask the Librarian or from a bot or the Assistant through `hub doc ask`. The same
+Every question, from a human through the Assistant or from a bot or the Assistant through `hub doc ask`. The same
 steps and the same answer. Budget: most answers in a few minutes; at most about 25 `hub doc fetch` calls.
 
 The outcome is a short answer a human can act on, each claim tied to the doc it came from, or a plain

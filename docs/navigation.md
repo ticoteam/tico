@@ -41,7 +41,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Find a file or page any bot made | Library → Files (`#/library/files`); search finds text inside ([Files](files.md#library--files)) |
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
 | Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
-| See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
+| See the market map | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
 | See growth ideas, tests, verdicts and channel economics | Growth (`#/growth`; This week, Channels, Learning and Go-to-market are its tabs) ([Growth](growth.md)) |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
 | Contact support or continue a support conversation | Ask → **Loop in Support** (phone: the Ask tab), or any `#/support` link |
@@ -49,7 +49,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Ask**
 (the sidebar's bottom row, ⌘J; the phone's middle tab) opens your Assistant over any page as **Tico Assistant**, `#/assistant`
 opens it full page, and the Assistant hands BotOps what needs BotOps;
-the Strategy Bot is on Goals and proposes Strategy, and Ask the Librarian is on Docs and on Strategy's Market tab. The Strategy Bot is at the top of the team chart; the other three stay out of it.
+the Strategy Bot is on Goals and proposes Strategy, and Docs has an **Ask** button that opens the same Assistant panel. The Strategy Bot is at the top of the team chart; the other three stay out of it.
 Inbox Manager and other repeating message work appear under **Message bots**.
 An older app may show Instructions under the bot's Docs tab; the action is still **Edit Instructions**.
 Removing a Computer revokes its registration and leaves its local files and bots in place.

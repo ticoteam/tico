@@ -14,8 +14,7 @@ it through Tico's MCP. Each task shows who added it: you, another human, or a bo
 
 **Where are the built-in bots?**
 **Assistant** and **BotOps** are in the main left rail; **Assistant** opens your private chat with it. The Strategy Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
-run and a box to ask it to change a goal. **Docs** and **Strategy**'s Market tab have **Ask the Librarian** on the right (a button on a
-phone). All four are managed in **Settings > Bots**; they stay out of the team chart and the goal owner list.
+run and a box to ask it to change a goal. **Docs** has an **Ask** button that opens your Assistant panel (a sheet on a phone). All four are managed in **Settings > Bots**; they stay out of the team chart and the goal owner list.
 
 **What is on a bot's page?**
 Its name, the mark for the harness it runs on, up to three tool icons and its goal across the top, the chat below,
