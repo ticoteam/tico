@@ -684,6 +684,12 @@ def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, 
         bot_by_bot = harness_denies(c, settings)
     assert batched == bot_by_bot
     assert {bot for bot, _, _ in batched} == {"chosen", "everywhere", "unconfigured"}
+    # A failure in the shared read falls back to the bot-by-bot pass instead of ending the health response.
+    def unreadable(c, bots):
+        raise RuntimeError("unreadable")
+    with api.app.state.store.read_transaction() as c:
+        monkeypatch.setattr(bot_tools, "prime_state", unreadable)
+        assert harness_denies(c, settings) == batched
 
 
 def _listened(api, *, routed_days_ago, saved_days_ago, judged=None):

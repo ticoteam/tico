@@ -254,12 +254,13 @@ def harness_denies(c, settings):
     from .repositories import Reads
     reported = _reported(c, DENIES_WARNING, limit=500)
     bots = sorted({bot for bot, _ in reported})
-    # Every bot's configuration, computer, pending requests and tool access, read once for all of them.
-    prime_state(c, bots)
+    # Every bot's configuration, computer, pending requests and tool access, read once for all of them. A failure
+    # here falls back to the per-bot path, where each bot's own failure is skipped as it was before.
     try:
+        prime_state(c, bots)
         reads = Reads(c, bots)
     except Exception:
-        reads = None                  # the per-bot path, as before
+        reads = None
     configs = {}
     for part in H.chunks(bots):
         configs.update((r["bot"], r) for r in c.execute(
