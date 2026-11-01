@@ -237,7 +237,7 @@ const opsLocationFields = r => {
 };
 const opsItemFields = r => {
   const accounts = OPS_REFS?.accounts || [];
-  const account = (label, name) => opsPick(label, name, accounts.map(a => [a.id, `${a.code || ''} ${a.name}`.trim()]), r?.[name], '—');
+  const account = (label, name) => opsPick(label, name, accounts.map(a => [a.id, `${a.number || ''} ${a.name}`.trim()]), r?.[name], '—');
   const price = r && r.price != null ? (r.price / 100).toFixed(2) : '';
   return `${opsInput('Name', 'name', r?.name, 'maxlength="200" required')}
     ${opsPick('Kind', 'kind', OPS_ITEM_KINDS, r?.kind || 'service', null)}

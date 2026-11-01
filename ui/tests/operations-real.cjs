@@ -46,6 +46,12 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
     browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
     const customer = (await api('dana', 'GET', '/v2/customers?q=Beta')).body.customers[0];
     assert.equal(customer.name, 'Beta Foods');
+    // An estimate tagged to the customer's site, for the panels' document sections (which filter by the lines' tags).
+    const betaSite = (await api('dana', 'GET', '/v2/locations?q=Beta')).body.locations[0];
+    const income = (await api('dana', 'GET', '/v2/finance/chart?for=journal')).body.accounts.find(a => a.number === '4000');
+    const est = await api('dana', 'POST', '/v2/finance/actions', {kind: 'estimate_create', payload: {customer_id: customer.id, estimate_date: '2026-10-06', number: 'EST-77',
+      lines: [{account_id: income.id, amount: 12000, description: 'Coil swap', tags: {location: betaSite.id}}]}});
+    assert.equal(est.body.status, 'committed', JSON.stringify(est.body));
 
     // The owner: each tab's server filters, and the panels' links.
     {
@@ -66,6 +72,9 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       await page.locator('[data-ops-pnl]').waitFor();
       assert.equal(await page.locator('[data-ops-pnl]').getAttribute('href'), '#/finance/pnl?split=location');
       await shot(page, 'real-desktop-location-panel');
+      assert.equal(await page.locator('#ops-panel').getByText('EST-77').count(), 0, 'only the site it was tagged to');
+      await page.locator('#ops-table').getByText('Beta Foods Site').click();
+      await page.locator('#ops-panel').getByText('EST-77').waitFor({timeout: t(15000)});
 
       await go(page, '#/operations/items');
       await tabReady(page, 'items');
@@ -111,8 +120,11 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       await row.waitFor();
       assert.match(await row.innerText(), /Overdue/);
       const first = await row.locator('[data-due-done]').getAttribute('data-on');
+      const nextDue = () => page.locator('tr[data-ops-row]', {hasText: 'Rooftop unit 3'}).locator('td[data-l="Next due"]').innerText();
+      const before = await nextDue();
       await row.locator('[data-due-done]').click();
       await page.waitForFunction(() => document.querySelectorAll('[data-due-reopen]').length === 1, null, {timeout: t(15000)});
+      await page.waitForFunction(was => document.querySelector('tr.ops-on td[data-l="Next due"]')?.innerText !== was, before, {timeout: t(15000)});
       await page.locator('.ops-due summary').click();
       assert.equal(await page.locator('[data-due-reopen]').getAttribute('data-on'), first, 'history lists the day just done');
       await shot(page, 'real-desktop-equipment-panel');
@@ -147,6 +159,7 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       await page.locator('#ops-panel [data-ops-customer]').click();
       await page.locator('[data-ops-customer-panel]').waitFor();
       assert.equal(await page.locator('#ops-panel h2').innerText(), 'Beta Foods');
+      await page.locator('#ops-panel').getByText('EST-77').waitFor({timeout: t(15000)});
       await shot(page, 'real-desktop-customer-panel-owner');
       assert.deepEqual(errors, [], 'owner page errors');
       await page.context().close();
@@ -169,6 +182,7 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       assert.deepEqual(heads, ['Locations', 'Equipment', 'Due dates'], 'H7a: no estimates or invoices');
       const text = await panel.innerText();
       for (const want of ['Beta Foods Site', 'Rooftop unit 3', 'Filter change', 'Fire inspection']) assert.ok(text.includes(want), want);
+      assert.ok(!text.includes('EST-77'), 'H7a: the estimate stays out');
       await shot(page, 'real-desktop-customer-panel-teammate');
       // Back to the location it names, then the customer's name again, on a phone.
       await page.context().close();

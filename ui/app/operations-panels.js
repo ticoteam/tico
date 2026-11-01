@@ -93,7 +93,7 @@ function opsEquipmentFacts(r) {
 // ----------------------------------------------------------------- what each panel reads beyond the record
 const OPS_DOC_READS = {
   po: ['Open POs', 'ops-m-pos', 'purchase-orders', 'orders', {}, ['draft', 'sent', 'approved', 'partial'], () => `${FIN_ROUTE}/payables/orders`],
-  estimate: ['Estimates', 'ops-m-est', 'estimates', 'estimates', {}, ['draft', 'sent'], () => `${FIN_ROUTE}/receivables/estimates`],
+  estimate: ['Estimates', 'ops-m-est', 'estimates', 'estimates', {}, ['draft', 'sent', 'accepted'], () => `${FIN_ROUTE}/receivables/estimates`],
   invoice: ['Invoices', 'ops-m-inv', 'finance/invoices', 'invoices', {status: 'unpaid'}, null, () => `${FIN_ROUTE}/receivables`],
 };
 function opsPanelMore(state, load, r) {
