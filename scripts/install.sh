@@ -484,8 +484,9 @@ fetch_bundle() {
   as_root install -d -m 0755 "$DIR"
   if [ -n "$RUNNER" ]; then
     # A runner needs the compose file and nothing else; the server's compose.yaml stays out of this directory.
-    tar -xzf "$work/$bundle" -C "$work" docker/runner.compose.yaml docker/runner-memory.sh \
-      || die 4 "$bundle has no docker/runner.compose.yaml or docker/runner-memory.sh."
+    tar -xzf "$work/$bundle" -C "$work" docker/runner.compose.yaml || die 4 "$bundle has no docker/runner.compose.yaml."
+    # Older releases have no memory rule: such a runner gets no default cap, as it always had.
+    tar -xzf "$work/$bundle" -C "$work" docker/runner-memory.sh 2>/dev/null || true
     as_root install -m 0644 "$work/docker/runner.compose.yaml" "$DIR/runner.compose.yaml"
     printf '%s\n' "$VERSION" | as_root tee "$DIR/.bundle-version" >/dev/null
     say "ok: runner.compose.yaml for $VERSION is in $DIR"
@@ -814,7 +815,7 @@ run_runner() {
   # The default memory cap, unless .env has TICO_RUNNER_MEMORY (empty counts as set, and 0 means no limit). It goes in
   # the environment of compose, which outranks .env, so it is never written to .env: a later, bigger computer gets a new default.
   memory_env=
-  if ! as_root grep -q '^TICO_RUNNER_MEMORY=' "$DIR/.env"; then
+  if ! as_root grep -Eq '^[[:space:]]*TICO_RUNNER_MEMORY[[:space:]]*=' "$DIR/.env" && [ -f "$work/docker/runner-memory.sh" ]; then
     cap=$(sh "$work/docker/runner-memory.sh" "$MEMINFO" 2>/dev/null) || cap=
     if [ -n "$cap" ]; then
       memory_env="TICO_RUNNER_MEMORY=$cap"
