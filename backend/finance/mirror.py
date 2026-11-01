@@ -2461,6 +2461,17 @@ PLANNERS: dict[str, handlers.Planner] = {"mirror_start": mirror_start, "mirror_s
 
 
 # ------------------------------------------------------------------------------------------------ documents out
+_PER_TRANSACTION = (("location", "location"), ("project", "job"))
+
+
+def _one_per_transaction(lines: list, keys: tuple[tuple[str, str], ...] = _PER_TRANSACTION) -> None:
+    """QuickBooks takes one location and one job per transaction. Lines that name more than one of either are refused
+    at plan time, before anything is queued for the provider."""
+    for tag, what in keys:
+        if len({dict(x.tags).get(tag, "") for x in lines} - {""}) > 1:
+            raise invalid(f"the lines name more than one {what}; QuickBooks takes one per transaction")
+
+
 def _create_planner(kind: str) -> handlers.Planner:
     """A bill or invoice written to the provider first: QuickBooks posts it when it is saved, so the books take its entry
     when the provider confirms the write. Its lines are checked the way the native planner checks them."""
@@ -2487,6 +2498,8 @@ def _create_planner(kind: str) -> handlers.Planner:
         if kind == "bill":
             raw, _ = PU.link_bill_lines(ctx, who, str(contact["id"]), raw)
         lines, _ = documents.resolve_lines(ctx, who, kind, contact, raw)
+        if _provider(ctx) == "quickbooks":
+            _one_per_transaction(lines)
         total = sum(x.amount for x in lines)
         body = {"party": str(contact["id"]), "number": number, "day": day, "due": due or "",
                 "memo": V.opt_text(p, "memo", 500) or "",
@@ -2684,6 +2697,7 @@ def _order_planner(kind: str) -> handlers.Planner:
             raise invalid("say which account each line posts to")
         if len({dict(x.tags).get("location", "") for x in lines} - {""}) > 1:
             raise invalid(f"a {word} is in one location: its lines name the same one")
+        _one_per_transaction(lines, (("project", "job"),))
         number = V.opt_text(p, "number", 80) or SP.next_number(ctx.c, table, ctx.book.id, prefix)
         if SP.number_taken(ctx.c, table, ctx.book.id, number):
             raise FinanceError(CONFLICT, f"{word} {number} exists")

@@ -2267,3 +2267,74 @@ def test_a_purchase_order_voided_here_says_to_delete_it_in_quickbooks_and_a_dele
     assert _drain(books, fake, cid, now=LATER) == []
     with books.read() as c:
         assert c.execute("SELECT status FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()[0] == "void"
+
+
+def test_a_purchase_order_whose_lines_name_two_locations_is_refused_at_plan_time_and_the_dry_run_shows_it(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"].append(M.Location(M.Ext("Department", "4", "1"), "Dallas"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item, vendor = _local(c, "Item:5", "items"), _local(c, "Vendor:9", "fin_contacts")
+        austin, dallas = _local(c, "Department:3", "locations"), _local(c, "Department:4", "locations")
+        refused = act(c, OWNER, "po_create", {
+            "vendor_id": vendor, "po_date": "2026-10-05",
+            "lines": [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"location": austin}},
+                      {"item_id": item, "amount": 900, "description": "pens", "tags": {"location": dallas}}]},
+            dry_run=True)
+        assert (refused.status, refused.code) == ("failed", "invalid"), refused
+        assert refused.reason == "a purchase order is in one location: its lines name the same one", refused
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='purchaseorder.create'").fetchone()[0] == 0
+
+
+def test_a_purchase_order_whose_lines_name_two_jobs_is_refused_at_plan_time_with_the_job_wording(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"].append(M.Project(M.Ext("Project", "13", "1"), "Bath remodel", customer="Customer:4"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item, vendor = _local(c, "Item:5", "items"), _local(c, "Vendor:9", "fin_contacts")
+        kitchen, bath = _local(c, "Project:12", "projects"), _local(c, "Project:13", "projects")
+        refused = act(c, OWNER, "po_create", {
+            "vendor_id": vendor, "po_date": "2026-10-05",
+            "lines": [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"project": kitchen}},
+                      {"item_id": item, "amount": 900, "description": "pens", "tags": {"project": bath}}]},
+            dry_run=True)
+        assert (refused.status, refused.code) == ("failed", "invalid"), refused
+        assert refused.reason == "the lines name more than one job; QuickBooks takes one per transaction", refused
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='purchaseorder.create'").fetchone()[0] == 0
+
+
+def test_a_bill_and_an_invoice_whose_lines_name_two_locations_or_two_jobs_are_refused_at_plan_time(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"] += [M.Location(M.Ext("Department", "4", "1"), "Dallas"),
+                                M.Project(M.Ext("Project", "13", "1"), "Bath remodel", customer="Customer:4")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item, vendor = _local(c, "Item:5", "items"), _local(c, "Vendor:9", "fin_contacts")
+        customer = _local(c, "Customer:4", "fin_contacts")
+        austin, dallas = _local(c, "Department:3", "locations"), _local(c, "Department:4", "locations")
+        kitchen, bath = _local(c, "Project:12", "projects"), _local(c, "Project:13", "projects")
+        bill = act(c, OWNER, "bill_create", {
+            "vendor_id": vendor, "number": "B-79", "bill_date": "2026-10-05", "due_date": "2026-11-05",
+            "lines": [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"location": austin}},
+                      {"item_id": item, "amount": 900, "description": "pens", "tags": {"location": dallas}}]},
+            dry_run=True)
+        assert (bill.status, bill.code) == ("failed", "invalid"), bill
+        assert bill.reason == "the lines name more than one location; QuickBooks takes one per transaction", bill
+        invoice = act(c, OWNER, "invoice_create", {
+            "customer_id": customer, "invoice_date": "2026-10-05",
+            "lines": [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"project": kitchen}},
+                      {"item_id": item, "amount": 900, "description": "pens", "tags": {"project": bath}}]},
+            dry_run=True)
+        assert (invoice.status, invoice.code) == ("failed", "invalid"), invoice
+        assert invoice.reason == "the lines name more than one job; QuickBooks takes one per transaction", invoice
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op IN ('bill.create', 'invoice.create')"
+                         ).fetchone()[0] == 0
