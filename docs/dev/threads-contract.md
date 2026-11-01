@@ -466,15 +466,17 @@ audience `members|personal|participants|meeting`, a private task's thread, or a 
 
 | mode | task turn | non-task turn, public | non-task turn, private |
 |---|---|---|---|
-| `session: bot` | `bot` thread (as today; stateless bots `task:<id>`) | `public` | `root:<root_id>:private` |
+| `session: bot` | `bot` thread; a private task (`task.private`), or a task turn in a private thread, `task:<id>` (stateless bots always `task:<id>`) | `public` | `root:<root_id>:private` |
 | default | `task:<id>` | `root:<root_id>:public` | `root:<root_id>:private` |
 | `session: task` | `task:<id>` | `root:<root_id>:public` | `root:<root_id>:private` |
 
-- A turn from an older server (no `root_id`) keys as before.
+- A turn from an older server (no `root_id`) keys as before, except that a private task on `session: bot` still
+  gets `task:<id>`.
 - Existing mappings: a `conversation:<id>` session is adopted as `root:<id>:<class>` on first use (the runner
   copies it); `task:<id>` stays. The old shared `bot` thread mixed private and public context, so it is **not**
   carried into `public` (a deviation recorded in the report).
-- Lanes: `task:` keys run in their own lane; `root:` and `public` share the main lane.
+- Lanes: `task:` keys run in their own lane; `root:` and `public` share the main lane. A private task on
+  `session: bot` keeps the main lane (the bot's one checkout); only its session is its own.
 
 ## 9. Events (SSE, `GET /api/v2/events`)
 

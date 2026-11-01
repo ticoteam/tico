@@ -200,12 +200,19 @@ pub fn session_key(attempt: &Value) -> String {
     let task = &attempt["task"];
     let task_id = [&task["session_task_id"], &task["id"]].into_iter().map(text_of).find(|t| !t.is_empty());
     let on_bot = mode == "bot" && !crate::continuity::stateless(config);
+    let root = text_of(&attempt["conversation"]["root_id"]);
+    let private = text_of(&attempt["conversation"]["audience_class"]) == "private";
+    // On `session: bot` a private task, or a task turn in a private thread, keeps its own session: the shared thread
+    // serves the Home and public turns, so private work never enters it (clients/sessions.py session_key).
+    if let (true, Some(t)) = (on_bot, &task_id) {
+        if task_private(task) || (!root.is_empty() && private) {
+            return format!("task:{t}");
+        }
+    }
     // A Hub with native threads names the turn's thread root and audience class (docs/dev/threads-contract.md section
     // 8): a turn with no task continues its thread tree's session, and a private thread's session never serves a
     // public turn. On `session: bot` the public turns share one thread, "public", which never takes over "bot".
-    let root = text_of(&attempt["conversation"]["root_id"]);
     if !root.is_empty() {
-        let private = text_of(&attempt["conversation"]["audience_class"]) == "private";
         let class = if private { "private" } else { "public" };
         return match (on_bot, task_id) {
             (true, Some(_)) => "bot".into(),
@@ -227,6 +234,12 @@ pub fn session_key(attempt: &Value) -> String {
         return format!("conversation:{conv}");
     }
     "bot".into()
+}
+
+/// Whether the turn's task is private: the Hub hands out the task's row, whose `private` is 1 or 0 (tasks are private
+/// by default, backend/hubdb.py). A task without the flag, or no task, is not.
+fn task_private(task: &Value) -> bool {
+    task["private"].as_bool().unwrap_or(false) || task["private"].as_i64().is_some_and(|p| p != 0)
 }
 
 /// A stateless bot's message with no task behind it (crate::continuity::stateless): a new session each time, none saved,
@@ -2801,6 +2814,34 @@ mod tests {
     }
 
     #[test]
+    fn a_private_tasks_turns_on_session_bot_never_share_the_bots_shared_thread() {
+        let turn = |task: Value, conversation: Value| json!({"bot": "ops", "config": {"session": "bot"}, "task": task,
+            "conversation": conversation, "session_epoch": 2, "bot_session_epoch": 7});
+        let public = json!({"id": "c-pub", "root_id": "r1", "audience_class": "public"});
+        let private_room = json!({"id": "c-task", "root_id": "c-task", "audience_class": "private"});
+        // A private task keeps its own session wherever its turn comes from, on a Hub with threads or an older one.
+        for private in [json!(1), json!(true)] {
+            assert_eq!(session_key(&turn(json!({"id": "t1", "private": private}), public.clone())), "task:t1");
+            assert_eq!(session_key(&turn(json!({"id": "t1", "private": private}), json!({"id": "c1"}))), "task:t1");
+        }
+        // A subtask worked in its root's session keys on the root, like any task session.
+        assert_eq!(session_key(&turn(json!({"id": "t2", "session_task_id": "t1", "private": 1}), public.clone())), "task:t1");
+        // A non-private task's turn in a private thread keeps its own session too; in a public one it shares the bot's.
+        assert_eq!(session_key(&turn(json!({"id": "t3", "private": 0}), private_room)), "task:t3");
+        assert_eq!(session_key(&turn(json!({"id": "t3", "private": 0}), public.clone())), "bot");
+        assert_eq!(session_key(&turn(json!({"id": "t3", "private": false}), json!({"id": "c1"}))), "bot");
+        // Home and public chat stay on the shared threads.
+        assert_eq!(session_key(&turn(Value::Null, public.clone())), "public");
+        assert_eq!(session_key(&turn(Value::Null, json!({"id": "c1"}))), "bot");
+        // The private task's session clears with its own thread, never with the bot-wide epoch.
+        assert_eq!(clear_epoch(&turn(json!({"id": "t1", "private": 1}), public), "task:t1"), Some(("r1".into(), 2)));
+        // A stateless bot already keys its tasks on themselves.
+        let stateless = json!({"bot": "ops", "config": {"session": "bot", "stateless": true}, "task": {"id": "t4", "private": 0},
+            "conversation": {"id": "c1"}});
+        assert_eq!(session_key(&stateless), "task:t4");
+    }
+
+    #[test]
     fn native_thread_turns_key_on_their_root_and_never_cross_audience_classes() {
         let turn = |config: Value, task: Value, class: &str| json!({"bot": "ops", "config": config, "task": task,
             "conversation": {"id": "sub", "root_id": "r1", "audience_class": class}});
@@ -2812,6 +2853,7 @@ mod tests {
         assert_eq!(session_key(&turn(json!({"session": "bot"}), Value::Null, "public")), "public");
         assert_eq!(session_key(&turn(json!({"session": "bot"}), Value::Null, "private")), "root:r1:private");
         assert_eq!(session_key(&turn(json!({"session": "bot"}), json!({"id": "t1"}), "public")), "bot");
+        assert_eq!(session_key(&turn(json!({"session": "bot"}), json!({"id": "t1", "private": 0}), "public")), "bot");
         assert_eq!(adopted_key("root:r1:private"), Some("conversation:r1".into()));
         assert_eq!((adopted_key("public"), adopted_key("bot"), adopted_key("task:t1")), (None, None, None));
         let epochs = json!({"conversation": {"id": "c"}, "session_epoch": 0, "bot_session_epoch": 4});
