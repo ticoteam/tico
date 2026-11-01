@@ -36,11 +36,12 @@ pub fn configured(config: &Value) -> Option<Hop> {
     Some(Hop { runtime: crate::harness_tools::runtime_of(&harness), harness, model, reasoning_effort: effort, default: false })
 }
 
-/// `configured`, unless the hop's runtime refused this bot's own key within REJECT_RECHECK: a refused key would be
-/// refused again, so the turn does not go there (signin.rs refusal_key).
+/// `configured`, unless the hop's runtime refused this bot's sign-in within REJECT_RECHECK: a refused login would be
+/// refused again, so the turn does not go there (signin.rs refusal_key). A delivered subscription for the runtime
+/// (`subscribed`) brings its own credentials, so its runtime's refusal does not apply.
 pub fn configured_for(config: &Value, sign_in: &crate::signin::SignIn, profile: Option<&crate::profiles::Profile>,
-                      bot: &str) -> Option<Hop> {
-    configured(config).filter(|hop| sign_in.rejection(&hop.runtime, profile, bot).is_none())
+                      bot: &str, subscribed: impl Fn(&str) -> bool) -> Option<Hop> {
+    configured(config).filter(|hop| subscribed(&hop.runtime) || sign_in.rejection(&hop.runtime, profile, bot).is_none())
 }
 
 /// A different model on the spent login is no fallback. Ignore that named hop so the company's next provider
@@ -421,8 +422,23 @@ mod tests {
         let sign = crate::signin::SignIn::new(&dir);
         let config = json!({"harness": "claude", "model": "m", "fallback": {"harness": "pi", "model": "kimi-k3"}});
         sign.reject("pi", "401 invalid OPENROUTER_API_KEY", None, "fallback-alpha");
-        assert!(configured_for(&config, &sign, None, "fallback-alpha").is_none());
-        assert_eq!(configured_for(&config, &sign, None, "fallback-beta").unwrap().harness, "pi");
+        assert!(configured_for(&config, &sign, None, "fallback-alpha", |_| false).is_none());
+        assert_eq!(configured_for(&config, &sign, None, "fallback-beta", |_| false).unwrap().harness, "pi");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_configured_fallback_a_delivered_subscription_covers_is_taken_despite_the_refusal() {
+        let dir = std::env::temp_dir().join(format!("tico-fallback-subscribed-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("secrets")).unwrap();
+        let sign = crate::signin::SignIn::new(&dir);
+        // A Codex bot whose Claude computer login was refused; its Claude fallback is the only way it can run.
+        let config = json!({"harness": "codex", "model": "m", "fallback": {"harness": "claude", "model": "opus"}});
+        sign.reject("claude", "authentication_error: invalid x-api-key", None, "fallback-alpha");
+        assert!(configured_for(&config, &sign, None, "fallback-alpha", |_| false).is_none());
+        // The company's Claude subscription delivered to this computer brings its own login, so it is taken.
+        let taken = configured_for(&config, &sign, None, "fallback-alpha", |rt| rt == "claude").unwrap();
+        assert_eq!((taken.harness.as_str(), taken.runtime.as_str()), ("claude", "claude"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

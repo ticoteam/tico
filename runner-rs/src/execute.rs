@@ -1813,7 +1813,12 @@ impl Runner {
         } else {
             config.clone()
         };
-        let mut pending = if unavailable && drove.outcome != "completed" && !native_control && continuing.is_empty() { crate::fallback::configured_for(&fallback_config, &self.sign_in, selected.as_ref(), &bot) } else { None };
+        let mut pending = if unavailable && drove.outcome != "completed" && !native_control && continuing.is_empty() {
+            crate::fallback::configured_for(&fallback_config, &self.sign_in, selected.as_ref(), &bot,
+                |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some())
+        } else {
+            None
+        };
         let turn_env = base_env.clone().unwrap_or_default();
         if pending.is_none() && (hit_limit || held.is_some()) && !native_control && prepared && continuing.is_empty() {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
