@@ -3,7 +3,7 @@ docs/dev/threads-contract.md section 10.
 
 The tests skip until the threads API is served (`require_threads_api`), so they can land before the track that builds
 it. The skip says what it waits for; after the build, every skip becomes a real check. A route the contract does not
-name yet is called through one constant here (HOME_ROUTE, ...), so the gap is in one place.
+name yet is called through one helper here (home_id), so the gap is in one place.
 """
 
 import uuid
@@ -13,9 +13,14 @@ import pytest
 from backend.tests.test_api import headers
 
 API_NOT_BUILT = "not built yet: threads API (docs/dev/threads-contract.md section 10)"
-# Contract gap: section 10 names no route for a teammate's Home. Until the threads/api track names one, the Home is
-# read through this path; a 404 there from a built server means the route is still missing, not that access is denied.
-HOME_ROUTE = "bots/{slug}/home"
+
+
+def home_id(api, slug):
+    """The id of a bot's Home. Contract gap: section 10 names no HTTP route for a Home (threads.home makes it lazily),
+    so the id is asked of the core here; every read of the Home after that goes through GET /api/v2/threads/{id}."""
+    from backend import threads
+    with api.app.state.store.transaction() as c:
+        return threads.home(c, "bot:" + slug)["id"]
 
 
 def call(api, method, path, token="ana-test", body=None):
