@@ -499,3 +499,19 @@ def test_a_prune_that_runs_over_after_a_healthy_update_keeps_the_update(monkeypa
     assert updater.status["state"] == "healthy"
     assert updater.status["message"] == "Updated, but old images were not removed: Removing old images exceeded 120 seconds."
     assert "stop" not in docker.verbs() and "run" not in docker.verbs()
+
+
+def test_a_stall_reading_the_front_door_before_any_change_rolls_back_cleanly(monkeypatch, tmp_path):
+    """Reading the front door sits inside the rollback path: a stall there is said by its step and the old server stays up."""
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: any(docker.containers[c]["tag"] == "v0.1.0" for c in docker.live()))
+
+    def stalled():
+        raise updater.Stalled(["docker", "compose", "config"], 600)
+    monkeypatch.setattr(updater, "selected_caddy", stalled)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "rolled_back"
+    assert updater.status["message"] == "Reading the server's services exceeded 600 seconds. Went back to v0.1.0."
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.1.0"]
+

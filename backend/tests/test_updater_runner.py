@@ -410,7 +410,7 @@ def test_a_compose_call_that_runs_over_is_killed_and_cannot_finish_later(monkeyp
     (bin_dir / "docker").write_text(f"#!/bin/sh\n(sleep 0.5; touch {marker}) &\nwait\n")
     (bin_dir / "docker").chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
-    with pytest.raises(RuntimeError, match="A Docker call exceeded 0.1 seconds"):
+    with pytest.raises(RuntimeError, match=r"A Docker call \(compose up\) exceeded 0.1 seconds"):
         updater.compose("up", "-d", "runner", timeout=0.1)
     time.sleep(0.8)
     assert not marker.exists()

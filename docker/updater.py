@@ -167,13 +167,21 @@ def step(name):
         _step.name = outer
 
 
+def subcommand(argv):
+    """The Docker subcommand a call runs, for a message: `compose up`, `inspect`."""
+    if argv[:2] == ["docker", "compose"] and "--project-directory" in argv:
+        rest = argv[argv.index("--project-directory") + 2:]
+        return "compose " + next((word for word in rest if not word.startswith("-")), "")
+    return " ".join(argv[1:2])
+
+
 class Stalled(subprocess.TimeoutExpired, RuntimeError):
     """A Docker call that ran past its time limit and was killed. Code that handles a timeout catches it as a
     TimeoutExpired, and the update's failure handling catches it as a RuntimeError. Its text names the step."""
 
     def __init__(self, argv, seconds):
         super().__init__(argv, seconds)
-        self.text = "%s exceeded %s seconds" % (getattr(_step, "name", "") or "A Docker call", seconds)
+        self.text = "%s exceeded %s seconds" % (getattr(_step, "name", "") or "A Docker call (%s)" % subcommand(argv), seconds)
 
     def __str__(self):
         return self.text
