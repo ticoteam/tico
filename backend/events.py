@@ -56,6 +56,7 @@ KEEP_HOURS = 24           # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5    # the shared look for changes another process wrote
 RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another process queued waits this long at most
 BACKLOG_MAX = 5000        # changes a stream may fall behind before it is reset rather than replayed (a slow consumer)
+GONE_SECONDS = 1.0        # a stream asks whether its client hung up at most this often
 STALL_SECONDS = 5.0       # a frame the client took longer than this to take: a slow consumer, reset rather than replayed
 READ_BYTES = 256 * 1024   # event bytes one read sends; the rest of its changes wait for the next read
 LIFETIME_SECONDS = 900    # bounded; each read and keepalive re-checks the sign-in, so this only caps stale state
@@ -1170,7 +1171,7 @@ def _needs_list(view, rows, task_view, held=None):
     return [(rows[-1], entry)]
 
 
-def _changed(c, clauses, args, limit):
+def _change_rows(c, clauses, args, limit):
     return [dict(r) for r in c.execute("SELECT * FROM changes WHERE " + " AND ".join(clauses)
                                        + " ORDER BY seq LIMIT ?", (*args, limit))]
 
@@ -1209,7 +1210,7 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
         if "needs" in topics:
             clauses.append("(topic!='needs' OR subject_id=?)")
             args.append(who.actor)
-        rows = _changed(c, clauses, args, limit)
+        rows = _change_rows(c, clauses, args, limit)
         more = len(rows) >= limit
         cursor = rows[-1]["seq"] if more else newest
         if not rows:
@@ -1389,10 +1390,13 @@ def install(app, store, auth, task_views, task_view):
                 deadline = time.monotonic() + LIFETIME_SECONDS
                 quiet_since = time.monotonic()
                 due = True                       # the first read catches up from `after`
-                read_at = 0.0
+                read_at = gone_at = 0.0
                 while True:
-                    if await request.is_disconnected():
-                        return
+                    # Asking costs the event loop a task group each time: once a second, not on every wake.
+                    if time.monotonic() - gone_at >= GONE_SECONDS:
+                        if await request.is_disconnected():
+                            return
+                        gone_at = time.monotonic()
                     generation = doorbell.generation
                     if due or doorbell.latest > cursor:
                         read_at = time.monotonic()

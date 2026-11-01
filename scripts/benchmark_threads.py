@@ -58,7 +58,7 @@ PROFILED = (("backend.threads", ("post", "deliver", "mentions", "audience_has", 
                                  "message_readable", "readable_ids")),
             ("backend.events", ("read", "latest", "oldest", "_Viewer.__init__", "_Viewer.prime", "_Viewer.conversation",
                                 "_Viewer.bot_readable", "_messages", "_threads", "_bots", "_tasks", "_needs_list",
-                                "_changed", "_stored_messages", "encode")),
+                                "_change_rows", "_stored_messages", "encode")),
             ("backend.store", ("Store.connect",)),
             ("backend.message_links", ("refresh_dirty",)),
             ("backend.org_rule_check", ("in_force", "apply", "preflight")))
