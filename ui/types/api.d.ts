@@ -656,7 +656,7 @@ export type Card = {
   name?: string;
   settings: Record<string, unknown>;
   team_name?: string;
-  template: "tasks_by_status" | "done_per_week" | "needs_you" | "spend" | "kpi" | "automation_runs" | "latest_pages";
+  template: "tasks_by_status" | "done_per_week" | "needs_you" | "spend" | "kpi" | "automation_runs" | "latest_pages" | "needs_attention" | "unread_threads" | "my_tasks" | "updates";
   title?: string;
 };
 
@@ -866,6 +866,28 @@ export type Config = {
   visual_files?: string;
   visual_origin?: string;
   visuals?: "full" | "hosted" | "media";
+};
+
+export type Connection = {
+  bots: Array<{
+  name: string;
+  slug: string;
+}>;
+  can_configure?: boolean;
+  configure: string;
+  detail?: string;
+  id: string;
+  kind: "slack" | "github" | "mailbox" | "inbox" | "meetings" | "trigger" | "webhook" | "postal" | "listening";
+  more_bots?: number;
+  name: string;
+  readers: string;
+  scope: "company" | "team" | "person";
+  status: "on" | "off" | "waiting" | "error" | "paused";
+};
+
+export type ConnectionList = {
+  connections: Array<Connection>;
+  next: string | null;
 };
 
 export type Contract = Record<string, unknown>;
@@ -2335,6 +2357,16 @@ export type InboundCursor = {
   cursor: number;
 };
 
+export type InboundInbox = {
+  address: string;
+  audience: "company" | "team";
+  group_id: string | null;
+  inbox_id: string;
+  kind: string;
+  name: string;
+  state: string;
+};
+
 export type InboundInboxes = {
   configured: boolean;
   error: string;
@@ -2374,6 +2406,11 @@ export type InboundTaskResult = {
   task: {
   id: string;
 } | null;
+};
+
+export type InboxAudience = {
+  audience?: "company" | "team";
+  group_id?: string | null;
 };
 
 export type InboxSend = {
@@ -3043,7 +3080,7 @@ export type Place = {
   audience?: Record<string, unknown>;
   can_edit: boolean;
   group?: string;
-  kind: "dashboard" | "team" | "bot" | "task";
+  kind: "dashboard" | "team" | "bot" | "task" | "person";
   name?: string;
   pins: Array<{
   card?: Card;
@@ -6561,6 +6598,14 @@ export type ListComputerSubscriptionsParams = Record<string, never>;
 export type ListComputerSubscriptionsBody = never;
 export type ListComputerSubscriptionsResponse = ComputerSubscriptionList;
 
+/** GET /api/v2/connections */
+export type ListConnectionsParams = {
+  cursor?: string;
+  limit?: number;
+};
+export type ListConnectionsBody = never;
+export type ListConnectionsResponse = ConnectionList;
+
 /** GET /api/v2/conversations */
 export type ListConversationsParams = {
   bot?: string | null;
@@ -8088,6 +8133,13 @@ export type SetGroupUsageLimitParams = {
 };
 export type SetGroupUsageLimitBody = UsageLimit;
 export type SetGroupUsageLimitResponse = UsagePoolLimit;
+
+/** PUT /api/v2/inbound/inboxes/{ident}/audience */
+export type SetInboundInboxAudienceParams = {
+  ident: string;
+};
+export type SetInboundInboxAudienceBody = InboxAudience;
+export type SetInboundInboxAudienceResponse = InboundInbox;
 
 /** PATCH /api/v2/inboxes/{inbox} */
 export type SetInboxSendParams = {
