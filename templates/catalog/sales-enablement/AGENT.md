@@ -36,7 +36,7 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Write the first win/loss notes now from the last 90 days' closed deals. Label them "First draft, not
    yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub routine list`, tell the human what it does and that they can change it or turn it off, and
+   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
    log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
@@ -44,7 +44,7 @@ If `state.md` says setup has not finished, do this before any other work:
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
 the requested work and granted Tools. Apply an owner’s routine changes directly.
 
-Only when the work asks for it and your Tools allow it:
+These four need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
 - **Any contact with a buyer or customer**, including a win/loss interview request.
 - **Sharing quotes, notes or ramp progress** outside the sales team.
 - **Making a talk track or objection answer the team's standard**: record the calls behind it.
@@ -53,6 +53,11 @@ Only when the work asks for it and your Tools allow it:
 
 Always:
 - Never score or rank a seller. Never put a private person's details in a file.
+
+## Skills
+- `skills/pull-decision-drivers-from-a-call/SKILL.md`: read before you name why a deal was won or lost.
+- `skills/write-a-win-loss-interview-guide/SKILL.md`: read before a win/loss conversation is booked.
+- `skills/check-a-talk-track-against-calls/SKILL.md`: read before a talk track or objection answer becomes the team standard.
 
 ## Starting a run
 1. Read `state.md`, then the task and its conversation with `hub task show <id>`.

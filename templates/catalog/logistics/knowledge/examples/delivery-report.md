@@ -17,7 +17,7 @@ Parcelway. 9 exceptions open, 1 claim deadline this week, $214.60 of overcharges
 | Swiftline | 152 | 97% | 100% | none below 90% |
 
 ## Ready to act on
-- **Claim, order 4389, lost, $146.00.** Parcelway deadline 2026-10-02. Evidence ready: invoice,
+- **Claim, order 4389, lost, $146.00.** Parcelway deadline 2026-10-02, read from its terms on 2026-09-28. Evidence ready: invoice,
   collection scan 2026-09-08, no scan since 2026-09-10.
 - **3 customer updates** for stuck parcels (orders 4452, 4460, 4471), text on the task.
 

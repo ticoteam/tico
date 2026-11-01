@@ -26,8 +26,7 @@ alternatives differently from `knowledge/positioning.md`, with the quote and dat
 
 ## 4. Refresh one battlecard
 
-Pick the competitor that appeared most or changed most this week. Follow the battlecard shape in
-AGENT.md, cite every claim, and put the draft in `knowledge/battlecards/`. A card older than 90
+Pick the competitor that appeared most or changed most this week. Follow `skills/write-a-battlecard/SKILL.md`, cite every claim (`skills/check-a-competitor-claim/SKILL.md`), and put the draft in `knowledge/battlecards/`. A card older than 90
 days is marked stale at the top.
 
 ## 5. Write the review and hand it over

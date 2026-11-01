@@ -13,7 +13,8 @@ import shlex
 from datetime import datetime, timezone
 
 from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login,
-               pipeline_stats, providers, releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
+               pipeline_stats, providers, releases, replication, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits,
+               watchers)
 from .batch_work import report, storage_error
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
@@ -32,7 +33,10 @@ PERSON_QUEUE_MINUTES = 2    # a person's own message, sooner: someone is sitting
 RESTART_STUCK_MINUTES = 34
 SILENT_MINUTES = 10         # a computer this quiet while work is queued for it has stopped, not blinked
 NEEDS_YOU_MINUTES = 30      # this quiet, its owner is asked to bring it back
-BACKUP_STALE_HOURS = 6      # the replica normally trails by seconds
+# A backup location that stays behind the database is warned about and then marked bad (replication.behind_warn_seconds,
+# replication.BEHIND_BAD_MIN_S). More local files than _unsent_limit() in Litestream's level-0 folder means uploads are not
+# getting through. The floor is for the default one-minute sync; a longer interval holds more files between uploads.
+BACKUP_UNSENT_FILES = 1000
 RECENT_HOURS = 24
 GITHUB_HEALTH = "github:token"
 PROXIES = {"cloudflare": "Cloudflare Access", "aws-alb": "an AWS load balancer", "oidc": "OpenID Connect",
@@ -1131,6 +1135,29 @@ def _slack(c):
     return _check("slack", "Slack", "bad", "Slack is disconnected" + (": " + state["message"] if state["message"] else "."), [fix])
 
 
+def _age_status(stamp):
+    """ok, warn or bad by how old a status-file time is: `behind_since` (how long the backup location has been behind the
+    database) or `checked_at` (when the loop last read it). A missing time is ok. The warning waits for ten sync intervals
+    (replication.behind_warn_seconds); bad past an hour, or past that warning time when it is later. It is judged from the
+    time itself, never from the age of the last copy: a quiet database writes nothing new and is not behind."""
+    if not stamp:
+        return "ok"
+    at = H.parse_ts(stamp)
+    if at is None:
+        return "warn"
+    age = (H.parse_ts(H.now()) - at).total_seconds()
+    warn_after = replication.behind_warn_seconds()
+    if age > max(replication.BEHIND_BAD_MIN_S, warn_after):
+        return "bad"
+    return "warn" if age > warn_after else "ok"
+
+
+def _unsent_limit():
+    """How many local level-0 files count as a pile-up. Litestream writes one local file a second on a busy database and
+    uploads once per sync interval, so two sync intervals' worth of files is normal; the floor is the one-minute default."""
+    return max(BACKUP_UNSENT_FILES, 2 * replication.sync_interval_seconds())
+
+
 def _backups(config, settings):
     backup = config.get("backup")
     fix = _fix("Backup settings", "https://github.com/ticoteam/tico/blob/main/docs/install.md#backups-and-restore")
@@ -1138,6 +1165,7 @@ def _backups(config, settings):
         return _check("backups", "Backups", "unknown", "This server does not report its backup state.")
     mode = str(backup["mode"]).replace("_", "-")
     last = backup.get("last_replicated_at") or ""
+    since = backup.get("behind_since") or ""
     target = str(backup.get("target_kind") or "")
     key = backup.get("credential_key") if isinstance(backup.get("credential_key"), dict) else {}
     key_here = bool(key.get("present"))                  # a local credential key (/data/credential.key) is in use
@@ -1149,6 +1177,19 @@ def _backups(config, settings):
     if mode == "off":
         return _check("backups", "Backups", "bad",
                       "Backups are off." + (KEY_LOST if key_here else ""), [fix])
+    # The loop writes checked_at every round, even when the listing fails; an old one means it has stopped or cannot reach
+    # the backup location, so nothing it last reported (copies, lag) can be trusted.
+    checked = _age_status(backup.get("checked_at"))
+    if checked != "ok":
+        return _check("backups", "Backups", checked,
+                      f"Backup status not checked since {backup.get('checked_at')}; the backup location may be unreachable.",
+                      [fix])
+    behind = _age_status(since) if mode == "remote" else "ok"
+    unsent = backup.get("unsent_files") if isinstance(backup.get("unsent_files"), int) else 0
+    if unsent > _unsent_limit():
+        return _check("backups", "Backups", "bad" if behind == "bad" else "warn",
+                      f"Backups are stuck: Litestream has {unsent:,} unsent files. Restart the server; if it continues, "
+                      "see the backup docs.", [fix])
     if mode in ("local-only", "local"):
         note = (" The credential key, which opens every saved credential, is only in this server's volumes too."
                 if key_here else "")
@@ -1162,10 +1203,13 @@ def _backups(config, settings):
                           [fix])
         return _check("backups", "Backups", "warn",
                       "Copies stay on this server only. A lost disk loses everything." + note, [fix])
-    if last and last < H.shift(H.now(), hours=-BACKUP_STALE_HOURS):
-        return _check("backups", "Backups", "warn", f"Last copy to {target or 'the remote'} was {last}.", [fix])
-    if not last:
-        return _check("backups", "Backups", "warn", "Set up, but nothing has been copied yet.", [fix])
+    if not last:    # `reason` says why there is no copy at all (replication.NO_RECENT_COPY)
+        return _check("backups", "Backups", "bad" if behind == "bad" else "warn",
+                      backup.get("reason") or "Set up, but nothing has been copied yet.", [fix])
+    if behind != "ok":
+        return _check("backups", "Backups", behind,
+                      f"Copies to {target or 'the remote'} have been behind the database since {since}. The newest copy is from "
+                      f"{last}.", [fix])
     if key_here and not key_copied:
         return _check("backups", "Backups", "warn",
                       f"The database is copied to {target or 'a remote'}, but the credential key has not been. A database restored "

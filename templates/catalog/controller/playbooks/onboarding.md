@@ -38,12 +38,12 @@ Follow `playbooks/month-end-close-review.md`. Attach it labelled "First draft, n
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "month-end close review: the 3rd of each month at 09:00 team time." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "month-end close review: the 3rd of each month at 09:00 team time." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
-different schedule or to leave it off, adjust the routine (`hub routine update <id>`, with `--disable` to turn it off).
+different schedule or to leave it off, adjust the routine (`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

@@ -4,6 +4,10 @@ Triggered by a task asking "should we renew X?" or by a renewal inside 60 days i
 `knowledge/renewals.md`. Budget 25 minutes. The outcome is a one-page brief a human decides from.
 You recommend nothing you cannot source, and you never act on the renewal.
 
+Inputs: the vendor line in `knowledge/vendors.md`, the contract or invoice if attached, the last two reports' mentions of the vendor, and the exports for the last 12 months.
+
+Done when: the brief is attached with the decide-by date first, every fact has its source or is marked not measured, and the task is closed with the suggestion.
+
 ---
 
 ## 1. Read what you have

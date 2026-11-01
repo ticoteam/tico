@@ -1088,7 +1088,8 @@ impl Runner {
     fn turn_profile(&self, attempt: &Value) -> Result<Option<Profile>, Fail> {
         let rows = self.runtime_rows.lock().unwrap().clone();
         let assignments = self.assignments_seen();
-        let rejected = |runtime: &str, p: &Profile| self.sign_in.rejection(runtime, Some(p)).is_some();
+        let bot = text_of(&attempt["bot"]);
+        let rejected = |runtime: &str, p: &Profile| self.sign_in.rejection(runtime, Some(p), &bot).is_some();
         crate::profiles::turn_profile(&self.config_now().data, attempt, &rows, &assignments, &rejected).map_err(Fail::unavailable)
     }
 
@@ -1110,7 +1111,7 @@ impl Runner {
         hop_attempt["config"] = hop.config(config);
         hop_attempt["fallback"] = json!(hop.harness);
         let Ok(profile) = self.turn_profile(&hop_attempt) else { return false };
-        self.fallback_ready(&hop.runtime, profile.as_ref())
+        self.fallback_ready(&hop.runtime, profile.as_ref(), &text_of(&attempt["bot"]))
             && self.serial_login(&hop.runtime, &hop.harness, profile.as_ref()).is_none_or(|l| crate::login_turns::holder(&l.key).is_none())
     }
 
@@ -1831,13 +1832,18 @@ impl Runner {
         } else {
             config.clone()
         };
-        let mut pending = if unavailable && drove.outcome != "completed" && !native_control && continuing.is_empty() { crate::fallback::configured(&fallback_config) } else { None };
+        let mut pending = if unavailable && drove.outcome != "completed" && !native_control && continuing.is_empty() {
+            crate::fallback::configured_for(&fallback_config, &self.sign_in, selected.as_ref(), &bot,
+                |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some())
+        } else {
+            None
+        };
         let turn_env = base_env.clone().unwrap_or_default();
         if pending.is_none() && (hit_limit || held.is_some()) && !native_control && prepared && continuing.is_empty() {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
             // once (Settings > Computers can turn this off for the company).
             let choices = self.default_fallbacks().await;
-            pending = crate::fallback::default_choice(&fallback_config, &choices, &turn_env, |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref()));
+            pending = crate::fallback::default_choice(&fallback_config, &choices, &turn_env, |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref(), &bot));
         }
         // A Tico fallback needs the turn's relay; without one it is left out and the primary's outcome stands.
         pending = crate::gateway_relay::admit(pending, vault.relay.is_some());
@@ -2083,7 +2089,7 @@ impl Runner {
             if drove.limited && hop.default && !native_control && spent < 2 && source_saved.is_none() {
                 left = Some((hop.harness.clone(), true));
                 let choices = self.default_fallbacks().await;
-                let next = crate::fallback::next_choice(&fallback_config, &choices, &turn_env, &tried, |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref()));
+                let next = crate::fallback::next_choice(&fallback_config, &choices, &turn_env, &tried, |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref(), &bot));
                 pending = crate::gateway_relay::admit(next, vault.relay.is_some());
             }
         }
@@ -2124,8 +2130,13 @@ impl Runner {
             .filter(|(rt, _)| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_none()) {
             // Retrying cannot help: this runtime takes no work here until a credential changes. A refused subscription
             // is the server's to mark (it needs reconnecting); the computer's own login is not touched.
-            self.sign_in.reject(rt, reason, selected.as_ref());
-            log(&format!("Tico runner: {bot}: {rt} sign-in was rejected; this computer takes no {rt} work on this profile until the key or sign-in changes"));
+            self.sign_in.reject(rt, reason, selected.as_ref(), &bot);
+            let scope = if crate::signin::bot_keyed(rt) && selected.is_none() {
+                format!("{bot} takes no {rt} work")
+            } else {
+                format!("this computer takes no {rt} work on this profile")
+            };
+            log(&format!("Tico runner: {bot}: {rt} sign-in was rejected; {scope} until the key or sign-in changes"));
         }
         if drove.capacity {
             log(&format!("Tico runner: {bot}: {ran_on} model is at capacity for now; the cloud will retry shortly"));

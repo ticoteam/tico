@@ -1084,6 +1084,7 @@ class Store:
     def connect(self, factory=None, check_same_thread=True):
         c = sqlite3.connect(str(self.settings.db_path), timeout=WRITE_WAIT, isolation_level=None,
                             factory=factory or self.factory, check_same_thread=check_same_thread)
+        H.leave_wal_for_litestream(c)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys=ON")
         # A writer waits out a backup checkpoint or another process's pass, but not so long that requests pile up
@@ -1745,6 +1746,18 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.phase3(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(67,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=68").fetchone():
+                    # Finance phase 4 (the mirror of QuickBooks or Xero): external refs with their revision, and the
+                    # restatements of closed months. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.phase4(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(68,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=69").fetchone():
+                    # Finance's Stripe feed: indexes on the charge link and the source id in each Stripe row's raw json,
+                    # which the refund lookups search by (backend/finance/store/schema.py). Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.stripe(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(69,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=70").fetchone():
                     # Finance tax (spec §11): the sales tax jurisdictions and the due dates seeded for the outside
                     # obligations. Idempotent, like 66.
@@ -1768,6 +1781,18 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.gaps_books(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(73,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=74").fetchone():
+                    # Finance's mirror columns (unknown writes, provider line ids) and fin_credit_refunds on an
+                    # install that took migrations 64 to 68 before they existed. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.create(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(74,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=75").fetchone():
+                    # The journal line each matched bank row took (fin_feed_txns.entry_line_id), on an install that
+                    # took migrations 64 to 74 before it. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.feed_lines(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(75,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
@@ -1811,6 +1836,9 @@ class Store:
                 # Unversioned the same way; the first run makes the draft from the company profile.
                 from .strategy import ensure as ensure_strategy
                 ensure_strategy(c)
+                # The built-in Idea task type growth ideas are filed as (backend/growth.py).
+                from .growth import ensure as ensure_growth
+                ensure_growth(c)
                 # Org rules and their due dates (backend/org_rules.py, backend/rule_due.py): sources, rules, holds, due
                 # dates and their status rows. Unversioned the same way: an older release never reads the tables.
                 from .org_rules import ensure as ensure_org_rules

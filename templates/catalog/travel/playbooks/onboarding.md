@@ -27,14 +27,15 @@ Numbered, each with its one-line why and a default.
 1. Do you have a travel policy? If not: class of travel, hotel limit per city, how far ahead to book. Every option is checked against it.
 2. Who owns travel bookings, and what budgets apply? (Default: the manager; above 2,000, the Operations Manager.)
 3. How do you book today: a tool, an agent, or each human? Sets where a requested booking goes.
-4. Which cities and events come up most; any preferred airlines or hotels? Preferred options go first when close.
+4. Which cities and events come up most; any preferred airlines or hotels? Preferred options go first when within about 5 percent of the cheapest total.
 5. When should the weekly trips page land, and for whom? (Default: the Operations Manager, Mondays 10:00.)
 
 ## 4. Record
 
 Answers to `state.md` under `## Answers`, dated. Write `knowledge/policy.md`; with no written policy,
 write the answers as the working policy and mark it "working policy, sources recorded" until the owner
-says otherwise. Default advance-booking rule if none is given: 14 days domestic, 21 international.
+says otherwise. Default advance-booking rule if none is given: 14 days domestic, 21 international. That is a minimum,
+not a target; `knowledge/travel-practice.md` has the fare data.
 
 ## 5. Produce the first result now
 
@@ -43,13 +44,13 @@ Follow `playbooks/weekly-trips-page.md`. If a trip is already requested, plan it
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send this page every Monday at 10:00 and plan each trip as it is requested." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send this page every Monday at 10:00 and plan each trip as it is requested." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

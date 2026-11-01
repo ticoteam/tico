@@ -205,6 +205,9 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             _need_line(ctx, who, item.account_id, item.tags)
         if row["status"] != "posted" or row["reverses_id"]:
             raise FinanceError(CONFLICT, "that entry is already reversed or is a reversal")
+        if ctx.book.mode == "mirror":
+            from .mirror import check_reversal
+            check_reversal(ctx, entry_id)
         # A reclassification of a reconciled row's spend is locked with that row's own entry (banking._reclass).
         moved = SK.get(ctx.c, "fin_feed_txns", F.reclass_of(str(row["source"]), str(row["source_id"])) or "-")
         if any(r["reconciliation_id"] for r in SK.rows_of_entry(ctx.c, entry_id)) or \
@@ -215,6 +218,9 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         total = sum(x.amount for x in lines if x.amount > 0)
 
         def undo(aid: str) -> Result:
+            if ctx.book.mode == "mirror":
+                from .mirror import write_reversal
+                return write_reversal(ctx, entry_id, day=when, memo=memo, by=who, action_id=aid)
             from .documents import entry_reversed
             out: Result = {"entry_id": posting.reverse(ctx, entry_id, day=when, memo=memo, by=who, action_id=aid),
                            "reverses": entry_id}
@@ -231,6 +237,9 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         _need_line(ctx, who, item.account_id, item.tags, new=True)
 
     def apply(aid: str) -> Result:
+        if ctx.book.mode == "mirror":
+            from .mirror import write_entry
+            return write_entry(ctx, e, by=who, action_id=aid)
         entry_id, line_ids = posting.post(ctx, e, by=who, action_id=aid)
         return {"entry_id": entry_id, "line_ids": line_ids}
     total = sum(x.amount for x in e.lines if x.amount > 0)
@@ -458,6 +467,7 @@ def _raise_to(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str) -> i
     when a later parent version would still be passed, since one raise cannot reach that day, or when the parent has no
     amount from `effective`."""
     parent, children, parent_versions = _parent_side(ctx, b, mine)
+    children.update({k: vs for k, vs in _kid_versions(ctx, parent.id).items() if k not in children})
     start = dates.day(effective)
     cap = B.amount_at(parent_versions, start)
     if cap is None:
@@ -528,8 +538,9 @@ def _over_children(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str)
 
 
 def _kid_versions(ctx: Ctx, budget_id: str) -> dict[str, list[B.Version]]:
-    """Each active child budget's versions."""
-    kids = [x.id for x in ctx.budgets().values() if x.parent_id == budget_id and x.active]
+    """Each child budget's versions, ended ones too: an ended child keeps its allocations reserved against this budget
+    (`_owed` counts what it still holds, and nothing else of it)."""
+    kids = [x.id for x in ctx.budgets().values() if x.parent_id == budget_id]
     return SB.versions(ctx.c, kids) if kids else {}
 
 
@@ -584,11 +595,12 @@ def _reactivate_fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int
         parent = ctx.budgets()[b.parent_id]
         kids = {k: vs for k, vs in _kid_versions(ctx, parent.id).items() if k != b.id}
         kids[b.id] = mine
-        _reserve_fit(ctx, who, parent, SB.versions(ctx.c, [parent.id])[parent.id], kids, effective)
+        _reserve_fit(ctx, who, parent, SB.versions(ctx.c, [parent.id])[parent.id], kids, effective,
+                     live=frozenset({b.id}))
 
 
 def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: dict[str, list[B.Version]],
-                 effective: str) -> None:
+                 effective: str, live: frozenset[str] = frozenset()) -> None:
     """On every day from `effective` that a version of `b` or of a child takes effect, `b`'s allocations and its children's
     amounts must fit `mine`, b's amount. A day at 0 is skipped: a pause froze the cards, and `_fits` holds the
     children to 0 under it."""
@@ -600,9 +612,10 @@ def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: d
             continue
         start, end = B.period_of(b, at, ctx.book.fiscal_year_start, mine)
         reserves, direct = _reserves(ctx, b, start.isoformat(), end.isoformat(), list(kids))
-        owed = _owed(ctx, kids, at)
+        owed = _owed(ctx, kids, at, live)
         total = sum(reserve for _, _, reserve in reserves) + direct + owed
-        if (not reserves and not direct) or total <= cap:
+        # A day with nothing of its own reserved is skipped, unless an ended child still holds something on it.
+        if total <= cap or (not reserves and not direct and not _ended_held(ctx, kids, at, live)):
             continue
         on = at.isoformat()
         if not reserves:
@@ -623,13 +636,19 @@ def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: d
         raise named_refusal(INVALID, named, [b.name, *labels], shown)
 
 
-def _owed(ctx: Ctx, kids: dict[str, list[B.Version]], at: date) -> int:
+def _owed(ctx: Ctx, kids: dict[str, list[B.Version]], at: date, live: frozenset[str] = frozenset()) -> int:
     """What a budget's children hold it to on `at`. Each child counts once, as its amount or as what it already needs if
     that is more: its spend, holds and allocation reserves (budgeting.state), all inside its own envelope. So nothing that
-    sits inside a child is counted again on its parent. A child with no stored budget yet needs nothing."""
+    sits inside a child is counted again on its parent. A child with no stored budget yet needs nothing. An ended child
+    has no envelope any more, but its allocations keep counting against the parent: each at the larger of its amount and
+    what its target used, the whole allocation (budgeting.retained), as a live child's amount counts. `live` names
+    budgets a change is bringing back active: they count as children, whatever their stored flag still says."""
     budgets = ctx.budgets()
     total = 0
     for cid, versions in kids.items():
+        if cid in budgets and not budgets[cid].active and cid not in live:
+            total += _retained(ctx, cid, at)
+            continue
         amount = B.amount_at(versions, at) or 0
         need = 0
         if cid in budgets:
@@ -637,6 +656,17 @@ def _owed(ctx: Ctx, kids: dict[str, list[B.Version]], at: date) -> int:
             need = st.actual + st.held
         total += max(amount, need)
     return total
+
+
+def _retained(ctx: Ctx, cid: str, at: date) -> int:
+    """What an ended child keeps against its parent on `at` (budgeting.retained) in its period on that day."""
+    return budgeting.retained(ctx, cid, *budgeting.period_window(ctx, cid, at.isoformat()))
+
+
+def _ended_held(ctx: Ctx, kids: dict[str, list[B.Version]], at: date, live: frozenset[str] = frozenset()) -> int:
+    """What the ended children among `kids` keep against their parent on `at`, as `_owed` counts it."""
+    budgets = ctx.budgets()
+    return sum(_retained(ctx, cid, at) for cid in kids if cid in budgets and not budgets[cid].active and cid not in live)
 
 
 def _reserves(ctx: Ctx, b: B.Budget, start: str, end: str, kid_ids: list[str]
@@ -746,8 +776,8 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     effective = _effective(ctx, new, V.opt_day(p, "effective_from"))
     # The fit reads the parent's figures from `effective` on: a reader whose figure is not the true one gets the owner's
     # decision and no amount, before any fit runs (figure_route).
-    hidden = amount is not None and bool(new.parent_id) and \
-        bool(figure_route(ctx, who, new.parent_id, effective=effective))
+    hide = figure_route(ctx, who, new.parent_id, effective=effective) if amount is not None and new.parent_id else ""
+    hidden = bool(hide)
     route = _fit(ctx, who, new, effective, amount, route=True) if amount is not None and not hidden else None
     words, impact = _raise_note(ctx, route, effective) if route is not None else ("", {})
     raise_to = route.raise_to if route is not None else None
@@ -764,7 +794,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         ctx.changed()
         return {"budget_id": made.id, "effective_from": effective if amount is not None else None}
     if hidden:
-        gate = HIDDEN_GATE
+        gate = HIDDEN_GATE if hide == "hidden" else REQUEST_GATE
     else:
         gate = K.default_gate(ctx.org, who, "budget_create") if route is None else _budget_owner_gate(route)
     head = f"Create budget {new.name}" + \
@@ -804,7 +834,8 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     # A figure the actor cannot check must not tell them anything about the amount: every amount gets one outcome, an
     # owner decides it on the true figures at approval (figure_route). So nothing is checked up front for them. A
     # reactivation reads the same figures with or without an amount.
-    hidden = bool(figure_route(ctx, who, old.id, effective=fit_from)) if amount is not None or reactivates else False
+    hide = figure_route(ctx, who, old.id, effective=fit_from) if amount is not None or reactivates else ""
+    hidden = bool(hide)
     if hidden:
         route = None
     elif reactivates:
@@ -834,7 +865,7 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             unfreeze_with_room(ctx, old.id, aid)
         return {"budget_id": old.id, "version": version}
     if hidden:
-        gate = HIDDEN_GATE
+        gate = HIDDEN_GATE if hide == "hidden" else REQUEST_GATE
     elif route is None:
         gate = K.default_gate(ctx.org, who, "budget_update")
     else:
@@ -850,21 +881,29 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 # The gate for an amount whose outcome must not depend on a figure the actor cannot check (see figure_route): an owner
 # decides it on the true figures at approval.
 HIDDEN_GATE = K.Gate("needs_approval", "owner", "default:figures-hidden")
+# A request by someone without finance.budgets (figure_route "request") goes to their manager, as every budget request does
+# (kinds.authority; spec 4.4). Its outcome is the same for every amount, so the manager's decision does not reveal one.
+REQUEST_GATE = K.Gate("needs_approval", "manager", "default:budget-request")
 
 
 def figure_route(ctx: Ctx, who: str, budget_id: str, card: Any = None, effective: str = "") -> str:
     """How an amount the actor asks for on a budget (a set-aside, a card, a budget change) is decided: the one gate every
     action that runs a budget or card fit calls first. Where their figure is the true one on every period the fit reads,
-    "" (decided here, as before). Where it is not, the amount must not tell them the difference, so every amount gets one
-    outcome: "hidden" (an approver decides on the true figures) or "request" (they lack finance.budgets, so the gate sends
-    it to their manager). The fit reads the budget, its parents and their children from `effective` on (today when none),
-    on each day a version of one of them takes effect (`_fit_days`). A card's own spend counts too."""
-    b = ctx.budgets().get(budget_id)
+    and every budget the fit reads is in their view (§7.5), "" (decided here, as before). Otherwise the amount must not
+    tell them the difference, so every amount gets one outcome: "hidden" (an approver decides on the true figures) or
+    "request" (they lack finance.budgets, so the gate sends it to their manager). The fit reads the budget, its parents
+    and their children from `effective` on (today when none), on each day a version of one of them takes effect
+    (`_fit_days`). A card's own spend counts too. A budget outside the actor's view hides the fit whatever its figure:
+    whether a fit passes or refuses it is a figure in itself (a parent's remaining shows as the boundary of an amount)."""
+    budgets = ctx.budgets()
+    b = budgets.get(budget_id)
     if b is None or ctx.deciding:
         return ""
     from .cards import figure_hidden
     days = _fit_days(ctx, b, effective)
-    hidden = any(_figure_differs(ctx, who, bid, day) for bid in _figure_ids(ctx, b) for day in days) or \
+    ids = _figure_ids(ctx, b)
+    unseen = any(not sees_budget(ctx, who, budgets[bid]) for bid in ids)
+    hidden = unseen or any(_figure_differs(ctx, who, bid, day) for bid in ids for day in days) or \
         (card is not None and any(figure_hidden(ctx, who, card, on=day.isoformat()) for day in days))
     if not hidden:
         return ""
@@ -872,12 +911,13 @@ def figure_route(ctx: Ctx, who: str, budget_id: str, card: Any = None, effective
 
 
 def _figure_ids(ctx: Ctx, b: B.Budget) -> list[str]:
-    """The budgets whose figures a fit on `b` reads: `b`, each budget above it, and each of those budgets' active children
-    (a fit reserves what the children hold, and a child's spend and holds sit in its own figure)."""
+    """The budgets whose figures a fit on `b` reads: `b`, each budget above it, and each of those budgets' children (a fit
+    reserves what the children hold, and a child's spend and holds sit in its own figure). An ended child counts too: its
+    allocations still reserve against the parents (budgeting._reserve)."""
     budgets = ctx.budgets()
     out: list[str] = []
     for one in B.chain(budgets, b.id):
-        for bid in (one.id, *(x.id for x in budgets.values() if x.parent_id == one.id and x.active)):
+        for bid in (one.id, *(x.id for x in budgets.values() if x.parent_id == one.id)):
             if bid not in out:
                 out.append(bid)
     return out
@@ -933,6 +973,12 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload, route: str = "") -> Plan:
         raise invalid("no such teammate")
     row = SB.allocation(ctx.c, b.id, kind, target)
     grow = amount - (int(row["amount"]) if row else 0)
+    if grow > 0 and not b.active:
+        # An ended budget takes no new set-asides or card limits: reserves skip inactive budgets (_reserve), so one would
+        # reserve nothing against its parent. Lowering or ending an allocation stays allowed.
+        named = Named((b.id,), "{0} has ended: it takes no new set-asides or card limits",
+                      "that budget has ended: it takes no new set-asides or card limits")
+        raise named_refusal(INVALID, named, [b.name], sees_budget(ctx, who, b))
     at = dates.day(ctx.today)
     if grow > 0 and route not in ("hidden", "request"):
         for one in B.chain(ctx.budgets(), b.id):
@@ -967,7 +1013,7 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload, route: str = "") -> Plan:
     if route == "hidden":
         gate = HIDDEN_GATE
     elif route == "request":
-        gate = K.Gate("needs_approval", "manager", "default:budget-request")
+        gate = REQUEST_GATE
     else:
         gate = K.default_gate(ctx.org, who, "allocation_set")
     return Plan(gate, f"Set aside {amount / 100:.2f} of {b.name} for {kind} {target}", apply)
@@ -1048,8 +1094,11 @@ def view_revoke(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 def private_lines_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("account_id", "private", "others_see", "full_detail"))
     account = _account(ctx, V.text(p, "account_id", 80))
-    if account.type != "expense":
-        raise invalid("private lines are expense lines (payroll by person)")
+    money = {str(m["account_id"] or "") for m in SK.money_accounts(ctx.c, ctx.book.id)}
+    # Payroll by person is private on expense and liability lines alike, payroll clearing included (spec §4, §7.5);
+    # a bank or card account keeps its fixed rules.
+    if account.type not in ("expense", "liability") or account.id in money:
+        raise invalid("private lines are expense or liability lines (payroll by person), not bank or card accounts")
     private = V.flag(p, "private", True)
     others = V.choice(p, "others_see", VW.OTHERS_SEE, "totals")
     detail = V.texts(p, "full_detail") if p.get("full_detail") else []

@@ -39510,6 +39510,15 @@
       },
       "FinanceConnectionRequest": {
         "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "mercury",
+              "stripe"
+            ],
+            "title": "Provider",
+            "default": "mercury"
+          },
           "credential_id": {
             "type": "string",
             "maxLength": 120,
@@ -39571,7 +39580,7 @@
           "credential_id"
         ],
         "title": "FinanceConnectionRequest",
-        "description": "Connect Mercury with a stored token credential. The approver is a Mercury user other than the token's creator,\nwho approves payments in Mercury; without one, payments stay off."
+        "description": "Connect a bank or Stripe with a stored credential. Mercury's token: the approver is a Mercury user other than the\ntoken's creator, who approves payments in Mercury; without one, payments stay off. Stripe's restricted key needs no\napprover."
       },
       "FinanceConnectionResult": {
         "type": "object",
@@ -42305,7 +42314,9 @@
               "flag",
               "goal_why",
               "recovery",
-              "strategy_draft"
+              "strategy_draft",
+              "brand_draft",
+              "gtm_draft"
             ],
             "title": "Kind"
           },
@@ -45608,6 +45619,77 @@
               }
             ],
             "title": "Owner"
+          },
+          "parent_kpi_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Kpi Id"
+          },
+          "growth_role": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "north_star",
+                  "input",
+                  "guardrail"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Growth Role"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "reach",
+                  "acquire",
+                  "activate",
+                  "retain",
+                  "refer"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "loop_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loop Name"
+          },
+          "loop_step": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 50.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loop Step"
           }
         },
         "additionalProperties": false,

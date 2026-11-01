@@ -133,6 +133,9 @@ function redesignRoute(r) {
     return true;
   }
   if (rdToolsRoute(r)) return true;
+  if (rdUnder(r, BRAND_ROUTE)) { pageBrand(); return true; }   // ui/app/brand-page.js
+  if (rdUnder(r, GTM_ROUTE)) { pageGtm(); return true; }   // ui/app/gtm-page.js
+  if (rdUnder(r, GR_ROUTE)) { pageGrowth(); return true; }   // ui/app/growth-page.js
   if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.js
   if (pagesRoute(r)) return true;   // Library › Files and #/page/<id> (ui/app/pages.js)
   if (rdUnder(r, RD_GOALS)) { pageGoals(); return true; }
@@ -152,15 +155,17 @@ function redesignAfterRoute() {
   pagesStop(S.route || '');
   rdLibSync();
   financeStop();
+  growthStop();
   finProbeOnce();   // the Finance link shows once the viewer sees something in Finance
 }
 
-// The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view.
+// The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view; Brand and
+// Go-to-market open from the Strategy tab and keep it lit.
 function redesignStrategyHead(tab) {
-  const on = tab === 'lenses' ? 'strategy' : tab;
-  const tabs = [['market', MARKET_ROUTE, 'Market'], ['strategy', '#/strategy', 'Strategy'], ['org', RD_ORG, 'Org'],
+  const on = ['lenses', 'brand', 'gtm'].includes(tab) ? 'strategy' : tab;
+  const tabs = [['market', MARKET_ROUTE, 'Market'], ['strategy', '#/strategy', 'Strategy'], ['growth', GR_ROUTE, 'Growth'], ['org', RD_ORG, 'Org'],
     ['goals', RD_GOALS, 'Goals'], ['budget', RD_BUDGET, 'Budget']];
-  const sub = on === 'strategy'
+  const sub = tab === 'strategy' || tab === 'lenses'
     ? `<a class="strat-sub" href="${tab === 'lenses' ? '#/strategy' : LENSES_ROUTE}">${tab === 'lenses' ? 'Strategy' : 'Lenses'}</a>` : '';
   return `<div class="strat-head rd-strat-head"><h1>Strategy</h1>
       <nav class="tabs slim strat-tabs" aria-label="Strategy">${tabs.map(([id, href, label]) =>

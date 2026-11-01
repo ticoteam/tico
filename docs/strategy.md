@@ -30,6 +30,11 @@ The page is cards, in this order: the summary on top; **Where we play** beside t
 **Related news**; then the sections. The owner edits each in place; a × on hover (always shown on a touch screen)
 removes a thing.
 
+- **Brand and GTM.** Two cards beside the Summary: the Brand strip (positioning, colours, voice, never-say) and the
+  Go-to-market card (motion, buyer, channels, North Star and target). Each opens its full page, is versioned on its own,
+  and is published by the owner. See [Growth](growth.md#brand-and-gtm-cards).
+- **Growth.** The Growth tab (`#/strategy/growth`) beside Market: ideas, tests, verdicts, channel economics and the
+  frameworks. See [Growth](growth.md).
 - **Summary.** At most 400 characters, drafted from the bets and edited by the owner. It is the one line on top and the
   text every bot gets in its run context.
 - **Vision.** Stored, not shown on the page. The Goals page reads it from here and, when it is empty, reads the
@@ -295,5 +300,5 @@ rules_out?, wrong_if?, cites?, status?}], source?, lens?}` (the server sets `sou
 it in `GET /goals` and `/goals/tree` ([Goals and KPIs](goals-and-kpis.md#hub-and-the-api)); goal proposals carry it
 too. Every change is a row in `strategy_events`, like `market_events`.
 
-Related: [Goals and KPIs](goals-and-kpis.md), [Your Strategy Bot](strategy-bot.md), [Librarian](librarian.md),
+Related: [Growth](growth.md), [Goals and KPIs](goals-and-kpis.md), [Your Strategy Bot](strategy-bot.md), [Librarian](librarian.md),
 [Routines](routines.md), [Agent context](agent-context.md).

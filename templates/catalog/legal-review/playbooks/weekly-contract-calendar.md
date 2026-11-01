@@ -52,3 +52,8 @@ urgent items first, and which contracts you could not read.
 ## When a source fails
 
 A contract file that will not open stays on the calendar as "not read, date unknown". It is never dropped.
+
+## Done when
+- Every contract in `knowledge/contracts.md` has a notice deadline, or "needs the contract", with its arithmetic.
+- Urgent, inside-the-window and coming items are sorted, and each urgent item has a task for its owner.
+- The calendar is published, the summaries waiting are listed, and the task is closed with the headline first.

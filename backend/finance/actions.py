@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
-from . import banking, budgeting, cards, documents, gateway_sync, gating, handlers, jobs, payments, posting
+from . import banking, budgeting, cards, documents, gateway_sync, gating, handlers, jobs, mirror, payments, posting
 from . import raw_totals, runs
 from . import setup as setup_mod
 from . import rights, sync, tax, usage
@@ -46,7 +46,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     "reconcile_undo": banking.reconcile_undo,
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
-    **documents.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS}
+    **documents.PLANNERS, **mirror.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
 
 STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")
@@ -194,14 +194,27 @@ def _approver(ctx: Ctx, gate: K.Gate, who: str) -> str:
     return "" if approver == who else approver
 
 
+def _decider(ctx: Ctx, row: Mapping[str, object], gate: K.Gate, who: str) -> str:
+    """Who decides an approved action now (_approver). A request asked of the requester's manager (default:budget-request)
+    keeps that route here: while deciding, figure_route is "" (the true figures), so the planned gate may no longer name
+    the manager. The manager must still be the person the request was sent to, or it is asked again (spec 6.3)."""
+    if str(row["rule_id"] or "") == handlers.REQUEST_GATE.rule:
+        gate = gating.combine(handlers.REQUEST_GATE, gate, who)
+    return _approver(ctx, gate, who)
+
+
 def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
           action_id: str) -> tuple[K.Gate, handlers.Plan]:
     """The right check first (a missing right is a denial, or for budgets a request to the asker's manager), then the
     kind's own checks and default gate, then the gate rules (§6.3), which run again whenever this does: at consume."""
+    if ctx.book.mode == "mirror" and kind in mirror.REFUSED:
+        raise FinanceError(NOT_AVAILABLE, f"{kind} is not available while the books are a provider's (mirror mode)")
     by_right = K.authority(ctx.org, p.who, kind, ctx.rights(p.who))
     if by_right is not None and by_right.outcome == "deny":
         raise FinanceError(DENIED, f"{kind} needs {by_right.rule.removeprefix('right:')}")
-    plan = PLANNERS[kind](ctx, p.who, payload)
+    # A mirrored book sends its documents to the provider first: the mirror's planner queues the write.
+    planner = mirror.DOC_PLANNERS.get(kind) if ctx.book.mode == "mirror" else None
+    plan = (planner or PLANNERS[kind])(ctx, p.who, payload)
     gate = by_right or plan.gate
     if by_right is not None:
         gate = gating.combine(by_right, plan.gate, p.who)
@@ -429,7 +442,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     try:
         ctx.deciding = True
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
-        now_to = _approver(ctx, gate, p.who)
+        now_to = _decider(ctx, row, gate, p.who)
         if now_to and (now_to != row["approval_to"] or _drifted(body, plan)):
             # The person who decides this changed since it was asked (a new manager, a finance approver named), or the
             # planner would now fix a value differently from the approved one (a parent raise that moved). When nobody
@@ -468,7 +481,7 @@ def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body:
     ctx.deciding = True                       # the recheck runs on the true figures (figure_route)
     try:
         gate, plan = _plan(ctx, p, kind, body, action_id)
-        approver = _approver(ctx, gate, p.who)
+        approver = _decider(ctx, row, gate, p.who)
     except FinanceError as e:
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.named)
     if not approver:
@@ -555,6 +568,8 @@ banking_stop = sync.stop
 banking_ring = sync.ring
 banking_step = sync.step
 mercury_probe = sync.probe_credential
+stripe_delivery = sync.stripe_delivery
+stripe_probe = sync.stripe_probe
 
 
 def receive(c: sqlite3.Connection, payload: dict[str, object]) -> bool:

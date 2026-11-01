@@ -105,6 +105,13 @@ def clear_private(c: sqlite3.Connection, account_id: str) -> int:
     return c.execute("DELETE FROM fin_private_lines WHERE account_id=?", (account_id,)).rowcount
 
 
+def mark_private(c: sqlite3.Connection, account_id: str, by: str, at: str) -> bool:
+    """Make an account private with the default (totals only, no full detail) unless it already is. True when it
+    was not private before, so the caller knows to move the view version."""
+    return c.execute("INSERT OR IGNORE INTO fin_private_lines(account_id, others_see, full_detail_json, created_at, "
+                     "created_by, updated_at) VALUES(?,?,?,?,?,?)", (account_id, "totals", "[]", at, by, at)).rowcount == 1
+
+
 # ------------------------------------------------------------------------------------------------ view version
 def view_version(c: sqlite3.Connection) -> int:
     row = c.execute("SELECT version FROM fin_view_versions WHERE id=1").fetchone()

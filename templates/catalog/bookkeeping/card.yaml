@@ -11,7 +11,7 @@ pack: basics
 icon: menu_book
 suggest: default
 tags: [smb, bookkeeping, month-end, services, ecommerce, saas, retail]
-summary: "Keeps the books current: a category for every unsorted transaction, the missing-receipt list and the month-end close checklist run to done each month. Requested entries use its Tools and evidence."
+summary: "Keeps the books current: a proposed category for every unsorted transaction, the missing-receipt list and the month-end close checklist run to done each month. It posts an entry only when a person asks and its Tools allow it."
 when: "A team whose books fall behind between the owner's other work, or whose accountant keeps asking for the same receipts."
 pains:
   - "unsorted transactions pile up until month end"
@@ -40,10 +40,8 @@ prerequisites:
     why: "Optional. Receipts and bills forwarded to a mailbox this bot reads let it match them to transactions."
     required: false
 onboarding:
-  - ask: "Which accounting system are the books in, and who keeps them (you, a bookkeeper, an outside accountant)?"
-    why: "Sets who receives the close status and who the accountant list is for. I only ever read the books; I say so if I cannot."
-  - ask: "How will I get the transactions: a weekly export from the accounting system, bank and card CSVs, or read-only access? Can you attach the last month now?"
-    why: "I cannot categorise what I cannot see. A real month lets me show a first result today."
+  - ask: "Which accounting system are the books in, who keeps them, and how do the transactions reach me: a weekly export, bank and card CSVs, or read-only access? Can you attach last month now?"
+    why: "Sets who receives the close status and what I can read. A real month lets me show a first result today; I cannot categorise what I cannot see."
   - ask: "Please paste your chart of accounts (or category list), and any rules you already use (for example, all cloud hosting is Software)."
     why: "Becomes knowledge/categories.md. A proposal has to land on a category you actually have."
   - ask: "On which day of the month should the close checklist start, and when should the status reach you? (Default: the 1st, status by the 5th.)"

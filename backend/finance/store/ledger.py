@@ -40,12 +40,20 @@ def book(c: sqlite3.Connection) -> Book | None:
     if row is None:
         return None
     return Book(id=row["id"], name=row["name"], base_currency=row["base_currency"], basis=row["basis"],
-                fiscal_year_start=int(row["fiscal_year_start"]), mode=row["mode"])
+                fiscal_year_start=int(row["fiscal_year_start"]), mode=row["mode"],
+                mirror_connection_id=row["mirror_connection_id"] or "")
 
 
 def insert_book(c: sqlite3.Connection, b: Book, by: str, at: str) -> None:
-    c.execute("INSERT INTO fin_books(id, name, base_currency, basis, fiscal_year_start, mode, created_at, created_by) "
-              "VALUES(?,?,?,?,?,?,?,?)", (b.id, b.name, b.base_currency, b.basis, b.fiscal_year_start, b.mode, at, by))
+    c.execute("INSERT INTO fin_books(id, name, base_currency, basis, fiscal_year_start, mode, mirror_connection_id, "
+              "created_at, created_by) VALUES(?,?,?,?,?,?,?,?,?)",
+              (b.id, b.name, b.base_currency, b.basis, b.fiscal_year_start, b.mode, b.mirror_connection_id or None,
+               at, by))
+
+
+def set_book_mode(c: sqlite3.Connection, book_id: str, mode: str, connection_id: str) -> None:
+    """Switch a book between native and mirror (and which connection's books it copies)."""
+    c.execute("UPDATE fin_books SET mode=?, mirror_connection_id=? WHERE id=?", (mode, connection_id or None, book_id))
 
 
 def _account(row: Any) -> Account:
@@ -155,10 +163,11 @@ def insert_entry(c: sqlite3.Connection, e: Entry, *, entry_id: str, period_id: s
         lid = new_id()
         ids.append(lid)
         c.execute("INSERT INTO fin_lines(id, entry_id, book_id, line_no, entry_date, account_id, amount, currency, "
-                  "original_amount, fx_rate, contact_id, description, role, created_at, created_by) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "original_amount, fx_rate, contact_id, description, role, external_line, created_at, created_by) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (lid, entry_id, e.book_id, n, e.entry_date, item.account_id, item.amount, item.currency,
-                   item.original_amount, str(item.fx_rate), item.contact_id, item.description, item.role, at, by))
+                   item.original_amount, str(item.fx_rate), item.contact_id, item.description, item.role,
+                   item.external_line, at, by))
         for kind, value in item.tags.items():
             c.execute("INSERT INTO fin_line_tags(line_id, kind, value, created_at, created_by) VALUES(?,?,?,?,?)",
                       (lid, kind, value, at, by))
@@ -263,7 +272,8 @@ def posted_total(c: sqlite3.Connection, entry_ids: Sequence[str], account_id: st
 def _line(r: Any, tags: Mapping[str, str]) -> Line:
     return Line(account_id=r["account_id"], amount=int(r["amount"]), currency=r["currency"],
                 original_amount=int(r["original_amount"]), fx_rate=Decimal(r["fx_rate"]), contact_id=r["contact_id"],
-                description=r["description"], tags=dict(tags), role=str(r["role"] or ""))
+                description=r["description"], tags=dict(tags), role=str(r["role"] or ""),
+                external_line=str(r["external_line"] or ""))
 
 
 def set_line_tags(c: sqlite3.Connection, row: Any, old: Mapping[str, str], new: Mapping[str, str], by: str,
@@ -328,6 +338,18 @@ def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, accoun
         sql += f" AND vendor IN ({','.join('?' * len(vendors))})"
         args += list(vendors)
     return int(c.execute(sql, args).fetchone()[0])
+
+
+def rollup_lines(c: sqlite3.Connection, book_id: str, start: str, end: str, account_ids: Sequence[str],
+                 teammate: str) -> list[Any]:
+    """One teammate's posted total per (account, team, vendor) in the window, on `account_ids`: the grain a budget's
+    allocation takes its lines by (budgeting._owned). Same filters as rollup_sum, so the parts add up to its total."""
+    if not account_ids:
+        return []
+    return c.execute(f"SELECT account_id, team, vendor, COALESCE(SUM(amount), 0) AS amount FROM fin_rollups "
+                     f"WHERE book_id=? AND day>=? AND day<=? AND teammate=? "
+                     f"AND account_id IN ({','.join('?' * len(account_ids))}) GROUP BY account_id, team, vendor",
+                     [book_id, start, end, teammate, *account_ids]).fetchall()
 
 
 def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], start: str, end: str,

@@ -673,6 +673,12 @@ class KpiUpdate(Contract):
     cadence: Literal["daily", "weekly", "monthly"] | None = None
     source_note: str | None = Field(default=None, max_length=2000)
     owner: str | None = Field(default=None, max_length=200)
+    # The KPI tree (backend/growth.py): sent as null, a field is cleared. At most one KPI is the North Star.
+    parent_kpi_id: str | None = Field(default=None, max_length=200)
+    growth_role: Literal["north_star", "input", "guardrail"] | None = None
+    stage: Literal["reach", "acquire", "activate", "retain", "refer"] | None = None
+    loop_name: str | None = Field(default=None, max_length=80)
+    loop_step: int | None = Field(default=None, ge=1, le=50)
 
 
 class GoalKpiLink(KpiTarget):
@@ -702,7 +708,7 @@ class KpiReading(Contract):
 
 class GoalProposalCreate(Contract):
     kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery",
-                  "strategy_draft"]
+                  "strategy_draft", "brand_draft", "gtm_draft"]
     goal_id: str | None = Field(default=None, max_length=200)
     kpi_id: str | None = Field(default=None, max_length=200)
     payload: dict = Field(default_factory=dict)
@@ -2865,3 +2871,264 @@ class TaskRuleUpdate(Contract):
     on: bool | None = None
     preset: Literal["15m", "hourly", "4h", "daily"] | None = None
     at: str | None = Field(default=None, max_length=5)
+
+
+# ----------------------------------------------------------------------------- brand, go-to-market, growth
+# The brand and GTM pages (backend/brand_gtm.py): one body per version, each section optional. The draft is written a
+# section at a time (null removes one) and checked whole against these shapes.
+S80 = Annotated[str, Field(max_length=80)]
+S300 = Annotated[str, Field(max_length=300)]
+S1000 = Annotated[str, Field(max_length=1000)]
+
+
+class BrandVoice(Contract):
+    trait: S80
+    do: S300 = ""
+    dont: S300 = ""
+
+
+class BrandTone(Contract):
+    situation: S80
+    guide: S300 = ""
+
+
+class BrandWordUse(Contract):
+    word: S80
+    not_: S300 = Field(default="", alias="not")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, populate_by_name=True,
+                              serialize_by_alias=True)
+
+
+class BrandWordAvoid(Contract):
+    word: S80
+    why: S300 = ""
+    level: Literal["warn", "block"] = "warn"
+
+
+class BrandWords(Contract):
+    use: list[BrandWordUse] = Field(default_factory=list, max_length=100)
+    avoid: list[BrandWordAvoid] = Field(default_factory=list, max_length=200)
+
+
+class BrandNaming(Contract):
+    name: S80
+    rule: S300 = ""
+    wrong: list[S80] = Field(default_factory=list, max_length=20)
+
+
+class BrandColor(Contract):
+    name: S80
+    hex: Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{3,8}$")]
+
+
+class BrandVisual(Contract):
+    colors: list[BrandColor] = Field(default_factory=list, max_length=30)
+    fonts: list[S80] = Field(default_factory=list, max_length=10)
+    logo_files: list[S300] = Field(default_factory=list, max_length=20)
+    imagery: S1000 = ""
+
+
+class BrandClaim(Contract):
+    claim: S300
+    proof: S1000 = ""
+    check: S300 = ""
+    status: Literal["proven", "due"] = "proven"
+
+
+class BrandClaims(Contract):
+    allowed: list[BrandClaim] = Field(default_factory=list, max_length=100)
+    never: list[S300] = Field(default_factory=list, max_length=100)
+
+
+class BrandExample(Contract):
+    text: S1000
+    verdict: Literal["on", "off"]
+    why: S300 = ""
+
+
+class BrandBody(Contract):
+    positioning: Annotated[str, Field(max_length=120)] | None = None
+    voice: list[BrandVoice] | None = Field(default=None, max_length=12)
+    tone: list[BrandTone] | None = Field(default=None, max_length=20)
+    words: BrandWords | None = None
+    naming: list[BrandNaming] | None = Field(default=None, max_length=50)
+    visual: BrandVisual | None = None
+    claims: BrandClaims | None = None
+    examples: list[BrandExample] | None = Field(default=None, max_length=30)
+
+
+Motion = Literal["self_serve", "sales_led", "partner", "marketplace", "local", "community", "ecommerce"]
+
+
+class GtmMotion(Contract):
+    primary: Motion
+    secondary: Motion | None = None
+
+
+class GtmBuyer(Contract):
+    who_buys: S300 = ""
+    who_uses: S300 = ""
+    deal_size: S80 = ""
+    cycle: S80 = ""
+    objections: list[S300] = Field(default_factory=list, max_length=30)
+
+
+class GtmWish(Contract):
+    text: S300
+    scope: S80 = ""
+    level: Literal["block", "warn", "setting"] = "warn"
+
+
+class GtmBody(Contract):
+    motion: GtmMotion | None = None
+    buyer: GtmBuyer | None = None
+    wishes: list[GtmWish] | None = Field(default=None, max_length=50)
+    playbooks: list[S80] | None = Field(default=None, max_length=30)
+
+
+class PageDraft(Contract):
+    """`sections`: {name: value or null}; null removes the section. `revision` is the draft's as read; leave it out to
+    write without the check."""
+    sections: dict[str, Any] = Field(default_factory=dict)
+    revision: int | None = None
+
+
+class PagePublish(Contract):
+    note: str = Field(default="", max_length=500)
+
+
+class PageCheck(Contract):
+    text: str = Field(max_length=200_000)
+
+
+# Growth (backend/growth.py)
+class GrowthChannelCreate(Contract):
+    slug: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,39}$")]
+    name: Annotated[str, Field(min_length=1, max_length=80)]
+    track: Literal["performance", "brand"] = "performance"
+    stage: Literal["idea", "testing", "scaling", "paused"] = "idea"
+    owner_ref: str | None = Field(default=None, max_length=200)
+    budget_month: float | None = Field(default=None, ge=0)
+    source_id: str | None = Field(default=None, max_length=200)
+    why: str = Field(default="", max_length=1000)
+    guardrail_kpi_id: str | None = Field(default=None, max_length=200)
+    guardrail_max: float | None = None
+    sort: int = 0
+
+
+class GrowthChannelUpdate(Contract):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    track: Literal["performance", "brand"] | None = None
+    stage: Literal["idea", "testing", "scaling", "paused"] | None = None
+    owner_ref: str | None = Field(default=None, max_length=200)
+    budget_month: float | None = Field(default=None, ge=0)
+    source_id: str | None = Field(default=None, max_length=200)
+    why: str | None = Field(default=None, max_length=1000)
+    guardrail_kpi_id: str | None = Field(default=None, max_length=200)
+    guardrail_max: float | None = None
+    sort: int | None = None
+
+
+class GrowthSourceCreate(Contract):
+    truth_for: Annotated[str, Field(min_length=1, max_length=80)]
+    system: Annotated[str, Field(min_length=1, max_length=80)]
+    reach_kind: Literal["mcp", "credential", "url", "person"]
+    reach_ref: str = Field(default="", max_length=300)
+    may: str = Field(default="", max_length=300)
+    owner_ref: str | None = Field(default=None, max_length=200)
+
+
+class GrowthSourceUpdate(Contract):
+    truth_for: str | None = Field(default=None, min_length=1, max_length=80)
+    system: str | None = Field(default=None, min_length=1, max_length=80)
+    reach_kind: Literal["mcp", "credential", "url", "person"] | None = None
+    reach_ref: str | None = Field(default=None, max_length=300)
+    may: str | None = Field(default=None, max_length=300)
+    owner_ref: str | None = Field(default=None, max_length=200)
+
+
+IceScore = Annotated[int, Field(ge=1, le=10)]
+IdeaSource = Literal["strategy", "competitor", "listening", "peec", "lost_test", "person", "other"]
+
+
+class GrowthIdeaCreate(Contract):
+    title: Annotated[str, Field(min_length=1, max_length=300)]
+    hypothesis: str = Field(default="", max_length=2000)
+    prediction: str = Field(default="", max_length=1000)
+    bet_id: str | None = Field(default=None, max_length=200)
+    kpi_id: str | None = Field(default=None, max_length=200)
+    channels: list[Annotated[str, Field(max_length=40)]] = Field(default_factory=list, max_length=10)
+    ice_i: IceScore | None = None
+    ice_c: IceScore | None = None
+    ice_e: IceScore | None = None
+    source_kind: IdeaSource | None = None
+    source_ref: str | None = Field(default=None, max_length=500)
+    follow_up_of: str | None = Field(default=None, max_length=200)
+    assignee: str | None = Field(default=None, max_length=200)
+    body: str = Field(default="", max_length=20_000)
+
+
+class GrowthIdeaUpdate(Contract):
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    hypothesis: str | None = Field(default=None, max_length=2000)
+    prediction: str | None = Field(default=None, max_length=1000)
+    bet_id: str | None = Field(default=None, max_length=200)
+    kpi_id: str | None = Field(default=None, max_length=200)
+    judged_kpi_id: str | None = Field(default=None, max_length=200)
+    channels: list[Annotated[str, Field(max_length=40)]] | None = Field(default=None, max_length=10)
+    source_kind: IdeaSource | None = None
+    source_ref: str | None = Field(default=None, max_length=500)
+    test_from: str | None = Field(default=None, max_length=40)
+    test_to: str | None = Field(default=None, max_length=40)
+    change: str | None = Field(default=None, max_length=2000)
+    stop_if: str | None = Field(default=None, max_length=1000)
+    min_events: int | None = Field(default=None, ge=0)
+    audience: str | None = Field(default=None, max_length=500)
+    external_ref: str | None = Field(default=None, max_length=500)
+
+
+class GrowthIdeaScore(Contract):
+    i: IceScore
+    c: IceScore
+    e: IceScore
+
+
+class GrowthIdeaStart(Contract):
+    test_from: str | None = Field(default=None, max_length=40)
+    test_to: Annotated[str, Field(min_length=1, max_length=40)]
+    change: Annotated[str, Field(min_length=1, max_length=2000)]
+    stop_if: Annotated[str, Field(min_length=1, max_length=1000)]
+    min_events: int | None = Field(default=None, ge=0)
+    judged_kpi_id: str | None = Field(default=None, max_length=200)
+    audience: str | None = Field(default=None, max_length=500)
+
+
+class GrowthIdeaVerdict(Contract):
+    status: Literal["won", "lost", "inconclusive", "dropped", "paused"]
+    result: str | None = Field(default=None, max_length=2000)
+    learning: str | None = Field(default=None, max_length=2000)
+    bet_effect: Literal["supports", "weakens", "none"] | None = None
+    confidence: Literal["low", "medium", "high"] | None = None
+
+
+class GrowthCohortSet(Contract):
+    channel: str | None = Field(default=None, max_length=40)       # a channel slug; "unknown" or null is Unknown
+    month: Annotated[str, Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
+    spend: float | None = Field(default=None, ge=0)
+    bot_cost: float | None = Field(default=None, ge=0)
+    new_customers: int | None = Field(default=None, ge=0)
+    kept_d30: float | None = Field(default=None, ge=0, le=100)
+    kept_d90: float | None = Field(default=None, ge=0, le=100)
+    kept_d180: float | None = Field(default=None, ge=0, le=100)
+    revenue_month: float | None = Field(default=None, ge=0)
+    margin_pct: float | None = Field(default=None, ge=0, le=100)
+    quality: Literal["actual", "estimate"] | None = None
+    sources: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=300)]] | None = None
+
+
+class GrowthSettingsUpdate(Contract):
+    unit: str | None = Field(default=None, min_length=1, max_length=40)
+    revenue_month: float | None = Field(default=None, ge=0)
+    margin_pct: float | None = Field(default=None, ge=0, le=100)
+    verdict_win_pct: float | None = Field(default=None, ge=0, le=100)
+    framework: str | None = Field(default=None, max_length=80)

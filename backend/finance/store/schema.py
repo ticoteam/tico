@@ -232,10 +232,22 @@ CREATE TABLE IF NOT EXISTS fin_connections (
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT, name TEXT NOT NULL DEFAULT '',
   settings_json TEXT NOT NULL DEFAULT '{}', events_cursor TEXT, last_sync_at TEXT, next_sync_at TEXT);
 
+-- Which provider record each mirrored local row is (spec §4.1). external_id is the provider's kind and id ("Vendor:9"),
+-- revision its version (QuickBooks SyncToken), status active, deleted or unmapped (taken in later, when its references are).
 CREATE TABLE IF NOT EXISTS fin_external_refs (
   id TEXT PRIMARY KEY, connection_id TEXT NOT NULL REFERENCES fin_connections(id), local_table TEXT NOT NULL,
   local_id TEXT NOT NULL, external_id TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
-  UNIQUE (connection_id, local_table, external_id));
+  kind TEXT NOT NULL DEFAULT '', revision TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active',
+  updated_at TEXT, UNIQUE (connection_id, local_table, external_id));
+
+-- A closed month a provider change restated: the change posted in the open period (reversal and replacement, or a
+-- new entry), and this row names the closed period it changed. The period itself is never reopened.
+CREATE TABLE IF NOT EXISTS fin_restatements (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), period_id TEXT NOT NULL REFERENCES fin_periods(id),
+  day TEXT NOT NULL, change TEXT NOT NULL CHECK (change IN ('added','replaced','deleted')),
+  entry_id TEXT REFERENCES fin_entries(id), reversal_id TEXT REFERENCES fin_entries(id),
+  connection_id TEXT REFERENCES fin_connections(id), external_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS fin_outbox (
   id TEXT PRIMARY KEY, connection_id TEXT REFERENCES fin_connections(id), action_id TEXT, op TEXT NOT NULL,
@@ -281,6 +293,11 @@ CREATE TABLE IF NOT EXISTS fin_cash_rollups (
   book_id TEXT NOT NULL, day TEXT NOT NULL, account_id TEXT NOT NULL, tagset TEXT NOT NULL,
   team TEXT NOT NULL DEFAULT '', teammate TEXT NOT NULL DEFAULT '', vendor TEXT NOT NULL DEFAULT '',
   amount BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (book_id, day, account_id, tagset));
+
+CREATE TABLE IF NOT EXISTS fin_credit_refunds (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id),
+  credit_entry_id TEXT NOT NULL, refund_entry_id TEXT NOT NULL, amount BIGINT NOT NULL, day TEXT NOT NULL,
+  voided_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS fin_view_grants (
   id TEXT PRIMARY KEY, subject_kind TEXT NOT NULL CHECK (subject_kind IN ('teammate','team')), subject TEXT NOT NULL,
@@ -399,6 +416,7 @@ CREATE INDEX IF NOT EXISTS fin_feed_txns_account ON fin_feed_txns(money_account_
 CREATE INDEX IF NOT EXISTS fin_feed_txns_card ON fin_feed_txns(card_id, txn_date);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_request ON fin_feed_txns(request_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry ON fin_feed_txns(entry_id);
+CREATE INDEX IF NOT EXISTS fin_feed_txns_entry_line ON fin_feed_txns(entry_line_id);
 CREATE INDEX IF NOT EXISTS fin_money_accounts_provider ON fin_money_accounts(connection_id, provider_account_id);
 CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_card_id);
 CREATE INDEX IF NOT EXISTS fin_card_saves_vendor ON fin_card_saves(book_id, vendor_key, active);
@@ -413,6 +431,8 @@ CREATE INDEX IF NOT EXISTS fin_rule_runs_action ON fin_rule_runs(action_id, crea
 CREATE INDEX IF NOT EXISTS fin_reconciliations_account ON fin_reconciliations(money_account_id, statement_end);
 CREATE INDEX IF NOT EXISTS fin_settlements_to ON fin_settlements(to_kind, to_id);
 CREATE INDEX IF NOT EXISTS fin_settlements_from ON fin_settlements(from_kind, from_id);
+CREATE INDEX IF NOT EXISTS fin_credit_refunds_credit ON fin_credit_refunds(credit_entry_id);
+CREATE INDEX IF NOT EXISTS fin_credit_refunds_refund ON fin_credit_refunds(refund_entry_id);
 CREATE INDEX IF NOT EXISTS fin_settlements_entry ON fin_settlements(entry_id);
 CREATE INDEX IF NOT EXISTS fin_attachments_subject ON fin_attachments(subject_kind, subject_id);
 CREATE INDEX IF NOT EXISTS fin_bills_status ON fin_bills(status, due_date);
@@ -426,6 +446,8 @@ CREATE INDEX IF NOT EXISTS fin_contacts_name ON fin_contacts(book_id, name);
 CREATE INDEX IF NOT EXISTS fin_vendor_aliases_contact ON fin_vendor_aliases(contact_id);
 CREATE INDEX IF NOT EXISTS fin_vendor_legacy_key ON fin_vendor_legacy(book_id, name_key);
 CREATE INDEX IF NOT EXISTS fin_rules_kind ON fin_rules(kind, active, priority);
+CREATE INDEX IF NOT EXISTS fin_external_refs_local ON fin_external_refs(connection_id, local_table, local_id);
+CREATE INDEX IF NOT EXISTS fin_restatements_period ON fin_restatements(period_id);
 """
 
 # Invariants 2 and 3 again in the database, so no statement (Finance's or anyone's) can break them. SQLite syntax: a
@@ -472,6 +494,9 @@ ADDED = (
     ("fin_feed_txns", "hold_id", "TEXT"), ("fin_feed_txns", "reconciliation_id", "TEXT"),
     ("fin_feed_txns", "version", "INTEGER NOT NULL DEFAULT 0"), ("fin_feed_txns", "request_id", "TEXT"),
     ("fin_feed_txns", "raw_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("fin_outbox", "unknown", "INTEGER NOT NULL DEFAULT 0"),
+    ("fin_bill_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_invoice_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     ("fin_reconciliations", "cleared_total", "BIGINT NOT NULL DEFAULT 0"),
     ("fin_reconciliations", "statement_id", "TEXT"), ("fin_reconciliations", "action_id", "TEXT"),
     ("fin_reconciliations", "undone_at", "TEXT"), ("fin_reconciliations", "undone_by", "TEXT"),
@@ -499,6 +524,11 @@ ADDED = (
     ("fin_invoices", "sent_at", "TEXT"), ("fin_invoices", "written_off", "BIGINT NOT NULL DEFAULT 0"),
     ("fin_invoices", "voided_at", "TEXT"),
     ("fin_contacts", "tax_id_last4", "TEXT"), ("fin_rules", "priority", "INTEGER NOT NULL DEFAULT 100"),
+    # phase 4: the mirror's external refs (kind, revision, status) on installs made before them (migration 68)
+    ("fin_external_refs", "kind", "TEXT NOT NULL DEFAULT ''"), ("fin_external_refs", "revision", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_external_refs", "status", "TEXT NOT NULL DEFAULT 'active'"), ("fin_external_refs", "updated_at", "TEXT"),
+    # the provider's id for a journal or credit memo line, so its tags follow the line across a revision
+    ("fin_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
     ("fin_contacts", "seats", "INTEGER"), ("fin_contacts", "renewal_on", "TEXT"),
     # the books gaps (migration 73): fin_transfers' columns added since it was first written
@@ -506,6 +536,8 @@ ADDED = (
     ("fin_transfers", "settled_at", "TEXT"), ("fin_transfers", "submitted_at", "TEXT"),
     ("fin_transfers", "counted_json", "TEXT NOT NULL DEFAULT '[]'"),
     ("fin_transfers", "provider_credit_txn_id", "TEXT"), ("fin_transfers", "find_after", "TEXT"),
+    # the journal line a bank row matched (migration 75), so a transfer's two legs on one account match one at a time
+    ("fin_feed_txns", "entry_line_id", "TEXT"),
 )
 
 
@@ -609,6 +641,37 @@ def phase2(c: sqlite3.Connection) -> None:
     same statements as `create` again, then the vendor names phase 1 posted as written (vendor_keys_folded)."""
     create(c)
     vendor_keys_folded(c)
+
+
+def feed_lines(c: sqlite3.Connection) -> None:
+    """Cloud migration 75: the journal line each matched bank row took (fin_feed_txns.entry_line_id). A row matched
+    before it takes the entry's line on its bank account for its amount, if the entry has one. Idempotent."""
+    create(c)
+    c.execute("UPDATE fin_feed_txns SET entry_line_id=(SELECT l.id FROM fin_lines l JOIN fin_money_accounts m ON "
+              "m.id=fin_feed_txns.money_account_id WHERE l.entry_id=fin_feed_txns.entry_id AND "
+              "l.account_id=m.account_id AND l.amount=fin_feed_txns.amount ORDER BY l.id LIMIT 1) "
+              "WHERE entry_id IS NOT NULL AND entry_line_id IS NULL")
+
+
+def phase4(c: sqlite3.Connection) -> None:
+    """Cloud migration 68: the mirror's tables and columns (external refs with their kind, revision and status, the
+    restatements a closed month takes, and each entry line's provider id), on an install made before them. The same
+    statements as `create`, which skips whatever exists."""
+    create(c)
+
+
+STRIPE_INDEXES = """
+CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_link ON fin_feed_txns(money_account_id, json_extract(raw_json, '$.link'));
+CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_source ON fin_feed_txns(money_account_id, json_extract(raw_json, '$.source'));
+"""
+
+
+def stripe(c: sqlite3.Connection) -> None:
+    """Cloud migration 69: the indexes the Stripe lookups search by, the charge link and the source id each Stripe row
+    carries in its raw json (a refund's charge total is one of them). Idempotent. They live here, not in `create`,
+    so an install from before 69 has no index on raw_json."""
+    for statement in statements(STRIPE_INDEXES):
+        c.execute(statement)
 
 
 def raw_import(c: sqlite3.Connection) -> None:

@@ -35,6 +35,7 @@ import threading
 import time
 import urllib.parse
 from datetime import timezone
+from typing import Any
 
 import httpx
 from fastapi import Request
@@ -95,9 +96,10 @@ class Stop(Exception):
 class Failed(Exception):
     """HQ did not answer, or answered something this server cannot use. `code` is stable and holds no HQ text."""
 
-    def __init__(self, code, status=0, body=None):
+    def __init__(self, code: str, status: int = 0, body: object = None) -> None:
         super().__init__(code)
-        self.code, self.status, self.body = code, status, body or {}
+        self.code, self.status = code, status
+        self.body: object = body or {}
 
 
 # ----------------------------------------------------------------------------- state
@@ -163,10 +165,11 @@ def clean_wake_url(value):
 class Link:
     """One Gateway key and base URL, read once from the connection (backend/gateway_connection.py)."""
 
-    def __init__(self, key, base, fingerprint):
+    def __init__(self, key: str, base: str, fingerprint: str) -> None:
         self.key, self.base, self.fingerprint = key, base, fingerprint
 
-    def call(self, method, path, body=None, idempotency=None, *, area="hooks", transport=None, cap=MAX_ANSWER):
+    def call(self, method: str, path: str, body: object = None, idempotency: str | None = None, *,
+             area: str = "hooks", transport: object = None, cap: int = MAX_ANSWER) -> dict[str, Any]:
         """One call to `<base>/<area>/<path>`. `area` and `cap` let the sleep client (backend/sleep_idle.py) share the
         key, the pinned client settings and the answer cap; `transport` is a test's fake HQ."""
         headers = {"Authorization": "Bearer " + self.key, "User-Agent": user_agent(), "Accept-Encoding": "identity"}
@@ -199,7 +202,7 @@ class Link:
         return answer
 
 
-def link_of(c, vault, settings):
+def link_of(c: Any, vault: Any, settings: Any) -> Link | None:
     """The Link for the connected key, or None. A base the key may not be sent to is no link."""
     key, base, _ = GC.target(c, vault, settings)
     if not key:

@@ -8,11 +8,15 @@ call also carries the result it just made, and a retry (the saved answer, or onc
 the action) reads the rest afresh through the caller's current view: a reason that names amounts shows only while that
 view still covers them."""
 from typing import Annotated, Any, Literal
+from urllib.parse import urlencode
 
-from fastapi import Query, Request, Response
+from fastapi import Path, Query, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import Field
 
+from . import company_server, hook_relay
 from .finance import actions as finance
+from .finance import books_link
 from .finance import reads as finance_reads
 from .models import ID, Contract
 from .store import Problem
@@ -28,8 +32,10 @@ Metric = Literal["cash", "burn", "runway_months", "revenue", "spend", "budget_re
 
 
 class FinanceConnectionRequest(Contract):
-    """Connect Mercury with a stored token credential. The approver is a Mercury user other than the token's creator,
-    who approves payments in Mercury; without one, payments stay off."""
+    """Connect a bank or Stripe with a stored credential. Mercury's token: the approver is a Mercury user other than the
+    token's creator, who approves payments in Mercury; without one, payments stay off. Stripe's restricted key needs no
+    approver."""
+    provider: Literal["mercury", "stripe"] = "mercury"
     credential_id: str = Field(min_length=1, max_length=120)
     name: str | None = Field(None, max_length=120)
     approver_email: str | None = Field(None, max_length=200)
@@ -45,8 +51,36 @@ class FinanceActionRequest(Contract):
     dry_run: bool = False
 
 
+class FinanceBooksRequest(Contract):
+    """Connect QuickBooks or Xero: HQ holds the app's secret and sends the browser to the provider's consent page."""
+    provider: Literal["quickbooks", "xero"]
+
+
+BOOKS_RETURN = "/api/v2/finance/books/return"    # HQ sends the browser here, with the flow id the connect added
+CLAIM = r"^[A-Za-z0-9._~-]{1,200}$"
+
+
 def problem(e):
     return Problem(e.code, e.message, STATUS.get(e.code, 400))
+
+
+def books_problem(e: books_link.BrokerFailed) -> Problem:
+    """A books step HQ could not do, as a refusal the page can act on. HQ's own text never reaches the caller."""
+    if isinstance(e, books_link.ReconnectRequired):
+        return Problem("reconnect_required", "The books grant no longer works: connect them again in Finance", 409)
+    if isinstance(e, books_link.NotConnected):
+        return Problem("not_connected", "HQ holds no books grant for this company: connect them again in Finance", 409)
+    if e.code == "revoke_failed":      # HQ kept the connection: a disconnect asked again is the retry
+        return Problem("revoke_failed", "HQ could not take the books connection off yet, so it is kept: disconnect "
+                       "again in a moment", 502, retryable=True)
+    if e.code == "vault_write_failed":  # HQ's grant stands and Tico could not keep the rotated pair: connect again
+        return Problem(
+            "vault_write_failed",
+            "Tico could not keep the books grant while taking it off, so the connection is kept: "
+            "connect the books again in Finance, then disconnect",
+            502, retryable=True, extra={"reason": "reconnect_required"},
+        )
+    return Problem("books_unavailable", "HQ could not finish that books step: try again in a moment", 502)
 
 
 def install(app, store, auth, mutate):
@@ -388,19 +422,21 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/finance/connections")
     def finance_connect(request: Request, body: FinanceConnectionRequest):
-        """Connect Mercury: the token is tested and its accounts listed (outside any transaction), then the
-        connection_create action maps them into the books. A finance admin's action; the Idempotency-Key is its key."""
+        """Connect Mercury or Stripe: the credential is tested and its accounts listed (outside any transaction), then
+        the connection_create action maps them into the books. A finance admin's action; the Idempotency-Key is its key."""
         who = viewer(request)
         if not read(lambda c: finance_reads.may_connect(c, who.actor)):
             raise Problem("denied", "connecting a bank is for finance admins", 403)
-        found, why = finance.mercury_probe(store, request.app.state.vault, body.credential_id)
+        probe = finance.stripe_probe if body.provider == "stripe" else finance.mercury_probe
+        found, why = probe(store, request.app.state.vault, body.credential_id)
         if why:
             raise Problem("invalid", why, 422)
         key = (request.headers.get("idempotency-key") or "").strip()
-        payload = {"provider": "mercury", "credential_id": body.credential_id, "probe": found,
-                   **{k: v for k, v in (("name", body.name), ("approver_email", body.approver_email),
-                                        ("token_creator_email", body.token_creator_email),
-                                        ("server_ip", body.server_ip)) if v}}
+        extra = (("name", body.name),) if body.provider == "stripe" else (
+            ("name", body.name), ("approver_email", body.approver_email),
+            ("token_creator_email", body.token_creator_email), ("server_ip", body.server_ip))
+        payload = {"provider": body.provider, "credential_id": body.credential_id, "probe": found,
+                   **{k: v for k, v in extra if v}}
 
         def work(c):
             done = finance.act(c, who.actor, "connection_create", payload, key)
@@ -410,6 +446,75 @@ def install(app, store, auth, mutate):
         if saved.get("status") == "committed":
             finance.banking_ring()                     # after the commit: the worker's first sync starts now
         return saved
+
+    def books_link_of(request):
+        """The Gateway link the books broker calls HQ through. A demo or rehearsal copy calls no HQ at all."""
+        if company_server.off(store.settings):
+            raise Problem("not_available", "Books are not connected from a demo or rehearsal copy", 409)
+        with store.read() as c:
+            found = hook_relay.link_of(c, request.app.state.vault, store.settings)
+        if found is None:
+            raise Problem("gateway_key", "Tico's AI Gateway key is not set, so QuickBooks and Xero cannot be reached", 409)
+        return found
+
+    def books_admin(request):
+        """The signed-in person, who must be a finance admin to connect or disconnect the books."""
+        who = viewer(request)
+        if not read(lambda c: finance_reads.may_connect(c, who.actor)):
+            raise Problem("denied", "connecting the books is for finance admins", 403)
+        return who
+
+    @app.post("/api/v2/finance/books/connect")
+    def finance_books_connect(request: Request, body: FinanceBooksRequest):
+        """Start connecting QuickBooks or Xero for this install's company: HQ's consent page, which the browser goes to,
+        and how long that link lives. Finance admins only, on a server linked to its Tico company."""
+        who = books_admin(request)
+        with store.read() as c:
+            company = str((company_server.view(c).get("company") or {}).get("id") or "")
+        if not company:
+            raise Problem("not_linked", "Link this server to its Tico company in Settings before connecting the books", 409)
+        link = books_link_of(request)
+        try:
+            url, expires = books_link.start(store, link, provider=body.provider, company_id=company, user=who.actor,
+                                            return_base=store.settings.public_url.rstrip("/") + BOOKS_RETURN)
+        except books_link.BrokerFailed as e:
+            raise books_problem(e) from None
+        return {"url": url, "expires_in": expires}
+
+    @app.get(BOOKS_RETURN + "/{flow}")
+    def finance_books_return(request: Request, flow: str = Path(pattern=r"^[A-Za-z0-9_-]{16,80}$"),
+                             outcome: str | None = Query(None, alias="finance", max_length=20),
+                             claim: str | None = Query(None, pattern=CLAIM),
+                             reason: str | None = Query(None, max_length=80)):
+        """HQ sends the browser back here after a books consent. Claims the grant once, keeps it in the vault and makes
+        the books connection, then sends the browser to Finance. Only the person who started the consent, and only
+        while they may connect, can claim it; the query is trusted for nothing but the claim id."""
+        who = books_admin(request)
+        link = books_link_of(request)
+        page = store.settings.public_url.rstrip("/") + "/#/finance"
+        try:
+            books_link.finish(store, request.app.state.vault, link, flow=flow, user=who.actor, outcome=outcome or "",
+                              reason=reason or "", claim_id=claim or "")
+        except books_link.NotStarted:
+            raise Problem("not_started", "That books connection was not started by you, or it has ended. Start it "
+                                         "again in Finance", 409) from None
+        except books_link.BrokerFailed as e:
+            return RedirectResponse(page + "?" + urlencode({"books": "error", "reason": e.code}), status_code=302)
+        return RedirectResponse(page + "?books=connected", status_code=302)
+
+    @app.post("/api/v2/finance/books/{connection_id}/disconnect")
+    def finance_books_disconnect(request: Request, connection_id: ID):
+        """Disconnect a QuickBooks or Xero books connection: HQ drops its grant, then the tokens leave the vault. A retry
+        after a failed HQ call is safe. Finance admins only."""
+        who = books_admin(request)
+        link = books_link_of(request)
+        try:
+            books_link.drop(store, request.app.state.vault, link, connection_id, by=who.actor)
+        except books_link.UnknownConnection:
+            raise Problem("not_found", "No such books connection", 404) from None
+        except books_link.BrokerFailed as e:
+            raise books_problem(e) from None
+        return {"connection_id": connection_id, "status": "disconnected"}
 
     @app.get("/api/v2/finance/expenses")
     def finance_expenses(request: Request, start: str | None = None, end: str | None = None,

@@ -28,6 +28,10 @@ Saving another field keeps that link. Choose **None** to remove it, or choose an
 | `owner` | the one accountable: Team (`company` in the API), a human or a bot |
 | `source_note` | where the number comes from |
 | `definition_version` | starts at 1 and goes up whenever the definition, unit, direction, cadence or source note changes; a rename or a new owner does not change it |
+| `parent_kpi_id` | the KPI this one moves: the inputs under a North Star. Shown as the KPI tree on the Growth tab |
+| `growth_role` | `north_star` (one per company; setting a new one clears the old), `input`, `guardrail` or blank |
+| `stage` | `reach`, `acquire`, `activate`, `retain` or `refer`: the Journey view |
+| `loop_name`, `loop_step` | a loop such as `referrals` and its step, for the Loops view. Labels on the KPI; there is no loop table |
 
 **Reading.** A fact, and immutable.
 
@@ -356,6 +360,7 @@ hub goal create / update [--bet ID]        hub kpi create "<name>" [--goal ID] [
 hub goal status <id> <colour> "<why>"          [--direction ..] [--cadence ..] [--owner ..] [target flags]
 hub goal status <id> auto                         hub kpi update <id> [fields]
 hub goal refresh                           hub kpi link <goal> <kpi> [target flags]  |  hub kpi unlink <goal> <kpi>
+hub kpi update <id> --parent P --role R --stage S --loop NAME:STEP   growth fields; see Growth
 hub goal checkin <id> "<words>"            hub kpi log <kpi> <value> ["<note>"] [--period-end D] [--evidence ..]
 hub goal checkin-list <id>                         [--quality ..] [--supersedes READING]
 hub goal needs-you                         hub kpi show <kpi> [--effective]

@@ -891,6 +891,65 @@ CREATE TABLE IF NOT EXISTS browser_exit_marks (boot TEXT PRIMARY KEY, seq INTEGE
 """
 
 
+# Growth (backend/growth.py) and the brand and go-to-market pages (backend/brand_gtm.py). Brand and GTM each keep
+# one draft row (id 1, with a revision so two editors never overwrite each other) and numbered published versions.
+# A cohort with no channel is the Unknown row: SQLite treats NULLs as distinct in UNIQUE, so the one-row-per-month
+# rule is an expression index over coalesce(channel_id, '').
+GROWTH_SCHEMA = """
+CREATE TABLE IF NOT EXISTS brand_drafts (
+  id INTEGER PRIMARY KEY CHECK(id=1), body_json TEXT NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 0,
+  updated_by TEXT, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS brand_versions (
+  id TEXT PRIMARY KEY, n INTEGER NOT NULL UNIQUE, body_json TEXT NOT NULL DEFAULT '{}', note TEXT NOT NULL DEFAULT '',
+  published_by TEXT, published_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS gtm_drafts (
+  id INTEGER PRIMARY KEY CHECK(id=1), body_json TEXT NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 0,
+  updated_by TEXT, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS gtm_versions (
+  id TEXT PRIMARY KEY, n INTEGER NOT NULL UNIQUE, body_json TEXT NOT NULL DEFAULT '{}', note TEXT NOT NULL DEFAULT '',
+  published_by TEXT, published_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS gtm_sources (
+  id TEXT PRIMARY KEY, truth_for TEXT NOT NULL, system TEXT NOT NULL,
+  reach_kind TEXT NOT NULL CHECK(reach_kind IN ('mcp','credential','url','person')), reach_ref TEXT NOT NULL DEFAULT '',
+  may TEXT NOT NULL DEFAULT '', owner_ref TEXT, created_at TEXT NOT NULL, retired_at TEXT);
+CREATE TABLE IF NOT EXISTS growth_channels (
+  id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+  track TEXT NOT NULL DEFAULT 'performance' CHECK(track IN ('performance','brand')),
+  stage TEXT NOT NULL DEFAULT 'idea' CHECK(stage IN ('idea','testing','scaling','paused')),
+  owner_ref TEXT, budget_month REAL, source_id TEXT, why TEXT NOT NULL DEFAULT '', guardrail_kpi_id TEXT,
+  guardrail_max REAL, sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, retired_at TEXT);
+CREATE TABLE IF NOT EXISTS growth_ideas (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id), hypothesis TEXT NOT NULL DEFAULT '', prediction TEXT NOT NULL DEFAULT '',
+  bet_id TEXT, kpi_id TEXT, judged_kpi_id TEXT, ice_i INTEGER, ice_c INTEGER, ice_e INTEGER,
+  status TEXT NOT NULL DEFAULT 'idea'
+    CHECK(status IN ('idea','testing','paused','won','lost','inconclusive','dropped')),
+  source_kind TEXT, source_ref TEXT, test_from TEXT, test_to TEXT, change TEXT, stop_if TEXT, min_events INTEGER,
+  audience TEXT, external_ref TEXT, result TEXT, learning TEXT,
+  bet_effect TEXT CHECK(bet_effect IS NULL OR bet_effect IN ('supports','weakens','none')),
+  confidence TEXT CHECK(confidence IS NULL OR confidence IN ('low','medium','high')),
+  verdict_at TEXT, verdict_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS growth_ideas_status ON growth_ideas(status, updated_at);
+CREATE INDEX IF NOT EXISTS growth_ideas_bet ON growth_ideas(bet_id) WHERE bet_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS growth_idea_channels (
+  task_id TEXT NOT NULL REFERENCES tasks(id), channel_id TEXT NOT NULL, PRIMARY KEY(task_id, channel_id));
+CREATE INDEX IF NOT EXISTS growth_idea_channels_channel ON growth_idea_channels(channel_id);
+CREATE TABLE IF NOT EXISTS growth_cohorts (
+  id TEXT PRIMARY KEY, channel_id TEXT, month TEXT NOT NULL, spend REAL, bot_cost REAL, new_customers INTEGER,
+  kept_d30 REAL, kept_d90 REAL, kept_d180 REAL, revenue_month REAL, margin_pct REAL,
+  quality TEXT NOT NULL DEFAULT 'actual' CHECK(quality IN ('actual','estimate')), sources_json TEXT NOT NULL DEFAULT '{}',
+  updated_by TEXT, updated_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS growth_cohorts_month ON growth_cohorts(coalesce(channel_id, ''), month);
+CREATE TABLE IF NOT EXISTS growth_settings (
+  id INTEGER PRIMARY KEY CHECK(id=1), unit TEXT NOT NULL DEFAULT 'customers', revenue_month REAL, margin_pct REAL,
+  framework TEXT NOT NULL DEFAULT '', verdict_win_pct REAL NOT NULL DEFAULT 60);
+ALTER TABLE kpis ADD COLUMN parent_kpi_id TEXT;
+ALTER TABLE kpis ADD COLUMN growth_role TEXT;
+ALTER TABLE kpis ADD COLUMN stage TEXT;
+ALTER TABLE kpis ADD COLUMN loop_name TEXT;
+ALTER TABLE kpis ADD COLUMN loop_step INTEGER;
+"""
+
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -912,7 +971,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
               LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
               POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA,
-              BROWSER_EXITS_SCHEMA]
+              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA]
 
 
 class Refused(Exception):
@@ -1023,6 +1082,16 @@ def synchronous(default):
 WAL_SIZE_LIMIT = 64 * 1024 * 1024
 
 
+def leave_wal_for_litestream(conn):
+    """Keep the -wal file on disk when this connection closes, instead of folding it into the database and deleting it.
+
+    SQLite's last close normally checkpoints and deletes the WAL. Litestream resumes from its place in that file, so
+    a WAL deleted on every stop makes every start upload the whole database. Checkpoints while the server runs still
+    keep the WAL small (journal_size_limit). Explicit `PRAGMA wal_checkpoint` calls are unaffected. Needs Python 3.12+."""
+    conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+    return conn
+
+
 def connect(path=None, adopt_legacy=False):
     """Open (and if need be create) hub.db. WAL, foreign keys on, migrations applied.
 
@@ -1037,7 +1106,7 @@ def connect(path=None, adopt_legacy=False):
     # the sweeps' freed pages can go back to the disk (store.reclaim_free_pages). An existing file keeps its mode;
     # changing that needs a VACUUM.
     fresh = str(target) == ":memory:" or not target.exists() or target.stat().st_size == 0
-    conn = sqlite3.connect(str(target), timeout=30, isolation_level=None)
+    conn = leave_wal_for_litestream(sqlite3.connect(str(target), timeout=30, isolation_level=None))
     conn.row_factory = sqlite3.Row
     if fresh:
         conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
