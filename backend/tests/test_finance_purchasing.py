@@ -754,6 +754,28 @@ def test_a_teammate_past_their_own_set_aside_is_refused_while_another_teammates_
         assert _status(c, po) == ("sent", "")
 
 
+def test_an_order_whose_line_fits_only_because_a_teammates_set_aside_on_another_budget_is_left_out_is_refused(books):
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Expenses", "account_id": account(c, "6000"),
+                                               "amount": 100_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+        parent = budget(c, "Expenses")
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"),
+                                               "parent_id": parent, "at_limit": "decline"})
+        assert made.status == "committed", made
+        for teammate in (EVE, FAY):
+            assert act(c, OWNER, "allocation_set", {"budget_id": budget(c, "Software"), "target_kind": "teammate",
+                                                    "target_id": teammate, "amount": 40_000}).status == "committed"
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 60_000, tags={"teammate": EVE}),
+                                {"account_id": _expense(c, "6200"), "amount": 20_000, "tags": {"teammate": FAY}}],
+                    approve=False)
+        assert act(c, OWNER, "po_send", {"po_id": po}).status == "committed"
+        refused = act(c, OWNER, "po_approve", {"po_id": po})
+        assert refused.status == "denied", refused
+        assert _status(c, po) == ("sent", "") and _holds(c, po) == []
+
+
 def test_a_teammates_bill_inside_their_set_aside_is_not_held_by_a_spend_that_overran_the_unallocated_room(books):
     with books.transaction() as c:
         _budget_at(c, 100_000, "warn")

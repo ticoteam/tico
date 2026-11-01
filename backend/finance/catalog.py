@@ -5,6 +5,7 @@ first (mirror.queue_record) and the local record changes when the provider confi
 change asks a finance admin, since a price changes what every new line posts."""
 import json
 from collections.abc import Callable
+from typing import Any
 
 from ..records import core as RC
 from ..records import reads as RR
@@ -117,6 +118,14 @@ def _mirrored(ctx: Ctx) -> bool:
     return ctx.book.mode == "mirror"
 
 
+def _hides_item(ctx: Ctx, who: str, item: Any) -> bool:
+    """Whether the item names an account the asker's view does not cover. Its price and accounts are then not theirs to
+    see, so the item is not found to them, as a missing one is, whatever they ask to change."""
+    view = ctx.view(who)
+    return any(account is not None and not view.sees_account(account) for account in
+               (ctx.accounts.get(str(item[key] or "")) for key, _ in mirror.ITEM_ACCOUNTS))
+
+
 def _create(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, fields: dict[str, object],
             key: str, *, books: bool) -> Result:
     """A new record: written here, or queued for the provider under the id it will have once confirmed. A record the
@@ -162,12 +171,16 @@ def _books_kind_change(old: str, new: str) -> None:
 def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("item_id", *ITEM_FIELDS, "active"))
     old = RR.get(ctx.c, "items", V.text(p, "item_id", 80))
-    if old is None:
+    if old is None or _hides_item(ctx, who, old):
         raise FinanceError(NOT_FOUND, "no such item")
     item_id = str(old["id"])
     f = _shape(lambda: _item_fields(ctx, who, p, create=False))
     if _mirrored(ctx) and "price" in f and f["price"] is None and old["price"] is not None:
         raise invalid("an item the provider holds keeps a price: set a new one")
+    for key, kind in mirror.ITEM_ACCOUNTS:
+        # QuickBooks and Xero keep an account the update leaves out, so a cleared one would stay on the provider's item.
+        if _mirrored(ctx) and key in f and f[key] is None and old[key] is not None:
+            raise invalid(f"an item the provider holds keeps its {kind} account: set another one")
     if _mirrored(ctx) and "kind" in f and f["kind"] != old["kind"]:
         _books_kind_change(str(old["kind"]), str(f["kind"]))
     gate = K.default_gate(ctx.org, who, "item_update")

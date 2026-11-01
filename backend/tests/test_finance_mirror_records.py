@@ -306,6 +306,9 @@ def test_an_item_change_in_a_mirrored_book_leaves_the_row_as_it_was_until_the_pr
     with books.transaction() as c:
         item = _local(c, "Item:5", "items")
         assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        # Dan sees the item's accounts, so a price change of his is asked of an admin rather than found missing.
+        assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything",
+                                            "whose": "company"}).status == "committed"
         assert act(c, "human:dan", "item_update", {"item_id": item, "price": 20_000}).status == "needs_approval"
         assert act(c, OWNER, "item_update", {"item_id": item, "price": 20_000}).status == "committed"
         assert c.execute("SELECT price FROM items WHERE id=?", (item,)).fetchone()[0] == 15_000
@@ -392,7 +395,7 @@ def test_a_change_made_after_a_write_is_read_and_before_it_is_claimed_is_sent_wi
             ("Consulting Pro", 20_000)
 
 
-def test_a_price_change_made_while_a_rename_waits_to_retry_is_sent_with_the_rename_and_never_reverted(books):
+def test_a_price_change_made_while_a_rename_waits_to_retry_is_sent_after_the_rename_and_never_reverts_it(books):
     fake = FakeBooks()
     _records(fake)
     cid = _connection(books)
@@ -406,11 +409,46 @@ def test_a_price_change_made_while_a_rename_waits_to_retry_is_sent_with_the_rena
     with books.transaction() as c:
         assert act(c, OWNER, "item_update", {"item_id": item, "price": 20_000}).status == "committed"
         pending = c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='item.update' AND status='pending'").fetchone()
-        assert pending[0] == 1
+        # The rename was attempted, so the price change is a write of its own behind it, not a change to the rename.
+        assert pending[0] == 2
     # The rename is still backing off: the price change must not go out ahead of it and then be undone by its retry.
     assert _drain(books, fake, cid) == []
     assert _drain(books, fake, cid, now=LATER) == []
     assert _item_sends(fake)[-1] == ("Consulting Pro", 20_000), _item_sends(fake)
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, price FROM items WHERE id=?", (item,)).fetchone()) == \
+            ("Consulting Pro", 20_000)
+
+
+def test_a_change_made_after_a_rename_reached_the_provider_with_its_answer_lost_is_not_sent_under_the_renames_key(
+        books, monkeypatch):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    # The provider keeps what it was sent under each idempotency key: the same key with another body is refused.
+    held: dict[str, dict[str, Any]] = {}
+    send = fake.send
+
+    def keyed(op: str, body: Any, key: str) -> mirror.Sent:
+        if held.setdefault(key, dict(body)) != body:
+            fake.sent.append((op, dict(body), key))
+            return mirror.Sent(False, error="the provider holds another request under this key", final=True)
+        return send(op, body, key)
+
+    monkeypatch.setattr(fake, "send", keyed)
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        assert act(c, OWNER, "item_update", {"item_id": item, "name": "Consulting Pro"}).status == "committed"
+    fake.replies.append(mirror.Sent(False, error="the answer was lost"))
+    assert _drain(books, fake, cid) == ["item.update: the answer was lost"]
+    with books.transaction() as c:
+        assert act(c, OWNER, "item_update", {"item_id": item, "price": 20_000}).status == "committed"
+    assert _drain(books, fake, cid) == []
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert _item_sends(fake) == [("Consulting Pro", 15_000), ("Consulting Pro", 15_000),
+                                 ("Consulting Pro", 20_000)], _item_sends(fake)
     with books.read() as c:
         assert tuple(c.execute("SELECT name, price FROM items WHERE id=?", (item,)).fetchone()) == \
             ("Consulting Pro", 20_000)
@@ -585,6 +623,40 @@ def test_a_mirrored_item_needs_a_price_and_keeps_the_price_the_provider_holds(bo
     assert [op for op, _, _ in fake.sent if op in ("item.create", "item.update")] == []
     with books.read() as c:
         assert c.execute("SELECT price FROM items WHERE id=?", (item,)).fetchone()[0] == 15_000
+
+
+def test_a_mirrored_item_keeps_the_accounts_the_provider_holds(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        cleared = act(c, OWNER, "item_update", {"item_id": item, "expense_account_id": None})
+        assert (cleared.status, cleared.code) == ("failed", "invalid"), cleared
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert [op for op, _, _ in fake.sent if op == "item.update"] == []
+    with books.read() as c:
+        assert c.execute("SELECT expense_account_id FROM items WHERE id=?", (item,)).fetchone()[0] == \
+            _local(c, "Account:2", "fin_accounts")
+
+
+def test_renaming_an_imported_job_in_a_mirrored_book_is_refused_and_queues_nothing(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        job = _local(c, "Project:12", "projects")
+        renamed = act(c, OWNER, "project_update", {"project_id": job, "name": "Kitchen remodel 2"})
+        assert renamed.status == "denied" and "mirror mode" in renamed.reason, renamed
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='project.update'").fetchone()[0] == 0
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert [op for op, _, _ in fake.sent if op == "project.update"] == []
+    with books.read() as c:
+        assert c.execute("SELECT name FROM projects WHERE id=?", (job,)).fetchone()[0] == "Kitchen remodel"
 
 
 def test_a_kind_change_across_the_item_type_the_books_hold_is_refused_and_one_inside_it_stays_here(books):

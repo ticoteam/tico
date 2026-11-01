@@ -737,10 +737,11 @@ def record_write_pending(c: sqlite3.Connection, op: str, local_id: str) -> Any:
 
 
 def outbox_amend(c: sqlite3.Connection, outbox_id: str, payload: Mapping[str, object], at: str) -> bool:
-    """Replace a write's payload while it waits to be claimed, a retry included, so a change that joins it goes out with
-    it. False (and nothing changed) once it is claimed, sent, or refused."""
+    """Replace a write's payload while it has never been attempted and waits to be claimed, so a change that joins it goes
+    out with it. False (and nothing changed) once it is claimed, attempted, sent, or refused: a write the provider may
+    have received keeps its content under its idempotency key, and a later change queues a write of its own behind it."""
     return c.execute("UPDATE fin_outbox SET payload_json=?, updated_at=? WHERE id=? AND status='pending' AND "
-                     "claimed_at IS NULL", (dump(payload), at, outbox_id)).rowcount == 1
+                     "claimed_at IS NULL AND attempts=0", (dump(payload), at, outbox_id)).rowcount == 1
 
 
 def outbox_repoint(c: sqlite3.Connection, local_id: str, record_id: str) -> None:

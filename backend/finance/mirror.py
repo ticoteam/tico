@@ -1656,9 +1656,9 @@ def queue_record(ctx: Ctx, who: str, aid: str, op: str, body: Mapping[str, Any])
 def queue_record_update(ctx: Ctx, who: str, aid: str, op: str, record_id: str, fields: Mapping[str, Any]) -> str:
     """A changed shared record's write, carrying only the change. The local row changes when the provider confirms the
     write, so the write is built when it is sent (_prepare), from the row as it then stands and the provider's current
-    revision: a retry never sends an older copy of the record. A change made while the record's newest write still waits
-    to be claimed joins that write; otherwise it is a write of its own, which goes out behind the writes already owed
-    to the record (SK.IN_ORDER)."""
+    revision: a retry never sends an older copy of the record. A change made while the record's newest write has never
+    been attempted and still waits to be claimed joins that write; otherwise it is a write of its own, which goes out
+    behind the writes already owed to the record (SK.IN_ORDER)."""
     waiting = SK.record_write_pending(ctx.c, op, record_id)
     body = {**fields, "local_id": record_id, "day": ctx.today}
     if waiting is not None:
