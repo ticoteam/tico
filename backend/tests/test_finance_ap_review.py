@@ -123,6 +123,24 @@ def test_an_unbooked_row_that_marked_payments_wait_for_cannot_pay_another_bill(b
         assert _money(c) == before
 
 
+def test_categorizing_an_unclear_row_is_refused_while_marked_payments_wait_for_it(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        # A posting rule for the counterparty does not post the row at ingest: the payments it may settle come first.
+        assert act(c, OWNER, "rule_create", {
+            "kind": "posting", "name": "Mercury", "when": {"counterparty": {"matches": "MERCURY"}},
+            "outcome": {"outcome": "post", "account_id": account(c, "6100")},
+            "examples": [{"input": {"counterparty": "MERCURY ACH"}, "expect": "post"}]}).status == "committed"
+        row, _ = _unclear_row(c, "MERCURY ACH")
+        before = _money(c)
+        for dry in (True, False):
+            tagged = act(c, OWNER, "categorize", {"feed_id": row, "account_id": account(c, "6900")}, dry_run=dry)
+            assert (tagged.status, tagged.code) == ("failed", "conflict"), tagged
+            assert "feed_match" in tagged.reason
+        assert _unbooked(c, row) and _money(c) == before
+
+
 def _paid_from_the_account_while_its_row_is_unclear(c, payment: dict[str, object]) -> None:
     """A bill paid from the account waits as an outstanding payment instead of taking the unclear row: the bank moves
     once for the payment, the row stays new, and a person links it (feed_match) to the payment it is."""

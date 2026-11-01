@@ -272,6 +272,12 @@ def test_a_mode_switch_keeps_an_unclear_row_from_paying_a_provider_bill(books):
             assert (refused.status, refused.code) == ("failed", CONFLICT), refused
             assert "feed_match" in refused.reason
         assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op LIKE 'payment.%'").fetchone()[0] == 0
+        # Categorizing the row would queue a journal for it at the provider: a second bank line beside the payments'.
+        queued = c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0]
+        for dry in (True, False):
+            tagged = act(c, OWNER, "categorize", {"feed_id": row, "account_id": account(c, "6100")}, dry_run=dry)
+            assert (tagged.status, tagged.code) == ("failed", CONFLICT), tagged
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == queued
 
 
 def _bank_row(c: sqlite3.Connection, amount: int, day: str) -> tuple[str, str]:

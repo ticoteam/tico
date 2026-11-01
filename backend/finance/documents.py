@@ -1008,8 +1008,9 @@ def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, *, posted: F.Fe
 
 def may_wait(ctx: Ctx, row: Any, money: Any) -> bool:
     """Whether a settled row not yet in the books may be the bank side of payments already marked paid from its money
-    account: expected_match leaves such a row to a person (feed_match), so it may not pay another document. True when a
-    payment waits for its gross (alone, or in a set that sums to it), or the search could not look at every candidate.
+    account: expected_match leaves such a row to a person (feed_match), so it may neither pay another document nor be
+    posted as a bank line of its own (categorize). True when a payment waits for its gross (alone, or in a set that sums
+    to it), or the search could not look at every candidate.
     A booked row is never held back."""
     from .banking import provider_fee
     gross = abs(int(row["amount"])) + provider_fee(row, money)
