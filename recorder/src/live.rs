@@ -271,6 +271,13 @@ impl Tico {
         }
         let mut db = store.db()?;
         let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        scrub_pending(
+            &transaction,
+            id,
+            &self.destination.id,
+            &context.paused_windows,
+            !context.paused_windows.is_empty(),
+        )?;
         let mut queue = Queue::read(&transaction, id, &self.destination.id)?;
         if live {
             queue.streamed(&transaction, &record, &streamed)?;
@@ -400,6 +407,9 @@ impl Tico {
                 Ok(())
             })?;
         }
+        if action == "pause" {
+            scrub_pause(store, id)?;
+        }
         let reply = self.call(
             &format!("/api/v2/live-meetings/{}/control", context.live_id),
             Some(&json!({"action": if action == "discard" { "end" } else { action }})),
@@ -514,7 +524,32 @@ fn note_state(store: &Store, id: &str, view: &Value) -> Result<()> {
     if current == state || current == "ended" {
         return Ok(());
     }
-    let at_ms = capture_time(&store.get(id)?);
+    let at_ms = if state == "paused" {
+        // The server supplies no capture timestamp for a remote pause. Keep the uncertain
+        // interval local, starting at the last acknowledged capture start (or earlier pending
+        // turn). This also covers words not transcribed when the pause was discovered.
+        let db = store.db()?;
+        let mut query = db.prepare("SELECT acknowledged,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=?")?;
+        let context = store.context(id)?;
+        let mut confirmed = 0;
+        let mut pending = u64::MAX;
+        for row in query.query_map([id, &context.live_destination], |r| {
+            Ok((r.get::<_, bool>(0)?, r.get::<_, String>(1)?))
+        })? {
+            let (ack, payload) = row?;
+            let start = serde_json::from_str::<Value>(&payload)?["start_ms"]
+                .as_u64()
+                .unwrap_or(0);
+            if ack {
+                confirmed = confirmed.max(start);
+            } else {
+                pending = pending.min(start);
+            }
+        }
+        confirmed.min(pending)
+    } else {
+        capture_time(&store.get(id)?)
+    };
     store.update_context(id, |context| {
         if context.live_discarded || (context.locally_paused && state == "live") {
             return Ok(());
@@ -533,7 +568,71 @@ fn note_state(store: &Store, id: &str, view: &Value) -> Result<()> {
         }
         context.live_state = state.into();
         Ok(())
-    })
+    })?;
+    if state == "paused" {
+        scrub_pause(store, id)?;
+    }
+    Ok(())
+}
+
+/// Keep sequence numbers stable: overlapping pending turns become removal markers rather than
+/// holes. The full source stays local. Corrections already queued before discovering a pause
+/// are invalidated too; the next pass derives fresh corrections from the filtered recording.
+fn scrub_pending(
+    tx: &rusqlite::Transaction,
+    id: &str,
+    destination: &str,
+    windows: &[(u64, Option<u64>)],
+    corrections: bool,
+) -> Result<()> {
+    let mut query = tx.prepare("SELECT seq,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND acknowledged=0")?;
+    let rows = query
+        .query_map([id, destination], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for (seq, text) in rows {
+        let mut payload: Value = serde_json::from_str(&text)?;
+        if excluded(
+            windows,
+            payload["start_ms"].as_u64().unwrap_or(0),
+            payload["end_ms"].as_u64().unwrap_or(u64::MAX),
+        ) {
+            payload["text"] = json!("[removed]");
+            tx.execute("UPDATE live_outbox SET payload_json=? WHERE recording_id=? AND destination_id=? AND seq=?", rusqlite::params![payload.to_string(), id, destination, seq])?;
+        }
+    }
+    if corrections {
+        let mut query = tx.prepare("SELECT rowid,payload_json FROM live_corrections WHERE recording_id=? AND destination_id=? AND state=0")?;
+        let rows = query
+            .query_map([id, destination], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for (rowid, text) in rows {
+            let mut payload: Value = serde_json::from_str(&text)?;
+            payload["text"] = json!("[removed]");
+            tx.execute(
+                "UPDATE live_corrections SET payload_json=? WHERE rowid=?",
+                rusqlite::params![payload.to_string(), rowid],
+            )?;
+        }
+    }
+    Ok(())
+}
+fn scrub_pause(store: &Store, id: &str) -> Result<()> {
+    let context = store.context(id)?;
+    let mut db = store.db()?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    scrub_pending(
+        &tx,
+        id,
+        &context.live_destination,
+        &context.paused_windows,
+        true,
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 
 /// Capture timestamps, rather than transcription arrival time, define off-the-record speech.
@@ -588,7 +687,7 @@ fn shareable(record: &Recording, windows: &[(u64, Option<u64>)]) -> Recording {
 }
 /// Kept draft items can disclose paused speech even though the transcript cannot.
 pub fn paused_quotes(record: &Recording, context: &crate::workspace::Context) -> bool {
-    let normalize = |s: &str| {
+    let tokens = |s: &str| {
         s.split_whitespace()
             .map(|w| {
                 w.chars()
@@ -598,7 +697,6 @@ pub fn paused_quotes(record: &Recording, context: &crate::workspace::Context) ->
             })
             .filter(|w| !w.is_empty())
             .collect::<Vec<_>>()
-            .join(" ")
     };
     context
         .items
@@ -612,25 +710,32 @@ pub fn paused_quotes(record: &Recording, context: &crate::workspace::Context) ->
             ) {
                 return true;
             }
-            let quote = normalize(&item.quote);
-            !quote.is_empty()
-                && record.chunks.iter().any(|chunk| {
-                    if !excluded(&context.paused_windows, chunk.start_ms, chunk.end_ms) {
-                        return false;
-                    }
-                    let text = if chunk.words.is_empty() {
-                        chunk.text.clone()
+            let quote = tokens(&item.quote);
+            if quote.is_empty() {
+                return false;
+            }
+            // Match the whole quote, retaining a pause flag for every matched token. A quote
+            // can start in public speech and continue across a pause or a chunk boundary.
+            ["me", "them"].iter().any(|channel| {
+                let mut text = Vec::new();
+                for chunk in record.chunks.iter().filter(|c| c.channel == *channel) {
+                    if chunk.words.is_empty() {
+                        let paused =
+                            excluded(&context.paused_windows, chunk.start_ms, chunk.end_ms);
+                        text.extend(tokens(&chunk.text).into_iter().map(|t| (t, paused)));
                     } else {
-                        chunk
-                            .words
-                            .iter()
-                            .filter(|w| excluded(&context.paused_windows, w.start_ms, w.end_ms))
-                            .map(|w| w.text.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    };
-                    normalize(&text).contains(&quote)
+                        for word in &chunk.words {
+                            let paused =
+                                excluded(&context.paused_windows, word.start_ms, word.end_ms);
+                            text.extend(tokens(&word.text).into_iter().map(|t| (t, paused)));
+                        }
+                    }
+                }
+                text.windows(quote.len()).any(|span| {
+                    span.iter().map(|(t, _)| t).eq(quote.iter())
+                        && span.iter().any(|(_, paused)| *paused)
                 })
+            })
         })
 }
 

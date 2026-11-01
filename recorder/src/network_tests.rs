@@ -1161,7 +1161,7 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
             Ok(())
         })
         .unwrap();
-    // Resumed in Tico: only the pre-pause waiting turn goes again.
+    // Resumed in Tico: the uncertain pending turn is only a removal marker.
     let (tico, seen, worker) = server(vec![Some(json!({"id":"live-fixture","state":"live"}))]);
     // A paused meeting is only read back.
     tico.sync_live(&store, id).unwrap();
@@ -1179,8 +1179,7 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
     assert_eq!(
         requests[0].1["chunks"],
         json!([
-            {"seq":1,"speaker":"Me","start_ms":0,"end_ms":5000,"text":"Morning all"},
-
+            {"seq":1,"speaker":"Me","start_ms":0,"end_ms":5000,"text":"[removed]"}
         ])
     );
 }
@@ -1310,6 +1309,22 @@ fn paused_capture_stays_local_through_resume_retry_recovery_and_final_correction
         &store.get(id).unwrap(),
         &context
     ));
+
+    // Quote starts outside the pause, so content matching must detect the paused suffix.
+    context.items[0].quote = "Public opening. Secret launch.".into();
+    assert!(crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
+    let mut untimed = store.get(id).unwrap();
+    untimed.chunks[0].words.clear();
+    assert!(crate::live::paused_quotes(&untimed, &context));
+    // A quote can cross two chunks as well as a pause boundary.
+    context.items[0].quote = "Secret launch. Secret plan. Public closing.".into();
+    assert!(crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
 }
 
 #[test]
@@ -1357,4 +1372,71 @@ fn uncertain_pause_stays_local_and_discard_never_finalizes_or_sends() {
         std::path::Path::new(&kept.chunks[0].file).exists()
             || dir.path().join(&kept.chunks[0].file).exists()
     );
+}
+
+#[test]
+fn remote_pause_scrubs_pending_turns_chunks_and_corrections_before_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Remote pause");
+    let id = &record.id;
+    streamed(&store, id, "me", 1000, "public opening", "");
+    let (tico, _, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    streamed(&store, id, "me", 4000, "secret streamed", "");
+    finished_chunk(
+        &store,
+        id,
+        5000,
+        8000,
+        vec![word(6000, 6300, "secret finished", "")],
+    );
+    // A correction queued before discovering the remote pause must also stay private.
+    store.db().unwrap().execute("INSERT INTO live_corrections(recording_id,destination_id,seq,revision,payload_json) VALUES(?, 'synthetic',1,2,?)",rusqlite::params![id, json!({"revision":2,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"secret correction"}).to_string()]).unwrap();
+    let (tico, _, worker) = server(vec![
+        Some(json!({"status":409,"error":{"code":"meeting_state","message":"paused"}})),
+        Some(json!({"state":"paused"})),
+    ]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert_eq!(
+        store.context(id).unwrap().paused_windows,
+        vec![(1000, None)]
+    );
+    let db = store.db().unwrap();
+    let pending: String = db.query_row("SELECT group_concat(payload_json) FROM live_outbox WHERE recording_id=? AND acknowledged=0", [id], |r|r.get(0)).unwrap();
+    assert!(!pending.contains("secret"));
+    let corrections: String = db.query_row("SELECT group_concat(payload_json) FROM live_corrections WHERE recording_id=? AND state=0", [id], |r|r.get(0)).unwrap();
+    assert!(!corrections.contains("secret"));
+    drop(db);
+    let store = Store::open(dir.path()).unwrap();
+    store
+        .mutate(id, |r| {
+            r.started_at = (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({})), Some(json!({"state":"live"}))]);
+    tico.sync_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert!(
+        !seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, p, _)| p.to_string().contains("secret"))
+    );
+    streamed(&store, id, "me", 12000, "public resumed", "");
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.push_live(&store, id).is_err());
+    worker.join().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2,3,4]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert!(!requests[0].1.to_string().contains("secret"));
+    assert!(requests[0].1.to_string().contains("public resumed"));
+    assert_eq!(store.get(id).unwrap().chunks[0].text, "secret finished");
 }
