@@ -242,6 +242,11 @@ ENTRIES = TEAM_RULES + [
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
       value="json", card=_card("repos", "set-repos"), words="run edit workflows actions ci product",
+      parts=(("Create bot repositories", "Private bot repositories in the connected organization"),
+             ("Create product repositories", "Private repositories with any other name; the bot gets write to each"),
+             ("Repository access", "Own repo only, All ticked repos or Chosen repos"),
+             ("Run workflows", "Start, rerun and cancel workflow runs (GitHub Actions: write)"),
+             ("Edit workflow files", "Create and change files in .github/workflows (GitHub Workflows: write)")),
       confirm_when=(("chosen.run_workflows", (True,)), ("chosen.edit_workflows", (True,)),
                     ("all_repos.run_workflows", (True,)), ("all_repos.edit_workflows", (True,)),
                     ("create_product_repositories", (True,))),
