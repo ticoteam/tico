@@ -1115,7 +1115,7 @@ fn individual_item_send_uses_durable_pause_discard_and_quote_guards() {
         }));
         assert!(app.sending.is_none());
         app.context = store.context(&record.id).unwrap();
-        let view = app.actions_view("Fixture");
+        let view = full_view(&mut app)["meeting"]["data"]["actions"].clone();
         assert_eq!(view["items"][0]["can_send"], false);
         assert!(view["items"][0]["send_blocked"].as_str().is_some());
     }
