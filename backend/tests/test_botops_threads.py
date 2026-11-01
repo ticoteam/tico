@@ -37,7 +37,7 @@ def test_botops_mutes_a_thread_for_the_person_who_asked_not_for_itself(api, boto
     _follow_route(api)
     tried = api.put(f"/api/v2/threads/{thread['id']}/follow", json={}, headers=headers(attempt["token"]))
     assert tried.status_code == 200, tried.text
-    assert tried.json() == {"actor": "human:ben"}
+    assert tried.json()["actor"] == "human:ben"    # the app adds actor_name to any response that names an actor
     with api.app.state.store.transaction() as c:
         rows = {r["actor"]: r["notify"] for r in
                 c.execute("SELECT actor, notify FROM thread_followers WHERE thread_id=?", (thread["id"],))}
