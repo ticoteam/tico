@@ -320,8 +320,9 @@ def proposal_error(c, kind, payload):
 
 def apply_proposal(c, kind, actor, payload):
     """A confirmed proposal, merged into the draft as the admin who confirmed it. Never published."""
-    merge(c, kind, actor, payload.get("sections") or {})
-    return {"sections": sorted(payload.get("sections") or {}), "draft": True}
+    sections = _body(kind, payload.get("sections"))   # a proposal filed before a section was retired
+    merge(c, kind, actor, sections)
+    return {"sections": sorted(sections), "draft": True}
 
 
 def kind_of_proposal(proposal_kind):

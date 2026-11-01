@@ -93,6 +93,16 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
     gtm = get(api, "gtm")
     assert gtm["published"] is None and gtm["draft"]["body"]["motion"] == {"primary": "local", "secondary": "self_serve"}
 
+    # A proposal filed before wishes were retired still confirms; the wishes are dropped.
+    old = post(api, "goal-proposals", {"kind": "gtm_draft", "reason": "Old", "payload": {
+        "sections": {"playbooks": ["Referrals"]}}}, token=ops)["proposal"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE goal_proposals SET payload_json=? WHERE id=?", (json.dumps(
+            {"sections": {"playbooks": ["Referrals"], "wishes": [{"text": "No cold SMS"}]}}), old["id"]))
+    post(api, f"goal-proposals/{old['id']}/decide", {"decision": "confirm"}, token="ben-test")
+    body = get(api, "gtm")["draft"]["body"]
+    assert body["playbooks"] == ["Referrals"] and "wishes" not in body
+
 
 def test_publish_emits_the_event_and_gtm_summary_names_motion_and_channels(api):
     draft(api, "gtm", {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners", "deal_size": "$90/month"}})
