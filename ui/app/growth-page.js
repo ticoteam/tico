@@ -1,6 +1,6 @@
-/* ui/app/growth-page.js — The Growth tab of Strategy (#/strategy/growth, docs: the growth spec §4): a framework picker
+/* ui/app/growth-page.js — The Growth section (#/growth, docs: the growth spec §4): its head and tabs; a framework picker
    (North Star · Loops · Journey · Bets × Channels · Experiments), each a view over the same ideas, KPIs, channels and bets;
-   Working now; + Idea; This week (#/strategy/growth/week). Channels and Learning are their own files
+   Working now; + Idea; This week (#/growth/week). Channels and Learning are their own files
    (growth-channels.js, growth-learning.js); the Idea panel on a task is growth-idea.js; Brand and Go-to-market are
    brand-page.js and gtm-page.js. Also what those files share: formats, chips, idea cards, a small dialog, the lists
    the forms pick from. Reads GET /api/v2/growth/{ideas,kpis,channels,settings,working,week} and GET /api/v2/strategy (bets).
@@ -8,8 +8,12 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const GR_ROUTE = '#/strategy/growth', GR_WEEK = GR_ROUTE + '/week', GR_CHANNELS = GR_ROUTE + '/channels',
-  GR_LEARNING = GR_ROUTE + '/learning', BRAND_ROUTE = '#/strategy/brand', GTM_ROUTE = '#/strategy/gtm';
+const GR_ROUTE = '#/growth', GR_WEEK = GR_ROUTE + '/week', GR_CHANNELS = GR_ROUTE + '/channels',
+  GR_LEARNING = GR_ROUTE + '/learning', BRAND_ROUTE = '#/strategy/brand', GTM_ROUTE = GR_ROUTE + '/gtm';
+// Where Growth and Go-to-market lived, under Strategy: redesignRoute sends them here.
+const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
+const GR_TABS = [['', GR_ROUTE, 'Overview'], ['week', GR_WEEK, 'This week'], ['channels', GR_CHANNELS, 'Channels'],
+  ['learning', GR_LEARNING, 'Learning'], ['gtm', GTM_ROUTE, 'Go-to-market']];
 let GR = null;            // the open Growth page: {load, sub, data, fw}
 let GR_LOAD = 0;
 const GR_FW_KEY = 'tico.growth.framework';
@@ -166,6 +170,16 @@ async function grPropose(button) {
 }
 
 // ----------------------------------------------------------------- the page
+// The Growth section's heading: its tabs, and the current page's actions on the right (#strat-actions).
+function growthHead(tab) {
+  return `<div class="strat-head rd-strat-head gr-head"><h1>Growth</h1>
+      <nav class="tabs slim strat-tabs" aria-label="Growth">${GR_TABS.map(([id, href, label]) =>
+        `<a href="${href}" data-gr-tab="${id || 'overview'}"${tab === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>
+      <span class="spacer"></span><div class="strat-actions" id="strat-actions"></div></div>`;
+}
+// What a Growth page puts above its body now that its name is the current tab: its tools, if any.
+const grTools = (tools = '') => tools ? `<div class="gr-crumbs"><span class="spacer"></span>${tools}</div>` : '';
+
 // After every route: forget each of the Growth, Brand and Go-to-market pages once off it, so a late answer for one
 // never draws over another (each page's reads check that its own state is still the open one).
 window.growthStop = function growthStop() {
@@ -186,7 +200,7 @@ function pageGrowth() {
   GR = {load, sub, data: null, fw: ''};
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
-  main.innerHTML = redesignStrategyHead('growth') + `<div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;
+  main.innerHTML = growthHead(['channels', 'learning', 'week'].includes(sub) ? sub : '') + `<div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;
   if (sub === 'channels') return pageGrowthChannels(GR);
   if (sub === 'learning') return pageGrowthLearning(GR);
   if (sub === 'week') return void growthWeek(GR);
@@ -212,8 +226,7 @@ async function growthMain(state) {
 function growthMainDraw(state) {
   const d = state.data, body = $('#gr-body');
   if (!body || !d) return;
-  patchHTML($('#strat-actions'), `<a class="ghost gr-btn" href="${GR_WEEK}">This week</a><a class="ghost gr-btn" href="${GR_CHANNELS}">Channels</a>`
-    + `<a class="ghost gr-btn" href="${GR_LEARNING}">Learning</a>${grLead() ? '<button class="ghost" type="button" data-gr-propose>Propose ideas</button>' : ''}`
+  patchHTML($('#strat-actions'), (grLead() ? '<button class="ghost" type="button" data-gr-propose>Propose ideas</button>' : '')
     + '<button class="primary" type="button" data-gr-new>+ Idea</button>');
   const view = grView(state.fw, d);
   const now = d.working.length ? `<aside class="card gr-now" aria-label="Working now"><h2 class="gr-k">Working now</h2>${d.working.map(w =>
@@ -319,7 +332,7 @@ function grExperiments(d) {
 async function growthWeek(state) {
   let w, chans = [];
   try { [w, chans] = await Promise.all([get('/v2/growth/week', {fresh: true}), get('/v2/growth/channels').then(r => r.channels || []).catch(() => [])]); }
-  catch (e) { if (GR === state) $('#gr-body').innerHTML = grCrumbs(GR_ROUTE, 'Growth', 'This week') + grFail(e); return; }
+  catch (e) { if (GR === state) $('#gr-body').innerHTML = grFail(e); return; }
   if (GR !== state) return;
   const row = i => `<a class="gr-row" href="${grTaskHref(i.task_id)}"><span class="gr-row-t">${esc(i.title)}</span>${grStatus(i.status)}`;
   const sec = (title, inner, cls = '') => inner ? `<section class="card gr-sec${cls ? ' ' + cls : ''}"><h3 class="gr-k">${esc(title)}</h3>${inner}</section>` : '';
@@ -331,6 +344,6 @@ async function growthWeek(state) {
   const top = (w.top_ideas || []).map(i => `${row(i)}<span class="gr-ice">ICE ${esc(grX(i.ice))}</span></a>`).join('');
   const verdicts = (w.recent_verdicts || []).map(i => `<a class="gr-row gr-row-v" href="${grTaskHref(i.task_id)}"><span class="gr-row-t">${esc(i.title)}</span>${grStatus(i.status)}
     <span class="muted gr-num">${esc(grDay(i.verdict_at))}</span>${i.result || i.learning ? `<span class="gr-row-l">${esc([i.result, i.learning].filter(Boolean).join(' · '))}</span>` : ''}</a>`).join('');
-  $('#gr-body').innerHTML = grCrumbs(GR_ROUTE, 'Growth', 'This week') + `<div class="gr-week">
+  $('#gr-body').innerHTML = `<div class="gr-week">
     ${sec('Guardrails', guards, 'gr-amber')}${sec('Readings', readings)}${sec('Tests due', due)}${sec('Top ideas', top)}${sec('Verdicts', verdicts)}</div>`;
 }

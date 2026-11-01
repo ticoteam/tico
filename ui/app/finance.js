@@ -65,7 +65,7 @@ function finHref(path, params = {}) {
 }
 
 // ----------------------------------------------------------------- the sidebar
-// Finance shows in the rail once Finance is set up and the viewer sees something in it; it sits under Strategy.
+// Finance shows in the rail once Finance is set up and the viewer sees something in it; it sits under Strategy and Growth.
 function finNavSync() {
   const nav = $('#side .side-scroll'); if (!nav) return;
   const link = nav.querySelector('a[data-nav="finance"]');
@@ -74,7 +74,7 @@ function finNavSync() {
   const a = Object.assign(document.createElement('a'), {className: 'nav-link', href: FIN_ROUTE,
     innerHTML: '<span class="nav-icon" aria-hidden="true">account_balance_wallet</span>Finance'});
   a.dataset.nav = 'finance';
-  const after = nav.querySelector('a[data-nav="strategy"]');
+  const after = nav.querySelector('a[data-nav="growth"]') || nav.querySelector('a[data-nav="strategy"]');
   if (after) after.after(a); else nav.prepend(a);
   renderTree();
 }

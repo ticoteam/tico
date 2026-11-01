@@ -33,8 +33,9 @@ removes a thing.
 - **Brand and GTM.** Two cards beside the Summary: the Brand strip (name, positioning, colours, voice, never-say) and the
   Go-to-market card (motion, buyer, channels, North Star and target). Each opens its full page, is versioned on its own,
   and is published by the owner. See [Growth](growth.md#brand-and-gtm-cards).
-- **Growth.** The Growth tab (`#/strategy/growth`) beside Market: ideas, tests, verdicts, channel economics and the
-  frameworks. See [Growth](growth.md).
+- **Growth.** Its own section under Strategy in the sidebar (`#/growth`; the old `#/strategy/growth` and
+  `#/strategy/gtm` addresses redirect): ideas, tests, verdicts, channel economics, the frameworks and the Go-to-market
+  page. See [Growth](growth.md).
 - **Summary.** At most 400 characters, drafted from the bets and edited by the owner. It is the one line on top and the
   text every bot gets in its run context.
 - **Vision.** Stored, not shown on the page. The Goals page reads it from here and, when it is empty, reads the
