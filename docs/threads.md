@@ -108,6 +108,8 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
 - `GET /api/v2/threads?with=<actor>&cursor=&limit=`: the threads shared with that actor that you can read.
 - `PUT` and `DELETE /api/v2/messages/{id}/reactions/{emoji}`: add or remove your reaction.
 - `POST /api/v2/threads/{id}/open-earlier`: a bot's manager opens its earlier messages to its Home readers.
+- `POST /api/v2/uploads/threads/{id}/messages`: a person posts a message with files attached (multipart, `text` and
+  `files`), under the chat upload size caps. It is not in the CLI or MCP yet.
 
 ## Webhooks
 
