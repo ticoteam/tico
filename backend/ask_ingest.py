@@ -293,11 +293,14 @@ def preflight(store, primary, who, target, title, text, kind="task"):
             person = H.resolve_actor(c, target)
             if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
                 return None
+            # The verdict exists before anything that can raise (the settings read included), so a failure after the
+            # person is known still lands a failed_open row (PR 1798's contract).
+            verdict = {"person": person, "asker": who.actor, "kind": kind, "mode": None, "answers": None,
+                       "items": {}, "criteria": {}, "call": None, "error": None}
             own = settings(c, person)
             if own["mode"] == OFF:
                 return None
-            verdict = {"person": person, "asker": who.actor, "kind": kind, "mode": own["mode"], "answers": None,
-                       "items": {}, "criteria": {}, "call": None, "error": None}
+            verdict["mode"] = own["mode"]
             try:
                 qset = J.load_set(QUESTION_SET)
             except J.JudgeError as exc:

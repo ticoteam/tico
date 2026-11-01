@@ -1095,3 +1095,23 @@ def test_a_call_with_neither_a_row_nor_a_reason_is_shown_as_unexplained(gate):
         H.event(c, H.KEEPER, "judge.call", "person-ask-ingest@1", {"label": "person-ask-ingest@1", "mode": "on"})
     row = next(r for r in get(api, "judge/readout")["sets"] if r["set"] == A.QUESTION_SET)
     assert row["reconcile"]["unexplained"] == 1 and row["reconcile"]["calls"] == 1
+
+
+def test_a_settings_failure_before_the_verdict_keeps_the_failed_open_record(gate, monkeypatch):
+    """The settings read is the first thing preflight does after the person is known: a failure there still writes
+    the failed_open row, and the create still succeeds (Dev 702 QA)."""
+    api, model, token = gate
+    real, seen = A.settings, []
+
+    def fails_once(c, person):
+        if not seen:
+            seen.append(person)
+            raise RuntimeError("settings unreadable")
+        return real(c, person)
+    monkeypatch.setattr(A, "settings", fails_once)
+    out = file(api, token)
+    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    [item] = items(api)
+    assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
+    assert item["ref"] == out["task"]["id"] and item["call_id"] is None
+    assert not calls(api) and not model.calls
