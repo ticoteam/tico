@@ -167,6 +167,7 @@ async function scenario(browser, mode, edit, editedBefore = false) {
       assert.equal(delivered.length, 1, 'one successful delivery');
       assert.equal(delivered[0].body, sentText, 'the edited text is the text sent');
       if (!edit) {
+        await page.waitForFunction(() => getComputedStyle(document.querySelector('#chat-composer .p-send')).opacity === '0.45');   // after its fade
         assert.equal(await send.evaluate(button => getComputedStyle(button).opacity), '0.45', 'the empty composer dims Send');
         await box.press('Enter');
         await send.evaluate(button => button.click());

@@ -93,7 +93,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   // The chat: one stream for the page, following this conversation; a change to it reads the snapshot once.
   snapshot = {messages: [...snapshot.messages, {id: 'm2', from_actor: 'bot:coo', body: 'The notes are in the doc.', created: now}], execution: null};
   const first = await send(following, block(10, 'ready', {}), block(11, 'messages', {id: 'm2', conversation_id: 'c-ops', message: snapshot.messages[1]}));
-  assert.deepEqual(first.searchParams.get('topics').split(',').sort(), ['bots', 'messages', 'needs', 'runs'], 'no task changes on a page with no task');
+  assert.deepEqual(first.searchParams.get('topics').split(',').sort(), ['bots', 'messages', 'needs', 'runs', 'threads'], 'no task changes on a page with no task');
   assert.equal(first.searchParams.get('party'), null);
   await page.getByText('The notes are in the doc.').waitFor();
   // Settled: no snapshot read queued, running or asked for again.
