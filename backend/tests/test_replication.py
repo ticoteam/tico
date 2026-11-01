@@ -204,7 +204,8 @@ def entrypoint(tmp_path, *args, command="restore", env=None):
     extra = env or {}
     env = {**os.environ, "PATH": f"{bin_dir}:{Path(__import__('sys').executable).parent}:{os.environ['PATH']}",
            "TICO_DATA_DIR": str(data), "TICO_BACKUP_DIR": str(backups), "PYTHONPATH": str(ROOT),
-           "STUB_LOG": str(tmp_path / "stub.log"), "STUB_DB": str(source), **extra}
+           "STUB_LOG": str(tmp_path / "stub.log"), "STUB_DB": str(source),
+           "TICO_LITESTREAM_CONFIG": str(tmp_path / "litestream.yml"), **extra}   # not the shared /tmp default: xdist workers race on it
     if "TICO_BACKUP_URL" not in extra:    # an inherited bucket setting must not reach the tests; one a test passes is its own
         env.pop("TICO_BACKUP_URL", None)
     # An inherited BASH_ENV can restore the turn's PATH and run real litestream and uvicorn instead of the stubs.
