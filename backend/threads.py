@@ -65,6 +65,7 @@ REASONS = ("dm", "mention", "ask", "assign", "addressed", "home", "sub_thread", 
 STATES = ("pending", "delivered", "read", "capped", "held", "failed", "moot")
 NOTIFY = ("live", "mentions", "digest", "muted")
 OUTSIDE_PREFIXES = ("slack:", "peer:")
+REMOTE_ACTOR = re.compile(r"^(human|bot):[^@\s]+@([^@\s]+)$")   # a federation guest: <kind>:<name>@<install>
 LOOP_GUARD_PER_HOUR = int(os.environ.get("TICO_THREAD_LOOP_GUARD") or 6)
 MIGRATION_KEY = "threads-migration"
 STRATEGY_ROOM = "ceo"           # rooms.STRATEGY_ROOM, read here without importing rooms
@@ -662,6 +663,8 @@ def audience_has(c, thread, actor, *, viewer_=None):
     root = root_of(c, thread)
     if root is None:
         return False
+    if remote_guest(c, actor):
+        return remote_member(c, root, actor)
     v = viewer_ or actor_viewer(c, actor)
     if v is None:
         return False
@@ -970,7 +973,7 @@ def record(c, message, conv):
 
 
 def _follow(c, thread_id, actor, reason, seq=None):
-    if not actor or not str(actor).startswith(("human:", "bot:")):
+    if not actor or not str(actor).startswith(("human:", "bot:")) or remote_guest(c, actor):
         return
     now = _now()
     c.execute("INSERT OR IGNORE INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,"
@@ -1247,6 +1250,16 @@ def capped(c, v):
     return out
 
 
+def _involved(c, v, root):
+    """The viewer owns the root, is a member or participant, or follows it: whose Needs attention its holds are."""
+    if root.get("owner_actor") == v.actor or v.actor in (root.get("participants") or []):
+        return True
+    if _is_member(c, v, root["id"]):
+        return True
+    return c.execute("SELECT 1 FROM thread_followers WHERE thread_id=? AND actor=? AND following=1",
+                     (root["id"], v.actor)).fetchone() is not None
+
+
 def resume_capped(c, root_id, *, limit=None):
     """Let capped wakes in this root go, oldest first: each starts its run through a carrier. A person posting in the
     root lets them all go; the scheduler (`reopen_windows`) lets go as many as the reopened window allows."""
@@ -1286,11 +1299,42 @@ def _actor_of(principal):
     return (v.actor if v else str(principal or "")), v
 
 
+def remote_install(actor):
+    """The install a remote author belongs to (`human:ana@<install>`, `bot:legal@<install>`), else None."""
+    match = REMOTE_ACTOR.match(str(actor or ""))
+    return match.group(2) if match else None
+
+
+def remote_guest(c, actor):
+    """`remote_install` for an actor not on this roster: a federation guest (a local id with an @ is a teammate)."""
+    install = remote_install(actor)
+    return install if install and H.resolve_actor(c, actor) is None else None
+
+
+def remote_member(c, root, actor):
+    """C1 for a remote author (a guest): a member row for it, or for its install's link (`peer:<install>`), on the
+    root. Never an owner, never Manage, no in-turn grant."""
+    install = remote_guest(c, actor)
+    if not install or root is None:
+        return False
+    return c.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (?,?) LIMIT 1",
+                     (root["id"], actor, "peer:" + install)).fetchone() is not None
+
+
 def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None, via=None,
-         origin=None, checked=None, replay=None, attachments=None):
+         origin=None, checked=None, attachments=None, as_actor=None):
     """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
-    preflight returned outside it."""
+    preflight returned outside it. `as_actor`: a remote author (federation, spec §7.2), only for the keeper writing
+    `via="peer"`, and only in the signing install's namespace (`<kind>:<name>@<origin install>`)."""
     actor, v = _actor_of(principal)
+    if as_actor is not None:
+        install = str((origin or {}).get("install") or "")
+        if actor != H.KEEPER or v is not None or via != "peer" or not install:
+            raise Problem("forbidden", "Only the keeper writes as a remote author, for a peer", 403)
+        namespaced = re.fullmatch(r"(human|bot):[^@\s]+@" + re.escape(install), str(as_actor))
+        if not namespaced or not remote_guest(c, as_actor):
+            raise Problem("actor", "A remote author is in its signer's namespace: <kind>:<name>@" + install, 422)
+        actor = as_actor                 # the author from here on; the keeper only carried it in
     if origin and origin.get("origin_id"):
         found = c.execute("SELECT message_id FROM message_revisions WHERE origin_id=? AND revision=?",
                           (origin["origin_id"], int(origin.get("revision") or 0))).fetchone()
@@ -1312,12 +1356,17 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
             raise Problem("not_found", "Thread not found", 404)
         if not can_post(c, v, thread):
             raise Problem("forbidden", "You can read this thread but not post in it", 403)
+    if as_actor is not None:
+        if not remote_member(c, root_of(c, thread), as_actor):
+            raise Problem("not_found", "Thread not found", 404)
+        if kind not in ("say", "ask", "answer"):
+            raise Problem("kind", "A remote author says, asks or answers", 422)
     if kind not in ("say", "ask", "answer", "notice", "steer"):
         raise Problem("kind", "A message is say, ask, answer, notice or steer", 422)
     text = str(body or "")
     if not text.strip() and not attachments:
         raise Problem("empty", "Write the message", 422)
-    refs = dict(refs or {})
+    given_refs, refs = refs, dict(refs or {})
     if via:
         refs["via"] = via
     if quiet_notice({"refs": refs}):
@@ -1341,10 +1390,14 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
         target = others[0] if len(others) == 1 else None
     if checked is not None:
         # The org-rule verdict its preflight returned, applied inside the write: a hold writes nothing (no message, no
-        # delivery) and answers with the hold; a warning goes on the recipients' copy. `replay` is what Send anyway
-        # runs (org_rule_check's threads replayer: this post as the recorded principal, the check skipped).
+        # delivery) and answers with the hold; a warning goes on the recipients' copy. The payload is the body the
+        # reviewer reads; `replay` is what Send anyway runs (org_rule_check's `threads` replayer: this post again as
+        # the person it was held for, the check skipped). Callers preflight with operation `threads`.
         from . import org_rule_check
-        gate = org_rule_check.apply(c, checked, {"thread_id": thread["id"], "body": text}, replay)
+        replay = {"thread_id": thread_id, "body": text, "kind": kind, "refs": given_refs or None,
+                  "parent_message_id": parent_message_id, "to_actor": to_actor, "via": via, "origin": origin,
+                  "attachments": attachments}
+        gate = org_rule_check.apply(c, checked, text, replay)
         if gate and gate.get("moved"):
             raise Problem("moved", "The thread changed while the message was checked; send it again", 409,
                           retryable=True)
@@ -1355,7 +1408,9 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
             text = org_rule_check.warned_text(gate, text)
     token = POSTING.set({"origin": origin or {}, "attachments": bool(attachments), "via": via})
     try:
-        if target and not str(target).startswith(OUTSIDE_PREFIXES):
+        if as_actor is not None:
+            message = H._write_message(c, as_actor, target, text, thread, kind, refs, None, None)
+        elif target and not str(target).startswith(OUTSIDE_PREFIXES):
             message = H.say(c, actor, target, text, thread["id"], kind, refs)
         else:
             message = _write_open(c, actor, text, thread, kind, refs, target)
@@ -1466,8 +1521,8 @@ def _require_write(c, v, target):
     if v is None:
         return
     from . import teammate_access
-    if str(target).startswith(OUTSIDE_PREFIXES):
-        return
+    if str(target).startswith(OUTSIDE_PREFIXES) or remote_guest(c, target):
+        return                           # an outside destination or a remote guest: not a teammate here
     try:
         levels = teammate_access.levels_for(c, v.who, target, auth=v.auth)
     except (ValueError, KeyError):
@@ -1686,11 +1741,13 @@ def _root_for_membership(c, principal, thread_id):
 
 def add_member(c, principal, thread_id, actor, *, role="member"):
     me, v, root = _root_for_membership(c, principal, thread_id)
-    target = actor if str(actor).startswith(("group:",) + OUTSIDE_PREFIXES) else H.resolve_actor(c, actor)
+    target = actor if remote_guest(c, actor) or str(actor).startswith(("group:",) + OUTSIDE_PREFIXES) else H.resolve_actor(c, actor)
     if not target:
         raise Problem("not_found", "Unknown teammate", 404)
     if role not in ("owner", "member"):
         raise Problem("role", "A member is owner or member", 422)
+    if role == "owner" and (remote_guest(c, target) or str(target).startswith(OUTSIDE_PREFIXES)):
+        raise Problem("role", "A remote member is a guest, never an owner", 422)
     if role == "owner" and v is not None and not can_manage(c, v, root):
         raise Problem("forbidden", "Only the thread's owner adds an owner", 403)
     if v is not None and not can_post(c, v, root):
@@ -2069,10 +2126,12 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
             subs[s["parent_message_id"]] = {"id": s["id"], "count": n, "last_seq": s["last_seq"],
                                             "unread": u["unread"], "more": n > 0}
     marks = reactions(c, ids)
+    # Every message sits at its thread's depth in the tree: 0 in a root, 1 in a sub-thread, and so on (`path`).
+    depth = max(0, len([p for p in str(row.get("path") or f"/{row['id']}/").split("/") if p]) - 1)
     out, size, hidden_open = [], 0, False
     for m in rows:
         if m.get("deleted_at"):
-            item = {**_message_out(m), "depth": 0}
+            item = {**_message_out(m), "depth": depth}
             hidden_open = False
         elif not message_readable(c, v, m, thread_checked=True):
             if hidden_open:
@@ -2080,7 +2139,7 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
             item = {"id": m["id"], "seq": m["seq"], "thread_id": row["id"], "hidden": True}
             hidden_open = True
         else:
-            item = {**_message_out(m), "depth": 0}
+            item = {**_message_out(m), "depth": depth}
             hidden_open = False
         if m["id"] in subs and not item.get("hidden"):
             item["sub_thread"] = subs[m["id"]]
@@ -2132,7 +2191,17 @@ def sidebar(c, v, *, cursor=None, limit=50):
         if budget < 0 or len(found) >= limit:
             break
         found.append(item)
-    attention = [t for t in found if t["me"]["unread"] and t["audience"] in ("personal", "participants")]
+    # Needs attention: threads with unread mentions, asks or DM messages (the `unread` counter), then every root the
+    # viewer is in whose bots' wakes the loop guard holds (`capped`, whichever page it is on): a person's post there
+    # lets them go.
+    attention = [t for t in found if t["me"]["unread"]]
+    listed = {t["id"] for t in attention}
+    for row in capped(c, v):
+        root = thread_row(c, row["root_id"])
+        if root is None or root["id"] in listed or not _involved(c, v, root):
+            continue
+        attention.append({**view(c, v, root), "capped": row["count"], "capped_since": row["oldest"]})
+        listed.add(root["id"])
     dms = [t for t in found if t["audience"] in ("personal", "participants")]
     threads = [t for t in found if t["audience"] not in ("personal", "participants")]
     tail = found[-1] if found else None

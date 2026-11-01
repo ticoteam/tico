@@ -80,7 +80,8 @@ def test_a_members_thread_reaches_only_its_members_and_a_mention_grants_nothing(
         member, outsider = [a for a in people(who) if a != owner.actor][:2]
         tid = threads.create(c, owner, title="Pricing", audience="members", members=[member])["id"]
         name = H.human(c, H.actor_id(outsider))["name"] or H.actor_id(outsider)
-        threads.post(c, owner, tid, f"cc @{H.actor_id(outsider)} @{name}")
+        sent = threads.post(c, owner, tid, f"cc @{H.actor_id(outsider)} @{name}")
+        assert {(w["rule"], w["actor"]) for w in sent.get("warnings") or []} == {("mention_outside", outsider)}
     with store.read_transaction() as c:
         assert threads.readable(c, threads.viewer(auth, who[member]), tid)
         assert not threads.readable(c, threads.viewer(auth, who[outsider]), tid)
@@ -99,19 +100,20 @@ def test_a_held_post_writes_no_message_and_no_delivery(world, monkeypatch):
     seen = {}
 
     def apply(c, verdict, payload=None, replay=None, **_):
-        seen["replay"] = replay
+        seen["payload"], seen["replay"] = payload, replay
         return {"held": {"id": "hold-1", "rule": "No prices"}}
 
     monkeypatch.setattr(org_rule_check, "apply", apply)
     with store.transaction() as c:
         before = (c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
                   c.execute("SELECT COUNT(*) FROM message_deliveries").fetchone()[0])
-        answer = threads.post(c, owner, tid, "The price is $10", checked={"outcome": "broken"}, replay={"op": "x"})
+        answer = threads.post(c, owner, tid, "The price is $10", checked={"outcome": "broken"})
         after = (c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
                  c.execute("SELECT COUNT(*) FROM message_deliveries").fetchone()[0])
     assert answer == {"held": {"id": "hold-1", "rule": "No prices"}}
     assert after == before
-    assert seen["replay"] == {"op": "x"}
+    assert seen["payload"] == "The price is $10"
+    assert seen["replay"]["thread_id"] == tid and seen["replay"]["body"] == "The price is $10"
 
 
 def test_a_warned_post_writes_the_warned_text(world, monkeypatch):
@@ -219,9 +221,12 @@ def test_the_loop_guard_defers_bot_wakes_and_lets_them_go(world, monkeypatch):
         assert capped >= 1, "past the guard a bot-to-bot wake waits"
         assert c.execute("SELECT COUNT(*) FROM messages WHERE conversation_id=? AND body LIKE 'turn %'",
                          (tid,)).fetchone()[0] == 4, "the messages themselves are all written"
+        attention = threads.sidebar(c, owner)["attention"]
+        assert [t["capped"] for t in attention if t["id"] == root] == [capped], "the owner sees the held wakes"
         threads.resume_capped(c, root)
         assert c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'",
                          (root,)).fetchone()[0] == 0
+        assert not [t for t in threads.sidebar(c, owner)["attention"] if t.get("capped")]
 
 
 # ----------------------------------------------------------------------------- C3: inbox readers read deliveries
@@ -388,4 +393,39 @@ def test_a_sub_thread_is_titled_by_its_parents_first_line_and_keeps_it(world):
         assert sub["subject"] == "Budget for Q3 is ready"
         threads.edit_message(c, owner, parent["id"], "Changed")
         assert threads.thread_row(c, sub["id"])["subject"] == "Budget for Q3 is ready"
+        threads.post(c, owner, sub["id"], "A reply")
+        assert {m["depth"] for m in threads.timeline(c, owner, tid)["messages"]} == {0}
+        assert {m["depth"] for m in threads.timeline(c, owner, sub["id"])["messages"]} == {1}
     assert threads.sub_thread_title("word " * 30).endswith("…") and len(threads.sub_thread_title("word " * 30)) <= 61
+
+
+# ----------------------------------------------------------------------------- federation: remote authors are guests
+def test_a_remote_author_writes_only_through_the_keeper_in_its_installs_namespace_and_only_where_linked(world):
+    store, auth, who = world
+    origin = {"origin_id": "0190aaaa-0000-7000-8000-000000000001", "revision": 0, "install": "peer.acme.example"}
+    with store.transaction() as c:
+        owner = threads.viewer(auth, owner_of(c, auth))
+        linked = threads.create(c, owner, title="Partner", audience="members", members=[])["id"]
+        other = threads.create(c, owner, title="Inside", audience="members", members=[])["id"]
+        threads.add_member(c, owner, linked, "peer:peer.acme.example")
+        with pytest.raises(Problem) as owner_role:
+            threads.add_member(c, owner, linked, "human:ana@peer.acme.example", role="owner")
+        assert owner_role.value.status == 422, "a remote member is never an owner"
+        for principal, actor, via in ((owner, "human:ana@peer.acme.example", "peer"),
+                                      (H.KEEPER, "human:ana@peer.acme.example", None)):
+            with pytest.raises(Problem) as refused:
+                threads.post(c, principal, linked, "hi", as_actor=actor, via=via, origin=origin)
+            assert refused.value.status == 403
+        with pytest.raises(Problem) as spoofed:
+            threads.post(c, H.KEEPER, linked, "hi", as_actor="human:ana@other.acme.example", via="peer", origin=origin)
+        assert spoofed.value.status == 422, "a peer writes only in its own namespace"
+        with pytest.raises(Problem) as unlinked:
+            threads.post(c, H.KEEPER, other, "hi", as_actor="human:ana@peer.acme.example", via="peer", origin=origin)
+        assert unlinked.value.status == 404, "C1 for a remote author is membership"
+        sent = threads.post(c, H.KEEPER, linked, "Hello from the partner", as_actor="human:ana@peer.acme.example",
+                            via="peer", origin=origin)
+        assert sent["from_actor"] == "human:ana@peer.acme.example"
+        again = threads.post(c, H.KEEPER, linked, "Hello from the partner", as_actor="human:ana@peer.acme.example",
+                             via="peer", origin=origin)
+        assert again["id"] == sent["id"], "a repeat (origin_id, revision) writes nothing"
+        assert not c.execute("SELECT 1 FROM thread_followers WHERE actor=?", ("human:ana@peer.acme.example",)).fetchone()

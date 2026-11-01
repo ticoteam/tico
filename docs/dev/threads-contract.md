@@ -91,7 +91,8 @@ and **no `seq`**: timelines, counters, search and SSE thread views never show it
 
 ```sql
 -- Access membership (C2). Only for audience members|personal|participants. actor: 'human:<id>' | 'bot:<slug>' |
--- 'group:<id>' (resolved live, people and bots, nested) | 'peer:<install>:<actor>' (federation).
+-- 'group:<id>' (resolved live, people and bots, nested) | 'peer:<install>' (a linked install) |
+-- '<human|bot>:<name>@<install>' (a remote guest, federation).
 CREATE TABLE IF NOT EXISTS thread_members (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, actor TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner','member')),
@@ -228,7 +229,7 @@ threads.AUDIENCES, threads.PRIVATE_AUDIENCES, threads.SAFE_REF_KEYS
 
 ```python
 threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None,
-             via=None, origin=None, checked=None, replay=None, attachments=None) -> message view
+             via=None, origin=None, checked=None, attachments=None) -> message view
 ```
 - `c`: inside the caller's write transaction (`mutate`/`store.transaction`). `principal`: a `threads.viewer(...)`, or
   an actor string for system writes (`keeper`, a migration) which skip C1.
@@ -240,10 +241,12 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
   `{"origin_id", "revision", "install", "actor"}` for replicated inbound (Slack, federation); a repeat
   `(origin_id, revision)` returns the existing message and writes nothing.
 - `checked`: the org-rule verdict from `org_rule_check.preflight` (step 5, done by the caller **outside** the
-  transaction). `post` applies it with `org_rule_check.apply(c, checked, payload, replay)` and reads **apply's
-  return**: held → returns `org_rule_check.answer(gate)` and writes no message and no delivery; warn → the warned
-  text is written; moved → 409 `moved` (retryable). `replay`: what Send anyway runs (the rules-people track's
-  `threads` replayer: `threads.post` as the recorded principal, the check skipped).
+  transaction, operation `threads`). `post` applies it with `org_rule_check.apply(c, checked, body, replay)` (the
+  payload is the body text) and reads **apply's return**: held → returns `org_rule_check.answer(gate)` and writes no
+  message and no delivery; warn → the warned text is written; moved → 409 `moved` (retryable). `post` builds
+  `replay = {"thread_id", "body", "kind", "refs", "parent_message_id", "to_actor", "via", "origin", "attachments"}`
+  from its own arguments: what Send anyway runs (the rules-people track's `threads` replayer: `threads.post` again as
+  the person it was held for, the check skipped).
 
 Step order (§3.1): (1) the caller authenticated `principal` (actor, represented principal, provenance); (2) C1 post
 right (`can_post`); (3) server mention parse (`threads.mentions(c, thread, body)`); (4) screening for outside
@@ -290,7 +293,9 @@ threads.update(c, principal, thread_id, *, title=None, archived=None)
 ```
 - Posting, being mentioned or owning the thread's task sets `following=1` (reason posted|mentioned|task).
 - **Mentions and following never grant access.** A mention outside the audience writes `in_audience=0`, no
-  delivery, and returns `warnings: [{"rule": "mention_outside", "actor": ...}]` to the author.
+  delivery, and returns `warnings: [{"rule": "mention_outside", "actor": ...}]` to the author: on the result of
+  `threads.post`, `hubdb.say` and every route built on them (REST answers the dict as is; CLI/MCP print it), beside
+  any writing-lint warnings.
 
 ### 3.4 Edit and delete (§3.5)
 
@@ -476,9 +481,9 @@ Thread view (`threads.view(c, viewer, row)`):
 
 | Route | Service function |
 |---|---|
-| `GET /api/v2/threads?cursor=&limit=` | `threads.sidebar(c, viewer, cursor=None, limit=50)` → `{"attention": [...], "threads": [...], "dms": [...], "next_cursor"}` |
+| `GET /api/v2/threads?cursor=&limit=` | `threads.sidebar(c, viewer, cursor=None, limit=50)` → `{"attention": [...], "threads": [...], "dms": [...], "next_cursor"}`; `attention`: threads with `me.unread` (mentions, asks, DM messages), then every root the viewer owns, is in or follows that holds capped wakes, each with `"capped": n, "capped_since"` |
 | `GET /api/v2/threads/{id}` | `threads.get(c, viewer, thread_id)` → thread view + `"breadcrumb": [{"id","title"}]` |
-| `GET /api/v2/threads/{id}/timeline?cursor=&limit=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=...)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor"}`; each message carries `depth`, and a parent carries `"sub_thread": {"id", "count", "last_seq", "unread", "more"}` |
+| `GET /api/v2/threads/{id}/timeline?cursor=&limit=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=...)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor"}`; each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "count", "last_seq", "unread", "more"}` |
 | `POST /api/v2/threads/{id}/read {seq}` | `threads.mark_read` |
 | `POST /api/v2/threads/{id}/read-all` | `threads.mark_all_read` |
 | `GET /api/v2/threads/search?q=` | T2 (FTS5), filtered by `threads.readable` per message |
@@ -504,6 +509,13 @@ Timeline messages: the existing message view plus `thread_id`, `root_id`, `seq`,
   puts the reply in that message's sub-thread when it is in the run's thread tree (else the run's thread).
 - Slack/federation inbound: `threads.post(..., via="slack"|"peer", origin={...})`; edits and deletes:
   `threads.apply_revision`.
+- Remote authors (spec §7.2): `threads.post(c, "keeper", thread_id, body, via="peer", origin={..., "install": I},
+  as_actor="human:ana@I")`. Only the keeper principal with `via="peer"` may pass `as_actor` (else 403); it must match
+  `^(human|bot):[^@]+@<origin.install>$` and not be a local teammate (else 422); kind say|ask|answer. It is stored
+  as `from_actor`. Remote actors are guests: C1 for them is a `thread_members` row on the root for the actor or for
+  `peer:<install>` (else 404, and `audience_has` is false); never an owner (`add_member(..., role="owner")` → 422),
+  never Manage, no bot in-turn grant, no follower rows. `threads.remote_guest(c, actor)` → the install or None.
+  Federation may call with the keyword and fall back without it.
 - `threads.remove_outside_member(c, principal, thread_id, actor) -> {"thread_id", "recipient", "removed"}` takes a
   `slack:`/`peer:` destination off a thread (Manage on the thread or an admin; an actor-string principal must be
   `keeper`); its pending deliveries become `moot`; audit row and `thread.outside_removed` event. Bridges call this,
