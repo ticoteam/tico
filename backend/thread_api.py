@@ -234,3 +234,4 @@ def install(app, store, auth, mutate, rule_check):
                     ready.append(True)
 
     search_index()
+    app.state.thread_index = search_index     # context search asks for the index before it reads
