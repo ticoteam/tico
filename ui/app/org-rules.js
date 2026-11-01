@@ -577,17 +577,27 @@ function ruWhereKind(where) {
   if (t.startsWith('thread:')) return {kind: 'thread', team: '', thread: t.slice(7)};
   return {kind: 'other', team: '', thread: ''};
 }
-// The threads the viewer can read, newest first, for the Where picker. The conversations list checks each one.
-const RU_THREADS = 200;
+// The threads the viewer can read, for the Where picker: the threads sidebar (GET /v2/threads, which checks each one),
+// a page at a time, newest activity first. Root threads only: a sub-thread's place is its root's.
+const RU_THREADS = 200, RU_THREAD_PAGES = 4;
 async function ruThreadList() {
-  const page = await get('/v2/conversations', {fresh: true}).catch(() => null);
-  return (page?.conversations || []).slice(0, RU_THREADS);
+  const out = new Map();
+  let cursor = '';
+  for (let i = 0; i < RU_THREAD_PAGES && out.size < RU_THREADS; i++) {
+    const page = await get('/v2/threads?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), {fresh: true})
+      .catch(() => null);
+    if (!page) break;
+    for (const t of [...(page.attention || []), ...(page.threads || []), ...(page.dms || [])]) out.set(t.id, t);
+    cursor = page.next_cursor;
+    if (!cursor) break;
+  }
+  return [...out.values()].slice(0, RU_THREADS);
 }
 function ruThreadOptions(thread) {
   const list = (RU?.threads || []).slice();
-  if (thread && !list.some(t => t.id === thread)) list.unshift({id: thread, subject: ''});
+  if (thread && !list.some(t => t.id === thread)) list.unshift({id: thread, title: ''});
   return `<option value="">Pick a thread</option>${list.map(t =>
-    `<option value="${esc(t.id)}"${t.id === thread ? ' selected' : ''}>${esc(t.subject || t.id)}</option>`).join('')}`;
+    `<option value="${esc(t.id)}"${t.id === thread ? ' selected' : ''}>${esc(t.title || t.id)}</option>`).join('')}`;
 }
 function ruWhereHTML(where, disabled) {
   const was = ruWhereKind(where);

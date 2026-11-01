@@ -251,8 +251,9 @@ ahead of time so it doesn't try.
     `has_outside_members` (someone in it is outside the roster, or is a Slack or federated actor). A write meets the
     rule when one of its terms holds. A message has the place of its thread (`conversations.id` is the thread id, with
     its root, audience and members read from the thread); a task comment has its task's conversation. The Rules panel
-    sets one choice (anywhere, direct chats, outside, a team, or a thread); its thread list is the conversations the
-    viewer is a member of, so a readable thread they have not joined is offered by id only through the API and CLI.
+    sets one choice (anywhere, direct chats, outside, a team, or a thread). Its thread list is the threads sidebar
+    (`GET /api/v2/threads`: root threads the viewer belongs to or follows, the public company and team ones, and DMs; 200
+    at most), so a readable thread outside those is set by id through the API and CLI.
     The API and CLI take several terms. A rule with no `where:` applies wherever its Who matches. Mail and drafts have
     no place, so a `where:` rule never matches them.
   - People's checks are charged to the same monthly budget as bots' (`rules_monthly_usd`) and counted on the Rules
