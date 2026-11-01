@@ -534,6 +534,31 @@ def test_a_default_bots_first_public_turn_after_the_update_gets_that_threads_his
     assert "Earlier words in public" in turn["prompt"] and "Private words from Ana" not in turn["prompt"]
 
 
+def test_a_public_session_hears_a_report_on_an_open_task_and_not_one_on_a_private_task(api, computer):
+    settled_count = lambda: len([a for a in computer.attempts() if a["result"]])
+    computer.start()
+    public = post(api, "threads", {"title": "Launch", "audience": "company", "body": "Launch week"})
+    post(api, f"threads/{public['id']}/messages", {"text": "@ops what is next?"})
+    until(lambda: settled_count() == 1, "the first public turn")
+    tasks = [post(api, "tasks", {"title": title, "body": "Look into it", "owner": "bot:ops", "private": private})
+             for title, private in (("Book the venue", False), ("Acme acquisition", True))]
+    until(lambda: settled_count() == 3, "the task turns")
+    with api.app.state.store.transaction() as c:
+        for task in tasks:
+            H.event(c, H.KEEPER, "task.started_in", task["id"], {"conversation": public["id"]})
+            assert H.task_report(c, H.task(c, task["id"]), "blocked", "Waiting on the owner"), task["title"]
+
+    post(api, f"threads/{public['id']}/messages", {"text": "@ops and now?"})
+    until(lambda: settled_count() == 4, "the public turn after the reports")
+    prompt = computer.prompts()[-1]["prompt"]
+    assert "and now?" in prompt
+    assert "Book the venue: blocked." in prompt, "the filter must not hide a report on an open task"
+    assert "Acme acquisition" not in prompt
+    # The flag is on the turn's page only: no reader's page says a message is narrower than its thread.
+    page = computer.api.get(f"/api/v2/threads/{public['id']}/timeline", headers=headers())
+    assert page.status_code == 200 and "and now?" in page.text and "audience_limited" not in page.text, page.text
+
+
 @pytest.mark.parametrize("old_hub", [False, True])
 def test_a_person_clearing_the_chat_starts_a_new_provider_thread_and_without_one_it_resumes(api, computer, old_hub,
                                                                                             monkeypatch):
