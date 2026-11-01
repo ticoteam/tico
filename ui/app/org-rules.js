@@ -154,7 +154,7 @@ async function pageRules() {
       <header class="ru-ph"><h1>Rules</h1><nav class="ru-tabs" aria-label="Rules"></nav><span class="spacer"></span><span class="ru-acts"></span></header>
       <div class="ru-body"><aside class="ru-filters" aria-label="Filters"></aside><section class="ru-list" aria-live="polite">${skelRows(6)}</section>
         <aside class="ru-side" id="ru-side" hidden></aside></div></div>`;
-    RU = {root: $('#ru-root'), tab: null, counts: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [],
+    RU = {root: $('#ru-root'), tab: null, counts: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [], threads: null,
           settings: [], settingsBy: new Map(), settingsLeft: 0, filter: {q: '', who: '', with: '', from: '', due: false, status: '', routine: '', settings: false, moreFrom: false},
           seq: 0, loaded: new Set(), error: ''};
     ruWire();
@@ -565,30 +565,47 @@ function ruQuoteHTML(cite) {
 }
 const ruPanelHead = (title, close) => `<div class="ru-side-h"><h2>${esc(title)}</h2><span class="spacer"></span><a class="ru-x" href="${close}" aria-label="Close">✕</a></div>`;
 
-// The Where a rule keeps, as the panel offers it: anywhere, direct chats, someone outside the company, or one team. A
-// rule that holds another term (a thread, or several) shows as "Other" and keeps it unless the person picks one here.
+// The Where a rule keeps, as the panel offers it: anywhere, direct chats, someone outside the company, one team, or one
+// thread. A rule that holds another term (several, or one the picker does not offer) shows as "Other" and keeps it
+// unless the person picks one here.
 function ruWhereKind(where) {
   const t = where[0] || '';
-  if (!t) return {kind: 'any', team: ''};
-  if (t === 'kind:dm') return {kind: 'dm', team: ''};
-  if (t === 'has_outside_members') return {kind: 'outside', team: ''};
-  if (t.startsWith('team:')) return {kind: 'team', team: t.slice(5)};
-  return {kind: 'other', team: ''};
+  if (!t) return {kind: 'any', team: '', thread: ''};
+  if (t === 'kind:dm') return {kind: 'dm', team: '', thread: ''};
+  if (t === 'has_outside_members') return {kind: 'outside', team: '', thread: ''};
+  if (t.startsWith('team:')) return {kind: 'team', team: t.slice(5), thread: ''};
+  if (t.startsWith('thread:')) return {kind: 'thread', team: '', thread: t.slice(7)};
+  return {kind: 'other', team: '', thread: ''};
+}
+// The threads the viewer can read, newest first, for the Where picker. The conversations list checks each one.
+const RU_THREADS = 200;
+async function ruThreadList() {
+  const page = await get('/v2/conversations', {fresh: true}).catch(() => null);
+  return (page?.conversations || []).slice(0, RU_THREADS);
+}
+function ruThreadOptions(thread) {
+  const list = (RU?.threads || []).slice();
+  if (thread && !list.some(t => t.id === thread)) list.unshift({id: thread, subject: ''});
+  return `<option value="">Pick a thread</option>${list.map(t =>
+    `<option value="${esc(t.id)}"${t.id === thread ? ' selected' : ''}>${esc(t.subject || t.id)}</option>`).join('')}`;
 }
 function ruWhereHTML(where, disabled) {
   const was = ruWhereKind(where);
   const radio = (value, label) => `<label><input type="radio" name="where_kind" value="${value}"${was.kind === value ? ' checked' : ''}${disabled}> ${label}</label>`;
   return `${radio('any', 'Anywhere')}${radio('dm', 'Direct chats only')}${radio('outside', 'Someone outside the company is in it')}
-    <div class="ru-where-team">${radio('team', 'In team')}<select name="where_team" aria-label="Team"${disabled}><option value="">Pick a team</option>${ruGroups().map(g =>
-      `<option value="${esc(g.id)}"${g.id === was.team ? ' selected' : ''}>${esc(g.name || g.id)}</option>`).join('')}</select></div>`;
+    <div class="ru-where-pick">${radio('team', 'In team')}<select name="where_team" aria-label="Team"${disabled}><option value="">Pick a team</option>${ruGroups().map(g =>
+      `<option value="${esc(g.id)}"${g.id === was.team ? ' selected' : ''}>${esc(g.name || g.id)}</option>`).join('')}</select></div>
+    <div class="ru-where-pick">${radio('thread', 'In thread')}<select name="where_thread" aria-label="Thread"${disabled}>${ruThreadOptions(was.thread)}</select></div>`;
 }
 function ruWhereValue(form, where) {
-  const pick = form.elements.where_kind.value, team = form.elements.where_team.value, was = ruWhereKind(where);
-  if (!pick || (pick === was.kind && (pick !== 'team' || team === was.team))) return where;
+  const pick = form.elements.where_kind.value, was = ruWhereKind(where);
+  // A team or thread keeps the stored term unless the person picks another; no pick keeps the rule's Where.
+  const id = pick === 'team' ? form.elements.where_team.value : pick === 'thread' ? form.elements.where_thread.value : '';
+  if (!pick || (pick === was.kind && (!id || id === was[pick]))) return where;
+  if (pick === 'any') return [];
   if (pick === 'dm') return ['kind:dm'];
   if (pick === 'outside') return ['has_outside_members'];
-  if (pick === 'team' && team) return ['team:' + team];
-  return pick === 'team' ? where : [];
+  return id ? [pick + ':' + id] : where;
 }
 
 async function ruRulePanel(side, id, note = '') {
@@ -600,6 +617,7 @@ async function ruRulePanel(side, id, note = '') {
   if (side.dataset.open !== want) return;
   const edit = !!r.can_edit, dis = edit ? '' : ' disabled', internal = r.kind === 'internal';
   if (!internal && !RU.sources.length) RU.sources = await ruAll('/v2/rule-sources').catch(() => []);
+  RU.threads = await ruThreadList();
   const dues = ruDueSorted(r);
   const quote = ruQuoteHTML(r.cite);
   const suggested = r.status === 'suggested';
@@ -837,7 +855,8 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
     document.body.appendChild(dlg);
   }
   const sources = await ruAll('/v2/rule-sources').catch(() => []);
-  dlg.innerHTML = `<form class="ru-form" method="dialog">
+  RU.threads = await ruThreadList();
+  dlg.innerHTML =`<form class="ru-form" method="dialog">
       <div class="ru-side-h"><h2>Add rule</h2><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-ru-close aria-label="Close">✕</button></div>
       ${ruSegHTML('kind', [['internal', 'Internal'], ['external', 'External']], kind)}
       <label class="ru-fl"><span class="ru-lbl">Rule</span><textarea name="text" rows="2" maxlength="1000" required></textarea></label>

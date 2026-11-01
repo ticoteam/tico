@@ -249,9 +249,12 @@ ahead of time so it doesn't try.
   - **`where:`** narrows a rule to some places: `thread:<conversation id>`, `team:<group>` (the sender's or the
     conversation owner's group chain), `kind:dm` (a direct chat, or a write with no conversation), and
     `has_outside_members` (someone in it is outside the roster, or is a Slack or federated actor). A write meets the
-    rule when one of its terms holds. The Rules panel sets one choice (anywhere, direct chats, outside, or a team); the
-    API and CLI take several. A rule with no `where:` applies wherever its Who matches. Mail, tasks, comments and
-    drafts have no place, so a `where:` rule never matches them.
+    rule when one of its terms holds. A message has the place of its thread (`conversations.id` is the thread id, with
+    its root, audience and members read from the thread); a task comment has its task's conversation. The Rules panel
+    sets one choice (anywhere, direct chats, outside, a team, or a thread); its thread list is the conversations the
+    viewer is a member of, so a readable thread they have not joined is offered by id only through the API and CLI.
+    The API and CLI take several terms. A rule with no `where:` applies wherever its Who matches. Mail and drafts have
+    no place, so a `where:` rule never matches them.
   - People's checks are charged to the same monthly budget as bots' (`rules_monthly_usd`) and counted on the Rules
     page next to its spend ("$3 on people"). A person has a daily cap of their own (`decisions_daily_calls_human`).
 - **What's judged:** the whole output, short or long. Screening's 200-character minimum, 20k cut and `free_text`
