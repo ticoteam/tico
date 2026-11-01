@@ -142,6 +142,9 @@ a.th-who:hover{text-decoration:underline}
 #main.bot-chat-layout #pane-chat>.bot-thread{display:flex;flex:1;flex-direction:column;min-height:0;width:100%;max-width:var(--read-width);margin:0 auto}
 .bot-talk-bar{display:flex;align-items:center;gap:8px;margin:0 0 4px}
 .bot-talk-bar .spacer{flex:1}
+.bot-talk-acts{display:inline-flex}
+.bot-talk-acts[hidden]{display:none}
+.bot-talk-acts .thv-titleline{gap:4px;padding:0}
 #main.bot-chat-layout #pane-chat>.bot-talk-bar{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
 .bot-talk-switch{display:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
 .bot-talk-switch button{border:0;border-radius:7px;background:none;padding:3px 10px;color:var(--muted);font-weight:600;font-size:var(--t-sm);cursor:pointer}

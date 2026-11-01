@@ -31,7 +31,8 @@ function thvDraftSave(view) {
 
 // `opts`: {id} a thread, {home: actor} that teammate's Home, or {dm: actor} the viewer's DM with them (made on the
 // first message). {card: true} keeps the list to a box inside a page; {header: false} leaves out the title line, and
-// {header: 'compact'} keeps only its actions (call, Members, the thread menu). {focus: message id} shows that message.
+// {header: 'compact'} keeps only its actions (call, Members, the thread menu), drawn into `actsHost` when given (a bar
+// the page owns). {focus: message id} shows that message.
 function threadMount(host, opts = {}) {
   const view = {key: ++THV_N, host, opts, id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading',
                 readAt: 0, openSeq: 0, readSent: new Map(), wantRead: new Set(), pending: [], replyTo: '', editing: '',
@@ -383,8 +384,9 @@ const thvAtBottom = view => { const b = view.el?.querySelector('.thv-scroll'); r
 function thvDraw(view, {stick = false} = {}) {
   if (view.gone) return;
   if (!view.host.isConnected) { threadUnmount(view); return; }
-  const head = view.el.querySelector('.thv-head');
+  const head = view.opts.actsHost?.isConnected ? view.opts.actsHost : view.el.querySelector('.thv-head');
   if (head) { const h = thvHeadHTML(view); patchHTML(head, h); head.hidden = !h; }
+  if (head === view.opts.actsHost) view.el.querySelector('.thv-head')?.setAttribute('hidden', '');
   const list = view.el.querySelector('.thv-list'), box = view.el.querySelector('.thv-scroll');
   const keep = stick || thvAtBottom(view);
   // Cards both trees share keep their node, as in a chat (ui/app/visual-cards.js).
@@ -684,6 +686,8 @@ function thvWire(view) {
     if (!pill.hidden && first && thvVisible(el.querySelector('.thv-scroll'), first)) pill.hidden = true;
   }, {passive: true});
   el.addEventListener('click', ev => void thvClick(view, ev));
+  // The bar outside the view is shared by the views that take turns in it: only the one on screen answers.
+  if (view.opts.actsHost) view.opts.actsHost.onclick = ev => { if (!view.gone) void thvClick(view, ev); };
   // A turn's steps load when their fold opens; open folds stay open across redraws (ui/app/chat.js).
   el.addEventListener('toggle', ev => {
     if (ev.target.matches?.('details.run-steps')) void v2StepsOpen(view.run, ev.target, el);

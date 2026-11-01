@@ -260,8 +260,8 @@ async function shot(page, name) {
     assert.ok(!tabs.includes('chat'));
     assert.equal(await page.locator('.bot-threads-link').getAttribute('href'), '#/threads?with=bot%3Aops');
     await shot(page, 'bot-home-desktop');
-    // The Home keeps the thread's actions in a compact row: the menu and the call, without a title line.
-    await page.locator('#bot-thread .thv-compact [data-thv-menu]').waitFor();
+    // The Home's actions (the call and the menu) sit in the Home/DM bar; the thread has no title line.
+    await page.locator('#pane-chat .bot-talk-acts [data-thv-menu]').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-title').count(), 0);
     // Wide, the top tabs give way to Tasks beside the thread; the switch above the thread picks Home or DM.
     assert.equal(await page.locator('#pane-chat [data-talk="home"]').getAttribute('aria-selected'), 'true');
