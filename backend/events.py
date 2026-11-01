@@ -931,15 +931,20 @@ def _messages(view, rows):
 def _threads(view, rows):
     """The `threads` topic (contract §9): one event per thread and kind, as it stands now. A `read` row goes only to
     the reader it names; a thread the viewer cannot read sends nothing."""
-    from . import threads
-    last = {}
+    from . import calls, threads
+    out, last = [], {}
     for row in rows:
+        if str(row["kind"]).startswith("call."):
+            # Tico Meet call changes (backend/calls.py): the call's thread decides who hears each one, and each is sent once.
+            if row["conversation_id"] and calls.readable(view.c, view.who.actor, row["conversation_id"]):
+                out.append((row, {"kind": row["kind"], "call_id": row["subject_id"],
+                                  "thread_id": row["conversation_id"]}))
+            continue
         if row["kind"] == "read" and row["ref"] != view.who.actor:
             continue
         # Reactions are per message: one event for each message whose reactions moved.
         last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] == "reactions" else None)] = row
     view.prime(subject for subject, _, _ in last)
-    out = []
     for (tid, kind, ref), row in last.items():
         if not view.conversation(tid):
             continue
@@ -1053,16 +1058,6 @@ def _bots(view, rows):
     return out
 
 
-def _threads(view, rows):
-    """Tico Meet call changes (backend/calls.py) reach the people who may read the call's thread, and no one else."""
-    from . import calls
-    out = []
-    for row in rows:
-        if row["conversation_id"] and calls.readable(view.c, view.who.actor, row["conversation_id"]):
-            out.append((row, {"kind": row["kind"], "call_id": row["subject_id"], "thread_id": row["conversation_id"]}))
-    return out
-
-
 NEEDS_CHANGES_MAX = 100   # ids named in one `needs` event; more than this reads the list whole (views.NEEDS_IDS_MAX)
 
 
@@ -1144,8 +1139,6 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
             picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"])]
         if by_topic.get("needs"):
             picked += [("needs", r, e) for r, e in _needs_list(view, by_topic["needs"], task_view, needs_held)]
-        if by_topic.get("threads"):
-            picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"])]
         events = []
         for topic, row, entry in sorted(picked, key=lambda item: item[1]["seq"]):
             actor = None if view.hidden_actor(row["actor"]) else row["actor"]
