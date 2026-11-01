@@ -20,6 +20,7 @@ sessions themselves are in the database), so a new one costs nobody their sessio
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,17 @@ OFF_WARNING = "Backups are off (TICO_BACKUP=off). Losing the data volume loses e
 # replica and not on S3; ours sits beside them. Listing the levels rather than everything keeps the check
 # cheap however many attachments there are.
 DB_LEVELS = tuple(prefix + str(level).rjust(width, "0") for prefix, width in (("", 4), ("ltx/", 1)) for level in (0, 1, 2, 3, 9))
+# Lag is about transaction IDs, never clocks: the backup location is behind when the local level-0 files hold a TXID
+# it lacks. A warning waits this long (or ten sync intervals, when longer) and a bad one waits an hour; a quiet
+# database has no new TXIDs, so it is never behind however old its last copy is.
+BEHIND_WARN_MIN_S = 600
+BEHIND_BAD_MIN_S = 3600
+NO_RECENT_COPY = "Litestream has not sent any copy of the database to the backup location."
+SYNC_INTERVAL_DEFAULT = 60
+# The replica fields write_status keeps when it has no mirror to read (backups off).
+REPLICA_FIELDS = ("last_replicated_at", "reason", "local_txid", "replica_txid", "behind_since")
+_LTX_NAME = re.compile(r"([0-9a-f]{16})-([0-9a-f]{16})\.ltx")
+_SYNC_UNITS = {"s": 1, "m": 60, "h": 3600}
 FILES_PREFIX = "files"
 # An unreachable bucket makes Litestream retry for minutes; a listing that long is treated as unreadable.
 LISTING_TIMEOUT = 60
@@ -84,8 +96,26 @@ def mode_from_env(env):
     return "remote" if env.get("TICO_BACKUP_URL") else "local-only"
 
 
+def sync_interval_seconds(env=None):
+    """TICO_BACKUP_SYNC_INTERVAL in seconds, read the way docker/entrypoint.sh reads it: a number and s, m or h, from 1s
+    to 1h, and 1m when unset. The entrypoint refuses any other value, so the fallback only matters outside a container."""
+    env = os.environ if env is None else env
+    found = re.fullmatch(r"([0-9]{1,4})([smh])", env.get("TICO_BACKUP_SYNC_INTERVAL") or "1m")
+    seconds = int(found.group(1)) * _SYNC_UNITS[found.group(2)] if found else 0
+    return seconds if 1 <= seconds <= 3600 else SYNC_INTERVAL_DEFAULT
+
+
+def behind_warn_seconds(env=None):
+    """How long the backup location may stay behind before it is a warning: ten sync intervals, at least ten minutes."""
+    return max(BEHIND_WARN_MIN_S, 10 * sync_interval_seconds(env))
+
+
+def _stamp(seconds):
+    return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _now():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _stamp(time.time())
 
 
 def credential_key_path(env):
@@ -142,7 +172,9 @@ def _status_file(env, path):
 
 
 def status(env=None, path=None):
-    """{mode, last_replicated_at, target_kind, warning, credential_key} for the config payload."""
+    """{mode, last_replicated_at, reason, behind_since, unsent_files, target_kind, warning, credential_key, key_files} for
+    the config payload. `reason` says why there is no copy at all; `behind_since` is when the backup location fell behind
+    the database (null when caught up); `unsent_files` is the local level-0 pile-up (local_level_zero())."""
     env = os.environ if env is None else env
     if rehearsal_on(env) or env.get("TICO_BACKUP_MODE") == "rehearsal":
         return {"mode": "rehearsal", "last_replicated_at": None, "target_kind": "none", "warning": ""}
@@ -159,7 +191,9 @@ def status(env=None, path=None):
     kind = "none" if mode == "off" else target_kind(env.get("TICO_BACKUP_URL", ""), env.get("TICO_BACKUP_ENDPOINT", ""))
     saved = _status_file(env, path)
     warning = {"local-only": LOCAL_WARNING, "off": OFF_WARNING}.get(mode, "")
-    return {"mode": mode, "last_replicated_at": saved.get("last_replicated_at"), "target_kind": kind, "warning": warning,
+    return {"mode": mode, "last_replicated_at": saved.get("last_replicated_at"), "reason": saved.get("reason"),
+            "behind_since": saved.get("behind_since"), "unsent_files": saved.get("unsent_files"), "target_kind": kind,
+            "warning": warning,
             "credential_key": credential_key_state(env, None if mode == "off" else saved.get("credential_key")),
             "key_files": key_files_state(env, None if mode == "off" else saved.get("key_files"))}
 
@@ -189,10 +223,18 @@ class LocalMirror:
     def exists(self, key):
         return (self.root / key).is_file()
 
-    def newest(self, prefixes):
-        return _first_level_newest(
-            [p.stat().st_mtime for p in (self.root / prefix).rglob("*") if p.is_file()]
-            if (self.root / prefix).is_dir() else [] for prefix in prefixes)
+    def _files(self, prefix):
+        """(file name, modified time) for every file under `prefix`."""
+        base = self.root / prefix
+        return [(p.name, p.stat().st_mtime) for p in base.rglob("*") if p.is_file()] if base.is_dir() else []
+
+    def latest(self, prefixes, replica=""):
+        """(newest copy time, highest end TXID) of the first of `prefixes` (Litestream levels, tried in order) that has a
+        file; `replica` is the folder of the replica under the backup location, "" the root. See _first_level."""
+        return _first_level(self._files(_level_path(replica, prefix)) for prefix in prefixes)
+
+    def newest(self, prefixes, replica=""):
+        return self.latest(prefixes, replica)[0]
 
 
 class S3Mirror:
@@ -227,18 +269,43 @@ class S3Mirror:
                 return False
             raise
 
-    def newest(self, prefixes):
-        return _first_level_newest([modified.timestamp() for _, modified in self._objects(prefix)] for prefix in prefixes)
+    def _files(self, prefix):
+        return [(key.rsplit("/", 1)[-1], modified.timestamp()) for key, modified in self._objects(prefix)]
+
+    def latest(self, prefixes, replica=""):
+        """As LocalMirror.latest, from the listing: names and dates only, nothing downloaded."""
+        return _first_level(self._files(_level_path(replica, prefix)) for prefix in prefixes)
+
+    def newest(self, prefixes, replica=""):
+        return self.latest(prefixes, replica)[0]
 
 
-def _first_level_newest(levels):
-    """The newest time in the first level that has any file. Litestream writes level 0 first and compacts upward,
-    so the lowest non-empty level holds the latest copy; the higher levels keep the 30-day history (tens of
+def _level_path(replica, level):
+    """`level` inside the replica folder `replica` ("" is the backup location's root)."""
+    return "/".join(part for part in (replica.strip("/"), level) if part)
+
+
+def ltx_range(name):
+    """(lowest, highest) TXID of a Litestream LTX file, from its name `<min>-<max>.ltx` (16 hex digits each); None for
+    any other name."""
+    found = _LTX_NAME.fullmatch(name)
+    return (int(found.group(1), 16), int(found.group(2), 16)) if found else None
+
+
+def max_txid(names):
+    """The highest end TXID among the LTX file names given; None when none of them is one."""
+    return max((found[1] for found in map(ltx_range, names) if found), default=None)
+
+
+def _first_level(levels):
+    """(newest time, highest end TXID) of the first level that has any file, the levels given in the order to try them.
+    Litestream writes level 0 first and compacts upward, and compaction keeps the highest TXID, so the first non-empty
+    level is where the replica is. The levels after it are not listed: the higher ones keep the 30-day history (tens of
     thousands of files) that a status check run every 30 seconds must not list each time."""
-    for times in levels:
-        if times:
-            return max(times)
-    return None
+    for files in levels:
+        if files:
+            return max(modified for _, modified in files), max_txid(name for name, _ in files)
+    return None, None
 
 
 def mirror_from_env(env=None):
@@ -450,16 +517,28 @@ def check_new_company(data_dir, mirror, restore_failed=False, initialize_empty=F
     return None
 
 
-def write_status(mirror, path, credential_key=None, key_files=None):
-    """The time the database copy last moved, and when the key files were last copied. They are kept apart: a
-    round where one fails must not wipe what the others last did."""
+def write_status(mirror, path, credential_key=None, key_files=None, unsent=None, local_txid=None,
+                 warn_after=BEHIND_WARN_MIN_S):
+    """The newest database copy and whether the backup location is behind the database, and when the key files were
+    last copied. They are kept apart: a round where one fails must not wipe what the others last did.
+
+    Behind means the local level-0 files hold a TXID the replica does not (local_txid above the replica's highest), so
+    `behind_since` is when that began: kept while it lasts, cleared once caught up. `last_replicated_at` is the newest
+    copy of the first replica level that has one, so an idle replica still shows a time. It is null, with `reason`, only
+    when the replica holds no database file at all. `warn_after` is the warning time, for the cell stats to judge by.
+    Without a mirror (backups off) the replica fields are carried over, not read."""
     saved = _status_file({}, path)
-    newest = mirror.newest(DB_LEVELS) if mirror is not None else None
-    if newest is None and credential_key is None and not key_files:
-        return
-    text = datetime.fromtimestamp(newest, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if newest is not None \
-        else saved.get("last_replicated_at")
-    data = {"last_replicated_at": text, "checked_at": _now()}
+    data = {"checked_at": _now(), "unsent_files": unsent, "warn_after_s": warn_after}
+    if mirror is None:
+        data.update({key: saved[key] for key in REPLICA_FIELDS if key in saved})
+    else:
+        newest, replica_txid = mirror.latest(DB_LEVELS)
+        behind = local_txid is not None and (replica_txid is None or local_txid > replica_txid)
+        data.update({"last_replicated_at": _stamp(newest) if newest is not None else None,
+                     "local_txid": _hex_txid(local_txid), "replica_txid": _hex_txid(replica_txid),
+                     "behind_since": (saved.get("behind_since") or _now()) if behind else None})
+        if newest is None:
+            data["reason"] = NO_RECENT_COPY
     if credential_key is not None or saved.get("credential_key"):
         data["credential_key"] = credential_key if credential_key is not None else saved["credential_key"]
     kept = {**(saved.get("key_files") if isinstance(saved.get("key_files"), dict) else {}), **(key_files or {})}
@@ -475,6 +554,24 @@ def litestream_state_dir(db):
     """Where Litestream 0.5 keeps its local copy of what it has shipped: `.<name>-litestream` beside the database."""
     db = Path(db)
     return db.parent / ("." + db.name + "-litestream")
+
+
+def _hex_txid(txid):
+    return None if txid is None else "%016x" % txid
+
+
+def local_level_zero(db):
+    """What Litestream keeps in its local level-0 folder beside the database, from the file names only and in one
+    listing: (how many LTX files, the highest end TXID among them). The count is None when the folder cannot be read,
+    and the TXID is None when there is no such file. Uploads that stop getting through let the files pile up."""
+    try:
+        with os.scandir(litestream_state_dir(db) / "ltx" / "0") as entries:
+            names = [entry.name for entry in entries if entry.name.endswith(".ltx")]
+    except FileNotFoundError:
+        return 0, None
+    except OSError:
+        return None, None
+    return len(names), max_txid(names)
 
 
 def replica_file_count(config, db, binary="litestream", timeout=LISTING_TIMEOUT):
@@ -522,6 +619,7 @@ def loop(env=None, interval=30, warn_every=3600, sleep=time.sleep, rounds=None):
     last_warned, done = 0.0, 0
     key_path, key_state, copied = credential_key_path(env), {}, None
     file_states, files_copied = {name: {} for name in KEY_FILES}, {}
+    db = env.get("TICO_DB") or "/data/hub.sqlite"
     while rounds is None or done < rounds:
         if warning and time.monotonic() - last_warned >= warn_every:
             print("tico: WARNING: " + warning, flush=True)
@@ -545,7 +643,8 @@ def loop(env=None, interval=30, warn_every=3600, sleep=time.sleep, rounds=None):
             except Exception as exc:
                 print("tico: warning: could not copy " + name + " to the backup location: " + type(exc).__name__, flush=True)
         try:
-            write_status(mirror, path, copied, files_copied)
+            unsent, local_txid = local_level_zero(db)
+            write_status(mirror, path, copied, files_copied, unsent, local_txid, behind_warn_seconds(env))
         except Exception as exc:
             print("tico: warning: backup status failed: " + type(exc).__name__ + ": " + str(exc)[:200], flush=True)
         done += 1
