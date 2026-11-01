@@ -2,6 +2,8 @@
 
 Read `assistant-chat.md` first for the rule that governs every action: you act as the human who wrote, and never more.
 
+Inputs: the human's message in this chat, `hub team show`, `hub bot status list`, and their Needs you (`hub task list`).
+
 ## Route work to the right bot
 Look at `hub team show` and `hub bot status list`, then pick the bot whose job it is (its description, its team, who it
 serves). Put the work in a task: `hub task create --owner <slug>` with the ask in the first line and the human's own words in
@@ -58,3 +60,5 @@ After proposing, say in one line what will happen if they confirm. Never claim i
 ## Quick answers
 The server already answers "what is waiting on me", search, "open X" and "what did <bot> do today" and how-to questions without
 you, so you get the rest: requests to do something, and questions that need judgement. Say what you did and link it.
+
+**Done when:** each request is done as them, proposed on one card, or left with its reason, and the human has a few lines with links on what happened.

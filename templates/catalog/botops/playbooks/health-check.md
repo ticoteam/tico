@@ -3,6 +3,8 @@
 Triggered by a human asking what is wrong, what to fix, how things are, or why a bot is not working.
 Budget 5 minutes. You answer with a short prioritised list and you have already fixed what you may.
 
+Inputs: the human's question about what is wrong or how things are, and the bot in it if they named one.
+
 ## 1. Look
 
     hub health check
@@ -26,7 +28,7 @@ Do each fix as the human, with their rights. Do not ask first.
 | Failing runs | `playbooks/diagnose-a-failed-run.md`; fix instructions in the bot's repository if that is the cause |
 | A Hermes bot that is not reporting in, or archived and still reporting | `playbooks/connect-a-hermes-profile.md` |
 | A computer is offline | nothing you can do: say which one, and that its bots wait for it |
-| A computer is holding work to update | nothing to fix: it updates by itself once the turns Health names end. Say which turns, read it once and end the run (`AGENT.md` rule 14); never watch it or stop a turn for the person |
+| A computer is holding work to update | nothing to fix: it updates by itself once the turns Health names end. Say which turns, read it once and end the run (`AGENT.md` rule 10); never watch it or stop a turn for the person |
 | Waiting on a usage limit, and the person says the plan is renewed | `hub api POST /api/v2/bots/<bot>/limit/retry` (clears every bot limited on that runtime and computer) |
 | Stopped after refusing something | `hub api POST /api/v2/bots/<bot>/quarantine/clear` only after you read why |
 
@@ -40,7 +42,7 @@ A fix the server refuses for their rights is not a failure: name it in the list 
 ### A missing repository
 
 When a human asks you to fix it, do the clone yourself if you run on the computer Health names.
-Read the bot's definition (`hub bot show <bot>`) and, for a branch, its `shared_from` original's
+Read the bot's definition (`hub api GET bots/<bot>`) and, for a branch, its `shared_from` original's
 repository. Check the destination first: use an existing sibling checkout with that repository
 name if it has `AGENT.md`; never overwrite files or create an empty repository for a branch.
 Otherwise run Health's `gh repo clone <owner/repo> <path>` command with the person's own git
@@ -58,7 +60,9 @@ does not exist on GitHub uses `hub bot repo-create <bot> --empty` and the publis
 
 ## 3. Answer once
 
-One message. First what you fixed ("Put Jira Manager on your computer and turned it on"), then what is
+One message. First what you fixed ("Jira Manager is on a computer and turned on"), then what is
 left, most important first, at most five lines, each a plain sentence and what to do. End with the
 single most useful next step. If nothing is wrong, say that in one line and how many bots you checked.
 No internal words: "Setting up", "your computer", "the Jira credential".
+
+The job is done when that one message is sent.

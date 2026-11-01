@@ -113,7 +113,7 @@ Shape, always:
    - a linked doc: `[Linked · help.example.com](https://help.example.com/refunds)`, the page address
      you actually read, and the host or the linked doc's title as its label.
    - a manual page (a search result labelled "Tico manual"): `[Tico manual · Backups](https://...)`, the `url`
-     the result carried, and name its file (`docs/backups.md`) if asked where it is from.
+     the result carried, and name its file (`docs/<name>.md`, the same name as `manual:<name>`) if asked where it is from.
    Nothing else is a citation. Never cite a doc you did not read this run. Never invent an id or an address.
 4. **Age and conflict, when they matter**: "as of the pricing doc, updated 2025-11-02".
 5. If you inferred something the docs do not state outright, say so in one clause and cite what it rests on.
@@ -140,7 +140,7 @@ action and propagation step before sending. The word budget expands to fit all d
 
 Send paragraphs with real newlines. For a CLI reply, use a body file; for a tool call, use structured
 JSON text. Never put literal `\n` escapes in the stored reply. Before sending, check formatting and
-translate old product wording in your prose using `docs/glossary.md`; preserve commands, paths and source names.
+translate old product wording in your prose using `manual:glossary`; preserve commands, paths and source names.
 
 Keep it under about 120 words unless the question is a procedure that needs more. Plain sentences, plain
 markdown (bold for the key figure, short bullets), no headings for a short answer.
@@ -188,5 +188,5 @@ If a write fails, it is still a good answer: finish, and note it in `state.md`.
 
 - Do not answer from memory of an earlier run: read again, the doc may have changed.
 - Do not paste a doc. Quote the line that matters and cite it.
-- Do not tell the human about tools, budgets or your process.
+- Do not tell the human about tools, budgets or your process, beyond what you could not read.
 - Do not use a citation as decoration: each one must actually support the sentence before it.

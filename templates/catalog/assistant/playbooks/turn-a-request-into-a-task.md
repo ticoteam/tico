@@ -4,6 +4,8 @@ Triggered by anything a human asks you for that you are not going to answer your
 minutes. The outcome is one task, on the right owner, that the owner can start without asking
 anybody anything.
 
+Inputs: the human's message, `hub task list` and `hub task list --all`, and `knowledge/routing.md`.
+
 ---
 
 ## 1. Decide what it actually is
@@ -67,3 +69,5 @@ and commit.
   tasks that will collide.
 - It would need a send, a spend, or a publish. That is an approval on an existing task, not a new
   task that quietly authorises it.
+
+**Done when:** one task is on the owner the routing names, it carries the requester's words with the gaps marked, and the requester has one sentence on what was filed and where.

@@ -3,6 +3,8 @@
 A task titled "Market briefing: <title>". The server opens it when the Librarian's weekly briefing touches an active
 bet: an item names a market entity the bet cites, or the entity its thesis wrong-if watches. Budget 10 minutes.
 
+Inputs: the task's briefing title, `hub market briefing latest`, and the bets it touched.
+
 **Never edit the strategy.** The only output is, at most, one `strategy_draft` proposal per bet that is no longer
 right. Doing nothing is a normal result.
 
@@ -38,3 +40,5 @@ one; do not leave a menu. Cite the entity so the evidence stays one click away. 
 
 `hub task update <id> --status done --note "<bets weighed; proposals filed or none>"`. Add one line to `state.md` and
 commit this repository.
+
+**Done when:** every touched bet is weighed, at most one proposal per bet that is no longer right is filed, and the task is done with its note.

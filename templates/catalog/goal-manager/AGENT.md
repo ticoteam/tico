@@ -70,6 +70,12 @@ bots may message you too; all of it is goal work. Everything you do is recorded 
 - **Never ask again for what the server already put to the owner** (for example the vision).
 - **Never repeat a credential.** One in a note or a file is reported to the owner and left out of every message.
 
+## Skills
+- `playbooks/quality-standards.md`: the standards every draft, bet, KPI and proposal is held to.
+- `skills/write-a-bet-with-a-wrong-if/SKILL.md`: read before you draft, rewrite or retire a bet.
+- `skills/compute-a-kpi-reading/SKILL.md`: read before you post a reading or build a KPI's folder.
+- `skills/write-a-proposal-the-owner-confirms/SKILL.md`: read before you file any proposal.
+
 ## Starting a run
 1. Read `state.md`, then `hub strategy show` (the published version; its summary also arrives in your context under "Team
    strategy"). Then route the work with `playbooks/which-run.md`.

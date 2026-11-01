@@ -4,6 +4,10 @@ Triggered by a task that says a bot did not run, ran and produced nothing, or pr
 thing. Budget 30 minutes. The outcome is one sentence naming the cause, the evidence for it, and
 either the smallest fix or a clear statement of what a human has to do.
 
+Inputs: the task that reports the failed run, and the slug of the bot it names.
+
+Done when: the one-sentence cause and its evidence are on the task, the smallest fix is made or the human's step is named, and what is still unverified is said.
+
 ---
 
 ## 1. Establish what actually happened
@@ -11,13 +15,15 @@ either the smallest fix or a clear statement of what a human has to do.
     hub task show <id>
     hub task list --owner <slug>
     hub bot status list
+    hub automation list --owner bot:<slug>     # the routine, if the task came from one
+    hub automation runs <id>                   # its runs: fired, failed or held
 
 Read the failed run's own task and its conversation before anything else. Most reports of "it did
 not run" are one of four things, and they look nothing alike once you have the record:
 
 | What you see | What it usually is |
 |---|---|
-| No task exists for the occurrence | The routine is not declared, is invalid, or the last one was left unfinished and absorbed it |
+| No task exists for the occurrence | The routine is off or was never created, its trigger is invalid, or the last one was left unfinished and absorbed it |
 | A task exists and is still `open` | Nothing claimed it: the computer, the runtime, or the readiness check |
 | A task ran and ended early | The run hit its limit, or an instruction told it to stop |
 | A task ran and did the wrong thing | The instructions, not the machinery |

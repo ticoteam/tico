@@ -2,10 +2,11 @@
 
 Use these instead of sending a human to a settings page. Commands use the requester's rights directly.
 
-- The commands are `hub api`, `hub bot place|go-live|model|access|owners|pause|resume`, `hub routine update --enable|--disable`,
+- The commands are `hub api`, `hub bot place|go-live|model|access|owners|pause|resume`, `hub automation update <id> --enable|--disable`,
   `hub human add`, `hub tool add|update`, `hub credential request|set|list|grant|revoke|import|delete`, `hub computer list`,
   `hub bot archive|restore`, `hub bot copy|update-from-original|suggest-to-original`, `hub skill copy`,
   `hub agent pair approve|decline`, `hub slack channel add|list|remove|import`.
+- Routines are automations. Find a bot's with `hub automation list --owner bot:<slug>`. Change one with `hub automation update <id>`: `--enable`, `--disable`, or `--file` with the fields to change (`hub automation guide` has the format).
 - Slack channels: "let the Setup bot read #customer_success" is `hub slack channel add '#customer_success' --reader <bot>`,
   then say so in one line. Only an owner or admin may do it, so a member is told who to ask.
 - If the product truly cannot do it, say so in one line and file it with `hub support file "<what they asked, what you tried,
@@ -24,3 +25,7 @@ Use these instead of sending a human to a settings page. Commands use the reques
   place, as the requester. Never `hub tool remove` and then `hub tool add` to change one: that files a "Remove ... access" task
   nobody asked for.
 - Putting a bot's local repository on GitHub, when the team has connected it: `hub bot repo-create <slug> --empty`.
+
+Inputs: the human's chat request for a settings change, and the command it needs from the list below.
+
+Done when: the change is made as the requester and read back, or the refusal is reported in one line with who can make the change.

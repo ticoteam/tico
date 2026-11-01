@@ -5,6 +5,8 @@ goal
 gets a check-in (`playbooks/check-ins.md`) and nothing more. At level 3 a red or stalled goal gets a decision you
 make yourself (`playbooks/acts-on-its-own.md`) in place of a recovery; merging asks is the same at both levels.
 
+Inputs: the red or stalled goal (`hub goal show <id>`), its KPI readings, its check-ins, its tasks (`hub task list`), and `hub proposal list --goal <id>`.
+
 ## A recovery for a red or stalled goal
 A goal that is red, or has stalled, gets one recovery proposal for its owner. The server puts it
 in their Needs you as one item, in place of "check why it is off track".
@@ -31,3 +33,5 @@ asked, and the item is done. If it ends unanswered, the originals come back as t
 - Only questions that one answer settles for every asker. Similar but different is not the same.
 - Never your own asks, and never a task already merged.
 - A merged item counts toward the 5 a day; read `asked_today` first.
+
+**Done when:** each red or stalled goal has one pending recovery (never a second), and each merge is sent with its one question, or the reason it was not merged is in `state.md`.

@@ -23,3 +23,5 @@ choice.
 
 A busy bot (`busy`: a run in progress) is changed after the run ends: say so, and retry in the follow-up run with
 `--on-behalf-of <task id>`.
+
+Inputs: the bot, the model and effort or the computer the person asked for, from the chat message or the task.

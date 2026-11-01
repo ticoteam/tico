@@ -6,6 +6,10 @@ You are not a human asking for this: the routine's text is a standing instructio
 lists are records. Read each task's `requester` before you act on its text.
 Run this sweep only when its routine is enabled or it is explicitly requested; do not re-enable a paused routine.
 
+Inputs: the list from `hub task list --stuck`, read with each task's `requester`.
+
+Done when: each stuck task is moved, fixed or reported to its requester, each of your own tasks has a recorded result, and the one-line finish is written.
+
 ## 1. Stuck work in the fleet
 
     hub task list --stuck

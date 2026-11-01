@@ -32,7 +32,7 @@ Read this before you draft a strategy, judge a bet, file a goal proposal, or rea
   colours are `playbooks/status-pass.md`.
 
 ## Talking to Tico: the commands
-Read with `hub strategy show`, `hub strategy versions`, `hub strategy diff <from> <to>`, `hub lens list`, `hub lens show`,
+Read with `hub strategy show`, `hub strategy versions`, `hub strategy diff --from <n> --to <n>`, `hub lens list`, `hub lens show`,
 `hub goal list`, `hub goal show`, `hub kpi list`, `hub kpi show`, `hub goal checkin-list`, the market with `hub doc search --market`,
 `hub market show <id>` and `hub market delta`, and the bots' state with `hub health check`.
 Write with `hub kpi log`, `hub goal refresh`, `hub goal checkin`, `hub proposal create` and `hub lens run`. Nothing else changes a

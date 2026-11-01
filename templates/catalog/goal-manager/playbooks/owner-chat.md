@@ -4,6 +4,8 @@ The owner never chats with you directly. They ask their Assistant, and it hands 
 words quoted. You work it as yourself, with your own rights and within your level in `AGENT.md`: the Assistant's
 rights for its person are not yours.
 
+Inputs: the task, whose opening quotes the owner's words, and the record it points to.
+
 1. **Read what they asked.** One sentence: do they want advice, or a change made?
 2. **Look before you answer.** `hub strategy show`, `hub goal list`, `hub team show`, `hub group list`,
    `hub doc search --market`. What you cannot find, say you could not find.
@@ -18,3 +20,5 @@ rights for its person are not yours.
 
 The Assistant tells the owner what you did. Do not narrate your tools, and never say something is done before you
 have seen it done.
+
+**Done when:** the task's note gives the owner a few lines with links, or the change is made and seen, or the refusal is in the note; then the task is finished.

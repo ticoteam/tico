@@ -6,7 +6,7 @@ hundredth question cheaper than the first. You are the only one who writes it; a
 a cache: when it disagrees with a doc, the doc wins and the map is fixed.
 
 Use team wording in titles: "Team glossary", "Docs index" and "Where things live". Keep `_librarian/` paths unchanged.
-An empty glossary says "No team terms are defined yet"; do not invent terms to fill it. Use `docs/glossary.md` for Tico's
+An empty glossary says "No team terms are defined yet"; do not invent terms to fill it. Use `manual:glossary` for Tico's
 product words and its "Instead of" mappings.
 
 Write each with `hub doc write <path> --title "<title>" --body-file <file> --note "<what changed>"`.

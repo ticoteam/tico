@@ -38,3 +38,5 @@ command. The briefing becomes the market page `market/briefings/<week>` and the 
 
 Name the week and the number of items in the sweep's report. Do not message the Strategy Bot: the server opens its task
 when the briefing touches a bet.
+
+Done when the week's briefing is posted, or you decided there is nothing worth saying and posted nothing.

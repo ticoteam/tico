@@ -5,6 +5,8 @@ threshold, a market entity the bet cites changed, or a sentence bet's check-by d
 published version, at every level, Passive included: the server detected the trip, so your only job is the words.
 The outcome is one Decide card for the owner that says what happened and what you would do. Budget 15 minutes.
 
+Inputs: the trip task (the bet id, the wrong-if that tripped and the evidence), `hub strategy show`, and the reading or market item it cites.
+
 **Never edit goals**, and never the strategy: the card is a proposal, and the owner decides. **Never invent a
 number**: the evidence is the reading, the market change or the date in the task, cited.
 
@@ -48,3 +50,5 @@ task.
 
 `hub task update <id> --status done --note "<the bet, what tripped, your pick>"`. Add one line to `state.md` (the
 bet, the trip, the card), and commit this repository. Nothing else: no goals proposed, no other bets touched.
+
+**Done when:** one pending `strategy_draft` card for this bet exists (or one was already pending, and this task says so), the task is done with its note, and `state.md` has the line.

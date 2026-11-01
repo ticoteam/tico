@@ -12,7 +12,7 @@ day that is not Monday, stop at once.
    "<one sentence>" --source <post url> --quote "<the post's words>" --source-ref <intake id>`.
    A post with no concrete market fact is resolved at once:
    `hub listening item resolve <intake id> --status rejected --reason "<one sentence>"`.
-1. Read `market_insights` with status `new`, oldest first (`hub market` queue, or the insights route).
+1. Read the queue, oldest first: `hub sql "SELECT id, kind, about, claim, source_url, quote, urgent, source_ref FROM market_insights WHERE status = 'new' ORDER BY reported_at"`. `hub sql` is read-only.
 2. Resolve each name: `hub market find` over names, aliases and domains, then judgment. Record the alias you matched so the next mention is a lookup.
 3. Decide the shape. An insight may become a new entity, an edge, a property change, an `until` on an edge it contradicts, an alias, or nothing.
 4. Write the evidence row first, then the entity or edge that cites it. `hub market apply` does that and closes the insight as applied.
@@ -36,6 +36,9 @@ day that is not Monday, stop at once.
 8. On Mondays the sweep's date is a Monday: refresh the weekly delta page from `market_events`, then write the week's
    briefing (`playbooks/write-the-briefing.md`).
 9. Staleness: an entity past `last_verified` plus 60 days (core tier: 30) that you tried to check and could not verify is named in that same sweep, with what to look for. The server files a task on the Social Media Manager (`listening`) only for those. A date being old is not itself a task.
+
+Done when every insight you read is applied, merged, rejected or needs-human, each listening item you filed is resolved
+(or left `new` on purpose), and the sweep is filed.
 
 The sixteen relations, the evidence standard, entity resolution and the page templates are in `knowledge/market/`.
 Reporters do not carry a copy.
