@@ -2,6 +2,7 @@
 HQ, the refresh's vault write retried, and the refusals that keep the claim the only way to make a books connection.
 Nothing here calls HQ or the provider: `books_link._call` answers from lists."""
 import json
+import threading
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -617,3 +618,65 @@ def test_a_return_refused_already_connected_says_so_and_the_held_connection_keep
         held = SX.books_connections(c)
         assert len(held) == 1
         assert T.credential_secret(c, T._VAULT[0], str(SX.books_settings(c, held[0][0])["refresh"])) == "ref-2"
+
+
+# ------------------------------------------------------------------------------ a refresh and a replacement interleaved
+def test_a_refresh_that_finishes_after_a_newer_pair_was_saved_drops_its_own_pair(books, monkeypatch):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1"))])
+    cid = _claimed_xero(books, vault)
+
+    def refresh_while_a_newer_pair_lands(link, provider, company, refresh_token):
+        # an unlocked save lands while this refresh is at HQ, as a pair kept after a refused disconnect can
+        with books.transaction() as c:
+            books_link.save(c, cid, books_link._tokens(xero_tokens("acc-2", "ref-2")), by=OWNER, at=AT)
+        return books_link._tokens(xero_tokens("acc-3", "ref-3"))
+
+    monkeypatch.setattr(books_link, "refresh", refresh_while_a_newer_pair_lands)
+    assert books_link.access_token(books, vault, LINK, cid, "xero", now=LATER, force=True) == "acc-2"
+    with books.read() as c:
+        settings = SX.books_settings(c, cid)
+        assert T.credential_secret(c, vault, str(settings["refresh"])) == "ref-2"    # the newer pair stays
+        assert T.credential_secret(c, vault, str(settings["access"])) == "acc-2"
+        assert SX.books_status(c, cid) == "active"
+
+
+def test_a_replacement_waits_for_a_refresh_at_hq_and_the_newer_pair_is_the_one_kept(books, monkeypatch):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement())])
+    cid = _claimed_xero(books, vault)
+    at_hq, release = threading.Event(), threading.Event()
+
+    def slow_refresh(link, provider, company, refresh_token):
+        at_hq.set()
+        assert release.wait(5)
+        return books_link._tokens(xero_tokens("acc-3", "ref-3"))
+
+    monkeypatch.setattr(books_link, "refresh", slow_refresh)
+    done: dict[str, Any] = {}
+
+    def refresh_now():
+        done["access"] = books_link.access_token(books, vault, LINK, cid, "xero", now=LATER, force=True)
+
+    def replace_now():
+        try:
+            _claimed_xero(books, vault)
+        except books_link.AlreadyConnected as refused:
+            done["replacement"] = refused.code
+
+    refresher = threading.Thread(target=refresh_now)
+    refresher.start()
+    assert at_hq.wait(5)
+    replacer = threading.Thread(target=replace_now)
+    replacer.start()
+    replacer.join(0.3)
+    assert replacer.is_alive()                  # the replacement waits for the refresh that holds the connection
+    with books.read() as c:
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-1"
+    release.set()
+    refresher.join(5)
+    replacer.join(5)
+    assert done == {"access": "acc-3", "replacement": "already_connected"}
+    with books.read() as c:
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-2"   # the replacement is last
+        assert SX.books_status(c, cid) == "active"

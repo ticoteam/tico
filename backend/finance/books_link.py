@@ -102,6 +102,11 @@ class Tokens:
         return "Tokens(<redacted>)"
 
 
+class _Superseded(Exception):
+    """A newer pair was saved for the connection after the pair being refreshed was read: the refreshed pair is stale and
+    is not kept. Internal to this module."""
+
+
 @dataclass(frozen=True)
 class _State:
     access: str
@@ -109,6 +114,7 @@ class _State:
     expires_at: str
     company: str
     realm: str
+    generation: int = 0    # saves of the connection's pair when this pair was read; a refresh saves only if unchanged
 
 
 def root(link: Link) -> Link:
@@ -190,7 +196,8 @@ def save(c: Any, cid: str, tokens: Tokens, *, by: str, at: str) -> None:
     SX.set_books_settings(c, cid, {
         "access": access, "refresh": refreshed, "expires_at": tokens.expires_at,
         "refresh_expires_at": tokens.refresh_expires_at,
-        "realm_id": tokens.realm_id or old.get("realm_id"), "tenant_id": tokens.tenant_id or old.get("tenant_id")})
+        "realm_id": tokens.realm_id or old.get("realm_id"), "tenant_id": tokens.tenant_id or old.get("tenant_id"),
+        "generation": _generation(old) + 1})
     for key in ("access", "refresh"):
         if old.get(key) and old.get(key) != SX.books_settings(c, cid).get(key):
             tico.drop_credential(c, str(old[key]))
@@ -200,11 +207,17 @@ def _secret(c: Any, vault: object, credential_id: object) -> str:
     return tico.credential_secret(c, vault, str(credential_id)) if credential_id else ""
 
 
+def _generation(books: Mapping[str, object]) -> int:
+    """How many times the connection's pair has been saved. A refresh saves its pair only while this is unchanged."""
+    value = books.get("generation")
+    return value if isinstance(value, int) else 0
+
+
 def _state(c: Any, vault: object, cid: str) -> _State:
     books = SX.books_settings(c, cid)
     return _State(access=_secret(c, vault, books.get("access")), refresh_token=_secret(c, vault, books.get("refresh")),
                   expires_at=str(books.get("expires_at") or ""), company=str(books.get("company_id") or ""),
-                  realm=str(books.get("realm_id") or ""))
+                  realm=str(books.get("realm_id") or ""), generation=_generation(books))
 
 
 def _due(expires_at: str, now: str) -> bool:
@@ -226,40 +239,49 @@ def realm_of(store: Any, vault: object, cid: str) -> str:
         return _state(c, vault, cid).realm
 
 
-def _refreshed(store: Any, vault: object, link: Link, cid: str, provider: str, state: _State) -> Tokens:
-    """HQ's refresh of the connection's pair. HQ answers not_connected when the pair posted is no longer the company's
-    (a refresh saved another meanwhile), so the vault is read again and the refresh is tried once with what it holds."""
+def _refreshed(store: Any, vault: object, link: Link, cid: str, provider: str,
+               state: _State) -> tuple[Tokens, int]:
+    """HQ's refresh of the connection's pair, with the generation of the pair it was made from. HQ answers not_connected
+    when the pair posted is no longer the company's (a refresh saved another meanwhile), so the vault is read again and
+    the refresh is tried once with what it holds."""
     try:
-        return refresh(link, provider, state.company, state.refresh_token)
+        return refresh(link, provider, state.company, state.refresh_token), state.generation
     except NotConnected:
         pass
     current = _current(store, vault, cid)
     if not current.refresh_token or current.refresh_token == state.refresh_token:
         raise ReconnectRequired("not_connected")
     try:
-        return refresh(link, provider, current.company, current.refresh_token)
+        return refresh(link, provider, current.company, current.refresh_token), current.generation
     except NotConnected:
         raise ReconnectRequired("not_connected") from None
 
 
-def _save_rotated(store: Any, cid: str, fresh: Tokens, now: str, *, tries: int = VAULT_TRIES) -> bool:
-    """Writes a rotated pair to the vault, up to `tries` times. True when one write lands."""
+def _save_rotated(store: Any, cid: str, fresh: Tokens, now: str, *, tries: int = VAULT_TRIES,
+                  expect: int | None = None) -> bool:
+    """Writes a rotated pair to the vault, up to `tries` times. True when one write lands. With `expect`, the pair is
+    written only while the connection is still at that generation: a newer save since then raises _Superseded."""
     for attempt in range(1, tries + 1):
         try:
             with store.transaction() as c:
+                if expect is not None and _generation(SX.books_settings(c, cid)) != expect:
+                    raise _Superseded()
                 save(c, cid, fresh, by=SYSTEM, at=now)
             return True
+        except _Superseded:
+            raise
         except Exception:  # noqa: BLE001 - any failure of the vault write is retried; the rotated pair must not be lost
             log.warning("Books connection %s: vault write try %d of %d failed after a refresh", cid, attempt, tries,
                         exc_info=True)
     return False
 
 
-def _keep_rotated(store: Any, cid: str, fresh: Tokens, provider: str, now: str) -> None:
+def _keep_rotated(store: Any, cid: str, fresh: Tokens, provider: str, now: str, *, expect: int) -> None:
     """The pair a refresh rotated, into the vault. QuickBooks has already retired the old refresh token, so the new pair
     is held here while the write is tried VAULT_TRIES times; when every try fails the connection asks for a reconnect
-    and ReconnectRequired is raised, as connect_claim does."""
-    if _save_rotated(store, cid, fresh, now):
+    and ReconnectRequired is raised, as connect_claim does. A pair a newer save overtook raises _Superseded instead, and
+    is not kept."""
+    if _save_rotated(store, cid, fresh, now, expect=expect):
         return
     with store.transaction() as c:
         SX.set_connection_status(c, cid, "reconnect", "vault_write_failed", now)
@@ -285,7 +307,7 @@ def access_token(store: Any, vault: object, link: Link, cid: str, provider: str,
         if not state.refresh_token:
             raise ReconnectRequired("no_refresh_token")
         try:
-            fresh = _refreshed(store, vault, link, cid, provider, state)
+            fresh, generation = _refreshed(store, vault, link, cid, provider, state)
         except ReconnectRequired:
             with store.transaction() as c:
                 SX.set_connection_status(c, cid, "reconnect", "reconnect_required", now)
@@ -293,8 +315,20 @@ def access_token(store: Any, vault: object, link: Link, cid: str, provider: str,
                                "The grant for this books connection no longer works. Connect it again in Finance; "
                                "the mirror waits until then.")
             raise
-        _keep_rotated(store, cid, fresh, provider, now)
+        try:
+            _keep_rotated(store, cid, fresh, provider, now, expect=generation)
+        except _Superseded:
+            return _newer_access(store, vault, cid, now=now)
         return fresh.access_token
+
+
+def _newer_access(store: Any, vault: object, cid: str, *, now: str) -> str:
+    """The access token of the pair a newer save put in the vault while a refresh was at HQ. The refreshed pair was dropped
+    as stale: the newer pair's token is used while it is not due; otherwise the pass is retried (BrokerFailed)."""
+    current = _current(store, vault, cid)
+    if current.access and not _due(current.expires_at, now):
+        return current.access
+    raise BrokerFailed("superseded")
 
 
 def _same_account(c: Any, provider: str, tokens: Tokens) -> str | None:
@@ -337,14 +371,15 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
             SX.set_books_settings(c, cid, {"provider": provider, "company_id": company_id,
                                           "realm_id": tokens.realm_id, "tenant_id": tokens.tenant_id})
         SX.set_connection_status(c, cid, "reconnect", "vault_pending", now)
-    _keep_claimed(store, cid, tokens, provider=provider, by=by, now=now)
+    with _lock(cid):
+        _keep_claimed(store, cid, tokens, provider=provider, by=by, now=now)
     return cid
 
 
 def _keep_claimed(store: Any, cid: str, tokens: Tokens, *, provider: str, by: str, now: str) -> None:
     """A claimed pair into the vault for a books connection, which is active once it lands. The write is tried
     VAULT_TRIES times; when every try fails the connection stays in `reconnect`, a Needs-you item asks for a new connect,
-    and ReconnectRequired is raised."""
+    and ReconnectRequired is raised. The caller holds the connection's lock."""
     for attempt in range(1, VAULT_TRIES + 1):
         try:
             with store.transaction() as c:
@@ -379,12 +414,15 @@ def _replace_held(store: Any, *, provider: str, replacement: dict[str, Any], by:
     pair is."""
     fresh = _tokens(replacement)
     company = str(replacement.get("company_id") or "")
-    with store.transaction() as c:
+    with store.read() as c:
         cid = _held(c, provider, company_id=company, tenant_id=fresh.tenant_id)
-        if cid is None:
-            raise BrokerFailed("bad_answer")
-        SX.set_connection_status(c, cid, "reconnect", "vault_pending", now)
-    _keep_claimed(store, cid, fresh, provider=provider, by=by, now=now)
+    if cid is None:
+        raise BrokerFailed("bad_answer")
+    # The connection's lock, as a refresh takes it: a refresh at HQ finishes first, and no older pair is saved after this.
+    with _lock(cid):
+        with store.transaction() as c:
+            SX.set_connection_status(c, cid, "reconnect", "vault_pending", now)
+        _keep_claimed(store, cid, fresh, provider=provider, by=by, now=now)
 
 
 def _drop_grant(store: Any, vault: object, link: Link, cid: str, provider: str, state: _State) -> None:
@@ -414,18 +452,21 @@ def _refresh_for_disconnect(store: Any, vault: object, link: Link, cid: str, pro
         state = _current(store, vault, cid)
         if not state.refresh_token:
             raise ReconnectRequired("no_refresh_token")
-        fresh = _refreshed(store, vault, link, cid, provider, state)
+        fresh, generation = _refreshed(store, vault, link, cid, provider, state)
         unkept = None if _save_rotated(store, cid, fresh, now) else fresh
     held = _State(access=fresh.access_token, refresh_token=fresh.refresh_token, expires_at=fresh.expires_at,
-                  company=state.company, realm=state.realm)
+                  company=state.company, realm=state.realm, generation=generation)
     return held, unkept
 
 
-def _keep_unkept(store: Any, cid: str, fresh: Tokens, provider: str, *, now: str) -> None:
+def _keep_unkept(store: Any, cid: str, fresh: Tokens, provider: str, *, now: str, expect: int) -> None:
     """HQ refused a disconnect while the rotated pair is still only in memory: the write is tried once more. When it
     lands the connection stays with its pair. When it does not, the connection asks for a reconnect and the caller
-    gets a retryable error saying so."""
-    if _save_rotated(store, cid, fresh, now, tries=1):
+    gets a retryable error saying so. A pair saved since the refresh is newer, so this one is dropped."""
+    try:
+        if _save_rotated(store, cid, fresh, now, tries=1, expect=expect):
+            return
+    except _Superseded:
         return
     with store.transaction() as c:
         SX.set_connection_status(c, cid, "reconnect", "vault_write_failed", now)
@@ -453,7 +494,7 @@ def _revoked(store: Any, vault: object, link: Link, cid: str, provider: str, *, 
                 state, unkept = _refresh_for_disconnect(store, vault, link, cid, provider, now=now)
                 continue
             if unkept is not None:
-                _keep_unkept(store, cid, unkept, provider, now=now)
+                _keep_unkept(store, cid, unkept, provider, now=now, expect=state.generation)
             raise
 
 
