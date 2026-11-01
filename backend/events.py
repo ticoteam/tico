@@ -1006,7 +1006,8 @@ class _Viewer:
             return False
         keys = row.keys()
         conversation = self.conversation(row["conversation_id"]) if "conversation_id" in keys and row["conversation_id"] else None
-        if conversation and self.who.actor in (conversation.get("participants") or []):
+        if conversation and (self.who.actor in (conversation.get("participants") or [])
+                             or self.known.member(row["conversation_id"])):
             return True
         if "topic" in keys and row["topic"] == "tasks" and row["subject_id"]:
             task = H.task(self.c, row["subject_id"])
@@ -1251,7 +1252,7 @@ def _threads(view, rows):
             if not message or not threads.message_readable(view.c, view.reader, message, thread_checked=True):
                 continue
             entry["message_id"] = ref
-            entry["reactions"] = threads.reactions(view.c, [ref]).get(ref, [])
+            entry["reactions"] = view.known.reactions(threads.reactions(view.c, [ref]).get(ref, []), tid)
         elif kind == "counters":
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}

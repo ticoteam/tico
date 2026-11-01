@@ -5983,7 +5983,8 @@ def thread_members_list(api, args):
 
 
 @tool("hub_thread_members_add", "Add a person, bot or group to a thread, so it can read it. You need Write on them. A "
-      "group's members are resolved live, so leaving the group takes the access away.",
+      "group's members are resolved live, so leaving the group takes the access away. A company or team thread adds "
+      "only bots: everyone else already reads it.",
       {"thread": THREAD_ID, "actor": THREAD_ACTOR,
        "role": {"type": "string", "enum": ["member", "owner"], "default": "member"}},
       required=("thread", "actor"), writes=True)
@@ -5993,7 +5994,7 @@ def thread_members_add(api, args):
 
 
 @tool("hub_thread_members_remove", "Remove a person, bot or group from a thread: they stop reading it. The thread's "
-      "owner or an admin only.",
+      "owner or an admin only. A company or team thread removes only bots.",
       {"thread": THREAD_ID, "actor": THREAD_ACTOR}, required=("thread", "actor"), writes=True)
 def thread_members_remove(api, args):
     return api.call("DELETE", _thread_path(args["thread"], "members", quote(args["actor"], safe=":")), None,

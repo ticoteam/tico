@@ -776,7 +776,7 @@ class Known:
     def __init__(self, c, viewer, auth=None):
         self.c, self.viewer, self.auth = c, viewer, auth
         self.me = str(getattr(viewer, "actor", "") or "")
-        self._people = None
+        self._people = self._strangers = None
         self._in = {}
 
     @property
@@ -790,10 +790,47 @@ class Known:
         if not conversation_id:
             return False
         if conversation_id not in self._in:
-            row = self.c.execute("SELECT participants_json FROM conversations WHERE id=?",
-                                 (conversation_id,)).fetchone()
-            self._in[conversation_id] = bool(row) and self.me in (H._json(row[0], []) or [])
+            self._in[conversation_id] = self._in_conversation(conversation_id)
         return self._in[conversation_id]
+
+    def _in_conversation(self, conversation_id):
+        """On its participant list or its root's, or a member of its root, directly or through a group: a native DM lists
+        only its starter as a participant, and thread_members holds the rest."""
+        row = self.c.execute("SELECT participants_json, COALESCE(root_id,id) FROM conversations WHERE id=?",
+                             (conversation_id,)).fetchone()
+        if not row:
+            return False
+        if self.me in (H._json(row[0], []) or []):
+            return True
+        root = row[1]
+        if root != conversation_id:
+            above = self.c.execute("SELECT participants_json FROM conversations WHERE id=?", (root,)).fetchone()
+            if above and self.me in (H._json(above[0], []) or []):
+                return True
+        from . import threads
+        names = threads.Viewer(self.auth, self.viewer).member_names(self.c)
+        return self.c.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (%s) LIMIT 1"
+                              % ",".join("?" * len(names)), (root, *names)).fetchone() is not None
+
+    def name(self, actor, conversation_id):
+        """`actor`, or "" when they are unseen and the reader is not in this conversation."""
+        return "" if actor in self.people and not self.member(conversation_id) else actor
+
+    def reactions(self, marks, conversation_id):
+        """A message's reactions: the count stays, the actors leave out whoever this reader may not be told about."""
+        if not self.people or self.member(conversation_id):
+            return marks
+        return [{**mark, "actors": [a for a in mark["actors"] if a not in self.people]} for mark in marks]
+
+    def members(self, rows, conversation_id):
+        """A thread's member rows: someone not in the thread is told only of the teammates they may see, bots and groups
+        too, and never who added whom they may not see."""
+        if self.member(conversation_id):
+            return rows
+        if self._strangers is None:
+            self._strangers = hidden(self.c, self.viewer, "see", KINDS, self.auth)
+        return [{**row, "added_by": "" if row.get("added_by") in self._strangers else row.get("added_by")}
+                for row in rows if row["actor"] not in self._strangers]
 
     def message(self, message):
         if not self.people or not isinstance(message, dict):

@@ -220,7 +220,7 @@ const thvCanPost = view => view.opts.canPost ?? (view.thread ? !!view.thread.me?
 function thvActsHTML(view) {
   const t = view.thread;
   return `${callHeadHTML(view)}
-      ${!t.parent_id && ['members', 'personal'].includes(t.audience) ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : ''}
+      ${!t.parent_id && ['members', 'personal', 'company', 'team'].includes(t.audience) ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : ''}
       <button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="menu" aria-expanded="false" aria-label="Thread menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`;
 }
 function thvHeadHTML(view) {

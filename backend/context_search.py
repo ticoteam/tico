@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 from fastapi import Query, Request
 
-from . import documents, market, media, meetings, thread_search, threads
+from . import documents, market, media, meetings, threads
 from .store import Problem
 from . import task_privacy as privacy
 
@@ -67,10 +67,9 @@ def install_context_search(app, store, auth):
             index()
         with store.read() as c:
             if source in ("all", "threads"):
-                # Thread messages the viewer may read: C1 as SQL, so a thread they may not read is never a hit.
+                # Thread messages the viewer may read: C1 for each hit, so a thread they may not read is never one.
                 v = threads.viewer(auth, who)
-                for hit in thread_search.search(c, q, thread_sql=threads.readable_sql(c, v, "cv"),
-                                                message_sql=threads.message_sql(c, v, "m"), limit=limit)["hits"]:
+                for hit in threads.search(c, v, q, limit=limit)["hits"]:
                     found.append({"kind": "thread_message", "id": hit["message_id"], "title": hit["title"] or "",
                                   "thread_id": hit["thread_id"], "excerpt": hit["excerpt"],
                                   "url": "#/thread/" + quote(hit["thread_id"], safe=""), "score": len(words)})

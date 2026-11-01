@@ -29,7 +29,8 @@ def post(c, mid, thread, body, actor="human:ana", refs=None):
 
 
 def find(c, query, **kw):
-    return search.search(c, query, thread_sql=THREADS, message_sql=MESSAGES, **kw)
+    return search.search(c, query, thread_sql=THREADS, message_sql=MESSAGES, readable=kw.pop("readable", lambda m: True),
+                         **kw)
 
 
 def ids(result):
@@ -119,3 +120,31 @@ def test_ensure_fills_an_index_from_existing_messages_and_keeps_it():
     assert search.ensure(c)
     assert c.execute("SELECT COUNT(*) FROM message_search").fetchone()[0] == before == 1
     assert ids(find(c, "memo")) == ["old"]
+
+
+def test_a_hit_the_full_check_refuses_is_not_counted_paged_or_hinted_at():
+    c = database()
+    for n in range(9):
+        post(c, f"m{n}", "t-open", "budget")
+    shown = {"m8", "m6", "m1"}
+    readable = lambda m: m["id"] in shown
+    first = find(c, "budget", limit=2, readable=readable)
+    assert ids(first) == ["m8", "m6"] and first["next_cursor"]
+    second = find(c, "budget", limit=2, readable=readable, before=first["next_cursor"])
+    assert ids(second) == ["m1"] and second["next_cursor"] is None
+    # An exact fit has no further page, and a viewer who reads nothing gets nothing that says there was something.
+    exact = find(c, "budget", limit=3, readable=readable)
+    assert len(ids(exact)) == 3 and exact["next_cursor"] is None
+    assert find(c, "budget", readable=lambda m: False) == {"hits": [], "next_cursor": None}
+
+
+def test_a_page_past_the_scan_budget_goes_on_from_its_last_hit_and_an_empty_one_ends(monkeypatch):
+    monkeypatch.setattr(search, "SCAN_BATCH", 2)
+    monkeypatch.setattr(search, "SCAN_MAX", 4)
+    c = database()
+    for n in range(8):
+        post(c, f"m{n}", "t-open", "budget")
+    readable = lambda m: m["id"] in ("m7", "m1")
+    first = find(c, "budget", readable=readable)
+    assert ids(first) == ["m7"] and first["next_cursor"]
+    assert find(c, "budget", readable=lambda m: m["id"] == "m0") == {"hits": [], "next_cursor": None}

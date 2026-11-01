@@ -442,7 +442,7 @@ class Viewer:
         self.auth, self.who = auth, who
         self.actor = str(getattr(who, "actor", "") or "")
         self.role = str(getattr(who, "role", "") or "")
-        self._chain = self._hidden = self._shared = self._admin = self._tasks = self._standing = None
+        self._chain = self._hidden = self._shared = self._admin = self._tasks = self._standing = self._known = None
         self._threads = {}
         self._legacy = {}
 
@@ -487,6 +487,13 @@ class Viewer:
     def member_names(self, c):
         """The `thread_members.actor` values that name this viewer: itself and its groups."""
         return [self.actor] + ["group:" + g for g in self.chain(c)]
+
+    def known(self, c):
+        """Which people a thread answer may name to this viewer (teammate_access.Known), asked once a request."""
+        if self._known is None:
+            from . import teammate_access
+            self._known = teammate_access.Known(c, self.who, self.auth)
+        return self._known
 
     def hidden_read(self, c):
         """Every teammate whose Home this viewer may not read."""
@@ -632,7 +639,10 @@ def denial(c, v, row):
         found = _legacy_home(c, v, root["id"]) if row["id"] == root["id"] else None
         return None if found and v.shared_slugs(c, sorted(found["slugs"])) else _MISSING
     if audience == "personal":
-        if v.actor != personal_owner(root) and not _is_member(c, v, root["id"]):
+        # A DM reads by its membership, so whoever leaves it stops reading, its starter too. A special room (room_key: a
+        # bot's personal chat, Strategy) has no member rows and stays its owner's.
+        owns = bool(root.get("room_key")) and v.actor == personal_owner(root)
+        if not owns and not _is_member(c, v, root["id"]):
             return _MISSING
         # The owner's Strategy chat belongs to the owner seat (backend/assistant.py move_strategy_room).
         if root.get("room_key") == STRATEGY_ROOM and v.role != "owner":
@@ -1004,7 +1014,8 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
             f"WHEN 'members' THEN {member} "
             f"WHEN 'task' THEN r.task_id IS NOT NULL "
             f"WHEN 'home' THEN {home} "
-            f"WHEN 'personal' THEN (COALESCE(r.owner_actor,{_FIRST_HUMAN.format(r='r')})={me} OR {member}) "
+            f"WHEN 'personal' THEN ((COALESCE(r.room_key,'')<>'' AND COALESCE(r.owner_actor,{_FIRST_HUMAN.format(r='r')})={me}) "
+            f"OR {member}) "
             f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
             f"WHEN 'participants' THEN {participant} "
             f"WHEN 'meeting' THEN {meeting_term} ELSE 0 END END")
@@ -1331,10 +1342,11 @@ def deliver(c, thread, message, in_audience, posting):
 
 def _dm_members(c, root):
     members = [r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (root["id"],))]
-    owner = root.get("owner_actor")
-    if audience_of(root) == "personal" and owner:
-        members.append(owner)
-    if audience_of(root) == "participants":
+    audience = audience_of(root)
+    # A DM's member rows are all of it. A special room has none: its owner and its bot are its people.
+    if audience == "personal" and root.get("room_key"):
+        members += [root.get("owner_actor")] + list(root.get("participants") or [])
+    if audience == "participants":
         members += list(root.get("participants") or [])
     return [a for a in dict.fromkeys(members) if str(a).startswith(("human:", "bot:"))]
 
@@ -1706,6 +1718,9 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
         target = H.resolve_actor(c, to_actor) or (to_actor if str(to_actor).startswith(OUTSIDE_PREFIXES) else None)
         if not target:
             raise Problem("not_found", "Unknown recipient", 404)
+        # Addressing is an answer about who exists: anyone not in the thread with the author takes the See gate.
+        if v is not None and not _in_it_together(c, thread, actor, target) and not _may_see(c, v, target):
+            raise Problem("not_found", "Unknown recipient", 404)
         if not str(target).startswith(OUTSIDE_PREFIXES) and not audience_has(c, thread, target):
             raise Problem("forbidden", "That teammate cannot read this thread. Add them first.", 403)
     elif kind == "ask":
@@ -1859,7 +1874,7 @@ def _create_plan(c, principal, *, title="", audience="members", audience_group_i
     for m in members or ():
         target = H.resolve_actor(c, m) if not str(m).startswith("group:") else m
         if not target:
-            raise Problem("not_found", f"Unknown teammate {m}", 404)
+            raise Problem("not_found", "Unknown teammate", 404)
         if target != actor:
             _require_write(c, v, target)
             resolved.append(target)
@@ -1871,8 +1886,10 @@ def _create_from(c, principal, plan):
     actor, _v = _actor_of(principal)
     audience, resolved = plan["audience"], plan["members"]
     owner = actor if audience != "task" else None
+    # On a public thread a bot's participation is its grant (`_bot_standing`); a person already reads it.
+    bots = [m for m in resolved if _public_member(c, m)] if audience in PUBLIC_AUDIENCES else ()
     row = _insert_thread(c, actor, title=plan["title"], audience=audience, audience_group_id=plan["audience_group_id"],
-                         owner_actor=owner, task_id=plan["task_id"], kind=plan["kind"])
+                         owner_actor=owner, task_id=plan["task_id"], kind=plan["kind"], participants=bots)
     now = _now()
     if audience in ("members", "personal"):
         for who, role in [(actor, "owner")] + [(m, "member") for m in resolved]:
@@ -1910,8 +1927,9 @@ def dm(c, principal, members, *, title=""):
     `post(..., start={"dm": members})`: a held first message makes no DM."""
     actor, v = _actor_of(principal)
     resolved = _dm_members_for(c, actor, members)
+    # Write gates starting a DM (`_create_plan`). Opening one you are already in needs nothing more.
     existing = _open_dm(c, actor, resolved)
-    if existing:
+    if existing and (v is None or denial(c, v, thread_row(c, existing)) is None):
         return view(c, principal, thread_row(c, existing))
     return create(c, principal, title=title, audience="personal", members=resolved)
 
@@ -1921,7 +1939,7 @@ def _dm_members_for(c, actor, members):
     for m in members or ():
         target = H.resolve_actor(c, m)
         if not target:
-            raise Problem("not_found", f"Unknown teammate {m}", 404)
+            raise Problem("not_found", "Unknown teammate", 404)
         if target != actor and target not in resolved:
             resolved.append(target)
     if not resolved:
@@ -1938,7 +1956,87 @@ def _open_dm(c, actor, resolved):
         have = {x[0] for x in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (r[0],))}
         if have == want:
             return r[0]
+    # A migrated DM or personal chat has no stored audience: its participant list is who it is with.
+    for r in c.execute("SELECT c.id, c.participants_json, c.scope, c.owner_actor FROM conversations c "
+                       "WHERE c.audience IS NULL AND c.kind='chat' AND c.task_id IS NULL AND c.parent_id IS NULL "
+                       "AND c.closed_at IS NULL AND c.archived_at IS NULL "
+                       "AND COALESCE(c.scope,'direct') IN ('direct','personal') "
+                       f"AND EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='c')} WHERE value=?) "
+                       "ORDER BY COALESCE(c.last_message_at,c.created) DESC LIMIT 200", (actor,)):
+        if set(H._json(r[1], []) or []) == want and (r[2] != "personal" or r[3] == actor):
+            return r[0]
     return None
+
+
+def personal_dm(c, thread_id, actor, people):
+    """Make a row a legacy writer just opened a DM as `threads.dm` makes one: `personal`, read by its members only, so
+    no owner inspection applies to it. The scope stays as `_insert_thread` writes it."""
+    now = _now()
+    c.execute("UPDATE conversations SET audience='personal', owner_actor=?, updated_at=? WHERE id=?",
+              (actor, now, thread_id))
+    for who in people:
+        c.execute("INSERT OR IGNORE INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "
+                  "VALUES(?,?,?,?,?,?,?)", (_new_id(), thread_id, who, "owner" if who == actor else "member", actor,
+                                            now, now))
+        _follow(c, thread_id, who, "starter" if who == actor else "joined", 0)
+
+
+def in_membership(c, thread, actor):
+    """Whether `actor` is one of the thread's own people: on its root's participant list or among its members, directly
+    or through a group. Unlike `audience_has`, a company thread's readers are not all in it."""
+    root = root_of(c, thread)
+    if root is None:
+        return False
+    if actor in (root.get("participants") or []):
+        return True
+    v = actor_viewer(c, actor)
+    names = v.member_names(c) if v is not None else [actor]
+    return c.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (%s) LIMIT 1"
+                     % ",".join("?" * len(names)), (root["id"], *names)).fetchone() is not None
+
+
+def _in_it_together(c, thread, actor, other):
+    return in_membership(c, thread, actor) and in_membership(c, thread, other)
+
+
+def _may_see(c, v, target):
+    from . import teammate_access
+    if str(target).startswith(OUTSIDE_PREFIXES) or remote_guest(c, target):
+        return True                      # not a teammate here: the outside destination's own rules apply
+    try:
+        return teammate_access.levels_for(c, v.who, target, auth=v.auth)["see"]
+    except (ValueError, KeyError):
+        return False
+
+
+def asks_still_readable(c, actor, messages):
+    """The loose asks to `actor` they may still read. A stored audience is the outer boundary: an ask in a thread they
+    left is off their list until they are back. A row with no stored audience keeps its addressee, who may never have
+    been on its participant list."""
+    v = None
+    out = []
+    for m in messages:
+        root = root_of(c, m["conversation_id"])
+        if root is not None and root.get("audience") in AUDIENCES:
+            v = v or actor_viewer(c, actor)
+            if v is None or not message_readable(c, v, m):
+                continue
+        out.append(m)
+    return out
+
+
+def search(c, v, query, *, limit=20, before=None):
+    """Message search as this viewer: `thread_search` over C1, each hit decided in full and its author named as `Known`
+    says. The SQL only narrows; a hit is shown when `message_readable` says so (a private task, a restricted message)."""
+    from . import thread_search
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    found = thread_search.search(c, query, thread_sql=readable_sql(c, v, "cv"), message_sql=message_sql(c, v, "m"),
+                                 readable=lambda m: message_readable(c, v, m), limit=limit, before=before)
+    known = v.known(c)
+    hits = [{**hit, "from_actor": known.message({"from_actor": hit["from_actor"],
+                                                 "conversation_id": hit["thread_id"]})["from_actor"]}
+            for hit in found["hits"]]
+    return {**found, "hits": hits}
 
 
 def home(c, owner_actor, *, create=True):
@@ -2121,9 +2219,20 @@ def _require_thread(c, principal, thread_id):
 def _root_for_membership(c, principal, thread_id):
     actor, v, row = _require_thread(c, principal, thread_id)
     root = root_of(c, row)
-    if audience_of(root) not in ("members", "personal", "participants"):
-        raise Problem("audience", "Only a members thread or a DM has members", 422)
+    if audience_of(root) not in ("members", "personal", "participants") + PUBLIC_AUDIENCES:
+        raise Problem("audience", "Only a members or public thread or a DM has members", 422)
     return actor, v, root
+
+
+def _public_member(c, target):
+    return str(target).startswith("bot:") and not remote_guest(c, target)
+
+
+def _with_participants(c, root, added):
+    people = list(root.get("participants") or [])
+    fresh = [a for a in added if a not in people]
+    if fresh:
+        c.execute("UPDATE conversations SET participants_json=? WHERE id=?", (H._dump(people + fresh), root["id"]))
 
 
 def add_member(c, principal, thread_id, actor, *, role="member"):
@@ -2133,6 +2242,9 @@ def add_member(c, principal, thread_id, actor, *, role="member"):
         raise Problem("not_found", "Unknown teammate", 404)
     if role not in ("owner", "member"):
         raise Problem("role", "A member is owner or member", 422)
+    public = audience_of(root) in PUBLIC_AUDIENCES
+    if public and (role != "member" or not _public_member(c, target)):
+        raise Problem("audience", "A public thread adds only bots: everyone else already reads it", 422)
     if role == "owner" and (remote_guest(c, target) or str(target).startswith(OUTSIDE_PREFIXES)):
         raise Problem("role", "A remote member is a guest, never an owner", 422)
     if role == "owner" and v is not None and not can_manage(c, v, root):
@@ -2141,13 +2253,12 @@ def add_member(c, principal, thread_id, actor, *, role="member"):
         raise Problem("forbidden", "You can read this thread but not add to it", 403)
     _require_write(c, v, target)
     now = _now()
-    c.execute("INSERT INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?) "
-              "ON CONFLICT(thread_id,actor) DO UPDATE SET role=excluded.role, updated_at=excluded.updated_at",
-              (_new_id(), root["id"], target, role, me, now, now))
-    if audience_of(root) == "participants":
-        people = list(root.get("participants") or [])
-        if target not in people:
-            c.execute("UPDATE conversations SET participants_json=? WHERE id=?", (H._dump(people + [target]), root["id"]))
+    if not public:      # a public thread's bots are its participants: thread_members grants nothing there
+        c.execute("INSERT INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "
+                  "VALUES(?,?,?,?,?,?,?) ON CONFLICT(thread_id,actor) DO UPDATE SET role=excluded.role, "
+                  "updated_at=excluded.updated_at", (_new_id(), root["id"], target, role, me, now, now))
+    if public or audience_of(root) == "participants":
+        _with_participants(c, root, [target])
     _follow(c, root["id"], target, "joined", root.get("last_seq") or 0)
     c.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, root["id"]))
     _event(c, me, "thread.member_added", root["id"], {"actor": target, "role": role})
@@ -2159,10 +2270,15 @@ def remove_member(c, principal, thread_id, actor):
     me, v, root = _root_for_membership(c, principal, thread_id)
     if v is not None and actor != me and not can_manage(c, v, root):
         raise Problem("forbidden", "Only the thread's owner removes a member", 403)
+    if audience_of(root) in PUBLIC_AUDIENCES and not _public_member(c, actor):
+        raise Problem("audience", "A public thread removes only bots: everyone else reads it anyway", 422)
     gone = c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor=?", (root["id"], actor)).rowcount
-    if audience_of(root) == "participants":
-        people = [p for p in root.get("participants") or [] if p != actor]
-        c.execute("UPDATE conversations SET participants_json=? WHERE id=?", (H._dump(people), root["id"]))
+    # Whatever the audience: a participant's grant reads as membership does, so leaving takes both.
+    people = list(root.get("participants") or [])
+    if actor in people:
+        gone = 1
+        c.execute("UPDATE conversations SET participants_json=? WHERE id=?",
+                  (H._dump([p for p in people if p != actor]), root["id"]))
     # Losing access: the follower rows of the subtree go, and undelivered deliveries become moot.
     c.execute("DELETE FROM thread_followers WHERE actor=? AND thread_id IN (SELECT id FROM conversations WHERE "
               "root_id=?)", (actor, root["id"]))
@@ -2179,13 +2295,20 @@ def members(c, v, thread_id, *, cursor=None, limit=100):
     row = require(c, v, thread_id)
     root = root_of(c, row)
     limit = max(1, min(int(limit or 100), MAX_PAGE))
-    rows = c.execute("SELECT actor, role, added_by, created_at FROM thread_members WHERE thread_id=? AND actor>? "
-                     "ORDER BY actor LIMIT ?", (root["id"], cursor or "", limit + 1)).fetchall()
-    out = [dict(r) for r in rows[:limit]]
-    if audience_of(root) == "participants" and not out and not cursor:
-        out = [{"actor": a, "role": "member", "added_by": None, "created_at": root.get("created")}
-               for a in root.get("participants") or []][:limit]
-    return {"members": out, "next_cursor": out[-1]["actor"] if len(rows) > limit else None}
+    rows = [dict(r) for r in c.execute("SELECT actor, role, added_by, created_at FROM thread_members WHERE thread_id=? "
+                                       "AND actor>? ORDER BY actor LIMIT ?", (root["id"], cursor or "", limit + 1))]
+    participant = lambda a: {"actor": a, "role": "member", "added_by": None, "created_at": root.get("created")}
+    if audience_of(root) in PUBLIC_AUDIENCES:
+        have = {r["actor"] for r in rows}
+        rows += [participant(a) for a in root.get("participants") or []
+                 if _public_member(c, a) and a > (cursor or "") and a not in have]
+        rows = sorted(rows, key=lambda r: r["actor"])[:limit + 1]
+    page = rows[:limit]
+    if audience_of(root) == "participants" and not page and not cursor:
+        page = [participant(a) for a in root.get("participants") or []][:limit]
+    # The cursor keeps to the stored rows, so what this viewer may not be told does not move it.
+    next_cursor = page[-1]["actor"] if len(rows) > limit else None
+    return {"members": v.known(c).members(page, root["id"]), "next_cursor": next_cursor}
 
 
 def follow(c, v, thread_id, *, notify="live"):
@@ -2234,6 +2357,14 @@ def set_audience(c, principal, thread_id, audience, *, audience_group_id=None):
         owner = root.get("owner_actor") or actor
         c.execute("INSERT OR IGNORE INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "
                   "VALUES(?,?,?,'owner',?,?,?)", (_new_id(), root["id"], owner, actor, now, now))
+        # The bots a public thread had keep their grant, as members now.
+        for bot in [a for a in root.get("participants") or [] if _public_member(c, a)]:
+            c.execute("INSERT OR IGNORE INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "
+                      "VALUES(?,?,?,'member',?,?,?)", (_new_id(), root["id"], bot, actor, now, now))
+    else:
+        # A member bot keeps its grant on the public thread: an external agent has no standing read there.
+        _with_participants(c, root, [r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?",
+                                                             (root["id"],)) if _public_member(c, r[0])])
     _event(c, actor, "thread.audience", root["id"], {"from": current, "to": audience, "group": group})
     _audit(c, actor, "thread:" + root["id"], {"audience": current, "audience_group_id": root.get("audience_group_id")},
            {"audience": audience, "audience_group_id": group})
@@ -2463,6 +2594,8 @@ def view(c, principal, row, *, follower=None):
            "last_seq": int(row.get("last_seq") or 0), "last_unread_seq": int(row.get("last_unread_seq") or 0)}
     if out["audience"] == "home":
         out["home"] = {"actor": home_owner(root)}
+    elif v is not None:
+        out["owner_actor"] = v.known(c).name(out["owner_actor"], root["id"])
     only_old = v is not None and legacy_reader_only(c, v, row)
     if only_old:
         last = c.execute("SELECT MAX(seq), MAX(created) FROM messages WHERE conversation_id=? AND legacy_audience "
@@ -2530,10 +2663,11 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
     marks = reactions(c, ids)
     # Every message sits at its thread's depth in the tree: 0 in a root, 1 in a sub-thread, and so on (`path`).
     depth = max(0, len([p for p in str(row.get("path") or f"/{row['id']}/").split("/") if p]) - 1)
+    known = v.known(c)
     out, size, hidden_open = [], 0, False
     for m in rows:
         if m.get("deleted_at") and readable_before_deletion(c, v, m):
-            item = {**_message_out(m), "depth": depth}
+            item = {**known.message(_message_out(m)), "depth": depth}
             hidden_open = False
         elif m.get("deleted_at"):
             if hidden_open:
@@ -2546,12 +2680,12 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
             item = {"id": m["id"], "seq": m["seq"], "thread_id": row["id"], "hidden": True}
             hidden_open = True
         else:
-            item = {**_message_out(m), "depth": depth}
+            item = {**known.message(_message_out(m)), "depth": depth}
             hidden_open = False
         if m["id"] in subs and not item.get("hidden"):
             item["sub_thread"] = subs[m["id"]]
         if m["id"] in marks and not item.get("hidden") and not item.get("deleted"):
-            item["reactions"] = marks[m["id"]]
+            item["reactions"] = known.reactions(marks[m["id"]], row["id"])
         size += len(json.dumps(item, default=str))
         if out and size > max_bytes:
             more = True
