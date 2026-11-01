@@ -37,7 +37,10 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
   and `origin` the message's id on its side. `apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None)`
   writes the verdict inside the write and returns None (deliver), `{"warn": line}` (deliver with the line), or
   `{"held": view}` (write nothing); `answer(gate)` is what the write answers with. `changed(...)` answers a write whose
-  destination moved. `place` is a dict, or a function of (c, principal, recipients) that reads it inside the check
+  destination moved. A thread message is checked as operation `threads` (not `message`, the chat's replayer), with
+  `payload` the body text (the reviewer reads it) and `replay={"thread_id", "body", "kind", "refs", "parent_message_id",
+  "to_actor", "via", "origin", "attachments"}`: the `threads` replayer posts it again as the person it was held for.
+  `place` is a dict, or a function of (c, principal, recipients) that reads it inside the check
   (`place_for`: the thread, its root and audience, kind, teams and outside members).
 - Where: a rule's `where:` (`thread:<id>`, `team:<group>`, `kind:dm`, `has_outside_members`) is matched on the place.
   Messages and task comments have a place through their thread (a task comment's is its task's conversation). Mail and
@@ -99,6 +102,7 @@ OPERATIONS = {
     "reply": "a reply in a conversation", "automation": "an automation's write", "slack": "a Slack reply",
     "mail": "an email", "update": "an update", "task_question": "a question put to a person",
     "slack_message": "a Slack message", "federated_message": "a message from another Tico",
+    "threads": "a thread message",
 }
 DRAFT_AS = {"message": "message", "comment": "comment", "task": "task_create", "assign": "task_owner"}
 
@@ -1275,6 +1279,20 @@ def _replay_mail(c, bot, hold, replay, ingest, gate=None):
     _tell_bot(c, hold["author"], "The email you were told was held may go now: send that exact draft again "
               f"(hold {hold['id']}).")
     return {"approved": True}
+
+
+THREAD_REPLAY = ("kind", "refs", "parent_message_id", "to_actor", "via", "origin", "attachments")
+
+
+@replayer("threads")
+def _replay_thread(c, bot, hold, replay, ingest, gate=None):
+    """A message held in a thread: Send anyway posts it again through `threads.post`, as the person it was held for
+    (`bot` is their replay identity), with the check skipped; the hold's nonce and the reviewer's send are the check.
+    `replay` is what core's post passed to `apply`: `thread_id` and `body`, and the post's own arguments
+    (`THREAD_REPLAY`)."""
+    args = {k: replay[k] for k in THREAD_REPLAY if replay.get(k) is not None}
+    message = T.post(c, bot, replay["thread_id"], replay["body"], checked=None, **args)
+    return {"id": (message or {}).get("id")}
 
 
 # ----------------------------------------------------------------------------- stats and health

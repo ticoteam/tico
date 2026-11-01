@@ -272,3 +272,32 @@ def test_an_inbound_message_with_no_principal_is_held_as_its_source(ruled):
     verdict = K.inbound(api.app.state.store, judge, None, "message", "Our favorite color is gold.", ["human:ben"],
                         source="federation", origin="hub-b.example")
     assert verdict["author"] == "federation:hub-b.example" and K.holds(verdict)
+
+
+def test_send_anyway_posts_a_held_thread_message_once_as_the_person(ruled):
+    api, judge = ruled
+    block_everyone(api)
+    store, text = api.app.state.store, "Our favorite color is gold."
+    with store.transaction() as c:
+        thread = H.open_conversation(c, "human:cara", ["human:cara", "human:ben"], kind="chat", subject="Colors")
+
+    def place(c, author, recipients):
+        return K.place_for(c, author, recipients, thread["id"])
+    verdict = K.preflight(store, judge, Identity("human:cara", "human"), "threads", text, ["human:ben"],
+                          place=place)
+    assert verdict["outcome"] == "broken" and K.holds(verdict)
+    replay = {"thread_id": thread["id"], "body": text, "kind": "say", "refs": None, "parent_message_id": None,
+              "to_actor": None, "via": None, "origin": None, "attachments": None}
+    with store.transaction() as c:
+        held = K.apply(c, verdict, text, replay)["held"]
+    assert bodies(api, "favorite color is gold") == []                    # held: nothing is written yet
+    calls = len(judge.calls)
+    view = get(api, f"rule-holds/{held['id']}")
+    assert view["can_send"] and view["text"] == text
+    sent = post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]})
+    assert sent["hold"]["state"] == "sent"
+    assert len(bodies(api, "favorite color is gold")) == 1 and len(judge.calls) == calls   # no second check
+    with store.read() as c:
+        row = c.execute("SELECT from_actor, conversation_id FROM messages WHERE body=?", (text,)).fetchone()
+    assert (row[0], row[1]) == ("human:cara", thread["id"])               # as the person, into the thread
+    post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, expected=409)

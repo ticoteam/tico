@@ -82,6 +82,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await threadRow.waitFor({timeout: t(10000)});
     const threadRule = await ok(page, 'GET', '/v2/rules/' + (await threadRow.getAttribute('data-rule')));
     assert.deepEqual(threadRule.where, ['thread:' + thread.id]);
+    await row.click();   // saving the threaded rule opened its panel; the edit below is for the first rule
 
     // Edit it in the side panel.
     const side = page.locator('#ru-side');
