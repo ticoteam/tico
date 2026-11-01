@@ -132,6 +132,13 @@ def test_summary_keeps_north_star_and_channels_when_a_field_is_long(api):
     assert all(item in avoid for item in listed)
 
 
+def test_clip_keeps_abbreviations_and_whole_words():
+    assert B._clip("U.S. homeowners with 1-3 units. Next: managers.", 90, first=True) == "U.S. homeowners with 1-3 units"
+    assert B._clip("Dr. Smith and other dentists", 90, first=True) == "Dr. Smith and other dentists"
+    assert B._clip("Owners (Oct 9). Not now: big operators", 90, first=True) == "Owners (Oct 9)"
+    assert B._clip("one two three four", 12) == "one two…"
+
+
 def test_check_finds_avoided_words_wrong_names_and_never_claims_at_word_boundaries():
     hits = B.check(BRAND, "Cheap and eco-friendly! Book AcmeClean today; cheapest maids aren't a maid.")
     assert [(h["kind"], h["match"], h["level"]) for h in hits] == [

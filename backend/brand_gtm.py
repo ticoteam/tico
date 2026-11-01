@@ -91,11 +91,11 @@ def _names(items, key, limit):
 
 
 def _clip(text, limit, first=False):
-    """Free text as one line: its first sentence when `first` (split on ". ", "; " or a newline), cut to `limit`
-    characters at a word boundary with "…". Never cuts a word."""
+    """Free text as one line: its first sentence when `first` (split on "; ", a newline, or ". " before a capital
+    when the dot ends a word, so "U.S." and "Dr." stay), cut to `limit` characters at a word boundary with "…"."""
     text = str(text or "").strip()
     if first:
-        text = re.split(r"\. |; |\n", text, maxsplit=1)[0]
+        text = re.split(r"(?<=[a-z0-9)]{2})\. (?=[A-Z])|; |\n", text, maxsplit=1)[0]
     text = " ".join(text.split())
     if len(text) <= limit:
         return text
@@ -124,11 +124,13 @@ def summary_text(c, kind, current=None, hidden=None):
         traits = _names(body.get("voice"), "trait", 4)
         if traits:
             parts.append("Voice: " + ", ".join(traits) + ".")
-        # Avoided words, block-level first; a word that would push the part past AVOID_CHARS is dropped with the rest.
+        # Avoided words, block-level first; a word that would push the part past AVOID_CHARS, or the summary past
+        # SUMMARY_MAX, is dropped with the rest, so no avoided word is ever cut.
+        room = min(AVOID_CHARS, SUMMARY_MAX - len(" ".join(parts)) - 1)
         avoid = []
         ranked = sorted((body.get("words") or {}).get("avoid") or [], key=lambda w: w.get("level") != "block")
         for word in _names(ranked, "word", None):
-            if len("Avoid: " + ", ".join(avoid + [word]) + ".") > AVOID_CHARS:
+            if len("Avoid: " + ", ".join(avoid + [word]) + ".") > room:
                 break
             avoid.append(word)
         if avoid:
