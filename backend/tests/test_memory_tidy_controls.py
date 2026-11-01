@@ -28,6 +28,7 @@ def test_default_off_empty_and_no_admission_or_manual_run(api):
     enable(api)
     j = job(api)
     assert j['on'] is False and j['pilots'] == [] and j['next'] is None
+    assert not j.get('run_unavailable')
     assert j['schedule'] == 'Nightly at 03:30'
     post(api, PATH + '/run', {}, expected=409)
     put(api, PATH, {'pilots': [entry()]})

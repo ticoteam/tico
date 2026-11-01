@@ -1,7 +1,7 @@
 //! Trusted input custody for a nightly tidy check. Only a pinned upstream tree is
 //! read; neither model sees the checkout, Hub credentials, or its ordinary prompt.
 use crate::client::Client;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -31,7 +31,6 @@ pub struct Packet {
     pub workspace: PathBuf,
     pub prompt: String,
     pub checkout: PathBuf,
-    before: String,
 }
 
 fn walk(root: &Path, path: &Path, entries: &mut BTreeMap<String, String>, bytes: &mut usize) -> Result<(), String> {
@@ -142,7 +141,6 @@ impl Packet {
             workspace,
             prompt,
             checkout: checkout.into(),
-            before,
         })
     }
 
@@ -165,7 +163,6 @@ impl Packet {
 
     pub async fn verify(&self, client: &Client, aid: &str, reply: &str) -> Result<(), String> {
         let after = manifest(&self.checkout, &self.workspace).await?;
-        let _changed = self.before != after;
         client
             .post(
                 &format!("attempts/{aid}/memory-tidy/verification"),
