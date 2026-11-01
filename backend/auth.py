@@ -922,57 +922,19 @@ class Auth:
         self.conversation(c, who, message["conversation_id"])
 
     def conversation(self, c, who, conversation_id, *, write=False):
+        """The conversation (thread) row, when `who` reads it; else 404, since an unreadable thread is never
+        confirmed to exist. Who reads is C1 in backend/threads.py."""
         self.domain(who)
         row = H.conversation(c, conversation_id)
         if not row:
             raise Problem("not_found", "Conversation not found", 404)
-        from .live_privacy import require_conversation, sources
-        from .task_privacy import actor
-        meeting_room = require_conversation(c, actor(who), conversation_id)
-        if write and (meeting_room or sources(c).conversation(conversation_id)):
+        from . import threads
+        from .live_privacy import sources
+        if threads.denial(c, threads.Viewer(self, who), row) is not None:
+            raise Problem("not_found", "Conversation not found", 404)
+        index = sources(c)
+        if write and (index.bound_conversation(conversation_id) or index.conversation(conversation_id)):
             raise Problem("forbidden", "Use live meeting chat for scoped meeting replies", 403)
-        if row.get("task_id"):
-            self.task(c, who, row["task_id"])
-            if row.get("kind") == "task":
-                return row
-        if who.role == "bot":
-            # A runner turn sees the conversations its attempt was handed. An external agent
-            # has no attempt: it sees the conversations it is in, which is what a claim would
-            # have granted a turn for the same message.
-            if who.agent:
-                grant = who.actor in row["participants"] or rooms.room_bot(row) == H.actor_id(who.actor)
-            else:
-                grant = c.execute("SELECT 1 FROM attempt_conversations WHERE attempt_id=? AND conversation_id=?",
-                                  (who.attempt_id, conversation_id)).fetchone()
-            # Task discussions are shared with their owners/delegates. Personal chat history
-            # is scoped to this execution, not every human who has used the same bot.
-            if not grant:
-                if row.get("task_id") and row["kind"] == "task":
-                    self.task(c, who, row["task_id"])
-                elif _own_ask_to_a_person(who, row):
-                    pass
-                else:
-                    raise Problem("forbidden", "This conversation is outside the current execution context", 403)
-            return row
-        if meeting_room:
-            return row
-        scope = row.get("scope") or "direct"
-        if scope == rooms.PERSONAL:
-            owner = row.get("owner_actor") or next(
-                (p for p in row["participants"] if str(p).startswith("human:")), None)
-            # Personal assistant rooms do not inherit the normal owner inspection bypass.
-            if who.actor != owner:
-                raise Problem("forbidden", "This personal conversation belongs to another person", 403)
-            # The owner's earlier Strategy Bot chat belongs to the owner seat: a person who is no longer the owner reads
-            # it no more, even before it moves to the new owner (backend/assistant.py move_strategy_room).
-            if row.get("room_key") == rooms.STRATEGY_ROOM and who.role != "owner":
-                raise Problem("forbidden", "This chat belongs to the company's owner", 403)
-        elif scope == rooms.SHARED:
-            bot = rooms.room_bot(row)
-            if not bot or not rooms.shared_member(c, self, who.actor, bot) or not self.bot_access(c, who, bot)["read"]:
-                raise Problem("forbidden", "You are not a member of this shared bot room", 403)
-        elif who.role != "owner" and who.actor not in row["participants"]:
-            raise Problem("forbidden", "This conversation is private", 403)
         return row
 
     def tico_principal(self, c, who):
