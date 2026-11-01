@@ -31,9 +31,9 @@ def run(binary, home, *args):
     return subprocess.run([str(binary), *args], env=env, capture_output=True, text=True, timeout=120)
 
 
-def enroll_args(url, code_file, projects, config):
+def enroll_args(url, code_file, projects, config, label=LABEL):
     return ["--config", str(config), "enroll", "--url", url, "--code-file", str(code_file),
-            "--label", LABEL, "--projects", str(projects)]
+            "--label", label, "--projects", str(projects)]
 
 
 def test_a_real_runner_enrolls_with_a_one_time_code_and_the_server_holds_its_registration(api, live, tmp_path):
@@ -52,8 +52,16 @@ def test_a_real_runner_enrolls_with_a_one_time_code_and_the_server_holds_its_reg
         row = c.execute("SELECT label, operator FROM runners WHERE id=?", (registration["runner_id"],)).fetchone()
     assert row is not None and row["label"] == LABEL and row["operator"] == "ana"
 
-    # A one-time code enrolls once: the second attempt is refused and writes no registration.
-    second = tmp_path / "second" / "runner.json"
-    again = run(binary, home, *enroll_args(live, code_file, projects, second))
-    assert again.returncode != 0 and not second.exists()
-    assert registration["token"] not in again.stdout + again.stderr
+    # The code is one-time for a computer: another label is refused and writes no registration. The same label
+    # retrying (a lost response) gets the same runner back, never a second computer (backend/execution.py enroll).
+    other = tmp_path / "other" / "runner.json"
+    refused = run(binary, home, *enroll_args(live, code_file, projects, other, label="Acme other computer"))
+    assert refused.returncode != 0 and not other.exists()
+    assert registration["token"] not in refused.stdout + refused.stderr
+    retry_config = tmp_path / "retry" / "runner.json"
+    retried = run(binary, home, *enroll_args(live, code_file, projects, retry_config))
+    assert retried.returncode == 0, retried.stderr[-400:]
+    assert json.loads(retry_config.read_text())["runner_id"] == registration["runner_id"]
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT count(*) FROM runners WHERE label=?", (LABEL,)).fetchone()[0]
+    assert rows == 1

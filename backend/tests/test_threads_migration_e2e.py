@@ -19,7 +19,7 @@ The file is written one entry per line, so a change shows as the lines it touche
 Regenerate after a deliberate change to who reads what, and review the diff:
     TICO_WRITE_READER_GOLDENS=1 python3 -m pytest -q backend/tests/test_threads_migration_e2e.py
 
-The comparisons run `threads.migrate(c, auth=None)` and assert `threads.readable` gives the same sets. Until
+The comparisons run `threads.migrate(c)` and assert `threads.readable` gives the same sets. Until
 backend/threads.py exists they skip; nothing is faked. The freshness test runs now: it fails when the golden no longer
 matches what today's predicates read, so a golden is never compared against a stale baseline.
 """
@@ -215,7 +215,7 @@ def migrate(settings, threads):
     store, _ = open_store(settings)
     try:
         with store.transaction() as c:
-            threads.migrate(c, auth=None)
+            threads.migrate(c)
     finally:
         close(store)
 
@@ -264,6 +264,7 @@ def test_removing_a_person_does_not_widen_any_reader_set(tmp_path):
     settings = demo.build(tmp_path / "demo", now=NOW)
     expected = full_from_golden(json.loads(golden_path("demo").read_text()), message_owners(settings))
     migrate(settings, threads)
+    before = threads_sets(threads, settings, expected)
     api = TestClient(create_app(settings), base_url="http://127.0.0.1:8765")
     api.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
     reply = api.post("/api/v2/people/ben", json={"left": True}, headers={"Idempotency-Key": "roster-ben-left"})
@@ -274,7 +275,8 @@ def test_removing_a_person_does_not_widen_any_reader_set(tmp_path):
             assert standing(c, "ben") == "left"
     finally:
         close(store)
-    got = threads_sets(threads, settings, expected)
-    widened = [line for line in differences(labeled(*expected), labeled(*got))
+    after = threads_sets(threads, settings, expected)
+    # Compared with the reader sets just before the removal, so only what the removal itself did is counted.
+    widened = [line for line in differences(labeled(*before), labeled(*after))
                if "expected hidden, got readable" in line]
-    assert not widened, report(widened, "demo", "after a roster removal")
+    assert not widened, report(widened, "demo", "after a roster removal (each line: before, got after)")
