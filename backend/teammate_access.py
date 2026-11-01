@@ -538,3 +538,79 @@ def _exists(c, kind, ident):
     if kind == "group":
         return ident in (roster.get("org_groups") or {})
     return bool(H.bot(c, ident))
+
+
+# ----------------------------------------------------------------------------- hiding unseen people and groups
+def unseen(c, viewer, auth=None):
+    """(person ids, group ids) the viewer may not see: what lists, the chart and the @mention picker leave out."""
+    found = hidden(c, viewer, "see", ("human", "group"), auth)
+    return ({t.split(":", 1)[1] for t in found if t.startswith("human:")},
+            {t.split(":", 1)[1] for t in found if t.startswith("group:")})
+
+
+def visible_group(gid, roster, groups_hidden):
+    """The nearest group at or above `gid` the viewer may see, or "": an unseen group's members show in the group
+    it is in."""
+    for at in P.group_chain(gid, roster):
+        if at not in groups_hidden:
+            return at
+    return ""
+
+
+def _rehang(parent, parents, gone):
+    """Walk a chart key (`p:<id>`, `g:<id>`, `b:<slug>`) up past the nodes the viewer may not see."""
+    seen = set()
+    while parent in gone and parent not in seen:
+        seen.add(parent)
+        parent = parents.get(parent, "")
+    return parent
+
+
+def redact_chart(view, roster, people_hidden, groups_hidden):
+    """An org view (`people`, `bots`, `org_groups`, each row with `org_parent`) without the people and groups the
+    viewer may not see. Whatever hung under one hangs from the nearest thing above it they may see; a `team` naming
+    an unseen group names the group it is in; a `reports_to` naming an unseen person names the next one up."""
+    if not people_hidden and not groups_hidden:
+        return view
+    gone = {"p:" + pid for pid in people_hidden} | {"g:" + gid for gid in groups_hidden}
+    parents = {}
+    for key, prefix in (("people", "p:"), ("bots", "b:"), ("org_groups", "g:")):
+        for row in view.get(key) or []:
+            parents[prefix + str(row.get("id"))] = row.get("org_parent") or ""
+    out = dict(view)
+    out["people"] = [_redact_row(row, roster, parents, gone, groups_hidden)
+                     for row in view.get("people") or [] if row.get("id") not in people_hidden]
+    for key in ("bots", "seats"):
+        if key in view:
+            out[key] = [_redact_row(row, roster, parents, gone, groups_hidden) for row in view.get(key) or []]
+    groups = []
+    for row in view.get("org_groups") or []:
+        if row.get("id") in groups_hidden:
+            continue
+        row = dict(row, org_parent=_rehang(row.get("org_parent") or "", parents, gone))
+        if row.get("parent"):
+            row["parent"] = visible_group(row["parent"], roster, groups_hidden)
+        if row.get("reports_to") in people_hidden:
+            row["reports_to"] = ""
+        groups.append(row)
+    out["org_groups"] = groups
+    if "teams" in out:
+        out["teams"] = {gid: v for gid, v in (out["teams"] or {}).items() if gid not in groups_hidden}
+    return out
+
+
+def _redact_row(row, roster, parents, gone, groups_hidden):
+    row = dict(row)
+    if "org_parent" in row:
+        row["org_parent"] = _rehang(row.get("org_parent") or "", parents, gone)
+    if row.get("team") in groups_hidden:
+        row["team"] = visible_group(row["team"], roster, groups_hidden)
+    reports = str(row.get("reports_to") or "")
+    bare = reports[6:] if reports.startswith("human:") else reports
+    if bare and "p:" + bare in gone:
+        up = _rehang("p:" + bare, parents, gone)
+        row["reports_to"] = ((("human:" if reports.startswith("human:") else "") + up[2:])
+                             if up.startswith("p:") else "")
+    if row.get("primary_for"):
+        row["primary_for"] = [g for g in row["primary_for"] if g not in groups_hidden]
+    return row

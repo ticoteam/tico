@@ -27,6 +27,7 @@ from . import listening as L
 from . import outcome_stats
 from . import rooms
 from . import task_privacy as privacy
+from . import teammate_access as TA
 from .privacy_index import ReadIndex
 from .bot_access import q, qlist
 from .models import Contract
@@ -52,6 +53,36 @@ MASKED = {"bot_control": {"claim_task": "CASE WHEN source.claim_task IS NULL THE
                                         "WHEN source.claim_task IN (SELECT id FROM tasks) THEN source.claim_task "
                                         "ELSE '' END"}}
 DENIED_FUNCTIONS = {"load_extension"}
+
+
+def unseen_authors(unseen, me, inner):
+    """A messages predicate (with its trailing AND) dropping posts by people the caller may not see, except in a
+    conversation the caller is a participant of: whoever is in a conversation with you is known to you there."""
+    people = sorted(t for t in unseen if t.startswith("human:"))
+    if not people:
+        return ""
+    return (f"(coalesce(source.from_actor,'') NOT IN {qlist(people)} OR EXISTS (SELECT 1 FROM {inner('conversations')} v, "
+            f"json_each(v.participants_json) p WHERE v.id=source.conversation_id AND p.value={me})) AND ")
+
+
+def teammate_masks(unseen, me):
+    """MASKED for one request: participant lists drop the people the caller may not see (in a conversation the caller
+    is not in), group lists the groups they may not see."""
+    people = sorted(t for t in unseen if t.startswith("human:"))
+    groups = sorted(t.split(":", 1)[1] for t in unseen if t.startswith("group:"))
+    out = {}
+    if people:
+        out["conversations"] = {"participants_json": (
+            "CASE WHEN source.participants_json IS NULL OR NOT json_valid(source.participants_json) THEN NULL "
+            f"WHEN EXISTS (SELECT 1 FROM json_each(source.participants_json) WHERE value={me}) THEN source.participants_json "
+            f"ELSE (SELECT json_group_array(value) FROM json_each(source.participants_json) WHERE value NOT IN {qlist(people)}) "
+            "END")}
+    if groups:
+        out["humans"] = {"teams_json": (
+            "CASE WHEN source.teams_json IS NULL OR NOT json_valid(source.teams_json) THEN source.teams_json "
+            f"ELSE (SELECT json_group_array(value) FROM json_each(source.teams_json) WHERE value NOT IN {qlist(groups)}) END")}
+        out["bot_config"] = {"team": f"CASE WHEN source.team IN {qlist(groups)} THEN NULL ELSE source.team END"}
+    return out
 
 
 def unsettled_watched(c, inner):
@@ -237,7 +268,7 @@ class Query(Contract):
     max_rows: int | None = Field(default=None, ge=1, le=5000)
 
 
-def guarded(c, auth, who, inner, function, columns=None):
+def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     """Every table a caller may read through a view: name -> (row predicate, hidden columns).
 
     The predicates say in SQL what `auth.bot_access`, `auth.conversation`, `auth.task` and
@@ -246,6 +277,9 @@ def guarded(c, auth, who, inner, function, columns=None):
     base table, and a plain table name inside a predicate is the filtered view of it.
     """
     me, owner, bot = q(who.actor), who.role == "owner", who.role == "bot"
+    # People and groups the caller may not see (backend/teammate_access.py): not in `humans`, not as authors of
+    # messages outside the conversations they are in, and not in a participant or group list (teammate_masks).
+    unseen = TA.hidden(c, who, "see", ("human", "group"), auth) if unseen is None else unseen
     listener = L.sees_everything(who)
     mine_inboxes = [] if listener else L.destinations_of(who.actor, L.destinations(auth.settings, c))
     hidden = sorted(auth.unreadable_bots(c, who))
@@ -336,7 +370,8 @@ def guarded(c, auth, who, inner, function, columns=None):
         "conversations": conversations,
         # Rooms are the small authorization set, unlike message/run history.
         # Build their id set once rather than re-evaluate the room view per message.
-        "messages": "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND " + msg_gate,
+        "messages": "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND "
+                    + unseen_authors(unseen, me, inner) + msg_gate,
         "tasks": tasks,
         "tags": tag_gate, "task_tags": by_task,
         "task_events": by_task + " AND " + content_gate(("old", "new", "note")), "task_delegations": by_task,
@@ -361,7 +396,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "attempt_inputs": by_attempt, "attempt_conversations": by_attempt,
         "bot_transition_checkpoints": "conversation_id IN (SELECT id FROM conversations)",
         "task_types": "1", "task_steps": "1",
-        "humans": "1",
+        "humans": TA.sql_visible(c, who, "id", bare="human", unseen=unseen),
         # Recruiting seats are roles on the company chart that everyone sees (backend/lifecycle.py): their titles,
         # job descriptions and reporting lines. Never a bare "1" (the same reason as intake_items below).
         "seats": "id IS NOT NULL",
@@ -629,7 +664,8 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         # Predicates, provenance and result rows use one read snapshot.
         conn.execute("BEGIN")
         columns = schema_columns(conn, path)
-        tables = guarded(conn, auth, who, inner, function, columns)
+        unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
+        tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
         source_tables = set(tables) | {"blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
                                        "live_meeting_turns"}
         class Source:
@@ -699,6 +735,8 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         tables = materialize(conn, index, tables, inner, function, private)
         conn.set_progress_handler(None, 0)
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
+        for table, columns_masked in teammate_masks(unseen, q(who.actor)).items():
+            masks[table] = {**masks.get(table, {}), **columns_masked}
         for table, (predicate, _) in tables.items():
             masked = masks.get(table, {})
             projection = ",".join(f'({masked[name]}) AS "{name}"' if name in masked else f'source."{name}"'

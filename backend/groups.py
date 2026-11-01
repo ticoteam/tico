@@ -79,6 +79,33 @@ def rows(roster, employees, archived=(), can_see=None, leads=False):
             for i, (gid, g) in sorted(enumerate(roster["org_groups"].items()), key=lambda row: row[1][1].get("order", row[0]))]
 
 
+def visible_rows(c, auth, who, roster, found):
+    """Group rows without the groups and people the caller may not see (backend/teammate_access.py). An unseen group's
+    teammates and groups show in the group it is in, as far as the caller may see that one."""
+    from . import teammate_access
+    people_hidden, groups_hidden = teammate_access.unseen(c, who, auth)
+    if not people_hidden and not groups_hidden:
+        return found
+    by_id = {row["id"]: row for row in found}
+    out = []
+    for row in found:
+        if row["id"] in groups_hidden:
+            continue
+        row = dict(row, people=[pid for pid in row["people"] if pid not in people_hidden])
+        if row.get("parent"):
+            row["parent"] = teammate_access.visible_group(row["parent"], roster, groups_hidden)
+        if str(row.get("lead") or "").removeprefix("person:") in people_hidden:
+            row["lead"] = ""
+        out.append(row)
+    for gid in groups_hidden:
+        home = teammate_access.visible_group(gid, roster, groups_hidden)
+        target = next((row for row in out if row["id"] == home), None)
+        if target is not None and gid in by_id:
+            target["people"] = target["people"] + [pid for pid in by_id[gid]["people"] if pid not in people_hidden]
+            target["bots"] = sorted(set(target["bots"]) | set(by_id[gid]["bots"]))
+    return out
+
+
 def refresh_teams(c, roster=None):
     """`bot_config.team`, the group each bot is in, read by the pages that list bots."""
     roster = roster or _roster(c)
@@ -605,7 +632,9 @@ def install(app, store, auth, mutate, settings):
         auth.domain(who)
         with store.read() as c:
             access = auth.bot_accesses(c, who)
-            return rows(_roster(c), _configs(c), _archived(c), lambda slug: access.get(slug, auth.FULL)["see"], True)
+            roster = _roster(c)
+            found = rows(roster, _configs(c), _archived(c), lambda slug: access.get(slug, auth.FULL)["see"], True)
+            return visible_rows(c, auth, who, roster, found)
 
     @app.post("/api/v2/groups")
     def group_create(request: Request, body: M.GroupCreate):

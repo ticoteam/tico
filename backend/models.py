@@ -1542,6 +1542,16 @@ class BotAccess(Contract):
     on_behalf_of: ID | None = None
 
 
+class TeammateAccess(Contract):
+    """A person's or a group's See, Read and Write (backend/teammate_access.py), in a bot's shape. `revision` is the
+    one the editor read: 0 while they still have the defaults."""
+    see: AccessAudience
+    read: AccessAudience
+    write: AccessAudience
+    revision: int = Field(ge=0)
+    on_behalf_of: ID | None = None
+
+
 # A bot's instructions (its AGENT.md) as a person reviewed them, one limit wherever they are sent: registering a bot,
 # adding one from the catalog and the first-run wizard. The longest shipped template is about half of it, and
 # backend/tests/test_onboarding.py checks every one against it.

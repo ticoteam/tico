@@ -457,6 +457,9 @@ def may_view(ctx, kind, ident):
     if kind == "team":
         if may_manage(ctx, kind, ident):
             return True
+        from . import teammate_access
+        if not teammate_access.can(ctx.c, who, "see", "group:" + ident, ctx.auth):
+            return False          # a group the reader may not see has no page for them
         level = audience_of(ctx.c, "team:" + ident)
         if who.role == "bot":
             return A.names(level, bot=H.actor_id(who.actor), team=ctx.chain())
