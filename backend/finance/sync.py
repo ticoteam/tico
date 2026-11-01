@@ -468,7 +468,7 @@ def outbox(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
         due = SK.outbox_due(c, now, OUTBOX_MOST, cid)
     problems: list[str] = []
     for o in due:
-        with store.transaction() as c:
+        with store.transaction(durable=True) as c:
             if not SK.outbox_claim(c, str(o["id"]), now):
                 continue
             if str(o["op"]) == "transfer_create":
@@ -691,7 +691,7 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
             continue
         if status != "queued":
             continue
-        with store.transaction() as c:
+        with store.transaction(durable=True) as c:
             ctx = load(c, now)
             row = SK.get(c, "fin_payments", pid)
             fresh: list[Any] = []

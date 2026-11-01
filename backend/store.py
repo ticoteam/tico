@@ -2187,7 +2187,11 @@ class Store:
         c.close()
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, durable=False):
+        """One write transaction. `durable` makes its commit reach the disk before the call returns, for a write
+        that authorises an outside effect (finance's claim of a money transfer before the provider is called): the
+        connection runs synchronous=FULL for this transaction and goes back to the pool at its default. SQLite refuses
+        to change the setting inside a transaction, so it is set before BEGIN, from `checkout`."""
         from .flight import begin
         # The gate is released only after commit/rollback, including message-link maintenance.
         with ExitStack() as stack:
@@ -2195,6 +2199,10 @@ class Store:
             def checkout():
                 nonlocal c
                 c = stack.enter_context(self.read())
+                if durable:
+                    c.execute("PRAGMA synchronous=FULL")
+                    # Registered after the read, so it runs before the connection is given back, even when BEGIN fails.
+                    stack.callback(c.execute, f"PRAGMA synchronous={H.synchronous('NORMAL')}")
                 return c
             done = begin(None, self.recorder, gate=self.writer, checkout=checkout)
             try:

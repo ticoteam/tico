@@ -239,6 +239,27 @@ def test_a_replayed_transfer_is_the_same_transfer_and_goes_to_mercury_once(books
     assert len(fake.sent("create_transfer")) == 1
 
 
+def test_a_transfer_is_claimed_in_a_fully_synced_commit_before_mercury_is_called(books, monkeypatch):
+    from backend.finance import sync
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        made = act(c, OWNER, "payment_create", _payload(src, dst, 10_000), key="move-durable")
+    assert made.status == "committed", made
+    seen = []
+    claim = sync.SK.outbox_claim
+
+    def watched(c, outbox_id, now):
+        seen.append(c.execute("PRAGMA synchronous").fetchone()[0])     # inside the claim's own transaction
+        return claim(c, outbox_id, now)
+
+    monkeypatch.setattr(sync.SK, "outbox_claim", watched)
+    sync_once(books, fake)
+    assert seen and set(seen) == {2}                    # FULL: the claim is on disk before the call goes out
+    assert len(fake.sent("create_transfer")) == 1
+    assert books.pool and all(p.execute("PRAGMA synchronous").fetchone()[0] != 2 for p in books.pool)  # back at the default
+
+
 def test_an_internal_transfer_needs_two_of_the_companys_bank_accounts_and_money_above_zero(books):
     fake = FakeMercury()
     src, dst = _two(books, fake)

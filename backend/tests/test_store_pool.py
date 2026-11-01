@@ -230,6 +230,39 @@ def test_test_databases_skip_the_disk_sync_and_servers_keep_theirs(tmp_path, mon
     hub.close()
 
 
+def test_a_durable_transaction_is_fully_synced_and_its_connection_goes_back_at_the_default(tmp_path, monkeypatch):
+    """A money write's commit reaches the disk (FULL) and the pooled connection is not left at FULL, whether the
+    transaction commits, its body fails, or BEGIN itself fails after the connection was taken."""
+    from backend import flight
+    from backend import hubdb as H
+    sync = lambda c: c.execute("PRAGMA synchronous").fetchone()[0]  # 0 OFF, 1 NORMAL, 2 FULL
+    s = store(tmp_path)
+    default = {"OFF": 0, "NORMAL": 1}[H.synchronous("NORMAL")]
+    with s.transaction(durable=True) as c:
+        assert sync(c) == 2
+        c.execute("INSERT INTO t VALUES(2)")
+    with pytest.raises(RuntimeError):
+        with s.transaction(durable=True) as c:
+            assert sync(c) == 2
+            c.execute("INSERT INTO t VALUES(3)")
+            raise RuntimeError("the body failed")
+    real_begin = flight.begin
+
+    def begin_refused(conn, recorder=None, *, gate=None, checkout=None):
+        checkout()                                       # the connection is taken, then BEGIN is refused
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(flight, "begin", begin_refused)
+    with pytest.raises(sqlite3.OperationalError):
+        with s.transaction(durable=True):
+            pass
+    monkeypatch.setattr(flight, "begin", real_begin)
+    with s.transaction() as c:
+        assert sync(c) == default                        # an ordinary transaction is never durable
+    assert s.pool and all(sync(p) == default for p in s.pool)
+    with s.read() as c:
+        assert [r[0] for r in c.execute("SELECT x FROM t ORDER BY x")] == [1, 2]
+
+
 def test_sweep_deltas_drops_a_finished_runs_text_pieces_after_a_day_only(tmp_path):
     from backend.store import H, sweep_deltas
     s = store(tmp_path)
