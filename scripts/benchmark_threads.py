@@ -6,6 +6,10 @@ holds, for --seconds: --viewers live streams on one room (GET /api/v2/events?thr
 at --rate messages a second each (POST /api/v2/threads/{id}/messages), one writer on a thread with --followers
 followers, a --burst of clients reconnecting together halfway through, and one slow consumer that never reads.
 
+--preset names a scenario: `default` (the flags' defaults: 20 writers at 5 a second, 100 offered writes a second) or
+`realistic` (20 writers at 1 a second, 20 writes a second, with the same 50 viewers and 200-client burst), whose
+targets are a write p95 of 150 ms, an event p95 of 1 s and a burst ready p95 of 2 s. Flags given after it override it.
+
 --path conversation runs the same load on the write path that predates threads: a direct conversation, streams with
 ?conversation= and POST /api/v2/conversations/{id}/messages. It is the baseline, run on a commit without threads.
 
@@ -42,7 +46,8 @@ import uvicorn  # noqa: E402
 from backend import hubdb as H  # noqa: E402
 from backend.tests import test_api  # noqa: E402
 
-WRITE_P95_MS, EVENT_P95_S = 150, 1.0
+WRITE_P95_MS, EVENT_P95_S, BURST_P95_S = 150, 1.0, 2.0
+PRESETS = {"default": {}, "realistic": {"viewers": 50, "writers": 20, "rate": 1.0, "burst": 200}}
 SENT = re.compile(r"sent=([0-9.]+)")
 TOKENS = ["ana-test", "ben-test", "cara-test"]          # the fixture's people; members of both threads
 DM_TOKENS = ["ana-test", "ben-test"]                    # the two people of the baseline's direct conversation
@@ -355,7 +360,8 @@ def scenario(args, port, db):
                     "delivered_max": max(per_viewer) if per_viewer else 0, "expected_each": posted_ok,
                     "event_seconds": summary(latencies), "event_p95_target_s": EVENT_P95_S,
                     "event_p95_met": (percentile(latencies, .95) or 1e9) < EVENT_P95_S},
-        "reconnect_burst": {"clients": args.burst, "ready_seconds": summary(ready),
+        "reconnect_burst": {"clients": args.burst, "ready_seconds": summary(ready), "p95_target_s": BURST_P95_S,
+                            "p95_met": (percentile(ready, .95) or 1e9) < BURST_P95_S,
                             "failed": sum(1 for b in burst if b.get("error") or b.get("status") != 200),
                             "resets": sum(1 for b in burst if b.get("reset"))},
         "slow_consumer": {k: slow.get(k) for k in ("status", "events_after_wait", "reset", "closed", "error")},
@@ -365,6 +371,7 @@ def scenario(args, port, db):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--preset", choices=sorted(PRESETS), default="default")
     parser.add_argument("--path", choices=("threads", "conversation"), default="threads")
     parser.add_argument("--seconds", type=int, default=60)
     parser.add_argument("--viewers", type=int, default=50)
@@ -374,6 +381,8 @@ def main():
     parser.add_argument("--burst", type=int, default=200)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--serve", action="store_true", help=argparse.SUPPRESS)
+    preset = parser.parse_known_args()[0].preset
+    parser.set_defaults(**PRESETS[preset])          # explicit flags still win over the preset
     args = parser.parse_args()
     if args.serve:
         return serve()
@@ -395,7 +404,8 @@ def main():
     result["server_profile"] = json.loads(lines[-1]).get("profile") if lines else None
     result.update({"platform": platform.platform(), "python": sys.version.split()[0], "cpu_count": os.cpu_count(),
                    "load_average": os.getloadavg(), "parameters": {k: str(v) for k, v in vars(args).items()},
-                   "targets": {"write_p95_ms": WRITE_P95_MS, "event_p95_s": EVENT_P95_S}})
+                   "targets": {"write_p95_ms": WRITE_P95_MS, "event_p95_s": EVENT_P95_S,
+                               "burst_ready_p95_s": BURST_P95_S}})
     text = json.dumps(result, indent=2)
     if args.output:
         args.output.write_text(text + "\n", encoding="utf-8")
