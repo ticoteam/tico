@@ -71,19 +71,22 @@ HEAD_WORDS = frozenset("head chief director vp".split())
 
 
 # A job named in full and by its letters is one job, in a title and in a template's name alike: "Human Resources
-# Generalist" is the HR Generalist, "SRE" the Site Reliability Engineer.
+# Generalist" is the HR Generalist, "SRE" the Site Reliability Engineer. The letters go in front of the words, which
+# stay ("Site Reliability Manager" still says "reliability").
 SHORT = ((r"human resources?", "hr"), (r"financial planning", "fp"), (r"public relations", "pr"),
          (r"quality assurance", "qa"), (r"user experience", "ux"), (r"information technology", "it"),
-         (r"search engine optimi[sz]ation", "seo"), (r"site reliability engineers?", "sre"),
-         (r"sales development (?:representatives?|reps?)", "sdr"),
-         (r"accounting", "bookkeeping"))      # the books, not a client account ("Account Manager")
+         (r"search engine optimi[sz]ation", "seo"), (r"site reliability", "sre"), (r"sales development", "sdr"))
+
+
+LETTERS = frozenset(short for _, short in SHORT)
 
 
 def _name_words(text):
     """(stem, word) for each word of a job's name, two letters and up: "QA", "HR" and "UX" name the work."""
     text = str(text or "").lower().replace("'", "")
     for full, short in SHORT:
-        text = re.sub(rf"\b{full}\b", short, text)
+        text = re.sub(rf"\b{full}\b", lambda found, short=short: f"{short} {found.group(0)}", text)
+    text = re.sub(r"\baccounting\b", "bookkeeping", text)      # the books, not a client account ("Account Manager")
     words = re.findall(r"[a-z0-9]+", text)
     return [(_name_stem(word), word) for word in words if len(word) > 1 and word not in NAME_STOP]
 
@@ -167,7 +170,8 @@ def _best_card(cards, title, team=""):
             # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of
             # People, the head of the HR department.
             name |= {stem for stem, _ in _name_words(FIELDS.get(card["department"], card["department"]))}
-        shared = len(name & work)
+        # A job's letters are a whole name ("PR" is Public Relations), so they outweigh one of its words ("Relations").
+        shared = sum(2 if stem in LETTERS else 1 for stem in name & work)
         if not shared:
             continue
         score, _ = R._match(card, words, common)
