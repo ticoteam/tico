@@ -84,13 +84,16 @@ LETTERS = frozenset(short for _, short in SHORT)
 
 def _name_words(text):
     """(stem, word) for each word of a job's name, two letters and up: "QA", "HR" and "UX" name the work."""
-    text = str(text or "").lower().replace("'", "")
+    text = re.sub(r"\bvice[\s-]+president\b", "vp", str(text or "").lower().replace("'", ""))
     # What follows the job says how it is held, not what it is: "UX Designer (Contract)", "Rust engineer - remote".
-    # A title written backwards names the work after its comma: "Manager, Engineering" is the Engineering Manager.
+    # A title written backwards names the work after its comma or in brackets: "Manager, Engineering" and "Analyst
+    # (Pricing)" are the Engineering Manager and the Pricing Analyst.
+    brackets = [inside for inside in re.findall(r"\(([^)]*)\)", text) if inside.strip()]
     parts = re.split(r"\s+[-\u2013\u2014|]\s+|,|\|", re.sub(r"\([^)]*\)", " ", text))
     first = re.findall(r"[a-z0-9]+", parts[0])
-    if len(parts) > 1 and first and all(word in ROLE_WORDS or R._stem(word) in RANKS for word in first):
-        text = parts[1] + " " + parts[0]
+    after = [part for part in parts[1:] if part.strip()] + brackets
+    if after and first and all(word in ROLE_WORDS or R._stem(word) in RANKS for word in first):
+        text = after[0] + " " + parts[0]
     else:
         text = parts[0]
     for full, short in SHORT:
