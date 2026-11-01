@@ -397,3 +397,35 @@ def test_a_sub_thread_is_titled_by_its_parents_first_line_and_keeps_it(world):
         assert {m["depth"] for m in threads.timeline(c, owner, tid)["messages"]} == {0}
         assert {m["depth"] for m in threads.timeline(c, owner, sub["id"])["messages"]} == {1}
     assert threads.sub_thread_title("word " * 30).endswith("…") and len(threads.sub_thread_title("word " * 30)) <= 61
+
+
+# ----------------------------------------------------------------------------- federation: remote authors are guests
+def test_a_remote_author_writes_only_through_the_keeper_in_its_installs_namespace_and_only_where_linked(world):
+    store, auth, who = world
+    origin = {"origin_id": "0190aaaa-0000-7000-8000-000000000001", "revision": 0, "install": "peer.acme.example"}
+    with store.transaction() as c:
+        owner = threads.viewer(auth, owner_of(c, auth))
+        linked = threads.create(c, owner, title="Partner", audience="members", members=[])["id"]
+        other = threads.create(c, owner, title="Inside", audience="members", members=[])["id"]
+        threads.add_member(c, owner, linked, "peer:peer.acme.example")
+        with pytest.raises(Problem) as owner_role:
+            threads.add_member(c, owner, linked, "human:ana@peer.acme.example", role="owner")
+        assert owner_role.value.status == 422, "a remote member is never an owner"
+        for principal, actor, via in ((owner, "human:ana@peer.acme.example", "peer"),
+                                      (H.KEEPER, "human:ana@peer.acme.example", None)):
+            with pytest.raises(Problem) as refused:
+                threads.post(c, principal, linked, "hi", as_actor=actor, via=via, origin=origin)
+            assert refused.value.status == 403
+        with pytest.raises(Problem) as spoofed:
+            threads.post(c, H.KEEPER, linked, "hi", as_actor="human:ana@other.acme.example", via="peer", origin=origin)
+        assert spoofed.value.status == 422, "a peer writes only in its own namespace"
+        with pytest.raises(Problem) as unlinked:
+            threads.post(c, H.KEEPER, other, "hi", as_actor="human:ana@peer.acme.example", via="peer", origin=origin)
+        assert unlinked.value.status == 404, "C1 for a remote author is membership"
+        sent = threads.post(c, H.KEEPER, linked, "Hello from the partner", as_actor="human:ana@peer.acme.example",
+                            via="peer", origin=origin)
+        assert sent["from_actor"] == "human:ana@peer.acme.example"
+        again = threads.post(c, H.KEEPER, linked, "Hello from the partner", as_actor="human:ana@peer.acme.example",
+                             via="peer", origin=origin)
+        assert again["id"] == sent["id"], "a repeat (origin_id, revision) writes nothing"
+        assert not c.execute("SELECT 1 FROM thread_followers WHERE actor=?", ("human:ana@peer.acme.example",)).fetchone()

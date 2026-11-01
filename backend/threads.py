@@ -65,6 +65,7 @@ REASONS = ("dm", "mention", "ask", "assign", "addressed", "home", "sub_thread", 
 STATES = ("pending", "delivered", "read", "capped", "held", "failed", "moot")
 NOTIFY = ("live", "mentions", "digest", "muted")
 OUTSIDE_PREFIXES = ("slack:", "peer:")
+REMOTE_ACTOR = re.compile(r"^(human|bot):[^@\s]+@([^@\s]+)$")   # a federation guest: <kind>:<name>@<install>
 LOOP_GUARD_PER_HOUR = int(os.environ.get("TICO_THREAD_LOOP_GUARD") or 6)
 MIGRATION_KEY = "threads-migration"
 STRATEGY_ROOM = "ceo"           # rooms.STRATEGY_ROOM, read here without importing rooms
@@ -662,6 +663,8 @@ def audience_has(c, thread, actor, *, viewer_=None):
     root = root_of(c, thread)
     if root is None:
         return False
+    if remote_guest(c, actor):
+        return remote_member(c, root, actor)
     v = viewer_ or actor_viewer(c, actor)
     if v is None:
         return False
@@ -970,7 +973,7 @@ def record(c, message, conv):
 
 
 def _follow(c, thread_id, actor, reason, seq=None):
-    if not actor or not str(actor).startswith(("human:", "bot:")):
+    if not actor or not str(actor).startswith(("human:", "bot:")) or remote_guest(c, actor):
         return
     now = _now()
     c.execute("INSERT OR IGNORE INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,"
@@ -1296,11 +1299,42 @@ def _actor_of(principal):
     return (v.actor if v else str(principal or "")), v
 
 
+def remote_install(actor):
+    """The install a remote author belongs to (`human:ana@<install>`, `bot:legal@<install>`), else None."""
+    match = REMOTE_ACTOR.match(str(actor or ""))
+    return match.group(2) if match else None
+
+
+def remote_guest(c, actor):
+    """`remote_install` for an actor not on this roster: a federation guest (a local id with an @ is a teammate)."""
+    install = remote_install(actor)
+    return install if install and H.resolve_actor(c, actor) is None else None
+
+
+def remote_member(c, root, actor):
+    """C1 for a remote author (a guest): a member row for it, or for its install's link (`peer:<install>`), on the
+    root. Never an owner, never Manage, no in-turn grant."""
+    install = remote_guest(c, actor)
+    if not install or root is None:
+        return False
+    return c.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (?,?) LIMIT 1",
+                     (root["id"], actor, "peer:" + install)).fetchone() is not None
+
+
 def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None, via=None,
-         origin=None, checked=None, attachments=None):
+         origin=None, checked=None, attachments=None, as_actor=None):
     """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
-    preflight returned outside it."""
+    preflight returned outside it. `as_actor`: a remote author (federation, spec §7.2), only for the keeper writing
+    `via="peer"`, and only in the signing install's namespace (`<kind>:<name>@<origin install>`)."""
     actor, v = _actor_of(principal)
+    if as_actor is not None:
+        install = str((origin or {}).get("install") or "")
+        if actor != H.KEEPER or v is not None or via != "peer" or not install:
+            raise Problem("forbidden", "Only the keeper writes as a remote author, for a peer", 403)
+        namespaced = re.fullmatch(r"(human|bot):[^@\s]+@" + re.escape(install), str(as_actor))
+        if not namespaced or not remote_guest(c, as_actor):
+            raise Problem("actor", "A remote author is in its signer's namespace: <kind>:<name>@" + install, 422)
+        actor = as_actor                 # the author from here on; the keeper only carried it in
     if origin and origin.get("origin_id"):
         found = c.execute("SELECT message_id FROM message_revisions WHERE origin_id=? AND revision=?",
                           (origin["origin_id"], int(origin.get("revision") or 0))).fetchone()
@@ -1322,6 +1356,11 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
             raise Problem("not_found", "Thread not found", 404)
         if not can_post(c, v, thread):
             raise Problem("forbidden", "You can read this thread but not post in it", 403)
+    if as_actor is not None:
+        if not remote_member(c, root_of(c, thread), as_actor):
+            raise Problem("not_found", "Thread not found", 404)
+        if kind not in ("say", "ask", "answer"):
+            raise Problem("kind", "A remote author says, asks or answers", 422)
     if kind not in ("say", "ask", "answer", "notice", "steer"):
         raise Problem("kind", "A message is say, ask, answer, notice or steer", 422)
     text = str(body or "")
@@ -1369,7 +1408,9 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
             text = org_rule_check.warned_text(gate, text)
     token = POSTING.set({"origin": origin or {}, "attachments": bool(attachments), "via": via})
     try:
-        if target and not str(target).startswith(OUTSIDE_PREFIXES):
+        if as_actor is not None:
+            message = H._write_message(c, as_actor, target, text, thread, kind, refs, None, None)
+        elif target and not str(target).startswith(OUTSIDE_PREFIXES):
             message = H.say(c, actor, target, text, thread["id"], kind, refs)
         else:
             message = _write_open(c, actor, text, thread, kind, refs, target)
@@ -1480,8 +1521,8 @@ def _require_write(c, v, target):
     if v is None:
         return
     from . import teammate_access
-    if str(target).startswith(OUTSIDE_PREFIXES):
-        return
+    if str(target).startswith(OUTSIDE_PREFIXES) or remote_guest(c, target):
+        return                           # an outside destination or a remote guest: not a teammate here
     try:
         levels = teammate_access.levels_for(c, v.who, target, auth=v.auth)
     except (ValueError, KeyError):
@@ -1700,11 +1741,13 @@ def _root_for_membership(c, principal, thread_id):
 
 def add_member(c, principal, thread_id, actor, *, role="member"):
     me, v, root = _root_for_membership(c, principal, thread_id)
-    target = actor if str(actor).startswith(("group:",) + OUTSIDE_PREFIXES) else H.resolve_actor(c, actor)
+    target = actor if remote_guest(c, actor) or str(actor).startswith(("group:",) + OUTSIDE_PREFIXES) else H.resolve_actor(c, actor)
     if not target:
         raise Problem("not_found", "Unknown teammate", 404)
     if role not in ("owner", "member"):
         raise Problem("role", "A member is owner or member", 422)
+    if role == "owner" and (remote_guest(c, target) or str(target).startswith(OUTSIDE_PREFIXES)):
+        raise Problem("role", "A remote member is a guest, never an owner", 422)
     if role == "owner" and v is not None and not can_manage(c, v, root):
         raise Problem("forbidden", "Only the thread's owner adds an owner", 403)
     if v is not None and not can_post(c, v, root):

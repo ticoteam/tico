@@ -91,7 +91,8 @@ and **no `seq`**: timelines, counters, search and SSE thread views never show it
 
 ```sql
 -- Access membership (C2). Only for audience members|personal|participants. actor: 'human:<id>' | 'bot:<slug>' |
--- 'group:<id>' (resolved live, people and bots, nested) | 'peer:<install>:<actor>' (federation).
+-- 'group:<id>' (resolved live, people and bots, nested) | 'peer:<install>' (a linked install) |
+-- '<human|bot>:<name>@<install>' (a remote guest, federation).
 CREATE TABLE IF NOT EXISTS thread_members (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, actor TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner','member')),
@@ -508,6 +509,13 @@ Timeline messages: the existing message view plus `thread_id`, `root_id`, `seq`,
   puts the reply in that message's sub-thread when it is in the run's thread tree (else the run's thread).
 - Slack/federation inbound: `threads.post(..., via="slack"|"peer", origin={...})`; edits and deletes:
   `threads.apply_revision`.
+- Remote authors (spec §7.2): `threads.post(c, "keeper", thread_id, body, via="peer", origin={..., "install": I},
+  as_actor="human:ana@I")`. Only the keeper principal with `via="peer"` may pass `as_actor` (else 403); it must match
+  `^(human|bot):[^@]+@<origin.install>$` and not be a local teammate (else 422); kind say|ask|answer. It is stored
+  as `from_actor`. Remote actors are guests: C1 for them is a `thread_members` row on the root for the actor or for
+  `peer:<install>` (else 404, and `audience_has` is false); never an owner (`add_member(..., role="owner")` → 422),
+  never Manage, no bot in-turn grant, no follower rows. `threads.remote_guest(c, actor)` → the install or None.
+  Federation may call with the keyword and fall back without it.
 - `threads.remove_outside_member(c, principal, thread_id, actor) -> {"thread_id", "recipient", "removed"}` takes a
   `slack:`/`peer:` destination off a thread (Manage on the thread or an admin; an actor-string principal must be
   `keeper`); its pending deliveries become `moot`; audit row and `thread.outside_removed` event. Bridges call this,
