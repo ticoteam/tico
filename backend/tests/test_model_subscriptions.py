@@ -543,7 +543,8 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
         assert H.status(c, "ops")["state"] != "limited" and "on a check" in H.status(c, "ops")["focus"]
 
 
-@pytest.mark.parametrize("mode", ["automatic", "disabled", "bot_off", "held", "rejected", "named", "same_runtime"])
+@pytest.mark.parametrize("mode", ["automatic", "disabled", "bot_off", "held", "rejected", "named", "same_runtime",
+                                  "absent", "uninstalled", "incomplete_named"])
 def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
     from backend import execution, providers
     setup(api)
@@ -565,6 +566,17 @@ def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
             config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
             config["fallback"] = {"harness": "codex" if mode == "named" else "claude",
                                   "model": "gpt-6.1-sol" if mode == "named" else "claude-sonnet-5-5"}
+            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode(config),))
+        if mode in ("absent", "uninstalled"):
+            ready = json.loads(c.execute("SELECT readiness_json FROM runners WHERE id=?", (m["runner_id"],)).fetchone()[0])
+            if mode == "absent":
+                ready["runtimes"].pop("codex")
+            else:
+                ready["runtimes"]["codex"]["installed"] = False
+            c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (encode(ready), m["runner_id"]))
+        if mode == "incomplete_named":
+            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+            config["fallback"] = {"harness": "claude"}
             c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode(config),))
         if mode == "held":
             login_holds._save(c, {"runner_id": "", "profile": login_holds.subscription_login(sid), "runtime": "codex",
@@ -625,3 +637,33 @@ def test_automatic_subscription_fallback_precedes_gateway(api, monkeypatch):
         assert any(providers.gateway_model(r["model"]) for r in providers.default_fallbacks(providers.load(c)))
         assert execution.fallback_choice(c, api.app.state.store.settings, m["runner_id"], "ops", turn["config"]) == (
             login_holds.subscription_login(sid), "codex")
+
+
+def test_changing_an_automatic_fallback_subscription_preserves_primary_sessions(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = machine(api, signed_in=True)
+    message = post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-claude"}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."}, m["token"])
+
+    def epoch():
+        with api.app.state.store.read() as c:
+            found = c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?",
+                              (message["conversation_id"],)).fetchone()
+        return found[0] if found else 0
+
+    before = epoch()
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    assert give(api, m, "codex", sid)["sessions_reset"] == 0
+    assert epoch() == before
+    assert post(api, f"model-subscriptions/{sid}", {"secret": codex_file(refresh="r-2")})["revision"] == 2
+    assert epoch() == before
+    assert give(api, m, "codex", None)["sessions_reset"] == 0
+    assert epoch() == before
+    give(api, m, "codex", sid)
+    response = api.delete(f"/api/v2/model-subscriptions/{sid}", headers=headers())
+    assert response.status_code == 200 and response.json()["sessions_reset"] == 0
+    assert epoch() == before

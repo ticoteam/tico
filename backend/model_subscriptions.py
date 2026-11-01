@@ -7,8 +7,8 @@ vault's data key (CredentialCipher.seal, context `model_subscription:<id>`), nev
 event or an idempotency receipt (saves go through Vault.change, which keeps only a keyed fingerprint).
 
 A computer (runner) is given at most one subscription per runtime (`computer_subscriptions`); one subscription may be
-given to many computers. A bot does not pick one: it runs on its computer, and a turn signs in, for its runtime and its
-named fallback's, with
+given to many computers. A bot does not pick one: it runs on its computer, and a turn signs in, for its runtime, its
+named fallback and eligible automatic fallbacks, with
 
   1. the computer's subscription for that runtime, unless it needs reconnecting (then it is passed over),
   2. else the login signed in on that computer (as before),
@@ -18,7 +18,8 @@ named fallback's, with
 Changing a computer's subscription for a runtime (giving, switching, taking it off) or removing a subscription in use
 stops that computer's live runs on that runtime and puts their work back in the queue (quarantine_stops.restart), and
 every session of that runtime on that computer starts fresh (`_restart`): nothing begun on the old login is resumed on
-the new one. The page confirms first (409 `confirm_restart` with the counts).
+the new one. Automatic fallback candidates alone do not fence a bot's primary conversations: fallback session keys
+already name the subscription home. The page confirms first (409 `confirm_restart` with the counts).
 
 Usage limits: a subscription is one login wherever it runs, so a limit met on it holds it on every computer it is given
 to until the reset (login_holds `sub:<id>`). While held it is passed over like one that needs reconnecting: turns there
@@ -262,7 +263,7 @@ def turn_runtimes(config, record=None):
         from . import providers
         from .harnesses import harness_caps
         # Like the runner's limited_config, ignore a named model on the same spent login.
-        same_login = (runtime_of(fallback.get("harness") or "") == config.get("runtime")
+        same_login = (fallback.get("model") and runtime_of(fallback.get("harness") or "") == config.get("runtime")
                       and harness_caps(config.get("harness"), config.get("runtime")).get("api_keys") != "bot"
                       and harness_caps(fallback.get("harness")).get("api_keys") != "bot")
         if not fallback.get("harness") or same_login:
@@ -274,15 +275,7 @@ def turn_runtimes(config, record=None):
 def covered_runtimes(c, runner, config):
     """{runtime: kind} the computer's subscriptions sign in for a bot on `config` there: a covered runtime needs no
     sign-in on that computer, for the bot's readiness and the claim's check."""
-    if not runner or not _given(c):
-        return {}
-    out = {}
-    from . import providers
-    for runtime in turn_runtimes(config, providers.load(c)):
-        sub = in_effect(c, runner["id"], runtime)
-        if sub:
-            out[runtime] = sub["kind"]
-    return out
+    return {item["runtime"]: item["subscription"]["kind"] for item in for_claim(c, runner, config)}
 
 
 def covered(ready, runtimes):
@@ -399,7 +392,8 @@ def _bots(c, settings, runner_id, runtime):
     for r in c.execute("SELECT a.bot,b.config_json FROM assignments a JOIN bot_config b ON b.bot=a.bot "
                        "WHERE a.runner_id=? ORDER BY a.bot", (runner_id,)).fetchall():
         config = providers.fill(record, follow(c, r["bot"], json.loads(r["config_json"] or "{}")))
-        if runtime in turn_runtimes(config, record):
+        # Automatic candidates must not reset unrelated primary conversations; their session keys bind the login.
+        if runtime in turn_runtimes(config):
             out.append(r["bot"])
     return out
 
@@ -593,12 +587,19 @@ def give(c, settings, who, body):
 
 # ------------------------------------------------------------------------------------------------ claim and run
 def for_claim(c, runner, config):
-    """The subscriptions a claimed turn on this computer runs on: [{runtime, subscription}]."""
+    """The subscriptions a claimed turn may use, with automatic candidates limited to installed runtimes."""
     if not runner or not _given(c):
         return []
-    out = []
     from . import providers
+    from .read_cache import one
+    from .store import readiness_document
+    own = turn_runtimes(config)
+    row = one(c, "SELECT readiness_json FROM runners WHERE id=?", (runner["id"],))
+    ready = readiness_document(row["readiness_json"]) if row else {}
+    out = []
     for runtime in turn_runtimes(config, providers.load(c)):
+        if runtime not in own and ((ready.get("runtimes") or {}).get(runtime) or {}).get("installed") is not True:
+            continue          # a subscription authenticates a CLI; it cannot install one
         sub = in_effect(c, runner["id"], runtime)
         if sub:
             out.append({"runtime": runtime, "subscription": sub})
