@@ -1666,8 +1666,8 @@ def customers(c: sqlite3.Connection, viewer: str, *, q: str = "", cursor: str | 
 
 
 def customer_panel(c: sqlite3.Connection, viewer: str, contact_id: str, at: str | None = None) -> Row:
-    """A customer's panel: the contact, the active locations it is the customer of, its open estimates (draft or
-    sent) and its unpaid invoices. A teammate without the receivables view reads the contact by id and name and its
+    """A customer's panel: the contact, the active locations it is the customer of, its open estimates (draft,
+    sent or accepted) and its unpaid invoices. A teammate without the receivables view reads the contact by id and name and its
     locations; its estimates and invoices are null. A missing contact, or one that is not a customer, is not_found."""
     ctx = load(c, at)
     view = ctx.view(viewer)
@@ -1689,9 +1689,9 @@ def customer_panel(c: sqlite3.Connection, viewer: str, contact_id: str, at: str 
         out["contact"] = tab_ap.contact_row(ctx, row, R.is_admin(ctx.org, viewer, ctx.rights(viewer)))
         out["invoices"] = tab_ap.invoices(c, viewer, status="unpaid", customer_id=contact_id, at=at)
         if R.has(ctx.org, viewer, R.AR, ctx.rights(viewer)):
-            drafts = estimates(c, viewer, status="draft", customer_id=contact_id, at=at)["estimates"]
-            sent = estimates(c, viewer, status="sent", customer_id=contact_id, at=at)["estimates"]
-            out["estimates"] = sorted([*drafts, *sent], key=lambda e: (str(e["date"]), str(e["id"])), reverse=True)
+            shown = [e for status in ("draft", "sent", "accepted")
+                     for e in estimates(c, viewer, status=status, customer_id=contact_id, at=at)["estimates"]]
+            out["estimates"] = sorted(shown, key=lambda e: (str(e["date"]), str(e["id"])), reverse=True)
     return {**out, **customer_extras(c, viewer, contact_id, at)}
 
 
