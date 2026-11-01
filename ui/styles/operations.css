@@ -104,3 +104,5 @@
   .ops-import-rows li{grid-template-columns:28px minmax(0,1fr)}
   .ops-import-st{grid-column:2}
 }
+.ops-pnl-accounts{width:100%;margin-top:2px}
+.ops-pnl-accounts td:last-child{padding-right:0;text-align:right}
