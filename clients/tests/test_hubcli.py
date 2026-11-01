@@ -877,9 +877,17 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
         "brand/draft", {"sections": {"positioning": "Acme cleans homes"}})
 
 
-def test_a_json_flag_the_command_lacks_is_dropped():
+def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):
     p = hubcli.parser()
-    assert hubcli.drop_json(p, ["task", "show", "t_1", "--json"]) == ["task", "show", "t_1"]
-    assert hubcli.drop_json(p, ["task", "show", "t_1"]) == ["task", "show", "t_1"]
-    assert hubcli.drop_json(p, ["task", "get", "t_1", "--json"]) == ["task", "get", "t_1", "--json"]   # still wrong
-    assert hubcli.drop_json(p, ["tool", "list", "--json"]) == ["tool", "list", "--json"]   # its own flag
+    assert hubcli.parse(p, ["task", "show", "t_1", "--json"]).id == ["t_1"]
+    assert hubcli.parse(p, ["tool", "list", "--json"]).json is True                  # its own flag
+    assert hubcli.parse(p, ["--json", "tool", "list", "--json"]).json is True
+    assert hubcli.parse(p, ["meeting", "search", "--", "--json"]).q == "--json"       # a value stays a value
+    for wrong in (["task", "get", "t_1", "--json"], ["task", "show", "t_1", "--json", "--bogus"]):
+        with pytest.raises(SystemExit) as e:
+            hubcli.parse(p, wrong)
+        assert e.value.code == 2
+    assert "--bogus" in capsys.readouterr().err
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"vendor": "v_1"}'))                # stdin is read once
+    args = hubcli.parse(p, ["finance", "act", "bill_create", "--payload", "-", "--json"])
+    assert args.payload == {"vendor": "v_1"}
