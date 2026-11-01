@@ -875,3 +875,11 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
     assert "stage" not in kpi
     assert run("brand", "draft", "--section", "positioning", "--body", '"Acme cleans homes"')[1:] == (
         "brand/draft", {"sections": {"positioning": "Acme cleans homes"}})
+
+
+def test_a_json_flag_the_command_lacks_is_dropped():
+    p = hubcli.parser()
+    assert hubcli.drop_json(p, ["task", "show", "t_1", "--json"]) == ["task", "show", "t_1"]
+    assert hubcli.drop_json(p, ["task", "show", "t_1"]) == ["task", "show", "t_1"]
+    assert hubcli.drop_json(p, ["task", "get", "t_1", "--json"]) == ["task", "get", "t_1", "--json"]   # still wrong
+    assert hubcli.drop_json(p, ["tool", "list", "--json"]) == ["tool", "list", "--json"]   # its own flag

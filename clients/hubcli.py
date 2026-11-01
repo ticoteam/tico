@@ -3519,6 +3519,29 @@ RENAMED.sort(key=lambda rule: -len(rule[0]))
 NOTICE_COMMANDS = ("list",)                             # the subcommands `hub notice` has now
 
 
+def drop_json(p, argv):
+    """`argv` without a `--json` the command does not take, so a bot that adds it out of habit gets the command's normal
+    answer instead of a usage error. Only when the line fails with it and parses without it; a command with its own
+    `--json` (`hub tool list`) keeps it."""
+    if "--json" not in argv:
+        return argv
+    import contextlib, io
+    try:
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            p.parse_args(argv)
+        return argv
+    except SystemExit as e:
+        if not e.code:
+            return argv                               # --help: let the real parse print it
+    rest = [a for a in argv if a != "--json"]
+    try:
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            p.parse_args(rest)
+    except SystemExit:
+        return argv                                   # wrong for another reason too: say that reason
+    return rest
+
+
 def rename_argv(argv):
     """`argv` for the new spelling of an old command line, and the notice to print (or None when nothing was renamed)."""
     argv = list(argv)
@@ -3568,6 +3591,7 @@ def main(argv):
     if renamed:
         print(f"hub: {renamed}; the old name stops working in the next release", file=sys.stderr)
     p = parser()
+    argv = drop_json(p, argv)
     try:
         args = p.parse_args(argv)
     except SystemExit as e:                 # argparse already said what was wrong, or printed help
