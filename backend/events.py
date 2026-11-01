@@ -22,8 +22,9 @@ signed-in person as they commit, filtered to what that person may read:
   before, so an older page keeps working.
 
 `after` (or the browser's `Last-Event-ID`) resumes from the last change number seen, so a
-reconnect misses nothing; a client further behind than the log keeps (24 h) is sent `reset` and
-reads its page in full.
+reconnect misses nothing; a client further behind than the log keeps (24 h), or more than BACKLOG_MAX changes behind
+(a slow consumer), is sent `reset` and reads its page in full. One read sends at most READ_BYTES of events and leaves
+the rest for the next read, so one poll's work and its payload stay bounded however busy the team is.
 
 Delivery has no per-client polling. `Store.mutate` and `Store.write` ring an in-process doorbell
 after a write that logged changes commits; one shared reader per event loop also looks for
@@ -48,9 +49,12 @@ from . import visuals as V
 from .store import H, Problem, encode
 
 TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads")
+AGENT_TOPICS = ("messages", "threads")   # what an external agent's standing token may follow (outside a turn)
 KEEP_HOURS = 24           # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5    # the shared look for changes another process wrote
 RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another process queued waits this long at most
+BACKLOG_MAX = 5000        # changes a stream may fall behind before it is reset rather than replayed (a slow consumer)
+READ_BYTES = 256 * 1024   # event bytes one read sends; the rest of its changes wait for the next read
 LIFETIME_SECONDS = 900    # bounded; each read and keepalive re-checks the sign-in, so this only caps stale state
 RUNNER_LIFETIME_SECONDS = 300
 KEEPALIVE_SECONDS = 15    # under the proxies' idle timeouts; TICO_STREAM_KEEPALIVE_SECONDS replaces it
@@ -934,7 +938,8 @@ def _messages(view, rows):
     from . import threads
     for (goal, subject), row in last.items():
         cid = row["conversation_id"]
-        if not cid or not view.conversation(cid):
+        conversation = view.conversation(cid) if cid else None
+        if not conversation:
             continue
         if goal:
             found = c.execute("SELECT * FROM chat_goals WHERE id=?", (subject,)).fetchone()
@@ -1117,7 +1122,7 @@ def _needs_list(view, rows, task_view, held=None):
 
 
 def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks=(), parties=(), task_views=None,
-         task_view=None, limit=BATCH, needs_held=None, visuals=None):
+         task_view=None, limit=BATCH, needs_held=None, visuals=None, threads_scope=()):
     """What `who` may be sent after change `after`: (events, cursor, reset, more). Each event is
     (seq, topic, data). `cursor` moves past every row read, sent or not, so a resume starts after
     what this viewer could not see. `more` when a full batch was read and more waits. `needs_held`
@@ -1127,12 +1132,17 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
         newest = latest(c)
         first = oldest(c)
         floor = (first - 1) if first is not None else newest
-        if after > newest or after < floor:
+        if after > newest or after < floor or newest - after > BACKLOG_MAX:
             return [], newest, True, False
         clauses, args = ["seq>?", "topic IN (%s)" % ",".join("?" * len(topics))], [after, *topics]
         if conversations:
             clauses.append("(topic NOT IN ('messages','runs') OR conversation_id IN (%s))" % ",".join("?" * len(conversations)))
             args += list(conversations)
+        if threads_scope:               # ?thread=: the messages and threads of these threads' subtrees (by path)
+            clauses.append("(topic NOT IN ('messages','threads') OR conversation_id IN (SELECT d.id FROM conversations d "
+                           "JOIN conversations t ON t.id IN (%s) AND substr(d.path,1,length(t.path))=t.path))"
+                           % ",".join("?" * len(threads_scope)))
+            args += list(threads_scope)
         if bots:
             clauses.append("(topic NOT IN ('runs','bots') OR bot IN (%s))" % ",".join("?" * len(bots)))
             args += list(bots)
@@ -1168,10 +1178,15 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
             picked += [("needs", r, e) for r, e in _needs_list(view, by_topic["needs"], task_view, needs_held)]
         if by_topic.get("threads"):
             picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"])]
-        events = []
+        events, size = [], 0
         for topic, row, entry in sorted(picked, key=lambda item: item[1]["seq"]):
             actor = None if view.hidden_actor(row["actor"], row) else row["actor"]
-            events.append((row["seq"], topic, {"seq": row["seq"], "actor": actor, "at": row["at"], **entry}))
+            data = {"seq": row["seq"], "actor": actor, "at": row["at"], **entry}
+            # The first event always goes, however large; the rest wait for the next read once the budget is spent.
+            size += len(encode(data))
+            if events and size > READ_BYTES:
+                return events, events[-1][0], False, True
+            events.append((row["seq"], topic, data))
         return events, cursor, False, more
     finally:
         if c.in_transaction:
@@ -1248,18 +1263,23 @@ def install(app, store, auth, task_views, task_view):
     @app.get("/api/v2/events")
     async def events(request: Request, topics: str | None = None, after: int | None = None,
                      conversation: str | None = None, bot: str | None = None, needs: str | None = None,
-                     task: str | None = None, party: str | None = None):
+                     task: str | None = None, party: str | None = None, thread: str | None = None):
         """Server-sent events for people's pages: see the module docstring."""
         who = request.state.identity
         auth.domain(who)
-        if who.role not in ("human", "owner"):
-            raise Problem("forbidden", "Live events are for people's pages", 403)
-        wanted = _list(topics, "topics") or TOPICS
+        # An external agent's standing token (outside a turn) follows messages and threads, filtered by C1.
+        agent = who.role == "bot" and bool(who.agent) and not who.attempt_id
+        if who.role not in ("human", "owner") and not agent:
+            raise Problem("forbidden", "Live events are for people's pages and agents", 403)
+        wanted = _list(topics, "topics") or (AGENT_TOPICS if agent else TOPICS)
+        if agent and any(topic not in AGENT_TOPICS for topic in wanted):
+            raise Problem("forbidden", "An agent may follow " + " and ".join(AGENT_TOPICS), 403)
         unknown = [topic for topic in wanted if topic not in TOPICS]
         if unknown:
             raise Problem("validation", "Unknown topic: " + ", ".join(unknown) + " (one of " + ", ".join(TOPICS) + ")", 422)
         conversations, bots = _list(conversation, "conversation"), _list(bot, "bot")
         tasks, parties = _list(task, "task"), _list(party, "party")
+        threads_scope = _list(thread, "thread")
         # The browser resends the last id it was given when it reconnects on its own.
         resume = request.headers.get("last-event-id", "")
         if resume.isdigit():
@@ -1283,7 +1303,8 @@ def install(app, store, auth, task_views, task_view):
                 return read(c, auth, who, cursor, topics=wanted, conversations=conversations, bots=bots,
                             tasks=tasks, parties=parties,
                             task_views=task_views, task_view=task_view, needs_held=held,
-                            visuals=lambda c, who, rows: V.for_reader(app, auth.settings, c, who, rows))
+                            visuals=None if agent else lambda c, who, rows: V.for_reader(app, auth.settings, c, who, rows),
+                            threads_scope=threads_scope)
 
         now_seq = await asyncio.to_thread(start)
         doorbell.observe(now_seq)
@@ -1336,7 +1357,9 @@ def install(app, store, auth, task_views, task_view):
                         return
                     wait = min(remaining, max(0.0, every - (time.monotonic() - quiet_since)))
                     if await doorbell.wait(generation, wait):
-                        await asyncio.sleep(gathered(GATHER_CHAT_SECONDS if conversations else GATHER_SECONDS, read_at))
+                        # A thread page is a chat for this purpose: its messages stay prompt, inside the 1-second target.
+                        await asyncio.sleep(gathered(GATHER_CHAT_SECONDS if conversations or threads_scope else GATHER_SECONDS,
+                                                     read_at))
                     # Due whether or not the bell rang: rings for changes this viewer may not see send nothing.
                     if time.monotonic() - quiet_since >= every:
                         beat.start()

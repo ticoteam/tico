@@ -1916,12 +1916,9 @@ def unread(c, v, thread_id, *, follower=None):
         return {"unread": 0, "activity": False}
     f = follower if follower is not None else c.execute(
         "SELECT last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?", (row["id"], v.actor)).fetchone()
-    if f is None:
-        n = c.execute("SELECT COUNT(*) FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
-                      "WHERE d.recipient=? AND d.thread_id=? AND d.state IN ('pending','delivered') "
-                      "AND m.deleted_at IS NULL", (v.actor, row["id"])).fetchone()[0]
-        return {"unread": n, "activity": False}
-    mark = f[0] if not isinstance(f, int) else f
+    # No follower row: the viewer has read nothing here, so the mark is 0 and the contract's rule counts every human or
+    # addressed message (a deliveries-only count missed the humans in a sub-thread the viewer never followed).
+    mark = 0 if f is None else (f[0] if not isinstance(f, int) else f)
     if int(row.get("last_seq") or 0) <= mark:
         return {"unread": 0, "activity": False}
     n = c.execute("SELECT COUNT(*) FROM messages m WHERE m.conversation_id=? AND m.seq>? AND m.deleted_at IS NULL "
