@@ -79,7 +79,7 @@ def expected_months(d30, d90=None, d180=None, cap=LIFETIME_CAP):
     if d30 is None:
         return None
     points = [(0.0, 1.0)] + [(t, max(0.0, float(v)) / 100) for t, v in ((1, d30), (3, d90), (6, d180)) if v is not None]
-    area = sum((t1 - t0) * (r0 + r1) / 2 for (t0, r0), (t1, r1) in zip(points, points[1:]))
+    area = sum((t1 - t0) * (r0 + r1) / 2 for (t0, r0), (t1, r1) in zip(points, points[1:], strict=False))
     (t0, r0), (t1, r1) = points[-2], points[-1]
     left = cap - t1
     if r1 <= 0 or left <= 0:
@@ -214,11 +214,8 @@ def idea_views(c, rows):
     bet_ids = sorted({r["bet_id"] for r in rows if r.get("bet_id")})
     bets = {}
     if bet_ids:
-        try:
-            bets = {r[0]: r[1] for r in c.execute(
-                f"SELECT id, statement FROM strategy_bets WHERE id IN ({','.join('?' * len(bet_ids))})", bet_ids)}
-        except Exception:
-            bets = {}
+        bets = {r[0]: r[1] for r in c.execute(
+            f"SELECT id, statement FROM strategy_bets WHERE id IN ({','.join('?' * len(bet_ids))})", bet_ids)}
     out = []
     for r in rows:
         tid = r["task_id"]
@@ -371,11 +368,8 @@ def evidence(c, auth, who):
             item["none"] += 1
     if by_bet:
         marks = ",".join("?" * len(by_bet))
-        try:
-            for r in c.execute(f"SELECT id, statement FROM strategy_bets WHERE id IN ({marks})", list(by_bet)):
-                by_bet[r[0]]["title"] = r[1]
-        except Exception:
-            pass
+        for r in c.execute(f"SELECT id, statement FROM strategy_bets WHERE id IN ({marks})", list(by_bet)):
+            by_bet[r[0]]["title"] = r[1]
     return {"bets": list(by_bet.values())}
 
 
@@ -535,11 +529,7 @@ def _channel_ids(c, slugs):
 def _bet_ref(c, value):
     if value in (None, ""):
         return None
-    try:
-        found = H._one(c, "SELECT id FROM strategy_bets WHERE id=?", (value,))
-    except Exception:
-        found = None
-    if not found:
+    if not H._one(c, "SELECT id FROM strategy_bets WHERE id=?", (value,)):
         raise Problem("not_found", f"No strategy bet {value}", 404)
     return value
 

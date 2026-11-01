@@ -1527,6 +1527,15 @@ KPI_PROPS = {
     "source_note": _s("Where the number comes from")}
 
 
+KPI_TREE_PROPS = {
+    "parent_kpi_id": _s("The KPI this one feeds in the growth tree; \"\" clears"),
+    "growth_role": {"type": "string", "enum": ["north_star", "input", "guardrail", ""],
+                    "description": "One North Star at a time: naming a new one moves the role; \"\" clears"},
+    "stage": {"type": "string", "enum": ["reach", "acquire", "activate", "retain", "refer", ""],
+              "description": "Funnel stage; \"\" clears"},
+    "loop": _s("NAME:STEP, its place in a growth loop (referral:2); \"\" clears")}
+
+
 def _target_body(args):
     """The link's target fields: a range when min or max is given, an improvement when a target is, else none."""
     body = {k: args.get(k) for k in ("baseline", "target", "deadline", "min", "max") if args.get(k) is not None}
@@ -1583,11 +1592,20 @@ def kpi_add(api, args):
 @tool("hub_kpi_update", "Change a KPI. A change to what it measures (definition, unit, direction, cadence, "
       "source note) is a new definition version; a rename or a new owner is not. The KPI's owner or someone above.",
       {"id": _s("KPI id"), "name": _s("New name"),
-       "owner": _s("New owner: `me`, a bot slug or a person id"), **KPI_PROPS},
+       "owner": _s("New owner: `me`, a bot slug or a person id"), **KPI_PROPS, **KPI_TREE_PROPS},
       required=("id",), writes=True)
 def kpi_update(api, args):
     body = {k: args.get(k) for k in ("name", *KPI_PROPS)}
     body["owner"] = _target(api, args["owner"]) if args.get("owner") else None
+    # The tree fields go only when named, so a rename never clears a KPI's place in the tree; "" clears one.
+    for k in ("parent_kpi_id", "growth_role", "stage"):
+        if args.get(k) is not None:
+            body[k] = args[k] or None
+    if args.get("loop") is not None:
+        name, sep, step = str(args["loop"]).rpartition(":")
+        if args["loop"] and (not sep or not name or not step.isdigit()):
+            raise APIError("loop", "--loop is NAME:STEP, for example referral:2; \"\" clears it")
+        body["loop_name"], body["loop_step"] = (name, int(step)) if args["loop"] else (None, None)
     return api.post("kpis/" + args["id"], body, key=_key(args))["kpi"]
 
 
@@ -1837,6 +1855,375 @@ def strategy_bet_update(api, args):
       "owner what to do with them.", {"id": _s("Bet id")}, required=("id",), writes=True)
 def strategy_bet_retire(api, args):
     return _as_person(api).post("strategy/bets/" + args["id"], {"status": "retired"}, key=_key(args))
+
+
+# ----------------------------------------------------------------------------- brand, go-to-market, growth
+PAGE_TITLES = {"brand": "brand", "gtm": "go-to-market"}
+BRAND_SECTIONS = ("positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
+GTM_SECTIONS = ("motion", "buyer", "wishes", "playbooks")
+
+
+def _page_show(api, kind, args):
+    """The page, or one version, or one section of either: what a bot needs without the rest."""
+    if args.get("version"):
+        page = _as_person(api).get(f"{kind}/versions/{int(args['version'])}")
+        body = page.get("body") or {}
+    else:
+        page = _as_person(api).get(kind)
+        body = ((page.get("published") or {}).get("body")) or {}
+    if args.get("section"):
+        return {"section": args["section"], "n": page.get("n") or (page.get("published") or {}).get("n"),
+                "value": body.get(args["section"])}
+    return page
+
+
+def _page_sections(args):
+    """`sections` as an object, or one `section` with its `body` as JSON text (the CLI's --section/--body)."""
+    sections = dict(args.get("sections") or {})
+    if args.get("section"):
+        raw = args.get("body")
+        try:
+            sections[args["section"]] = json.loads(raw) if isinstance(raw, str) else raw
+        except ValueError:
+            raise APIError("body", "--body must be JSON: a string in quotes, a list or an object") from None
+    return sections
+
+
+def _page_draft(api, kind, args):
+    body = {"sections": _page_sections(args)}
+    if args.get("revision") is not None:
+        body["revision"] = int(args["revision"])
+    return _as_person(api).call("PUT", f"{kind}/draft", body, _key(args))
+
+
+def _page_tools(kind, sections):
+    title = PAGE_TITLES[kind]
+    show_props = {"section": {"type": "string", "enum": list(sections), "description": "Only this section"},
+                  "version": {"type": "integer", "description": "A published version's number; default the latest"}}
+
+    @tool(f"hub_{kind}_show", f"The {title} page: the published version, the version list, and for the owner and "
+          f"admins the draft. With section, only that section's value.", show_props)
+    def show(api, args):
+        return _page_show(api, kind, args)
+
+    @tool(f"hub_{kind}_summary", f"The published {title} page as the short text a growth-facing bot's turn carries.", {})
+    def summary(api, args):
+        return api.get(f"{kind}/summary")
+
+    @tool(f"hub_{kind}_draft", f"Owner or admin only: change sections of the {title} draft (a section set to null is "
+          f"removed); publish makes it a version. A bot proposes instead: hub_proposal_create, kind {kind}_draft, "
+          "payload {sections: {...}}.",
+          {"sections": {"type": "object", "description": "{section: value or null}: " + ", ".join(sections)},
+           "section": {"type": "string", "enum": list(sections), "description": "One section, with body"},
+           "body": _s("That section's value as JSON text"),
+           "revision": {"type": "integer", "description": "The draft's revision you read; stale is refused"}},
+          writes=True)
+    def draft(api, args):
+        return _page_draft(api, kind, args)
+
+    @tool(f"hub_{kind}_publish", f"Owner or admin only: the {title} draft becomes the next numbered version.",
+          {"note": _s("What this version changes, in a line", default="")}, writes=True)
+    def publish(api, args):
+        return _as_person(api).post(f"{kind}/publish", {"note": args.get("note") or ""}, key=_key(args))
+
+
+_page_tools("brand", BRAND_SECTIONS)
+_page_tools("gtm", GTM_SECTIONS)
+
+
+@tool("hub_brand_check", "Check a draft (a post, an email, an ad) against the published brand: words to avoid, "
+      "wrong spellings of names, claims the brand never makes. Each hit has kind, match, rule, level (block or warn) "
+      "and index. Fix every block before it goes out.",
+      {"text": _s("The draft, whole")}, required=("text",))
+def brand_check(api, args):
+    return api.post("brand/check", {"text": args["text"]})
+
+
+@tool("hub_gtm_sources", "Which system holds the truth for each number (bookings, spend, sign-ups), how a bot "
+      "reaches it and what it may do there, and any number two sources both claim.",
+      {"include_retired": {"type": "boolean", "default": False}})
+def gtm_sources(api, args):
+    return api.get("growth/sources", include_retired="true" if args.get("include_retired") else None)
+
+
+CHANNEL_PROPS = {
+    "name": _s("What people call it: Google Search"),
+    "track": {"type": "string", "enum": ["performance", "brand"], "description": "Judged by CAC, or by reach"},
+    "stage": {"type": "string", "enum": ["idea", "testing", "scaling", "paused"]},
+    "owner": _s("Who runs it: me, a bot slug or a person id; \"\" clears"),
+    "budget_month": {"type": "number", "description": "Spend per month, in the team's unit"},
+    "source_id": _s("The source that holds its spend"),
+    "why": _s("Why we use it, in a line"),
+    "guardrail_kpi_id": _s("A KPI that must stay under guardrail_max"),
+    "guardrail_max": {"type": "number"},
+    "sort": {"type": "integer"}}
+
+
+def _channel_body(api, args, keys):
+    body = {k: args[k] for k in keys if k in CHANNEL_PROPS and k != "owner" and args.get(k) is not None}
+    if args.get("owner") is not None:
+        body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
+    return body
+
+
+@tool("hub_growth_channel_list", "The growth channels by sort then name: stage, owner, monthly budget, why, guardrail.",
+      {"include_retired": {"type": "boolean", "default": False}})
+def growth_channel_list(api, args):
+    return api.get("growth/channels", include_retired="true" if args.get("include_retired") else None)
+
+
+@tool("hub_growth_channel_show", "One channel by slug.", {"slug": _s("Channel slug")}, required=("slug",))
+def growth_channel_show(api, args):
+    return api.get("growth/channels/" + args["slug"])
+
+
+@tool("hub_growth_channel_add", "Owner or admin only: a new channel.",
+      {"slug": _s("Lowercase, digits and dashes: google-search"), **CHANNEL_PROPS},
+      required=("slug", "name"), writes=True)
+def growth_channel_add(api, args):
+    body = {"slug": args["slug"], **_channel_body(api, args, CHANNEL_PROPS)}
+    return _as_person(api).post("growth/channels", body, key=_key(args))
+
+
+@tool("hub_growth_channel_update", "Change a channel, only the fields sent. Owner or admin; the bot that owns the "
+      "channel may change its why, stage and monthly budget.",
+      {"slug": _s("Channel slug"), **CHANNEL_PROPS}, required=("slug",), writes=True)
+def growth_channel_update(api, args):
+    return _as_person(api).patch("growth/channels/" + args["slug"], _channel_body(api, args, CHANNEL_PROPS),
+                                 key=_key(args))
+
+
+@tool("hub_growth_channel_retire", "Owner or admin only: retire a channel. Its cohorts and ideas keep the link.",
+      {"slug": _s("Channel slug")}, required=("slug",), writes=True)
+def growth_channel_retire(api, args):
+    return _as_person(api).post(f"growth/channels/{args['slug']}/retire", {}, key=_key(args))
+
+
+SOURCE_PROPS = {
+    "truth_for": _s("The number it is the truth for: bookings, ad spend"),
+    "system": _s("The system: Stripe, Google Ads"),
+    "reach_kind": {"type": "string", "enum": ["mcp", "credential", "url", "person"], "description": "How a bot reaches it"},
+    "reach_ref": _s("The MCP server, credential name, URL or person"),
+    "may": _s("What a bot may do there: read only, pause ads"),
+    "owner": _s("Who answers for it: me, a bot slug or a person id")}
+
+
+def _source_body(api, args):
+    body = {k: args[k] for k in SOURCE_PROPS if k != "owner" and args.get(k) is not None}
+    if args.get("owner") is not None:
+        body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
+    return body
+
+
+@tool("hub_growth_source_list", "Same as hub_gtm_sources: the source of truth for each number, and conflicts.",
+      {"include_retired": {"type": "boolean", "default": False}})
+def growth_source_list(api, args):
+    return gtm_sources(api, args)
+
+
+@tool("hub_growth_source_add", "Owner or admin only: name the system that holds the truth for a number.",
+      SOURCE_PROPS, required=("truth_for", "system", "reach_kind"), writes=True)
+def growth_source_add(api, args):
+    return _as_person(api).post("growth/sources", _source_body(api, args), key=_key(args))
+
+
+@tool("hub_growth_source_update", "Owner or admin only: change a source, only the fields sent.",
+      {"id": _s("Source id"), **SOURCE_PROPS}, required=("id",), writes=True)
+def growth_source_update(api, args):
+    return _as_person(api).patch("growth/sources/" + args["id"], _source_body(api, args), key=_key(args))
+
+
+@tool("hub_growth_source_retire", "Owner or admin only: retire a source.", {"id": _s("Source id")},
+      required=("id",), writes=True)
+def growth_source_retire(api, args):
+    return _as_person(api).post(f"growth/sources/{args['id']}/retire", {}, key=_key(args))
+
+
+IDEA_SOURCES = ["strategy", "competitor", "listening", "peec", "lost_test", "person", "other"]
+ICE = {"type": "integer", "minimum": 1, "maximum": 10}
+IDEA_PROPS = {
+    "hypothesis": _s("We believe X because Y"),
+    "prediction": _s("What will move, by how much, by when"),
+    "bet_id": _s("The strategy bet it tests (hub strategy show lists them)"),
+    "kpi_id": _s("The KPI it should move"),
+    "channels": {"type": "array", "items": {"type": "string"}, "description": "Channel slugs"},
+    "source_kind": {"type": "string", "enum": IDEA_SOURCES, "description": "Where the idea came from"},
+    "source_ref": _s("A link or id for that source")}
+
+
+@tool("hub_growth_idea_create", "File a growth idea: an Idea task with its hypothesis, prediction, bet, KPI, channels "
+      "and ICE scores (impact, confidence, ease, 1-10 each). Any teammate may file one. A similar open idea is "
+      "refused; follow_up_of links a new idea to a finished test.",
+      {"title": _s("The change, in a line"), **IDEA_PROPS,
+       "ice_i": {**ICE, "description": "Impact, 1-10"}, "ice_c": {**ICE, "description": "Confidence, 1-10"},
+       "ice_e": {**ICE, "description": "Ease, 1-10"},
+       "follow_up_of": _s("The idea (task id) this follows up"),
+       "assignee": _s("Who runs it: me, a bot slug or a person id; default you"),
+       "body": _s("More detail for the task", default="")},
+      required=("title",), writes=True)
+def growth_idea_create(api, args):
+    keys = ("title", *IDEA_PROPS, "ice_i", "ice_c", "ice_e", "follow_up_of", "body")
+    body = {k: args[k] for k in keys if args.get(k) not in (None, [])}
+    if args.get("assignee"):
+        body["assignee"] = _target(api, args["assignee"])
+    return _as_person(api).post("growth/ideas", body, key=_key(args))["idea"]
+
+
+@tool("hub_growth_idea_list", "Growth ideas you may see, best ICE first, with status, bet, KPI, channels and verdict.",
+      {"status": {"type": "string", "enum": ["idea", "testing", "won", "lost", "inconclusive", "dropped", "paused"]},
+       "bet_id": _s("Only ideas testing this bet"), "channel": _s("Only ideas on this channel slug"),
+       "kpi_id": _s("Only ideas for this KPI"), "q": _s("Words in the title or hypothesis"),
+       "limit": {"type": "integer", "default": 200, "maximum": 500}})
+def growth_idea_list(api, args):
+    return api.get("growth/ideas", **{k: args.get(k) for k in ("status", "bet_id", "channel", "kpi_id", "q", "limit")})
+
+
+@tool("hub_growth_idea_show", "One growth idea whole: its test plan, verdict, follow-ups and subtasks.",
+      {"id": _s("The idea's task id")}, required=("id",))
+def growth_idea_show(api, args):
+    return api.get("growth/ideas/" + args["id"])["idea"]
+
+
+@tool("hub_growth_idea_update", "Change a growth idea, only the fields sent. Its assignee, its creator or an admin.",
+      {"id": _s("The idea's task id"), "title": _s("The change, in a line"), **IDEA_PROPS,
+       "judged_kpi_id": _s("The KPI the verdict reads"),
+       "test_from": _s("YYYY-MM-DD"), "test_to": _s("YYYY-MM-DD"), "change": _s("What the test changes"),
+       "stop_if": _s("Stop early if this happens"), "min_events": {"type": "integer", "minimum": 0},
+       "audience": _s("Who sees the change"), "external_ref": _s("The experiment's id in another tool")},
+      required=("id",), writes=True)
+def growth_idea_update(api, args):
+    keys = ("title", *IDEA_PROPS, "judged_kpi_id", "test_from", "test_to", "change", "stop_if", "min_events",
+            "audience", "external_ref")
+    body = {k: args[k] for k in keys if args.get(k) is not None}
+    return _as_person(api).patch("growth/ideas/" + args["id"], body, key=_key(args))["idea"]
+
+
+@tool("hub_growth_idea_score", "Score a growth idea: impact, confidence and ease, 1-10 each. Its assignee, creator "
+      "or an admin.",
+      {"id": _s("The idea's task id"), "i": {**ICE, "description": "Impact"}, "c": {**ICE, "description": "Confidence"},
+       "e": {**ICE, "description": "Ease"}}, required=("id", "i", "c", "e"), writes=True)
+def growth_idea_score(api, args):
+    body = {k: int(args[k]) for k in ("i", "c", "e")}
+    return _as_person(api).post(f"growth/ideas/{args['id']}/score", body, key=_key(args))["idea"]
+
+
+@tool("hub_growth_idea_start", "Start an idea's test: the window, what changes, the stop rule, and the KPI the "
+      "verdict reads. Its assignee or an admin.",
+      {"id": _s("The idea's task id"), "test_from": _s("YYYY-MM-DD; default today"), "test_to": _s("YYYY-MM-DD"),
+       "change": _s("What the test changes"), "stop_if": _s("Stop early if this happens"),
+       "judged_kpi_id": _s("The KPI the verdict reads; default the idea's KPI"),
+       "min_events": {"type": "integer", "minimum": 0, "description": "Events needed before a won verdict"},
+       "audience": _s("Who sees the change")},
+      required=("id", "test_to", "change", "stop_if"), writes=True)
+def growth_idea_start(api, args):
+    keys = ("test_from", "test_to", "change", "stop_if", "judged_kpi_id", "min_events", "audience")
+    body = {k: args[k] for k in keys if args.get(k) is not None}
+    return _as_person(api).post(f"growth/ideas/{args['id']}/start", body, key=_key(args))["idea"]
+
+
+@tool("hub_growth_idea_verdict", "Give an idea's verdict; a final one closes its task. Judge in this order: a stop "
+      "rule hit or a missed baseline is lost, before counting events; then fewer than min_events is inconclusive; "
+      "then the prediction met is won. Its assignee or an admin.",
+      {"id": _s("The idea's task id"),
+       "status": {"type": "string", "enum": ["won", "lost", "inconclusive", "dropped", "paused"]},
+       "result": _s("What happened, with the numbers"), "learning": _s("What we now know"),
+       "bet_effect": {"type": "string", "enum": ["supports", "weakens", "none"], "description": "What it says about the bet"},
+       "confidence": {"type": "string", "enum": ["low", "medium", "high"]}},
+      required=("id", "status"), writes=True)
+def growth_idea_verdict(api, args):
+    keys = ("status", "result", "learning", "bet_effect", "confidence")
+    body = {k: args[k] for k in keys if args.get(k) is not None}
+    return _as_person(api).post(f"growth/ideas/{args['id']}/verdict", body, key=_key(args))["idea"]
+
+
+COHORT_FIELDS = ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180", "revenue_month",
+                 "margin_pct", "quality")
+
+
+@tool("hub_growth_cohort_list", "Monthly cohorts by channel: spend, bot cost, new customers, % kept at 30/90/180 "
+      "days, revenue and margin.",
+      {"channel": _s("A channel slug, or unknown"), "month": _s("YYYY-MM"),
+       "limit": {"type": "integer", "default": 500, "maximum": 2000}})
+def growth_cohort_list(api, args):
+    return api.get("growth/cohorts", channel=args.get("channel"), month=args.get("month"), limit=args.get("limit"))
+
+
+@tool("hub_growth_cohort_set", "Set one channel's numbers for one month, only the fields sent (any bot or an admin). "
+      "Use channel unknown for customers no channel claims.",
+      {"channel": _s("A channel slug, or unknown"), "month": _s("YYYY-MM"),
+       "spend": {"type": "number"}, "bot_cost": {"type": "number"},
+       "new_customers": {"type": "integer", "minimum": 0},
+       "kept_d30": {"type": "number", "description": "% kept after 30 days"},
+       "kept_d90": {"type": "number", "description": "% kept after 90 days"},
+       "kept_d180": {"type": "number", "description": "% kept after 180 days"},
+       "revenue_month": {"type": "number", "description": "Revenue per customer per month"},
+       "margin_pct": {"type": "number", "description": "Gross margin %"},
+       "quality": {"type": "string", "enum": ["actual", "estimate"]},
+       "sources": {"type": "object", "description": "{field: where the number came from}"},
+       "source": {"type": "array", "items": {"type": "string"}, "description": "FIELD=TEXT, instead of sources"}},
+      required=("channel", "month"), writes=True)
+def growth_cohort_set(api, args):
+    body = {"channel": args["channel"], "month": args["month"],
+            **{k: args[k] for k in COHORT_FIELDS if args.get(k) is not None}}
+    sources = dict(args.get("sources") or {})
+    for pair in args.get("source") or []:
+        field, sep, text = pair.partition("=")
+        if not sep:
+            raise APIError("source", "--source is FIELD=TEXT")
+        sources[field] = text
+    if sources:
+        body["sources"] = sources
+    return api.call("PUT", "growth/cohorts", body, _key(args))
+
+
+@tool("hub_growth_economics", "Unit economics by channel for a month: CAC (spend plus bot cost per new customer), "
+      "expected months kept, LTV and LTV:CAC, with the total and the Unknown row.",
+      {"month": _s("YYYY-MM; default the latest with numbers")})
+def growth_economics(api, args):
+    return api.get("growth/economics", month=args.get("month"))
+
+
+@tool("hub_growth_week", "The growth week: tests running and due, verdicts in the last week, guardrails over their "
+      "limit, and the North Star.", {})
+def growth_week(api, args):
+    return api.get("growth/week")
+
+
+@tool("hub_growth_evidence", "Each strategy bet with the verdicts that support or weaken it.", {})
+def growth_evidence(api, args):
+    return api.get("growth/evidence")
+
+
+@tool("hub_growth_working", "What is working: won tests and their learnings, and channels by CAC.", {})
+def growth_working(api, args):
+    return api.get("growth/working")
+
+
+@tool("hub_growth_kpis", "The KPI tree: the North Star, its inputs and guardrails, each KPI's funnel stage and loop.", {})
+def growth_kpis(api, args):
+    return api.get("growth/kpis")
+
+
+@tool("hub_growth_settings", "The growth settings (unit, revenue per customer per month, margin %, the win "
+      "threshold, framework). With values or set, owner or admin only: change them.",
+      {"values": {"type": "object", "description": "{unit, revenue_month, margin_pct, verdict_win_pct, framework}"},
+       "set": {"type": "array", "items": {"type": "string"}, "description": "KEY=VALUE, instead of values"}},
+      writes=True)
+def growth_settings(api, args):
+    values = dict(args.get("values") or {})
+    for pair in args.get("set") or []:
+        k, sep, v = pair.partition("=")
+        if not sep:
+            raise APIError("set", "--set is KEY=VALUE")
+        if k in ("revenue_month", "margin_pct", "verdict_win_pct"):
+            try:
+                v = float(v)
+            except ValueError:
+                raise APIError("set", f"{k} is a number") from None
+        values[k] = v
+    if not values:
+        return api.get("growth/settings")
+    return _as_person(api).call("PUT", "growth/settings", values, _key(args))
 
 
 # ----------------------------------------------------------------------------- lenses
