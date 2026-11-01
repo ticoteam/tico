@@ -177,13 +177,19 @@ CREATE TABLE IF NOT EXISTS sequences (name TEXT PRIMARY KEY, value INTEGER NOT N
 Sub-threads are evaluated through their **root** row (same audience by §1.1, but the root is the authority).
 
 ### 2.2 Bots
-- **In a turn** (runner token): the bot reads a thread when its attempt holds a grant on any thread with the same
-  `root_id` (`attempt_conversations` joined through `conversations.root_id`). Task threads it may read are added as
-  today (`auth.task`). Its own open asks to a person stay readable (`_own_ask_to_a_person`).
-- **Outside a turn** (agent token): access membership (`thread_members`, including via a group), the participant
-  grant (`participants_json`), `home` when the bot is the Home's owner or holds Read on its owner, or a task thread it
-  may read. A `company` or `team` thread gives no standing read: a bot in its wake audience (`threads.audience_has`:
-  company bots, the group's bots) reads it only through a turn's grant.
+Bots are AI employees: an internal bot reads what a person in the same seat reads.
+- **Every bot** reads by access membership (`thread_members`, including via a group), the participant grant
+  (`participants_json`), `home` when it is the Home's owner or holds Read on its owner, or a task thread it may read
+  (`auth.task`). Its own open asks to a person stay readable (`_own_ask_to_a_person`). `members`, `personal` and
+  `participants` threads open to nothing else.
+- **Internal bots** (runner token, any turn) also read every `company` thread, and the `team` threads of the group
+  they are in or any group above it (`Viewer.chain`, nested groups included). The turn's grant (`attempt_conversations`,
+  any thread with the same `root_id`) adds the woken tree when the bot could not otherwise read it. A legacy root (no
+  stored audience) still opens to an internal bot only by that grant, and migrated shared-room history only to the
+  room's bot, a participant or a granted turn.
+- **External agents** (agent token) never get `company` or `team` standing read: there only their participation
+  counts. A bot in a thread's wake audience (`threads.audience_has`: company bots, the group's bots) may still be
+  woken there.
 - **Posting in a Home** takes Write on its owner for bots as for people (`can_post`). Only the Home's own bot and a
   run replying into the thread its attempt was granted skip it.
 - There is no `threads: read_open`. Membership is the grant.

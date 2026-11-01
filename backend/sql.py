@@ -260,7 +260,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         meeting=lambda cid: function("meeting_room") + f"({cid})",
         conversation=lambda cid: function("conversation") + f"({cid})")
     # A message migrated from a shared bot room keeps that room's readers (threads.message_sql).
-    legacy_messages = threads.message_sql(c, viewer, "")
+    legacy_messages = threads.message_sql(c, viewer, "", inner=inner)
     tasks = auth.task_sql(c, who, delegations=inner("task_delegations"), unreadable=hidden)
     # Evaluate provenance only for candidate rows, never scan unrelated content first.
     msg_gate = function("message") + "(id,conversation_id,refs_json,in_reply_to)"

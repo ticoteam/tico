@@ -59,7 +59,10 @@ def test_python_sql_and_sse_renderings_agree_for_every_teammate(world):
     with store.read_transaction() as c:
         ids = [r[0] for r in c.execute("SELECT id FROM conversations WHERE COALESCE(room_key,'') NOT LIKE 'live-meeting:%'")]
         assert set(made.values()) <= set(ids)
-        for actor, identity in who.items():
+        from backend.auth import Identity
+        # Bots as external agents (identities) and as internal bots in a turn granted nothing.
+        turns = {"turn:" + a: Identity(a, "bot", attempt_id="att-none") for a in who if a.startswith("bot:")}
+        for actor, identity in {**who, **turns}.items():
             v = threads.viewer(auth, identity)
             python = {i for i in ids if threads.readable(c, v, i)}
             marks = ",".join("?" * len(ids))
@@ -103,6 +106,62 @@ def test_an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_o
         assert threads.can_post(c, agent, home), "a bot posts in its own Home"
         assert not threads.can_post(c, stranger, home), "another bot needs Write on the Home's owner"
         assert threads.can_post(c, turn, home), "a run replies into the thread it was granted"
+
+
+def test_internal_bots_read_company_and_their_groups_threads_and_external_agents_do_not(world):
+    """Bots are AI employees: an internal bot reads what a person in its seat reads, every company thread and its
+    group's team threads (groups above its own included), in any turn; members and personal threads only as a member.
+    An external agent never gets company or team standing read. Python, SQL and SSE agree on every row."""
+    from backend.auth import Identity
+    store, auth, who = world
+    bots = sorted(a for a in who if a.startswith("bot:"))
+    import json
+    bot = "bot:content"
+    with store.transaction() as c:
+        # The demo's Content bot is in Leadership; here Leadership sits under Operations.
+        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster["org_groups"] = {"operations": {"name": "Operations"}, "marketing": {"name": "Marketing"},
+                                "leadership": {"name": "Leadership", "parent": "operations"}}
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+    with store.transaction() as c:
+        owner = threads.viewer(auth, owner_of(c, auth))
+        other = next(a for a in people(who) if a != owner.actor)
+        chain = threads.Viewer(auth, Identity(bot, "bot", attempt_id="att-none")).chain(c)
+        assert chain[:2] == ["leadership", "operations"], chain
+        own, above, outside = "leadership", "operations", "marketing"
+
+        def make(title, **kw):
+            return threads.create(c, owner, title=title, **kw)["id"]
+
+        made = {
+            "company": make("All hands", audience="company"),
+            "team own": make("Own team", audience="team", audience_group_id=own),
+            "team above": make("Parent team", audience="team", audience_group_id=above),
+            "team outside": make("Other team", audience="team", audience_group_id=outside),
+            "members": make("Launch", audience="members", members=[other]),
+            "members with bot": make("Launch bot", audience="members", members=[other, bot]),
+            "personal": make("Notes", audience="personal"),
+        }
+    internal = {"company", "team own", "team above", "members with bot"}
+    expected = {
+        "internal": internal,
+        "external": {"members with bot"},
+    }
+    viewers = {"internal": Identity(bot, "bot", attempt_id="att-none"), "external": Identity(bot, "bot", agent="a-1")}
+    ids = list(made.values())
+    with store.read_transaction() as c:
+        for kind, identity in viewers.items():
+            v = threads.viewer(auth, identity)
+            python = {name for name, i in made.items() if threads.readable(c, v, i)}
+            marks = ",".join("?" * len(ids))
+            sql_ids = {r[0] for r in c.execute(f"SELECT id FROM conversations WHERE id IN ({marks}) AND "
+                                               + threads.readable_sql(c, v, "conversations"), ids)}
+            sse_ids = threads.readable_ids(c, threads.viewer(auth, identity), ids)
+            sql = {name for name, i in made.items() if i in sql_ids}
+            sse = {name for name, i in made.items() if i in sse_ids}
+            assert python == sql == sse == expected[kind], (kind, python, sql, sse)
+            # Every one of these threads may still wake the bot when it is in the audience.
+            assert threads.audience_has(c, made["company"], bot)
 
 
 def test_a_members_thread_reaches_only_its_members_and_a_mention_grants_nothing(world):
@@ -609,6 +668,17 @@ def test_a_migrated_home_shows_old_readers_only_its_history_and_home_readers_onl
         python, sql, legacy, opens = sees(c, home_reader)
         assert (python, sql, opens) == ({new["id"]}, {new["id"]}, True)
         assert old["id"] not in legacy
+        # An internal bot that reads the Home, in a turn not granted the old room, sees only what is new too.
+        from backend.auth import Identity
+        peer = next(a for a in sorted(who) if a.startswith("bot:") and a != bot)
+        v = threads.viewer(auth, Identity(peer, "bot", attempt_id="att-none"))
+        monkeypatch.setattr(threads.Viewer, "can_read_home", lambda self, c, owner: (
+            self.actor in (home_reader, peer) if owner == bot else real_home(self, c, owner)))
+        v._hidden = None
+        sql = {r[0] for r in c.execute(
+            "SELECT id FROM messages WHERE conversation_id=? AND " + threads.message_sql(c, v, "messages"),
+            (room["id"],))}
+        assert {m for m in (old["id"], new["id"]) if threads.readable(c, v, m)} == {new["id"]} == sql
     with store.transaction() as c:
         threads.open_earlier_messages(c, H.KEEPER, slug)
     with store.read_transaction() as c:
