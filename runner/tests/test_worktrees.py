@@ -1379,7 +1379,7 @@ def test_the_advertised_retry_resumes_an_expired_setup_in_place(trees, phase):
     assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']
 
 
-def _merge_in_progress(trees, tmp_path, *, conflicts=('file',), deleted=(), copies=()):
+def _merge_in_progress(trees, tmp_path, *, conflicts=('file',), deleted=(), copies=(), adds=()):
     """A task worktree whose merge of main is left in progress. Main changes each `conflicts` name and adds a clean
     file, `mainonly`; main deletes each `deleted` name and adds each `copies` name with the content of `other`. The
     task's own commit is pushed, so nothing is unpushed."""
@@ -1408,6 +1408,8 @@ def _merge_in_progress(trees, tmp_path, *, conflicts=('file',), deleted=(), copi
     for name in deleted:
         (clone / name).unlink()
     (clone / 'mainonly').write_text('main only')
+    for name in adds:
+        (clone / name).write_text('')
     if copies:
         (clone / 'other').write_text('other')  # main keeps the task's `other` unchanged, so only the copy is new to it
     for name in copies:
@@ -1593,3 +1595,16 @@ def test_a_staged_mode_change_on_a_path_the_merge_touched_is_kept(trees, tmp_pat
         W.act(workspace, row, 'remove', os.environ.copy())
     git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
     assert 'mode 100755' in git(path, 'diff', '--cached', '--summary')
+
+
+def test_a_resolution_of_a_bracketed_name_beside_a_sibling_is_kept(trees, tmp_path):
+    """A pathspec would read the brackets as a pattern and compare the sibling's entry instead."""
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path, adds=('x[1].txt', 'x1.txt'))
+    (path / 'x[1].txt').write_text('two')
+    git(path, 'add', 'x[1].txt')
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+    assert (path / 'x[1].txt').read_text() == 'two'
+    assert 'two' == git(path, 'show', ':x[1].txt')

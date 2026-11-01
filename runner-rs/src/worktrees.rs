@@ -1224,8 +1224,9 @@ async fn clear_merge(path: &Path, release: bool, env: &Env) -> R<()> {
     // a resolution, which the abort would discard. Equal blobs prove nothing: a resolution can select either side.
     for name in touched.iter().filter(|name| !unmerged.contains(*name)) {
         // Mode and blob both: a staged mode change on a path the merge touched would otherwise be reset by the abort.
-        let ours: Vec<String> = git(path, env, &["ls-files", "-s", "--", name], false).await?.stdout.split_whitespace().take(2).map(str::to_string).collect();
-        let expected: Vec<String> = git(path, env, &["ls-tree", &tree, "--", name], false).await?.stdout.split_whitespace().enumerate().filter(|(i, _)| *i != 1).take(2).map(|(_, t)| t.to_string()).collect();
+        // Literal name: a pathspec would read `[`, `*` or `?` as patterns and match a sibling file's entry.
+        let ours: Vec<String> = git(path, env, &["--literal-pathspecs", "ls-files", "-s", "--", name], false).await?.stdout.split_whitespace().take(2).map(str::to_string).collect();
+        let expected: Vec<String> = git(path, env, &["--literal-pathspecs", "ls-tree", &tree, "--", name], false).await?.stdout.split_whitespace().enumerate().filter(|(i, _)| *i != 1).take(2).map(|(_, t)| t.to_string()).collect();
         if ours != expected {
             return Err(WtErr::msg(UNRESOLVED));
         }
@@ -1949,11 +1950,11 @@ mod tests {
     /// A task worktree whose merge of main is left in progress: main changes each `conflicts` name, deletes each
     /// `deleted` name and adds a clean file, `mainonly`. The task's own commit is pushed, so nothing is unpushed.
     fn merge_in_progress(folder: &Path, conflicts: &[&str], deleted: &[&str]) -> Merge {
-        merge_in_progress_with(folder, conflicts, deleted, &[])
+        merge_in_progress_with(folder, conflicts, deleted, &[], &[])
     }
 
     /// As `merge_in_progress`, and main also adds each `copies` name with the content of the task's `other` file.
-    fn merge_in_progress_with(folder: &Path, conflicts: &[&str], deleted: &[&str], copies: &[&str]) -> Merge {
+    fn merge_in_progress_with(folder: &Path, conflicts: &[&str], deleted: &[&str], copies: &[&str], adds: &[&str]) -> Merge {
         let (workspace, remote, clone) = (folder.join("workspace"), folder.join("remote.git"), folder.join("clone"));
         let base = workspace.join("repos/org__product");
         let path = workspace.join("tasks/12345678/org__product");
@@ -1984,6 +1985,9 @@ mod tests {
             std::fs::remove_file(clone.join(name)).unwrap();
         }
         std::fs::write(clone.join("mainonly"), "main only\n").unwrap();
+        for name in adds {
+            std::fs::write(clone.join(name), "").unwrap();
+        }
         if !copies.is_empty() {
             std::fs::write(clone.join("other"), "other\n").unwrap();
         }
@@ -2091,7 +2095,7 @@ mod tests {
     #[tokio::test]
     async fn a_staged_deletion_paired_with_an_identical_addition_is_kept() {
         let folder = temp_folder("deletion-copy");
-        let mut m = merge_in_progress_with(&folder.0, &["file"], &[], &["copy"]);
+        let mut m = merge_in_progress_with(&folder.0, &["file"], &[], &["copy"], &[]);
         sh(&m.path, &["rm", "-q", "other"]);
         let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
         assert_eq!(err.text(), UNRESOLVED);
@@ -2194,5 +2198,17 @@ mod tests {
         assert_eq!(err.text(), UNRESOLVED);
         sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
         assert!(sh(&m.path, &["diff", "--cached", "--summary"]).contains("mode 100755"));
+    }
+
+    #[tokio::test]
+    async fn a_resolution_of_a_bracketed_name_beside_a_sibling_is_kept() {
+        let folder = temp_folder("bracket");
+        let mut m = merge_in_progress_with(&folder.0, &["file"], &[], &[], &["x[1].txt", "x1.txt"]);
+        std::fs::write(m.path.join("x[1].txt"), "two").unwrap();
+        sh(&m.path, &["add", "x[1].txt"]);
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert_eq!(sh(&m.path, &["show", ":x[1].txt"]), "two");
     }
 }

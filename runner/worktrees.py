@@ -979,8 +979,9 @@ def _clear_merge(path, row, env):
     # a resolution, which the abort would discard. Equal blobs prove nothing: a resolution can select either side.
     for name in touched - unmerged:
         # Mode and blob both: a staged mode change on a path the merge touched would otherwise be reset by the abort.
-        ours = git(path, 'ls-files', '-s', '--', name, env=env, check=False).stdout.split()[:2]
-        expected = git(path, 'ls-tree', tree, '--', name, env=env, check=False).stdout.split()[:3:2]
+        # Literal name: a pathspec would read `[`, `*` or `?` as patterns and match a sibling file's entry.
+        ours = git(path, '--literal-pathspecs', 'ls-files', '-s', '--', name, env=env, check=False).stdout.split()[:2]
+        expected = git(path, '--literal-pathspecs', 'ls-tree', tree, '--', name, env=env, check=False).stdout.split()[:3:2]
         if ours != expected:
             raise ValueError(unresolved)
     git(path, 'merge', '--abort', env=env)
