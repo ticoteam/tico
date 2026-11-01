@@ -17,7 +17,7 @@ FAILING_HOURS = 24
 ORDER = {HIGH: 0, MEDIUM: 1, LOW: 2}
 
 
-PAUSE_REASON_SQL = "SELECT reason FROM bot_status_history WHERE bot=? AND state='paused' ORDER BY since DESC LIMIT 1"
+PAUSE_REASON_SQL = "SELECT reason FROM bot_status_history WHERE bot=? AND state='paused' ORDER BY since DESC, rowid DESC LIMIT 1"
 
 
 def prime_pause_reasons(c, bots):
@@ -28,7 +28,7 @@ def prime_pause_reasons(c, bots):
     for part in H.chunks(sorted(set(bots))):
         marks = ",".join("?" * len(part))
         latest = {r["bot"]: r for r in c.execute(
-            "SELECT bot,reason FROM (SELECT bot,reason,row_number() OVER (PARTITION BY bot ORDER BY since DESC) AS n "
+            "SELECT bot,reason FROM (SELECT bot,reason,row_number() OVER (PARTITION BY bot ORDER BY since DESC, rowid DESC) AS n "
             f"FROM bot_status_history WHERE state='paused' AND bot IN ({marks})) WHERE n=1", part)}
         prime(c, PAUSE_REASON_SQL, {(s,): latest.get(s) for s in part})
 
