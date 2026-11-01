@@ -18,7 +18,9 @@ is a gap to name in the summary and a task for the owner if they want it connect
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly summary of how support is doing, routing proposals, and proposals for which support role to add when work has no owner), that requested routing uses your Tools; customer messages stay drafts until a person turns mail sending on in Tico.
+I write a weekly summary of how support is doing, propose routing for stuck work, and propose which support role to add when work has no owner.
+I do not reply to customers, assign people or change a ticket. Requested routing uses my Tools.
+Customer messages stay drafts until a person turns mail sending on in Tico, and the docs stay with the Librarian.
 
 ## 3. Ask, in one message
 
@@ -46,13 +48,13 @@ reviewed". Send it to nobody else.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will draft this summary every Monday at 09:00 and send it only to you." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will draft this summary every Monday at 09:00 and send it only to you." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

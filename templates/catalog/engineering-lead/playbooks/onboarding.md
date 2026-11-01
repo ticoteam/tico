@@ -1,7 +1,7 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 30 minutes. The outcome is six recorded answers, a real draft of this week's summary on the task, and the first routine checked.
+Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+The outcome is five recorded answers, a real draft of this week's summary on the task, and the first routine checked.
 
 ---
 
@@ -23,12 +23,11 @@ What you do (a weekly summary of what shipped, what is stuck and what is blocked
 
 Numbered, each with its one-line why. Offer a default so a human can answer "fine".
 
-1. Which repositories make up the product, and who owns each area? Why: Sets the scope of the summary and lets me name an owner beside every stuck item.
-2. Who reads the weekly summary, and which day and hour should it land? (Default: you, Mondays at 09:00.) Why: Sets the recipient and the first routine's schedule. Share only with the named recipients.
-3. How do you release: on every merge, on a schedule, by hand? What is the last release and when was it? Why: Lead time and deploy frequency are counted from releases or deploys, and I only count what I can read.
-4. After how many working days without a review or a change should a pull request count as stuck? (Default: 2 for review, 5 for open.) Why: Sets the stuck list's threshold, so it neither nags nor misses.
-5. Which measures do you want to see, and which would feel like surveillance? (Default: shipped count, review wait, stuck pull requests; nothing per person.) Why: A measure that ranks people changes behaviour. I list only what you pick, by team and repository.
-6. How does an incident get reported here, and where do the engineering bots' reports live? Why: Lets me include incidents, release notes and docs status without asking each bot.
+1. Which repositories make up the product, and who owns each area? Why: sets the scope of the summary and lets me name an owner beside every stuck item.
+2. Who reads the weekly summary, and which day and hour should it land? (Default: you, Mondays at 09:00.) Why: sets the recipient and the first routine's schedule. Share only with the named recipients.
+3. How do you release: on every merge, on a schedule, by hand? What is the last release and when was it? Why: lead time and deploy frequency are counted from releases or deploys, and I only count what I can read.
+4. After how many working days without a review or a change should a pull request count as stuck? (Default: 2 for review, 5 for open.) Which measures do you want to see, and which would feel like surveillance? (Default: shipped count, review wait, stuck pull requests; nothing per person.) Why: the stuck list's threshold should neither nag nor miss, and a measure that ranks people changes behaviour, so I list only what you pick, by team and repository.
+5. How does an incident get reported here, and where do the engineering bots' reports live? Why: lets me include incidents, release notes and docs status without asking each bot.
 
 ## 4. Record
 
@@ -40,13 +39,13 @@ Read the last two weeks of merged and open pull requests in the named repositori
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you this summary every Monday at 09:00, and I will not assign or message anyone." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you this summary every Monday at 09:00, and I will not assign or message anyone." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

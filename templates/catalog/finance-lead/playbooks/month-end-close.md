@@ -1,8 +1,17 @@
 # Month-end close
 
-Triggered on the first working day of the month, or by a task asking "where is the close?". Budget 25
-minutes, repeated daily until the close is done. The outcome is a close that finishes by the team's
-deadline with every blocker named and owned. You coordinate; the Bookkeeper keeps the checklist and requested posting and period locks use the accounting Tools.
+Triggered on the first working day of the month, or by a task asking "where is the close?". Budget 25 minutes, repeated
+daily until the close is done.
+
+Inputs: the close deadline in `knowledge/finance-calendar.md`, the close checklist (`hub finance report close --month YYYY-MM`),
+and the Bookkeeper's (`bookkeeper`) status on the task. If the books are kept outside Tico, the name of who keeps them is in
+`knowledge/team.md`.
+
+Outcome: a close that finishes by the team's deadline, with every blocker named and owned. You coordinate. The Bookkeeper
+keeps the checklist. Posting and period locks happen only when a task requests them and a granted accounting Tool allows them.
+
+Done when: every line of the checklist is done or has a named owner and a date, the close section is on the task, and on
+the last day the task is closed with the outcome.
 
 ---
 
@@ -10,9 +19,8 @@ deadline with every blocker named and owned. You coordinate; the Bookkeeper keep
 
     hub task show <id>
 
-Read the close deadline in `knowledge/finance-calendar.md` and the month's close checklist
-(`hub finance report close --month YYYY-MM`), which the Bookkeeper (`bookkeeper`) works through. If the books are
-kept outside Tico, name who keeps them from `knowledge/team.md`.
+Read the close deadline in `knowledge/finance-calendar.md` and the month's close checklist, which the Bookkeeper works
+through. If the books are kept outside Tico, name who keeps them from `knowledge/team.md`.
 
 ## 2. Check the inputs, in order
 
@@ -30,12 +38,12 @@ Each is done, open or blocked, with who owes it:
 
 ## 3. Unblock
 
-For each blocked line, one routing proposal: who, what, by when. Ask once with `hub task ask <id>`;
-create the requested follow-through with `hub task create --owner <slug or person> --parent <id>` and the evidence.
+For each blocked line, one routing proposal: who, what, by when. Ask once with `hub task ask <id>`. Create the requested
+follow-through with `hub task create --owner <slug or person> --parent <id>` and the evidence.
 
 ## 4. Report
 
-Add a close section to the task: day N of the close against the deadline, lines done, the blockers
-with owners, and the one thing that would finish it soonest. When a human says the period is locked,
-record the date in `knowledge/finance-calendar.md` and tell the FP&A Analyst on its task that
-budget-against-actual can run. `hub task update <id> --status done --note` on the last day.
+Add a close section to the task: day N of the close against the deadline, lines done, the blockers with owners, and the one
+thing that would finish it soonest. When a human says the period is locked, record the date in
+`knowledge/finance-calendar.md` and tell the FP&A Analyst on its task that budget-against-actual can run.
+`hub task update <id> --status done --note` on the last day.

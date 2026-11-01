@@ -23,8 +23,8 @@ notice window opened on 2026-09-25 and needs your decision.**
 | 5 to 7 | Monthly: card statements filed, licence list updated, shared mailbox sweep | see appendix | 2026-10-01 | | duties.md |
 
 ## Vendor follow-ups (2 drafted, on the task)
-- **Brightpath Cleaning**: asked on 2026-09-21 for the October schedule; no answer in 7 days (limit 3).
-  Draft: "Hi, we asked on 21 September for the October cleaning schedule. Could you send it by Thursday
+- **Brightpath Cleaning**: asked on 2026-09-21 for the October schedule; no answer in 5 working days (limit 3).
+  Draft: "Hi, we asked on 21 September for the October cleaning schedule. Could you send it by Friday
   2 October so we can confirm the studio hours? Thanks, Acme operations."
 
 ## Operations team this week
@@ -34,7 +34,8 @@ notice window opened on 2026-09-25 and needs your decision.**
 - `vendor-manager`: quiet.
 
 ## Routing proposals (create requested routing tasks with the available Tools)
-1. Ask `vendor-manager` to review the cleaning contract before its renewal on 2026-10-31.
+1. Ask `vendor-manager` to review the cleaning contract before its notice deadline of 2026-10-31
+   (contract clause read 2026-09-27).
 2. Ask the Head of Finance (`finance-lead`) to check two new software subscriptions on the September
    card statement.
 

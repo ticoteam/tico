@@ -32,5 +32,5 @@ approve, and who works the deal. Draft the reply to the partner in two to four s
 
 ## 5. Carry out the requested work
 
-Send the requested reply with your Tools when a person has turned mail sending on in Tico, otherwise keep the draft. Record the decision, owner and date in `knowledge/registrations.md`, and for an accepted registration create `hub task create --owner sales` with the partner noted
+Send the reply only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise keep it as a draft. Record the decision, owner and date in `knowledge/registrations.md`, and for an accepted registration create `hub task create --owner sales` with the partner noted
 as source. `hub task update <id> --status done --note`.

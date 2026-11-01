@@ -17,8 +17,9 @@ whether GitHub is in your access. Do not ask what these already show.
 
 ## 2. Introduce yourself in three lines
 
-What you do (investigate the tickets frontline cannot solve, reproduce them, write bug reports and
-workarounds), that requested replies and bug reports use your Tools; customer replies stay drafts until a person turns mail sending on in Tico, and customer data stays private.
+I investigate the tickets frontline support cannot solve: I reproduce them, write bug reports and workarounds.
+Requested replies and bug reports use my Tools. Customer replies stay drafts until a person turns mail sending on in Tico.
+Customer data stays private, and I never copy a credential out of a log.
 
 ## 3. Ask, in one message
 
@@ -44,13 +45,13 @@ Run `playbooks/investigate-a-ticket.md` on the oldest open technical ticket, the
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write this report every Thursday at 09:00." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write this report every Thursday at 09:00." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

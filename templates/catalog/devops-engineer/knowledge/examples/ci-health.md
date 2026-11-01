@@ -12,9 +12,9 @@ Nothing was rerun, cancelled or changed. First draft, not yet reviewed.
 ## Flaky tests (register: knowledge/flaky-tests.md)
 | Test | Flips (14 days) | Suspected cause | Owner | Decision needed |
 |---|---|---|---|---|
-| `test_booking_reminder_sends_at_7am` | 6, e.g. runs 88121, 88164 | timezone: passes except 23:00-00:00 UTC | Kenji | fix or quarantine by Fri |
-| `e2e/checkout.spec: applies promo` | 3 | waits on a fixed 2 s sleep | Lena | fix |
-| `test_export_csv_large` | 2 (was 5) | shared temp dir; Lena's fix on 2026-09-23 halved it | Lena | watch |
+| `test_booking_reminder_sends_at_7am` | 6, e.g. runs 88121, 88164 | timezone: passes except 23:00-00:00 UTC | API owner | fix or quarantine by Fri |
+| `e2e/checkout.spec: applies promo` | 3 | waits on a fixed 2 s sleep | web owner | fix |
+| `test_export_csv_large` | 2 (was 5) | shared temp dir; the 2026-09-23 fix halved it | web owner | watch |
 
 ## Slowest jobs (median, 14 days vs previous 14)
 - `ci.yml / test-api`: 11 min 30 s (was 7 min 50 s). Dependency install is not cached since the lockfile
@@ -32,8 +32,8 @@ Nothing was rerun, cancelled or changed. First draft, not yet reviewed.
 1. **Cache the api install** (`ci.yml`, job `test-api`): point the cache key at `api/package-lock.json`.
    Expected: about 6 minutes off every run. Check: the step "Restore cache" reports a hit.
 2. **Freeze the clock in the reminder test**: set the test's time to 10:00 in the studio's zone instead of
-   now. Owner: Kenji.
-3. **Replace the fixed sleep in the promo e2e test** with a wait for the total to change. Owner: Lena.
+   now. Owner: the API owner.
+3. **Replace the fixed sleep in the promo e2e test** with a wait for the total to change. Owner: the web owner.
 
 ## Could not read
 - Logs older than the repository's retention for 4 runs on 2026-09-15; counted as unknown, not green.

@@ -4,6 +4,9 @@ Runs once, on the first message or task you receive, while `state.md` says onboa
 finished. Budget 25 minutes. The outcome is five recorded answers, a first weekly summary on the
 task, and the first routine checked.
 
+Inputs: the setup task, `hub team show`, `hub task list --all`, and the five questions in step 3.
+Done when: `state.md` holds five dated answers; `knowledge/workstreams.md`, `knowledge/calendar.md` and `knowledge/routing.md` are written; the first draft summary is on the task, labelled as a draft; the routine is checked and logged in `memory/decisions.md`; `hub bot setup-done` has run.
+
 ---
 
 ## 1. Read before you ask
@@ -18,7 +21,7 @@ workstream to start with and why, not a summary of nothing.
 
 ## 2. Introduce yourself in three lines
 
-What you do (a weekly marketing summary, a six week calendar, routing proposals), that requested routing uses your Tools, and that public messages stay drafts until a person turns mail sending on in Tico.
+What you do (a weekly marketing summary, a six week calendar, routing proposals), that routing happens only when the task asks for it and a granted Tool allows it, and that public messages stay drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 

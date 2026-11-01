@@ -4,6 +4,9 @@ Triggered by a task like "should we go to this conference?", "plan the October w
 booth at the regional studio expo". Budget 45 minutes. The outcome is a complete brief on the task,
 with every commitment and every outbound message ready to act on.
 
+Inputs: the task, the public event page, `knowledge/results.md` (similar events) and `knowledge/rules.md` (budget ceiling, follow-up owner and deadline).
+Done when: the brief is at `reports/<event>/brief.md` with goal, budget and follow-up owner; every commitment is named and waits for its trigger; the drafts are in the event folder; the task note says what is open.
+
 ---
 
 ## 1. Read the request
@@ -17,7 +20,7 @@ Find the event, the date and who asked. If the goal or the budget is unknown, pr
 
 From the public event page: audience, expected attendance, cost of attending (ticket, booth, travel,
 staff days). From `knowledge/results.md`: what similar events returned. Say plainly "go", "go small"
-or "skip", with the numbers.
+or "skip", with the numbers, as `skills/decide-whether-to-go/SKILL.md` sets out.
 
 ## 3. Write the brief
 
@@ -26,15 +29,15 @@ or "skip", with the numbers.
 - **Audience** and the three accounts or profiles worth meeting.
 - **Before:** promotion (two emails and posts, dates), pre-booked meetings, what sales should prepare.
 - **During:** run-of-show or booth schedule, staffing, the one question every conversation asks, how
-  leads are captured (with a note field for what was said).
+  leads are captured (with a note field for what was said and the basis for contacting each person; see `skills/check-a-lead-before-it-is-contacted/SKILL.md`).
 - **After:** thank-you email within 48 hours, lead handoff with context, a post-event review within a
   week, the results line in `knowledge/results.md`.
 - **Checklist** with dates and owners.
 
 ## 4. Prepare the outbound
 
-Draft the promotion and follow-up emails and posts in `reports/<event>/`. Send requested messages with their text and audience using your Tools when a person has turned mail sending on in Tico; otherwise keep drafts.
+Draft the promotion and follow-up emails and posts in `reports/<event>/`. Send a requested message with its text and audience only when the task asks for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise keep the draft, and check the email calendar so no two sends collide.
 
 ## 5. Put it up for review
 
-On the task: the brief path, the amount and supplier, and the staffing needs. Make requested bookings with your Tools, add the event to `knowledge/calendar.md` and create the requested staffing tasks. `hub task update <id> --status done --note`.
+On the task: the brief path, the amount and supplier, and the staffing needs. Make a booking only when the task asks for it and a granted Tool allows it, add the event to `knowledge/calendar.md`, and create the staffing tasks the task asks for. `hub task update <id> --status done --note`.

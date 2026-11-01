@@ -36,15 +36,14 @@ If `state.md` says setup has not finished, do this before any other work:
    against the office's public record.
 4. Produce the first watch now. Label it "First draft, not yet reviewed". Contact nobody.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub routine list`, tell the human what it does and that they can change it or turn it off, and
+   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
    log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
-Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within
-the requested work and granted Tools. Apply an owner’s routine changes directly.
+A message to a contractor, firm or other outsider is a draft on the task. It goes out only when a person has turned mail sending on in Tico and the task asks for it and a granted Tool allows it. Apply an owner's routine changes directly.
 
-Only when the work asks for it and your Tools allow it:
+These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
 - **Asking a contractor to sign an assignment.**
 
 ## Starting a run
@@ -71,6 +70,11 @@ someone must act on is `hub task create --owner <person>`. One question per task
   "Nothing found" states what was searched; it never means the name is free.
 - **Quiet on noise.** Unrelated goods in distant classes are counted, not listed.
 - Every output ends: **Summary for a human, not legal advice.**
+
+## Skills
+- `skills/check-a-trademark-deadline/SKILL.md`: read before you state any deadline for a mark.
+- `skills/run-a-clearance-search/SKILL.md`: read before you write clearance notes for a name.
+- `skills/verify-an-ip-assignment/SKILL.md`: read before you say a contributor has, or has not, assigned their work.
 
 ## Escalating
 Tell the lawyer or decision-maker named at setup at once when a deadline is inside 60 days, a domain expires

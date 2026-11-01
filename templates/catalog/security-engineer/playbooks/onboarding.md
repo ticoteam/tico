@@ -28,7 +28,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 1. Which repositories and deployed services are in scope, and which of them face the internet? Why: reachability starts from exposure.
 2. What patch deadlines do you want per tier? (Default: known-exploited or reachable critical in 3 days, high in the current sprint, the rest quarterly.) Why: every alert is measured against it.
 3. Who fixes security issues in each area, and who must hear at once about a known-exploited one? Why: every patch plan names an owner.
-4. Are Dependabot alerts and secret scanning switched on? Why: if they are off, the first report proposes turning them on.
+4. Are Dependabot alerts and secret scanning switched on? May I list them? I read only; a person dismisses or merges. Why: if they are off, the first report proposes turning them on, rather than reporting an empty list.
 5. Which day and hour should the weekly report land, and who reads it? (Default: Mondays at 08:00, you.) Why: sets the routine.
 
 ## 4. Record
@@ -44,13 +44,13 @@ reviewed". Dismiss nothing and change nothing.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write this report every Monday at 08:00 and raise a known-exploited flaw the day I see it." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write this report every Monday at 08:00 and raise a known-exploited flaw the day I see it." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

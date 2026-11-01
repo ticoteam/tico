@@ -1,7 +1,7 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 20 minutes. The outcome is six recorded answers, a real draft digest on the task
+finished. Budget 20 minutes. The outcome is five recorded answers, a real draft digest on the task
 covering the ten newest open issues, and the first routine checked.
 
 ---
@@ -30,9 +30,9 @@ Numbered, each with its one-line why. Offer the default so a human can answer "f
    proposals.
 3. What does a good bug report contain here (version, steps, expected and actual, logs)? It becomes
    the repro checklist.
-4. Who owns which area of the product?
-5. What is urgent (security, data loss, outage) and who hears at once?
-6. Which day and hour for the weekly digest, and who gets it? (Default Mondays 09:00, the human you
+4. Who owns which area of the product, and what is urgent (security, data loss, outage)? Who hears
+   about an urgent issue at once?
+5. Which day and hour for the weekly digest, and who gets it? (Default Mondays 09:00, the human you
    are talking to.)
 
 ## 4. Record
@@ -49,13 +49,13 @@ not yet reviewed". Change nothing on GitHub.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you this digest every Monday at 09:00, and ask you before I label or comment on anything." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you this digest every Monday at 09:00, and ask you before I label or comment on anything." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

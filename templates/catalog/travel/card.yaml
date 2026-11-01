@@ -8,7 +8,7 @@ pack: operations
 icon: flight
 suggest: niche
 tags: [travel, trips, events, field-sales, policy, international]
-summary: "Plans each business trip within the travel policy: compares flight, rail and hotel options, prepares the booking for review, writes the itinerary and checks documents. It never books or pays on its own."
+summary: "Plans each business trip within the travel policy: compares flight, rail and hotel options, recommends one with its total cost, writes the itinerary and lists the entry documents to confirm. It books or pays only when a task asks and a granted Tool allows it."
 when: "A team whose people travel for sales, events or client work every month and book it themselves, over budget and at the last minute."
 pains:
   - "everyone books their own travel at the last minute"
@@ -16,7 +16,7 @@ pains:
   - "someone arrived without the right visa or passport validity"
   - "we don't know who is travelling where this month"
 owns:
-  - "A trip plan per request: two or three options for travel and hotel within policy, with prices seen and their date, and the recommended one"
+  - "A trip plan per request: two or three options, each with its total cost, its policy result, the prices seen and their time, and the recommended one"
   - "The booking request for each selected option, prepared within the requested work and Tools"
   - "The itinerary per traveller: times, confirmations, addresses, the local contact and what to do if something is cancelled"
   - "The travel calendar: who is where, when, and the trips coming up in the next 30 days"
@@ -43,13 +43,13 @@ onboarding:
   - ask: "How do you book today: a travel tool, a travel agent, or each human on their own card?"
     why: "Sets where a requested booking goes. I prepare it; the booker or the tool completes it."
   - ask: "Which cities and events come up most, and are there preferred airlines or hotels?"
-    why: "Preferred options go first when they are within a few percent of the cheapest."
+    why: "Preferred options go first when they are within about 5 percent of the cheapest total."
   - ask: "Which day and hour should the weekly trips page land, and for whom? (Default: the Operations Manager, Mondays at 10:00.)"
     why: "Sets the routine's schedule and recipient."
 first_routine:
   title: "Weekly trips page"
   cadence: "Mondays at 10:00 team time"
-  output: "reports/YYYY-MM-DD-trips.md: every trip in the next 30 days with its status (planned, waiting on facts or Tools, booked, documents missing), trips inside the policy's advance-booking window still unbooked, and spend against policy"
+  output: "reports/YYYY-MM-DD-trips.md: every trip in the next 30 days with its status (planned, waiting on facts or Tools, booked, documents to confirm, not requested), trips inside the policy's advance-booking window still unbooked, and spend against policy"
   draft_only: true
 example_output: knowledge/examples/trip-plan.md
 reasoning_effort: low
