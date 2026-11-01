@@ -119,7 +119,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewp
       if (body.on === 'published' && (!published || noPublished)) return json({error: {code: 'no_published', detail: 'Nothing is published'}}, 422);
       const lens = LENSES.find(l => l.id === start[1]);
       const run = {id: 'r-new' + st.runs.length, lens: lens.id, name: lens.name, applies_to: lens.applies_to, on_draft: body.on === 'draft', strategy_n: body.on === 'draft' ? null : 1,
-        status: slow ? 'no_model' : 'running', answers: body.answers, result: null, applied: [], sharpen_tasks: {}, proposal_id: null, created_by: 'human:ana', created: new Date().toISOString(), finished: null, error: null};
+        status: slow ? 'no_model' : 'running', answers: body.answers, result: null, applied: [], sharpen_tasks: {}, proposal_id: null, created_by: 'human:ana', created: '2026-10-27T12:00:00.000Z', finished: null, error: null};
       st.runs.unshift(run);
       return json(run, 202);
     }
