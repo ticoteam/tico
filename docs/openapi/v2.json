@@ -20556,7 +20556,7 @@
         ]
       },
       "put": {
-        "summary": "Save a Dashboard or team page (its default cards become pins) and a team page's audience",
+        "summary": "Save a Dashboard or team page (its default cards become pins); a team page's audience sets its group's See and Read",
         "operationId": "savePlace",
         "parameters": [
           {

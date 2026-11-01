@@ -65,6 +65,40 @@ SCHEMA = (
 def ensure(c):
     for statement in SCHEMA:
         c.execute(statement)
+    migrate_team_pages(c)
+
+
+def migrate_team_pages(c):
+    """A team page's "Seen by" (pin_places.audience_json) is now its group's See and Read. Each narrowed page moves
+    into its group once, narrowing a level that is still Everyone and never widening one, then is cleared."""
+    try:
+        rows = c.execute("SELECT place, audience_json FROM pin_places "
+                         "WHERE place LIKE 'team:%' AND audience_json IS NOT NULL").fetchall()
+    except Exception:            # a database from before team pages
+        return
+    from . import audit_log
+    for place, raw in ((r[0], r[1]) for r in rows):
+        gid = place[5:]
+        try:
+            level = A.audience(json.loads(raw))
+        except (ValueError, TypeError):
+            level = {"everyone": True}
+        if not level.get("everyone"):
+            row = c.execute("SELECT id, access FROM teammate_accesses WHERE target_type='group' AND target_id=?",
+                            (gid,)).fetchone()
+            before = _complete(row[1] if row else None, "group", gid)
+            doc = {key: (dict(level) if key in ("see", "read") and before[key].get("everyone") else before[key])
+                   for key in AUDIENCE_LEVELS}
+            if doc != before:
+                text, now = json.dumps(doc, sort_keys=True, separators=(",", ":")), H.now()
+                if row:
+                    c.execute("UPDATE teammate_accesses SET access=?,revision=revision+1,updated_by='system',updated_at=? "
+                              "WHERE id=?", (text, now, row[0]))
+                else:
+                    c.execute("INSERT INTO teammate_accesses (id,target_type,target_id,access,revision,updated_by,"
+                              "created_at,updated_at) VALUES (?,?,?,?,1,'system',?,?)", (H.new_id(), "group", gid, text, now, now))
+                audit_log.write(c, "system", f"group:{gid}:access", before, doc, "team-page-audience")
+        c.execute("UPDATE pin_places SET audience_json=NULL WHERE place=?", (place,))
 
 
 # ----------------------------------------------------------------------------- targets and stored shape
@@ -596,6 +630,30 @@ def redact_chart(view, roster, people_hidden, groups_hidden):
     out["org_groups"] = groups
     if "teams" in out:
         out["teams"] = {gid: v for gid, v in (out["teams"] or {}).items() if gid not in groups_hidden}
+    return out
+
+
+def redact_bots(c, viewer, rows, auth=None):
+    """Bot rows (`/api/employees`) without the people and groups the viewer may not see: their place on the chart
+    rehung as on `/api/v2/org`, and an unseen person left out of `operator`, `users` and `bot_owners`."""
+    people_hidden, groups_hidden = unseen(c, viewer, auth)
+    if not people_hidden and not groups_hidden:
+        return rows
+    from . import views
+    roster, entries = views.roster(c, shared=True), views.entries(c, shared=True)
+    archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+    chart = P.org_view(roster, entries, archived, bare_people=True)
+    view = redact_chart({"people": chart.get("people") or [], "org_groups": chart.get("org_groups") or [],
+                         "bots": [{**row, "id": row.get("name")} for row in rows]}, roster, people_hidden, groups_hidden)
+    out = []
+    for row in view["bots"]:
+        row.pop("id", None)
+        if row.get("operator") in people_hidden:
+            row["operator"] = None
+        for key in ("users", "bot_owners"):
+            if isinstance(row.get(key), list):
+                row[key] = [p for p in row[key] if (p or {}).get("id") not in people_hidden]
+        out.append(row)
     return out
 
 

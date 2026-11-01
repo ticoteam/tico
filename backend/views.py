@@ -2229,7 +2229,9 @@ def install_views(app, store, auth, mutate, task_view):
         human_only(request.state.identity)
         # One snapshot from the start, so read_cache serves the roster, configs and access rows once.
         with store.read_transaction() as c:
-            return employee_rows(c, request.state.identity)
+            from . import teammate_access
+            # The people and groups this caller may not see are not named on a bot either.
+            return teammate_access.redact_bots(c, request.state.identity, employee_rows(c, request.state.identity), auth)
 
     @app.get("/api/people")
     def people(request: Request):

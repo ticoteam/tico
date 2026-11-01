@@ -85,17 +85,19 @@ Who manages:
 - **a group**: its leads and the leads of the groups above it, the admins and the owner;
 - **a bot**: its owners, as in [Always full access](#always-full-access).
 
-Whoever manages someone always has all three levels and edits their access: **Access** on a person's page, the
-**Access** button on a group's team page, both with the same editor as a bot's.
+Whoever manages someone always has all three levels and edits their access: **Access** on a person's page, and
+**Seen by** on a group's team page, both with the same editor as a bot's.
 
 A group names the **people and bots** in it and in the groups nested in it. That holds in every audience: a bot in
 Contracts, nested under Legal, is in an audience that names Legal, for a bot, a person or a group.
 
 Hidden means hidden: someone you may not see is left out of the chart (the ones under them hang from the nearest
-shown row above), the people and group lists, the @ picker and `hub sql` (`humans` rows, `humans.teams`,
-`bot_config.team`, `conversations.participants` and messages they wrote), and their page, photo and access answer
-`404`. A hidden group's people and bots are shown under the nearest group above it. Inside a conversation you are in,
-everyone in it stays known to you. The owner, the admins and whoever manages them always see them.
+shown row above), the people and group lists, the @ picker, the bots' rows (`/api/employees`: operator, owners,
+users, team and who they report to), the event stream's actors and `hub sql` (`humans` rows, `humans.teams`,
+`bot_config.team`, `conversations.participants`, messages they wrote, `tasks.owner`, `requester` and `closed_by`, and
+the `actor` of `events` and `task_events`, which read `''`), and their page, photo and access answer `404`. A hidden
+group's people and bots are shown under the nearest group above it. Inside a conversation you are in, and on a task you
+own or asked for, everyone in it stays known to you. The owner, the admins and whoever manages them always see them.
 
 ```
 GET  /api/v2/humans/cara/access          GET  /api/v2/groups/legal/access
@@ -153,8 +155,10 @@ read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 ## Dashboard, team pages and pins
 
 The owner and admins arrange the Dashboard. A team page is arranged by them and by a person who leads the group or a group
-above it; it is seen by its audience, Everyone unless they narrow it to people, groups or bots (the same audience as a
-bot's levels above; naming a group names the groups under it). A bot pins only its own pages and cards, to its own
+above it; it is seen by whoever may Read the group. **Seen by** on the page opens the group's Access editor
+([People and groups](#people-and-groups)); `PUT /api/v2/places/team:<group>` with an `audience` sets the group's See and
+Read to it. A page audience narrowed before this release moved into its group's See and Read once on upgrade, narrowing a
+level that was still Everyone and never widening one. A bot pins only its own pages and cards, to its own
 sidebar or a task it holds or asked for; a person who manages a bot may pin another bot's page to its sidebar. A page a
 person pins to the Dashboard or a team page may be read by that place's audience, and a private task's file is never
 pinned there ([Overview](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who

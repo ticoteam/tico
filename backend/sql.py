@@ -65,12 +65,30 @@ def unseen_authors(unseen, me, inner):
             f"json_each(v.participants_json) p WHERE v.id=source.conversation_id AND p.value={me})) AND ")
 
 
-def teammate_masks(unseen, me):
+def teammate_masks(unseen, me, inner=None):
     """MASKED for one request: participant lists drop the people the caller may not see (in a conversation the caller
-    is not in), group lists the groups they may not see."""
+    is not in), group lists the groups they may not see. A task's owner, requester and closer, and the actor of an
+    event or a task event, read '' when they are such a person, unless the caller is a party to that task or in that
+    conversation: whoever works with you there is known to you there."""
     people = sorted(t for t in unseen if t.startswith("human:"))
     groups = sorted(t.split(":", 1)[1] for t in unseen if t.startswith("group:"))
     out = {}
+    if people and inner is not None:
+        hidden = qlist(people)
+
+        def member(conversation):
+            return (f"EXISTS (SELECT 1 FROM {inner('conversations')} v, json_each(v.participants_json) p "
+                    f"WHERE v.id={conversation} AND p.value={me})")
+
+        def party(task):
+            return (f"EXISTS (SELECT 1 FROM {inner('tasks')} t WHERE t.id={task} AND (t.owner={me} OR t.requester={me} "
+                    f"OR {member('t.conversation_id')}))")
+
+        def masked(column, known):
+            return f"CASE WHEN source.{column} IN {hidden} AND NOT {known} THEN '' ELSE source.{column} END"
+        out["tasks"] = {column: masked(column, party("source.id")) for column in ("owner", "requester", "closed_by")}
+        out["task_events"] = {"actor": masked("actor", party("source.task_id"))}
+        out["events"] = {"actor": masked("actor", f"({member('source.target')} OR {party('source.target')})")}
     if people:
         out["conversations"] = {"participants_json": (
             "CASE WHEN source.participants_json IS NULL OR NOT json_valid(source.participants_json) THEN NULL "
@@ -735,7 +753,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         tables = materialize(conn, index, tables, inner, function, private)
         conn.set_progress_handler(None, 0)
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
-        for table, columns_masked in teammate_masks(unseen, q(who.actor)).items():
+        for table, columns_masked in teammate_masks(unseen, q(who.actor), inner).items():
             masks[table] = {**masks.get(table, {}), **columns_masked}
         for table, (predicate, _) in tables.items():
             masked = masks.get(table, {})

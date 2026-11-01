@@ -98,7 +98,6 @@ async function pageDashboard(place) {
   const main = $('#main'); main.classList.add('dash-layout');
   main.innerHTML = `<div class="dash" id="dash-root"><header class="dash-head">
       <h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML('dashboard')}<span class="spacer"></span>
-      ${team ? '<button type="button" class="ghost" data-dash-access hidden aria-haspopup="dialog">Access</button>' : ''}
       <span class="dash-actions" hidden>${team ? '<button type="button" class="ghost dash-audience" data-dash-audience></button>' : ''}
         <button type="button" class="ghost" data-dash-add="card"><span class="dash-plus" aria-hidden="true">+</span>Card</button>
         <button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button></span></header>
@@ -107,7 +106,6 @@ async function pageDashboard(place) {
   const state = DASH = {place, view: null, choices: null, root: $('#dash-root'), menu: null};
   dashWire(state);
   if (kept) { state.view = kept; dashDraw(state); }
-  if (team) void dashAccessLoad(state);
   let view;
   try { view = await get(dashApi(place)); }
   catch (e) {
@@ -125,13 +123,14 @@ async function pageDashboard(place) {
   state.view = view;
   dashDraw(state);
 }
-// A group's See, Read and Write (backend/teammate_access.py): the button shows only for its leads and the admins.
-async function dashAccessLoad(state) {
-  const data = await teammateAccessRead('group', state.place.slice(5));
-  const button = DASH === state && state.root.querySelector('[data-dash-access]');
-  if (!button) return;
-  button.hidden = !data;
-  if (data) button.title = accessSummary(data);
+// "Seen by" is the group's See and Read (backend/teammate_access.py): it opens the group's Access editor, for its leads
+// and the admins (the same people who arrange the page), and the page is read again after a save.
+function dashAccessEdit(state) {
+  const gid = state.place.slice(5);
+  return teammateEditAccess('group', gid, state.view?.name || teamLabel(gid), async () => {
+    const view = await get(dashApi(state.place), {fresh: true}).catch(() => null);
+    if (view && DASH === state) { state.view = view; dashDraw(state); }
+  });
 }
 function dashDraw(state) {
   const v = state.view, root = state.root;
@@ -256,8 +255,7 @@ function dashWire(state) {
     if (state.menu && !ev.target.closest('.dash-menu')) dashMenuClose(state);
     const add = ev.target.closest('[data-dash-add]');
     if (add) return void (add.dataset.dashAdd === 'card' ? dashCardForm(state, -1) : dashPageForm(state));
-    if (ev.target.closest('[data-dash-audience]')) return void dashAudienceForm(state);
-    if (ev.target.closest('[data-dash-access]')) return void teammateEditAccess('group', state.place.slice(5), state.view?.name || teamLabel(state.place.slice(5)), () => dashAccessLoad(state));
+    if (ev.target.closest('[data-dash-audience]')) return void dashAccessEdit(state);
   });
   root.addEventListener('keydown', ev => {
     const grip = ev.target.closest('[data-dash-grip]'); if (!grip) return;
@@ -274,7 +272,7 @@ function dashWire(state) {
   });
 }
 
-// ---- forms: a card's settings, a page to pin, a team page's audience
+// ---- forms: a card's settings, a page to pin
 async function dashChoices(state, team = '') {
   const key = 'c:' + team;
   if (!state.choicesBy) state.choicesBy = {};
@@ -367,23 +365,4 @@ async function dashPageForm(state) {
     if (!value) return;
     await dashWrite(state, async () => { await dashSaved(state); return post('/v2/pins', {place: state.place, item: 'page:' + value, size: f.elements.namedItem('size').value}); });
   });
-}
-async function dashAudienceForm(state) {
-  let choices;
-  try { choices = await dashChoices(state); } catch (e) { return dashToast(e.message); }
-  if (DASH !== state) return;
-  const aud = state.view.audience || {everyone: true}, people = (S.people || []).filter(p => p.id);
-  const box = (name, id, label, on) => `<label class="dash-pick-row"><input type="checkbox" name="${name}" value="${esc(id)}"${on ? ' checked' : ''}><span>${esc(label)}</span></label>`;
-  const form = dashDialog(state, 'Who sees this page', `
-    <label class="dash-pick-row"><input type="checkbox" name="everyone"${aud.everyone !== false ? ' checked' : ''}><span>Everyone</span></label>
-    <div class="dash-chosen"${aud.everyone !== false ? ' hidden' : ''}>
-      ${choices.teams.length ? `<fieldset class="dash-pick"><legend>Teams</legend>${choices.teams.map(t => box('teams', t.id, t.name, (aud.teams || []).includes(t.id))).join('')}</fieldset>` : ''}
-      ${people.length ? `<fieldset class="dash-pick"><legend>People</legend>${people.map(p => box('people', p.id, p.name || p.id, (aud.people || []).includes(p.id))).join('')}</fieldset>` : ''}</div>`,
-  async f => {
-    const all = name => [...f.querySelectorAll(`[name="${name}"]:checked`)].map(el => el.value);
-    const audience = f.elements.namedItem('everyone').checked ? {everyone: true} : {everyone: false, teams: all('teams'), people: all('people'), bots: aud.bots || []};
-    await dashWrite(state, () => put(dashApi(state.place), {audience}));
-  });
-  const every = form.elements.namedItem('everyone');
-  every.onchange = () => { form.querySelector('.dash-chosen').hidden = every.checked; };
 }

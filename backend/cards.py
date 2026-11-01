@@ -444,6 +444,10 @@ def place_row(c, place):
 
 
 def audience_of(c, place):
+    """Who sees a team page: its group's Read (teammate_access.migrate_team_pages moved the old page audiences there)."""
+    from . import teammate_access
+    if place.startswith("team:"):
+        return teammate_access.document(c, "group:" + place[5:])["read"]
     row = place_row(c, place)
     return A.audience(json.loads(row["audience_json"]) if row and row["audience_json"] else {"everyone": True})
 
@@ -458,12 +462,8 @@ def may_view(ctx, kind, ident):
         if may_manage(ctx, kind, ident):
             return True
         from . import teammate_access
-        if not teammate_access.can(ctx.c, who, "see", "group:" + ident, ctx.auth):
-            return False          # a group the reader may not see has no page for them
-        level = audience_of(ctx.c, "team:" + ident)
-        if who.role == "bot":
-            return A.names(level, bot=H.actor_id(who.actor), team=ctx.chain())
-        return A.names(level, person=H.actor_id(who.actor), team=ctx.chain())
+        # A team page is read by whoever may read its group (backend/teammate_access.py): "Seen by" is the group's Read.
+        return teammate_access.can(ctx.c, who, "read", "group:" + ident, ctx.auth)
     if kind == "bot":
         return bool(ctx.auth.bot_access(ctx.c, who, ident)["read"])
     try:
@@ -828,9 +828,15 @@ def save_place(ctx, place, audience=None):
     if audience is not None:
         if kind != "team":
             raise bad("Everyone sees the Dashboard")
+        # The page's audience is its group's See and Read: set there, with the group's Manage check and audit row.
+        from . import teammate_access
+        target = "group:" + ident
         level = A.audience(audience.model_dump())
-        ctx.c.execute("UPDATE pin_places SET audience_json=?, saved=?, saved_by=? WHERE place=?",
-                      (None if level["everyone"] else json.dumps(level), H.now(), ctx.who.actor, place))
+        current = teammate_access.document(ctx.c, target)
+        if (current["see"], current["read"]) != (level, level):
+            teammate_access.save(ctx.c, ctx.who, target, {"see": level, "read": level, "write": current["write"],
+                                                         "revision": teammate_access.revision(ctx.c, target)}, ctx.auth)
+        ctx.c.execute("UPDATE pin_places SET saved=?, saved_by=? WHERE place=?", (H.now(), ctx.who.actor, place))
         H.event(ctx.c, ctx.who.actor, "place.audience", place, {"everyone": level["everyone"]})
     return place
 

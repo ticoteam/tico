@@ -265,3 +265,76 @@ def test_botops_sets_access_with_the_rights_of_the_person_who_asked(acme):
     with api.app.state.store.read() as c:
         row = c.execute("SELECT actor,detail_json FROM events WHERE action='person.access_changed' ORDER BY rowid DESC").fetchone()
         assert row["actor"] == "human:dee" and '"via": "botops"' in row["detail_json"]
+
+
+def test_hiding_reaches_task_columns_events_the_stream_and_bot_rows(acme):
+    from backend import events as E
+
+    api, tokens = acme
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='counsel'")
+    asked = post(api, "tasks", {"owner": "counsel", "title": "Review the lease", "body": "Please."}, token="cara-test")
+    to_eve = post(api, "tasks", {"owner": "human:eve", "title": "Send the signed copy", "body": "Thanks."},
+                  token="cara-test")
+    requesters = f"SELECT id, requester FROM tasks WHERE id IN ('{asked['id']}','{to_eve['id']}') ORDER BY id"
+    actors = f"SELECT actor FROM events WHERE action='task.create' AND target='{asked['id']}'"
+    assert sql_column(api, actors, "eve-test") == ["human:cara"]
+    set_access(api, "humans/cara", token="cara-test", see={"teams": ["legal"]}, read={"teams": ["legal"]},
+               write={"teams": ["legal"]})
+
+    def requester_of(token):
+        r = api.post("/api/v2/sql", json={"sql": requesters}, headers=headers(token))
+        assert r.status_code == 200, r.text
+        return {row[0]: row[1] for row in r.json()["rows"]}
+    for name, sees in {"eve": False, "fay": True, "dee": True, "ben": True, "cara": True}.items():
+        shown = requester_of(tokens[name])
+        assert (shown[asked["id"]] == "human:cara") is sees, name
+        if name in ("fay", "dee", "ben"):
+            assert sql_column(api, actors, tokens[name]) == ["human:cara"], name
+    # A task Cara asked Eve for: Eve is a party to it, so Cara stays known there.
+    assert requester_of("eve-test")[to_eve["id"]] == "human:cara"
+    assert sql_column(api, actors, "eve-test") == [""]
+    # The stream: Cara's name leaves events Eve reads, except on a task Eve is a party to.
+    with store.read() as c:
+        view = E._Viewer(c, auth, who(api, "eve"))
+        assert view.hidden_actor("human:cara", {"topic": "tasks", "subject_id": asked["id"], "conversation_id": None})
+        assert not view.hidden_actor("human:cara", {"topic": "tasks", "subject_id": to_eve["id"], "conversation_id": None})
+        assert not view.hidden_actor("human:fay", {"topic": "tasks", "subject_id": asked["id"], "conversation_id": None})
+        assert not E._Viewer(c, auth, who(api, "fay")).hidden_actor("human:cara", None)
+    # Bot rows: Cara runs Counsel, but Eve's /api/employees does not name her.
+    for name, sees in {"eve": False, "fay": True}.items():
+        row = next(e for e in api.get("/api/employees", headers=headers(tokens[name])).json() if e["name"] == "counsel")
+        assert (row.get("operator") == "cara") is sees, name
+        assert any(o["id"] == "cara" for o in row.get("bot_owners") or []) is sees, name
+
+
+def test_a_team_page_is_seen_by_its_groups_read_and_old_audiences_move_there(acme):
+    api, tokens = acme
+    store = api.app.state.store
+    # "Seen by" on the team page sets the group's See and Read; Write stays the members.
+    api.put("/api/v2/places/team:sales", json={}, headers=headers("ana-test"))
+    r = api.put("/api/v2/places/team:sales", json={"audience": {"everyone": False, "people": ["dee"]}},
+                headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    assert r.json()["audience"]["people"] == ["dee"]
+    doc = get(api, "groups/sales/access", "ana-test")
+    assert doc["see"]["people"] == ["dee"] and doc["read"]["people"] == ["dee"] and doc["write"]["teams"] == ["sales"]
+    assert api.get("/api/v2/places/team:sales", headers=headers("dee-test")).status_code == 200
+    assert api.get("/api/v2/places/team:sales", headers=headers("fay-test")).status_code in (403, 404)
+    # An install from before: a narrowed page audience moves into its group once, never widening a level.
+    set_access(api, "groups/legal", see=EVERYONE, read={"people": ["cara"]}, write={"teams": ["legal"]})
+    with store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO pin_places(place, audience_json, saved, saved_by) VALUES "
+                  "('team:legal', ?, ?, 'human:ana'), ('team:contracts', ?, ?, 'human:ana')",
+                  (encode({"everyone": False, "people": ["fay"]}), H.now(),
+                   encode({"everyone": True}), H.now()))
+        TA.migrate_team_pages(c)
+        TA.migrate_team_pages(c)                    # once: the page audience is cleared
+        legal, contracts = TA.document(c, "group:legal"), TA.document(c, "group:contracts")
+        audits = c.execute("SELECT count(*) FROM audit_log WHERE object='group:legal:access' AND actor='system'").fetchone()[0]
+        left = c.execute("SELECT count(*) FROM pin_places WHERE audience_json IS NOT NULL").fetchone()[0]
+    assert legal["see"]["people"] == ["fay"] and not legal["see"]["everyone"]
+    assert legal["read"]["people"] == ["cara"]      # already narrower: kept, not widened
+    assert contracts == TA.default_document("group", "contracts")
+    assert audits == 1 and left == 0
