@@ -111,7 +111,7 @@ async function restrictPerson(hub) {
     await omar.getByText('Not found').waitFor({timeout: t(15000)});
     assert.ok(!(await omar.content()).includes(SECRET), 'the members-only text is not on Omar\'s page');
     await omar.goto(hub.url + '/#/bot/' + BOT + '/dm');
-    await omar.locator('#btabs').waitFor({timeout: t(15000)});
+    await omar.locator('#btabs').waitFor({state: 'attached', timeout: t(15000)});
     await omar.waitForLoadState('networkidle');
     assert.equal(await omar.locator('.bot-talk-switch [data-talk="home"]').count(), 0,
       'a peer with See only on the bot gets no Home tab');

@@ -45,7 +45,7 @@ const timeline = {
     msg('s2', 2, 'human:bea', 'Then 45 this time.', {thread_id: 't-sub', depth: 1}),
   ]}),
   // A tree with seqs as the server gives them: t-rb is read, t-lb is long ("2 more", unread), t-nb has an unread reply.
-  't-tree': () => ({thread: thread('t-tree', 'Vendors', 60, {me: me(0, {last_read_seq: 59})}), breadcrumb: [{id: 't-tree', title: 'Vendors'}], next_cursor: null, messages: [
+  't-tree': () => ({thread: thread('t-tree', 'Vendors', 60, {me: me(0, {last_read_seq: 58})}), breadcrumb: [{id: 't-tree', title: 'Vendors'}], next_cursor: null, messages: [
     msg('p1', 10, 'human:bea', 'Which vendor?', {thread_id: 't-tree', sub_thread: {id: 't-rb', title: 'Which vendor?', count: 1, last_seq: 11, last_read_seq: 11, unread: 0, more: 0}}),
     msg('r1', 11, 'human:bea', 'Old reply.', {thread_id: 't-rb', depth: 1}),
     msg('p2', 12, 'human:bea', 'A long one.', {thread_id: 't-tree', sub_thread: {id: 't-lb', title: 'A long one.', count: 4, last_seq: 22, last_read_seq: 0, unread: 4, more: 2}}),
