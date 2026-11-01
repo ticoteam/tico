@@ -11,8 +11,9 @@ max_run_minutes: 45
 # the bot puts every draft on the task and drafts until a person turns mail sending on in Tico.
 outbound_send: false
 
-# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# Declared off. Setup switches on only the first routine; the onboarding playbook (step 6) switches on the two growth
+# routines with `hub automation update <id> --enable`. `hub bot create` seeds them once; from then on Tico's automations
+# are the routines (docs/routines.md).
 routines:
   - id: weekly-marketing-summary
     title: Weekly marketing summary

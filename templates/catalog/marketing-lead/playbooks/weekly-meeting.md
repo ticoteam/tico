@@ -12,14 +12,19 @@ week" and the readings in one line. Do not ask.
 
     hub growth week
 
-It returns the readings (KPIs with a growth role), the tests due (testing, ending within 7 days or past), the top ideas by
-ICE, the verdicts from the last 14 days and any guardrail breached. Note each guardrail: a breach goes on the question in step 5.
+It returns the readings (KPIs with a growth role), the tests due (testing, window ended or ending within 7 days), the top
+ideas by ICE, the verdicts from the last 14 days and any guardrail breached. Note each guardrail: a breach goes on the
+question in step 5.
 
 Budget left per channel: `hub growth channel list` (`budget_month`), and the team's Finance budget if it is connected.
 
+Who may do what: scoring an idea needs its creator, its assignee or an admin; starting a test and giving its verdict need
+its assignee or an admin. Before you score, start or judge an idea someone else holds, take it:
+`hub task update <task id> --owner marketing-lead`. If you will not take it, ask its assignee on the task instead.
+
 ## 2. Write the verdicts that are due
 
-For each test in `tests_due`, read the idea and its judged KPI:
+For each test in `tests_due` whose window has ended, read the idea and its judged KPI:
 
     hub growth idea show <task id>
     hub kpi show <judged_kpi_id>
@@ -27,7 +32,10 @@ For each test in `tests_due`, read the idea and its judged KPI:
 Apply `playbooks/verdict.md` and write it with `hub growth idea verdict <task id> --status <won|lost|inconclusive> ...`.
 A verdict you write stands unless the owner changes it. Do not wait for a second read.
 
-If a test was ended early by its stop rule, its verdict is Lost even if the window is still open.
+A test whose window is still open is not judged. List it in the question as "ending soon", with its end date.
+
+If a test was ended early by its stop rule, its verdict is Lost even if the window is still open. The tests due list does
+not show a test that ends later, so also check `hub growth idea list --status testing` for a stop rule that has fired.
 
 ## 3. Score new ideas
 
@@ -50,15 +58,17 @@ A pick that breaks the rule waits for next Monday, and the question says so.
 ## 5. Ask one question
 
 Put the picks to the owner as one multi-pick question on this task. Options are "LABEL -> WHAT HAPPENS" and there are two to
-six of them. Recommend the picks you would start. Name the money on the label for any idea that spends: `--spend` approves
-that spend when the owner ticks it. Name any breached guardrail in `--why`.
+six of them. Recommend the picks you would start. Name the money on the label for any idea that spends. `--spend` takes one
+pick: ticking that option approves its spend, and no other option does. Any other paid pick needs its own approval
+(`hub approval request --kind spend`) and does not start until it is approved. Name any breached guardrail and every test
+ending soon in `--why`.
 
     hub task question "Which of these should we test first?" --on <owner person ref> --multi \
       --title "Weekly growth, week <NN>" --parent <this task id> \
-      --why "Verdicts: <idea> <verdict>. Guardrails: <none or the breach>." \
+      --why "Verdicts: <idea> <verdict>. Ending soon: <idea and end date, or none>. Guardrails: <none or the breach>." \
       --option "Price calculator -> starts Monday, no spend" \
       --option "Competitor bids -> two weeks, <amount> on Google Ads" \
-      --option "Manager meetups -> sponsor one, <amount>" \
+      --option "Manager meetups -> sponsor one for <amount>, after its own spend approval" \
       --recommend "Price calculator" --recommend "Competitor bids" \
       --spend "Competitor bids=<amount>:Google Ads, two weeks" \
       --if-no-answer "Start the ticked picks that cost nothing" --default-kind reversible
@@ -84,7 +94,10 @@ For each picked idea, in this order:
        hub task relate <later task id> <earlier task id> --kind blocked_by
 
 3. Spend that the question did not cover needs its own approval: `hub approval request --kind spend --payload-file <file> --task <idea task id>`.
-   Money the owner ticked is already approved by `--spend`; the channel owner consumes that approval once with `hub approval consume`.
+   Money the owner ticked is already approved by `--spend`. The approval belongs to this bot, which asked the question: its id
+   is `spend_approval` on the answer (`hub task show <question task id>`). Put that id in the spend subtask's body
+   (`hub task child <idea task id> --owner <channel owner slug> --title "<step>" --body "Spend approval <id>: <amount> on <what>"`),
+   and this bot spends it once, when the money is committed.
 
 Picks the owner did not tick stay at status `idea`.
 

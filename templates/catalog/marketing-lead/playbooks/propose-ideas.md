@@ -16,7 +16,7 @@ Nothing is started here; the weekly meeting starts tests.
     hub growth channel list        the channels, their stage and owner
 
 Then the market: `hub market show <competitor>` for each competitor, `hub listening runs --since <30 days ago>` for the
-recent matches, and `hub growth idea list --status lost --status inconclusive`.
+recent matches, then `hub growth idea list --status lost` and `hub growth idea list --status inconclusive`, one list each.
 
 ## 2. Look at what did not work first
 

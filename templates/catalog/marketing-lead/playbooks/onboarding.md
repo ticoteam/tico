@@ -42,15 +42,19 @@ Follow `playbooks/weekly-marketing-summary.md`. Write it in the shape of
 `knowledge/examples/marketing-week.md`, attach it to the task, labelled "First draft, not yet
 reviewed". Nothing is shared and no task is created for anyone.
 
-## 6. Check the routine
+## 6. Check the routines
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will draft this summary every Friday at 14:00 for you to review." They
-can change it or turn it off any time; there is nothing to approve.
+Setting you up switched your first routine on. List your automations with
+`hub automation list --owner bot:marketing-lead`. If `weekly-marketing-summary` shows off, turn it on with
+`hub automation update <id> --enable`. Then turn on the two growth routines the same way: `weekly-growth-meeting` and
+`monthly-growth-report`, each by its id from that list.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
-different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+Tell the human in one line what they do: "I will draft this summary every Friday at 14:00 for you to review, run the
+growth meeting every Monday at 08:00, and file the growth report on the 3rd of each month." They can change or turn off
+any of them any time; there is nothing to approve.
+
+Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to
+leave one off, adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
