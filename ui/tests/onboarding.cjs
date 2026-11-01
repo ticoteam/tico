@@ -959,9 +959,7 @@ function recruitFor({department, briefing, share}) {
     await page.goto('https://tico-ui.test/#/bot/meeting-notes');
     await page.locator('#bot-start-setup').click();
     await page.locator('#bot-start-setup', {hasText: 'Onboarding started'}).waitFor();
-    // Its DM tab shows the line. (Pressed with the DM tab already open and empty, the line does not appear until a
-    // server event or reload: ui/first-run.js:210 still feeds only the old chat view. Reported, not asserted.)
-    await page.goto('https://tico-ui.test/#/bot/meeting-notes/dm');
+    // Start onboarding opens its DM tab, which shows the line at once, not after a reload.
     await page.locator('#bot-thread .th-msg.th-mine', {hasText: "Let's set you up."}).waitFor({timeout: t(3000)});
     assert.equal(await page.locator('#bot-thread .th-empty').count(), 0);
     assert.deepEqual(definitions, [{path: '/api/v2/bots/meeting-notes/definition', body: {status: 'active', expected_revision: 4}}]);
