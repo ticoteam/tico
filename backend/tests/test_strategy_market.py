@@ -3,8 +3,8 @@ segment, and the competitors. Examples use Acme and Northwind."""
 
 from datetime import datetime, timedelta, timezone
 
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
-from backend.tests.test_growth import patch
+from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
+from backend.tests.test_growth import add_channel, patch
 from backend.tests.test_market import _librarian
 from backend.tests.test_market_spend import defined, evidence
 
@@ -70,6 +70,39 @@ def test_writes_straight_to_the_graph_move_growth_and_only_people_mark_us_or_nex
     post(api, "market/segments/target", {"id": first, "target": "ours"}, token=librarian["token"], expected=403)
     post(api, "market/segments/target", {"id": first, "target": "none"}, token=librarian["token"], expected=403)
     assert _status(api)[first] == "dropped"
+
+
+def test_a_segment_made_next_on_the_graph_or_merged_away_keeps_growth_in_step(api):
+    first, second, sub = defined(api)
+    proof = [evidence(api)]
+    made = post(api, "market/entities", {"type": "segment", "name": "Leases", "properties": {"next": True},
+                                         "evidence_ids": proof, "force": True})["entity"]
+    assert _status(api)[made["id"]] == "next"
+    # Screening is served and Payments tested; merged, Payments is served and has Screening's channels, ideas,
+    # cohorts (one channel's same month added up) and the fields it lacked.
+    post(api, "market/segments/target", {"id": first, "target": "ours"})
+    rows = {s["segment_id"]: s for s in get(api, "growth/segments")["segments"]}
+    patch(api, f"growth/segments/{rows[first]['id']}", {"who_buys": "Landlords who screen"})
+    keep = post(api, "growth/segments", {"segment_id": second, "status": "testing"})["segment"]
+    add_channel(api, segments=[rows[first]["id"]])
+    idea = post(api, "growth/ideas", {"title": "Screening ad", "segments": [rows[first]["id"]]})["idea"]
+    for seg, month, new in ((first, "2026-09", 5), (first, "2026-10", 30), (second, "2026-10", 10)):
+        put(api, "growth/cohorts", {"channel": "google-search", "month": month, "segment_id": seg, "spend": new * 10,
+                                    "new_customers": new})
+    post(api, f"market/entities/{first}/merge", {"into": second})
+    listed = {s["segment_id"]: s for s in get(api, "growth/segments")["segments"]}
+    assert first not in listed and (listed[second]["id"], listed[second]["status"]) == (keep["id"], "serving")
+    assert listed[second]["who_buys"] == "Landlords who screen" and segments(api)[second]["self"]
+    assert get(api, "growth/channels")["channels"][0]["segments"] == [keep["id"]]
+    assert next(i for i in get(api, "growth/ideas")["ideas"] if i["task_id"] == idea["task_id"])["segments"] == [keep["id"]]
+    assert sorted((c["month"], c["segment_id"], c["new_customers"], c["spend"])
+                  for c in get(api, "growth/cohorts")["cohorts"]) == \
+        [("2026-09", keep["id"], 5, 50), ("2026-10", keep["id"], 40, 400)]
+    # A Next segment merged into one with no Growth row: the row moves, and the graph marks the other Next.
+    post(api, "market/segments/target", {"id": sub, "target": "next"})
+    moved = post(api, "market/segments", {"name": "Deposits"})["segment"]["id"]
+    post(api, f"market/entities/{sub}/merge", {"into": moved})
+    assert sub not in _status(api) and _status(api)[moved] == "next" and segments(api)[moved]["next"]
 
 
 def test_a_removed_next_segment_added_again_is_not_next(api):

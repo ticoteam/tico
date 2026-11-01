@@ -7,6 +7,7 @@ in one click each. They are the market graph's own rows (backend/market.py, back
   `set_status` is the one write that keeps both in step, for the Growth routes and for a click here. A write
   straight to the graph (the market routes, an import) moves the Growth row too (`follow_graph`): Us makes it
   serving, Next next, and losing both drops a serving or next one. Only people set these: a bot is refused here;
+- merging one segment into another moves its Growth row there (`follow_merge`);
 - removing a segment retires it and clears its Next (its Growth row, if any, is dropped); its sub-segments move up
   to its parent;
 - a competitor is a company or product with a current `competes_with` edge to `company/self`, either way round.
@@ -151,6 +152,48 @@ def follow_graph(c, actor, segment_id):
         _put(c, actor, segment_id, now, True)
     elif row and row["status"] in ("serving", "next"):
         _put(c, actor, segment_id, "dropped", False)
+
+
+def follow_merge(c, actor, segment_id, into_id):
+    """Segment `segment_id` was merged into `into_id` (backend/market.py merge_entities): its Growth row becomes the
+    other's, or folds into the one it has, which takes the stronger status (serving, next, testing, dropped) and any
+    field it lacks; channels, ideas and cohorts follow (two cohorts for one channel and month add up into one). Then
+    the graph and the row agree on that status."""
+    from . import growth as G
+    old, row = growth_row(c, segment_id), growth_row(c, into_id)
+    if old and not row:
+        c.execute("UPDATE growth_segments SET segment_id=?, updated_at=?, updated_by=? WHERE id=?",
+                  (into_id, H.now(), actor, old["id"]))
+        H.event(c, actor, "growth.segment.update", old["id"], {"segment_id": into_id, "merged_from": segment_id})
+    elif old:
+        fill = {k: old[k] for k in ("motion", "who_buys", "deal_size", "why", "owner_ref") if old[k] and not row[k]}
+        if fill:
+            c.execute(f"UPDATE growth_segments SET {', '.join(k + '=?' for k in fill)} WHERE id=?",
+                      (*fill.values(), row["id"]))
+        for table, key in (("growth_channel_segments", "channel_id"), ("growth_idea_segments", "task_id")):
+            c.execute(f"INSERT OR IGNORE INTO {table} ({key}, segment_row_id) SELECT {key}, ? FROM {table} "
+                      "WHERE segment_row_id=?", (row["id"], old["id"]))
+            c.execute(f"DELETE FROM {table} WHERE segment_row_id=?", (old["id"],))
+        for cohort in H._rows(c.execute("SELECT * FROM growth_cohorts WHERE segment_id=?", (old["id"],))):
+            same = H._one(c, "SELECT * FROM growth_cohorts WHERE coalesce(channel_id,'')=coalesce(?,'') AND month=? "
+                             "AND segment_id=?", (cohort["channel_id"], cohort["month"], row["id"]))
+            if not same:
+                c.execute("UPDATE growth_cohorts SET segment_id=? WHERE id=?", (row["id"], cohort["id"]))
+                continue
+            both = [{**r, "channel": r["channel_id"] or ""} for r in (same, cohort)]
+            total = G.aggregate(both, {})
+            sources = {**MK.loads(cohort["sources_json"], {}), **MK.loads(same["sources_json"], {})}
+            keys = ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180", "revenue_month",
+                    "margin_pct", "quality")
+            c.execute(f"UPDATE growth_cohorts SET {', '.join(k + '=?' for k in keys)}, sources_json=?, updated_by=?, "
+                      "updated_at=? WHERE id=?", (*(total[k] for k in keys), MK.dumps(sources), actor, H.now(), same["id"]))
+            c.execute("DELETE FROM growth_cohorts WHERE id=?", (cohort["id"],))
+        c.execute("DELETE FROM growth_segments WHERE id=?", (old["id"],))
+        H.event(c, actor, "growth.segment.merge", row["id"], {"segment_id": into_id, "merged": old["id"]})
+    rank = ("serving", "next", "testing", "dropped")
+    found = [x for x in ((old or {}).get("status"), (row or {}).get("status"), placed(c, into_id)) if x]
+    if found:
+        set_status(c, actor, into_id, min(found, key=rank.index))
 
 
 def _put(c, actor, segment_id, status, create):

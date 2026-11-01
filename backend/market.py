@@ -633,6 +633,8 @@ def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, t
     events = [_event(conn, "entity", eid, actor, "created", None, name, insight_id)]
     if ids:
         _cite(conn, actor, "entity", eid, ids, insight_id)
+    if type == "segment" and (properties or {}).get("next"):
+        _growth_follows(conn, actor, eid)
     return entity(conn, eid), events
 
 
@@ -813,6 +815,9 @@ def merge_entities(conn, actor, entity_id, into_id, insight_id=None):
                  (into_id, H.now(), entity_id))
     _event(conn, "entity", entity_id, actor, "status", src["status"], "merged", insight_id)
     _event(conn, "entity", entity_id, actor, "merged_into", src["merged_into"], into_id, insight_id)
+    if src["type"] == "segment" and dst["type"] == "segment":
+        from . import strategy_market
+        strategy_market.follow_merge(conn, actor, entity_id, into_id)
     return entity(conn, entity_id)
 
 

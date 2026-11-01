@@ -62,8 +62,10 @@ removes a thing.
   `company/self` `operates_in` the segment, Next is `next: true` on the segment, as the company file's import writes
   them. They mirror the [Growth segments](growth.md#segments): Us is a serving segment and Next a next one, and a
   change on either page shows on the other. A write straight to the graph (the market routes, an import) moves the
-  Growth segment too: Us makes it serving, Next next, and losing both drops a serving or next one. Only a person
-  marks Us or Next here; a removed segment loses its Next, so adding it again does not bring it back.
+  Growth segment too: Us makes it serving, Next next, and losing both drops a serving or next one. A segment merged
+  into another hands it its Growth segment (or folds into the one it has, keeping the stronger status, with its
+  channels, ideas and cohorts). Only a person marks Us or Next here; a removed segment loses its Next, so adding it
+  again does not bring it back.
 - **Competitors.** Every company or product with a current `competes_with` edge to `company/self`, as chips that link
   to their sites. × ends those edges (the company stays in the graph); **Add a competitor or its site** finds the
   company the graph has by that name or domain, or makes it, and adds the edge.
