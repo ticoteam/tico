@@ -1,5 +1,9 @@
 """Company inbound inboxes. Shared by people and agents; reads never consume messages.
 
+Each inbox has an audience: `company` (the default) is every member and agent; `team` is the people and bots in one
+group and the groups under it, plus the owner and admins. An inbox outside the reader's audience is not there for them
+on any read: the inbox list, messages, search, the cursor, waits, a message and its code.
+
 HQ owns supplier credentials. This install holds its own inbound key and pulls normalized text only.
 """
 import asyncio
@@ -46,6 +50,20 @@ CREATE TABLE IF NOT EXISTS inbound_sync(
  last_sync REAL, error TEXT NOT NULL DEFAULT '', gaps_json TEXT NOT NULL DEFAULT '[]');
 INSERT OR IGNORE INTO inbound_sync(singleton) VALUES(1);
 '''
+
+
+AUDIENCES = ('company','team')
+
+
+def ensure(c):
+    """Columns added after the first release (idempotent)."""
+    H.add_column(c,'inbound_inboxes','audience',"TEXT NOT NULL DEFAULT 'company'")
+    H.add_column(c,'inbound_inboxes','group_id','TEXT')
+
+
+class Audience(Contract):
+    audience: Literal['company','team'] = 'company'
+    group_id: str | None = Field(default=None,max_length=120)
 
 
 class Create(Contract):
@@ -104,6 +122,38 @@ def permit(c, who, *, admin=False, auth=None):
     validate_identity(c,who)
     if admin and (who.role not in ('owner','human') or auth.company_role(who) not in ('owner','admin')):
         raise Problem('forbidden','An owner or admin manages phone rentals and releases inboxes',403)
+
+
+def manager(c, who, auth):
+    return who.role=='owner' or (who.role=='human' and auth.company_role(who) in ('owner','admin'))
+
+
+def reader_groups(c, who):
+    """The groups the reader is in: their own and every group it sits under."""
+    from . import groups as G
+    from . import people as P
+    roster = G._roster(c)
+    if who.role in ('owner','human'):
+        own = (P.person(H.actor_id(who.actor),roster) or {}).get('team') or ''
+    else:
+        own = P.team_of(H.actor_id(who.actor),G._configs(c),roster) or ''
+    return set(P.group_chain(own,roster) or ([own] if own else []))
+
+
+def hidden_inboxes(c, who, auth):
+    """The inboxes narrowed to a group the reader is not in: none for the owner and admins."""
+    narrowed = c.execute("SELECT inbox_id,group_id FROM inbound_inboxes WHERE audience='team'").fetchall()
+    if not narrowed or manager(c,who,auth):
+        return set()
+    mine = reader_groups(c,who)
+    return {r['inbox_id'] for r in narrowed if r['group_id'] not in mine}
+
+
+def without(column, hidden):
+    """A WHERE clause and its values leaving out the hidden inboxes."""
+    if not hidden:
+        return '1',[]
+    return column+' NOT IN ('+','.join('?' for _ in hidden)+')',sorted(hidden)
 
 
 def save_inbox(c, item):
@@ -167,7 +217,9 @@ class Inbound:
     def list_inboxes(self, who, after="", limit=100):
         with self.store.read_transaction() as c:
             permit(c,who)
-            rows = [dict(r) for r in c.execute('SELECT * FROM inbound_inboxes WHERE inbox_id>? ORDER BY inbox_id LIMIT ?', (after,limit+1))]
+            clause,values = without('inbox_id',hidden_inboxes(c,who,self.auth))
+            rows = [dict(r) for r in c.execute('SELECT * FROM inbound_inboxes WHERE inbox_id>? AND '+clause+
+                                               ' ORDER BY inbox_id LIMIT ?',(after,*values,limit+1))]
             sync = dict(c.execute('SELECT * FROM inbound_sync WHERE singleton=1').fetchone())
         return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off,'last_sync':sync['last_sync'],'error':sync['error'],
                 'gaps':json.loads(sync['gaps_json'])}
@@ -267,7 +319,7 @@ class Inbound:
         with self.store.read_transaction() as c:
             permit(c,who)
             row = c.execute('SELECT kind,name FROM inbound_inboxes WHERE inbox_id=?',(ident,)).fetchone()
-            if not row:
+            if not row or ident in hidden_inboxes(c,who,self.auth):
                 raise Problem('unknown_inbox','Unknown inbox',404)
             permit(c,who,admin=row['kind']=='sms',auth=self.auth)
             rename = row['name']!=body.name
@@ -275,7 +327,7 @@ class Inbound:
         def commit(c):
             permit(c,who)
             row = c.execute('SELECT kind FROM inbound_inboxes WHERE inbox_id=?',(ident,)).fetchone()
-            if not row:
+            if not row or ident in hidden_inboxes(c,who,self.auth):
                 raise Problem('unknown_inbox','Unknown inbox',404)
             permit(c,who,admin=row['kind']=='sms',auth=self.auth)
             if result is not None:save_inbox(c,result)
@@ -325,13 +377,37 @@ class Inbound:
             return result
         return self.store.write(who,commit)
 
-    def scope(self,c,ids):
+    def set_audience(self, who, ident, body):
+        """Who reads an inbox: the company, or one group and the groups under it. Owner and admins only."""
+        def commit(c):
+            permit(c,who,admin=True,auth=self.auth)
+            row = c.execute('SELECT * FROM inbound_inboxes WHERE inbox_id=?',(ident,)).fetchone()
+            if not row:
+                raise Problem('unknown_inbox','Unknown inbox',404)
+            group = (body.group_id or '').strip() or None
+            if body.audience=='team':
+                from . import groups as G
+                if not group or group not in (G._roster(c).get('org_groups') or {}):
+                    raise Problem('invalid_request','Pick a group',422)
+            else:
+                group = None
+            before = {'audience':row['audience'],'group_id':row['group_id']}
+            after = {'audience':body.audience,'group_id':group}
+            if before!=after:
+                from . import audit_log
+                c.execute('UPDATE inbound_inboxes SET audience=?,group_id=? WHERE inbox_id=?',(body.audience,group,ident))
+                audit_log.write(c,who.actor,'inbound_inbox:'+ident,before,after,who.via)
+                H.event(c,who.actor,'inbound.inbox_audience',ident,after)
+            return dict(c.execute('SELECT * FROM inbound_inboxes WHERE inbox_id=?',(ident,)).fetchone())
+        return self.store.write(who,commit)
+
+    def scope(self,c,ids,hidden=()):
         if ids is None:
             return []
         if not ids or len(ids)>30 or len(set(ids))!=len(ids):
             raise Problem('unknown_inbox','Choose one or more distinct inboxes',422)
         for ident in ids:
-            if not c.execute('SELECT 1 FROM inbound_inboxes WHERE inbox_id=?',(ident,)).fetchone():
+            if ident in hidden or not c.execute('SELECT 1 FROM inbound_inboxes WHERE inbox_id=?',(ident,)).fetchone():
                 raise Problem('unknown_inbox','Unknown inbox',404)
         return ids
 
@@ -339,8 +415,10 @@ class Inbound:
         cutoff = now()-RETENTION
         with self.store.read_transaction() as c:
             permit(c,who)
-            ids = self.scope(c,inbox_ids)
-            clauses,values = ['seq>?'],[after]
+            hidden = hidden_inboxes(c,who,self.auth)
+            ids = self.scope(c,inbox_ids,hidden)
+            shut,closed = without('inbox_id',hidden)
+            clauses,values = ['seq>?',shut],[after,*closed]
             # Content past the cutoff is treated as removed even before the next purge.
             for condition,value in [('seq<?',before),('kind=?',kind),('sender LIKE ?',('%'+sender+'%') if sender else None),
                                     ('((body LIKE ? AND received_at>=?) OR subject LIKE ?)',('%'+q+'%') if q else None)]:
@@ -359,7 +437,7 @@ class Inbound:
                              '(retention_removed OR received_at<?) AS retention_removed FROM inbound_messages WHERE '+
                              ' AND '.join(clauses)+' ORDER BY seq '+order+' LIMIT ?',
                              [cutoff]*3+values+[limit+1]).fetchall()
-            current = c.execute('SELECT coalesce(max(seq),0) FROM inbound_messages').fetchone()[0]
+            current = c.execute('SELECT coalesce(max(seq),0) FROM inbound_messages WHERE '+shut,closed).fetchone()[0]
         result,used = [],0
         for row in rows[:limit]:
             item = dict(row);item['from'] = item.pop('sender')
@@ -377,7 +455,9 @@ class Inbound:
         from . import screening
         with self.store.read() as c:
             permit(c,who)
-            row = c.execute('SELECT subject,body,retention_removed FROM inbound_messages WHERE message_id=?',(ident,)).fetchone()
+            row = c.execute('SELECT inbox_id,subject,body,retention_removed FROM inbound_messages WHERE message_id=?',
+                            (ident,)).fetchone()
+            if row and row['inbox_id'] in hidden_inboxes(c,who,self.auth):return None
         if not row or row['retention_removed'] or not row['body']:return None
         # The subject too: an injection can start in the subject and go on in the body.
         text = f"{row['subject']}\n\n{row['body']}" if row['subject'] else row['body']
@@ -390,7 +470,8 @@ class Inbound:
         def run(c):
             permit(c,who)
             row = c.execute('SELECT * FROM inbound_messages WHERE message_id=?',(ident,)).fetchone()
-            if not row:raise Problem('not_found','Message not found',404)
+            if not row or row['inbox_id'] in hidden_inboxes(c,who,self.auth):
+                raise Problem('not_found','Message not found',404)
             if row['retention_removed'] or row['received_at']<now()-RETENTION:
                 self.expire(c)
                 raise Problem('retention','Message content was removed by retention',410)
@@ -542,6 +623,12 @@ def install(app,store,settings,auth):
 
     @app.patch('/api/v2/inbound/inboxes/{ident}')
     def edit(request:Request,ident:str,body:Edit):return service.edit(request.state.identity,ident,body)
+
+    @app.put('/api/v2/inbound/inboxes/{ident}/audience')
+    def audience(request:Request,ident:str,body:Audience):
+        """Who reads the inbox: `company` (everyone) or `team` with `group_id` (that group and the groups under it).
+        The owner and admins always read it. Owner and admins only."""
+        return service.set_audience(request.state.identity,ident,body)
 
     @app.post('/api/v2/inbound/inboxes/{ident}/release')
     def release(request:Request,ident:str,body:Release):return service.release(request.state.identity,ident,body.confirm)
