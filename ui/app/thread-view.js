@@ -220,10 +220,19 @@ function thvMsgHTML(view, m) {
   else if (view.editing === m.id) body = `<div class="th-edit"><textarea class="th-edit-text" rows="2" aria-label="Edit message">${esc(m.body || '')}</textarea>
       <div class="th-edit-acts"><button type="button" class="ghost small" data-th-edit-cancel>Cancel</button><button type="button" class="primary small" data-th-edit-save>Save</button></div></div>`;
   else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);
+  // A card a bot left for you fills in from its action or request (ui/assistant.js, ui/credential-card.js).
+  else if (m.refs?.credential_request) body = `<div data-credential-host="${esc(m.refs.credential_request)}"><div class="asst-state">Loading the card…</div></div>`;
+  else if (m.refs?.action) body = `<div data-action-host="${esc(m.refs.action)}"><div class="asst-state">Loading the card…</div></div>`;
+  // The Assistant's read-back of what it will approve is shown exactly as written, never formatted.
+  else if (m.refs?.read_back) body = `<div class="th-body read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`;
   else body = `<div class="th-body md">${safeMd(m.body || '', {shortLinks: true})}</div>`;
+  // What a bot's turn did, in the same muted rows a chat shows (ui/app/chat.js), and the runner's warnings.
+  if (!m.deleted && view.editing !== m.id && String(m.from_actor || '').startsWith('bot:'))
+    body += (m.refs?.warnings || []).map(w => `<div class="chat-warn">${esc(String(w).charAt(0).toUpperCase() + String(w).slice(1))}</div>`).join('')
+      + v2RunHTML(m) + v2MessageCards(m);
   const st = m.sub_thread, more = st?.more ? `<a class="th-more" href="${threadHref(st.id)}" style="--d:${Math.min(depth + 1, THV_DEPTH_MAX)}">${
     typeof st.more === 'number' ? `${st.more} more ${st.more === 1 ? 'reply' : 'replies'}` : 'More replies'}${st.unread ? ` · <span class="th-more-new">${st.unread} new</span>` : ''}</a>` : '';
-  return `<div class="${cls}" data-mid="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}" style="--d:${depth}">
+  return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}" style="--d:${depth}">
     <div class="th-av">${actorAvatar(m.from_actor, sub ? 20 : 28)}</div>
     <div class="th-main">${head}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m)}</div>
     ${m.deleted || view.editing === m.id ? '' : `<div class="th-acts"><button type="button" class="th-act" data-th-ack aria-label="Acknowledge" title="Acknowledge">${THV_ACK}</button><button type="button" class="th-act" data-th-more aria-haspopup="menu" aria-expanded="false" aria-label="Message menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>`}
@@ -298,7 +307,11 @@ function thvDraw(view, {stick = false} = {}) {
   if (head) { const h = thvHeadHTML(view); patchHTML(head, h); head.hidden = !h; }
   const list = view.el.querySelector('.thv-list'), box = view.el.querySelector('.thv-scroll');
   const keep = stick || thvAtBottom(view);
-  patchHTML(list, thvListHTML(view));
+  // Cards both trees share keep their node, as in a chat (ui/app/visual-cards.js).
+  patchHTML(list, thvListHTML(view), visualSwap);
+  const reload = () => thvRefresh(view);
+  if (list.querySelector('[data-action-host]')) void window.assistantChat?.cards(list, {get, post, esc, toast, reload});
+  if (list.querySelector('[data-credential-host]')) void window.credentialCards?.mount(list, {get, post, esc, toast, reload});
   view.el.querySelector('.thv-older').hidden = !view.next;
   chatThumbsLoad?.(list);
   const unread = list.querySelector('.th-new');
