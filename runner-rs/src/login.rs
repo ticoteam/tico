@@ -125,8 +125,13 @@ fn plain(raw: &str) -> String {
     p.control.replace_all(&text, "").into_owned()
 }
 
-/// The shortest thing Connect takes for a token: anything less is the CLI naming the format, not printing one.
-const MIN_TOKEN: usize = 40;
+/// The shortest thing Connect takes for a token: anything less is the CLI naming the format, or a piece of a token.
+const MIN_TOKEN: usize = 90;
+/// How long a Connect's command has to end by itself once it has printed its token.
+#[cfg(not(test))]
+const TOKEN_GRACE: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const TOKEN_GRACE: Duration = Duration::from_millis(500);
 
 /// The token `prefix` starts, from what a Connect's command has printed so far. Until the command has `ended` a token
 /// counts only once something follows it: the rest of it may still be arriving.
@@ -722,6 +727,9 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         })
     };
     let deadline = Instant::now() + lifetime;
+    // A Connect's command that printed its token and then would not end: its token still counts.
+    let mut token_at = None;
+    let mut stopped_after_token = false;
     let verdict: Option<(String, String)> = loop {
         match child.try_wait() {
             Ok(Some(_)) | Err(_) => break None,
@@ -735,9 +743,11 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             kill(&mut child);
             break Some(("failed".into(), "The sign-in was not finished in time".into()));
         }
-        // The token is all a Connect wants: the command has nothing left to do for it, if it is still open.
-        if !token_prefix.is_empty() && printed_token(&s.inner.lock().unwrap().raw, &token_prefix, false).is_some() {
+        // The token is all a Connect wants. The command gets to end by itself, so a failure it reports still counts.
+        if !token_prefix.is_empty() && printed_token(&s.inner.lock().unwrap().raw, &token_prefix, false).is_some()
+            && token_at.get_or_insert_with(Instant::now).elapsed() > TOKEN_GRACE {
             kill(&mut child);
+            stopped_after_token = true;
             break None;
         }
         if let Some(w) = &writer {
@@ -764,8 +774,9 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         Some(v) => v,
         None if s.cancelled.load(Ordering::SeqCst) => ("cancelled".into(), "Cancelled".into()),
         None if connect => {
-            let _ = child.wait();
+            let finished = child.wait().map(|st| st.success()).unwrap_or(false);
             let value = match &switch {
+                _ if !finished && !stopped_after_token => None,
                 Some((_, side)) => file_text(&side.join(&login.connect_file), &real_env),
                 None => printed_token(&s.inner.lock().unwrap().raw, &token_prefix, true),
             };
@@ -1567,7 +1578,7 @@ mod tests {
 
     #[test]
     fn connect_takes_a_printed_token_only_once_it_has_all_arrived() {
-        let token = format!("sk-ant-oat01-{}", "a1_B-".repeat(12));
+        let token = format!("sk-ant-oat01-{}", "a1_B-".repeat(20));
         let shown = format!("\x1b[1mYour token:\x1b[0m\r\n{token}\x1b[0m\r\nStore it safely.\r\n");
         assert_eq!(printed_token(&shown, "sk-ant-oat", false).as_deref(), Some(token.as_str()));
         // Still arriving: no verdict until something follows it, or the command has ended.
@@ -1576,13 +1587,15 @@ mod tests {
         // The CLI naming the format is not a token.
         assert_eq!(printed_token("It looks like sk-ant-oat01-… or sk-ant-oat01-abc\n", "sk-ant-oat", true), None);
         assert_eq!(printed_token("no such thing\n", "sk-ant-oat", true), None);
+        // Nor is a piece of one.
+        assert_eq!(printed_token(&format!("{}\n", &token[..80]), "sk-ant-oat", true), None);
     }
 
     /// A Connect relays the link, leaves the login it does not need alone, and holds its one result for the server.
     #[test]
     fn connect_captures_the_result_and_leaves_the_computers_own_login() {
         const CHILD: &str = "TICO_TEST_CONNECT";
-        let token = format!("sk-ant-oat01-{}", "x".repeat(60));
+        let token = format!("sk-ant-oat01-{}", "x".repeat(95));
         let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
             let root = std::env::temp_dir().join(format!("tico-connect-{}", uuid::Uuid::new_v4().simple()));
             std::fs::create_dir_all(root.join("bin")).unwrap();
@@ -1594,6 +1607,7 @@ case "$*" in
     read code
     test "$code" = pasted-code || exit 4
     echo 'Your OAuth token:'; echo '{token}'; echo 'Store it safely.'
+    test ! -e "$HOME/fails-after-token" || exit 7
     sleep 30 ;;
   --version) echo 1.0.0 ;;
   *) exit 2 ;;
@@ -1604,7 +1618,8 @@ case "$*" in
   "login --device-auth")
     echo 'Open https://auth.example/device'; echo 'Enter code ABCD-1234'
     case "$CODEX_HOME" in *.tico-switch-*) ;; *) exit 5 ;; esac
-    echo '{"tokens":{"refresh_token":"r-new"}}' > "$CODEX_HOME/auth.json" ;;
+    echo '{"tokens":{"refresh_token":"r-new"}}' > "$CODEX_HOME/auth.json"
+    test ! -e "$HOME/fails-after-token" || exit 7 ;;
   --version) echo 1.0.0 ;;
   *) exit 2 ;;
 esac
@@ -1651,6 +1666,22 @@ esac
         assert_eq!(std::fs::read_to_string(root.join(".codex/auth.json")).unwrap(), "{\"own\":true}");
         let left: Vec<_> = std::fs::read_dir(root.join(".codex")).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(left.len(), 1, "no side home stays: {left:?}");
+
+        // A command that says it failed gives nothing, whatever it printed or wrote first.
+        std::fs::write(root.join("fails-after-token"), "").unwrap();
+        for (id, runtime) in [("c4", "claude"), ("c5", "codex")] {
+            let login = Session::new(&json!({"id": id, "runtime": runtime, "kind": "connect"}));
+            let (s2, r2, c2) = (login.clone(), runner.clone(), config.clone());
+            let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+            if runtime == "claude" {
+                wait_for(|| !login.inner.lock().unwrap().url.is_empty());
+                login.submit("pasted-code");
+            }
+            running.join().unwrap();
+            let i = login.inner.lock().unwrap();
+            assert!(i.captured.is_none() && i.finished && i.state == "failed", "{runtime}: {}", i.state);
+        }
+        std::fs::remove_file(root.join("fails-after-token")).unwrap();
 
         // Cancelled: nothing is captured.
         let login = Session::new(&json!({"id": "c3", "runtime": "claude", "kind": "connect"}));

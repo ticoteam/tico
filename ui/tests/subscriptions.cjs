@@ -120,10 +120,11 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       if (sub?.computers.includes('r1') && !body.confirm)
         return json(problem('confirm_restart', 'Reconnecting restarts running tasks', {running: 1, sessions: 2, computers: sub.computers.length}), 409);
       if (data.connectRefused) return json(problem('offline', data.connectRefused), 409);
+      if (data.connectHeld) await data.connectHeld;
       const kind = KINDS.find(k => k.kind === (body.kind || sub.kind));
       data.login = {id: `l${writes.length}`, runner_id: 'r1', runtime: kind.runtime, kind: 'connect', state: 'waiting', url: 'https://sign-in.example/authorize?x=1',
         code: kind.runtime === 'codex' ? 'ABCD-1234' : '', lines: [], message: '', accepts_code: kind.runtime === 'claude', code_sent: false,
-        created: new Date().toISOString(), updated: new Date().toISOString(), computer: 'Tico Team box', target: body.name};
+        created: new Date().toISOString(), updated: new Date().toISOString(), computer: 'Tico Team box', not_yours: Boolean(data.connectNotYours), target: body.name};
       return json(data.login);
     }
     const signIn = p.match(/^\/api\/v2\/computers\/r1\/logins\/([^/]+)(?:\/(code|cancel))?$/);
@@ -376,6 +377,31 @@ async function connectPlan(browser) {
   await page.locator('dialog.model-login[open] [data-close]').first().click();
   await page.locator('dialog.model-login[open]').waitFor({state: 'detached'});
   assert.ok(writes.at(-1).p.endsWith('/cancel'));
+  // Someone else's computer: the dialog says so before the person signs in.
+  data.connectNotYours = true;
+  await page.locator('[data-subs-more=s1]').click();
+  await page.locator('#subs-menu [data-subs-act=reconnect]').click();
+  await page.locator('dialog[open] [data-subs-connect]').click();
+  await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
+  const where = page.locator('dialog.model-login[open] .model-login-where');
+  await where.waitFor();
+  assert.match(await where.innerText(), /Runs on Tico Team box, not your computer/);
+  await shot(page, 'connect-elsewhere-desktop-dark', page.locator('dialog.model-login[open]'));
+  await page.locator('dialog.model-login[open] [data-close]').first().click();
+  await page.locator('dialog.model-login[open]').waitFor({state: 'detached'});
+  data.connectNotYours = false;
+  // Closed while the start is on its way: the sign-in it started is cancelled, not left running out of sight.
+  let release; data.connectHeld = new Promise(done => { release = done; });
+  await page.locator('#subs-add').click();
+  const closing = page.locator('dialog.subs-dialog[open]');
+  await closing.locator('input[name=name]').fill('Closed early');
+  await closing.locator('[data-subs-connect]').click();
+  await until(page, () => writes.at(-1).body?.name === 'Closed early', 'the start');
+  await closing.locator('[data-close], .tmodal-foot button[type=button]').first().click();
+  await closing.waitFor({state: 'detached'});
+  release(); data.connectHeld = null;
+  await until(page, () => writes.at(-1).p.endsWith('/cancel'), 'the cancel');
+  assert.equal(data.login.state, 'cancelled');
   assert.deepEqual(errors, []);
   await page.close();
   // No computer can run it right now: the button says so and paste still works.

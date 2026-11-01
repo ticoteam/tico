@@ -752,8 +752,8 @@ def assignment_fields(c, runner, config):
 # ------------------------------------------------------------------------------------------------ routes
 # ------------------------------------------------------------------------------------------------ connect
 def _connect_computers(c, runtime, who=None):
-    """The computers that can run `runtime`'s sign-in for a Connect: those with nothing signing in for that tool first,
-    of those the person's own, then the one seen last."""
+    """The computers that can run `runtime`'s sign-in for a Connect: the person's own first, since the result passes
+    through the computer, then those with nothing signing in for that tool, then the one seen last."""
     from . import model_login
     if runtime not in model_login.CONNECT_RUNTIMES:
         return []
@@ -768,7 +768,7 @@ def _connect_computers(c, runtime, who=None):
                 and (report.get(runtime) or {}).get("installed")):
             found.append(runner)
     found.sort(key=lambda r: r["last_seen"] or "", reverse=True)
-    found.sort(key=lambda r: (r["id"] in busy, r["operator"] != me))
+    found.sort(key=lambda r: (r["operator"] != me, r["id"] in busy))
     return found
 
 
@@ -808,11 +808,20 @@ def connect(c, settings, who, body):
     if not new and login["requested_by"] != who.actor:
         raise Problem("state", f"Someone else is connecting a subscription on {runner['label']}; try again in a minute",
                       409)
-    c.execute("INSERT OR REPLACE INTO subscription_connects(login_id,kind,name,subscription_id) VALUES(?,?,?,?)",
-              (login["id"], kind, name, sid))
     if new:
+        c.execute("INSERT INTO subscription_connects(login_id,kind,name,subscription_id) VALUES(?,?,?,?)",
+                  (login["id"], kind, name, sid))
         H.event(c, who.actor, "subscription.connect", sid or login["id"], {"kind": kind, "runner": runner["id"]})
-    return {**model_login.view(login), "computer": runner["label"]}
+    else:
+        # The job running is theirs. Asking for the same thing again picks it back up; anything else must not take
+        # over its result, which would land on what they asked for second.
+        running = c.execute("SELECT kind,name,subscription_id FROM subscription_connects WHERE login_id=?",
+                            (login["id"],)).fetchone()
+        if not running or tuple(running) != (kind, name, sid):
+            raise Problem("state", f"You are connecting another subscription on {runner['label']}; finish or cancel "
+                          "that first", 409)
+    return {**model_login.view(login), "computer": runner["label"],
+            "not_yours": runner["operator"] != H.actor_id(who.actor)}
 
 
 def connected(c, vault, settings, who, login_id, body):

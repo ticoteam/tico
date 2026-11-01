@@ -273,6 +273,8 @@ function subsDialog(mode, sub = null) {
       // A new value restarts the runs on each computer given it: with runs going, the page asks before the sign-in.
       const first = await subsConfirmed(start, running => ({title: `Reconnect ${sub?.name}?`, text: `${subsStopWords(running)}, and their sessions start fresh.`, ok: 'Reconnect', danger: false}));
       if (!first) { button.disabled = false; return; }
+      // Closed while that was on its way: nobody is left to finish the sign-in it started.
+      if (!dialog.open) { await post(`/v2/computers/${encodeURIComponent(first.runner_id)}/logins/${encodeURIComponent(first.id)}/cancel`, {}).catch(() => {}); return; }
       TicoModelLogin.open({into: dialog, runnerId: first.runner_id, runtime: first.runtime, machine: first.computer || '', connect: {
         title: mode === 'add' ? `Connect ${name}` : `Reconnect ${sub.name}`, first, start: () => start(true),
         done: mode === 'add' ? `${name} added` : `${sub.name} reconnected`}});

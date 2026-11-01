@@ -80,7 +80,7 @@
     const body = dialog.querySelector('[data-body]'), status = dialog.querySelector('[data-status]'),
           actions = dialog.querySelector('[data-actions]');
     // `note`: why a cancel did not go through, kept on screen while the sign-in it left running goes on.
-    let login = null, timer = null, closed = false, sending = false, note = '', first = connect?.first || null;
+    let login = null, timer = null, closed = false, sending = false, note = '', first = connect?.first || null, elsewhere = false;
 
     const stop = () => { closed = true; clearTimeout(timer); };
     const close = async () => {
@@ -131,7 +131,7 @@
           ${login.accepts_code ? `<li>${login.code_sent ? 'Code sent. Waiting for the computer to finish…' : 'The page then shows a code. Paste it here:'}
               ${login.code_sent ? '' : `<form class="model-login-paste" data-paste><input name="code" type="text" autocomplete="off" spellcheck="false" required maxlength="700" aria-label="Code from the sign-in page" placeholder="Paste the code">
               <button class="primary" type="submit">Send code</button></form>`}</li>` : ''}
-        </ol>`;
+        </ol>${connect && elsewhere ? `<p class="model-login-where">Runs on ${text(machine)}, not your computer: the token passes through it. To avoid that, cancel and paste.</p>` : ''}`;
       }
       const lines = (login.lines || []).length && !hosted() && !connect && (state === 'waiting' && !login.url && !login.code || state === 'failed')
         ? `<details open><summary>What the computer printed</summary><pre data-lines>${text(login.lines.join('\n'))}</pre></details>` : '';
@@ -204,7 +204,7 @@
           // Try again may run on another computer: the server chooses.
           login = first || await connect.start();
           first = null;
-          runnerId = login.runner_id; machine = login.computer || machine;
+          runnerId = login.runner_id; machine = login.computer || machine; elsewhere = Boolean(login.not_yours);
         } else login = await post(base(), {runtime, ...(profile ? {profile} : {}), ...(toSubscription ? {to: 'subscription'} : switchAccount ? {switch: true} : {})});
       } catch (error) { status.textContent = error.message; actions.innerHTML = '<button class="ghost" type="button" data-close>Close</button>'; return; }
       draw();

@@ -391,6 +391,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .model-login h2{margin:0;font-size:var(--t-md)}
 .model-login-body{padding:8px 16px}
 .model-login-steps{margin:8px 0;padding-left:20px;display:grid;gap:12px}
+.model-login-where{margin:8px 0;color:var(--muted);font-size:var(--t-sm)}
 .model-login-code{display:flex;align-items:center;gap:10px;margin-top:6px}
 .model-login-code code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:var(--t-2xl);letter-spacing:.08em;padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface2)}
 .model-login-paste{display:flex;gap:8px;margin-top:6px}.model-login-paste input{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}

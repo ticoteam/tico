@@ -145,15 +145,36 @@ def test_connect_needs_a_computer_that_is_online_up_to_date_and_has_the_tool(api
     assert get(api, "model-subscriptions")["connect"] == ["codex_login"]
 
 
-def test_a_free_computer_goes_first_then_the_persons_own(api):
+def test_the_persons_own_computer_goes_first_and_someone_elses_says_so(api):
     setup(api)
     company(api)
     other = computer(api, operator="ben", label="Ben's")
-    mine = computer(api, label="Mine")
     start = {"kind": "claude_token", "name": "Max"}
-    assert post(api, "model-subscriptions/connect", start)["runner_id"] == mine["runner_id"]
-    # Mine is busy with that tool now, so the next one goes to the free computer.
-    assert post(api, "model-subscriptions/connect", {**start, "name": "Two"})["runner_id"] == other["runner_id"]
+    # Only Ben's can run it: the answer says the token would pass through a computer that is not theirs.
+    first = post(api, "model-subscriptions/connect", start)
+    assert first["runner_id"] == other["runner_id"] and first["not_yours"] is True
+    post(api, f"computers/{other['runner_id']}/logins/{first['id']}/cancel", {})
+    mine = computer(api, label="Mine")
+    second = post(api, "model-subscriptions/connect", start)
+    assert second["runner_id"] == mine["runner_id"] and second["not_yours"] is False
+
+
+def test_a_second_connect_does_not_take_over_the_first_ones_result(api):
+    setup(api)
+    company(api)
+    m = computer(api)
+    send(api, m, post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "A"}))
+    send(api, m, post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "B"}))
+    subs = {s["name"]: s["id"] for s in get(api, "model-subscriptions")["subscriptions"]}
+    reconnect_a = {"subscription": subs["A"], "confirm": True}
+    first = post(api, "model-subscriptions/connect", reconnect_a)
+    # Reconnecting B meanwhile is refused, and asking for A again picks the same sign-in back up.
+    post(api, "model-subscriptions/connect", {"subscription": subs["B"], "confirm": True}, expected=409)
+    post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "C"}, expected=409)
+    assert post(api, "model-subscriptions/connect", reconnect_a)["id"] == first["id"]
+    assert send(api, m, first)["state"] == "done"
+    assert sorted(get(api, "model-subscriptions")["subscriptions"], key=lambda s: s["name"])[0]["id"] == subs["A"]
+    assert len(get(api, "model-subscriptions")["subscriptions"]) == 2
 
 
 def test_someone_elses_connect_is_not_taken_over(api):

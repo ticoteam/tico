@@ -206,7 +206,9 @@ signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key.
 **Connect** signs a plan in without pasting. Tico picks an online computer on the latest release with that tool
 installed, the person's own first, and runs the sign-in there: `claude setup-token`, or `codex login` in a folder of its
 own. That computer's own login stays as it was. The page shows the link and any code, never the result, which the
-computer sends straight to Tico and keeps no copy of. With no such computer, **Connect** is off and pasting still works.
+computer sends straight to Tico and keeps no copy of. If it has to run on someone else's computer, the page says so before
+the sign-in, since the result passes through that computer; cancel and paste to avoid that. With no such computer,
+**Connect** is off and pasting still works. A sign-in the command reports as failed saves nothing.
 Connecting a saved subscription is **Reconnect**, and asks first as a pasted value does. It belongs to the company; the list says
 who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
 page sees the list (name, kind, status, computers, usage), never a value.
