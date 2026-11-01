@@ -190,6 +190,10 @@ def _connector(c, auth, who, rid, *, states=None):
     return row
 
 
+# Called as hook(c, rid, reply, who) inside a bot's reply's transaction, so a thread that a call projects to gets the
+# reply or nothing. backend/calls.py registers its projection here; a hook may raise to refuse the whole reply.
+REPLY_HOOKS = []
+
 NOTICE_EVENTS = ("meeting.bot_turn_failed", "meeting.bot_turn_waiting", "meeting.bot_turn_deferred",
                  "meeting.bot_turn_retried")
 
@@ -1040,6 +1044,53 @@ def _run_windows(app, rid, *, final=False):
         index += 1
 
 
+def append_chunks(c, rid, row, actor, chunks):
+    """Stores transcript chunks in order. Each is a dict with seq, speaker, start_ms, end_ms and text. A chunk already
+    stored with the same text is accepted again (a retry); different text at a stored sequence is a conflict. The
+    transcript route and calls (backend/calls.py) both write through here, so they share one order and one history.
+    Returns (accepted, added): every sequence seen, and the ones newly stored."""
+    expected = row["seq"] + 1
+    accepted, added = [], []
+    previous_start = c.execute("SELECT COALESCE(MAX(start_ms),-1) FROM live_meeting_chunks WHERE meeting_id=?",
+                               (rid,)).fetchone()[0]
+    for chunk in chunks:
+        data = (chunk["speaker"], chunk["start_ms"], chunk["end_ms"], chunk["text"])
+        found = c.execute("SELECT speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? AND seq=?",
+                          (rid, chunk["seq"])).fetchone()
+        if found:
+            known = c.execute("SELECT 1 FROM live_meeting_chunk_versions WHERE meeting_id=? AND seq=? "
+                              "AND speaker=? AND start_ms=? AND end_ms=? AND text=? LIMIT 1",
+                              (rid, chunk["seq"], *data)).fetchone()
+            if not known:
+                raise Problem("sequence_conflict", f"Sequence {chunk['seq']} already has different text", 409)
+            accepted.append(chunk["seq"])
+            continue
+        if row["state"] != "live":
+            raise Problem("meeting_state", f"A {row['state']} meeting cannot accept new transcript text", 409)
+        if chunk["seq"] != expected:
+            raise Problem("sequence_gap", f"Expected sequence {expected}", 409, extra={"expected_seq": expected})
+        if chunk["start_ms"] < previous_start:
+            raise Problem("sequence_order", "Transcript start times must not go backwards", 422)
+        stamp = H.now()
+        c.execute("INSERT INTO live_meeting_chunks(meeting_id,seq,revision,speaker,start_ms,end_ms,text,created) "
+                  "VALUES(?,?,?,?,?,?,?,?)", (rid, chunk["seq"], 1, chunk["speaker"], chunk["start_ms"],
+                                               chunk["end_ms"], chunk["text"], stamp))
+        c.execute("INSERT INTO live_meeting_chunk_versions VALUES(?,?,?,?,?,?,?,?,?)",
+                  (rid, chunk["seq"], 1, chunk["speaker"], chunk["start_ms"], chunk["end_ms"], chunk["text"],
+                   actor, stamp))
+        c.execute("UPDATE live_meetings SET seq=?,updated=? WHERE id=?", (chunk["seq"], stamp, rid))
+        _event(c, rid, "meeting.chunk", {"seq": chunk["seq"], "speaker": chunk["speaker"],
+                                          "start_ms": chunk["start_ms"], "end_ms": chunk["end_ms"],
+                                          "text": chunk["text"], "revision": 1})
+        _route_mentions(c, rid, chunk["text"], source_key=f"chunk:{chunk['seq']}",
+                        transcript_seq=chunk["seq"], at_ms=chunk["end_ms"])
+        accepted.append(chunk["seq"])
+        added.append(chunk["seq"])
+        expected += 1
+        previous_start = chunk["start_ms"]
+    return accepted, added
+
+
 def _reply(c, rid, who, turn_id, text, *, at_ms=None, transcript_seq=None):
     turn = c.execute("SELECT * FROM live_meeting_turns WHERE id=? AND meeting_id=?", (turn_id, rid)).fetchone()
     if not turn or who.role != "bot" or H.actor_id(who.actor) != turn["bot"]:
@@ -1084,7 +1135,10 @@ def _reply(c, rid, who, turn_id, text, *, at_ms=None, transcript_seq=None):
     _event(c, rid, "meeting.router", {"turn_id": turn_id, "bot": turn["bot"],
                                        "window_index": turn["window_index"], "outcome": "reply",
                                        "trace": {"reason": "bot_replied", "source_key": turn["source_key"]}})
-    return dict(c.execute("SELECT * FROM live_meeting_chat WHERE id=?", (cid,)).fetchone())
+    reply = dict(c.execute("SELECT * FROM live_meeting_chat WHERE id=?", (cid,)).fetchone())
+    for hook in REPLY_HOOKS:
+        hook(c, rid, reply, who)
+    return reply
 
 
 class Routing:
@@ -1319,45 +1373,7 @@ def install_live_meetings(app, store, auth, write):
         who = request.state.identity
         def work(c):
             row = _connector(c, auth, who, rid)
-            expected = row["seq"] + 1
-            accepted, added = [], []
-            previous_start = c.execute("SELECT COALESCE(MAX(start_ms),-1) FROM live_meeting_chunks WHERE meeting_id=?",
-                                       (rid,)).fetchone()[0]
-            for chunk in body.chunks:
-                data = (chunk.speaker, chunk.start_ms, chunk.end_ms, chunk.text)
-                found = c.execute("SELECT speaker,start_ms,end_ms,text FROM live_meeting_chunks WHERE meeting_id=? AND seq=?",
-                                  (rid, chunk.seq)).fetchone()
-                if found:
-                    known = c.execute("SELECT 1 FROM live_meeting_chunk_versions WHERE meeting_id=? AND seq=? "
-                                      "AND speaker=? AND start_ms=? AND end_ms=? AND text=? LIMIT 1",
-                                      (rid, chunk.seq, *data)).fetchone()
-                    if not known:
-                        raise Problem("sequence_conflict", f"Sequence {chunk.seq} already has different text", 409)
-                    accepted.append(chunk.seq)
-                    continue
-                if row["state"] != "live":
-                    raise Problem("meeting_state", f"A {row['state']} meeting cannot accept new transcript text", 409)
-                if chunk.seq != expected:
-                    raise Problem("sequence_gap", f"Expected sequence {expected}", 409, extra={"expected_seq": expected})
-                if chunk.start_ms < previous_start:
-                    raise Problem("sequence_order", "Transcript start times must not go backwards", 422)
-                stamp = H.now()
-                c.execute("INSERT INTO live_meeting_chunks(meeting_id,seq,revision,speaker,start_ms,end_ms,text,created) "
-                          "VALUES(?,?,?,?,?,?,?,?)", (rid, chunk.seq, 1, chunk.speaker, chunk.start_ms,
-                                                       chunk.end_ms, chunk.text, stamp))
-                c.execute("INSERT INTO live_meeting_chunk_versions VALUES(?,?,?,?,?,?,?,?,?)",
-                          (rid, chunk.seq, 1, chunk.speaker, chunk.start_ms, chunk.end_ms, chunk.text,
-                           who.actor, stamp))
-                c.execute("UPDATE live_meetings SET seq=?,updated=? WHERE id=?", (chunk.seq, stamp, rid))
-                _event(c, rid, "meeting.chunk", {"seq": chunk.seq, "speaker": chunk.speaker,
-                                                  "start_ms": chunk.start_ms, "end_ms": chunk.end_ms,
-                                                  "text": chunk.text, "revision": 1})
-                _route_mentions(c, rid, chunk.text, source_key=f"chunk:{chunk.seq}",
-                                transcript_seq=chunk.seq, at_ms=chunk.end_ms)
-                accepted.append(chunk.seq)
-                added.append(chunk.seq)
-                expected += 1
-                previous_start = chunk.start_ms
+            accepted, added = append_chunks(c, rid, row, who.actor, [chunk.model_dump() for chunk in body.chunks])
             return {"id": rid, "state": row["state"], "seq": row["seq"] + len(added),
                     "accepted": accepted, "event_id": _meeting(c, rid)["next_event_id"]}
         result = mutate(request, body, work)

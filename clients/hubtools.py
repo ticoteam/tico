@@ -6920,6 +6920,83 @@ def rules_appeal(api, args):
     return api.post(f"rule-holds/{args['id']}/appeal", {"why": args.get("why") or ""}, key=_key(args))
 
 
+# ----------------------------------------------------------------------------- calls (Tico Meet: docs/meet.md)
+# A call belongs to a thread. Starting, joining, ending and attaching bots are people's acts; BotOps acts as the person it
+# works for, and the server refuses a bot on each of them. Every read checks the caller's access to the thread.
+CALL_TOOLS = ("hub_call_list", "hub_call_show", "hub_call_start", "hub_call_join", "hub_call_token", "hub_call_leave",
+              "hub_call_end", "hub_call_bot_add", "hub_call_bot_remove")
+
+
+@tool("hub_call_list", "The calls in a thread, newest first: id, title, state (`live` or `ended`), connector, and how each "
+      "ended. `next_before` reads older ones.",
+      {"thread_id": _s("The thread's id"),
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+       "before": _s("The `started_at` of the last call you read, from `next_before`")}, required=("thread_id",))
+def call_list(api, args):
+    query = {key: args[key] for key in ("limit", "before") if args.get(key) not in (None, "")}
+    return _as_person(api).get(f"threads/{args['thread_id']}/calls", **query)
+
+
+@tool("hub_call_show", "A call: its state, title, connector, who joined (and when they left or were removed), the bots "
+      "listening, and how it ended. Only people who can read its thread see it.", {"call_id": _s("The call's id")},
+      required=("call_id",))
+def call_show(api, args):
+    return _as_person(api).get(f"calls/{args['call_id']}")
+
+
+@tool("hub_call_start", "Start a call in a thread you can write to. Its audio and screen share reach the people in the "
+      "thread, and a live transcript is kept while it runs and posted to the thread when it ends. You are its connector. "
+      "Refused while another call runs in the thread, and while Tico Meet is not set up on this server.",
+      {"thread_id": _s("The thread's id"), "title": _s("What the call is called, up to 200 characters")},
+      required=("thread_id",), writes=True)
+def call_start(api, args):
+    body = {"title": str(args["title"])} if args.get("title") else {}
+    return _as_person(api).post(f"threads/{args['thread_id']}/calls", body, key=_key(args))
+
+
+@tool("hub_call_join", "Join a call you can read. The answer has `url` and `token`: connect a LiveKit client to them to speak "
+      "and share your screen (never a camera). The token lasts 5 minutes; get a fresh one with hub_call_token while you stay.",
+      {"call_id": _s("The call's id")}, required=("call_id",), writes=True)
+def call_join(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/join", {}, key=_key(args))
+
+
+@tool("hub_call_token", "A fresh token for a call you have joined, good for 5 minutes. Refused once you were removed from the "
+      "call (you lost access to its thread), and once you have left it or it has ended.",
+      {"call_id": _s("The call's id")}, required=("call_id",))
+def call_token(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/token", {})
+
+
+@tool("hub_call_leave", "Leave a call you joined. The others stay in it.", {"call_id": _s("The call's id")},
+      required=("call_id",), writes=True)
+def call_leave(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/leave", {}, key=_key(args))
+
+
+@tool("hub_call_end", "End a call you started. The speech so far is transcribed and the transcript is posted to the thread. "
+      "Tasks are made by hand.", {"call_id": _s("The call's id")}, required=("call_id",), writes=True)
+def call_end(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/end", {}, key=_key(args))
+
+
+@tool("hub_call_bot_add", "Let bots listen to a call you have joined and reply in its thread. You must be able to write to "
+      "each bot; up to 10 at once.",
+      {"call_id": _s("The call's id"),
+       "bots": {"type": "array", "items": _s("A bot's slug"), "minItems": 1, "maxItems": 10}},
+      required=("call_id", "bots"), writes=True)
+def call_bot_add(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/bots", {"bots": [str(bot) for bot in args["bots"]]},
+                                key=_key(args))
+
+
+@tool("hub_call_bot_remove", "Take a bot out of a call. Its replies already in the thread stay.",
+      {"call_id": _s("The call's id"), "bot": _s("The bot's slug")}, required=("call_id", "bot"), writes=True)
+def call_bot_remove(api, args):
+    return _as_person(api).call("DELETE", f"calls/{args['call_id']}/bots/{quote(str(args['bot']), safe='')}", {},
+                                key=_key(args))
+
+
 BY_NAME = {t["name"]: t for t in TOOLS}
 
 
@@ -6986,6 +7063,7 @@ AUDIENCE = {
     "hub_health_metrics": REQUESTER,
     **{name: REQUESTER for name in ("hub_bot_archive", "hub_doc_archive", "hub_file_archive", "hub_meeting_delete", "hub_meeting_granola_status", "hub_meeting_granola_sync",
                                    "hub_meeting_pending", "hub_meeting_approve", "hub_meeting_dismiss", "hub_meeting_restore")},
+    **{name: REQUESTER for name in CALL_TOOLS},     # a person's act; BotOps acts as the person it works for
     # The Assistant only.
     "hub_assistant_propose": ("assistant",), "hub_approval_read_back": ("assistant",),
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
