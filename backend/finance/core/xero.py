@@ -612,6 +612,8 @@ def document_body(body: Mapping[str, Any], kind: str) -> dict[str, Any]:
         row: dict[str, Any] = {"AccountID": _ref(line.get("account"), "Account"),
                                "Description": str(line.get("description") or "")[:4000], "Quantity": 1,
                                "UnitAmount": amount_text(int(line["amount"]))}
+        if line.get("item_code"):      # the item the line sells, by the code Xero holds it under (see item_body)
+            row["ItemCode"] = str(line["item_code"])[:30]
         tracking = _tracking({"location": _option(line.get("location")), "class": _option(line.get("class"))})
         if tracking:
             row["Tracking"] = tracking

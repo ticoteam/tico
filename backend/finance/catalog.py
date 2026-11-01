@@ -221,10 +221,11 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise invalid("a bundle cannot be made while the books are mirrored: the provider takes no bundles")
     if _mirrored(ctx) and "price" in f and f["price"] is None and old["price"] is not None:
         raise invalid("an item the provider holds keeps a price: set a new one")
-    for key, kind in mirror.ITEM_ACCOUNTS:
-        # QuickBooks and Xero keep an account the update leaves out, so a cleared one would stay on the provider's item.
-        if _mirrored(ctx) and key in f and f[key] is None and old[key] is not None:
-            raise invalid(f"an item the provider holds keeps its {kind} account: set another one")
+    # The provider holds the item's accounts and SKU; a change here would not reach it, so bills would post elsewhere.
+    if _mirrored(ctx) and any(key in f and f[key] != old[key] for key, _ in mirror.ITEM_ACCOUNTS):
+        raise invalid("an item the provider holds keeps its accounts: change them in the books")
+    if _mirrored(ctx) and "sku" in f and old["sku"] and not f["sku"]:
+        raise invalid("an item the provider holds keeps its SKU: set another one")
     if _mirrored(ctx) and "kind" in f and f["kind"] != old["kind"]:
         _books_kind_change(str(old["kind"]), str(f["kind"]))
     gate = K.default_gate(ctx.org, who, "item_update")
