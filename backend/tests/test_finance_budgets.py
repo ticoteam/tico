@@ -664,12 +664,13 @@ def test_a_line_one_teammate_posts_is_drawn_once_across_three_generations(books)
 
 
 def test_a_line_an_ended_budget_shares_goes_to_the_active_one_on_the_same_account(books):
-    """Codex's case under Opex (20,000): Eve's 5,000 on an ended Software child (account 6100, any vendor) and 5,000 on an
+    """Codex's case under Opex (20,000, on account 6000): Eve's 5,000 on an ended Software child (account 6100, any vendor) and 5,000 on an
     active Slack child (the same account, vendor Slack). Her GitHub line is Software's alone; her Slack line is the active
     Slack child's, which takes precedence. Software has nothing left to reserve, so Opex has 10,000 left and a 7,500 spend
     fits. Subtracting Slack's whole actual from Software left a phantom 5,000 reserve (remaining 5,000)."""
     with books.transaction() as c:
-        pid, _ = _tree(c, 20_000, ())
+        pid = str(act(c, OWNER, "budget_create", {"name": "Opex", "account_id": account(c, "6000"),
+                                                  "amount": 20_000, "at_limit": "decline"}).result["budget_id"])
         soft = _child(c, pid, "Software", 5_000)
         _allot(c, soft, 5_000)
         assert act(c, OWNER, "budget_update", {"budget_id": soft, "active": False}).status == "committed"
