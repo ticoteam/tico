@@ -12,6 +12,7 @@ from typing import Any, cast
 
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
+from . import due_dates as DD
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
 from . import closing as CL
 from . import context as _context
@@ -1412,7 +1413,7 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 
 # ------------------------------------------------------------------------------------------------ search
 SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project", "po",
-              "estimate")
+              "estimate", "due_date")
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
@@ -1677,6 +1678,13 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 results += [{**r, "label": f"{r['nickname'] or r['holder']} ••{r['last4'] or ''}".strip()}
                             for r in cast(list[Row], found["cards"])]
                 nxt = cast(str | None, found["next"])
+            elif k == "due_date":
+                # Due dates page by name; `active=0` names the archived ones, the default is the live ones.
+                listed = DD.listing(c, viewer, q=text, archived="only" if _filter(f, "active") in ("0", "false")
+                                    else "hide", cursor=cursor, limit=most, at=at)
+                results += [cast(Row, {**r, "kind": "due_date", "label": r["name"]})
+                            for r in cast(list[Row], listed["due_dates"])]
+                nxt = cast(str | None, listed["next_cursor"])
             elif k in RECORD_KINDS:
                 _teammate_or_refuse(ctx, viewer)
                 parts = tab.decode_cursor(cursor)
