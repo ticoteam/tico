@@ -586,11 +586,12 @@ def _reactivate_fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int
         parent = ctx.budgets()[b.parent_id]
         kids = {k: vs for k, vs in _kid_versions(ctx, parent.id).items() if k != b.id}
         kids[b.id] = mine
-        _reserve_fit(ctx, who, parent, SB.versions(ctx.c, [parent.id])[parent.id], kids, effective)
+        _reserve_fit(ctx, who, parent, SB.versions(ctx.c, [parent.id])[parent.id], kids, effective,
+                     live=frozenset({b.id}))
 
 
 def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: dict[str, list[B.Version]],
-                 effective: str) -> None:
+                 effective: str, live: frozenset[str] = frozenset()) -> None:
     """On every day from `effective` that a version of `b` or of a child takes effect, `b`'s allocations and its children's
     amounts must fit `mine`, b's amount. A day at 0 is skipped: a pause froze the cards, and `_fits` holds the
     children to 0 under it."""
@@ -602,10 +603,10 @@ def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: d
             continue
         start, end = B.period_of(b, at, ctx.book.fiscal_year_start, mine)
         reserves, direct = _reserves(ctx, b, start.isoformat(), end.isoformat(), list(kids))
-        owed = _owed(ctx, kids, at)
+        owed = _owed(ctx, kids, at, live)
         total = sum(reserve for _, _, reserve in reserves) + direct + owed
         # A day with nothing of its own reserved is skipped, unless an ended child still holds something on it.
-        if total <= cap or (not reserves and not direct and not _ended_held(ctx, kids, at)):
+        if total <= cap or (not reserves and not direct and not _ended_held(ctx, kids, at, live)):
             continue
         on = at.isoformat()
         if not reserves:
@@ -626,15 +627,16 @@ def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: d
         raise named_refusal(INVALID, named, [b.name, *labels], shown)
 
 
-def _owed(ctx: Ctx, kids: dict[str, list[B.Version]], at: date) -> int:
+def _owed(ctx: Ctx, kids: dict[str, list[B.Version]], at: date, live: frozenset[str] = frozenset()) -> int:
     """What a budget's children hold it to on `at`. Each child counts once, as its amount or as what it already needs if
     that is more: its spend, holds and allocation reserves (budgeting.state), all inside its own envelope. So nothing that
     sits inside a child is counted again on its parent. A child with no stored budget yet needs nothing. An ended child
-    has no envelope any more: it counts only what it still holds (its allocations' reserves and holds)."""
+    has no envelope any more: it counts only what it still holds (its allocations' reserves and holds). `live` names
+    budgets a change is bringing back active: they count as children, whatever their stored flag still says."""
     budgets = ctx.budgets()
     total = 0
     for cid, versions in kids.items():
-        if cid in budgets and not budgets[cid].active:
+        if cid in budgets and not budgets[cid].active and cid not in live:
             total += budgeting.state(ctx, cid, at).held
             continue
         amount = B.amount_at(versions, at) or 0
@@ -646,10 +648,11 @@ def _owed(ctx: Ctx, kids: dict[str, list[B.Version]], at: date) -> int:
     return total
 
 
-def _ended_held(ctx: Ctx, kids: dict[str, list[B.Version]], at: date) -> int:
+def _ended_held(ctx: Ctx, kids: dict[str, list[B.Version]], at: date, live: frozenset[str] = frozenset()) -> int:
     """What the ended children among `kids` still hold on `at`, as `_owed` counts it."""
     budgets = ctx.budgets()
-    return sum(budgeting.state(ctx, cid, at).held for cid in kids if cid in budgets and not budgets[cid].active)
+    return sum(budgeting.state(ctx, cid, at).held for cid in kids
+               if cid in budgets and not budgets[cid].active and cid not in live)
 
 
 def _reserves(ctx: Ctx, b: B.Budget, start: str, end: str, kid_ids: list[str]
