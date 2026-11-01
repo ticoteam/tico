@@ -9,6 +9,7 @@ from collections.abc import Iterable, Sequence
 from datetime import date
 from typing import Any, cast
 
+from ..records import reads as RR
 from .context import Ctx, load
 from .core import ap as AP
 from .core import dates
@@ -18,6 +19,7 @@ from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .store import ap as SAP
 from .store import banking as SK
+from .store import catalog as SC
 from .store import ledger as SL
 from .tab import BILLS_EMAIL_KEY, decode_cursor, encode_cursor, page_size, private_cut
 
@@ -186,7 +188,8 @@ def aging_summary(c: sqlite3.Connection, ctx: Ctx, kind: str, cut: set[str]) -> 
 def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | None = None,
               contact_id: str | None = None, q: str = "", start: str | None = None, end: str | None = None,
               aging: str | None = None, late: bool = False, cursor: str | None = None, limit: int = 50,
-              order: str = "date", at: str | None = None) -> Row:
+              order: str = "date", location_id: str | None = None, project_id: str | None = None,
+              at: str | None = None) -> Row:
     """Bills or invoices newest first (by date, or with `order` paid_on by when they were last paid), filtered by status (or `unpaid`), contact, dates, aging bucket (or `late`: past
     due) and a search over number, memo and contact name, with the open total by aging bucket. Each row has the line
     its lines go to and their team; a paid one when it was paid and by whom. `next_cursor` pages."""
@@ -207,11 +210,12 @@ def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | No
     out: list[Row] = []
     scanned = 0
     nxt: str | None = None
+    tagged = tag_filter(c, location_id, project_id)
     while len(out) < most and scanned < SCAN:
         batch = SAP.docs_page(c, kind, book_id=ctx.book.id, statuses=statuses, contact_id=contact_id or "",
                               q=(q or "").strip()[:100], start=dates.day(start).isoformat() if start else "",
                               end=dates.day(end).isoformat() if end else "", before=before, most=BATCH,
-                              by_paid=order == "paid_on")
+                              by_paid=order == "paid_on", tagged=tagged)
         if not batch:
             break
         scanned += len(batch)
@@ -241,7 +245,31 @@ def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | No
             "currency": ctx.book.base_currency, "view_version": view.version}
 
 
-def _approvals(c: sqlite3.Connection, kind: str, doc_id: str) -> list[Row]:
+def tag_filter(c: sqlite3.Connection, location_id: str | None, project_id: str | None
+               ) -> list[tuple[str, tuple[str, ...]]]:
+    """What a list narrowed to a location or project matches on a line's tags: the record's id and the ids merged into
+    it, since a line keeps the id it was tagged with."""
+    asked = (("location", "locations", location_id), ("project", "projects", project_id))
+    return [(tag, RR.ids_of(c, table, value)) for tag, table, value in asked if value]
+
+
+def list_names(c: sqlite3.Connection) -> dict[str, dict[str, str]]:
+    """The names a list row shows: its locations and projects. A panel's full set is `record_names`."""
+    return {"location": RR.names(c, "locations"), "project": RR.names(c, "projects")}
+
+
+def record_names(c: sqlite3.Connection) -> dict[str, dict[str, str]]:
+    """Each record's name by id, archived ones too: a line keeps naming what it was tagged with."""
+    return {"location": RR.names(c, "locations"), "project": RR.names(c, "projects"), "class": SC.class_names(c),
+            "item": RR.names(c, "items")}
+
+
+def tag_names(names: dict[str, dict[str, str]], tags: dict[str, str]) -> dict[str, str]:
+    """A line's location, project and class by name, for a panel that shows them."""
+    return {k: names[k].get(tags[k], tags[k]) for k in ("location", "project", "class") if tags.get(k)}
+
+
+def doc_approvals(c: sqlite3.Connection, kind: str, doc_id: str) -> list[Row]:
     return [{"action_id": str(r["id"]), "kind": str(r["kind"]), "status": str(r["status"]), "actor": str(r["actor"]),
              "approval_id": r["approval_id"], "approval_to": r["approval_to"], "rule_id": str(r["rule_id"]) or None,
              "created_at": str(r["created_at"])} for r in SAP.doc_actions(c, kind, doc_id, 20)]
@@ -262,8 +290,10 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
     settled = SAP.settlement_count(c, kind, doc_id)
     pay = SK.last_payments(c, [f"bill:{doc_id}"]).get(f"bill:{doc_id}") if kind == "bill" else None
     out = doc_row(kind, r, dates.day(ctx.today), attached, pay)
+    names = record_names(c)
     out["lines"] = [{"id": str(x["id"]), "account": account_ref(ctx, x["account_id"]), "amount": int(x["amount"]),
                      "description": str(x["description"]), "tags": SK.loads(x["tags_json"]),
+                     "tag_names": tag_names(names, cast(dict[str, str], SK.loads(x["tags_json"]))),
                      **({"taxable": bool(x["taxable"])} if kind == "invoice" else {})}
                     for x in found[doc_id]]
     out["settlements"] = [{"id": str(s["id"]), "from_kind": str(s["from_kind"]), "from_id": str(s["from_id"]) or None,
@@ -275,7 +305,7 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
                            "created_at": str(f["created_at"])}
                           for f in SAP.attachments_first(c, kind, doc_id, NESTED_MOST)]
     out["attachment_count"], out["attachments_more"] = attached, attached > NESTED_MOST
-    out["actions"] = _approvals(c, kind, doc_id)
+    out["actions"] = doc_approvals(c, kind, doc_id)
     out["terms_days"] = r["terms_days"]
     if kind == "bill":
         out["schedule"] = SK.loads(r["schedule_json"]) or None
@@ -295,10 +325,12 @@ def bills(c: sqlite3.Connection, viewer: str, *, status: str | None = None, vend
 
 def invoices(c: sqlite3.Connection, viewer: str, *, status: str | None = None, customer_id: str | None = None,
              q: str = "", start: str | None = None, end: str | None = None, aging: str | None = None,
-             late: bool = False, cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
+             late: bool = False, cursor: str | None = None, limit: int = 50, location_id: str | None = None,
+             project_id: str | None = None, at: str | None = None) -> Row:
     """Invoices the viewer sees (`documents` with kind invoice)."""
     return documents(c, viewer, "invoice", status=status, contact_id=customer_id, q=q, start=start, end=end,
-                     aging=aging, late=late, cursor=cursor, limit=limit, at=at)
+                     aging=aging, late=late, cursor=cursor, limit=limit, location_id=location_id,
+                     project_id=project_id, at=at)
 
 
 def bill(c: sqlite3.Connection, viewer: str, bill_id: str, at: str | None = None) -> Row:
@@ -316,7 +348,8 @@ def contact_row(ctx: Ctx, r: Any, admin: bool, owed: Row | None = None) -> Row:
             "default_account": account_ref(ctx, r["default_account_id"]), "is_1099": bool(r["is_1099"]),
             "has_tax_id": bool(r["tax_id_ref"]), "tax_id_last4": r["tax_id_last4"] if admin else None,
             "recipient_id": r["payment_ref"], "active": bool(r["active"]), "owed": owed or {},
-            "created_at": str(r["created_at"])}
+            "payment_terms_days": r["payment_terms_days"], "owner_id": r["owner_id"], "renewal_on": r["renewal_on"],
+            "renewal_notice_days": r["renewal_notice_days"], "created_at": str(r["created_at"])}
 
 
 def _owed(c: sqlite3.Connection, kind: str, contact_ids: Sequence[str], cut: set[str]) -> dict[str, int]:
@@ -327,6 +360,29 @@ def _owed(c: sqlite3.Connection, kind: str, contact_ids: Sequence[str], cut: set
     for r in kept:
         out[str(r[contact])] = out.get(str(r[contact]), 0) + int(r["total"]) - paid_of(kind, r)
     return out
+
+
+def _contact_rows(c: sqlite3.Connection, ctx: Ctx, view: VW.View, admin: bool, page: Sequence[Any]) -> list[Row]:
+    """Contacts with what their open documents owe, on the sides this viewer sees."""
+    vendors, customers = sees_side(ctx, view, "bill"), sees_side(ctx, view, "invoice")
+    ids = [str(r["id"]) for r in page]
+    cut = set(private_cut(ctx, view))
+    bills_owed = _owed(c, "bill", ids, cut) if vendors else {}
+    invoices_owed = _owed(c, "invoice", ids, cut) if customers else {}
+    return [contact_row(ctx, r, admin, {**({"bills": bills_owed.get(str(r["id"]), 0)} if vendors else {}),
+                                        **({"invoices": invoices_owed.get(str(r["id"]), 0)} if customers else {})})
+            for r in page]
+
+
+def contact(c: sqlite3.Connection, viewer: str, contact_id: str, at: str | None = None) -> Row:
+    """One vendor or customer, active or not, to whoever sees its side; to anyone else it does not exist."""
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    r = SAP.get(c, "fin_contacts", contact_id)
+    if r is None or str(r["book_id"]) != ctx.book.id or not sees_contact_kind(ctx, view, str(r["kind"])):
+        raise FinanceError(NOT_FOUND, "no such contact in your view")
+    admin = R.is_admin(ctx.org, viewer, ctx.rights(viewer))
+    return {"contact": _contact_rows(c, ctx, view, admin, [r])[0], "view_version": view.version}
 
 
 def contacts(c: sqlite3.Connection, viewer: str, *, kind: str | None = None, q: str = "", active: bool | None = True,
@@ -341,7 +397,6 @@ def contacts(c: sqlite3.Connection, viewer: str, *, kind: str | None = None, q: 
              (kind is None or k == kind or (kind != "both" and k == "both"))]
     if not kinds:
         raise denied("contacts are not in your view")
-    vendors, customers = sees_side(ctx, view, "bill"), sees_side(ctx, view, "invoice")
     admin = R.is_admin(ctx.org, viewer, ctx.rights(viewer))
     most = page_size(limit)
     marks = decode_cursor(cursor)
@@ -349,13 +404,7 @@ def contacts(c: sqlite3.Connection, viewer: str, *, kind: str | None = None, q: 
     rows = SAP.contacts_page(c, book_id=ctx.book.id, kinds=kinds, q=(q or "").strip()[:100], active=active,
                              after=after, most=most + 1)
     page = rows[:most]
-    ids = [str(r["id"]) for r in page]
-    cut = set(private_cut(ctx, view))
-    bills_owed = _owed(c, "bill", ids, cut) if vendors else {}
-    invoices_owed = _owed(c, "invoice", ids, cut) if customers else {}
-    out = [contact_row(ctx, r, admin, {**({"bills": bills_owed.get(str(r["id"]), 0)} if vendors else {}),
-                                       **({"invoices": invoices_owed.get(str(r["id"]), 0)} if customers else {})})
-           for r in page]
+    out = _contact_rows(c, ctx, view, admin, page)
     nxt = encode_cursor([str(page[-1]["name"]), str(page[-1]["id"])]) if len(rows) > most else None
     return {"contacts": out, "next_cursor": nxt, "view_version": view.version}
 
@@ -393,7 +442,8 @@ def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: st
         if not wide:
             row["attributable"] = _attributable(ctx, viewer, a)
         out.append(row)
-    return {"accounts": out[:CHART_MOST], "more": len(out) > CHART_MOST, "view_version": view.version}
+    return {"accounts": out[:CHART_MOST], "more": len(out) > CHART_MOST,
+            "classes": [{"id": i, "name": n} for i, n in SC.classes_active(c)], "view_version": view.version}
 
 
 ATTRIBUTABLE_MOST = 200

@@ -658,6 +658,12 @@ ref = lambda name: {"$ref": "#/components/schemas/" + name}   # noqa: E731
 ACTORS = {"type": "object", "additionalProperties": {"type": "string"},
           "description": "On reads: display names for every actor id in the answer, {\"human:ana\": \"Ana Alvarez\"}"}
 
+_FINANCE_CONTACT = obj({
+        "id": "s", "name": "s", "kind": {"type": "string", "enum": ["vendor", "customer", "both"]},
+        "emails": items({"type": "string"}), "default_account": {"type": ["object", "null"], "additionalProperties": True},
+        "is_1099": "b", "has_tax_id": "b", "tax_id_last4": "n", "recipient_id": "n", "active": "b",
+        "owed": obj({"bills": "i", "invoices": "i"}, required=[]), "created_at": "s"},
+        required=["id", "name", "kind", "active"])
 SCHEMAS = {
     "SubscriptionList": obj({"profiles_by_computer": items(obj({"runner_id": "s", "label": "s", "profiles": items(
         obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))}))}),
@@ -1502,6 +1508,8 @@ STABLE.extend([
     ("/api/v2/finance/contacts", "get", "Finance", "listFinanceContacts",
      "Vendors (to whoever sees payables) and customers (receivables) by name, with what their open documents owe; a "
      "tax id's last 4 only for a finance admin", "FinanceContacts"),
+    ("/api/v2/finance/contacts/{contact_id}", "get", "Finance", "getFinanceContact",
+     "One vendor or customer, active or not, to whoever sees its side", "FinanceContact"),
     ("/api/v2/finance/chart", "get", "Finance", "getFinanceChart",
      "The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for= bill "
      "keeps expense and asset lines, invoice income lines; for teammates who write to the books", "FinanceChart"),
@@ -1523,13 +1531,13 @@ STABLE.extend([
      "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
      "FinanceReportOf"),
     ("/api/v2/finance/search", "get", "Finance", "searchFinance",
-     "Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees; with kind it pages by "
-     "cursor, without it returns the first few of each kind", "FinanceSearch"),
+     "Search entries, bank and card rows, bills, invoices, contacts, rules and equipment the caller sees; with kind it "
+     "pages by cursor, without it returns the first few of each kind", "FinanceSearch"),
     ("/api/v2/purchase-orders", "get", "Finance", "listPurchaseOrders",
      "Purchase orders the caller sees (payables), newest first, by status, vendor and a search over number, memo and "
      "vendor name, with a cursor", "PurchaseOrders"),
     ("/api/v2/purchase-orders/{po_id}", "get", "Finance", "getPurchaseOrder",
-     "One purchase order with its lines and what each line has billed", "PurchaseOrder"),
+     "One purchase order with its lines, what each line has billed, the bills on it and the approvals asked", "PurchaseOrder"),
     ("/api/v2/estimates", "get", "Finance", "listEstimates",
      "Estimates the caller sees (receivables), newest first, by status, customer and a search over number, memo and "
      "customer name, with a cursor", "Estimates"),
@@ -1541,6 +1549,12 @@ STABLE.extend([
      "Locations"),
     ("/api/v2/locations/{location_id}", "get", "Finance", "getLocation",
      "One location, archived or not", "LocationOne"),
+    ("/api/v2/equipment", "get", "Finance", "listEquipment",
+     "Equipment and vans by name, serial, make or model; kind, customer_id and location_id narrow it, warranty_ends_by "
+     "keeps the warranties ending on or before a day; archived hides them (default), shows only them or both; with a "
+     "cursor", "Equipments"),
+    ("/api/v2/equipment/{equipment_id}", "get", "Finance", "getEquipment",
+     "One piece of equipment, archived or not", "EquipmentOne"),
     ("/api/v2/due-dates", "get", "Finance", "listDueDates",
      "Due dates by name: what each falls on, its repeat, the next day due and its teammate; q searches names, archived "
      "hides them (default), shows only them or both; subject_type with subject_id narrows to one record; with a cursor",
@@ -1739,7 +1753,8 @@ SCHEMAS.update({
                                                 "parent_id": "n", "company_wide": "b",
                                                 "attributable": items(obj({"team": "s", "teammate": "s"}, required=[]))},
                                                required=["id", "number", "name", "type"])),
-                         "more": "b", "view_version": "i"}),
+                         "more": "b", "classes": items(obj({"id": "s", "name": "s"}, required=["id", "name"])),
+                         "view_version": "i"}),
     "FinancePayFrom": obj({"accounts": items(obj({"id": "s", "name": "s", "provider": "s", "last4": "n",
                                                   "balance": {"type": ["integer", "null"]},
                                                   "available_balance": {"type": ["integer", "null"]},
@@ -1777,12 +1792,8 @@ SCHEMAS.update({
         "settlement_count": "i", "settlements_more": "b", "attachment_count": "i", "attachments_more": "b",
         "terms_days": {"type": ["integer", "null"]}, "schedule": {"type": ["object", "null"]}, "view_version": "i"},
         required=["lines", "settlements", "attachments", "actions"])]},
-    "FinanceContacts": obj({"contacts": items(obj({
-        "id": "s", "name": "s", "kind": {"type": "string", "enum": ["vendor", "customer", "both"]},
-        "emails": items({"type": "string"}), "default_account": {"type": ["object", "null"], "additionalProperties": True},
-        "is_1099": "b", "has_tax_id": "b", "tax_id_last4": "n", "recipient_id": "n", "active": "b",
-        "owed": obj({"bills": "i", "invoices": "i"}, required=[]), "created_at": "s"},
-        required=["id", "name", "kind", "active"])), "next_cursor": "n", "view_version": "i"}),
+    "FinanceContacts": obj({"contacts": items(_FINANCE_CONTACT), "next_cursor": "n", "view_version": "i"}),
+    "FinanceContact": obj({"contact": _FINANCE_CONTACT, "view_version": "i"}),
     "FinanceInbox": obj({"items": items(obj({"kind": {"type": "string", "enum": [
         "uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
         "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),
@@ -1794,18 +1805,31 @@ SCHEMAS.update({
                             "prior": {"type": "object", "additionalProperties": True}}, required=["kind"]),
     "FinanceOrderRow": obj({
         "id": "s", "number": "s", "contact": obj({"id": "s", "name": "s"}), "date": "s", "status": "s",
-        "currency": "s", "total": "i", "memo": "s"}, required=["id", "number", "contact", "date", "status", "currency",
-                                                             "total", "memo"]),
+        "currency": "s", "total": "i", "memo": "s", "billed": "i", "held": "i",
+        "locations": items(obj({"id": "s", "name": "s"}, required=["id", "name"])),
+        "projects": items(obj({"id": "s", "name": "s"}, required=["id", "name"]))},
+        required=["id", "number", "contact", "date", "status", "currency", "total", "memo"]),
     "PurchaseOrders": obj({"orders": items(ref("FinanceOrderRow")), "next_cursor": "n"}, required=["orders",
                                                                                                 "next_cursor"]),
     "PurchaseOrder": {"allOf": [ref("FinanceOrderRow"), obj({
-        "lines": items(obj({"id": "s", "line_no": "i"}, required=["id", "line_no"])), "view_version": "i"},
+        "lines": items(obj({"id": "s", "line_no": "i"}, required=["id", "line_no"])), "view_version": "i",
+        "actions": items({"type": "object", "additionalProperties": True}),
+        "bills": items(obj({"id": "s", "number": "s", "vendor": "s", "date": "s", "status": "s", "total": "i",
+                            "on_order": "i"}, required=["id", "total", "on_order"]))},
         required=["lines"])]},
     "Estimates": obj({"estimates": items(ref("FinanceOrderRow")), "next_cursor": "n"}, required=["estimates",
                                                                                               "next_cursor"]),
     "Estimate": {"allOf": [ref("FinanceOrderRow"), obj({
-        "lines": items(obj({"id": "s", "line_no": "i"}, required=["id", "line_no"])), "view_version": "i"},
+        "lines": items(obj({"id": "s", "line_no": "i"}, required=["id", "line_no"])), "view_version": "i",
+        "actions": items({"type": "object", "additionalProperties": True})},
         required=["lines"])]},
+    "Equipments": obj({"equipment": items(ref("Equipment")), "next_cursor": "n"},
+                      required=["equipment", "next_cursor"]),
+    "EquipmentOne": obj({"equipment": ref("Equipment")}, required=["equipment"]),
+    "Equipment": obj({"id": "s", "name": "s", "kind": {"type": "string", "enum": ["owned", "customer"]},
+                      "location_id": "n", "customer_id": "n", "make": "s", "model": "s", "serial": "s",
+                      "installed_on": "n", "warranty_ends_on": "n", "photo_file_id": "n", "archived_at": "n"},
+                     required=["id", "name", "kind", "make", "model", "serial"]),
     "Locations": obj({"locations": items(ref("Location")), "next_cursor": "n"}, required=["locations", "next_cursor"]),
     "LocationOne": obj({"location": ref("Location")}, required=["location"]),
     "DueDates": obj({"due_dates": items(ref("DueDate")), "next_cursor": "n"}, required=["due_dates", "next_cursor"]),
@@ -1840,7 +1864,8 @@ SCHEMAS.update({
                           "invoices": {"type": ["object", "null"], "additionalProperties": True}},
                          required=["contact", "locations", "estimates", "invoices"]),
     "FinanceSearch": obj({"results": items(obj({"kind": {"type": "string", "enum": [
-        "entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project"]}, "id": "s",
+        "entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project",
+        "equipment"]}, "id": "s",
         "label": "s"})),
         "next_cursor": "n", "currency": "s", "view_version": "i"}),
     "FinanceMetric": obj({"name": "s", "value": {"type": ["integer", "string", "null"]}, "unit": {
@@ -2588,6 +2613,26 @@ SCHEMAS.update({
 })
 SCHEMAS["Seat"]["properties"].update({name: _t("s") for name in ("agent", "agent_name", "request_state")})
 SCHEMAS["Seat"]["required"] = sorted(set(SCHEMAS["Seat"]["required"]) | {"agent", "agent_name", "request_state"})
+
+# CSV imports of shared records: the preview and the commit answer the same shape, one line per row.
+TAGS["Imports"] = "CSV files of shared records (locations, items, equipment, due dates), checked before they import."
+SCHEMAS["RecordsImport"] = obj({
+    "record_type": "s", "kind": "s", "rows": "i", "summary": "o", "truncated": "b",
+    "ignored_columns": items(_t("s")), "report_csv": "s",
+    "lines": items(obj({"line": "i", "name": "s", "status": "s", "reason": "s", "record_id": "s",
+                        "matches": {"type": ["object", "null"]}, "approval_id": "s"},
+                       required=["line", "name", "status"]))},
+    required=["record_type", "kind", "rows", "summary", "truncated", "ignored_columns", "lines"])
+STABLE.extend([
+    ("/api/v2/imports/preview", "post", "Imports", "previewRecordsImport",
+     "Check a CSV file of records row by row and write nothing: what each row would create, what is already here, and "
+     "each row's error. A row that looks like a record already held (the same address, SKU or serial) is flagged for a "
+     "person to decide", "RecordsImport"),
+    ("/api/v2/imports/commit", "post", "Imports", "commitRecordsImport",
+     "Import a CSV file of records: each new row is one Finance action, as hand entry is, so rights and approvals "
+     "apply. A row already imported says already_there; a bad row is reported and the rest still import",
+     "RecordsImport"),
+])
 
 
 def generate():

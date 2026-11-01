@@ -6627,11 +6627,20 @@ def _fin_paged(api, path, query, key, budget):
        "contact_kind": _s("Contacts: vendor, customer or both", enum=["vendor", "customer", "both"]),
        "active": {"type": "boolean", "description": "Contacts and records: active or not (archived only when false)"},
        "rule_kind": _s("Rules: gate or posting", enum=["gate", "posting"]),
+       "equipment_kind": _s("Equipment: owned (a van or tool) or customer (a unit at a customer)",
+                            enum=["owned", "customer"]),
+       "customer_id": _s("Equipment: at this customer (a contact's id)"),
+       "location_id": _s("Equipment: kept at this location"),
+       "warranty_ends_by": {**FIN_DAY, "description": "Equipment: warranties ending on or before this day"},
+       "warranty": _s("Equipment: warranties ending within the next 90 days", enum=["ending"]),
+       "due": _s("Equipment: a due date soon (within its lead time) or overdue; each row's next_due_on",
+                 enum=["soon", "overdue"]),
        "cursor": _s("next_cursor from the last page (needs kind)"),
        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows per page (default 50)"}})
 def finance_search(api, args):
     query = _fin_query(args, ("kind", "q", "status", "contact_id", "vendor", "account_id", "money_account_id", "start",
-                              "end", "aging", "contact_kind", "rule_kind", "cursor", "limit"))
+                              "end", "aging", "contact_kind", "rule_kind", "equipment_kind", "customer_id",
+                              "location_id", "warranty_ends_by", "warranty", "due", "cursor", "limit"))
     if args.get("active") is not None:
         query["active"] = "true" if args["active"] else "false"
     budget = _fin_budget(args.get("limit"), 50)

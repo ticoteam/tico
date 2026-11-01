@@ -791,3 +791,30 @@ def test_a_teammates_bill_inside_their_set_aside_is_not_held_by_a_spend_that_ove
         # Eve's bill is inside what was set aside for her; the untargeted bill took the room that was not set aside.
         assert DOC.bill_budget(load(c, AT), str(mine.result["bill_id"])).outcome == "allow"
         assert DOC.bill_budget(load(c, AT), str(untargeted.result["bill_id"])).outcome == "needs_approval"
+
+
+def test_lists_narrow_to_a_lines_location_or_project_and_a_merged_id_still_matches(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        here = act(c, OWNER, "location_create", {"name": "North"}).result["location_id"]
+        there = act(c, OWNER, "location_create", {"name": "South"}).result["location_id"]
+        tagged = _order(c, vendor, [_line(c, 1_000), _line(c, 2_000, tags={"location": there})], approve=False)
+        _order(c, vendor, [_line(c, 3_000)], approve=False)
+        RS.alias(c, "locations", there, here, AT)   # South merged into North: its lines keep South's id
+        for asked in (here, there):
+            assert [r["id"] for r in FR.orders(c, OWNER, location_id=asked)["orders"]] == [tagged]
+        assert FR.orders(c, OWNER, project_id="nope")["orders"] == []
+
+
+def test_one_contact_shows_only_to_who_sees_its_side(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        customer = act(c, OWNER, "contact_create", {"name": "Acme Homes", "kind": "customer"}).result["contact_id"]
+        assert act(c, OWNER, "view_grant", {"subject_kind": "teammate", "subject": EVE, "what": "payables"}).status == \
+            "committed"
+        assert FR.contact(c, EVE, vendor)["contact"]["id"] == vendor
+        with pytest.raises(FinanceError) as refused:
+            FR.contact(c, EVE, customer)
+        assert refused.value.code == NOT_FOUND
+        with pytest.raises(FinanceError):
+            FR.contact(c, FAY, vendor)

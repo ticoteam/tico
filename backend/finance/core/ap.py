@@ -94,11 +94,19 @@ def bill_stage(due: str | None, today: date) -> str | None:
     return reached[-1] if reached else None
 
 
-def renewal_stage(renewal: str | None, today: date) -> str | None:
-    """The tightest renewal stage a vendor has reached; none without a date or once the date has passed."""
+def renewal_notice_by(renewal: str | None, notice_days: int | None) -> str | None:
+    """The cancel-by day: the renewal date less the notice the vendor asks for (none without a renewal date)."""
     if not renewal:
         return None
-    left = (dates.day(renewal) - today).days
+    return (dates.day(renewal) - timedelta(days=notice_days or 0)).isoformat()
+
+
+def renewal_stage(notice_by: str | None, today: date) -> str | None:
+    """The tightest renewal stage a vendor has reached, counted to its cancel-by day (see renewal_notice_by); none
+    without a day or once that day has passed."""
+    if not notice_by:
+        return None
+    left = (dates.day(notice_by) - today).days
     if left < 0:
         return None
     reached = [name for name, days in RENEWAL_STAGES if left <= days]

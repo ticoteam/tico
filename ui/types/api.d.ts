@@ -858,7 +858,9 @@ export type Config = {
   app_name: string;
   assistant_bot: string;
   assistant_name: string;
+  business_type?: string | null;
   company_name: string;
+  hidden_sections?: Array<string> | null;
   owner_email: string;
   public_url: string;
   s3_view_urls?: Record<string, string>;
@@ -890,6 +892,24 @@ export type ConversationList = {
   actor: string;
   actors?: Record<string, string>;
   conversations: Array<Conversation>;
+};
+
+export type CustomerPanel = {
+  contact: {
+  id: string;
+  name: string;
+};
+  estimates: Array<unknown> | null;
+  invoices: Record<string, unknown> | null;
+  locations: Array<Location>;
+};
+
+export type Customers = {
+  customers: Array<{
+  id: string;
+  name: string;
+}>;
+  next_cursor: string | null;
 };
 
 export type DocCreate = {
@@ -1028,6 +1048,39 @@ export type DueAdd = {
   timezone?: string | null;
 };
 
+export type DueDate = {
+  archived_at?: string | null;
+  assignee_id: string;
+  every_count?: number | null;
+  history?: Array<DueDay>;
+  id: string;
+  lead_days: number;
+  name: string;
+  next_due_on?: string | null;
+  repeats: string;
+  starts_on: string;
+  status: string;
+  subject_id: string;
+  subject_name?: string | null;
+  subject_type: string;
+};
+
+export type DueDateOne = {
+  due_date: DueDate;
+};
+
+export type DueDates = {
+  due_dates: Array<DueDate>;
+  next_cursor: string | null;
+};
+
+export type DueDay = {
+  completed_at?: string | null;
+  completed_by_id?: string | null;
+  due_on: string;
+  task_id?: string | null;
+};
+
 export type DueEdit = {
   first_due?: string | null;
   owner?: string | null;
@@ -1043,6 +1096,7 @@ export type DueSatisfied = {
 export type Empty = Record<string, unknown>;
 
 export type Estimate = (FinanceOrderRow & {
+  actions?: Array<Record<string, unknown>>;
   lines: Array<{
   id: string;
   line_no: number;
@@ -1403,6 +1457,10 @@ export type FinanceChart = {
   subtype?: string;
   type: string;
 }>;
+  classes: Array<{
+  id: string;
+  name: string;
+}>;
   more: boolean;
   view_version: number;
 };
@@ -1438,6 +1496,27 @@ export type FinanceConnectionResult = {
   reason?: string;
   result?: Record<string, unknown>;
   status: string;
+};
+
+export type FinanceContact = {
+  contact: {
+  active: boolean;
+  created_at?: string;
+  default_account?: Record<string, unknown> | null;
+  emails?: Array<string>;
+  has_tax_id?: boolean;
+  id: string;
+  is_1099?: boolean;
+  kind: "vendor" | "customer" | "both";
+  name: string;
+  owed?: {
+  bills?: number;
+  invoices?: number;
+};
+  recipient_id?: string | null;
+  tax_id_last4?: string | null;
+};
+  view_version: number;
 };
 
 export type FinanceContacts = {
@@ -1628,15 +1707,25 @@ export type FinanceOpenTotal = {
 };
 
 export type FinanceOrderRow = {
+  billed?: number;
   contact: {
   id: string;
   name: string;
 };
   currency: string;
   date: string;
+  held?: number;
   id: string;
+  locations?: Array<{
+  id: string;
+  name: string;
+}>;
   memo: string;
   number: string;
+  projects?: Array<{
+  id: string;
+  name: string;
+}>;
   status: string;
   total: number;
 };
@@ -1769,7 +1858,7 @@ export type FinanceReport = {
 };
 
 export type FinanceReportOf = {
-  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
   prior?: Record<string, unknown>;
 };
 
@@ -2773,6 +2862,8 @@ export type LocalFinding = {
 export type Location = {
   address: Record<string, unknown>;
   archived_at?: string | null;
+  customer_id?: string | null;
+  customer_name?: string | null;
   id: string;
   kind: string;
   name: string;
@@ -3235,6 +3326,7 @@ export type ProfileChoices = {
 export type Project = {
   archived_at?: string | null;
   customer_id?: string | null;
+  customer_name?: string | null;
   id: string;
   name: string;
   status: "open" | "closed";
@@ -3306,6 +3398,16 @@ export type PublicationInput = {
 };
 
 export type PurchaseOrder = (FinanceOrderRow & {
+  actions?: Array<Record<string, unknown>>;
+  bills?: Array<{
+  date?: string;
+  id: string;
+  number?: string;
+  on_order: number;
+  status?: string;
+  total: number;
+  vendor?: string;
+}>;
   lines: Array<{
   id: string;
   line_no: number;
@@ -5912,12 +6014,28 @@ export type GetConversationSnapshotParams = {
 export type GetConversationSnapshotBody = never;
 export type GetConversationSnapshotResponse = Snapshot;
 
+/** GET /api/v2/customers/{contact_id} */
+export type GetCustomerParams = {
+  contact_id: string;
+  view_as?: string | null;
+};
+export type GetCustomerBody = never;
+export type GetCustomerResponse = CustomerPanel;
+
 /** GET /api/v2/context/document */
 export type GetDocumentParams = {
   id: string;
 };
 export type GetDocumentBody = never;
 export type GetDocumentResponse = unknown;
+
+/** GET /api/v2/due-dates/{due_date_id} */
+export type GetDueDateParams = {
+  due_date_id: string;
+  view_as?: string | null;
+};
+export type GetDueDateBody = never;
+export type GetDueDateResponse = DueDateOne;
 
 /** GET /api/v2/estimates/{estimate_id} */
 export type GetEstimateParams = {
@@ -6009,6 +6127,14 @@ export type GetFinanceCloseChecklistParams = {
 export type GetFinanceCloseChecklistBody = never;
 export type GetFinanceCloseChecklistResponse = FinanceCloseChecklist;
 
+/** GET /api/v2/finance/contacts/{contact_id} */
+export type GetFinanceContactParams = {
+  contact_id: string;
+  view_as?: string | null;
+};
+export type GetFinanceContactBody = never;
+export type GetFinanceContactResponse = FinanceContact;
+
 /** GET /api/v2/finance/expenses */
 export type GetFinanceExpensesParams = {
   account_id?: string | null;
@@ -6098,7 +6224,7 @@ export type GetFinanceReportParams = {
   by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "location" | "class" | "project" | "location_class" | "location_project" | "class_project" | null;
   compare?: "prior" | null;
   end?: string | null;
-  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
   period?: "day" | "week" | "month" | "quarter" | "year";
   start?: string | null;
   top_n?: number;
@@ -6754,6 +6880,16 @@ export type ListConversationsParams = {
 export type ListConversationsBody = never;
 export type ListConversationsResponse = ConversationList;
 
+/** GET /api/v2/customers */
+export type ListCustomersParams = {
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  view_as?: string | null;
+};
+export type ListCustomersBody = never;
+export type ListCustomersResponse = Customers;
+
 /** GET /api/v2/deleted-tasks */
 export type ListDeletedTasksParams = Record<string, never>;
 export type ListDeletedTasksBody = never;
@@ -6775,11 +6911,26 @@ export type ListDocsConversationsParams = {
 export type ListDocsConversationsBody = never;
 export type ListDocsConversationsResponse = DocsConversations;
 
+/** GET /api/v2/due-dates */
+export type ListDueDatesParams = {
+  archived?: "hide" | "only" | "all";
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  subject_id?: string | null;
+  subject_type?: "location" | "equipment" | "contact" | null;
+  view_as?: string | null;
+};
+export type ListDueDatesBody = never;
+export type ListDueDatesResponse = DueDates;
+
 /** GET /api/v2/estimates */
 export type ListEstimatesParams = {
   cursor?: string | null;
   customer_id?: string | null;
   limit?: number;
+  location_id?: string | null;
+  project_id?: string | null;
   q?: string;
   status?: string | null;
   view_as?: string | null;
@@ -6899,6 +7050,8 @@ export type ListFinanceInvoicesParams = {
   end?: string | null;
   late?: boolean;
   limit?: number;
+  location_id?: string | null;
+  project_id?: string | null;
   q?: string;
   start?: string | null;
   status?: string | null;
@@ -7229,6 +7382,8 @@ export type ListPublicRoadmapCommentsResponse = PublicRoadmapComments;
 export type ListPurchaseOrdersParams = {
   cursor?: string | null;
   limit?: number;
+  location_id?: string | null;
+  project_id?: string | null;
   q?: string;
   status?: string | null;
   vendor_id?: string | null;
@@ -8122,7 +8277,7 @@ export type SearchFinanceParams = {
   contact_kind?: "vendor" | "customer" | "both" | null;
   cursor?: string | null;
   end?: string | null;
-  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | "due_date" | null;
   limit?: number;
   money_account_id?: string | null;
   q?: string;

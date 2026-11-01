@@ -10,8 +10,10 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
-from ..records import due_dates as RDD
+from ..records import core as RC
+from ..records import due_dates as RD
 from ..records import reads as RR
+from ..records import store as RS
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
 from . import due_dates as DD
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
@@ -1416,8 +1418,8 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 
 # ------------------------------------------------------------------------------------------------ search
 SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project", "po",
-              "estimate", "due_date")
-RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
+              "estimate", "equipment", "due_date")
+RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects", "equipment": "equipment"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
 
@@ -1456,13 +1458,15 @@ def _record_row(kind: str, r: Any, source: str, as_of: str) -> Row:
         row["sku"] = str(r["sku"])
     elif kind == "location":
         row["location_kind"] = str(r["kind"])
+    elif kind == "equipment":
+        row["equipment_kind"] = str(r["kind"])
     else:
         row["status"] = str(r["status"])
     return row
 
 
-RECORD_TABLE = {"location": "locations", "item": "items", "project": "projects"}
-RECORD_PLURAL = {"location": "locations", "item": "items", "project": "projects"}
+RECORD_TABLE = {"location": "locations", "item": "items", "project": "projects", "equipment": "equipment"}
+RECORD_PLURAL = {"location": "locations", "item": "items", "project": "projects", "equipment": "equipment"}
 
 
 ITEM_ACCOUNTS = ("income_account_id", "expense_account_id", "asset_account_id")
@@ -1503,20 +1507,75 @@ def _account_shown(view: VW.View, accounts: Mapping[str, Account], account_id: o
     return account is not None and view.sees_account(account)
 
 
+WARRANTY_WINDOW_DAYS = 90
+
+
+@dataclass
+class _Narrow:
+    """The filters a record read hands records/reads.search: equal, by (on or before), between (from, to), and the ids
+    kept (None keeps every row, an empty list none)."""
+    equal: dict[str, str]
+    by: dict[str, str]
+    between: dict[str, tuple[str, str]]
+    ids: list[str] | None
+
+
+def _narrow(ctx: Ctx, kind: str, f: Mapping[str, object]) -> _Narrow:
+    """The filters a record read takes. Equipment is kept by its kind, its customer, its location (an alias resolves to
+    the location it names), a warranty that ends on or before a day or within the window, and a due date that is soon or
+    overdue: those ids are worked out from the live due dates, so the SQL paging counts right. Others take no filter."""
+    out = _Narrow({}, {}, {}, None)
+    if kind != "equipment":
+        return out
+    for key in ("kind", "customer_id"):
+        value = _filter(f, key)
+        if value is not None:
+            out.equal[key] = value
+    if out.equal.get("kind") not in (None, *RC.EQUIPMENT_KINDS):
+        raise invalid(f"equipment kind is {'|'.join(RC.EQUIPMENT_KINDS)}")
+    location = _filter(f, "location_id")
+    if location is not None:
+        out.equal["location_id"] = RS.resolve(ctx.c, "locations", location)
+    ends = _filter(f, "warranty_ends_by")
+    if ends is not None:
+        out.by["warranty_ends_on"] = dates.day(ends).isoformat()
+    warranty = _filter(f, "warranty")
+    if warranty is not None:
+        if warranty != "ending":
+            raise invalid("warranty is ending")
+        today = DD.today_of(ctx)
+        out.between["warranty_ends_on"] = (today.isoformat(),
+                                           (today + timedelta(days=WARRANTY_WINDOW_DAYS)).isoformat())
+    due = _filter(f, "due")
+    if due is not None:
+        if due not in ("soon", "overdue"):
+            raise invalid("due is soon or overdue")
+        out.ids = DD.equipment_due(ctx, due)
+    return out
+
+
 def _customer_out(customer_id: object, names: Mapping[str, str]) -> Row:
     """A record's customer by id and name, for every teammate: the customer's name is operational."""
     key = str(customer_id) if customer_id else None
     return {"customer_id": key, "customer_name": names.get(key) if key else None}
 
 
-def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, source: str, names: Mapping[str, str]) -> Row:
+def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, source: str, names: Mapping[str, str],
+                due: Mapping[str, str] | None = None) -> Row:
     """A record as the records API shows it, to a teammate: an item's sale price and description whatever the viewer's
-    Finance view; an item's accounts show to the viewers who see them. A location's or project's customer shows by id
-    and name. Only teammates reach this (see _teammate_or_refuse)."""
+    Finance view; an item's accounts show to the viewers who see them. A location's, equipment's or project's customer
+    shows by id and name. A location's or equipment's next due day comes from `due` (records/due_dates.next_due_for),
+    null when none is open. Only teammates reach this (see _teammate_or_refuse)."""
     out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"], "source": source,
                 "as_of": ctx.at}
     if kind == "location":
-        out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"))
+        out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"),
+                   next_due_on=(due or {}).get(str(r["id"])))
+        out.update(_customer_out(r["customer_id"], names))
+    elif kind == "equipment":
+        out.update(kind=str(r["kind"]), location_id=r["location_id"], make=str(r["make"]), model=str(r["model"]),
+                   serial=str(r["serial"]), installed_on=r["installed_on"], warranty_ends_on=r["warranty_ends_on"],
+                   photo_file_id=r["photo_file_id"], next_due_on=(due or {}).get(str(r["id"])))
         out.update(_customer_out(r["customer_id"], names))
     elif kind == "item":
         out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), currency=str(r["currency"]),
@@ -1530,11 +1589,12 @@ def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, source: str, names: 
 
 def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archived: str = "hide",
             cursor: str | None = None, limit: int = 50, at: str | None = None,
-            equal: Mapping[str, str] | None = None) -> Row:
-    """Locations, items or projects by name (an item also by sku), past `cursor`. `archived` is hide, only or all, and
-    `equal` narrows by column (a location's kind or customer, an item's kind, a project's status or customer). A
-    location row carries `next_due_on`, its earliest open due day, or null. A guest is refused; an item's accounts are
-    cut to what the viewer sees."""
+            equal: Mapping[str, str] | None = None, filters: Mapping[str, object] | None = None) -> Row:
+    """Locations, items, projects or equipment by name (an item also by sku, equipment by serial, make or model), past
+    `cursor`. `archived` is hide, only or all. `equal` narrows by column (a location's kind or customer, an item's kind,
+    a project's status or customer); equipment takes `filters`: kind, customer_id, location_id, warranty_ends_by,
+    warranty (ending) and due (soon|overdue), see _narrow. A location or equipment row carries `next_due_on`, its earliest
+    open due day, or null. A guest is refused; an item's accounts are cut to what the viewer sees."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     _teammate_or_refuse(ctx, viewer)
@@ -1542,22 +1602,20 @@ def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archi
     after = (parts[0], parts[1]) if len(parts) == 2 else None
     active = {"hide": True, "only": False, "all": None}[archived]
     most = tab.page_size(limit)
+    narrow = _narrow(ctx, kind, filters or {})
     rows = RR.search(c, RECORD_TABLE[kind], (q or "").strip()[:100], active=active, after=after, most=most + 1,
-                     equal=equal)
+                     equal={**(equal or {}), **narrow.equal}, by=narrow.by, between=narrow.between, ids=narrow.ids)
     shown = rows[:most]
     nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
     sources = SM.record_providers(c, RECORD_TABLE[kind], [str(r["id"]) for r in shown])
     names = _customer_names(ctx, kind, shown)
-    out = [_record_out(ctx, kind, r, view, sources.get(str(r["id"]), "tico"), names) for r in shown]
-    if kind == "location":
-        due = RDD.next_due_for(c, "location", [str(r["id"]) for r in shown])
-        for row in out:
-            row["next_due_on"] = due.get(str(row["id"]))
-    return {RECORD_PLURAL[kind]: out, "next_cursor": nxt}
+    due = RD.next_due_for(c, kind, [str(r["id"]) for r in shown]) if kind in ("location", "equipment") else {}
+    return {RECORD_PLURAL[kind]: [_record_out(ctx, kind, r, view, sources.get(str(r["id"]), "tico"), names, due=due)
+                                  for r in shown], "next_cursor": nxt}
 
 
 def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at: str | None = None) -> Row:
-    """One location, item or project, archived or not, by its id or an id it was merged under."""
+    """One location, item, project or piece of equipment, archived or not, by its id or an id it was merged under."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     _teammate_or_refuse(ctx, viewer)
@@ -1565,13 +1623,29 @@ def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at:
     if row is None:
         raise FinanceError(NOT_FOUND, f"no such {kind}")
     source = SM.record_providers(c, RECORD_TABLE[kind], [str(row["id"])]).get(str(row["id"]), "tico")
-    return {kind: _record_out(ctx, kind, row, view, source, _customer_names(ctx, kind, [row]))}
+    due = RD.next_due_for(c, "equipment", [str(row["id"])]) if kind == "equipment" else {}
+    return {kind: _record_out(ctx, kind, row, view, source, _customer_names(ctx, kind, [row]), due=due)}
 
 
 def customer_extras(c: sqlite3.Connection, viewer: str, customer_id: str, at: str | None = None) -> Row:
-    """What a customer panel adds beyond its contact, locations, estimates and invoices, by name. The equipment and
-    due dates of the customer's locations join the panel here; none are on this branch yet."""
-    return {}
+    """What a customer panel adds beyond its contact, locations, estimates and invoices: the equipment the customer has,
+    by name with each piece's next due day, and the live due dates on the contact, its locations and that equipment,
+    as the viewer may read them (finance/due_dates._can_read), the next due first."""
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    _teammate_or_refuse(ctx, viewer)
+    equipment = RR.equipment_for_customer(c, customer_id)
+    locations = RR.at_customer(c, customer_id)
+    ids = [str(r["id"]) for r in equipment]
+    sources = SM.record_providers(c, "equipment", ids)
+    names = _customer_names(ctx, "equipment", equipment)
+    due = RD.next_due_for(c, "equipment", ids)
+    return {
+        "equipment": [_record_out(ctx, "equipment", r, view, sources.get(str(r["id"]), "tico"), names, due=due)
+                      for r in equipment],
+        "due_dates": DD.customer_due_dates(ctx, viewer, contact_id=customer_id,
+                                           location_ids=[str(r["id"]) for r in locations], equipment_ids=ids),
+    }
 
 
 def customers(c: sqlite3.Connection, viewer: str, *, q: str = "", cursor: str | None = None, limit: int = 50,
@@ -1592,9 +1666,9 @@ def customers(c: sqlite3.Connection, viewer: str, *, q: str = "", cursor: str | 
 
 
 def customer_panel(c: sqlite3.Connection, viewer: str, contact_id: str, at: str | None = None) -> Row:
-    """A customer's panel: the contact, the active locations it is the customer of, its open estimates (draft or
-    sent) and its unpaid invoices. A teammate without the receivables view reads the contact by id and name and its
-    locations; its estimates and invoices are null. A missing contact, or one that is not a customer, is not_found."""
+    """A customer's panel: the contact, the active locations it is the customer of, its open estimates (draft,
+    sent or accepted) and its unpaid invoices. A teammate without the receivables view reads the contact by id and name
+    and its locations; its estimates and invoices are null. A missing contact, or one that is not a customer, is not_found."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     _teammate_or_refuse(ctx, viewer)
@@ -1615,9 +1689,9 @@ def customer_panel(c: sqlite3.Connection, viewer: str, contact_id: str, at: str 
         out["contact"] = tab_ap.contact_row(ctx, row, R.is_admin(ctx.org, viewer, ctx.rights(viewer)))
         out["invoices"] = tab_ap.invoices(c, viewer, status="unpaid", customer_id=contact_id, at=at)
         if R.has(ctx.org, viewer, R.AR, ctx.rights(viewer)):
-            drafts = estimates(c, viewer, status="draft", customer_id=contact_id, at=at)["estimates"]
-            sent = estimates(c, viewer, status="sent", customer_id=contact_id, at=at)["estimates"]
-            out["estimates"] = sorted([*drafts, *sent], key=lambda e: (str(e["date"]), str(e["id"])), reverse=True)
+            shown = [e for status in ("draft", "sent", "accepted")
+                     for e in estimates(c, viewer, status=status, customer_id=contact_id, at=at)["estimates"]]
+            out["estimates"] = sorted(shown, key=lambda e: (str(e["date"]), str(e["id"])), reverse=True)
     return {**out, **customer_extras(c, viewer, contact_id, at)}
 
 
@@ -1631,7 +1705,9 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
     start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
     po/estimate: status, contact_id, and a search over number, memo and contact name;
-    item/location/project: active (1 keeps only active records)."""
+    item/location/project: active (1 keeps only active records); equipment: kind (owned|customer), customer_id,
+    location_id, warranty_ends_by (a day: warranties ending on or before it), warranty (ending: within the window),
+    due (soon|overdue), active."""
     if kind is not None and kind not in SEARCH_KINDS:
         raise invalid(f"kind is {'|'.join(SEARCH_KINDS)}")
     if cursor and kind is None:
@@ -1701,9 +1777,11 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 _teammate_or_refuse(ctx, viewer)
                 parts = tab.decode_cursor(cursor)
                 active = _filter(f, "active")
+                narrow = _narrow(ctx, k, f)
                 rows = RR.search(c, RECORD_KINDS[k], text, active=None if active is None else
                                  active in ("1", "true", "True"), after=(parts[0], parts[1]) if len(parts) == 2
-                                 else None, most=most)
+                                 else None, most=most, equal=narrow.equal, by=narrow.by, between=narrow.between,
+                                 ids=narrow.ids)
                 results += _record_rows(c, ctx, k, rows)
                 nxt = tab.encode_cursor([str(rows[-1]["name"]), str(rows[-1]["id"])]) \
                     if rows and len(rows) == most else None
@@ -2054,6 +2132,7 @@ provider_users = tab_money.provider_users
 bills = tab_ap.bills
 invoices = tab_ap.invoices
 contacts = tab_ap.contacts
+contact = tab_ap.contact
 bill = tab_ap.bill
 invoice = tab_ap.invoice
 chart = tab_ap.chart

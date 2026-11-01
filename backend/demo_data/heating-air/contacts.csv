@@ -1,0 +1,6 @@
+name,kind,email
+Sample Dental Group,customer,office@dental.acme.example
+Sample Apartments Ridge,customer,manager@ridge.acme.example
+Sample Church Hall,customer,admin@church.acme.example
+Sample Plumbing Supply,vendor,orders@supply.acme.example
+Sample Parts Depot,vendor,sales@parts.acme.example

@@ -1,0 +1,10 @@
+{
+  "purchase_orders": [
+    {"vendor": "Sample Steel Supply", "po_date": "2026-10-26",
+     "memo": "Bar and plate for the gearbox run", "send": true,
+     "lines": [{"item": "Steel bar 1 in", "amount": 62000}, {"item": "Steel plate 1/4 in", "amount": 84000}]},
+    {"vendor": "Sample Fasteners Inc", "po_date": "2026-10-30",
+     "memo": "Fasteners for the control panel assemblies",
+     "lines": [{"item": "Hex bolt M8", "amount": 15000}, {"item": "Hex nut M8", "amount": 9000}]}
+  ]
+}

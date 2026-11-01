@@ -11,6 +11,8 @@
    the viewer may post to (/finance/chart) and the bank accounts they may pay from (/finance/pay-from).
    Writes (POST /api/v2/finance/actions): bill_create, bill_approve, bill_schedule, bill_mark_paid, bill_void,
    invoice_create, invoice_send, invoice_record_payment, invoice_write_off, journal, contact_create.
+   A line form offers an item (it fills the line and, on a sale, the price), then Location, Project and Class. A
+   document's vendor or customer in its rail opens that contact's panel (finance-contact.js).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -22,6 +24,11 @@ const FIN_DOC = {
     search: 'Search customers, invoices',
     filters: [['unpaid', 'Open'], ['late', 'Late'], ['draft', 'Draft'], ['paid', 'Paid'], ['', 'All']]},
 };
+// The other two documents the form makes (finance-orders.js lists them): `chart` is the lines they may post to.
+FIN_DOC.po = {list: 'orders', contact: 'vendor', contactKind: 'vendor', right: 'finance.ap', label: 'Purchase order', who: 'Vendor', chart: 'bill',
+  action: 'po_create', dated: 'po_date', adding: '+ New purchase order'};
+FIN_DOC.estimate = {list: 'estimates', contact: 'customer', contactKind: 'customer', right: 'finance.ar', label: 'Estimate', who: 'Customer', chart: 'invoice',
+  action: 'estimate_create', dated: 'estimate_date', adding: '+ New estimate'};
 const FIN_DOC_F = {bill: {q: '', status: 'unpaid'}, invoice: {q: '', status: 'unpaid'}};
 const FIN_CAME_IN = {manual: 'By hand', email: 'Email', upload: 'Upload'};
 // A document's line (or Split) and team, from backend/finance/tab_ap.py doc_lines.
@@ -96,6 +103,8 @@ function finDecideDialog(title, body, label, build, done) {
     // A new bill or invoice opens in the rail when its tab is the one showing it.
     const made = r.result?.bill_id ? ['bill', r.result.bill_id] : r.result?.invoice_id ? ['invoice', r.result.invoice_id] : null;
     if (made && FIN?.doc?.kind === made[0]) FIN.doc.sel = String(made[1]);
+    const order = r.result?.po_id ? ['po', r.result.po_id] : r.result?.estimate_id ? ['estimate', r.result.estimate_id] : null;
+    if (order && FIN?.ord?.kind === order[0]) FIN.ord.sel = String(order[1]);
     finDocsReload();
   });
   const form = dlg.querySelector('form');
@@ -109,6 +118,7 @@ function finDecideDialog(title, body, label, build, done) {
 // After a write: the list (and the open document) read again, wherever the person is.
 function finDocsReload() {
   if (FIN?.doc) void finDocLoad(false);
+  if (FIN?.ord) void finOrdLoad(false);
   if (FIN?.bs) void finBsLoad();
   if (FIN?.tx) void finTxLoad(false);
 }
@@ -137,8 +147,9 @@ function finDocEmailSet() {
 // ----------------------------------------------------------------- the page
 function finDocPage(kind) {
   const k = FIN_DOC[kind], f = FIN_DOC_F[kind], caps = finCaps();
-  FIN.doc = {kind, rows: [], next: null, sel: '', load: 0, one: null, oneLoad: 0, email: ''};
-  $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(f.q)}" placeholder="${esc(k.search)}" aria-label="${esc(k.search)}"></label>
+  const want = FIN.q?.get('doc') || '';   // a link to one document (from a purchase order or a contact's panel)
+  FIN.doc = {kind, rows: [], next: null, sel: want, want, load: 0, one: null, oneLoad: 0, email: ''};
+  $('#fin-body').innerHTML = `<div class="fin-bar">${finOrdViews(kind)}<label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(f.q)}" placeholder="${esc(k.search)}" aria-label="${esc(k.search)}"></label>
       ${finSeg('status', 'Status', k.filters, f.status)}<span class="spacer"></span><span id="fin-doc-email" class="fin-doc-email"></span>
       ${kind === 'bill' && caps.owner && !caps.viewing ? '<label class="fin-inline" data-fin-direct-box hidden><input type="checkbox" role="switch" class="people-switch" data-fin-direct aria-label="Direct send"><span>Direct send</span></label>' : ''}
       ${caps.may(k.right) ? `<button type="button" class="primary" data-fin-doc-add>+ ${k.label}</button>` : ''}</div>`
@@ -148,6 +159,7 @@ function finDocPage(kind) {
   body.querySelector('[data-fin-q]').oninput = ev => { clearTimeout(timer); timer = setTimeout(() => { f.q = ev.target.value.trim(); void finDocLoad(false); }, 300); };
   body.onclick = ev => {
     const seg = ev.target.closest('[data-fin-seg] button');
+    if (seg?.parentElement.dataset.finSeg === 'view') { finOrdViewGo(seg.dataset.v); return; }
     if (seg) { if (seg.dataset.v !== f.status) { f.status = seg.dataset.v; finSegSet(seg); void finDocLoad(false); } return; }
     if (ev.target.closest('[data-fin-more]')) { void finDocLoad(true); return; }
     if (ev.target.closest('[data-fin-doc-add]')) { void finDocAdd(kind); return; }
@@ -155,10 +167,11 @@ function finDocPage(kind) {
     const copy = ev.target.closest('[data-fin-copy]');
     if (copy) { void copyText(copy.dataset.finCopy).then(() => toast('Copied'), () => toast('Could not copy', true)); return; }
     const tr = ev.target.closest('tr[data-fin-doc]');
-    if (tr && tr.dataset.finDoc !== FIN.doc.sel) { FIN.doc.sel = tr.dataset.finDoc; finDocDraw(); void finDocOne(); }
+    if (tr && (tr.dataset.finDoc !== FIN.doc.sel || finContactOpen())) { FIN.doc.sel = tr.dataset.finDoc; finContactClose(); finDocDraw(); void finDocOne(); }
   };
   void finDocLoad(false);
   void finDirectSend();
+  finContactFromAddress();
 }
 // The owner's company switch (payment_settings direct_send, backend/finance/payments.py): payments to recipients
 // already paid may go straight to Mercury instead of its approval queue. The server checks it again at send. Shown
@@ -192,7 +205,7 @@ async function finDocLoad(more) {
   state.rows = more ? [...state.rows, ...(d[k.list] || [])] : d[k.list] || [];
   state.next = d.next_cursor || null;
   if (state.kind === 'bill') { state.email = d.bills_email || ''; finDocEmailDraw(); }
-  if (!state.rows.some(r => r.id === state.sel)) state.sel = state.rows[0]?.id || '';
+  if (!state.rows.some(r => r.id === state.sel) && (!state.want || state.sel !== state.want)) state.sel = state.rows[0]?.id || '';
   finDocDraw(); void finDocOne();
   if (!more) void finDocPaidLoad(state);
 }
@@ -232,12 +245,13 @@ async function finDocOne() {
   const state = FIN.doc, id = state.sel, load = ++state.oneLoad;
   state.one = null;
   const row = state.rows.find(r => r.id === id) || (state.paid || []).find(r => r.id === id);
-  if (!row) { finRail(''); return; }
-  finDocRail(row, false);
+  if (!id || (!row && id !== state.want)) { finRail(''); return; }
+  if (finContactOpen()) return;
+  if (row) finDocRail(row, false);
   let d;
   try { d = await get(`/v2/finance/${FIN_DOC[state.kind].list}/${encodeURIComponent(id)}${finAs('?')}`, {fresh: true}); }
   catch (e) { if (FIN?.doc === state && state.oneLoad === load) finRail(finFail(e)); return; }
-  if (FIN?.doc !== state || state.oneLoad !== load) return;
+  if (FIN?.doc !== state || state.oneLoad !== load || finContactOpen()) return;
   state.one = d;
   finDocRail(d, true);
 }
@@ -257,11 +271,11 @@ function finDocRail(d, full) {
   if (!bill && d.written_off) rows.push(finKv('Written off', finUsd(d.written_off)));
   if (!bill && /^https:\/\//.test(d.payment_link || '')) rows.push(finKv('Pay link', `<a href="${esc(d.payment_link)}" target="_blank" rel="noopener">Open</a>`));
   if (d.memo) rows.push(finKv('Memo', esc(d.memo)));
-  const parts = [`<div class="fin-rail-title"><h2>${esc(d[k.contact]?.name || '—')}</h2><span class="fin-big">${finUsd(d.total)}</span></div>`, rows.join('')];
+  const parts = [`<div class="fin-rail-title"><h2>${finContactLink(d[k.contact])}</h2><span class="fin-big">${finUsd(d.total)}</span></div>`, rows.join('')];
   if (full) {
     const lines = d.lines || [], files = d.attachments || [], paid = d.settlements || [];
     const asked = (d.actions || []).filter(a => a.approval_id || a.status === 'needs_approval');
-    if (lines.length) parts.push(`<h3 class="fin-h">Lines</h3>${lines.map(l => finKv([l.account?.name, l.description, l.taxable === true ? 'Taxable' : ''].filter(Boolean).join(' · ') || '—', finCents(l.amount))).join('')}`);
+    if (lines.length) parts.push(`<h3 class="fin-h">Lines</h3>${lines.map(l => finKv([l.account?.name, l.description, ...Object.values(l.tag_names || {}), l.taxable === true ? 'Taxable' : ''].filter(Boolean).join(' · ') || '—', finCents(l.amount))).join('')}`);
     if (files.length) parts.push(`<h3 class="fin-h">Files</h3><div class="fin-files">${files.map((f, i) =>
       `<a href="/api/v2/files/${encodeURIComponent(f.file_id)}" target="_blank" rel="noopener">File${files.length > 1 ? ' ' + (i + 1) : ''}</a>`).join('')}</div>`);
     if (paid.length) parts.push(`<h3 class="fin-h">Payments</h3>${paid.map(s => finKv(`${finDayLabel(s.settled_on)} · ${FIN_PAID_FROM[s.from_kind] || s.from_kind}`,
@@ -272,7 +286,11 @@ function finDocRail(d, full) {
   }
   finRail(parts.join(''));
   const rail = $('#fin-rail');
-  if (rail) rail.onclick = full ? ev => { const b = ev.target.closest('[data-fin-do]'); if (b) finDocDo(b.dataset.finDo, d, b); } : null;
+  if (rail) rail.onclick = ev => {
+    if (finContactClick(ev, k.contactKind)) return;
+    const b = full && ev.target.closest('[data-fin-do]');
+    if (b) finDocDo(b.dataset.finDo, d, b);
+  };
 }
 // Only the decisions the viewer may take on this document now.
 function finDocActs(d) {
@@ -308,7 +326,7 @@ function finDocDo(what, d, btn) {
   }, 'Written off');
 }
 // A rail button's decision: straight through, or the approver named in place of the buttons, then Send.
-async function finDocRun(kind, payload, done, btn) {
+async function finDocRun(kind, payload, done, btn, again = () => finDocActsHtml(FIN.doc.one || {})) {
   btn.disabled = true;
   let r;
   try { r = await finDecide(kind, payload); }
@@ -318,7 +336,7 @@ async function finDocRun(kind, payload, done, btn) {
   box.innerHTML = `<span class="fin-ask">${esc(finAskText(r.ask))}</span><button type="button" class="ghost" data-fin-ask-no>Cancel</button><button type="button" class="primary" data-fin-ask-yes>Send</button>`;
   box.onclick = async ev => {
     ev.stopPropagation();
-    if (ev.target.closest('[data-fin-ask-no]')) { box.outerHTML = finDocActsHtml(FIN.doc.one || {}); return; }
+    if (ev.target.closest('[data-fin-ask-no]')) { box.outerHTML = again(); return; }
     const yes = ev.target.closest('[data-fin-ask-yes]'); if (!yes) return;
     yes.disabled = true;
     try { await finDecide(kind, payload, r.sig); finDocsReload(); }
@@ -332,6 +350,7 @@ async function finChart(use) {
   FIN.chart ||= {};
   if (FIN.chart[use]) return FIN.chart[use];
   const r = await get(`/v2/finance/chart?for=${use}${finAs()}`, {fresh: true});
+  FIN.classes = r?.classes || [];   // the classes a line may name come with the chart
   return FIN.chart[use] = r?.accounts || [];
 }
 // The bank accounts the viewer may pay a bill from (finance.pay).
@@ -386,50 +405,55 @@ async function finDocMarkPaid(d) {
 async function finContacts(kind) {
   try { return (await get(`/v2/finance/contacts?kind=${kind}&limit=200${finAs()}`, {fresh: true}))?.contacts || []; } catch { return []; }
 }
-// A bill or invoice: its contact (or a new one), number, dates, one line and its amount, memo.
+// A bill, an invoice, a purchase order or an estimate: its contact (or a new one), number, dates, its lines, memo. A
+// bill takes one line; the others several, each with its amount, and a sale's say whether they are taxable.
 async function finDocAdd(kind) {
-  const k = FIN_DOC[kind], bill = kind === 'bill';
-  let contacts, lines;
-  try { [contacts, lines] = await Promise.all([finContacts(k.contactKind), finChart(kind)]); }
+  const k = FIN_DOC[kind], bill = kind === 'bill', sale = k.contactKind === 'customer';
+  let contacts, lines, picks;
+  try { [contacts, lines, picks] = await Promise.all([finContacts(k.contactKind), finChart(k.chart || kind), finPicks()]); }
   catch (e) { toast(e.message, true); return; }
-  // An invoice may also carry its sales tax: a line on a jurisdiction's sales tax account (a liability).
-  if (!bill) lines = [...lines, ...(await finChart('journal').catch(() => [])).filter(l => l.subtype === 'sales_tax')];
+  // A sale may also carry its sales tax: a line on a jurisdiction's sales tax account (a liability).
+  if (sale) lines = [...lines, ...(await finChart('journal').catch(() => [])).filter(l => l.subtype === 'sales_tax')];
   let made = null;   // a new contact made by an earlier Save, so a second Save does not make it twice
-  // An invoice takes several lines, each taxable or not (a sales tax line itself is neither); a bill takes one.
-  const invLine = () => `<div class="fin-il"><select name="acct" aria-label="Line">${finOpts(lines)}</select>
-    <input name="amt" inputmode="decimal" autocomplete="off" aria-label="Amount"><label class="fin-check"><input type="checkbox" name="taxable">Taxable</label></div>`;
-  const lineHtml = bill ? `<label>Line<select name="line" required>${finOpts(lines)}</select></label>
+  const itemLine = picks.items.length ? `<option value="">Item's line</option>` : '';
+  const docLine = () => `<div class="fin-il">${finItemHtml(picks)}<select name="acct" aria-label="Line">${finOpts(lines)}${itemLine}</select>
+    <input name="amt" inputmode="decimal" autocomplete="off" aria-label="Amount">${sale ? '<label class="fin-check"><input type="checkbox" name="taxable">Taxable</label>' : ''}${finDimsHtml(picks)}</div>`;
+  const lineHtml = bill ? `${finItemHtml(picks)}<label>Line<select name="line" required>${finOpts(lines)}${itemLine}</select></label>
     <label data-fin-for hidden>For<select name="for"></select></label>
-    <label>Amount<input name="amount" inputmode="decimal" required autocomplete="off"></label>`
-    : `<div data-fin-il>${invLine()}</div><button type="button" class="ghost fin-jl-add" data-fin-il-add>+ Line</button>
+    <label>Amount<input name="amount" inputmode="decimal" required autocomplete="off"></label>${finDimsHtml(picks)}`
+    : `<div data-fin-il>${docLine()}</div><button type="button" class="ghost fin-jl-add" data-fin-il-add>+ Line</button>
     <label data-fin-for hidden>For<select name="for"></select></label>`;
+  const hasDue = bill || kind === 'invoice';
   const dlg = finDecideDialog(k.label, `<label>${k.who}<select name="contact" required>${finOpts(contacts)}<option value="+">New ${k.who.toLowerCase()}</option></select></label>
     <label data-fin-new hidden>Name<input name="name" maxlength="120" autocomplete="off"></label>
     <label>Number<input name="number" maxlength="60" autocomplete="off"></label>
-    <div class="fin-pair"><label>Date<input type="date" name="date" required value="${finToday()}"></label><label>Due<input type="date" name="due"></label></div>
+    ${hasDue ? `<div class="fin-pair"><label>Date<input type="date" name="date" required value="${finToday()}"></label><label>Due<input type="date" name="due"></label></div>`
+    : `<label>Date<input type="date" name="date" required value="${finToday()}"></label>`}
     ${lineHtml}
     <label>Memo<input name="memo" maxlength="200" autocomplete="off"></label>`, 'Save', async form => {
     const el = form.elements;
     let docLines;
     if (bill) {
-      const amount = finParseCents(el.amount.value);
+      const amount = finParseCents(el.amount.value), item = el.item?.value || '';
       if (!amount) throw new Error('A dollar amount, like 500');
-      if (!el.line.value) throw new Error('No line in your view');
-      const line = lines.find(l => l.id === el.line.value), tags = line?.company_wide === false ? finAttrTags(el.for.value) : null;
-      if (line?.company_wide === false && !tags) throw new Error('Pick who it is for');
-      docLines = [{account_id: el.line.value, amount, ...(tags ? {tags} : {})}];
+      if (!el.line.value && !item) throw new Error('No line in your view');
+      const line = lines.find(l => l.id === el.line.value), who = line?.company_wide === false ? finAttrTags(el.for.value) : null;
+      if (line?.company_wide === false && !who) throw new Error('Pick who it is for');
+      const tags = {...who, ...finDimTags(form)};
+      docLines = [{...(el.line.value ? {account_id: el.line.value} : {}), ...(item ? {item_id: item} : {}), amount, ...(Object.keys(tags).length ? {tags} : {})}];
     } else {
       const who = finAttrTags(el.for.value);
       docLines = [];
       for (const row of form.querySelectorAll('[data-fin-il] .fin-il')) {
-        const acct = row.querySelector('[name=acct]').value, text = row.querySelector('[name=amt]').value.trim();
+        const acct = row.querySelector('[name=acct]').value, text = row.querySelector('[name=amt]').value.trim(), item = row.querySelector('[name=item]')?.value || '';
         if (!text) continue;
         const amount = finParseCents(text), line = lines.find(l => l.id === acct);
         if (!amount) throw new Error('A dollar amount on each line, like 500');
-        if (!acct) throw new Error('No line in your view');
+        if (!acct && !item) throw new Error('No line in your view');
         if (line?.company_wide === false && !who) throw new Error('Pick who it is for');
-        const box = row.querySelector('[name=taxable]'), shown = !row.querySelector('.fin-check').hidden;
-        docLines.push({account_id: acct, amount, ...(shown ? {taxable: box.checked} : {}), ...(line?.company_wide === false ? {tags: who} : {})});
+        const box = row.querySelector('[name=taxable]'), shown = !!box && !row.querySelector('.fin-check').hidden;
+        const tags = {...(line?.company_wide === false ? who : {}), ...finDimTags(row)};
+        docLines.push({...(acct ? {account_id: acct} : {}), ...(item ? {item_id: item} : {}), amount, ...(shown ? {taxable: box.checked} : {}), ...(Object.keys(tags).length ? {tags} : {})});
       }
       if (!docLines.length) throw new Error('A dollar amount, like 500');
     }
@@ -449,16 +473,17 @@ async function finDocAdd(kind) {
       }
     }
     if (!contact) throw new Error('Pick a ' + k.who.toLowerCase());
-    const payload = {[bill ? 'vendor_id' : 'customer_id']: contact, [bill ? 'bill_date' : 'invoice_date']: el.date.value, lines: docLines};
+    const payload = {[`${k.contact}_id`]: contact, [k.dated || `${kind}_date`]: el.date.value, lines: docLines};
     if (el.number.value.trim()) payload.number = el.number.value.trim();
-    if (el.due.value) payload.due_date = el.due.value;
+    if (el.due?.value) payload.due_date = el.due.value;
     if (el.memo.value.trim()) payload.memo = el.memo.value.trim();
     if (bill) payload.origin = 'manual';
-    return [bill ? 'bill_create' : 'invoice_create', payload];
+    return [k.action || `${kind}_create`, payload];
   }, 'Saved');
   const form = dlg.querySelector('form'), pick = form.elements.contact;
   const sync = () => { form.querySelector('[data-fin-new]').hidden = pick.value !== '+'; };
   pick.addEventListener('change', sync); sync();
+  finItemWatch(form, picks, sale);
   if (bill) {
     finForSync(form, () => [lines.find(l => l.id === form.elements.line.value)]);
     form.elements.line.addEventListener('change', () => finForSync(form, () => [lines.find(l => l.id === form.elements.line.value)]));
@@ -472,15 +497,16 @@ async function finDocAdd(kind) {
     const taxed = rows().some(r => lineOf(r)?.subtype === 'sales_tax');
     for (const r of rows()) {
       const line = lineOf(r), label = r.querySelector('.fin-check');
+      if (!label) continue;
       label.hidden = line?.subtype === 'sales_tax' || (!!line && line.type !== 'income');
       if (!touched) r.querySelector('[name=taxable]').checked = taxed;
     }
     finForSync(form, () => rows().map(lineOf));
   };
-  form.querySelector('[data-fin-il-add]').onclick = () => { form.querySelector('[data-fin-il]').insertAdjacentHTML('beforeend', invLine()); taxSync(); };
+  form.querySelector('[data-fin-il-add]').onclick = () => { form.querySelector('[data-fin-il]').insertAdjacentHTML('beforeend', docLine()); taxSync(); };
   form.addEventListener('change', ev => {
     if (ev.target.name === 'taxable') touched = true;
-    if (ev.target.name === 'acct' || ev.target.name === 'taxable') taxSync();
+    if (ev.target.name === 'acct' || ev.target.name === 'taxable' || ev.target.name === 'item') taxSync();
   });
   taxSync();
 }
