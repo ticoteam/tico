@@ -104,3 +104,13 @@ def test_check_route_reads_the_published_brand(api):
     ops = bot(api, "ops")
     found = post(api, "brand/check", {"text": "A cheap clean"}, token=ops)
     assert found["n"] == 1 and [h["match"] for h in found["hits"]] == ["cheap"]
+
+
+def test_growth_facing_bots_get_the_brand_and_gtm_in_their_turn(api):
+    from backend import learned
+    draft(api, sections={"positioning": "Acme cleans homes"})
+    post(api, "brand/publish", {})
+    settings = api.app.state.store.settings
+    with api.app.state.store.read() as c:
+        assert learned.for_turn(c, settings, None, "growth")["brand"].startswith("Brand v1.")
+        assert "brand" not in (learned.for_turn(c, settings, None, "ops") or {})
