@@ -70,15 +70,27 @@ def _name_stem(word):
 HEAD_WORDS = frozenset("head chief director vp".split())
 
 
+# A job named in full and by its letters is one job, in a title and in a template's name alike: "Human Resources
+# Generalist" is the HR Generalist, "SRE" the Site Reliability Engineer.
+SHORT = ((r"human resources?", "hr"), (r"financial planning", "fp"), (r"public relations", "pr"),
+         (r"quality assurance", "qa"), (r"user experience", "ux"), (r"information technology", "it"),
+         (r"search engine optimi[sz]ation", "seo"), (r"site reliability engineers?", "sre"),
+         (r"sales development (?:representatives?|reps?)", "sdr"),
+         (r"accounting", "bookkeeping"))      # the books, not a client account ("Account Manager")
+
+
 def _name_words(text):
     """(stem, word) for each word of a job's name, two letters and up: "QA", "HR" and "UX" name the work."""
-    words = re.findall(r"[a-z0-9]+", str(text or "").lower().replace("'", ""))
+    text = str(text or "").lower().replace("'", "")
+    for full, short in SHORT:
+        text = re.sub(rf"\b{full}\b", short, text)
+    words = re.findall(r"[a-z0-9]+", text)
     return [(_name_stem(word), word) for word in words if len(word) > 1 and word not in NAME_STOP]
 
 
 # The words a department head's title may use for the department's field beyond its id ("Head of Human Resources").
 FIELDS = {"hr": "hr human resources people", "support": "support customer service",
-          "operations": "operations ops", "product": "product", "legal": "legal", "finance": "finance accounting",
+          "operations": "operations ops", "product": "product", "legal": "legal", "finance": "finance",
           "marketing": "marketing growth", "sales": "sales revenue", "engineering": "engineering technology"}
 
 
