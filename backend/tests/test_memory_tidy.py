@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from backend.memory_tidy import ARCHIVE, LEARNINGS, build_packet, evaluate, parse, preservation_flags
+from backend.memory_tidy import ARCHIVE, LEARNINGS, build_packet, evaluate, parse, preservation_flags, resolve_source
 
 TODAY = date(2026, 11, 1)
 
@@ -26,7 +26,7 @@ def proposal(snap, op="generalise", count=1, replacement=None, sources=True, **e
 
 
 def run(snap, obj, **kw):
-    return evaluate(snap, json.dumps(obj), since=None, today=TODAY,
+    return evaluate(snap, json.dumps(obj), since=kw.pop("since", None), today=kw.pop("today", TODAY),
                     checkout_before={"AGENT.md": "a", LEARNINGS: "b"},
                     checkout_after=kw.pop("checkout_after", {"AGENT.md": "a", LEARNINGS: "b"}),
                     conflict_check=kw.pop("conflict_check", lambda agent, rules: []), **kw)
@@ -100,7 +100,7 @@ def test_domain_fact_moves_verbatim_and_retires_leave_a_marker():
     result = run(snap, proposal(snap, "move_fact", replacement=entry.text, destination="knowledge/domain.md"))
     assert result.status == "offer" and entry.text in result.files["knowledge/domain.md"]
     result = run(snap, proposal(snap, "retire", replacement=""))
-    assert result.status == "offer" and "retired 2026-11-01, replaced by edit 1" in result.files[ARCHIVE]
+    assert result.status == "offer" and "retired 2026-11-01 (edit 1)" in result.files[ARCHIVE]
 
 
 def test_old_log_is_required_and_moves_verbatim_without_counting_as_rule_removal():
@@ -280,3 +280,93 @@ def test_attachment_uses_only_server_diary_and_scratch_contains_changed_paths_on
     attachment = json.loads(result.edits_json)
     assert attachment["diary"] == result.diary and "Untrusted narrative" not in result.edits_json
     assert set(result.files) == {LEARNINGS, ARCHIVE}
+
+
+def test_later_pass_archives_aged_out_history_without_exposing_it_to_model():
+    snap = snapshot("\n## Log\n- 2026-10-15 A note that will age out.\n")
+    previous = snap[LEARNINGS]
+    first = run(snap, {"edits": [], "diary": ""}, today=date(2026, 11, 13))
+    assert first.status == "no_change"
+    since = datetime(2026, 11, 13, tzinfo=timezone.utc)
+    packet = build_packet(snap, since=since, previous_learnings=previous)
+    old = packet.all_logs[0]
+    assert old.text not in json.dumps(packet.model_input())
+    result = run(snap, proposal(snap), today=date(2026, 11, 15), since=since, previous_learnings=previous)
+    assert result.status == "offer"
+    edits = json.loads(result.edits_json)["edits"]
+    assert [e["number"] for e in edits] == [1, 2]
+    assert edits[1] == {"number": 2, "operation": "archive_log",
+                         "targets": [{"entry_id": old.entry_id, "old_text": old.text}],
+                         "replacement": "", "sources": [old.entry_id]}
+    assert old.text not in result.files[LEARNINGS]
+    assert resolve_source({**snap, **result.files}, old.entry_id) == old.text
+    assert "1 archive_log" in result.diary
+
+
+def test_no_model_edits_stays_no_change_even_when_hidden_history_ages_out():
+    snap = snapshot("\n## Log\n- 2026-09-15 Old hidden note.\n")
+    result = run(snap, {"edits": [], "diary": ""}, since=datetime(2026, 11, 1, tzinfo=timezone.utc),
+                 previous_learnings=snap[LEARNINGS])
+    assert result.status == "no_change" and "no change" in result.diary
+    assert not result.files and not result.edits_json
+
+
+def test_model_cannot_target_hidden_history_even_if_code_archives_it():
+    snap = snapshot("\n## Log\n- 2026-09-15 Old hidden note.\n")
+    old = parse(snap[LEARNINGS]).all_logs[0]
+    edit = {"number": 1, "operation": "archive_log", "replacement": "", "sources": [old.entry_id],
+            "targets": [{"entry_id": old.entry_id, "old_text": old.text}]}
+    result = run(snap, {"edits": [edit], "diary": ""}, since=datetime(2026, 11, 1, tzinfo=timezone.utc),
+                 previous_learnings=snap[LEARNINGS])
+    assert result.status == "flagged" and "unknown or repeated target" in result.diary
+
+
+def test_sources_resolve_after_earlier_text_moves_and_only_cited_archive_is_read():
+    snap = snapshot()
+    original, later = parse(snap[LEARNINGS]).rules[:2]
+    result = run(snap, proposal(snap))
+    assert result.status == "offer"
+    kept = {**snap, **result.files}
+    assert next(e for e in parse(kept[LEARNINGS]).rules if e.text == later.text).entry_id == later.entry_id
+    assert resolve_source(kept, original.entry_id) == original.text
+    assert original.entry_id in kept[ARCHIVE]
+    # Uncited archive content never enters the packet.
+    kept[ARCHIVE] += "\nAn unrelated archived note.\n"
+    packet = build_packet(kept, since=datetime(2026, 11, 1, tzinfo=timezone.utc))
+    sources = [e for e in packet.entries if e.kind == "source"]
+    assert len(sources) == 1 and sources[0].text == original.text
+    assert "unrelated archived note" not in json.dumps(packet.model_input())
+    obj = {"edits": [{"number": 1, "operation": "retire", "replacement": "", "sources": [original.entry_id],
+                     "targets": [{"entry_id": original.entry_id, "old_text": original.text}]}], "diary": ""}
+    assert run(kept, obj).status == "flagged"
+    # A forged or damaged archive record cannot satisfy the reference.
+    kept[ARCHIVE] = kept[ARCHIVE].replace(original.text, original.text.replace("Rule 0", "Rule X"))
+    assert resolve_source(kept, original.entry_id) is None
+
+
+def test_identical_entries_have_distinct_content_occurrences_not_offsets():
+    text = "# Working rules\n- Same.\n- Other.\n- Same.\n"
+    before = parse(text).rules
+    after = parse(text.replace("- Other.\n", "")).rules
+    assert before[0].entry_id != before[2].entry_id
+    assert [e.entry_id for e in after] == [before[0].entry_id, before[2].entry_id]
+
+
+@pytest.mark.parametrize("heading", ["# Working rules", "## Working rules", "## Standing rules"])
+def test_explicit_log_heading_ends_rules_and_moves_reuse_it(heading):
+    snap = snapshot(heading=heading)
+    snap[LEARNINGS] = snap[LEARNINGS].replace("- Rule 0.", "## 2026-10-31 Note\nText.\n\n- Rule 0.")
+    # The dated heading ends top-level PR Reviewer rules, but remains mixed for level two.
+    if heading == "# Working rules":
+        snap = snapshot(heading=heading)
+    snap[LEARNINGS] += "\n## Log\n- An undated log detail.\n## 2026-11-01 Existing\nKept.\n"
+    packet = parse(snap[LEARNINGS])
+    assert len(packet.rules) == 8
+    if heading != "# Working rules":
+        old = packet.all_logs[0]
+        obj = {"edits": [{"number": 1, "operation": "move_log", "replacement": "", "sources": [old.entry_id],
+                         "targets": [{"entry_id": old.entry_id, "old_text": old.text}]}], "diary": ""}
+        result = run(snap, obj)
+        assert result.status == "offer" and result.files[LEARNINGS].count("## Log\n") == 1
+        assert result.files[LEARNINGS].index(old.text) > result.files[LEARNINGS].index("## Log\n")
+        assert len(parse(result.files[LEARNINGS]).rules) == 8

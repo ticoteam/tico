@@ -143,13 +143,16 @@ Later passes should supply `previous_learnings`, the exact learnings snapshot at
 last completed kept or discarded pass, to select changed undated notes. Without that
 snapshot, undated log history fails closed. Same-day dated notes remain included
 because their dates do not identify which appeared after a timestamp. Source dates,
-entry IDs and exact heading titles select cited logs; unresolved external references
-are never fetched.
+entry IDs and exact heading titles select cited logs. Exact originals cited by source
+ID are also read from the archive; unrelated archive contents and external references
+are never sent to the child.
 
 The exact rule headings are `Working rules` and `Standing rules`, optionally followed
-by parenthetical guidance. Top-level Working rules end at the first dated heading;
-second-level sections end at the next peer heading. Dated headings/bullets inside
-Standing rules are logs; a subsequent undated top-level bullet resumes rules. Imported
+by parenthetical guidance. Top-level Working rules end at the first dated heading.
+Second-level sections end at the next undated peer or shallower heading; dated peer
+headings remain mixed notes inside that section. An explicit Log, Learning log or
+Dated learnings heading ends rules at any depth. Dated headings/bullets inside
+second-level rules are logs; a subsequent undated top-level bullet resumes rules. Imported
 `Working rules from ...` headings are log, never rules. Unrecognized prose remains
 untouched. This is a Markdown-entry contract, not a generic Markdown rewriter.
 
@@ -169,8 +172,7 @@ Manifest validation alone cannot stop an automatic commit that happened before
 validation. These runner controls are a prerequisite supplied by the platform slice,
 not an effect of this pure module. Child output is consumed by code and the child is
 closed without an ordinary parent wake turn, per the engineering run-path decision.
- The module trusts these
-manifests, not a child's claim that it wrote nothing.
+The module trusts these manifests, not a child's claim that it wrote nothing.
 
 ### JSON attachment
 
@@ -191,7 +193,11 @@ Operations are `merge`, `generalise`, `resolve_contradiction`, `retire`, `archiv
 `move_fact` and `move_log`. Targets are individual whole entries from the packet;
 repeated targets, wrong old text and whole-file rewrites fail. Every replaced entry
 must be a source. New rules list each source ID in their replacement text, retaining
-links to exact originals. Retire/archive/move-log edits have empty replacements.
+links to exact originals. IDs use exact content and its occurrence number, so changes
+above an entry do not change its identity. Each archived original records that same
+ID and exact character length; `resolve_source(snapshot, entry_id)` resolves current
+or archived text and validates archived content against the ID. Cited archived entries
+have kind `source` and cannot be edit targets. Retire/archive/move-log edits have empty replacements.
 A fact move supplies its unchanged original as replacement and a normalized
 `knowledge/*.md` `destination`. Other operations cannot set a destination. Paths
 containing traversal, backslashes or control characters are rejected.
@@ -201,13 +207,17 @@ containing traversal, backslashes or control characters are rejected.
 `evaluate(snapshot, raw_json, since, today, checkout_before, checkout_after,
 conflict_check, previous_learnings)` applies anchored edits to an in-memory scratch
 copy, archives every removed original verbatim, and computes a unified diff. Retired
-rules include a retirement date and replacement edit number. Dated-note moves append
-the original under a Log heading. More than a quarter of actual working rules touched
+rules include a retirement date and edit number. Dated-note moves insert
+the original under the existing Log heading, creating one if needed. More than a quarter of actual working rules touched
 flags the proposal; exactly a quarter is permitted. Dated notes do not enter that
 count. Log entries strictly older than 30 days must be removed and present verbatim
 in the archive before an offer. Thirty-day-old entries remain eligible to stay.
-Historical old entries outside the packet cannot be edited by the model: they produce
-a review flag rather than silently widening the read scope.
+When a nonempty model proposal leaves historical old entries outside the packet,
+code adds numbered `archive_log` edits for those entries, using exact originals.
+The model never reads or targets that older history. The combined attachment, counts
+and diff include these mechanical moves for review. Empty model edits remain
+`no_change`, with no archival-only card. A kept nonempty proposal must archive every
+old entry; the check resolves its exact framed archive record rather than a substring.
 
 `conflict_check(agent_text, rules)` is a required trusted semantic check of both old
 and proposed rules against AGENT.md. It returns a list of conflict descriptions. Its
