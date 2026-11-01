@@ -653,6 +653,7 @@ export type Call = {
   connector: string;
   end_reason: string | null;
   ended_at: string | null;
+  holds: Array<CallHold>;
   id: string;
   meeting_id: string;
   participants: Array<CallParticipant>;
@@ -665,6 +666,13 @@ export type Call = {
 
 export type CallBots = {
   bots: Array<string>;
+};
+
+export type CallHold = {
+  created_at: string;
+  detail: string;
+  kind: "transcript" | "action_items";
+  reason: string;
 };
 
 export type CallJoin = {
@@ -8429,6 +8437,14 @@ export type RetireRuleParams = {
 };
 export type RetireRuleBody = RuleDecide;
 export type RetireRuleResponse = unknown;
+
+/** POST /api/v2/calls/{call_id}/action-items/retry */
+export type RetryCallActionItemsParams = {
+  "Idempotency-Key": string;
+  call_id: string;
+};
+export type RetryCallActionItemsBody = Empty;
+export type RetryCallActionItemsResponse = Call;
 
 /** POST /api/v2/webhooks/{hook_id}/sends/{send_id}/retry */
 export type RetryWebhookSendParams = {

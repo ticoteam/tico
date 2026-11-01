@@ -4267,6 +4267,77 @@
         ]
       }
     },
+    "/api/v2/calls/{call_id}/action-items/retry": {
+      "post": {
+        "summary": "Ask again for a call's action items the Gateway could not make; the sweep makes them",
+        "operationId": "retryCallActionItems",
+        "parameters": [
+          {
+            "name": "call_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Call Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Call"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Calls"
+        ]
+      }
+    },
     "/api/v2/calls/{call_id}/bots": {
       "post": {
         "summary": "Let bots listen to a call and reply in its thread",
@@ -39877,6 +39948,13 @@
               "type": "string"
             }
           },
+          "holds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CallHold"
+            },
+            "description": "Posts the thread refused at the call's end. Only the connector sees them"
+          },
           "speak_replies": {
             "type": "boolean",
             "description": "Whether bots were asked to speak their replies on this call; off unless the call asked. Spoken replies are not sent yet"
@@ -39887,6 +39965,7 @@
           "connector",
           "end_reason",
           "ended_at",
+          "holds",
           "id",
           "meeting_id",
           "participants",
@@ -39916,6 +39995,33 @@
           "bots"
         ],
         "title": "CallBots"
+      },
+      "CallHold": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "transcript",
+              "action_items"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "created_at",
+          "detail",
+          "kind",
+          "reason"
+        ],
+        "additionalProperties": true
       },
       "CallJoin": {
         "type": "object",

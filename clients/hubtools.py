@@ -7327,7 +7327,7 @@ def rules_appeal(api, args):
 # A call belongs to a thread. Starting, joining, ending and attaching bots are people's acts; BotOps acts as the person it
 # works for, and the server refuses a bot on each of them. Every read checks the caller's access to the thread.
 CALL_TOOLS = ("hub_call_list", "hub_call_show", "hub_call_start", "hub_call_join", "hub_call_token", "hub_call_leave",
-              "hub_call_end", "hub_call_bot_add", "hub_call_bot_remove")
+              "hub_call_end", "hub_call_retry", "hub_call_bot_add", "hub_call_bot_remove")
 
 
 @tool("hub_call_list", "The calls in a thread, newest first: id, title, state (`live` or `ended`), connector, and how each "
@@ -7385,6 +7385,13 @@ def call_leave(api, args):
       "Tasks are made by hand.", {"call_id": _s("The call's id")}, required=("call_id",), writes=True)
 def call_end(api, args):
     return _as_person(api).post(f"calls/{args['call_id']}/end", {}, key=_key(args))
+
+
+@tool("hub_call_retry", "Ask again for a call's action items when the Gateway could not make them. Only the person who "
+      "started the call may ask, and only after it ended. The sweep makes them again shortly.",
+      {"call_id": _s("The call's id")}, required=("call_id",), writes=True)
+def call_retry(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/action-items/retry", {}, key=_key(args))
 
 
 @tool("hub_call_bot_add", "Let bots listen to a call you have joined and reply in its thread. You must be able to write to "

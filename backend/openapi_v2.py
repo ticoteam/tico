@@ -2519,16 +2519,22 @@ STABLE.extend([
     ("/api/v2/calls/{call_id}/leave", "post", "Calls", "leaveCall", "Leave a call you joined", "Call"),
     ("/api/v2/calls/{call_id}/end", "post", "Calls", "endCall", "End a call you started; its transcript is posted to the thread",
      "Call"),
+    ("/api/v2/calls/{call_id}/action-items/retry", "post", "Calls", "retryCallActionItems",
+     "Ask again for a call's action items the Gateway could not make; the sweep makes them", "Call"),
     ("/api/v2/calls/{call_id}/bots", "post", "Calls", "attachCallBots", "Let bots listen to a call and reply in its thread", "Call"),
     ("/api/v2/calls/{call_id}/bots/{bot}", "delete", "Calls", "detachCallBot", "Take a bot out of a call", "Call"),
 ])
 SCHEMAS.update({
     "CallParticipant": obj({"actor": "s", "joined_at": "s", "left_at": "n", "removed_at": "n"}),
+    "CallHold": obj({"kind": {"enum": ["transcript", "action_items"]}, "reason": "s", "detail": "s",
+                     "created_at": "s"}),
     "CallSummary": obj({"id": "s", "thread_id": "s", "title": "s", "state": {"enum": ["live", "ended"]}, "connector": "s",
                         "started_at": "s", "ended_at": "n", "end_reason": "n"}),
     "Call": obj({"id": "s", "thread_id": "s", "title": "s", "state": {"enum": ["live", "ended"]}, "connector": "s",
                  "meeting_id": "s", "started_at": "s", "ended_at": "n", "end_reason": "n",
                  "participants": items(ref("CallParticipant")), "bots": items({"type": "string"})},
+                holds={"type": "array", "items": ref("CallHold"),
+                       "description": "Posts the thread refused at the call's end. Only the connector sees them"},
                 speak_replies={"type": "boolean", "description": "Whether bots were asked to speak their replies "
                                "on this call; off unless the call asked. Spoken replies are not sent yet"}),
     "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n"}),

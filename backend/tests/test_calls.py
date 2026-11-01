@@ -1,12 +1,14 @@
 """Tico Meet calls: synthetic speech becomes a transcript and a bot reply in the thread, and access to a call follows the
 thread. LiveKit and the Gateway are fakes here, and every name is synthetic (Acme, acme.example)."""
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import call_media, calls, events, gateway_connection, live_privacy, teammate_access, threads
+from backend import (audit_log, call_items, call_media, calls, events, gateway_connection, live_privacy,
+                     teammate_access, threads)
 from backend.auth import Identity
-from backend.store import H
+from backend.store import H, Problem
 from backend.tests.test_api import api, assign, get, headers, post, runner  # noqa: F401
 from backend.tests.test_call_media import CONFIG, decode, fake_rtc, wait_until  # noqa: F401
 from backend.tests.test_live_meetings import live, settle  # noqa: F401
@@ -205,6 +207,105 @@ def test_a_gateway_that_does_not_answer_keeps_the_transcript_and_posts_no_action
     texts = thread_texts(meet, cid)
     assert any(text.startswith("Call transcript") and SYNTHETIC_SPEECH in text for text in texts)
     assert not any(text.startswith("Action items:") for text in texts)
+
+
+def _owed(api, call_id):
+    """The call's action-item bookkeeping, as the sweep leaves it."""
+    with api.app.state.store.read() as c:
+        return dict(c.execute("SELECT finalized_at,wrapped_up_at,action_items_posted_at,action_items_attempts,"
+                              "action_items_retry_at,action_items_failed_at,action_items_given_up_at "
+                              "FROM calls WHERE id=?", (call_id,)).fetchone())
+
+
+def _ago(hours):
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def test_action_items_wait_out_a_gateway_outage_with_backoff_then_give_up_with_a_retry_route(meet, monkeypatch):
+    """A Gateway that does not answer at the end leaves the action items owed. The sweep tries again only once the
+    wait is up; a day on, the thread gets one line saying so, with the retry route; and the connector's retry makes
+    them once the Gateway answers."""
+    drafts, gateway_up = [], []
+
+    def draft(base, key, model, rows):
+        drafts.append(len(rows))
+        if not gateway_up:
+            raise call_items.ItemsUnavailable("The Gateway answered 0")
+        return [{"title": "Schedule the reliability review", "quote": SYNTHETIC_SPEECH}]
+
+    monkeypatch.setattr(call_items, "draft", draft)
+    cid = thread(meet)
+    call_id = start_call(meet, cid)["id"]
+    join(meet, call_id, "ana-test")
+    meet.app.state.calls.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 0)
+    settle(meet)
+    post(meet, f"calls/{call_id}/end", {}, token="ana-test")
+    owed = _owed(meet, call_id)
+    assert len(drafts) == 1 and owed["finalized_at"] is None and owed["action_items_attempts"] == 1
+    assert owed["action_items_retry_at"] > _ago(0) and owed["action_items_given_up_at"] is None
+
+    meet.app.state.calls.sweep()                 # the wait is not up yet: the Gateway is not asked again
+    assert len(drafts) == 1
+
+    with meet.app.state.store.transaction() as c:
+        c.execute("UPDATE calls SET action_items_retry_at=? WHERE id=?", (_ago(0.01), call_id))
+    meet.app.state.calls.sweep()
+    assert len(drafts) == 2 and _owed(meet, call_id)["action_items_attempts"] == 2
+
+    with meet.app.state.store.transaction() as c:
+        c.execute("UPDATE calls SET action_items_failed_at=?,action_items_retry_at=? WHERE id=?",
+                  (_ago(25), _ago(0.01), call_id))
+    meet.app.state.calls.sweep()                 # a day since the first failure: give up, with one line in the thread
+    texts = thread_texts(meet, cid)
+    notes = [text for text in texts if text.startswith("Action items for Acme launch call could not be made")]
+    assert len(notes) == 1 and f"/api/v2/calls/{call_id}/action-items/retry" in notes[0]
+    owed = _owed(meet, call_id)
+    assert owed["finalized_at"] and owed["action_items_given_up_at"] and owed["action_items_posted_at"] is None
+
+    gateway_up.append(True)
+    post(meet, f"calls/{call_id}/action-items/retry", {}, token="ben-test", expected=403)
+    post(meet, f"calls/{call_id}/action-items/retry", {}, token="ana-test")
+    meet.app.state.calls.sweep()
+    texts = thread_texts(meet, cid)
+    assert [text for text in texts if text.startswith("Action items:")] == [
+        "Action items: Acme launch call\n- Schedule the reliability review"]
+    assert _owed(meet, call_id)["finalized_at"] and _owed(meet, call_id)["action_items_posted_at"]
+
+
+def test_a_thread_refusal_of_the_end_of_call_post_leaves_an_audit_row_and_a_hold_for_the_starter(meet, monkeypatch):
+    """A thread that refuses the call's end-of-call posts is final: nothing retries them. The refusal leaves an
+    audit row, and a hold on the call that only its starter sees."""
+    real_post, refused = threads.post, []
+
+    def refuse_call_posts(*args, **kwargs):
+        if "call" in (kwargs.get("refs") or {}):
+            refused.append(kwargs["refs"])
+            raise Problem("forbidden", "The thread does not take the call's posts", 403)
+        return real_post(*args, **kwargs)
+
+    monkeypatch.setattr(threads, "post", refuse_call_posts)
+    monkeypatch.setattr(call_items, "draft",
+                        lambda base, key, model, rows: [{"title": "Schedule the review", "quote": SYNTHETIC_SPEECH}])
+    cid = thread(meet)
+    call_id = start_call(meet, cid)["id"]
+    join(meet, call_id, "ana-test")
+    meet.app.state.calls.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 0)
+    settle(meet)
+    post(meet, f"calls/{call_id}/end", {}, token="ana-test")
+    assert len(refused) == 2                     # the transcript, then the action items: each tried once
+
+    holds = get(meet, f"calls/{call_id}")["holds"]
+    assert [(hold["kind"], hold["reason"]) for hold in holds] == [("transcript", "forbidden"),
+                                                                 ("action_items", "forbidden")]
+    assert get(meet, f"calls/{call_id}", token="ben-test")["holds"] == []
+    with meet.app.state.store.read() as c:
+        refusals = [row for row in audit_log.rows(c, obj=f"call:{call_id}")["rows"]
+                    if row["after"]["kind"] == "call.post_refused"]
+    assert len(refusals) == 2
+
+    meet.app.state.calls.sweep()
+    assert len(refused) == 2 and _owed(meet, call_id)["finalized_at"]
+    assert not any(text.startswith("Call transcript") for text in thread_texts(meet, cid))
 
 
 def test_a_person_outside_a_members_thread_cannot_see_or_join_its_call(meet):

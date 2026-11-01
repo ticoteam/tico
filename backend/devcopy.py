@@ -101,7 +101,7 @@ EMPTY = (
     "fin_recipients", "fin_payments", "fin_transfers", "fin_provider_users", "fin_card_saves",
     # Calls: a live call's room and recorder are on the source's LiveKit, so the copy holds no live call. Its
     # transcripts and action items are thread messages, kept with the history.
-    "calls", "call_participants",
+    "calls", "call_participants", "call_holds",
     # Federation: the install's keys, its peerings and what it sends or received from other installs; a copy never
     # speaks for the source to another company (the shared threads' messages are kept with the history).
     "federation_keys", "federation_peerings", "federation_outbox", "federation_receipts", "federation_state",

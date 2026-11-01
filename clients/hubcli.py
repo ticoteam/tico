@@ -176,6 +176,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub call token <call>                  a fresh token while you are joined
     hub call leave <call>                  leave a call you joined
     hub call end <call>                    end a call you started; its transcript goes to the thread
+    hub call retry <call>                  ask again for action items the Gateway could not make
     hub call bot add <call> <bot>...       bots listen to a call and reply in its thread
     hub call bot remove <call> <bot>       take a bot out of a call
     hub assistant propose --summary "..." --path /api/v2/... [--method POST] [--body '{...}']
@@ -2802,7 +2803,8 @@ def parser():
                               ("join", "join a call: the URL and a token good for 5 minutes"),
                               ("token", "a fresh token while you are joined"),
                               ("leave", "leave a call you joined"),
-                              ("end", "end a call you started; its transcript is posted to the thread")):
+                              ("end", "end a call you started; its transcript is posted to the thread"),
+                              ("retry", "ask again for action items the Gateway could not make")):
         s = call.add_parser(action, help=help_text)
         s.add_argument("call_id")
         s.set_defaults(fn="call " + action)
