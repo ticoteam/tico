@@ -44,7 +44,10 @@ REWRITE_MODEL = "gemini-3.7-flash"
 # With no Gemini key (a hosted install), the Tico AI Gateway's General · Low tier at version 1.0 (Claude Haiku 5.5, the
 # cheapest general chat tier; backend/gateway_tiers.py). Pinned, so a later version never changes what a draft runs on.
 GATEWAY_REWRITE_MODEL = "tico-general-low-1.0"
-GATEWAY_MAX_TOKENS = 400
+# Gateway models reason before they answer, and the reasoning counts against the cap: 400 left a rewrite (the longer
+# prompt) with no answer at all. The least reasoning, and room for it plus a 150-word answer.
+GATEWAY_MAX_TOKENS = 2000
+GATEWAY_EFFORT = "low"
 # The tools a card's `prerequisites` name, as a person reads them. Tico's own tasks, docs and the open web need nothing
 # set up, so a candidate needing them has them; any other tool is set up on hire (required) or later (optional).
 TOOL_LABELS = {"hub": "Tico tasks", "docs": "Docs", "web": "Web", "mail": "Email", "calendar": "Calendar",
@@ -359,7 +362,7 @@ def _rewrite_call(text, title, boss, deadline, gateway=None):
         raise TimeoutError("the gateway key came too late")
     if target and target[0]:
         body = {"model": GATEWAY_REWRITE_MODEL, "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": GATEWAY_MAX_TOKENS, "stream": False}
+                "max_tokens": GATEWAY_MAX_TOKENS, "reasoning_effort": GATEWAY_EFFORT, "stream": False}
         answer = _gateway_answer(G.safe_base(target[1]), target[0], body, deadline)
         return str(answer["choices"][0]["message"]["content"] or "").strip()
     raise NoKey("no Gemini key and no Tico AI Gateway key")

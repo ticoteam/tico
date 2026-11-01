@@ -171,6 +171,7 @@ def test_without_a_gemini_key_a_draft_is_written_on_the_tico_gateway_or_stays_em
     [(base, key, body)] = asked
     assert (base, key) == (G.DEFAULT_BASE, "gw-test-key") and body["model"] == recruiting.GATEWAY_REWRITE_MODEL
     assert body["stream"] is False and body["messages"][0]["role"] == "user"
+    assert body["reasoning_effort"] == "low" and body["max_tokens"] >= 2000     # reasoning counts against the cap
     assert "the role \"Rust engineer\"" in body["messages"][0]["content"]
 
     monkeypatch.setenv("TICO_GATEWAY_KEY", "")
