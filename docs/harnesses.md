@@ -295,11 +295,14 @@ The remaining provider catalogs are preserved by this update; their next refresh
 
 Installs go into the runner's **tools directory**, never system-wide: `TICO_TOOLS_DIR`, else `tools_dir` in the
 registration, else `tools/` beside `runner.json`. In the Docker image that is `/home/runner/tools`, inside the runner
-volume, so harnesses survive a restart or a new image. The directory is put last on `PATH`.
+volume, so harnesses survive a restart or a new image. The directory is put last on `PATH`, except on a cloud machine.
 
 - **Mac**: a harness already on `PATH` (Homebrew, `npm -g`) is used as it is. The runner installs into its tools
   directory only when the harness is missing, and never updates one it did not install. Installing needs `node` and
   `npm` on the Mac.
+- **Cloud machine**: Tico owns the disk, so a copy on `PATH` is not left alone. A harness a bot wants gets the runner's
+  own install, which then wins and updates as usual; the tools directory goes first on `PATH`. See
+  [Cloud machines](cloud-machines.md#whats-on-a-machine).
 - **Linux (Docker)**: the image has node, npm, python, pip, git, gh, build tools, ripgrep, jq and curl, and no model
   CLI. It also has the system libraries Chromium needs, so a browser a bot installs (`npx playwright install
   chromium`) starts. When a Playwright Chromium is on a computer, the runner starts it headless every 15 minutes;
@@ -338,7 +341,7 @@ Only an install that failed (no `npm` on a Mac, say) blocks the move, with the r
 
 ## Updating and pinning
 
-Every day the runner asks each harness it installed (and has not been turned off) for the newest release. With the default policy (`latest`) it
+Every day, and at every start on a cloud machine, the runner asks each harness it installed (and has not been turned off) for the newest release. With the default policy (`latest`) it
 installs the new version **between runs**: the copy is downloaded and checked beside the old one while runs are in progress,
 and switched in only at a moment no run in progress uses that harness (a run on another harness does not hold it
 back). A failed install keeps the working version and is retried after 30 minutes.

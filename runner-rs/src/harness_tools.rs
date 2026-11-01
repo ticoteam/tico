@@ -5,11 +5,14 @@
 //!
 //!     <tools>/<id>/<uid>/     one complete install (an npm prefix, a venv, or a binary)
 //!     <tools>/<id>/current    symlink to the install in use
-//!     <tools>/bin/<exe>       symlink put at the END of PATH
+//!     <tools>/bin/<exe>       symlink put at the END of PATH (the START on a cloud machine)
 //!
 //! A harness already on PATH is used as it is and never touched; a new version is staged beside the old one
 //! (on a blocking worker) and switched in by `step` only when no running turn uses that host; a pinned
 //! harness is never moved by the daily check. `harnesses.json` is the same file the Python runner keeps.
+//!
+//! A cloud machine (crate::cloud_machine) is the exception: Tico owns its disk and nobody else keeps a copy on PATH
+//! current, so a wanted harness gets its own install here, which wins over PATH once it lands (`Harnesses::own`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::os::unix::fs::PermissionsExt;
@@ -709,6 +712,24 @@ pub fn path_with(path: &str, bin_dir: &Path) -> String {
     }
 }
 
+/// `path` with `bin_dir` first and nowhere else, on a machine Tico owns: what the runner installed wins. A harness not
+/// installed yet has no link in `bin_dir`, so the next one on PATH keeps answering until it lands.
+pub fn path_first(path: &str, bin_dir: &Path) -> String {
+    let bin = bin_dir.display().to_string();
+    std::iter::once(bin.as_str())
+        .chain(path.split(':').filter(|e| !e.is_empty() && *e != bin))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+fn exposed(path: &str, bin_dir: &Path, owned: bool) -> String {
+    if owned {
+        path_first(path, bin_dir)
+    } else {
+        path_with(path, bin_dir)
+    }
+}
+
 /// Numbers of a version, for comparing releases.
 pub fn version_key(text: &str) -> Vec<u64> {
     let head = text.split('-').next().unwrap_or("").split('+').next().unwrap_or("");
@@ -766,6 +787,8 @@ pub struct Harnesses {
     state_path: PathBuf,
     pub manifests: BTreeMap<String, Manifest>,
     check_every: f64,
+    owned: bool, // a machine Tico owns (`own`): our install wins, and nobody else keeps one current
+    search: Option<String>, // the PATH `locate` looks through; None is this process's
     pub wanted: HashSet<String>,
     needed: HashSet<String>,           // what this computer's bots run on: always installed
     default: HashSet<String>,          // a computer with no bots: the company default, unless the owner turned it off
@@ -811,6 +834,8 @@ impl Harnesses {
             state_path,
             manifests,
             check_every: CHECK_EVERY_S,
+            owned: false,
+            search: None,
             wanted: HashSet::new(),
             needed: HashSet::new(),
             default: HashSet::new(),
@@ -825,6 +850,14 @@ impl Harnesses {
         };
         h.state = h.load();
         h
+    }
+
+    /// This runner is on a machine Tico owns. A wanted harness found only on PATH gets a managed copy, and that copy
+    /// wins. A runner here starts when the machine wakes, so a saved `checked` from before the sleep (or a snapshot)
+    /// says nothing about today: every harness is checked again now.
+    fn own(&mut self) {
+        self.owned = true;
+        self.section("checked").clear();
     }
 
     fn load(&self) -> Map<String, Value> {
@@ -871,16 +904,22 @@ impl Harnesses {
         self.tools.join("bin")
     }
 
-    /// (path, source) of the executable a turn would run: "path" for the person's own, "tools" for ours.
+    /// (path, source) of the executable a turn would run: "path" for the person's own, "tools" for ours. The same
+    /// order as the PATH `expose_path` gives this process: on a machine Tico owns ours comes first.
     pub fn locate(&self, m: &Manifest) -> (Option<PathBuf>, &'static str) {
         let bin = self.bin_dir();
-        let path = std::env::var("PATH").unwrap_or_else(|_| "/bin:/usr/bin".into());
+        let ours = bin.join(&m.executable);
+        let have_ours = std::fs::metadata(&ours)
+            .is_ok_and(|md| md.is_file() && md.permissions().mode() & 0o111 != 0);
+        if self.owned && have_ours {
+            return (Some(ours), "tools");
+        }
+        let path = self.search.clone().unwrap_or_else(|| std::env::var("PATH").unwrap_or_else(|_| "/bin:/usr/bin".into()));
         let rest: Vec<&str> = path.split(':').filter(|e| !e.is_empty() && Path::new(e) != bin).collect();
         if let Some(found) = crate::env::which(&m.executable, &rest.join(":")) {
             return (Some(found), "path");
         }
-        let ours = bin.join(&m.executable);
-        if std::fs::metadata(&ours).is_ok_and(|md| md.is_file() && md.permissions().mode() & 0o111 != 0) {
+        if have_ours {
             return (Some(ours), "tools");
         }
         (None, "")
@@ -1061,7 +1100,13 @@ impl Harnesses {
         let words = message.split_whitespace().collect::<Vec<_>>().join(" ");
         let message: String = words.chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect();
         if job.kind == "check" {
-            self.section("checked").insert(m.id.clone(), json!(epoch_s()));
+            // Asked again tomorrow; on a machine Tico owns, in 30 minutes: it may have woken before its network did.
+            let at = if self.owned {
+                (epoch_s() - self.check_every + RETRY_AFTER_S).max(0.0)
+            } else {
+                epoch_s()
+            };
+            self.section("checked").insert(m.id.clone(), json!(at));
         } else {
             self.section("failed").insert(m.id.clone(), json!({"at": epoch_s(), "error": message}));
         }
@@ -1089,7 +1134,8 @@ impl Harnesses {
             }
             let (path, source) = self.locate(&m);
             let (policy, pin) = self.policy(&m);
-            let Some(path) = path else {
+            // On a machine Tico owns a copy found only on PATH counts as missing: turns keep using it until ours lands.
+            let Some(path) = path.filter(|_| source == "tools" || !self.owned) else {
                 if self.wanted.contains(&id) {
                     return job("install", &id, if policy == "pinned" { &pin } else { "" });
                 }
@@ -1421,8 +1467,8 @@ fn place_download(exe: &Path, body: &[u8]) -> Result<(), String> {
 static SHARED: OnceLock<Arc<Mutex<Harnesses>>> = OnceLock::new();
 static TURNS: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
 
-/// This runner's one installer, made on first use (with the tools bin put last on PATH). Call it before the
-/// tokio runtime starts threads when possible (main), so PATH is changed while nothing else reads it.
+/// This runner's one installer, made on first use (with the tools bin put on PATH, see `expose_path`). Call it before
+/// the tokio runtime starts threads when possible (main), so PATH is changed while nothing else reads it.
 pub fn init(config: &Config) -> Arc<Mutex<Harnesses>> {
     init_at(config, config.state_dir().join("harnesses.json"))
 }
@@ -1432,8 +1478,11 @@ pub fn init(config: &Config) -> Arc<Mutex<Harnesses>> {
 pub fn init_at(config: &Config, state_path: PathBuf) -> Arc<Mutex<Harnesses>> {
     SHARED
         .get_or_init(|| {
-            let h = Harnesses::new(tools_dir(config), state_path, manifests().clone());
-            expose_path(&h.bin_dir());
+            let mut h = Harnesses::new(tools_dir(config), state_path, manifests().clone());
+            if crate::cloud_machine::detected() {
+                h.own();
+            }
+            expose_path(&h.bin_dir(), h.owned);
             Arc::new(Mutex::new(h))
         })
         .clone()
@@ -1443,10 +1492,11 @@ pub fn shared() -> Option<Arc<Mutex<Harnesses>>> {
     SHARED.get().cloned()
 }
 
-/// Put the tools bin last on this process's PATH (harness_tools.expose_path).
-pub fn expose_path(bin_dir: &Path) {
+/// Put the tools bin last on this process's PATH, or first on a machine Tico owns. Everything that finds a harness
+/// (a turn's environment, readiness, sign-in, profiles) reads this PATH.
+pub fn expose_path(bin_dir: &Path, owned: bool) {
     let path = std::env::var("PATH").unwrap_or_default();
-    let new = path_with(&path, bin_dir);
+    let new = exposed(&path, bin_dir, owned);
     if new != path {
         std::env::set_var("PATH", new);
     }
@@ -1673,6 +1723,296 @@ mod tests {
         let bin = Path::new("/t/bin");
         assert_eq!(path_with("/usr/bin:/bin", bin), "/usr/bin:/bin:/t/bin");
         assert_eq!(path_with("/usr/bin:/t/bin", bin), "/usr/bin:/t/bin");
+    }
+
+    #[test]
+    fn tools_bin_goes_first_on_path_once_on_a_machine_tico_owns() {
+        let bin = Path::new("/t/bin");
+        assert_eq!(path_first("/usr/bin:/bin", bin), "/t/bin:/usr/bin:/bin");
+        // A runner restarted by its own update inherits the old order.
+        assert_eq!(
+            path_first("/usr/bin:/t/bin:/bin", bin),
+            "/t/bin:/usr/bin:/bin"
+        );
+        assert_eq!(path_first("", bin), "/t/bin");
+    }
+
+    /// An executable that says `version`, at `exe`. Through `place_download`, so a fork elsewhere can't hold it busy.
+    fn fake_cli(exe: &Path, version: &str) {
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        place_download(exe, format!("#!/bin/sh\necho {version}\n").as_bytes()).unwrap();
+        std::fs::set_permissions(exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A computer with a stale Claude Code only on PATH and a bot that runs on it: the machine seen live.
+    struct Machine {
+        dir: PathBuf,
+        on_path: PathBuf, // the copy on PATH
+        h: Harnesses,
+    }
+
+    impl Machine {
+        fn new(owned: bool) -> Machine {
+            let dir = std::env::temp_dir()
+                .join(format!("tico-harness-{}", uuid::Uuid::new_v4().simple()));
+            let on_path = dir.join("usr-bin").join("claude");
+            fake_cli(&on_path, "2.1.220");
+            let mut h = Harnesses::new(dir.join("tools"), dir.join("harnesses.json"), built_in());
+            h.manifests.retain(|id, _| id == "claude-code");
+            h.search = Some(dir.join("usr-bin").display().to_string());
+            if owned {
+                h.own();
+            }
+            h.want(&["claude"], &Vec::<String>::new());
+            Machine { dir, on_path, h }
+        }
+
+        /// The executable a turn, the readiness check and sign-in would find: the first on the PATH `expose_path` sets.
+        fn turn_runs(&self) -> PathBuf {
+            crate::env::which(
+                "claude",
+                &exposed(
+                    self.h.search.as_ref().unwrap(),
+                    &self.h.bin_dir(),
+                    self.h.owned,
+                ),
+            )
+            .unwrap()
+        }
+
+        fn managed(&self) -> PathBuf {
+            self.h.bin_dir().join("claude")
+        }
+
+        /// What a finished install leaves: a checked copy waiting for its switch.
+        fn stage(&mut self, version: &str) {
+            let copy = self.h.tools.join("claude-code").join("abc");
+            fake_cli(&copy.join("node_modules/.bin/claude"), version);
+            let job = Job {
+                kind: "install".into(),
+                harness: "claude-code".into(),
+                version: String::new(),
+                request: String::new(),
+                staged: Some((copy, version.into())),
+            };
+            self.h.staged.insert("claude-code".into(), job);
+        }
+
+        fn row(&mut self) -> Value {
+            self.h.report(&Map::new())["claude-code"].clone()
+        }
+    }
+
+    impl Drop for Machine {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn a_path_only_harness_on_a_machine_tico_owns_gets_a_managed_copy_only_if_wanted() {
+        let mut m = Machine::new(true);
+        assert_eq!(
+            m.h.locate(&m.h.manifests["claude-code"].clone()),
+            (Some(m.on_path.clone()), "path")
+        );
+        let job = m.h.next().unwrap();
+        assert_eq!(
+            (
+                job.kind.as_str(),
+                job.harness.as_str(),
+                job.version.as_str()
+            ),
+            ("install", "claude-code", "")
+        );
+        // No bot here runs on it: it is left as it is.
+        m.h.want(&Vec::<String>::new(), &Vec::<String>::new());
+        assert!(m.h.next().is_none());
+    }
+
+    #[test]
+    fn the_managed_copy_takes_over_between_turns_and_is_then_kept_current() {
+        let mut m = Machine::new(true);
+        m.h.check_every = f64::INFINITY; // no `step` here starts a real check
+        assert_eq!(m.turn_runs(), m.on_path);
+        // Installed while a turn runs: nothing moves under it.
+        m.stage("2.1.316");
+        m.h.step(&HashSet::from(["claude".to_string()]));
+        assert_eq!(m.turn_runs(), m.on_path);
+        let row = m.row();
+        assert_eq!(
+            (
+                &row["source"],
+                &row["managed"],
+                &row["version"],
+                &row["state"]
+            ),
+            (
+                &json!("path"),
+                &json!(false),
+                &json!("2.1.220"),
+                &json!("updating")
+            )
+        );
+        // The turn ended: the turn, the readiness check and the report all see the managed copy.
+        m.h.step(&HashSet::new());
+        assert_eq!(m.turn_runs(), m.managed());
+        assert_eq!(
+            m.h.locate(&m.h.manifests["claude-code"].clone()),
+            (Some(m.managed()), "tools")
+        );
+        let row = m.row();
+        assert_eq!(
+            (
+                &row["source"],
+                &row["managed"],
+                &row["version"],
+                &row["latest"],
+                &row["update_available"]
+            ),
+            (
+                &json!("tools"),
+                &json!(true),
+                &json!("2.1.316"),
+                &json!("2.1.316"),
+                &json!(false)
+            )
+        );
+        // The normal check and update apply.
+        m.h.check_every = CHECK_EVERY_S;
+        assert_eq!(m.h.next().unwrap().kind, "check");
+        m.h.section("latest")
+            .insert("claude-code".into(), json!("2.1.400"));
+        assert_eq!(m.row()["update_available"], json!(true));
+        let job = m.h.next().unwrap();
+        assert_eq!((job.kind.as_str(), job.version.as_str()), ("update", ""));
+    }
+
+    #[test]
+    fn a_failed_install_keeps_the_path_copy_working_and_backs_off() {
+        let mut m = Machine::new(true);
+        let job = m.h.next().unwrap();
+        assert_eq!(job.kind, "install");
+        m.h.job = Some((
+            job,
+            Arc::new(Mutex::new(Some(
+                Err("npm exited 1: no network".to_string()),
+            ))),
+        ));
+        m.h.step(&HashSet::new());
+        assert!(
+            m.h.job.is_none(),
+            "nothing is tried again during the back-off"
+        );
+        assert_eq!(m.turn_runs(), m.on_path);
+        let row = m.row();
+        assert_eq!(
+            (
+                &row["installed"],
+                &row["source"],
+                &row["managed"],
+                &row["state"]
+            ),
+            (
+                &json!(true),
+                &json!("path"),
+                &json!(false),
+                &json!("failed")
+            )
+        );
+        assert!(text_of(&row["detail"]).contains("npm exited 1"));
+        assert!(m.h.installing("claude").is_none());
+        // Tried again once the back-off is over.
+        m.h.section("failed").insert(
+            "claude-code".into(),
+            json!({"at": epoch_s() - RETRY_AFTER_S - 1.0, "error": "x"}),
+        );
+        assert_eq!(m.h.next().unwrap().kind, "install");
+    }
+
+    #[test]
+    fn a_persons_machine_or_docker_box_leaves_a_path_install_alone() {
+        let mut m = Machine::new(false);
+        assert_eq!(
+            m.h.locate(&m.h.manifests["claude-code"].clone()),
+            (Some(m.on_path.clone()), "path")
+        );
+        m.h.section("latest")
+            .insert("claude-code".into(), json!("2.1.400"));
+        assert!(m.h.next().is_none());
+        let row = m.row();
+        assert_eq!(
+            (&row["source"], &row["managed"], &row["update_available"]),
+            (&json!("path"), &json!(false), &json!(false))
+        );
+        // Even with a copy of ours beside it, the person's own still wins.
+        m.stage("2.1.316");
+        m.h.check_every = f64::INFINITY;
+        m.h.step(&HashSet::new());
+        assert!(m.managed().exists());
+        assert_eq!(m.turn_runs(), m.on_path);
+        assert_eq!(
+            m.h.locate(&m.h.manifests["claude-code"].clone()),
+            (Some(m.on_path.clone()), "path")
+        );
+        // And its daily check keeps the day it was saved with.
+        let mut only_ours = Machine::new(false);
+        std::fs::remove_file(&only_ours.on_path).unwrap();
+        only_ours.stage("2.1.316");
+        only_ours.h.check_every = f64::INFINITY;
+        only_ours.h.step(&HashSet::new());
+        only_ours.h.check_every = CHECK_EVERY_S;
+        only_ours
+            .h
+            .section("checked")
+            .insert("claude-code".into(), json!(epoch_s()));
+        only_ours.h.save();
+        let mut again = Harnesses::new(
+            only_ours.h.tools.clone(),
+            only_ours.dir.join("harnesses.json"),
+            only_ours.h.manifests.clone(),
+        );
+        again.search = only_ours.h.search.clone();
+        assert!(again.next().is_none());
+    }
+
+    #[test]
+    fn a_wake_on_a_machine_tico_owns_checks_at_once_whatever_was_saved() {
+        let mut m = Machine::new(true);
+        std::fs::remove_file(&m.on_path).unwrap();
+        m.stage("2.1.316");
+        m.h.check_every = f64::INFINITY;
+        m.h.step(&HashSet::new());
+        for saved in [epoch_s(), epoch_s() + 90.0 * 86400.0] {
+            // Checked minutes before the sleep, or by a clock ahead of this one.
+            m.h.section("checked")
+                .insert("claude-code".into(), json!(saved));
+            m.h.save();
+            let mut woken = Harnesses::new(
+                m.h.tools.clone(),
+                m.dir.join("harnesses.json"),
+                m.h.manifests.clone(),
+            );
+            woken.search = m.h.search.clone();
+            woken.own();
+            assert_eq!(woken.next().unwrap().kind, "check");
+        }
+        // A wake's check that fails is asked again soon, not tomorrow.
+        m.h.check_every = CHECK_EVERY_S;
+        let manifest = m.h.manifests["claude-code"].clone();
+        let check = Job {
+            kind: "check".into(),
+            harness: "claude-code".into(),
+            version: String::new(),
+            request: String::new(),
+            staged: None,
+        };
+        m.h.failed(&manifest, &check, "npm view failed");
+        assert!(m.h.next().is_none());
+        let at = m.h.read("checked", "claude-code").as_f64().unwrap();
+        m.h.section("checked")
+            .insert("claude-code".into(), json!(at - RETRY_AFTER_S - 1.0));
+        assert_eq!(m.h.next().unwrap().kind, "check");
     }
 
     #[test]

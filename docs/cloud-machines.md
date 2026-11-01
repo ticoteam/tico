@@ -96,8 +96,8 @@ lands while the runner reports a fresh `updating`, except out of credit (HQ stop
 of a frozen company stops at once too) and a person's delete.
 
 The runner knows it is on a cloud machine by the marker `/etc/tico/cloud-machine.json` (root's, naming the runner's
-user), which the base step writes. Machines made before Tico models ran here have it too, so they take Tico models once
-their runner updates.
+user), which the base step writes. Machines made before Tico models ran here have it too, so they take Tico models, and
+keep their own harnesses current ([What's on a machine](#whats-on-a-machine)), once their runner updates.
 
 ## What's on a machine
 
@@ -110,8 +110,19 @@ The base step (below) installs these, so every machine made from the snapshot ha
   ([Share internet with bots](computers.md#share-internet-with-bots)).
 - **Fonts** (`fonts-liberation`, `fonts-noto-color-emoji`).
 - **Node.js 22 or newer** and npm, from NodeSource's apt repository (a newer Node already on the image is kept). The
-  runner installs each bot's harness (Claude Code, Codex, Pi, Gemini, Grok) with npm on demand, so only the harness a bot
-  uses lands on the machine.
+  runner installs each harness its bots use (Claude Code, Codex, Pi, Gemini, Grok) with npm, as below.
+
+`base` installs no harness, but a machine can still start with one on `PATH`, as old as the snapshot. Tico owns this
+disk and nobody else updates such a copy, so the runner treats it as missing when a bot here wants that harness: it
+installs its own copy in its tools directory (`tools/` beside `runner.json`). Turns keep using the `PATH` copy until
+the new one is switched in at a moment no turn uses that harness. From then on the runner's copy wins, because the tools
+directory comes first on `PATH` here (last on any other computer), and it updates like any managed install
+([Updating and pinning](harnesses.md#updating-and-pinning)). A failed install is retried after 30 minutes and leaves the
+`PATH` copy working. A copy too old for its provider still fails turns until the install lands. A harness no bot here
+wants stays as it is, and reports `source: path`.
+
+Every runner start on a machine checks for new releases at once, so a machine that wakes does not wait out a saved
+24 hours; a check that fails is asked again after 30 minutes.
 
 Nothing else is in the base. A bot that needs ffmpeg, a toolchain or anything else installs it itself with `sudo`; it
 stays on the machine's disk across stops and resumes. On the shared machine, tools a bot installs are there for every
