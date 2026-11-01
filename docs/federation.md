@@ -22,13 +22,17 @@ The request and each approval carry this install's company name (its settings), 
 peering's `company`. The install that approves a peering is its accepting admin: that person reads the threads the
 peering brings in.
 
-In the app, the owner does all of this in Library > Connections > Other companies: this install's id and key, Connect a
+In the app, the owner or an admin does all of this in Library > Connections > Other companies: this install's id and key, Connect a
 company (by install id), and Approve, Pause, Resume or Revoke on each peering. A thread's Who can read sheet shows
-Shared with, where the owner adds or removes an install.
+Shared with, where they add or remove an install.
 
 ## Share a thread
 
-`hub peer share <thread> <install>` gives an active peer a thread this install owns (its audience is `members`).
+`hub peer share <thread> <install>` gives an active peer a thread this install owns (its audience is `members`). You must
+read and manage the thread: an admin cannot share, or see listed, a members thread they are not in. While it is shared, the
+thread stays a members thread: neither side can open it to the company or a team. The home's own member list is the
+thread's: another company's people come from their posts and its copies mirror them. Companies join and leave only through
+`share` and `unshare`, never the thread's member list.
 The peer gets the thread from that moment, not its history. A message reaches it only if it was posted after the peer
 joined; a sub-thread reply counts from its parent's time. Each message goes out in its current state: an edit made before
 the first send sends the new text, and a message deleted before anything left is never sent. A message restricted to a
@@ -37,8 +41,9 @@ task or a meeting is never sent.
 `hub peer unshare <thread> <install>` removes an install. It gets the removal and nothing after it.
 
 On the receiving install, a shared thread is a replica. Only the accepting admin can read it at first. Other local people
-get a 404 until an admin adds them: `hub peer add-reader <thread> human:<name>`, or
-`POST /api/v2/federation/threads/{thread_id}/readers` with `{"actor": "human:<name>"}` (owner only). Readers are added only
+get a 404 until an admin who reads it adds them: `hub peer add-reader <thread> human:<name>`, or
+`POST /api/v2/federation/threads/{thread_id}/readers` with `{"actor": "human:<name>"}`. Once no local person is left in a
+replica, any admin can add one. Readers are added only
 to a replica of a members thread. The home's own thread, a DM, a local thread, or a thread this install was removed from
 is refused with a 409.
 
@@ -64,9 +69,20 @@ is refused with a 409.
 | `hub peer revoke <peering>` | `hub_peer_revoke` | `POST /peerings/{id}/revoke` |
 | `hub peer share <thread> <install>` | `hub_peer_share` | `POST /threads/{id}/installs` |
 | `hub peer unshare <thread> <install>` | `hub_peer_unshare` | `DELETE /threads/{id}/installs/{install}` |
+| `hub peer retry <thread> <install>` | `hub_peer_retry` | `POST /threads/{id}/installs/{install}/retry` |
 | `hub peer add-reader <thread> <actor>` | `hub_peer_add_reader` | `POST /threads/{id}/readers` |
 
-Every route is owner only. Each write records an audit row and a change event, like the other owner settings.
+Every route is for the owner or an admin, except `retry`, which is for whoever manages the thread. A thread's routes also
+ask that the caller reads and manages it, and `GET` lists only the threads the caller may read. BotOps does each of these
+with the rights of the person who asked. Each write records an audit row and a change event, like other admin settings.
+
+## When a send fails
+
+A message's delivery to another install stays `pending` until Tico HQ takes the envelope, then it is `delivered`. If HQ
+refuses it for good, the delivery is `failed`. If sends keep failing (about 25 minutes), or one has failed, one Needs you
+item, **Not sent**, goes to whoever manages the thread, one per thread and company. It clears when the send goes through
+(Retry in the thread's Shared with, or `hub peer retry`), when the message is edited or deleted, or when that company leaves
+the thread. A paused or revoked peering lists nothing: its messages wait for it.
 
 ## How it works
 
@@ -84,16 +100,20 @@ Every route is owner only. Each write records an audit row and a change event, l
   its own messages, and an origin id another author or thread already uses is refused.
 - **Rules and screening.** A message from another install is checked before anything is written. The org rules and the
   injection screener (source `federation`, default `warn`) run first, outside the write, and the verdict is applied inside
-  it. A message the rules block is written nowhere, and the sender gets a refusal. A check that did not run (no verdict, or
-  the rules could not check) is never treated as a pass: the receiver holds that envelope, and the later envelopes for
-  the same peer and root wait behind it. Other roots and peers are not held. Outbound needs no extra step: a local member's post passes the org rule check in `threads.post`
-  before it is stored, so it is checked before it can replicate.
+  it. A message the rules block is written nowhere, and the sender gets a refusal. It leaves a hold: the reviewer's Send
+  anyway posts it as its author, and on the home it goes on to the others as the author's signed envelope. A later revision
+  is checked afresh, and closes holds on older ones. The injection screen goes first, so a hold never carries a text it
+  stopped. A check that did not run (no verdict, or the rules could not check) is never treated as a pass: the receiver
+  holds that envelope, and the later envelopes for the same peer and root wait behind it. Other roots and peers are not
+  held. Outbound needs no extra step: a local member's post passes the org rule check in `threads.post` before it is
+  stored, so it is checked before it can replicate.
 - **Refusals.** A receiver that refuses a message (rules, namespace or unknown thread) sends a signed refusal to the
   install that sent it. That install posts a quiet note to the message's author in the thread, like a held message's note.
   If the author can no longer read the thread, nothing is posted and the refusal is recorded as `refused`.
 - **Order.** The home numbers each shared thread's messages (`home_seq`). A replica applies them in that order. An edit
-  or delete for a message the replica does not have yet waits for a catch-up. A catch-up asks the home for everything
-  after the last `home_seq` the replica applied.
+  or delete for a message the replica does not have yet waits for a catch-up, and is never made into a message: only the
+  first send of a message (`first`) can create one, whatever its revision. A catch-up asks the home for everything after
+  the last `home_seq` the replica applied. The home refuses an edit of a message it does not have.
 - **Lanes.** Order is kept per peer and per root, in both directions. A lane is one peer and one root. Outbound, a
   message waits behind an earlier one for the same peer and root, and only the first is sent next. A send HQ refuses
   for a reason that will not change (a 4xx other than a pause, a timeout or a rate limit) is settled as failed; a
@@ -132,7 +152,6 @@ Treat HQ as a relay you trust for delivery, not as a place a shared thread is ke
 
 - A later member's manager cannot read a replica yet. Only the accepting admin and the people an admin adds can.
 - A refusal is passed on one hop only.
-- A held federated message has no "send anyway". It stays held.
 - Core's member lists do not show company names yet. `GET /api/v2/federation` does (`company` on each peering, `members` and
   `guests` on each thread).
 - A thread's history from before it was shared is never sent to a later member.

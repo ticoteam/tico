@@ -35,7 +35,10 @@ def add_outside(c, thread_id, install):
 
 def remove_outside(c, thread_id, install):
     """Unlink a peer install: its deliveries go moot, so nothing more is sent or accepted for it as a link."""
-    CORE.remove_outside_member(c, "keeper", thread_id, f"peer:{install}")
+    recipient = f"peer:{install}"
+    CORE.remove_outside_member(c, "keeper", thread_id, recipient)
+    c.execute("UPDATE message_deliveries SET state='moot', updated_at=? WHERE root_id=? AND recipient=? "
+              "AND state IN ('pending','failed')", (H.now(), thread_id, recipient))
 
 
 def roster(c, thread_id):
@@ -69,6 +72,34 @@ def ensure_guest(c, thread_id, actor):
         CORE.add_member(c, "keeper", thread_id, actor)
         return True
     return False
+
+
+def viewer_of(auth, who):
+    """The person calling, as core's rules read them."""
+    return CORE.viewer(auth, who)
+
+
+def can_see(c, viewer, thread_id):
+    """Whether this viewer may read the thread, by core's rule."""
+    row = CORE.thread_row(c, thread_id)
+    return row is not None and CORE.denial(c, viewer, row) is None
+
+
+def require_manage(c, viewer, thread_id):
+    """A thread this viewer may read (else 404: it is never confirmed to exist) and manage (else 403)."""
+    row = CORE.require(c, viewer, thread_id)
+    if not CORE.can_manage(c, viewer, row):
+        raise Problem("forbidden", "Only someone who manages this thread can do that", 403)
+    return row
+
+
+def require_reader_add(c, viewer, thread_id):
+    """Who adds a reader to a shared copy: someone who manages it. A copy with no local person left in it has nobody to
+    do that, so there the caller (an admin; the route checks) may."""
+    left = c.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND actor LIKE 'human:%' AND instr(actor,'@')=0 LIMIT 1",
+                     (thread_id,)).fetchone()
+    if left is not None:
+        require_manage(c, viewer, thread_id)
 
 
 def can_read(c, thread_id, actor):
@@ -151,10 +182,67 @@ def _shape(c, r):
 
 
 def due(c, limit):
-    """Outbound deliveries to peer installs that are waiting, oldest first, as dicts with the keys federation reads: id,
-    recipient, thread_id (the shared root), message_id, origin_id, revision, actor, message_kind, body, deleted, created,
-    origin_install, restricted, parent_message (the origin id of the message a sub-thread hangs from, or '')."""
-    return [_shape(c, dict(row)) for row in CORE.outside_due(c, "peer:", limit)]
+    """Outbound deliveries to peer installs that are waiting to be staged, oldest first, as dicts with the keys federation
+    reads: id, recipient, thread_id (the shared root), message_id, origin_id, revision, actor, message_kind, body, deleted,
+    created, origin_install, restricted, parent_message (the origin id of the message a sub-thread hangs from, or '').
+    A delivery with a row in the outbox for its message as it stands is on its way: it stays pending until that row is
+    settled, and is not listed, so it never takes the place of one that still needs staging."""
+    rows = c.execute(
+        "SELECT d.*, m.body, m.from_actor, m.origin_id, m.deleted_at, m.conversation_id "
+        "FROM message_deliveries d JOIN messages m ON m.id=d.message_id WHERE d.recipient LIKE 'peer:%' "
+        "AND d.state='pending' AND (d.next_attempt_at IS NULL OR d.next_attempt_at<=?) "
+        "AND NOT EXISTS (SELECT 1 FROM federation_outbox o WHERE o.kind='delivery' AND o.delivery_id=d.id) "
+        "AND NOT EXISTS (SELECT 1 FROM federation_items i JOIN federation_outbox o ON o.kind='item' AND o.item_id=i.id "
+        "AND o.recipient=substr(d.recipient,6) WHERE i.origin_id=m.origin_id AND i.revision=m.revision) "
+        "ORDER BY d.created_at LIMIT ?", (H.now(), max(1, min(int(limit), 500)))).fetchall()
+    return [_shape(c, dict(row)) for row in rows]
+
+
+def item_delivery(c, item_id, install):
+    """The waiting delivery an item row carries to an install, while the item is its message as it stands: an edit made
+    during the send leaves it waiting for the next item. None for a membership item."""
+    row = c.execute("SELECT d.id FROM federation_items i JOIN federation_messages fm ON fm.origin_id=i.origin_id "
+                    "JOIN message_deliveries d ON d.message_id=fm.message_id AND d.recipient=? "
+                    "JOIN messages m ON m.id=d.message_id WHERE i.id=? AND d.state='pending' AND m.revision<=i.revision",
+                    (f"peer:{install}", item_id)).fetchone()
+    return row[0] if row else None
+
+
+def note_failure(c, delivery_id, code):
+    """A send that did not go, kept on the delivery: enough of them and it reaches Needs you (`unsent`)."""
+    c.execute("UPDATE message_deliveries SET attempts=attempts+1, error=?, updated_at=? WHERE id=? AND state='pending'",
+              (code, H.now(), delivery_id))
+
+
+# Failed sends before a waiting delivery counts as not sent: with the backoff (backend/federation_sync.py), about 25
+# minutes. The figure is in the partial index message_deliveries_unsent, word for word.
+UNSENT_WHERE = "(d.state='failed' OR (d.state='pending' AND d.attempts>=8))"
+
+
+def unsent(c):
+    """Messages another company's Tico has not taken, one row per thread and company: out of retries, or still failing.
+    A peering paused, revoked or not yet active lists nothing: its messages wait for it."""
+    rows = c.execute(f"SELECT d.root_id, d.recipient, MIN(d.created_at) AS since FROM message_deliveries d WHERE {UNSENT_WHERE} "
+                     "AND d.recipient LIKE 'peer:%' AND d.root_id IS NOT NULL GROUP BY d.root_id, d.recipient "
+                     "ORDER BY since").fetchall()
+    return [dict(r) for r in rows if F.active(c, r["recipient"].removeprefix("peer:")) is not None]
+
+
+def unsent_counts(c, thread_id):
+    """{install: messages not sent} for one thread, as Shared with shows them."""
+    return {r["recipient"].removeprefix("peer:"): r["n"] for r in c.execute(
+        f"SELECT d.recipient, COUNT(*) AS n FROM message_deliveries d WHERE {UNSENT_WHERE} AND d.recipient LIKE 'peer:%' "
+        "AND d.root_id=? GROUP BY d.recipient", (thread_id,))}
+
+
+def retry_unsent(c, thread_id, install, origin_id):
+    """Everything not sent to this install goes back to waiting, now. Returns how many deliveries that was."""
+    now = H.now()
+    count = c.execute(f"UPDATE message_deliveries AS d SET state='pending', attempts=0, error=NULL, next_attempt_at=NULL, "
+                      f"updated_at=? WHERE {UNSENT_WHERE} AND d.recipient=? AND d.root_id=?",
+                      (now, f"peer:{install}", thread_id)).rowcount
+    c.execute("UPDATE federation_outbox SET next_attempt_at=0 WHERE recipient=? AND thread_origin=?", (install, origin_id))
+    return count
 
 
 def current(c, delivery_id):

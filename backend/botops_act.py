@@ -260,6 +260,12 @@ DO = _routes(
     ("PUT", rf"org/order/{_S}"),
     # Which Slack channels bots read and post in: an owner or an admin's call, which the route checks.
     ("POST", r"slack/channels"), ("POST", r"slack/channels/(remove|import)"),
+    # Peering with another company's Tico and what it shares: the owner's or an admin's call, and a thread's routes also
+    # ask for read and manage on that thread (backend/federation_routes.py).
+    ("POST", r"federation/keys(/rotate)?"), ("POST", r"federation/peerings"),
+    ("POST", rf"federation/peerings/{_S}/(approve|pause|revoke)"),
+    ("POST", rf"federation/threads/{_S}/(readers|installs)"), ("POST", rf"federation/threads/{_S}/installs/{_S}/retry"),
+    ("DELETE", rf"federation/threads/{_S}/installs/{_S}"),
     ("POST", rf"credentials/{_S}/grants"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
     ("DELETE", rf"credentials/{_S}"),
     # Computers: a restart, a model sign-in (its code is pasted in the app, never here), who may open its screen (opening

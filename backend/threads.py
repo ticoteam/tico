@@ -136,6 +136,9 @@ TABLES = (
     "CREATE INDEX IF NOT EXISTS message_deliveries_carrier ON message_deliveries(carrier_id) "
     "WHERE carrier_id IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS message_deliveries_thread ON message_deliveries(thread_id, recipient)",
+    # Outside messages not sent (backend/federation_threads.py UNSENT_WHERE, word for word, or SQLite does not use it).
+    "CREATE INDEX IF NOT EXISTS message_deliveries_unsent ON message_deliveries(root_id, recipient) "
+    "WHERE (state='failed' OR (state='pending' AND attempts>=8))",
     "CREATE TABLE IF NOT EXISTS message_mentions (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, actor TEXT NOT NULL, "
     "kind TEXT NOT NULL CHECK (kind IN ('mention','ask','assign')), in_audience INTEGER NOT NULL DEFAULT 1, "
     "created_at TEXT NOT NULL, UNIQUE (message_id, actor))",
@@ -2126,11 +2129,40 @@ def _root_for_membership(c, principal, thread_id):
     return actor, v, root
 
 
+def replica_root(c, root_id):
+    """Whether this root is a copy of another install's thread, even one this install was removed from: it holds that
+    company's words. A copy's id is its own, its origin the home's."""
+    return c.execute("SELECT 1 FROM federation_threads WHERE thread_id=? AND origin_id<>thread_id",
+                     (root_id,)).fetchone() is not None
+
+
+def shared_root(c, root_id):
+    """Whether this root is another company's copy here (`replica_root`), or this install's own with a company in it now."""
+    return replica_root(c, root_id) or c.execute(
+        "SELECT 1 FROM federation_members WHERE thread_id=? AND status='active' LIMIT 1", (root_id,)).fetchone() is not None
+
+
+def _shared_membership(c, v, root, target, adding):
+    """A person changing who is in a shared thread (the keeper, for federation, is not checked here). Links and guests
+    come from federation: `peer:` only through sharing and unsharing, and another company's people only through the
+    home, whose roster every copy mirrors. A copy's own readers are the ones its admins add."""
+    if v is None:
+        return
+    if str(target).startswith("peer:") or (adding and remote_guest(c, target)):
+        raise Problem("shared_membership", "Other companies join a thread through sharing, not its member list", 409)
+    if replica_root(c, root["id"]):
+        if remote_guest(c, target):
+            raise Problem("shared_membership", "The company that shared this thread decides who of theirs is in it", 409)
+        if adding and not can_manage(c, v, root):
+            raise Problem("forbidden", "An admin adds readers to a shared copy", 403)
+
+
 def add_member(c, principal, thread_id, actor, *, role="member"):
     me, v, root = _root_for_membership(c, principal, thread_id)
     target = actor if remote_guest(c, actor) or str(actor).startswith(("group:",) + OUTSIDE_PREFIXES) else H.resolve_actor(c, actor)
     if not target:
         raise Problem("not_found", "Unknown teammate", 404)
+    _shared_membership(c, v, root, target, True)
     if role not in ("owner", "member"):
         raise Problem("role", "A member is owner or member", 422)
     if role == "owner" and (remote_guest(c, target) or str(target).startswith(OUTSIDE_PREFIXES)):
@@ -2159,6 +2191,7 @@ def remove_member(c, principal, thread_id, actor):
     me, v, root = _root_for_membership(c, principal, thread_id)
     if v is not None and actor != me and not can_manage(c, v, root):
         raise Problem("forbidden", "Only the thread's owner removes a member", 403)
+    _shared_membership(c, v, root, actor, False)
     gone = c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor=?", (root["id"], actor)).rowcount
     if audience_of(root) == "participants":
         people = [p for p in root.get("participants") or [] if p != actor]
@@ -2224,6 +2257,8 @@ def set_audience(c, principal, thread_id, audience, *, audience_group_id=None):
     current = audience_of(root)
     if current not in ("members", "team", "company") or audience not in ("members", "team", "company"):
         raise Problem("audience", "Only a members, team or company thread changes audience", 422)
+    if audience != current and shared_root(c, root["id"]):
+        raise Problem("shared_audience", "A thread shared with another company stays a members thread", 409)
     if audience == "team" and (not audience_group_id or audience_group_id not in _group_ids(c)):
         raise Problem("audience", "A team thread names its group", 422)
     group = audience_group_id if audience == "team" else None

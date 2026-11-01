@@ -989,6 +989,8 @@ def held_for(c, who, operations):
     out = []
     for row in rows:
         role = _reader(who, dict(row), c)
+        if role is None and row["reviewer"] == who.actor and who.via not in ("botops", "assistant"):
+            role = "reviewer"                                 # a person's hold names its reviewer: no rule rows here
         if role in ("reviewer", "represented", "author"):     # author: a person's own held post
             out.append({**dict(row), "role": role})
     return out
@@ -1115,9 +1117,11 @@ def replay_identity(c, hold, auth):
     """The identity a held write runs as on Send anyway: the person it was held for, rebuilt with their own permissions
     (`auth.identity_for_actor`, refused once they are off the team), or for a bot's hold the bot, with the run it came
     from (its private tasks and meetings)."""
-    if H.is_human(hold["author"]):
+    if H.is_human(hold["author"]) and not T.remote_guest(c, hold["author"]):
         return auth.identity_for_actor(c, hold["author"])
     from .auth import Identity
+    if T.remote_guest(c, hold["author"]):               # another company's person or bot: never on this roster
+        return Identity(hold["author"], "guest", agent="org-rule-hold")
     return Identity(hold["author"], "bot", agent="org-rule-hold",
                     attempt_id=hold_provenance(hold).get("attempt_id") or "")
 
@@ -1399,6 +1403,26 @@ def _blocked_again(c, hold, verdict):
         "hold": hold["id"], "operation": "mail", "rules": rules, "cached": bool(verdict.get("cached")),
         "reviewer": hold["reviewer"], "repeat": True, **({"task": task_id} if task_id else {})})
     return _hold(c, hold["id"])
+
+
+def federated_hold(c, origin_id, revision):
+    """Whether this revision of a message from another install was held before: a catch-up brings it again, and the
+    first hold stands, whatever its reviewer decided."""
+    return c.execute("SELECT 1 FROM org_rule_holds WHERE operation='federated_message' "
+                     "AND json_extract(payload_json,'$.replay.origin_id')=? "
+                     "AND json_extract(payload_json,'$.replay.revision')=? LIMIT 1",
+                     (origin_id, int(revision))).fetchone() is not None
+
+
+def supersede_federated(c, origin_id, revision):
+    """A newer revision of a message from another install came: holds on its older revisions close, kept, so a late
+    Send anyway cannot put old words back. Their review tasks close with them."""
+    from .auth import Identity
+    rows = c.execute("SELECT * FROM org_rule_holds WHERE state='held' AND operation='federated_message' "
+                     "AND json_extract(payload_json,'$.replay.origin_id')=? "
+                     "AND json_extract(payload_json,'$.replay.revision')<?", (origin_id, int(revision))).fetchall()
+    for row in rows:
+        _decide(c, Identity(H.KEEPER, "service"), dict(row), "kept", "org_rule_hold.superseded")
 
 
 def supersede_mail(c, hold_id):

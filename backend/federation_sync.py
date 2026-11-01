@@ -44,6 +44,7 @@ REASON_NOTES = {"rules": "Tico held this message, so it did not reach the thread
                 "screening": "Tico held this message, so it did not reach the thread.",
                 "namespace": "Tico did not take this message: its author is not from the install that sent it.",
                 "origin": "Tico did not take this message: its id is already used by another message.",
+                "unknown_message": "Tico did not take this edit: the other company has no message it changes.",
                 "unknown_parent": "Tico did not take this message: the message it replies to is not shared with this install.",
                 "unknown_thread": "Tico did not take this message: the thread is not shared with this install."}
 
@@ -158,10 +159,12 @@ def sign_item(c, vault, thread, *, kind, payload, origin, revision, now):
                        sent_at=sent_at, key_id=current["key_id"], signature=signature, body=body)
 
 
-def message_payload(thread_origin, origin, revision, actor, message_kind, body, deleted, created, parent=""):
+def message_payload(thread_origin, origin, revision, actor, message_kind, body, deleted, created, parent="", first=False):
+    """`first`: this is the first its author sends of the message, at whatever revision it has by then. Without it, a
+    revision past 0 is an edit, and an edit of a message the receiver does not know is never made into one."""
     return {"type": "message", "thread": thread_origin, "origin_id": origin, "revision": int(revision), "actor": actor,
             "message_kind": message_kind, "body": "" if deleted else (body or ""), "deleted": bool(deleted),
-            "created": created or "", "parent": parent or ""}
+            "created": created or "", "parent": parent or "", **({"first": True} if first else {})}
 
 
 def membership_payload(thread, change, install, members, title=""):
@@ -278,7 +281,11 @@ def stage(c, vault, now, limit=100):
                 T.settle(c, delivery, "moot")
                 continue
             item = home_message(c, vault, thread, row, now)
-            T.settle(c, delivery, "delivered" if item else "moot")
+            if item is None:
+                T.settle(c, delivery, "moot")
+                continue
+            # Numbered and on its way, not there yet: `sent` or `refused` settles the delivery when HQ answers.
+            queue(c, recipient=target, kind="item", item_id=item["id"], thread_origin=thread["origin_id"])
             staged += 1
             continue
         if row["origin_install"]:
@@ -462,7 +469,7 @@ def checked_message(payload):
             and not (deleted and revision == 0)):
         return None
     return {"origin_id": origin, "revision": revision, "actor": actor, "body": text, "message_kind": kind,
-            "deleted": deleted, "parent": parent}
+            "deleted": deleted, "parent": parent, "first": payload.get("first") is True}
 
 
 def parent_local(c, thread, parent_origin):
@@ -476,11 +483,26 @@ def parent_local(c, thread, parent_origin):
     return row["message_id"]
 
 
-def record_refused(c, origin, root, actor, revision):
-    """A refused first message is kept with no local message, so a later revision is refused the same way."""
+def record_refused(c, known, origin, root, actor, revision):
+    """A refused first message is kept with no local message, at the revision refused: a repeat of it is refused the same
+    way, without another check. A later revision is a new text, so it is checked afresh, and a reviewer can release a hold."""
+    if known is not None:
+        c.execute("UPDATE federation_messages SET revision=?, updated_at=? WHERE origin_id=?", (revision, stamp(), origin))
+        return
     c.execute("INSERT INTO federation_messages(id,origin_id,message_id,thread_id,author,revision,home_seq,sent_revision,"
               "created_at,updated_at) VALUES(?,?,'',?,?,?,NULL,NULL,?,?)", (H.new_id(), origin, root, actor, revision,
                                                                            stamp(), stamp()))
+
+
+def record_posted(c, known, origin, message_id, root, actor, revision, seq):
+    """A first message now has its local message: a new row, or the refused row it replaces."""
+    if known is not None:
+        c.execute("UPDATE federation_messages SET message_id=?, revision=?, home_seq=?, updated_at=? WHERE origin_id=?",
+                  (message_id, revision, seq, stamp(), origin))
+        return
+    c.execute("INSERT INTO federation_messages(id,origin_id,message_id,thread_id,author,revision,home_seq,sent_revision,"
+              "created_at,updated_at) VALUES(?,?,?,?,?,?,?,NULL,?,?)",
+              (H.new_id(), origin, message_id, root, actor, revision, seq, stamp(), stamp()))
 
 
 def on_message(c, now, me, sender, payload, envelope_id, sent, signature, body, gate=None, vault=None):
@@ -507,19 +529,28 @@ def on_message(c, now, me, sender, payload, envelope_id, sent, signature, body, 
         return "unknown_message"
     if known is None and revision > 0 and fields["deleted"]:
         return "unknown_message"
-    if known is not None and known["message_id"] == "":
-        return refuse(c, sender, payload, "rules")       # refused when it first came: nothing to edit
+    if known is None and revision > 0 and not fields["first"]:
+        return refuse(c, sender, payload, "unknown_message")     # an edit is never made into a message
+    fresh = known is None or known["message_id"] == ""           # no local message yet: this would be the first
     if known is not None and revision <= known["revision"]:
-        return "duplicate"
-    parent = parent_local(c, thread, fields["parent"]) if known is None else ""
+        return refuse(c, sender, payload, "rules") if fresh else "duplicate"
+    OR.supersede_federated(c, origin, revision)
+    parent = parent_local(c, thread, fields["parent"]) if fresh else ""
     if parent is None:
         return refuse(c, sender, payload, "unknown_parent")
-    text, reason = ("", None) if fields["deleted"] else screen(c, gate, actor, fields["body"], sender, origin, revision, root)
+    if fresh and fields["deleted"]:                              # taken back before it was ever taken here
+        record_refused(c, known, origin, root, actor, revision)
+        return "applied"
+    replay = {"sender": sender, "actor": actor, "kind": fields["message_kind"], "parent": fields["parent"],
+              "envelope_id": envelope_id, "sent_at": sent, "key_id": peer["peer_key_id"], "signature": signature,
+              "payload_b64": base64.b64encode(bytes(body)).decode("ascii")}
+    text, reason = ("", None) if fields["deleted"] else screen(c, gate, actor, fields["body"], sender, origin, revision, root,
+                                                               replay)
     if reason:
-        if known is None:
-            record_refused(c, origin, root, actor, revision)
+        if fresh:
+            record_refused(c, known, origin, root, actor, revision)
         return refuse(c, sender, payload, reason)
-    if known is None:
+    if fresh:
         if T.ensure_guest(c, root, actor) and vault is not None:
             refresh_roster(c, vault, thread, now)         # the roster carries the new guest before the message does
         view = T.post_inbound(c, root, text, kind=fields["message_kind"],
@@ -527,9 +558,7 @@ def on_message(c, now, me, sender, payload, envelope_id, sent, signature, body, 
                               parent_message=parent or None)
         item = insert_item(c, thread, kind="message", origin=origin, revision=revision, author=sender, envelope_id=envelope_id,
                            sent_at=sent, key_id=peer["peer_key_id"], signature=signature, body=body)
-        c.execute("INSERT INTO federation_messages(id,origin_id,message_id,thread_id,author,revision,home_seq,sent_revision,"
-                  "created_at,updated_at) VALUES(?,?,?,?,?,?,?,NULL,?,?)",
-                  (H.new_id(), origin, view["id"], root, actor, revision, item["home_seq"], stamp(), stamp()))
+        record_posted(c, known, origin, view["id"], root, actor, revision, item["home_seq"])
     else:
         view = T.apply_revision(c, {"origin_id": origin, "revision": revision, "install": sender, "actor": actor},
                                 body=text, deleted=fields["deleted"])
@@ -627,6 +656,7 @@ def on_item(c, now, me, sender, peer, wrapper, fetched, gate=None):
     fields = checked_message(payload)
     if fields is None:
         return "invalid"
+    fields["first"] = wrapper.get("first") is True      # the home's word: this is the stream's first of this message
     if seq > thread["applied_through"] + 1:
         request_catch_up(c, now, thread, thread["applied_through"])
         return "gap"
@@ -645,8 +675,9 @@ def advance(c, thread, seq):
 
 def apply_message(c, me, thread, author, seq, fields, gate=None, sender=None):
     """One message from the stream into the local thread, through core's door and the org rules (for a message another
-    install wrote). A message refused here is recorded with no local message, so a catch-up never screens it again.
-    Works for a number already passed too, so a message a replica lost comes back on a catch-up."""
+    install wrote). A message refused here is recorded with no local message, so a catch-up never screens that text again.
+    An edit of a message not known here is never made into one: the catch-up brings the message first. Works for a number
+    already passed too, so a message a replica lost comes back on a catch-up."""
     origin, revision, actor, root = fields["origin_id"], fields["revision"], fields["actor"], thread["thread_id"]
     known = message_row(c, origin)
     carried = author != me
@@ -659,32 +690,34 @@ def apply_message(c, me, thread, author, seq, fields, gate=None, sender=None):
     if revision > 0:
         if known is not None and not same:
             return "unknown_message"
-        if known is None and fields["deleted"]:
+        if known is None and (fields["deleted"] or not fields["first"]):
             return "unknown_message"
-        if known is not None and known["message_id"] == "":
-            return "rules"                               # refused when it came: nothing to edit
         if known is not None and revision <= known["revision"]:
-            return "duplicate"
-    if known is None:
+            return "rules" if known["message_id"] == "" else "duplicate"   # refused when it came: nothing to edit
+    OR.supersede_federated(c, origin, revision)
+    fresh = known is None or known["message_id"] == ""   # no local message yet: this would be the first
+    replay = {"sender": sender, "actor": actor, "kind": fields["message_kind"], "parent": fields["parent"], "seq": seq}
+    if fresh:
         parent = parent_local(c, thread, fields["parent"])
         if parent is None:
             refuse(c, sender, {"thread": thread["origin_id"], "origin_id": origin, "revision": revision}, "unknown_parent")
             return "unknown_parent"
+        if fields["deleted"]:                            # taken back before it was ever taken here
+            record_refused(c, known, origin, root, actor, revision)
+            return "applied"
         text, reason = (fields["body"], None) if not carried else screen(c, gate, actor, fields["body"], author, origin,
-                                                                         revision, root)
+                                                                         revision, root, replay)
         if reason:
-            record_refused(c, origin, root, actor, revision)
+            record_refused(c, known, origin, root, actor, revision)
             refuse(c, sender, {"thread": thread["origin_id"], "origin_id": origin, "revision": revision}, reason)
             return reason
         view = T.post_inbound(c, root, text, kind=fields["message_kind"],
                               origin={"origin_id": origin, "revision": revision, "install": author, "actor": actor},
                               parent_message=parent or None)
-        c.execute("INSERT INTO federation_messages(id,origin_id,message_id,thread_id,author,revision,home_seq,sent_revision,"
-                  "created_at,updated_at) VALUES(?,?,?,?,?,?,?,NULL,?,?)",
-                  (H.new_id(), origin, view["id"], root, actor, revision, seq, stamp(), stamp()))
+        record_posted(c, known, origin, view["id"], root, actor, revision, seq)
         return "applied"
     if carried and not fields["deleted"]:
-        text, reason = screen(c, gate, actor, fields["body"], author, origin, revision, root)
+        text, reason = screen(c, gate, actor, fields["body"], author, origin, revision, root, replay)
     else:
         text, reason = fields["body"], None
     if reason:
@@ -751,25 +784,85 @@ def on_membership(c, now, me, sender, thread, seq, payload):
 
 
 # ----------------------------------------------------------------------------- screening, refusals, rosters
-def screen(c, gate, actor, text, install, origin_id, revision, thread_id):
+def screen(c, gate, actor, text, install, origin_id, revision, thread_id, replay=None):
     """(text to write, refusal reason or None) for one carried text. The checks ran before this write, outside it (the
-    relay's preflight): the org rules decide here (a Block writes nothing, a warning is written with its line), and the
-    injection screen's `hold` refuses while its `warn` puts a line before the text. A verdict that could not be checked,
-    or that moved, defers the envelope."""
+    relay's preflight): the injection screen's `hold` refuses and its `warn` puts a line before the text, and the org
+    rules decide here (a Block writes nothing and leaves a hold a reviewer can release, a warning is written with its
+    line). The injection screen goes first, so a hold only ever carries a text that passed it. `replay` is what `release`
+    needs of the envelope, kept on the hold. A verdict that could not be checked, or that moved, defers the envelope."""
     if gate is None:
         return text, None
     org, injection = gate(actor, text, install, origin_id, revision, thread_id)
-    outcome = OR.apply(c, org, text, {"install": install, "origin_id": origin_id, "thread_id": thread_id})
+    if injection and injection.get("action") == "hold":
+        return None, "screening"
+    warning = screening.warning_line(injection) if injection and injection.get("action") == "warn" else ""
+    if OR.holds(org) and OR.federated_hold(c, origin_id, revision):
+        return None, "rules"                              # a catch-up brought it again: the first hold stands
+    outcome = OR.apply(c, org, text, {**(replay or {}), "install": install, "origin_id": origin_id, "revision": revision,
+                                      "thread_id": thread_id, "warning": warning})
     if outcome and "moved" in outcome:
         raise Deferred("moved")
     if outcome and "held" in outcome:
         return None, "rules"
-    if injection and injection.get("action") == "hold":
-        return None, "screening"
     text = OR.warned_text(outcome, text)
-    if injection and injection.get("action") == "warn":
-        text = screening.warning_line(injection) + "\n" + text
-    return text, None
+    return (warning + "\n" + text if warning else text), None
+
+
+def stays_held(why):
+    return Problem("changed", why + " It stays held.", 409)
+
+
+def release(c, vault, now, bot, hold, replay, gate=None):
+    """Send anyway for a message another install sent: the write the check stopped, run now as its recorded author (a
+    guest here, `bot`), in this install's thread. The hold's reviewer and nonce are the check, so nothing is screened
+    again; the envelope's own checks are, as they stand now. The home relays the author's signed envelope as it came, so
+    every other member can still check it against the author's key. A refusal keeps the hold, its nonce unspent."""
+    origin, revision, actor, root = replay["origin_id"], int(replay["revision"]), replay["actor"], replay["thread_id"]
+    sender, author = replay["sender"], replay["install"]
+    thread, known = thread_local(c, root), message_row(c, origin)
+    if bot.actor != actor or thread is None or thread["removed_at_seq"] is not None:
+        raise stays_held("This thread is no longer shared with that company.")
+    if F.active(c, sender) is None:
+        raise stays_held("The connection with that company is paused or ended.")
+    if known is None or known["author"] != actor or known["thread_id"] != root:
+        raise stays_held("This message changed.")
+    fresh = known["message_id"] == ""
+    if revision != known["revision"] if fresh else revision <= known["revision"]:
+        raise stays_held("A newer version of this message came.")
+    home = thread["home_install"] == F.install(c)
+    if home:
+        member = member_of(c, root, sender)
+        if member is None or member["status"] != "active":
+            raise stays_held("This thread is no longer shared with that company.")
+        if F.peering(c, sender)["peer_key_id"] != replay["key_id"]:
+            raise stays_held("That company's key changed, so its envelope can no longer be checked.")
+    stored = json.loads(hold["payload_json"] or "{}").get("text") or ""
+    text = OR.warned_text(gate, stored)
+    text = replay["warning"] + "\n" + text if replay.get("warning") else text
+    carried = {"origin_id": origin, "revision": revision, "install": author, "actor": actor}
+    if fresh:
+        parent = parent_local(c, thread, replay.get("parent") or "")
+        if parent is None:
+            raise stays_held("The message it replies to is not in this thread.")
+        if home and T.ensure_guest(c, root, actor) and vault is not None:
+            refresh_roster(c, vault, thread, now)         # the roster carries the new guest before the message does
+        view = T.post_inbound(c, root, text, kind=replay["kind"], origin=carried, parent_message=parent or None)
+    else:
+        view = T.apply_revision(c, carried, body=text, deleted=False)
+        if view is None:
+            raise stays_held("This message changed.")
+    item = None
+    if home:
+        item = insert_item(c, thread, kind="message", origin=origin, revision=revision, author=author,
+                           envelope_id=replay["envelope_id"], sent_at=replay["sent_at"], key_id=replay["key_id"],
+                           signature=replay["signature"], body=base64.b64decode(replay["payload_b64"]))
+    if fresh:
+        record_posted(c, known, origin, view["id"], root, actor, revision, item["home_seq"] if item else replay.get("seq"))
+    else:
+        c.execute("UPDATE federation_messages SET revision=?, updated_at=? WHERE origin_id=?", (revision, stamp(), origin))
+    if item:
+        enqueue(c, thread, item)
+    return {"id": view["id"], "thread_id": root}
 
 
 def refusal_bytes(thread, origin, revision, reason):
@@ -917,7 +1010,8 @@ def staged_payload(c, row, me):
     if sent_revision is not None and revision <= sent_revision:
         return None
     body = E.payload_bytes(message_payload(thread["origin_id"], origin, revision, actor, cur["message_kind"], cur["body"],
-                                           cur["deleted"], cur["created"], parent=cur["parent_message"]))
+                                           cur["deleted"], cur["created"], parent=cur["parent_message"],
+                                           first=sent_revision is None))
     if len(body) > E.MAX_BODY:
         T.settle(c, row["delivery_id"], "failed", error="too_large")
         return None
@@ -929,6 +1023,7 @@ def envelope(c, vault, row, now):
     me = F.install(c)
     recipient = row["recipient"]
     origin = revision = None
+    skip = False
     if row["kind"] == "item":
         item = c.execute("SELECT * FROM federation_items WHERE id=?", (row["item_id"],)).fetchone()
         if item is None:
@@ -939,12 +1034,15 @@ def envelope(c, vault, row, now):
             return None
         thread = thread_local(c, item["thread_id"])
         if item["kind"] == "message" and not eligible(c, member, item["origin_id"]):
+            skip = True
             body = E.payload_bytes({"type": "item", "thread": thread["origin_id"], "home_seq": item["home_seq"], "skip": True})
         else:
+            first = item["kind"] == "message" and item["home_seq"] == c.execute(
+                "SELECT MIN(home_seq) FROM federation_items WHERE origin_id=?", (item["origin_id"],)).fetchone()[0]
             body = E.payload_bytes({"type": "item", "thread": thread["origin_id"], "home_seq": item["home_seq"],
                                     "item_type": item["kind"], "author": item["author"], "envelope_id": item["envelope_id"],
                                     "sent_at": item["sent_at"], "key_id": item["key_id"], "signature": item["signature"],
-                                    "payload_b64": base64.b64encode(bytes(item["payload"])).decode("ascii")})
+                                    "first": first, "payload_b64": base64.b64encode(bytes(item["payload"])).decode("ascii")})
     elif row["kind"] == "delivery":
         built = staged_payload(c, row, me)
         if built is None:
@@ -956,12 +1054,21 @@ def envelope(c, vault, row, now):
     envelope_id, sent_at = E.new_envelope_id(), int(now)
     signature = E.sign(F.private(c, vault, current), me, recipient, envelope_id, sent_at, body)
     return {"to": recipient, "body": body, "envelope_id": envelope_id, "sent_at": sent_at, "key_id": current["key_id"],
-            "signature": signature, "origin": origin, "revision": revision}
+            "signature": signature, "origin": origin, "revision": revision, "skip": skip}
+
+
+def delivery_of(c, row):
+    """The message delivery an outbox row carries, still waiting: its own, or the one for an item's message to this
+    recipient. None for a row that carries no message (membership, catch-up, refusal)."""
+    if row["kind"] == "delivery":
+        return row["delivery_id"]
+    return T.item_delivery(c, row["item_id"], row["recipient"]) if row["kind"] == "item" else None
 
 
 def sent(c, row, outbound):
     """HQ took the row. A delivery's revision is sent (the outbound's), and the delivery is settled delivered only while it
-    is still that revision. An edit made during the send leaves it pending, and the next stage queues the new one."""
+    is still that revision. An edit made during the send leaves it pending, and the next stage queues the new one. An item
+    settles the delivery of its message to this recipient the same way; a skip was not for it, so that delivery goes moot."""
     if row["kind"] == "delivery" and outbound.get("origin"):
         c.execute("UPDATE federation_messages SET sent_revision=?, revision=max(revision,?), updated_at=? WHERE origin_id=? "
                   "AND (sent_revision IS NULL OR sent_revision<?)",
@@ -969,28 +1076,40 @@ def sent(c, row, outbound):
         waiting = T.current(c, row["delivery_id"])
         if waiting is not None and waiting["revision"] == outbound["revision"]:
             T.settle(c, row["delivery_id"], "delivered")
+    elif row["kind"] == "item":
+        delivery = delivery_of(c, row)
+        if delivery:
+            T.settle(c, delivery, "moot" if outbound.get("skip") else "delivered")
     c.execute("DELETE FROM federation_outbox WHERE id=?", (row["id"],))
 
 
 def dropped(c, row):
     """A row no longer to be sent: a delivery still waiting goes moot, and the row goes."""
-    if row["kind"] == "delivery":
-        T.moot_pending(c, row["delivery_id"])
+    delivery = delivery_of(c, row)
+    if delivery:
+        T.moot_pending(c, delivery)
     c.execute("DELETE FROM federation_outbox WHERE id=?", (row["id"],))
 
 
 def refused(c, row, code):
-    """HQ or the peer will never take this row as it is: settled as failed (a delivery) and dropped."""
-    if row["kind"] == "delivery":
-        T.settle(c, row["delivery_id"], "failed", error=code)
+    """HQ or the peer will never take this row as it is: settled as failed (a delivery, which Needs you then lists:
+    `T.unsent`) and dropped."""
+    delivery = delivery_of(c, row)
+    if delivery:
+        T.settle(c, delivery, "failed", error=code)
     c.execute("DELETE FROM federation_outbox WHERE id=?", (row["id"],))
 
 
 def retry(c, row, code, now):
+    """A send that may go later: tried again after the backoff. The delivery keeps the count, unless the peering is merely
+    paused, which is no failure."""
     attempts = row["attempts"] + 1
     wait = min(BACKOFF_MAX, RETRY_FIRST * 2 ** min(attempts, 8))
     c.execute("UPDATE federation_outbox SET attempts=?, next_attempt_at=?, last_error=? WHERE id=?",
               (attempts, now + wait, code, row["id"]))
+    delivery = delivery_of(c, row) if code != "paused" else None
+    if delivery:
+        T.note_failure(c, delivery, code)
 
 
 def carried_texts(c, me, sender, body):
@@ -1013,12 +1132,16 @@ def carried_texts(c, me, sender, body):
         except (TypeError, ValueError):
             inner = None
         fields = checked_message(inner) if inner else None
+        if fields:
+            fields["first"] = payload.get("first") is True
         if (isinstance(author, str) and author != me and thread and fields and not fields["deleted"]
                 and E.install_of(fields["actor"]) == author):
             out.append((author, fields, thread))
     found = []
     for install, fields, thread in out:
         known = message_row(c, fields["origin_id"])
+        if known is None and fields["revision"] > 0 and not fields["first"]:
+            continue                                     # an edit of a message not known here: not written, not checked
         if known is not None and (known["author"] != fields["actor"] or known["thread_id"] != thread["thread_id"]
                                   or fields["revision"] <= known["revision"]):
             continue

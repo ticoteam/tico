@@ -74,7 +74,7 @@ async function needsRecommend(button, ask, version) {
 // task rows' columns (task-list.js taskListRowHTML), with nothing to select and no status.
 // The thread items (backend/thread_attention.py): each names its kind, and opens its thread rather than a decide card.
 const THREAD_NEED_KINDS = {thread_ask: 'Question', thread_mention: 'Mention', thread_dm: 'Direct message',
-                           thread_held: 'Held', thread_capped: 'Paused'};
+                           thread_held: 'Held', thread_capped: 'Paused', thread_unsent: 'Not sent'};
 function needRowHTML(it, ctx = {}) {
   const key = decideItemKey(it), stale = it.kind === 'stale', thread = THREAD_NEED_KINDS[it.kind];
   const from = stale ? '' : taskRequester(it) || it.requester || '';

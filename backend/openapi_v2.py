@@ -2400,7 +2400,8 @@ STABLE.extend([
     ('/api/v2/federation/peerings/{peering_id}/revoke', 'post', 'Federation', 'revokeFederationPeering', 'End a peering; a new request starts over', None),
     ('/api/v2/federation/threads/{thread_id}/installs', 'post', 'Federation', 'shareFederationThread', 'Share a thread this install owns with an active peer; it gets the thread from now on', None),
     ('/api/v2/federation/threads/{thread_id}/installs/{install_id}', 'delete', 'Federation', 'unshareFederationThread', 'Remove an install from a thread this install owns; it gets the removal and nothing after', None),
-    ('/api/v2/federation/threads/{thread_id}/readers', 'post', 'Federation', 'addFederationThreadReader', 'Let a local person read a shared thread copy on this install; only the owner adds readers', None),
+    ('/api/v2/federation/threads/{thread_id}/installs/{install_id}/retry', 'post', 'Federation', 'retryFederationThreadInstall', 'Send again now what another install has not taken from this thread; for whoever manages the thread', None),
+    ('/api/v2/federation/threads/{thread_id}/readers', 'post', 'Federation', 'addFederationThreadReader', 'Let a local person read a shared thread copy on this install; an admin who reads it adds readers', None),
 ])
 # Threads (docs/dev/threads-contract.md §10): a thread is a conversation read through threads.view, and its messages
 # carry thread_id, root_id-free fields as _message_out writes them.

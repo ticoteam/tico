@@ -3,8 +3,8 @@
    mailboxes, Email & Phone inboxes, meeting importers, incoming and outgoing webhooks, physical mail and Listening. A
    row says its status, whose it is, who reads it and its bots, and links to where it is set up (Slack's and GitHub's
    connect cards stay on their Tools pages). The hub filters the rows per reader; this page only draws them.
-   Below the list, admins see Slack (threads linked to Slack channels) and the owner sees Other companies (this Tico's
-   ID and key, and its peerings with other companies' Ticos); the shared rows are in ui/app/thread-connect.js.
+   Below the list, admins see Slack (threads linked to Slack channels) and Other companies (this Tico's ID and key, and
+   its peerings with other companies' Ticos); the shared rows are in ui/app/thread-connect.js.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -140,11 +140,11 @@ async function cnSlackSection(view) {
   catch (e) { if (view === CN_VIEW && sec.isConnected) { list.innerHTML = ''; failed(e); } }
 }
 
-// ----------------------------------------------------------------- Other companies: peerings (the owner only)
+// ----------------------------------------------------------------- Other companies: peerings (admins only)
 // GET /api/v2/federation lists at most 50 peerings, newest first, and is not cursor-paged (docs/federation.md).
 async function cnPeersSection(view) {
   const sec = $('#cn-peers');
-  if (!sec || !tcnOwner()) return;
+  if (!sec || !tcnAdmin()) return;
   sec.hidden = false;
   sec.innerHTML = `<header class="cn-sec-head"><h2>Other companies</h2><span class="spacer"></span>
       <button type="button" class="ghost small" data-cn-open aria-expanded="false">Connect a company</button></header>

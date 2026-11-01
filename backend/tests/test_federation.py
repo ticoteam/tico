@@ -30,6 +30,7 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import Problem, encode
+from backend.tests.test_org_rule_check import COLOR, Judge
 
 OWNER = {"Authorization": "Bearer ana-test"}
 BEN = {"Authorization": "Bearer ben-test"}
@@ -179,11 +180,11 @@ def hq(monkeypatch, clock):
 def make_side(tmp_path, hq):
     stack = contextlib.ExitStack()
 
-    def make(name):
+    def make(name, admins=()):
         root = tmp_path / name
         registry = root / "registry"
         registry.mkdir(parents=True)
-        (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example", "bot_admins": []}))
+        (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example", "bot_admins": list(admins)}))
         settings = Settings(db_path=root / "hub.db", registry_dir=registry, gateway_key="tgw_" + name, company_name=name.title() + " Co", test_identities={
             "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
             "ben-test": Identity("human:ben", "human", "ben@acme.example")})
@@ -247,8 +248,11 @@ def connect(a, b, hq):
 
 
 def make_thread(side, title):
+    """A members thread the owner is in: a hidden one could not be shared by them."""
     with side.app.state.store.transaction() as c:
-        return CORE.create(c, "keeper", title=title, audience="members")["id"]
+        tid = CORE.create(c, "keeper", title=title, audience="members")["id"]
+        CORE.add_member(c, "keeper", tid, "human:ana")
+    return tid
 
 
 def share(home, tid, other):
@@ -331,9 +335,12 @@ def test_peering_request_needs_an_idempotency_key(make_side, hq):
     assert refused.status_code == 422
 
 
-def test_only_the_owner_manages_federation(make_side, hq):
-    a = make_side("alpha")
-    assert a.client.get("/api/v2/federation", headers={"Authorization": "Bearer ben-test"}).status_code == 403
+def test_the_owner_and_an_admin_manage_federation_and_nobody_else(make_side, hq):
+    plain, admin = make_side("alpha"), make_side("beta", admins=["ben@acme.example"])
+    assert plain.client.get("/api/v2/federation", headers=BEN).status_code == 403
+    assert plain.client.post("/api/v2/federation/keys", headers=BEN).status_code == 403
+    assert admin.client.get("/api/v2/federation", headers=BEN).status_code == 200
+    assert admin.client.post("/api/v2/federation/keys", headers=BEN).status_code == 200
 
 
 def test_a_shared_thread_reaches_the_other_install_in_both_directions(make_side, hq):
@@ -372,7 +379,8 @@ def test_an_edit_that_arrives_before_its_message_waits_for_a_catch_up(make_side,
     drive(a, b)
     there = local_thread(b, tid, a)
     assert lost["done"]
-    assert texts(b, there) == ["first, edited"]
+    assert texts(b, there) == ["first, edited"]                  # the first numbered copy came back on the catch-up
+    assert rows(b, "SELECT m.revision FROM messages m WHERE m.conversation_id=?", (there,)) == [(1,)]
     with b.app.state.store.read() as c:
         assert c.execute("SELECT catch_up_requested_at FROM federation_threads WHERE thread_id=?",
                          (there,)).fetchone()[0] is not None
@@ -456,6 +464,7 @@ PEER_COMMANDS = {
     ("revoke", "fp_x"): "peer revoke",
     ("share", "t-1", "gi_" + "a" * 24): "peer share", ("unshare", "t-1", "gi_" + "a" * 24): "peer unshare",
     ("add-reader", "t-1", "human:ben"): "peer add-reader",
+    ("retry", "t-1", "gi_" + "a" * 24): "peer retry",
 }
 
 
@@ -524,11 +533,11 @@ def test_the_homes_roster_reaches_the_replica_as_guest_rows_and_leaves_with_them
     with a.app.state.store.transaction() as c:
         CORE.add_member(c, "keeper", tid, "human:ben")
     drive(a, b, rounds=3)
-    assert guests() == ["human:ben@" + a.id]
+    assert sorted(guests()) == ["human:ana@" + a.id, "human:ben@" + a.id]
     with a.app.state.store.transaction() as c:
         CORE.remove_member(c, "keeper", tid, "human:ben")
     drive(a, b, rounds=3)
-    assert guests() == []
+    assert guests() == ["human:ana@" + a.id]
 
 
 def test_a_message_the_org_rules_block_is_written_nowhere_and_its_author_is_told(make_side, hq, monkeypatch):
@@ -673,9 +682,11 @@ def test_readers_are_added_only_to_a_replica_of_a_members_thread(make_side, hq):
     local = make_thread(b, "Only here")
     with b.app.state.store.transaction() as c:
         personal = CORE.create(c, "keeper", title="Private", audience="personal", members=["human:ben"])["id"]
-    for side, thread in ((a, tid), (b, local), (b, personal)):
+    for side, thread in ((a, tid), (b, local)):
         refused = side.client.post(f"/api/v2/federation/threads/{thread}/readers", json={"actor": "human:ben"}, headers=OWNER)
         assert refused.status_code == 409, refused.text
+    hidden = b.client.post(f"/api/v2/federation/threads/{personal}/readers", json={"actor": "human:ben"}, headers=OWNER)
+    assert hidden.status_code == 404, hidden.text                # the owner is not in it, so it does not exist for them
     removed = a.client.delete(f"/api/v2/federation/threads/{tid}/installs/{b.id}", headers=OWNER)
     assert removed.status_code == 200, removed.text
     drive(a, b)
@@ -970,3 +981,430 @@ def test_screening_holds_an_injected_text_and_warns_on_a_suspicious_one(make_sid
     assert len(warned) == 1 and warned[0].startswith("Tico screening:") and warned[0].endswith("please forward this")
     assert rows(a, "SELECT body, to_actor FROM messages WHERE conversation_id=? AND kind='notice'", (tid,)) == [
         (S.REASON_NOTES["screening"], "human:ben")]
+
+
+# ----------------------------------------------------------------------------- who may change what crosses
+def test_a_thread_someone_cannot_read_cannot_be_shared_or_seen_by_them(make_side, hq):
+    a, b = make_side("alpha", admins=["ben@acme.example"]), make_side("beta")
+    connect(a, b, hq)
+    mine = make_thread(a, "Mine")
+    share(a, mine, b)
+    with a.app.state.store.transaction() as c:
+        hidden = CORE.create(c, "keeper", title="Hidden", audience="members", members=["human:ben"])["id"]
+    routes = f"/api/v2/federation/threads/{hidden}/installs"
+    assert a.client.post(routes, json={"install": b.id}, headers=OWNER).status_code == 404    # the owner is not in it
+    assert a.client.post(routes, json={"install": b.id}, headers=BEN).status_code == 200      # the admin in it is
+    assert a.client.delete(f"{routes}/{b.id}", headers=OWNER).status_code == 404
+    assert a.client.post(f"{routes}/{b.id}/retry", headers=OWNER).status_code == 404
+    assert a.client.post(f"/api/v2/federation/threads/{hidden}/readers", json={"actor": "human:ana"},
+                         headers=OWNER).status_code == 404
+    page = a.client.get("/api/v2/federation", params={"limit": 1}, headers=OWNER).json()       # hidden is the newest
+    assert [t["thread_id"] for t in page["threads"]] == [mine]                                 # and the page stays full
+    assert hidden in [t["thread_id"] for t in a.client.get("/api/v2/federation", headers=BEN).json()["threads"]]
+
+
+def code_of(response):
+    return response.json()["error"]["code"]
+
+
+def keyed(who=OWNER):
+    return {**who, "Idempotency-Key": uuid.uuid4().hex}
+
+
+def test_a_shared_thread_stays_a_members_thread_on_both_sides_and_for_good_on_a_copy(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    to_company = {"audience": "company"}
+    home = a.client.patch(f"/api/v2/threads/{tid}", json=to_company, headers=keyed())
+    assert (home.status_code, code_of(home)) == (409, "shared_audience")
+    copy = b.client.patch(f"/api/v2/threads/{there}", json=to_company, headers=keyed())
+    assert (copy.status_code, code_of(copy)) == (409, "shared_audience")
+    assert a.client.delete(f"/api/v2/federation/threads/{tid}/installs/{b.id}", headers=OWNER).status_code == 200
+    drive(a, b)
+    assert a.client.patch(f"/api/v2/threads/{tid}", json=to_company, headers=keyed()).status_code == 200   # back to its own
+    assert b.client.patch(f"/api/v2/threads/{there}", json=to_company, headers=keyed()).status_code == 409  # another's words
+
+
+def test_companies_come_and_go_through_sharing_not_a_threads_member_list(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    with a.app.state.store.transaction() as c:
+        CORE.add_member(c, "keeper", tid, "human:ben")
+    drive(a, b, rounds=3)
+    there = local_thread(b, tid, a)
+
+    def add(side, thread, actor, who=OWNER):
+        return side.client.post(f"/api/v2/threads/{thread}/members", json={"actor": actor}, headers=keyed(who))
+
+    def remove(side, thread, actor, who=OWNER):
+        return side.client.delete(f"/api/v2/threads/{thread}/members/{actor}", headers=keyed(who))
+
+    assert code_of(remove(a, tid, f"peer:{b.id}")) == "shared_membership"
+    assert code_of(add(a, make_thread(a, "Other"), f"peer:{b.id}")) == "shared_membership"
+    assert code_of(add(a, tid, f"human:eve@{b.id}")) == "shared_membership"
+    assert code_of(remove(b, there, f"human:ben@{a.id}")) == "shared_membership"     # the home decides who of theirs is in
+    assert (f"human:ben@{a.id}",) in rows(b, "SELECT actor FROM thread_members WHERE thread_id=?", (there,))
+    assert add(b, there, "human:ben").status_code == 200                             # the copy's own readers are its admins'
+    assert add(b, there, "human:ana", who=BEN).status_code == 403
+    assert remove(b, there, "human:ben").status_code == 200
+
+
+# ----------------------------------------------------------------------------- an edit is never made into a message
+def test_an_edit_of_a_message_the_home_never_had_is_refused_and_no_text_lands(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    ben = f"human:ben@{b.id}"
+    edit_envelope = sign_and_post(hq, b, a, message_body(tid, ben, "edited text, no original", revision=3))
+    drive(a)
+    assert outcomes(a, b, edit_envelope) == ["unknown_message"]
+    assert texts(a, tid) == []
+    first = E.payload_bytes({"type": "message", "thread": tid, "origin_id": "msg-" + uuid.uuid4().hex, "revision": 3,
+                             "actor": ben, "message_kind": "say", "body": "edited before it first went", "deleted": False,
+                             "created": "", "first": True})
+    sign_and_post(hq, b, a, first)
+    drive(a)
+    assert texts(a, tid) == ["edited before it first went"]    # the first send of a message, at the revision it has by then
+
+
+def test_a_copy_never_makes_a_message_of_an_edit_and_waits_for_the_original(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    lost = {"on": True}
+
+    def lose_the_first_send(sender, to, body):
+        if sender == a.id and to == b.id and lost["on"] and json.loads(body).get("item_type") == "message":
+            lost["on"] = False
+            return True
+        return False
+
+    hq.lose = lose_the_first_send
+    message = say(a, tid, "first")
+    tick(a)
+    edit(a, message, "first, edited")
+    tick(a)
+    tick(b)                                # only the edit came: the gap asks for a catch-up, and nothing is written
+    assert texts(b, there) == []
+    edit_only = {**S.checked_message(json.loads(forged(tid, f"human:ana@{a.id}", "msg-" + uuid.uuid4().hex, 2, text="no original"))),
+                 "first": False}
+    with b.app.state.store.transaction() as c:
+        thread = S.thread_local(c, there)
+        assert S.apply_message(c, b.id, thread, a.id, thread["applied_through"] + 1, edit_only, sender=a.id) == "unknown_message"
+    assert texts(b, there) == []
+    drive(a, b)
+    assert texts(b, there) == ["first, edited"]
+
+
+# ----------------------------------------------------------------------------- a message held by this install's rules
+def ruled(side):
+    side.app.state.judge = Judge(side.app.state.store)
+    made = side.client.post("/api/v2/rules", json={"kind": "internal", "text": COLOR, "who": {"everyone": True}}, headers=keyed())
+    assert made.status_code == 200, made.text
+
+
+def holds(side, state="held"):
+    return [dict(zip(("id", "author", "operation"), r)) for r in rows(
+        side, "SELECT id, author, operation FROM org_rule_holds WHERE state=? AND operation='federated_message' "
+              "ORDER BY created", (state,))]
+
+
+def send_anyway(side, hold, expected=200):
+    view = side.client.get(f"/api/v2/rule-holds/{hold['id']}", headers=OWNER)
+    assert view.status_code == 200 and view.json()["can_send"], view.text
+    sent = side.client.post(f"/api/v2/rule-holds/{hold['id']}/send", json={"nonce": view.json()["nonce"]}, headers=keyed())
+    assert sent.status_code == expected, sent.text
+    return view.json()["nonce"]
+
+
+def needs_kinds(side, token=OWNER):
+    return [i["kind"] for i in side.client.get("/api/v2/needs-you", headers=token).json()["items"]]
+
+
+def test_send_anyway_releases_a_replicas_message_held_at_home_as_its_author_to_every_copy(make_side, hq):
+    a, b, third = make_side("alpha"), make_side("beta"), make_side("gamma")
+    connect(a, b, hq)
+    connect(a, third, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    share(a, tid, third)
+    drive(a, b, third)
+    there_b, there_third = local_thread(b, tid, a), local_thread(third, tid, a)
+    ruled(a)
+    say(b, there_b, "Our favorite color is gold.", who="human:ana")
+    drive(a, b, third)
+    author = f"human:ana@{b.id}"
+    assert texts(a, tid) == [] and texts(third, there_third) == []
+    assert "rules" in receipts(a, b)                          # the sender is told, as for any refusal
+    [hold] = holds(a)
+    assert hold["author"] == author and "thread_held" in needs_kinds(a)
+    nonce = send_anyway(a, hold)
+    drive(a, b, third)
+    assert rows(a, "SELECT from_actor, body FROM messages WHERE conversation_id=? AND kind<>'notice'", (tid,)) == [
+        (author, "Our favorite color is gold.")]
+    # The other company checks the author's own signature, and the author's copy is not written twice.
+    assert rows(third, "SELECT from_actor FROM messages WHERE conversation_id=?", (there_third,)) == [(author,)]
+    assert [t for t in texts(b, there_b) if t == "Our favorite color is gold."] == ["Our favorite color is gold."]
+    assert holds(a) == [] and "thread_held" not in needs_kinds(a)
+    again = a.client.post(f"/api/v2/rule-holds/{hold['id']}/send", json={"nonce": nonce}, headers=keyed())
+    assert again.status_code in (404, 409)                    # spent, and the message is there once
+    assert texts(a, tid).count("Our favorite color is gold.") == 1
+
+
+def test_send_anyway_releases_a_message_held_on_a_copy_first_or_edited(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    ruled(b)
+    say(a, tid, "Our favorite color is gold.")                # the first of a message
+    drive(a, b)
+    assert texts(b, there) == []
+    [held_first] = holds(b)
+    send_anyway(b, held_first)
+    assert rows(b, "SELECT from_actor, body FROM messages WHERE conversation_id=?", (there,)) == [
+        (f"human:ana@{a.id}", "Our favorite color is gold.")]
+    plain = say(a, tid, "Plain so far.")                      # a revision of a message already here
+    drive(a, b)
+    edit(a, plain, "Their favorite color is blue.")
+    drive(a, b)
+    assert "Their favorite color is blue." not in texts(b, there) and "Plain so far." in texts(b, there)
+    [held_edit] = holds(b)
+    send_anyway(b, held_edit)
+    assert "Their favorite color is blue." in texts(b, there) and "Plain so far." not in texts(b, there)
+    say(a, tid, "Later and fine.")
+    drive(a, b)
+    assert texts(b, there)[-1] == "Later and fine."           # the stream goes on from where it was
+
+
+def test_a_later_revision_of_a_held_message_closes_the_hold_and_is_checked_on_its_own(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    ruled(b)
+    message = say(a, tid, "Our favorite color is gold.")
+    drive(a, b)
+    [first] = holds(b)
+    nonce = b.client.get(f"/api/v2/rule-holds/{first['id']}", headers=OWNER).json()["nonce"]
+    edit(a, message, "Our favorite color is red.")
+    drive(a, b)
+    [second] = holds(b)                                       # still blocked: a new hold, on the new words
+    assert second["id"] != first["id"] and first["id"] in [h["id"] for h in holds(b, "kept")]
+    late = b.client.post(f"/api/v2/rule-holds/{first['id']}/send", json={"nonce": nonce}, headers=keyed())
+    assert late.status_code in (404, 409) and texts(b, there) == []
+    edit(a, message, "We cannot say.")
+    drive(a, b)
+    assert holds(b) == [] and texts(b, there) == ["We cannot say."]   # it passes, so it is written, as the first it has
+
+
+def test_a_catch_up_never_files_a_second_hold_for_the_same_words(make_side, hq, clock):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    ruled(b)
+    message = say(a, tid, "Plain so far.")
+    drive(a, b)
+    edit(a, message, "Our favorite color is gold.")
+    drive(a, b)
+    [hold] = holds(b)
+    assert b.client.post(f"/api/v2/rule-holds/{hold['id']}/keep", json={}, headers=keyed()).status_code == 200
+    clock["t"] += 600
+    with b.app.state.store.transaction() as c:
+        S.request_catch_up(c, R.now(), S.thread_local(c, there), 0)
+    drive(a, b)
+    assert holds(b) == [] and texts(b, there) == ["Plain so far."]      # the reviewer's answer stands
+    assert held_reasons(b) == []                                        # and the lane is not stuck behind it
+
+
+def test_a_hold_stays_held_while_the_peering_is_paused(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    ruled(a)
+    say(b, there, "Our favorite color is gold.", who="human:ana")
+    drive(a, b)
+    [hold] = holds(a)
+    assert a.client.post(f"/api/v2/federation/peerings/{row_for(a, b.id)}/pause", json={"paused": True},
+                         headers=OWNER).status_code == 200
+    send_anyway(a, hold, expected=409)
+    assert holds(a) == [hold] and texts(a, tid) == []
+    assert a.client.post(f"/api/v2/federation/peerings/{row_for(a, b.id)}/pause", json={"paused": False},
+                         headers=OWNER).status_code == 200
+    send_anyway(a, hold)                                      # its nonce was not spent
+    assert texts(a, tid) == ["Our favorite color is gold."]
+
+
+def test_the_injection_screen_goes_first_so_a_hold_never_carries_a_text_it_stopped(make_side, hq, monkeypatch):
+    real_screen = screening.screen
+    monkeypatch.setattr(screening, "screen", lambda store, source, text, *args, **kwargs: (
+        {"action": "hold", "score": 0.9, "kinds": ["instruction override"], "detector": "model", "why": "", "label": "",
+         "cached": False, "mode": "hold"} if "INJECT" in text else real_screen(store, source, text, *args, **kwargs)))
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    ruled(b)
+    say(a, tid, "INJECT: our favorite color is gold.")
+    drive(a, b)
+    assert texts(b, there) == [] and holds(b) == [] and "screening" in receipts(b, a)
+
+
+# ----------------------------------------------------------------------------- BotOps acts with the person's rights
+def test_botops_runs_every_federation_write_and_tool_as_the_person_who_asked():
+    from backend.botops_act import default_delegable
+    from clients import hubtools
+    for method, path in [("POST", "federation/keys"), ("POST", "federation/keys/rotate"), ("POST", "federation/peerings"),
+                         ("POST", "federation/peerings/fp_x/approve"), ("POST", "federation/peerings/fp_x/pause"),
+                         ("POST", "federation/peerings/fp_x/revoke"), ("POST", "federation/threads/t1/installs"),
+                         ("DELETE", "federation/threads/t1/installs/gi_x"), ("POST", "federation/threads/t1/installs/gi_x/retry"),
+                         ("POST", "federation/threads/t1/readers")]:
+        assert default_delegable(method, "/api/v2/" + path, {}), (method, path)
+
+    class Caller:
+        def __init__(self, kind):
+            self.kind, self.delegated = kind, []
+
+        def get(self, path, /, **query):
+            return {"kind": self.kind} if path == "me" else self.call("GET", path, query=query)
+
+        def post(self, path, body=None, key=None):
+            return self.call("POST", path, body, key)
+
+        def delete(self, path, key=None):
+            return self.call("DELETE", path, key=key)
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            self.delegated.append(bool(delegate))
+            return {}
+
+    for name, entry in hubtools.BY_NAME.items():
+        if not name.startswith("hub_peer_"):
+            continue
+        args = {field: "x" for field in entry["inputSchema"].get("required", [])}
+        botops, bot = Caller("botops"), Caller("bot")
+        entry["fn"](botops, dict(args))
+        entry["fn"](bot, dict(args))
+        assert botops.delegated and all(botops.delegated), name
+        assert bot.delegated and not any(bot.delegated), name
+
+
+# ----------------------------------------------------------------------------- a send that does not go
+def deliveries(side, thread):
+    return rows(side, "SELECT state FROM message_deliveries WHERE root_id=? AND recipient LIKE 'peer:%' ORDER BY created_at",
+                (thread,))
+
+
+def hq_answers(hq, monkeypatch, peer, status_code, error):
+    """HQ answers every send to `peer` with this until the returned switch is turned off."""
+    real, on = hq.envelope, {"on": True}
+
+    def envelope(me, request):
+        if on["on"] and request.headers.get("x-tico-to") == peer.id:
+            return httpx.Response(status_code, json={"error": error})
+        return real(me, request)
+
+    monkeypatch.setattr(hq, "envelope", envelope)
+    return on
+
+
+def test_a_homes_delivery_is_delivered_only_once_hq_has_taken_it(make_side, hq, monkeypatch, clock):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    busy = hq_answers(hq, monkeypatch, b, 503, "unavailable")
+    say(a, tid, "first")
+    tick(a)
+    assert deliveries(a, tid) == [("pending",)]
+    busy["on"] = False
+    clock["t"] += 600
+    tick(a)
+    assert deliveries(a, tid) == [("delivered",)]
+
+
+def test_a_refused_send_is_one_needs_you_item_until_retry_sends_it(make_side, hq, monkeypatch, clock):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    refusing = hq_answers(hq, monkeypatch, b, 422, "refused")
+    say(a, tid, "first")
+    say(a, tid, "second")
+    drive(a, rounds=3)
+    assert set(deliveries(a, tid)) == {("failed",)}
+    assert needs_kinds(a).count("thread_unsent") == 1          # one per thread and company, not one per message
+    assert needs_kinds(a, BEN).count("thread_unsent") == 0     # for whoever manages the thread
+    entry = next(t for t in status(a)["threads"] if t["thread_id"] == tid)
+    assert entry["unsent"] == {b.id: 2}
+    refusing["on"] = False
+    retried = a.client.post(f"/api/v2/federation/threads/{tid}/installs/{b.id}/retry", headers=OWNER)
+    assert retried.status_code == 200 and retried.json()["retried"] == 2
+    assert needs_kinds(a).count("thread_unsent") == 0
+    drive(a, b)
+    assert texts(b, local_thread(b, tid, a)) == ["first", "second"]
+    assert set(deliveries(a, tid)) == {("delivered",)}
+
+
+def test_sends_that_keep_failing_are_listed_and_a_pause_is_not_a_failure(make_side, hq, monkeypatch, clock):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    busy = hq_answers(hq, monkeypatch, b, 503, "unavailable")
+    say(a, tid, "first")
+    for _ in range(7):
+        tick(a)
+        clock["t"] += 600
+    assert "thread_unsent" not in needs_kinds(a)
+    tick(a)
+    assert needs_kinds(a).count("thread_unsent") == 1          # still waiting, and somebody knows
+    assert a.client.post(f"/api/v2/federation/peerings/{row_for(a, b.id)}/pause", json={"paused": True},
+                         headers=OWNER).status_code == 200
+    assert "thread_unsent" not in needs_kinds(a)               # a paused peering waits: nothing to do about the send
+    assert a.client.post(f"/api/v2/federation/peerings/{row_for(a, b.id)}/pause", json={"paused": False},
+                         headers=OWNER).status_code == 200
+    busy["on"] = False
+    clock["t"] += 600
+    drive(a, b)
+    assert "thread_unsent" not in needs_kinds(a) and texts(b, local_thread(b, tid, a)) == ["first"]
+
+
+def test_unsharing_clears_what_was_not_sent(make_side, hq, monkeypatch):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    hq_answers(hq, monkeypatch, b, 422, "refused")
+    say(a, tid, "first")
+    drive(a, rounds=2)
+    assert needs_kinds(a).count("thread_unsent") == 1
+    assert a.client.delete(f"/api/v2/federation/threads/{tid}/installs/{b.id}", headers=OWNER).status_code == 200
+    assert "thread_unsent" not in needs_kinds(a)

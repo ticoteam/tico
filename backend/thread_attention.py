@@ -7,7 +7,10 @@ does, not by a click:
 - an unread DM is open until the person reads past its last message from a person or one addressed to them;
 - a write held for review is open until it is decided: its reviewer releases or keeps it, or the person it is held for
   withdraws it (the hold leaves `held`);
-- a capped thread (the loop guard, spec 4.5) is open until its capped deliveries resume.
+- a capped thread (the loop guard, spec 4.5) is open until its capped deliveries resume;
+- a thread with a message another company's Tico has not taken is open until the send goes through, the message is
+  edited or deleted, or that company leaves the thread. A paused or revoked peering lists nothing (it is already shown in
+  Connections, and its messages wait for it).
 A bot's mention of the person and a bot's ask are the thread's questions to the person and count; a bot's post that
 names nobody is activity, not attention.
 
@@ -16,7 +19,8 @@ Every item is listed. The caller pages the whole list (views.needs_items), so no
 from . import hubdb as H
 
 ADDRESSED = ("mention", "ask", "assign", "addressed")
-HELD_OPERATIONS = ("message", "reply")      # the writes a thread post is checked as (backend/org_rule_check.py)
+# The writes a thread post is checked as (backend/org_rule_check.py), and a message carried in from another install.
+HELD_OPERATIONS = ("message", "reply", "federated_message")
 
 
 def _clip(text, n=160):
@@ -55,6 +59,11 @@ def items(c, auth, who, skip=()):
         if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
             out.append(_item("thread_capped", row["root_id"], row["root_id"],
                              _clip(root["subject"] or "Thread") + ": bot replies paused", row["since"]))
+    for row in _unsent(c):
+        root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
+        if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
+            out.append(_item("thread_unsent", row["root_id"] + ":" + row["recipient"], row["root_id"],
+                             _clip(root["subject"] or "Thread") + ": not sent to another company", row["since"]))
     return sorted(out, key=lambda it: str(it["created"] or ""))
 
 
@@ -104,6 +113,12 @@ def _holds(c, who):
     their bot reports up to, org_rule_check.represented). The item clears when the hold is decided."""
     from . import org_rule_check
     return org_rule_check.held_for(c, who, HELD_OPERATIONS)
+
+
+def _unsent(c):
+    """One row per thread and company whose peering is live and whose messages have not gone (`federation_threads.unsent`)."""
+    from . import federation_threads
+    return federation_threads.unsent(c)
 
 
 def _capped(c):
