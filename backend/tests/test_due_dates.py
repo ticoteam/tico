@@ -1,18 +1,23 @@
 """Due dates on records (plan §1a, §7.2; test cases H8, H9, H10, H10a, H10b, H10c, R3, R4, M3, C4, C5, S2, X3): the
 calendar and completion chains, one task per teammate for a day's work, closing a task completes nothing, archived
-records open nothing, and who may ask. The clock is passed in as `at`: no test reads the wall clock."""
+records open nothing, the window a calendar date counts from, and who may read and work due dates. The clock is passed
+in as `at`: no test reads the wall clock."""
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+
+import pytest
 
 from backend import due_date_flow as DF
 from backend import hubdb as H
 from backend.finance import due_dates as FD
 from backend.finance import reads as FR
-from backend.finance.core.errors import FinanceError
+from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.records import due_dates as RD
+from backend.records import store as RS
 from backend.tests.test_finance_fixtures import AT, OWNER, act, books, finance_template, store  # noqa: F401
 
 DAY = "2026-10-15"          # AT's day in the company zone (America/Los_Angeles)
+TWO_YEARS_AGO = (date(2026, 10, 15) - timedelta(weeks=104)).isoformat()   # on the weekly grid, 728 days before DAY
 
 
 def moment(at: str = AT) -> datetime:
@@ -85,6 +90,10 @@ def _complete(store, due_date_id: str, due_on: str | None = None, at: str = AT) 
         res = act(c, OWNER, "due_date_occurrence_complete", payload, at=at)
     assert res.status == "committed", res.reason
     return dict(res.result)
+
+
+def _counted(c, due_date_id: str) -> str:
+    return str(c.execute("SELECT counted_from_on FROM due_dates WHERE id=?", (due_date_id,)).fetchone()[0])
 
 
 # ---------------------------------------------------------------------------------------------------- H8, H9, subjects
@@ -208,6 +217,55 @@ def test_a_second_run_on_the_same_day_opens_nothing_new_and_an_open_task_is_not_
     assert len(_tasks(books, "bot:coder")) == 1
 
 
+def test_overdue_occurrences_open_a_task_whose_due_is_already_past(books):
+    """Everything in the task is overdue: the task still opens, and carries a due that is already past."""
+    with books.transaction() as c:
+        _due(c, "location", _location(c, "Acme Past Store"), name="Late permit", assignee="bot:coder",
+             starts_on="2026-10-12")
+    result = _tick(books)
+    assert [t["occurrences"] for t in result["tasks"]] == [1]
+    [task] = _tasks(books, "bot:coder")
+    assert task["title"] == "Due dates: 1 due" and "due 2026-10-12" in task["body"]
+    with books.read() as c:
+        task_due = c.execute("SELECT due FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
+    assert task_due is not None and str(task_due)[:10] in ("2026-10-12", "2026-10-13")
+
+
+# ----------------------------------------------------------------------------------------- the window a calendar counts
+def test_a_weekly_date_from_two_years_ago_opens_one_occurrence_not_one_per_missed_week(books):
+    with books.transaction() as c:
+        _due(c, "location", _location(c, "Acme Old Weekly"), name="Weekly walk", assignee="bot:coder",
+             repeats="weekly", starts_on=TWO_YEARS_AGO)
+    result = _tick(books)
+    assert [t["occurrences"] for t in result["tasks"]] == [1]
+    [task] = _tasks(books, "bot:coder")
+    assert f"due {DAY}" in task["body"]
+
+
+def test_weeks_missed_after_creation_stay_open_and_count(books):
+    with books.transaction() as c:
+        due = _due(c, "location", _location(c, "Acme Missed Weekly"), name="Missed walk", assignee="bot:coder",
+                   repeats="weekly", starts_on=TWO_YEARS_AGO)
+    _tick(books)                          # opens the one on the day it was made
+    _complete(books, due, DAY)            # that one is done
+    result = _tick(books, later(14))      # two weeks on, the two missed since creation are both open
+    assert [t["occurrences"] for t in result["tasks"]] == [2]
+
+
+def test_counted_from_on_is_the_day_made_and_moves_only_when_the_repeat_or_the_start_changes(books):
+    with books.transaction() as c:
+        due = _due(c, "location", _location(c, "Acme Count Store"), name="Count check", assignee="bot:coder",
+                   repeats="weekly", starts_on=TWO_YEARS_AGO)
+        assert _counted(c, due) == DAY
+    with books.transaction() as c:
+        assert act(c, OWNER, "due_date_update", {"due_date_id": due, "lead_days": 3}, at=later(3)).status == "committed"
+        assert _counted(c, due) == DAY
+    with books.transaction() as c:
+        assert act(c, OWNER, "due_date_update", {"due_date_id": due, "repeats": "monthly"},
+                   at=later(3)).status == "committed"
+        assert _counted(c, due) == "2026-10-18"
+
+
 # --------------------------------------------------------------------------------------------- H10a, H10b, month end
 def test_h10a_every_90_days_counts_from_the_last_completion_and_quarterly_falls_on_calendar_quarters(books):
     with books.transaction() as c:
@@ -232,16 +290,17 @@ def test_h10b_a_90_day_service_done_20_days_late_moves_to_90_days_after_the_day_
 
 
 def test_month_end_a_monthly_date_from_the_31st_falls_on_the_last_day_and_a_chain_clamps_the_same_way(books):
+    jan = "2026-01-31T12:00:00.000000Z"
     with books.transaction() as c:
         store_id = _location(c, "Acme Month End")
         monthly = _due(c, "location", store_id, name="Monthly close", assignee="bot:coder", repeats="monthly",
-                       starts_on="2026-01-31")
+                       starts_on="2026-01-31", at=jan)
         chain = _due(c, "location", store_id, name="Monthly chain", assignee="bot:coder", repeats="every_months",
-                     every=1, starts_on="2026-01-31")
-    _complete(books, monthly, "2026-01-31", at="2026-01-31T12:00:00.000000Z")
-    assert _next(books, monthly, "2026-01-31T12:00:00.000000Z") == "2026-02-28"   # 2026 is not a leap year
-    _complete(books, chain, "2026-01-31", at="2026-01-31T12:00:00.000000Z")
-    assert _next(books, chain, "2026-01-31T12:00:00.000000Z") == "2026-02-28"
+                     every=1, starts_on="2026-01-31", at=jan)
+    _complete(books, monthly, "2026-01-31", at=jan)
+    assert _next(books, monthly, jan) == "2026-02-28"        # 2026 is not a leap year
+    _complete(books, chain, "2026-01-31", at=jan)
+    assert _next(books, chain, jan) == "2026-02-28"
     _complete(books, chain, "2026-02-28", at="2026-02-28T12:00:00.000000Z")
     assert _next(books, chain, "2026-02-28T12:00:00.000000Z") == "2026-03-28"    # from the 28th, not the 31st
 
@@ -268,7 +327,8 @@ def test_h10c_an_archived_location_or_an_archived_due_date_opens_nothing(books):
 
 
 def test_x3_a_hidden_equipment_section_changes_nothing_about_equipment_due_dates(books):
-    """X3: the company's hidden sections are a sidebar setting; the pass reads none of them."""
+    """X3: the company's hidden sections are a sidebar setting; the pass reads none of them. (This branch has no
+    hidden_sections setting, so this only shows the probe key does not change the pass.)"""
     with books.transaction() as c:
         c.execute("INSERT OR REPLACE INTO registry_metadata(key, value_json) VALUES('hidden_sections', ?)",
                   (json.dumps(["operations", "operations.equipment"]),))
@@ -305,18 +365,22 @@ def test_reopening_the_latest_completion_restores_the_prior_next_due_on_and_only
     assert _next(books, service, later(90)) == "2027-01-13"
 
 
-# ------------------------------------------------------------------------------------- assignees and who may ask
-def test_an_archived_assignee_becomes_one_needs_you_item_for_the_owner_and_nothing_is_dropped(books):
+# ----------------------------------------------------------------------------------- assignees, notices, who may do what
+def test_an_archived_assignee_gets_one_needs_you_item_naming_all_its_due_dates_and_nothing_is_dropped(books):
     with books.transaction() as c:
         extinguisher = _due(c, "location", _location(c, "Acme Extinguisher Store"), name="Extinguisher check",
                             assignee="bot:coder")
+        hose = _due(c, "location", _location(c, "Acme Hose Store"), name="Hose check", assignee="bot:coder")
         c.execute("UPDATE bots SET state='archived' WHERE slug='coder'")
     result = _tick(books)
     assert result["tasks"] == [] and len(result["notices"]) == 1
-    [notice] = _tasks(books, "human:ana", prefix="Due date has no teammate")
-    assert "Extinguisher check" in notice["body"] and "archived" in notice["body"]
+    [notice] = _tasks(books, "human:ana", prefix="Due dates need a teammate")
+    assert notice["title"] == "Due dates need a teammate: bot:coder"
+    assert "2 due date(s)" in notice["body"] and "archived" in notice["body"]
+    assert "- Extinguisher check" in notice["body"] and "- Hose check" in notice["body"]
     with books.read() as c:
         assert RD.next_open(RD.get(c, extinguisher), RD.completed_days(c, extinguisher)) is not None
+        assert RD.next_open(RD.get(c, hose), RD.completed_days(c, hose)) is not None
     assert _tick(books, later(0, 2)) is None      # the same day, nothing more
 
 
@@ -328,7 +392,7 @@ def test_a_missing_assignee_is_refused_when_the_due_date_is_made(books):
     assert res.code == "invalid" and "teammate" in res.reason
 
 
-def test_a_teammate_without_the_records_right_cannot_make_or_complete_due_dates(books):
+def test_a_teammate_without_the_records_right_cannot_make_due_dates(books):
     with books.transaction() as c:
         res = act(c, "human:eve", "due_date_create", {"name": "Check", "subject_type": "location",
                                                       "subject_id": _location(c, "Acme Eve Store"),
@@ -337,18 +401,91 @@ def test_a_teammate_without_the_records_right_cannot_make_or_complete_due_dates(
     assert res.status == "denied"
 
 
-def test_a_teammate_with_no_finance_view_is_refused_by_the_reads(books):
-    """Members default to own expenses; with the member default set to none, eve (who leads and manages nobody) has no
-    view at all, so the reads refuse rather than list due dates."""
+def test_the_assignee_completes_and_reopens_its_occurrences_without_the_right_and_without_approval(books):
+    """A bot or a person who is the assignee works its own occurrences with no records right and no approval. Anyone else
+    without the right is denied."""
+    with books.transaction() as c:
+        bot_due = _due(c, "location", _location(c, "Acme Bot Work"), name="Bot work", assignee="bot:coder")
+        person_due = _due(c, "location", _location(c, "Acme Person Work"), name="Person work", assignee="human:eve")
+    for who, due_id in (("bot:coder", bot_due), ("human:eve", person_due)):
+        with books.transaction() as c:
+            done = act(c, who, "due_date_occurrence_complete", {"due_date_id": due_id, "due_on": DAY})
+        assert done.status == "committed" and done.approval_id is None, (who, done.reason)
+        with books.transaction() as c:
+            back = act(c, who, "due_date_occurrence_reopen", {"due_date_id": due_id, "due_on": DAY})
+        assert back.status == "committed" and back.approval_id is None, (who, back.reason)
+    with books.transaction() as c:
+        assert act(c, "bot:seller", "due_date_occurrence_complete",
+                   {"due_date_id": bot_due, "due_on": DAY}).status == "denied"
+        assert act(c, "human:fay", "due_date_occurrence_complete",
+                   {"due_date_id": person_due, "due_on": DAY}).status == "denied"
+
+
+def test_a_teammate_reads_due_dates_without_a_finance_view(books):
+    """Teammates read operational due dates whatever their finance view: with the member default set to none, eve (who
+    leads and manages nobody) sees a location's due date, and so does the bot on the org chart."""
     with books.transaction() as c:
         assert act(c, OWNER, "view_defaults_set", {"manager": "own_expenses", "member": "none"}).status == "committed"
+        _due(c, "location", _location(c, "Acme Teammate Store"), name="Store check", assignee="bot:coder")
     with books.read() as c:
-        try:
-            FD.listing(c, "human:eve")
-        except FinanceError as exc:
-            assert exc.code == "denied"
-        else:
-            raise AssertionError("the listing answered a teammate with no finance view")
+        assert [r["name"] for r in FD.listing(c, "human:eve")["due_dates"]] == ["Store check"]
+        assert [r["name"] for r in FD.listing(c, "bot:coder")["due_dates"]] == ["Store check"]
+
+
+def test_a_guest_reads_only_the_due_dates_it_works(books):
+    with books.transaction() as c:
+        store_id = _location(c, "Acme Guest Store")
+        mine = _due(c, "location", store_id, name="Guest work", assignee="bot:coder")
+        theirs = _due(c, "location", store_id, name="Team work", assignee="bot:coder")
+        c.execute("UPDATE due_dates SET assignee_id='human:zed' WHERE id=?", (mine,))
+    with books.read() as c:
+        assert [r["name"] for r in FD.listing(c, "human:zed")["due_dates"]] == ["Guest work"]
+        assert FD.due_date(c, "human:zed", due_date_id=mine)["due_date"]["name"] == "Guest work"  # type: ignore[index]
+        with pytest.raises(FinanceError) as refused:
+            FD.due_date(c, "human:zed", due_date_id=theirs)
+        assert refused.value.code == NOT_FOUND
+        # a teammate on the org chart reads every due date, the guest's included
+        assert sorted(r["name"] for r in FD.listing(c, "bot:coder")["due_dates"]) == ["Guest work", "Team work"]
+
+
+def test_contact_due_dates_follow_each_contacts_kind_per_row_and_paging_counts_them(books):
+    with books.transaction() as c:
+        assert act(c, OWNER, "view_defaults_set", {"manager": "own_expenses", "member": "none"}).status == "committed"
+        customer = _customer(c, "Acme Visible Customer")
+        vendor = _vendor(c, "Acme Hidden Vendor")
+        _due(c, "contact", customer, name="Customer visit", assignee="bot:coder")
+        _due(c, "contact", vendor, name="Vendor audit", assignee="bot:coder")
+        _due(c, "contact", vendor, name="Vendor call", assignee="human:eve")     # eve works this one
+    with books.read() as c:
+        assert sorted(r["name"] for r in FD.listing(c, OWNER)["due_dates"]) == [
+            "Customer visit", "Vendor audit", "Vendor call"]
+        # eve sees a customer's due date (every teammate reads customer names) and the vendor one she works, not the
+        # vendor one the bot works: she has no vendor view.
+        seen: list[str] = []
+        cursor = None
+        while True:
+            page = FD.listing(c, "human:eve", limit=1, cursor=cursor)
+            seen += [str(r["name"]) for r in page["due_dates"]]  # type: ignore[index]
+            cursor = page["next_cursor"]
+            if not cursor:
+                break
+        assert seen == ["Customer visit", "Vendor call"]
+
+
+def test_a_merged_location_answers_under_its_record_and_next_due_is_read_for_it(books):
+    with books.transaction() as c:
+        kept = _location(c, "Acme Kept Store")
+        merged = _location(c, "Acme Merged Store")
+        _due(c, "location", merged, name="Merged store check", assignee="bot:coder")
+        RS.alias(c, "locations", merged, kept, AT)
+    with books.read() as c:
+        listed = FD.listing(c, OWNER, subject_type="location", subject_id=kept)["due_dates"]  # type: ignore[index]
+        assert [r["name"] for r in listed] == ["Merged store check"]  # type: ignore[index]
+        assert listed[0]["subject_name"] == "Acme Kept Store"  # type: ignore[index]
+        assert FD.listing(c, OWNER, subject_type="equipment")["due_dates"] == []  # type: ignore[index]
+        assert RD.next_due_for(c, "location", [kept, merged]) == {kept: DAY, merged: DAY}
+        with pytest.raises(FinanceError):
+            FD.listing(c, OWNER, subject_id=kept)
 
 
 def test_search_finds_due_dates_by_name_and_hides_archived_ones_unless_asked(books):

@@ -2,7 +2,9 @@
 teammate who works it, and one occurrence per day it falls due, each completed on its own.
 
 - Calendar repeats (once, weekly, monthly, quarterly, yearly) are counted from `starts_on` by backend/rule_due.py, so a
-  month-end date clamps the way a rule's does. Nothing stores them; an occurrence with no row is open.
+  month-end date clamps the way a rule's does. Nothing stores them; an occurrence with no row is open. Only the window
+  from `window` counts: the latest occurrence on or before `counted_from_on` (the day the date was made, or its dates
+  last changed), and every occurrence after it. An old date opens one occurrence, and nothing lapses after that.
 - Completion-anchored repeats (every_days, every_months) keep one `next_due_on` that moves when the occurrence is
   completed, to the completion day plus the count. A late completion shifts the chain: a 90-day service done 20 days
   late is next due 90 days after the day it was done.
@@ -10,7 +12,7 @@ teammate who works it, and one occurrence per day it falls due, each completed o
 """
 import sqlite3
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -42,15 +44,35 @@ def step_after(day: date, repeats: str, count: int) -> date:
     return D.occurrence(day, "monthly", count)
 
 
+def window(row: Mapping[str, object]) -> date:
+    """The first calendar occurrence that counts: the latest one on or before `counted_from_on`. A date that starts after
+    that day counts from its start. Only calendar repeats have one."""
+    first = date.fromisoformat(str(row["starts_on"]))
+    counted = date.fromisoformat(str(row["counted_from_on"]))
+    if counted <= first:
+        return first
+    repeats = str(row["repeats"])
+    latest = first
+    for n in range(D.MAX_OCCURRENCES):
+        day = D.occurrence(first, repeats, n)
+        if day is None or day > counted:
+            break
+        latest = day
+    return latest
+
+
 def open_days(row: Mapping[str, object], through: date, completed: set[str]) -> list[date]:
     """The occurrences of one due date that are open and fall due by `through`, oldest first. A completion-anchored
-    chain has at most one open occurrence, on `next_due_on`; a calendar one has every occurrence not yet completed."""
+    chain has at most one open occurrence, on `next_due_on`; a calendar one has every counted occurrence not yet
+    completed."""
     repeats = str(row["repeats"])
     if repeats in COMPLETION:
         due = date.fromisoformat(str(row["next_due_on"]))
         return [due] if due <= through and due.isoformat() not in completed else []
     first = date.fromisoformat(str(row["starts_on"]))
-    return [d for d in D.occurrences(first, repeats, through) if d <= through and d.isoformat() not in completed]
+    start = window(row)
+    return [d for d in D.occurrences(first, repeats, through)
+            if start <= d <= through and d.isoformat() not in completed]
 
 
 def next_open(row: Mapping[str, object], completed: set[str]) -> date | None:
@@ -60,20 +82,23 @@ def next_open(row: Mapping[str, object], completed: set[str]) -> date | None:
         due = date.fromisoformat(str(row["next_due_on"]))
         return None if due.isoformat() in completed else due
     first = date.fromisoformat(str(row["starts_on"]))
+    start = window(row)
     for n in range(D.MAX_OCCURRENCES):
         day = D.occurrence(first, repeats, n)
         if day is None:
             return None
-        if day.isoformat() not in completed:
+        if start <= day and day.isoformat() not in completed:
             return day
     return None
 
 
 def is_occurrence(row: Mapping[str, object], day: date) -> bool:
-    """Whether `day` is one of the due date's occurrences: the chain's `next_due_on`, or a calendar day."""
+    """Whether `day` is one of the due date's counted occurrences: the chain's `next_due_on`, or a calendar day from the
+    window on."""
     if str(row["repeats"]) in COMPLETION:
         return day.isoformat() == str(row["next_due_on"])
-    return bool(D.is_occurrence(date.fromisoformat(str(row["starts_on"])), str(row["repeats"]), day))
+    first = date.fromisoformat(str(row["starts_on"]))
+    return window(row) <= day and bool(D.is_occurrence(first, str(row["repeats"]), day))
 
 
 def status(row: Mapping[str, object], next_on: date | None, today: date) -> str:
@@ -159,10 +184,18 @@ def live(c: sqlite3.Connection) -> list[Any]:
     return list(c.execute("SELECT * FROM due_dates WHERE archived_at IS NULL ORDER BY created_at, id"))
 
 
-def page(c: sqlite3.Connection, *, q: str, archived: str, after: tuple[str, str] | None, most: int,
-         contacts: bool) -> list[Any]:
-    """Due dates by name then id, past `after`. `archived` is hide, only or all. Contact subjects are left out unless
-    the viewer sees contacts."""
+def contact_kind(c: sqlite3.Connection, contact_id: str) -> str | None:
+    """A contact's kind (vendor, customer or both), or None when there is no such contact."""
+    row = c.execute("SELECT kind FROM fin_contacts WHERE id=?", (contact_id,)).fetchone()
+    return str(row[0]) if row else None
+
+
+def page(c: sqlite3.Connection, *, q: str, archived: str, after: tuple[str, str] | None, most: int, viewer: str,
+         teammate: bool, contact_kinds: tuple[str, ...], subject_type: str | None,
+         subject_ids: tuple[str, ...] | None) -> list[Any]:
+    """Due dates by name then id, past `after`, that this viewer may read. A guest (not a teammate) reads only the ones it
+    works. A contact subject shows when its kind is in `contact_kinds` or the viewer works it. `archived` is hide, only or
+    all; `subject_type` and `subject_ids` narrow to one record. Every filter is in the SQL, so paging counts right."""
     where: list[str] = []
     args: list[object] = []
     if archived == "hide":
@@ -172,12 +205,26 @@ def page(c: sqlite3.Connection, *, q: str, archived: str, after: tuple[str, str]
     if q:
         where.append("instr(lower(name), ?) > 0")
         args.append(q.lower())
-    if not contacts:
-        where.append("subject_type <> 'contact'")
+    if not teammate:
+        where.append("assignee_id = ?")
+        args.append(viewer)
+    contact = "subject_type <> 'contact' OR assignee_id = ?"
+    args.append(viewer)
+    if contact_kinds:
+        contact += (" OR EXISTS (SELECT 1 FROM fin_contacts k WHERE k.id = due_dates.subject_id AND k.kind IN "
+                    f"({','.join('?' * len(contact_kinds))}))")
+        args.extend(contact_kinds)
+    where.append(f"({contact})")
+    if subject_type is not None:
+        where.append("subject_type = ?")
+        args.append(subject_type)
+    if subject_ids is not None:
+        where.append(f"subject_id IN ({','.join('?' * len(subject_ids))})")
+        args.extend(subject_ids)
     if after is not None:
         where.append("(name, id) > (?, ?)")
         args.extend(after)
-    sql = "SELECT * FROM due_dates" + (f" WHERE {' AND '.join(where)}" if where else "") + " ORDER BY name, id LIMIT ?"
+    sql = "SELECT * FROM due_dates WHERE " + " AND ".join(where) + " ORDER BY name, id LIMIT ?"
     return list(c.execute(sql, [*args, most]))
 
 
@@ -195,3 +242,39 @@ def subject(c: sqlite3.Connection, subject_type: str, subject_id: str) -> tuple[
         return (str(row[0]), row[1] is None) if row else None
     row = c.execute("SELECT name, active FROM fin_contacts WHERE id=?", (subject_id,)).fetchone()
     return (str(row[0]), bool(row[1])) if row else None
+
+
+def subject_ids(c: sqlite3.Connection, subject_type: str, subject_id: str) -> tuple[str, ...]:
+    """Every id that names the record `subject_id` names: the id itself, the record's own id, and the ids merged into it
+    (a location's aliases). A due date stored under any of them sits on the same record."""
+    if subject_type != "location":
+        return (subject_id,)
+    canon = RS.resolve(c, "locations", subject_id)
+    ids = {subject_id, canon}
+    ids.update(str(r[0]) for r in c.execute(
+        "SELECT alias_id FROM record_aliases WHERE table_name='locations' AND record_id=?", (canon,)))
+    return tuple(sorted(ids))
+
+
+def next_due_for(c: sqlite3.Connection, subject_type: str, subject_ids_asked: Iterable[str]) -> dict[str, str]:
+    """The earliest open day of each record's live due dates, as ISO days, keyed by the ids asked for (a merged location's
+    old id answers with its record's). A record with no open due date has no key. Archived due dates count for nothing.
+    An equipment or location row calls this for its next_due_on."""
+    canon_of: dict[str, str] = {}
+    for given in subject_ids_asked:
+        canon_of[given] = RS.resolve(c, "locations", given) if subject_type == "location" else given
+    lookup: dict[str, str] = {}
+    for canon in set(canon_of.values()):
+        for stored in subject_ids(c, subject_type, canon):
+            lookup[stored] = canon
+    best: dict[str, date] = {}
+    if lookup:
+        marks = ",".join("?" * len(lookup))
+        rows = c.execute(f"SELECT * FROM due_dates WHERE archived_at IS NULL AND subject_type=? AND subject_id IN ({marks})",
+                         [subject_type, *lookup]).fetchall()
+        for row in rows:
+            canon = lookup[str(row["subject_id"])]
+            nxt = next_open(row, completed_days(c, str(row["id"])))
+            if nxt is not None and (canon not in best or nxt < best[canon]):
+                best[canon] = nxt
+    return {given: best[canon_of[given]].isoformat() for given in canon_of if canon_of[given] in best}

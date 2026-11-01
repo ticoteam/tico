@@ -10,10 +10,9 @@ from ..records import due_dates as RD
 from . import tab
 from . import tab_ap as TA
 from .context import Ctx, load
-from .core import ap as AP
 from .core import kinds as K
+from .core import rights as R
 from .core import validate as V
-from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .handlers import Plan, Planner, Result
 
@@ -84,7 +83,7 @@ def due_date_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     assignee = _assignee(ctx, V.text(p, "assignee_id", 80))
     due_date_id = RD.new_id()
     row = {"id": due_date_id, "name": name, "subject_type": subject_type, "subject_id": subject_id,
-           "repeats": repeats, "every_count": every, "starts_on": starts_on,
+           "repeats": repeats, "every_count": every, "starts_on": starts_on, "counted_from_on": _moment(ctx).isoformat(),
            "next_due_on": starts_on if repeats in RD.COMPLETION else None, "lead_days": lead,
            "assignee_id": assignee, "created_at": ctx.at, "created_by_id": who}
 
@@ -110,6 +109,8 @@ def due_date_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if "starts_on" in p:
         changes["starts_on"] = starts_on
     changes["repeats"] = repeats
+    if repeats != str(row["repeats"]) or starts_on != str(row["starts_on"]):
+        changes["counted_from_on"] = _moment(ctx).isoformat()      # the window starts again from the day it changed
     changes["every_count"] = _every(p, repeats, row["every_count"])
     if repeats in RD.COMPLETION:
         if "next_due_on" in p:
@@ -145,9 +146,17 @@ def _complete(ctx: Ctx, who: str, due_date_id: str, day: date) -> Result:
     return {"due_date_id": due_date_id, "due_on": iso, "completed": done, "next_due_on": nxt}
 
 
+def _may_work(ctx: Ctx, who: str, row: Any) -> bool:
+    """The assignee completes and reopens its own due dates without the records right; anyone else needs it. The action's
+    right check leaves these two kinds to this planner (K.ASSIGNEE_WORKS)."""
+    return str(row["assignee_id"]) == who or R.has(ctx.org, who, R.RECORDS, ctx.rights(who))
+
+
 def due_date_occurrence_complete(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("due_date_id", "due_on"))
     row = _row(ctx, p)
+    if not _may_work(ctx, who, row):
+        raise denied(f"due_date_occurrence_complete needs {R.RECORDS}")
     due_date_id = str(row["id"])
     if "due_on" in p:
         day = date.fromisoformat(V.day(p, "due_on"))
@@ -172,6 +181,8 @@ def due_date_occurrence_reopen(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     completion can be reopened: a later one was made against the chain it moved."""
     V.only(p, ("due_date_id", "due_on"))
     row = _row(ctx, p)
+    if not _may_work(ctx, who, row):
+        raise denied(f"due_date_occurrence_reopen needs {R.RECORDS}")
     due_date_id = str(row["id"])
     day = date.fromisoformat(V.day(p, "due_on"))
     existing = RD.occurrence(ctx.c, due_date_id, day.isoformat())
@@ -200,14 +211,41 @@ PLANNERS: dict[str, Planner] = {
 
 
 # ----------------------------------------------------------------------------------------------------------- reads
-def _in_view_or_refuse(view: VW.View) -> None:
-    """Due dates are for viewers with a finance view at all, as records are."""
-    if not view.sees_anything():
-        raise denied("records are not in your view")
+def _teammate(ctx: Ctx, viewer: str) -> bool:
+    """Teammates read due dates: the people on the org chart and the install's bots. A guest reads only the due dates it
+    works. The rule matches records' read rule for operational fields; reconcile at merge."""
+    return viewer == ctx.org.owner or viewer in ctx.org.humans or viewer in ctx.org.bots
 
 
-def _contacts_visible(ctx: Ctx, view: VW.View) -> bool:
-    return any(TA.sees_contact_kind(ctx, view, k) for k in AP.CONTACT_KINDS)
+def _contact_kinds(ctx: Ctx, viewer: str, teammate: bool) -> tuple[str, ...]:
+    """The contact kinds whose due dates this viewer reads. A customer's name is every teammate's; a vendor's, and a
+    contact that is both, needs the vendor side (bills) of the finance view."""
+    if not teammate:
+        return ()
+    kinds = ["customer"]
+    if TA.sees_side(ctx, ctx.view(viewer), "bill"):
+        kinds += ["vendor", "both"]
+    return tuple(kinds)
+
+
+def _can_read(ctx: Ctx, viewer: str, row: Any) -> bool:
+    if str(row["assignee_id"]) == viewer:
+        return True
+    if not _teammate(ctx, viewer):
+        return False
+    if str(row["subject_type"]) != "contact":
+        return True
+    return RD.contact_kind(ctx.c, str(row["subject_id"])) in _contact_kinds(ctx, viewer, True)
+
+
+def _subject_filter(c: Any, subject_type: str | None, subject_id: str | None) -> tuple[str | None, tuple[str, ...] | None]:
+    if subject_type is not None and subject_type not in RD.SUBJECT_TYPES:
+        raise invalid("subject_type is location, equipment or contact")
+    if subject_id is None:
+        return subject_type, None
+    if subject_type is None:
+        raise invalid("subject_id needs subject_type")
+    return subject_type, RD.subject_ids(c, subject_type, subject_id)
 
 
 def _out(c: Any, row: Any, today: date) -> Row:
@@ -222,19 +260,23 @@ def _out(c: Any, row: Any, today: date) -> Row:
 
 
 def listing(c: Any, viewer: str, *, q: str = "", archived: str = "hide", cursor: str | None = None,
-            limit: int = 50, at: str | None = None) -> Row:
-    """Due dates by name then id. `archived` hides the archived ones (the default), shows only them, or both; a name
-    search matches `q`. A viewer who sees no contacts is not shown due dates on contacts. `next_cursor` pages."""
+            limit: int = 50, at: str | None = None, subject_type: str | None = None,
+            subject_id: str | None = None) -> Row:
+    """Due dates by name then id, the ones this viewer may read: a teammate reads them all, except that a vendor's (or a
+    both-side contact's) need the vendor view; a guest reads the ones it works. `archived` hides the archived ones (the
+    default), shows only them, or both; `q` searches names; `subject_type` and `subject_id` narrow to one record (a merged
+    location answers under its record). `next_cursor` pages."""
     if archived not in ("hide", "only", "all"):
         raise invalid("archived is hide, only or all")
+    kind, ids = _subject_filter(c, subject_type, subject_id)
     ctx = load(c, at)
-    view = ctx.view(viewer)
-    _in_view_or_refuse(view)
+    teammate = _teammate(ctx, viewer)
     parts = tab.decode_cursor(cursor)
     after = (parts[0], parts[1]) if len(parts) == 2 else None
     most = tab.page_size(limit)
-    rows = RD.page(c, q=(q or "").strip()[:100], archived=archived, after=after, most=most + 1,
-                   contacts=_contacts_visible(ctx, view))
+    rows = RD.page(c, q=(q or "").strip()[:100], archived=archived, after=after, most=most + 1, viewer=viewer,
+                   teammate=teammate, contact_kinds=_contact_kinds(ctx, viewer, teammate), subject_type=kind,
+                   subject_ids=ids)
     shown = rows[:most]
     nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
     today = RD.local_day(datetime.fromisoformat(ctx.at), FLOW.zone())
@@ -244,10 +286,8 @@ def listing(c: Any, viewer: str, *, q: str = "", archived: str = "hide", cursor:
 def due_date(c: Any, viewer: str, *, due_date_id: str, at: str | None = None) -> Row:
     """One due date with its occurrences, newest first: each one's completion and the task that carried it."""
     ctx = load(c, at)
-    view = ctx.view(viewer)
-    _in_view_or_refuse(view)
     row = RD.get(c, due_date_id)
-    if row is None or (str(row["subject_type"]) == "contact" and not _contacts_visible(ctx, view)):
+    if row is None or not _can_read(ctx, viewer, row):
         raise FinanceError(NOT_FOUND, "no such due date")
     today = RD.local_day(datetime.fromisoformat(ctx.at), FLOW.zone())
     out = _out(c, row, today)

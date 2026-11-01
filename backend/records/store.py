@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS due_dates (
   subject_type TEXT NOT NULL CHECK (subject_type IN ('location','equipment','contact')), subject_id TEXT NOT NULL,
   repeats TEXT NOT NULL CHECK (repeats IN ('once','weekly','monthly','quarterly','yearly','every_days','every_months')),
   every_count INTEGER CHECK (every_count IS NULL OR every_count BETWEEN 1 AND 3660),
-  starts_on TEXT NOT NULL, next_due_on TEXT,
+  starts_on TEXT NOT NULL, counted_from_on TEXT NOT NULL, next_due_on TEXT,
   lead_days INTEGER NOT NULL DEFAULT 0 CHECK (lead_days BETWEEN 0 AND 366), assignee_id TEXT NOT NULL,
   archived_at TEXT, created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT,
   CHECK ((repeats IN ('every_days','every_months')) = (every_count IS NOT NULL)));

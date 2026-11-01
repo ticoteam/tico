@@ -1534,7 +1534,8 @@ STABLE.extend([
      "One location, archived or not", "LocationOne"),
     ("/api/v2/due-dates", "get", "Finance", "listDueDates",
      "Due dates by name: what each falls on, its repeat, the next day due and its teammate; q searches names, archived "
-     "hides them (default), shows only them or both; with a cursor", "DueDates"),
+     "hides them (default), shows only them or both; subject_type with subject_id narrows to one record; with a cursor",
+     "DueDates"),
     ("/api/v2/due-dates/{due_date_id}", "get", "Finance", "getDueDate",
      "One due date, archived or not, with its days newest first and the task that carried each", "DueDateOne"),
     ("/api/v2/items", "get", "Finance", "listItems",

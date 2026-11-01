@@ -30,7 +30,7 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "estimate_accept", "estimate_decline", "estimate_convert",
        # due dates on records (backend/finance/due_dates.py)
        "due_date_create", "due_date_update", "due_date_occurrence_complete", "due_date_occurrence_reopen")
-LIVE = ("journal","categorize", "account_create", "account_update", "budget_create", "budget_update",
+LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
         # phase 1: banks, cards, payments, reconciliation and gate rules
@@ -112,6 +112,10 @@ class Gate:
 
 
 ALLOW = Gate("allow")
+# A due date's assignee completes and reopens its own occurrences without the records right, and without an approval;
+# anyone else needs finance.records. The planner checks which (backend/finance/due_dates.py), so the right check here
+# leaves these two kinds alone.
+ASSIGNEE_WORKS = frozenset({"due_date_occurrence_complete", "due_date_occurrence_reopen"})
 
 
 def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | None:
@@ -126,6 +130,8 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
         if not R.is_admin(org, actor, held):
             return Gate("deny", rule="right:finance.admin")
         return Gate("needs_approval", "owner", "default:bot-admin") if actor in org.bots else None
+    if kind in ASSIGNEE_WORKS:
+        return None
     need = NEEDS.get(kind)
     if need is None:
         return None

@@ -318,13 +318,17 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/due-dates")
     def finance_due_date_list(request: Request, q: str = Query("", max_length=100),
                               archived: Literal["hide", "only", "all"] = "hide",
+                              subject_type: Literal["location", "equipment", "contact"] | None = None,
+                              subject_id: str | None = Query(None, max_length=80),
                               cursor: str | None = Query(None, max_length=600),
                               limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
         """Due dates by name: what they fall on (a location, equipment, or a vendor or customer), the repeat, the next
         day it falls due and the teammate who works it. `q` searches names, and `archived` hides the archived ones (the
-        default), shows only them, or shows both. `next_cursor` pages."""
+        default), shows only them, or shows both. `subject_type` (with `subject_id`) narrows to one record; a merged
+        location answers under its record. `next_cursor` pages."""
         actor = as_viewer(request, view_as)
-        return read(lambda c: finance_due_dates.listing(c, actor, q=q, archived=archived, cursor=cursor, limit=limit))
+        return read(lambda c: finance_due_dates.listing(c, actor, q=q, archived=archived, cursor=cursor, limit=limit,
+                                                        subject_type=subject_type, subject_id=subject_id))
 
     @app.get("/api/v2/due-dates/{due_date_id}")
     def finance_due_date_one(request: Request, due_date_id: ID, view_as: str | None = None):

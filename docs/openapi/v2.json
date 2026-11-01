@@ -7335,7 +7335,7 @@
     },
     "/api/v2/due-dates": {
       "get": {
-        "summary": "Due dates by name: what each falls on, its repeat, the next day due and its teammate; q searches names, archived hides them (default), shows only them or both; with a cursor",
+        "summary": "Due dates by name: what each falls on, its repeat, the next day due and its teammate; q searches names, archived hides them (default), shows only them or both; subject_type with subject_id narrows to one record; with a cursor",
         "operationId": "listDueDates",
         "parameters": [
           {
@@ -7362,6 +7362,44 @@
               "type": "string",
               "default": "hide",
               "title": "Archived"
+            }
+          },
+          {
+            "name": "subject_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "location",
+                    "equipment",
+                    "contact"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Type"
+            }
+          },
+          {
+            "name": "subject_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Id"
             }
           },
           {

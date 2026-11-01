@@ -6,8 +6,8 @@ ONE task per teammate listing them all, so a teammate with forty of them is woke
   occurrence still open when its task closes is opened again by the next day's pass (H10).
 - An occurrence whose task is still open is not opened again. An archived due date, or one whose record is archived or
   gone, opens nothing further (H10c).
-- An assignee that is missing or cannot take work (archived, paused) gets one Needs-you item for the install owner each
-  day until it is fixed. The occurrences stay open, so nothing is dropped.
+- An assignee that is missing or cannot take work (archived, paused) gets one Needs-you item for the install owner, naming
+  all its due dates, until it is fixed. The occurrences stay open, so nothing is dropped.
 """
 import json
 from datetime import datetime, timedelta, timezone
@@ -60,11 +60,11 @@ def _task_open(c: Any, task_id: str) -> bool:
     return row is not None and str(row[0]) in H.ACTIVE_STATUSES
 
 
-def candidates(c: Any, today: Any) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
-    """The open occurrences that need a task, by the actor who works them, and one entry per due date whose assignee
-    cannot take one. Reads only."""
+def candidates(c: Any, today: Any) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
+    """The open occurrences that need a task, by the actor who works them, and one entry per assignee that cannot take
+    work, naming the due dates it holds. The assignee is resolved once per due date. Reads only."""
     groups: dict[str, list[dict[str, Any]]] = {}
-    unassigned: list[dict[str, Any]] = []
+    unassigned: dict[str, dict[str, Any]] = {}
     for row in RD.live(c):
         due_date_id = str(row["id"])
         found = RD.subject(c, str(row["subject_type"]), str(row["subject_id"]))
@@ -72,17 +72,21 @@ def candidates(c: Any, today: Any) -> tuple[dict[str, list[dict[str, Any]]], lis
             continue                                   # an archived or missing record opens nothing (H10c)
         through = today + timedelta(days=int(row["lead_days"]))
         done = RD.completed_days(c, due_date_id)
+        items: list[dict[str, Any]] = []
         for day in RD.open_days(row, through, done):
             occ = RD.occurrence(c, due_date_id, day.isoformat())
             if occ is not None and occ["task_id"] and _task_open(c, str(occ["task_id"])):
                 continue                               # its task is still open: the teammate has it
-            item = {"due_date_id": due_date_id, "name": str(row["name"]), "subject": found[0], "due_on": day}
-            actor, why = assignee(c, str(row["assignee_id"]))
-            if why:
-                if not any(u["due_date_id"] == due_date_id for u in unassigned):
-                    unassigned.append({**item, "assignee": str(row["assignee_id"]), "why": why})
-            else:
-                groups.setdefault(actor, []).append(item)
+            items.append({"due_date_id": due_date_id, "name": str(row["name"]), "subject": found[0], "due_on": day})
+        if not items:
+            continue
+        actor, why = assignee(c, str(row["assignee_id"]))
+        if why:
+            held = unassigned.setdefault(str(row["assignee_id"]), {"assignee": str(row["assignee_id"]), "why": why,
+                                                                   "names": []})
+            held["names"].append(str(row["name"]))
+        else:
+            groups.setdefault(actor, []).extend(items)
     return groups, unassigned
 
 
@@ -111,14 +115,19 @@ def _open_for(c: Any, actor: str, items: list[dict[str, Any]], at: datetime) -> 
     return {"actor": actor, "task": str(task["id"]), "occurrences": n}
 
 
-def _notify(c: Any, item: dict[str, Any]) -> str | None:
-    """One Needs-you item for the install owner about a due date whose assignee cannot take work."""
+def _notify(c: Any, held: dict[str, Any]) -> str | None:
+    """One Needs-you item for the install owner about an assignee that cannot take work, naming its due dates. The title
+    has no count, so the open item is reused as more due dates fall to the same assignee."""
     owner = FC.owner(c)
     if not owner:
         return None
-    title = f"Due date has no teammate: {item['name']} ({item['due_date_id'][:8]})"[:200]
-    body = (f"{item['name']} at {item['subject']} is assigned to {item['assignee']}, which {item['why']}. Its "
-            "occurrences stay open. Give it an active teammate (due_date_update) and the next pass opens its task.")
+    names: list[str] = held["names"]
+    n = len(names)
+    title = f"Due dates need a teammate: {held['assignee']}"[:200]
+    listed = "\n".join(f"- {name}" for name in names[:LISTED])
+    more = f"\n...and {n - LISTED} more." if n > LISTED else ""
+    body = (f"{n} due date(s) are assigned to {held['assignee']}, which {held['why']}. Their occurrences stay open. "
+            "Give them an active teammate (due_date_update) and the next pass opens their tasks.\n\n" + listed + more)
     return TI.needs_you(c, owner, title, body)
 
 
@@ -130,11 +139,11 @@ def tick(c: Any, at: datetime) -> dict[str, Any] | None:
         return None
     groups, unassigned = candidates(c, today)
     tasks: list[dict[str, Any]] = []
-    notices = [n for n in (_notify(c, item) for item in unassigned) if n]
+    notices = [n for n in (_notify(c, held) for _, held in sorted(unassigned.items())) if n]
     for actor, items in sorted(groups.items()):
         try:
             tasks.append(_open_for(c, actor, items, at))
-        except H.Refused as exc:               # a rule declined the task: the owner hears why, and the day's pass ends
+        except H.Refused as exc:               # a rule declined the task: the owner hears why, and the pass goes on
             owner = FC.owner(c)
             detail = str(getattr(exc, "detail", "") or exc)
             if owner:
