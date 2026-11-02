@@ -41,6 +41,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Find a file or page any bot made | Library → Files (`#/library/files`); search finds text inside ([Files](files.md#library--files)) |
 | See every connection, who reads it and its bots | Library → Connections (`#/library/connections`) ([Connect tools](connect-tools.md#connections)) |
 | Arrange your own landing page | Overview → Mine (`#/home`) ([Overview](overview.md#my-dashboard)) |
+| See rules or goals on the team chart, by bot | Overview → Graph (`#/overview/graph`, `?view=goals` for goals) ([Overview](overview.md#graph)) |
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
 | Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |

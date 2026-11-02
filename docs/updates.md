@@ -284,7 +284,7 @@ Set `TICO_UPDATER_FULL_CHECK=1` in `.env` to run it anyway.
 
 The time allowed for the copy is the larger of 20 minutes (1200 seconds) and 5 minutes (300 seconds) per gigabyte of
 `hub.sqlite`: max(1200 seconds, 300 seconds × N GB). A 3.6 GB hub gets the 20-minute floor, 1200 seconds, because
-5 minutes × 3.6 GB is 1080 seconds. Set `TICO_UPDATER_SNAPSHOT_SECONDS` in `.env` to use a fixed number of seconds instead.
+5 minutes × 3.6 GB is 1080 seconds. Set `TICO_UPDATER_SNAPSHOT_SECONDS` in `.env` to use a fixed number of seconds instead; a value that is not a positive whole number is ignored, with a warning in the updater's log.
 
 ## The runner
 
