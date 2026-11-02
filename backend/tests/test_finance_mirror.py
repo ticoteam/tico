@@ -15,6 +15,7 @@ from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import mirror as M
 from backend.finance.core import qbo as Q
+from backend.finance.core.ledger import Account
 from backend.finance.core.errors import CONFLICT, NOT_AVAILABLE
 from backend.finance.store import access as SA
 from backend.finance.store import ap as SAP
@@ -363,6 +364,19 @@ def test_a_bill_is_payable_on_the_provider_account_bound_to_tico_payable(books):
     with books.read() as c:
         ctx = load(c, AT)
         assert documents.control(ctx, "bill").id == _local(c, "Account:13", "fin_accounts")
+
+
+def test_a_bill_is_payable_on_the_payable_bound_to_the_provider_before_the_one_with_the_default_code(books):
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        bound = Account(id=SL.new_id(), book_id=SL.book(c).id, code="2010", name="Accounts Payable (QB)",
+                        type="liability", subtype="payable", active=True)
+        SL.insert_account(c, bound, OWNER, AT)
+        SX.ref_insert(c, cid=cid, local_table="fin_accounts", local_id=bound.id, kind="Account", external_id="13",
+                      revision="1", status="active", at=AT, by=OWNER)
+    with books.read() as c:
+        assert documents.control(load(c, AT), "bill").id == bound.id      # not the default chart's 2000, unbound
 
 
 def test_a_mode_switch_keeps_an_unclear_row_from_paying_a_provider_bill(books):

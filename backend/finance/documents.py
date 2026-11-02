@@ -40,6 +40,7 @@ from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import mirror as SX
 from .store import purchasing as SP
 from .store import tico
 
@@ -65,10 +66,18 @@ def _event(ctx: Ctx, name: str, subject: str, payload: Mapping[str, object], key
 
 
 def control(ctx: Ctx, kind: str) -> L.Account:
-    """Accounts payable (bills) or receivable (invoices): the default chart's line, else any active one of its kind."""
+    """Accounts payable (bills) or receivable (invoices): the one bound to the mirrored provider's account of that kind,
+    else the default chart's line, else the lowest code of its kind. With several, the pick is the same every time."""
     code, subtype, words = CONTROL[kind]
+    cid = ctx.book.mirror_connection_id
+
+    def rank(a: L.Account) -> tuple[bool, bool, str, str]:
+        ref = SX.ref_for_local(ctx.c, cid, "fin_accounts", a.id) if cid else None
+        bound = ref is not None and str(ref["status"]) == "active"
+        return (not bound, a.code != code, a.code, a.id)
+
     found = [a for a in ctx.accounts.values() if a.active and a.subtype == subtype]
-    best = next((a for a in found if a.code == code), found[0] if found else None)
+    best = min(found, key=rank) if found else None
     if best is None:
         raise invalid(f"the books have no {words} line")
     return best
