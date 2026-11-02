@@ -54,8 +54,8 @@ CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, s
 def ensure_schema(c):
     c.executescript(SCHEMA)
     have = {r[1] for r in c.execute("PRAGMA table_info(assistant_actions)")}
-    # ask_json: the ask a card carries to someone who may (backend/settings_asks.py), settled with the card.
-    for column in ("confirm_hash", "running_since", "description", "diff", "proposer", "ask_json"):
+    # ask: the ask a card carries to someone who may (backend/settings_asks.py), settled with the card.
+    for column in ("confirm_hash", "running_since", "description", "diff", "proposer", "ask"):
         if column not in have:
             c.execute("ALTER TABLE assistant_actions ADD COLUMN %s TEXT" % column)
     if not any(r[1] == "via" for r in c.execute("PRAGMA table_info(task_events)")):

@@ -58,8 +58,8 @@ def check_asker(c, asker, asked, instruction):
         raise Problem("forbidden", "A person asks someone who can, or BotOps or their Assistant for them", 403)
     if asker.via == "assistant":
         instruction(c, asker, asked)
-    waiting = c.execute("SELECT count(*) FROM assistant_actions WHERE status='pending' AND ask_json IS NOT NULL "
-                        "AND json_extract(ask_json, '$.asker')=?", (asker.actor,)).fetchone()[0]
+    waiting = c.execute("SELECT count(*) FROM assistant_actions WHERE status='pending' AND ask IS NOT NULL "
+                        "AND json_extract(ask, '$.asker')=?", (asker.actor,)).fetchone()[0]
     if waiting >= MAX_OPEN:
         raise Problem("too_many", f"{MAX_OPEN} of your asks are still waiting for an answer; ask again when one is "
                       "settled", 409)
@@ -82,8 +82,8 @@ def file(c, auth, settings, asker, chosen, e, card, room, bot, note="", target=N
     if card.get("repeated"):
         # The card was already waiting (assistant.create_proposal reuses an identical pending one). Only the same
         # person's ask is the same request; anyone else's, or the person's own card, is never taken over silently.
-        held = c.execute("SELECT ask_json FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
-        ask = json.loads(held["ask_json"]) if held and held["ask_json"] else None
+        held = c.execute("SELECT ask FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
+        ask = json.loads(held["ask"]) if held and held["ask"] else None
         if ask and ask["asker"] == asker.actor:
             return ask["task"]
         by = f"{_name(c, ask['asker'])} already asked them for" if ask else "they already have their own card for"
@@ -91,10 +91,10 @@ def file(c, auth, settings, asker, chosen, e, card, room, bot, note="", target=N
                       "was asked; ask again once it is settled", 409)
     on = {k: str(v) for k, v in (target or {}).items() if v}
     what = _what(c, e, on)
-    for row in c.execute("SELECT ask_json FROM assistant_actions WHERE status='pending' AND owner=? AND id<>? AND "
-                         "json_extract(ask_json, '$.asker')=? AND json_extract(ask_json, '$.key')=?",
+    for row in c.execute("SELECT ask FROM assistant_actions WHERE status='pending' AND owner=? AND id<>? AND "
+                         "json_extract(ask, '$.asker')=? AND json_extract(ask, '$.key')=?",
                          (chosen.actor, action["id"], asker.actor, e.key)):
-        if (json.loads(row["ask_json"]).get("target") or {}) == on:
+        if (json.loads(row["ask"]).get("target") or {}) == on:
             # Refused before anything is kept: the card just made goes with the transaction.
             raise Problem("already_asked", f"You already asked {_name(c, chosen.actor)} about {what}; their answer "
                           "to that comes first (they confirm or cancel it, or it expires after a day)", 409)
@@ -108,7 +108,7 @@ def file(c, auth, settings, asker, chosen, e, card, room, bot, note="", target=N
                          lint=False)
     ask = {"task": task["id"], "asker": asker.actor, "room": room["id"], "bot": bot, "key": e.key, "target": on,
            "what": what}
-    c.execute("UPDATE assistant_actions SET ask_json=? WHERE id=?", (json.dumps(ask), action["id"]))
+    c.execute("UPDATE assistant_actions SET ask=? WHERE id=?", (json.dumps(ask), action["id"]))
     H.event(c, asker.actor, "settings.asked", e.key, {"to": chosen.actor, "task": task["id"], "action": action["id"]})
     return task["id"]
 
@@ -116,7 +116,7 @@ def file(c, auth, settings, asker, chosen, e, card, room, bot, note="", target=N
 def settled(c, row, status, result=None):
     """A card's outcome, for the ask it carries (if any): its task done (the change ran) or declined (cancelled,
     refused at the tap, or expired), and the asker told in the chat they asked from."""
-    ask = json.loads(row.get("ask_json") or "null") if isinstance(row, dict) else None
+    ask = json.loads(row.get("ask") or "null") if isinstance(row, dict) else None
     if not ask:
         return
     name, what = _name(c, row["owner"]), ask.get("what") or "the change"
@@ -140,7 +140,7 @@ def sweep(c, at=None):
     gone = []
     if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assistant_actions'").fetchone():
         return gone                                     # a database made without the Assistant's tables
-    for row in H._rows(c.execute("SELECT * FROM assistant_actions WHERE status='pending' AND ask_json IS NOT NULL "
+    for row in H._rows(c.execute("SELECT * FROM assistant_actions WHERE status='pending' AND ask IS NOT NULL "
                                  "AND created_at<? ORDER BY created_at", (H.shift(at, hours=-CONFIRM_TTL_H),))):
         with isolated(c, "settings_asks", row["id"]):
             c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=? AND status='pending'",
@@ -153,12 +153,12 @@ def sweep(c, at=None):
 def interrupted(c, at, ttl_s, orphans=False):
     """The asked cards whose confirm never settled (a restart mid-run): those still `running` past `ttl_s`, and with
     `orphans` (the hourly sweep) those already marked failed without settling their ask (their task still open)."""
-    rows = H._rows(c.execute("SELECT * FROM assistant_actions WHERE ask_json IS NOT NULL AND ((status='running' AND "
+    rows = H._rows(c.execute("SELECT * FROM assistant_actions WHERE ask IS NOT NULL AND ((status='running' AND "
                              "running_since<?) OR (? AND status='failed')) ORDER BY created_at",
                              (H.shift(at, seconds=-ttl_s), int(orphans))))
     ended = ("done", "declined", "closed")
     return [r for r in rows if r["status"] == "running"
-            or (H.task(c, json.loads(r["ask_json"])["task"]) or {}).get("status") not in (None, *ended)]
+            or (H.task(c, json.loads(r["ask"])["task"]) or {}).get("status") not in (None, *ended)]
 
 
 def recover(c, at=None, orphans=False):

@@ -17,9 +17,9 @@ from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (
 def asks(api, person):
     """The requests filed for `person` by an ask: (task, the card it carries)."""
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT * FROM assistant_actions WHERE owner=? AND ask_json IS NOT NULL",
+        rows = c.execute("SELECT * FROM assistant_actions WHERE owner=? AND ask IS NOT NULL",
                          ("human:" + person,)).fetchall()
-        return [(H.task(c, json.loads(r["ask_json"])["task"]), dict(r)) for r in rows]
+        return [(H.task(c, json.loads(r["ask"])["task"]), dict(r)) for r in rows]
 
 
 def times(api):
@@ -139,7 +139,7 @@ def test_an_asked_card_nobody_taps_expires_within_the_hour_after_a_day_and_tells
     assert not told(api, "cara", new["id"]) and times(api) == before
     with api.app.state.store.read() as c:
         waiting = c.execute("SELECT count(*) FROM assistant_actions WHERE status='pending' AND "
-                            "json_extract(ask_json, '$.asker')='human:cara'").fetchone()[0]
+                            "json_extract(ask, '$.asker')='human:cara'").fetchone()[0]
     assert waiting == 1
 
 
@@ -184,8 +184,8 @@ def test_two_people_asking_for_the_same_change_never_share_one_request(api, boto
     err, got = ask(api, botops, "ben", "team.rules.go_ahead_days", 5)
     assert err and got["error"] == "already_waiting" and "their own card" in got["detail"], got
     with api.app.state.store.read() as c:
-        held = c.execute("SELECT ask_json FROM assistant_actions WHERE id=?", (own["action"]["id"],)).fetchone()
-    assert held["ask_json"] is None
+        held = c.execute("SELECT ask FROM assistant_actions WHERE id=?", (own["action"]["id"],)).fetchone()
+    assert held["ask"] is None
 
 
 def test_an_asked_confirm_cut_off_by_a_restart_settles_its_request_once_without_running_again(api, botops):
