@@ -869,4 +869,4 @@ def test_health_lists_waiting_bots_while_a_claim_check_raises(api, monkeypatch, 
         c.execute("UPDATE jobs SET created_at=? WHERE state='queued'", (H.shift(H.now(), minutes=-30),))
         online = {r["id"] for r in health._online_runners(c)}
         waiting, slow, stuck = health._waiting(c, online, store.settings)
-    assert "ops" not in {r["bot_id"] for r in stuck}
+    assert "ops" not in {r["bot"] for r in stuck}

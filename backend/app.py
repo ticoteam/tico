@@ -3771,7 +3771,7 @@ def create_app(settings=None):
     # ------------------------------------------------------------------ quiet notes
     def note_view(row, c):
         waiting = H.note_waiting(c, row)
-        return {"id": row["id"], "from": row["sender_id"], "to": row["recipient_id"], "text": row["body"],
+        return {"id": row["id"], "from": row["from_actor"], "to": row["to_actor"], "text": row["body"],
                 "created_at": row["created_at"], "waiting": waiting,
                 "carried": bool(row.get("carried_by")) and not waiting and not row.get("cancelled_at"),
                 "carried_by": row.get("carried_by"), "cancelled_at": row.get("cancelled_at")}
@@ -3780,10 +3780,10 @@ def create_app(settings=None):
         # A bot sees the notes it left and the ones left for it; a person, the ones they left and
         # every note between bots whose activity they may read.
         if who.role == "bot":
-            return who.actor in (row["sender_id"], row["recipient_id"])
-        if who.actor == row["sender_id"]:
+            return who.actor in (row["from_actor"], row["to_actor"])
+        if who.actor == row["from_actor"]:
             return True
-        bots = [H.actor_id(a) for a in (row["sender_id"], row["recipient_id"]) if str(a).startswith("bot:")]
+        bots = [H.actor_id(a) for a in (row["from_actor"], row["to_actor"]) if str(a).startswith("bot:")]
         return all(level["read"] for level in auth.bot_accesses(c, who, bots).values())
 
     def note_write(c, who, body, rc=None):

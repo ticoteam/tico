@@ -64,7 +64,7 @@ def test_ten_loaded_minutes_record_an_overload_that_names_what_ran_and_health_sh
     post(api, "runners/performance", {"samples": busy[9:]}, token=r["token"])
     seen = get(api, f"computers/{rid}/performance?hours=1")
     (o,) = seen["overloads"]
-    assert o["reasons"] == ["cpu"] and o["ended"] is None and o["bots"][0]["bot_id"] == "ops"
+    assert o["reasons"] == ["cpu"] and o["ended_at"] is None and o["bots"][0]["bot_id"] == "ops"
     assert o["procs"][0]["name"] == "cargo"
     assert seen["summary"].startswith("Overloaded once") and "cargo" in seen["summary"]
     check = next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)
@@ -175,7 +175,7 @@ def test_turning_it_off_ends_an_open_overload(api):
     rid = r["runner_id"]
     start = (int(time.time()) // 60 - 11) * 60
     post(api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"])
-    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended"] is None
+    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended_at"] is None
     post(api, f"computers/{rid}/performance", {"mode": "off"})
     assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended"] == start + 600
     assert not any(x["id"] == "performance:" + rid and "overloaded now" in x["summary"] for x in get(api, "health")["checks"])

@@ -238,7 +238,7 @@ def tick(c, at=None):
             due = _sweep_slot(c, job, values_of["sweep_seconds"])
             if due is None:
                 c.execute("UPDATE jobs SET state='canceled',held=0 WHERE id=?", (job["id"],))
-                H.event(c, H.KEEPER, "job.wake_merged", job["id"], {"bot_id": job["bot_id"]})
+                H.event(c, H.KEEPER, "job.wake_merged", job["id"], {"bot": job["bot_id"]})
                 continue
         else:
             due = _batch_slot(c, job, values_of)

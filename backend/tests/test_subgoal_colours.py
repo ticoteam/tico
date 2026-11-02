@@ -105,7 +105,7 @@ def test_person_colour_on_subgoal_stays_and_strategy_only_suggests(api, clock):
     assert [(r["goal"], r["suggested"]) for r in result["suggested"]] == [(child["id"], "red")]
     with api.app.state.store.read() as c:
         row = G.goal(c, child["id"])
-        for field in ("status", "status_source", "status_by", "status_note", "status_at", "parent_id"):
+        for field in ("status", "status_source", "status_by_id", "status_note", "status_at", "parent_id"):
             assert row[field] == before[field]
         assert row["suggest_status"] == "red"
         assert row["suggest_note"] == "Activation 39% below range 40–60%"

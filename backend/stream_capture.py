@@ -98,7 +98,7 @@ def keep(c, row, body):
               "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(attempt_id) DO UPDATE SET provider=excluded.provider,"
               "frames=excluded.frames,truncated=excluded.truncated,dropped_bytes=excluded.dropped_bytes,"
               "bytes=excluded.bytes,created_at=excluded.created_at",
-              (row["id"], row["bot"], body.provider, frames, int(body.truncated), body.dropped_bytes,
+              (row["id"], row["bot_id"], body.provider, frames, int(body.truncated), body.dropped_bytes,
                len(frames.encode()), H.now()))
     return {"kept": True, "bytes": len(frames.encode()), "truncated": body.truncated}
 

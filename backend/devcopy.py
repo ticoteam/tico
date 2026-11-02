@@ -103,8 +103,8 @@ EMPTY = (
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
                "automation_versions")
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
-HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_at", "events": "ts", "deltas": "ts",
-           "bot_status_history": "since", "audit_log": "at", "browser_exit_usage": "day"}
+HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_at", "events": "created_at", "deltas": "created_at",
+           "bot_status_history": "started_at", "audit_log": "created_at", "browser_exit_usage": "day"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",

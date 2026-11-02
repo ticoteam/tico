@@ -39,7 +39,7 @@ WHO = {
     "bot": "the bot's owners, its operator, the people above it, an admin or the owner",
     "self": "each person, for themselves",
     "creator": "the person who made it, an admin or the owner",
-    "owner_id": "the computer's operator, an admin or the owner",
+    "operator": "the computer's operator, an admin or the owner",
     "anyone": "anyone on the team",
 }
 TARGETS = ("bot", "computer", "person", "id")

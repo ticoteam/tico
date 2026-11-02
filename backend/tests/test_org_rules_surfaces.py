@@ -189,4 +189,4 @@ def test_rules_due_takes_the_next_window_and_list_is_the_same_view(api):
     due = cli(api, "ana-test", "due", "add", rule["id"], "--first", soon, "--repeats", "once", "--owner", "ops")
     upcoming = cli(api, "ana-test", "due", "--next", "30d")
     assert [d["id"] for d in upcoming["due"]] == [due["id"]]
-    assert cli(api, "ana-test", "due", "list", "--next", "30d")["due_at"] == upcoming["due"]
+    assert cli(api, "ana-test", "due", "list", "--next", "30d")["due"] == upcoming["due"]

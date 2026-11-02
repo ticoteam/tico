@@ -269,7 +269,7 @@ def create(conn, actor, title, owner, parent_id=None, body="", top=False, bet_id
     _event(conn, row["id"], actor, "created", None, title)
     if bet_id:
         _event(conn, row["id"], actor, "bet_id", None, bet_id)
-    H.event(conn, actor, "goal.create", row["id"], {"owner_id": owner, "title": title, "parent_id": parent_id})
+    H.event(conn, actor, "goal.create", row["id"], {"owner": owner, "title": title, "parent_id": parent_id})
     return goal(conn, row["id"])
 
 
@@ -468,7 +468,7 @@ def kpi_create(conn, actor, owner, fields, goal_id=None, target=None):
                 raise ValueError(error)
     except ValueError as exc:
         _lint(conn, actor, exc)
-    H.event(conn, actor, "kpi.create", row["id"], {"name": row["name"], "owner_id": owner})
+    H.event(conn, actor, "kpi.create", row["id"], {"name": row["name"], "owner": owner})
     arm_pass(conn)
     if goal_id:
         kpi_link(conn, actor, goal_id, row["id"], target or {"kind": "none"})

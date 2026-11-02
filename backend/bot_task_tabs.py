@@ -329,9 +329,9 @@ def tab_sql(tab, bot, viewer, visible_sql="1"):
         elif field == "type":
             part = many("type_id")
         elif field == "assigned_to":
-            part = party_sql("owner", value, bot, viewer)
+            part = party_sql("owner_id", value, bot, viewer)
         elif field == "asked_by":
-            part = party_sql("requester", value, bot, viewer)
+            part = party_sql("requester_id", value, bot, viewer)
         elif field == "needs":
             part = "((owner_id=? AND status IN ('open','doing','waiting')) OR (status='waiting' AND waiting_on=?))", [viewer, viewer]
         elif field == "waiting_on":
@@ -350,11 +350,11 @@ def tab_sql(tab, bot, viewer, visible_sql="1"):
         elif field == "due":
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             if value == "overdue":
-                part = ("coalesce(due,'')!='' AND substr(due,1,10)<? AND status NOT IN ('done','closed','declined')",
+                part = ("coalesce(due_at,'')!='' AND substr(due_at,1,10)<? AND status NOT IN ('done','closed','declined')",
                         [today])
             else:
                 until = (datetime.now(timezone.utc) + timedelta(days=value)).strftime("%Y-%m-%d")
-                part = "coalesce(due,'')!='' AND substr(due,1,10) BETWEEN ? AND ?", [today, until]
+                part = "coalesce(due_at,'')!='' AND substr(due_at,1,10) BETWEEN ? AND ?", [today, until]
         else:  # label
             part = ("EXISTS (SELECT 1 FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
                     "WHERE task_tags.task_id=tasks.id AND tags.key=?)", [value])

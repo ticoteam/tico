@@ -227,7 +227,7 @@ def test_each_field_filters(api):
     bot_wait(api, "Waits on cpo", created_at=10, updated_at=10)
     task(api, "Done lately", "bot:ops", "human:ana", status="done", done_at=5, created_at=10, updated_at=5)
     task(api, "Done long ago", "bot:ops", "human:ana", status="done", done_at=40, created_at=50, updated_at=40)
-    task(api, "Overdue", "bot:ops", "human:ana", due="2020-01-01", created_at=10, updated_at=10)
+    task(api, "Overdue", "bot:ops", "human:ana", due_at="2020-01-01", created_at=10, updated_at=10)
     rows = lambda *c: [{"field": f, "value": v} for f, v in c]  # noqa: E731
     save(api, "ops", [
         {"name": "Created recently", "show_count": False, "conditions": rows(("created_within", 3))},
@@ -343,10 +343,10 @@ def test_needs_you_supplements_deduplicate_beyond_first_page_without_leaking_pri
 
 def test_attention_counts_include_approvals_in_whole_list():
     from backend import views
-    items = [{"kind": "task", "id": "owned", "owner": "human:ana", "requester": "bot:ops", "status": "open"},
-             {"kind": "waiting", "id": "wait", "owner": "bot:ops", "requester": "human:ana", "status": "waiting", "waiting_on": "human:ana"},
-             {"kind": "approval", "id": "approval", "requested_by": "bot:ops"},
-             {"kind": "approval", "id": "other", "requested_by": "human:ben"}]
+    items = [{"kind": "task", "id": "owned", "owner_id": "human:ana", "requester_id": "bot:ops", "status": "open"},
+             {"kind": "waiting", "id": "wait", "owner_id": "bot:ops", "requester_id": "human:ana", "status": "waiting", "waiting_on": "human:ana"},
+             {"kind": "approval", "id": "approval", "requested_by_id": "bot:ops"},
+             {"kind": "approval", "id": "other", "requested_by_id": "human:ben"}]
     assert views.needs_bots(items, "human:ana") == {"bot:ops": 3}
 
 

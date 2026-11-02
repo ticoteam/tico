@@ -38,7 +38,7 @@ def change(api, task, token, **fields):
 
 
 @pytest.mark.parametrize('fields,field', [({'status': 'doing'}, 'status'),
-    ({'due': '2027-01-01T00:00:00Z'}, 'due'), ({'owner': 'cpo'}, 'owner'),
+    ({'due': '2027-01-01T00:00:00Z'}, 'due_at'), ({'owner': 'cpo'}, 'owner_id'),
     ({'title': 'Check the revised packet'}, 'title'), ({'body': 'Review the revised packet.'}, 'body'),
     ({'rank': 12}, 'rank'), ({'step_rank': 11}, 'step_rank')])
 def test_manager_updates_and_is_named_in_history(api, manager, fields, field):
@@ -47,7 +47,7 @@ def test_manager_updates_and_is_named_in_history(api, manager, fields, field):
     changed = change(api, task, token, **fields)
     assert changed[field] != task.get(field)
     with api.app.state.store.read() as c:
-        events = [e for e in H.task_history(c, task['id']) if e['field'] == field]
+        events = [e for e in H.task_history(c, task['id']) if e['field'] == {'due_at': 'due', 'owner_id': 'owner'}.get(field, field)]
         if field not in ('rank', 'step_rank'):
             assert events[-1]['actor'] == actor
         assert c.execute("SELECT actor FROM events WHERE action='task.update' AND target=? ORDER BY rowid DESC LIMIT 1",
@@ -252,7 +252,7 @@ def test_nonmanager_unchanged_and_refusal_names_managers(api, manager):
     get(api, 'tasks/' + private['id'], token=outsider, expected=404)
     task = make(api, private=False)
     refusal = post(api, 'tasks/' + task['id'], {'version': task['version'], 'status': 'doing'}, token=outsider, expected=403)
-    assert 'managers' in str(refusal) and 'owner_id' in str(refusal)
+    assert 'managers' in str(refusal) and 'owner' in str(refusal)
     post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Unrelated comment.'}, token=outsider, expected=403)
 
 

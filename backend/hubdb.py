@@ -4429,7 +4429,7 @@ def tags(conn, is_template=None):
 def tag_can_edit(conn, actor, row, mover=None):
     if mover is None:
         mover = actor == KEEPER or can_move(conn, actor)
-    return bool(mover or row.get("owner_id") == actor)
+    return bool(mover or row.get("owner") == actor)
 
 
 def tag_create(conn, actor, key, label=None, metadata=None, markdown=None, is_template=False,
@@ -6232,7 +6232,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         # warn mode: the problem is on the record, the task still exists (the refuse week follows)
         _task_event(conn, row["id"], KEEPER, "lint", None, "; ".join(plain), "")
         event(conn, actor, "task.lint", row["id"], {"problems": plain})
-    event(conn, actor, "task.create", row["id"], {"owner_id": target, "title": title})
+    event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
     _building(conn, None)
     hook(conn, "task.created", row["id"], lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id), actor, revision=0)
     from . import task_trigger_rules
@@ -6638,9 +6638,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             continue
         if field in checked:
             path_mentioned(conn, actor, f"task {field}", str(value), task_id)
-        sets.append(f"{field}=:{field}")
-        args[field] = value
-        _task_event(conn, task_id, actor, field, row.get(field), value, note or "")
+        column = "due_at" if field == "due" else field     # the event's field keeps its name
+        sets.append(f"{column}=:{column}")
+        args[column] = value
+        _task_event(conn, task_id, actor, field, row.get(column), value, note or "")
     if labels is not None:
         _set_task_tags(conn, actor, task_id, labels, note or "", approval_id=approval_id, approved=approved)
         sets.append("updated_at=:updated_at")

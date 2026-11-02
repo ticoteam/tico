@@ -954,7 +954,7 @@ def holding_turns(c, attempts):
         ids = sorted(attempt_tasks(c, a["id"]))
         task = c.execute(f"SELECT id,title FROM tasks WHERE id IN ({','.join('?' * len(ids))}) AND NOT private "
                          "ORDER BY updated_at DESC LIMIT 1", ids).fetchone() if ids else None
-        out.append({"run": a["id"], "bot": a["bot"], "name": names.get(a["bot"], a["bot"]), "since": a["since"],
+        out.append({"run": a["id"], "bot": a["bot_id"], "name": names.get(a["bot_id"], a["bot_id"]), "since": a["since"],
                     "task": task["id"] if task else "", "task_title": task["title"] if task else ""})
     return out
 
@@ -1441,7 +1441,7 @@ def _failed(c):
                      "ORDER BY finished_at DESC LIMIT 5", (since,)).fetchall()
     total = c.execute("SELECT count(*) FROM attempts WHERE state IN ('failed','expired') AND finished_at>?",
                       (since,)).fetchone()[0]
-    return total, [{"bot_id": r["bot_id"], "state": r["state"], "at": r["finished_at"]} for r in rows]
+    return total, [{"bot": r["bot_id"], "state": r["state"], "at": r["finished_at"]} for r in rows]
 
 
 def _fallbacks(c):
@@ -1604,7 +1604,7 @@ def _unreviewed_runs(c, who, auth):
         hours = int((H.parse_ts(H.now()) - H.parse_ts(oldest)).total_seconds() // 3600) if oldest else 0
         if count:
             text = f"{_bot_name(c, slug)}: {count} stopped run{'' if count == 1 else 's'} waiting {hours} h"
-            items.append({"bot_id": slug, "name": _bot_name(c, slug), "count": count, "hours": hours, "text": text,
+            items.append({"bot": slug, "name": _bot_name(c, slug), "count": count, "hours": hours, "text": text,
                           "fixes": [_fix("Review stopped runs", f"#/bot/{slug}/more")]})
     return _check("stopped_runs", "Stopped runs nobody decided", "warn",
                   _diagnostic_summary("Held for a check two hours or more; choose Try again or Don't retry.", items),
@@ -1645,14 +1645,14 @@ def view(c, who, settings, auth, github, config):
     listed = {row["bot"] for row in stuck_rows}
     stuck_rows += [row for row in setup_stuck.stuck(c) if row["bot"] not in listed]
     if not full and stuck_rows:      # someone who is not an administrator hears only about the bots they may read
-        readable = auth.bot_accesses(c, who, [row["bot_id"] for row in stuck_rows])
-        stuck_rows = [row for row in stuck_rows if readable.get(row["bot_id"], auth.FULL)["read"]]
+        readable = auth.bot_accesses(c, who, [row["bot"] for row in stuck_rows])
+        stuck_rows = [row for row in stuck_rows if readable.get(row["bot"], auth.FULL)["read"]]
     blocked = _stuck(c, stuck_rows, online_ids, who, full, auth)
     on_fallback, limited = _fallbacks(c) if kind != "bot" else ([], [])
     if not full and (on_fallback or limited):     # the same rule as `stuck`: only bots the caller may read
-        readable = auth.bot_accesses(c, who, sorted({row["bot_id"] for row in on_fallback + limited}))
-        on_fallback = [row for row in on_fallback if readable.get(row["bot_id"], auth.FULL)["read"]]
-        limited = [row for row in limited if readable.get(row["bot_id"], auth.FULL)["read"]]
+        readable = auth.bot_accesses(c, who, sorted({row["bot"] for row in on_fallback + limited}))
+        on_fallback = [row for row in on_fallback if readable.get(row["bot"], auth.FULL)["read"]]
+        limited = [row for row in limited if readable.get(row["bot"], auth.FULL)["read"]]
     failed, failures = _failed(c)
     checks = []
     from . import assigned_start
@@ -1706,7 +1706,7 @@ def view(c, who, settings, auth, github, config):
             fixes = [_fix(*COMPUTERS)]
             # Items share the shape of every other check's (bot, name, text, fixes) so issue lists can sort and
             # show them; a resolved incident is an ok summary with no items, like any other clear check.
-            items = [{"bot_id": "", "name": "Company turns", "text": text, "incident": incident['id'],
+            items = [{"bot": "", "name": "Company turns", "text": text, "incident": incident['id'],
                       "opened_at": incident['opened_at'], "at_stop": bool(incident.get('at_stop')),
                       "in_use": value['in_use'], "warning": value['warning'], "stop": value['stop'],
                       "finding": found or None, "task_id": incident.get('task_id'), "fixes": fixes}] if incident.get('active') else []
@@ -2056,11 +2056,11 @@ def view(c, who, settings, auth, github, config):
     # An offline computer (or none) is "Bots waiting"; this check is everything else, so one cause is one item.
     held = {w["bot"] for w in waiting}
     # A bot stuck in onboarding has its own check below ("Onboarding not finished").
-    blocking = [s for s in blocked if s["bot_id"] not in held and s["reason"] != "setup"]
+    blocking = [s for s in blocked if s["bot"] not in held and s["reason"] != "setup"]
     busy = [row for row in slow if row["reason"] == "busy"]
-    readable = auth.bot_accesses(c, who, [row["bot_id"] for row in busy]) if busy and not full else {}
+    readable = auth.bot_accesses(c, who, [row["bot"] for row in busy]) if busy and not full else {}
     busy_rows = _stuck(c, [{**row, "reason": row["wait_reason"], "runtime": ""} for row in busy
-                          if full or readable.get(row["bot_id"], auth.FULL)["read"]], online_ids, who, full, auth)
+                          if full or readable.get(row["bot"], auth.FULL)["read"]], online_ids, who, full, auth)
     if blocking:
         items = _queue_items(blocking + busy_rows, full, kind == "bot") if full or kind == "bot" else []
         bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off", "task_wait", "task_next_run", "task_cap", "auto_start_off", "handed_back",
@@ -2109,7 +2109,7 @@ def view(c, who, settings, auth, github, config):
         "AND e.target=tasks.id AND e.created_at>=tasks.updated_at) ORDER BY updated_at", H.ACTIVE_STATUSES)
         if row["status"] != "waiting" or H.own_stuck_blockers(c, dict(row))]
     if stalled:
-        items = [{"bot_id": H.actor_id(row["owner_id"]), "name": row["title"][:200], "task": row["id"],
+        items = [{"bot": H.actor_id(row["owner_id"]), "name": row["title"][:200], "task": row["id"],
                   "quiet_minutes": quiet_minutes(row["updated_at"]),
                   "text": f"#{row['number'] or row['id']} {row['title'][:200]} (owner {row['owner_id']}): "
                           f"no progress for {quiet_minutes(row['updated_at'])} min; check the recovery diagnosis or record the missing dependency",

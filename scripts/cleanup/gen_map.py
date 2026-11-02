@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "backend/tests/fixtures/schema_pre_cleanup.sql"
 # Every table the commit before the renames can hold, with those made only on first use (gen_upgrade_fixture.py).
 EVERY_TABLE = ROOT / "backend/tests/fixtures/schema_old_main.sql"
+# Migration 0008 reads these under their old names, then drops them, before any rename runs.
+GONE_BEFORE_RENAMES = {"documents", "document_versions"}
 YAML_OUT = ROOT / "scripts/cleanup/renames.yaml"
 DATA_OUT = ROOT / "backend/migrations/renames_data.py"
 BASE = "29fcaaf6e"
@@ -200,7 +202,8 @@ def load_schema(sql_path):
     if EVERY_TABLE.exists():
         every, every_virtual = _one_schema(EVERY_TABLE)
         for name, cols in every.items():
-            tables.setdefault(name, cols)
+            if name not in GONE_BEFORE_RENAMES:
+                tables.setdefault(name, cols)
         virtual |= every_virtual
     return tables, virtual
 
@@ -216,7 +219,7 @@ def _one_schema(sql_path):
         virtual = {name for name, sql in rows if sql and sql.upper().startswith("CREATE VIRTUAL")}
         shadow = {f"{v}_{s}" for v in virtual for s in ("data", "idx", "content", "docsize", "config")}
         tables = {}
-        for name, sql in rows:
+        for name, _sql in rows:
             if name.startswith("sqlite_") or name in shadow:
                 continue
             tables[name] = [r[1] for r in conn.execute(f'PRAGMA table_info("{name}")')]

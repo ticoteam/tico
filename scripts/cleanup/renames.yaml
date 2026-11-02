@@ -169,10 +169,6 @@ columns:
   docs.created_by: created_by_id
   docs.updated: updated_at
   docs.updated_by: updated_by_id
-  document_versions.imported: imported_at
-  document_versions.payload_json: payload
-  documents.payload_json: payload
-  documents.updated: updated_at
   enrollments.expires: expires_at
   enrollments.operator: owner_id
   events.detail_json: detail
@@ -621,7 +617,7 @@ golden_added:
 waves:
   "1":
     rule: "M2: every *_json column drops the suffix (stored encoding unchanged)"
-    count: 185
+    count: 183
     global:
       acceptance_json: acceptance  # 1 table
       access_json: access  # 1 table
@@ -692,7 +688,7 @@ waves:
       owner_ids_json: owner_ids  # 1 table
       params_json: params  # 1 table
       participants_json: participants  # 1 table
-      payload_json: payload  # 14 tables
+      payload_json: payload  # 12 tables
       pnl_json: pnl  # 1 table
       procs_json: procs  # 1 table
       purpose_json: purpose  # 1 table
@@ -746,7 +742,7 @@ waves:
     scoped: {}
   "2":
     rule: "M1 created/updated -> created_at/updated_at; M3 uniform bare time columns -> <verb>_at"
-    count: 271
+    count: 270
     global:
       code_expires: code_expires_at  # 1 table
       created: created_at  # 138 tables
@@ -772,11 +768,11 @@ waves:
       restart_requested: restart_requested_at  # 1 table
       started: started_at  # 14 tables
       stop_requested: stop_requested_at  # 1 table
-      updated: updated_at  # 73 tables
+      updated: updated_at  # 72 tables
     scoped: {}
   "2s":
     rule: "M3 per table, common words (queued, checked, deleted...) -> <verb>_at (needs review, not applied: most sites cannot be told apart from counters, statuses and flags)"
-    count: 43
+    count: 42
     global: {}
     scoped:
       archives.imported: imported_at
@@ -792,7 +788,6 @@ waves:
       credential_uses.logged: logged_at
       deferrals.due: due_at  # tasks, deferrals, task_reminders; also a trigger type and finance documents' field
       deferrals.settled: settled_at
-      document_versions.imported: imported_at
       feed_deliveries.delivered: delivered_at
       feed_sources.fetched: fetched_at
       feed_updates.fetched: fetched_at

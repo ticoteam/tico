@@ -1107,7 +1107,7 @@ class Onboarding:
                 if row:
                     # Only the owner's machines may host every bot, so this one becomes the owner's.
                     c.execute("UPDATE runners SET owner_id=? WHERE id=?", (self.auth.owner_id(c), row["id"]))
-                    H.event(c, actor, "runner.adopted", row["id"], {"owner_id": self.auth.owner_id(c)})
+                    H.event(c, actor, "runner.adopted", row["id"], {"owner": self.auth.owner_id(c)})
         if not row:
             self._adopt_cloud(c, actor)
             return []

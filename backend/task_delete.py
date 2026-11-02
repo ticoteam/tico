@@ -27,6 +27,8 @@ from . import task_relations as TR
 from .migrations import renames
 
 
+# The trash keeps `owner` and `requester` until the second release; an audience clause names the tasks table's columns.
+READABLE = "(SELECT *, owner AS owner_id, requester AS requester_id FROM task_trash)"
 TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
  task_id TEXT PRIMARY KEY, number INTEGER, title TEXT, requester TEXT, owner TEXT, status TEXT,
  private INTEGER NOT NULL DEFAULT 1, deleted_at TEXT NOT NULL, deleted_by TEXT NOT NULL,
@@ -316,7 +318,7 @@ def trash(c, actor=None, audience=None):
     ones that person deleted or asked for."""
     ensure(c)
     sql = ("SELECT task_id AS id, number, title, requester, owner, status, deleted_at, deleted_by "
-           "FROM task_trash WHERE purged_at IS NULL")
+           f"FROM {READABLE} WHERE purged_at IS NULL")
     args = []
     if audience:
         sql += f" AND ({audience})"
@@ -330,9 +332,9 @@ def trashed(c, ref, audience=None):
     """The restorable trash row for a task id or number (`42` or `#42`) the reader may see, or None."""
     ensure(c)
     where = "purged_at IS NULL" + (f" AND ({audience})" if audience else "")
-    row = c.execute(f"SELECT * FROM task_trash WHERE task_id=? AND {where}", (ref,)).fetchone()
+    row = c.execute(f"SELECT * FROM {READABLE} WHERE task_id=? AND {where}", (ref,)).fetchone()
     if not row and str(ref).lstrip("#").isdigit():
-        row = c.execute(f"SELECT * FROM task_trash WHERE number=? AND {where}", (int(str(ref).lstrip("#")),)).fetchone()
+        row = c.execute(f"SELECT * FROM {READABLE} WHERE number=? AND {where}", (int(str(ref).lstrip("#")),)).fetchone()
     return dict(row) if row else None
 
 

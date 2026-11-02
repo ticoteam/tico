@@ -15,7 +15,7 @@ class Withdrawn(HubCase):
         appr = H.approval_request(self.conn, CMO, "merge", MERGE, task_id=row["id"])
         H.task_update(self.conn, CMO, row["id"], status="done", note="shipped")
         after = H.approval(self.conn, appr["id"])
-        self.assertEqual((after["decision"], after["decided_by"]), ("withdrawn", H.KEEPER))
+        self.assertEqual((after["decision"], after["decided_by_id"]), ("withdrawn", H.KEEPER))
         self.assertEqual(self.pending(), [])
         told = self.conn.execute("SELECT body, refs FROM messages WHERE recipient_id=? AND body LIKE 'Withdrawn:%'",
                                  (CMO,)).fetchall()

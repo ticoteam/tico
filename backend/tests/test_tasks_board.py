@@ -180,8 +180,8 @@ def test_finishing_the_blocker_clears_blocked_by_and_wakes_the_bot_owner(api):
     other = post(api, "tasks", {"owner": "cmo", "title": "Pick the photo", "body": "x"})
     blocked = relate(api, blocked["id"], blocker["id"], "blocked_by")
     entry = blocked["relations"]["blocks"][0]
-    assert {k: entry[k] for k in ("id", "title", "status", "owner", "direction")} == {
-        "id": blocker["id"], "title": "Write the copy", "status": "open", "owner": "bot:cmo", "direction": "in"}
+    assert {k: entry[k] for k in ("id", "title", "status", "owner_id", "direction")} == {
+        "id": blocker["id"], "title": "Write the copy", "status": "open", "owner_id": "bot:cmo", "direction": "in"}
     relate(api, blocked["id"], blocked["id"], "blocked_by", expected=422)
     relate(api, blocker["id"], blocked["id"], "blocked_by", expected=422)      # no loops
     assert related(relate(api, other["id"], blocked["id"], "blocks"), "blocks", "out") == [blocked["id"]]  # a second

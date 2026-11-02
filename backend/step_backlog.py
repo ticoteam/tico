@@ -129,7 +129,7 @@ def sweep(c, at=None):
                 if H._wake(c, first, who, text, {"wake": "blocker", "step_backlog": True}, trigger="stall_check"):
                     told.append(who)
             if told:
-                H.event(c, H.KEEPER, EVENT, first["id"], {"key": key, "step": step["name"], "owner_id": owner,
+                H.event(c, H.KEEPER, EVENT, first["id"], {"key": key, "step": step["name"], "owner": owner,
                                                           "count": len(waiting), "told": told})
                 sent.append((step["name"], owner, len(waiting), told))
     return sent

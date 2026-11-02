@@ -335,12 +335,12 @@ def test_a_due_date_keeps_its_edit_chain_and_is_readable_by_id(api):
     assert listed["due"] and all("chain" not in d for d in listed["due"])
     third = post(api, f"rule-due/{second}", {"first_due": "2027-06-01"})["id"]
     old = get(api, f"rule-due/{due['id']}")
-    assert old["replaced_by_id"] == second and old["replaces"] is None
+    assert old["replaced_by"] == second and old["replaces"] is None
     assert old["chain"][0]["ended_on"] is not None
     assert [link["id"] for link in old["chain"]] == [due["id"], second, third]
     assert old["chain"][0]["satisfied"][0]["due_on"] == start
     mid = get(api, f"rule-due/{second}")
-    assert mid["replaces"] == due["id"] and mid["replaced_by_id"] == third
+    assert mid["replaces"] == due["id"] and mid["replaced_by"] == third
     assert [link["id"] for link in mid["chain"]] == [due["id"], second, third]
     assert not old["can_edit"] and not old["can_satisfy"]
     live = get(api, f"rule-due/{third}")
@@ -447,7 +447,7 @@ def test_spend_sentences_cover_the_company_default_and_the_pools_with_edit_links
 def _routine_due(api):
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
     start = (D.local_today("America/Los_Angeles") - timedelta(days=1)).isoformat()
-    due = post(api, f"rules/{r['id']}/due", {"first_due_on": start, "repeats": "once", "owner": "ops"})
+    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner": "ops"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE rule_due_dates SET routine_id='routine-1' WHERE id=?", (due["id"],))
     return r, due, start

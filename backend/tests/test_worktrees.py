@@ -225,7 +225,7 @@ def test_unlink_retries_exhausted_cleanup_with_move_rights_and_keeps_work_until_
         generation = saved['cleanup_retry_generation']
         assert generation != 'previous-request' and uuid.UUID(generation)
     actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
-    assert len(actions) == 1 and actions[0]['action'] == 'remove' and actions[0]['owner_id'] == 'cmo'
+    assert len(actions) == 1 and actions[0]['action'] == 'remove' and actions[0]['owner'] == 'cmo'
     assert actions[0]['cleanup_retry_generation'] == generation
     # A fresh refusal keeps the files/link and resumes bounded retries; requesting removal does not bypass it.
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []

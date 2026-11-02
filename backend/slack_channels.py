@@ -199,7 +199,7 @@ def _dump(value):
 def _check_readers(c, readers):
     """The bot ids for `readers` (each a bot's slug or id); refuses any that is no bot."""
     ids = [(H.resolve_bot(c, slug) or {}).get("id") for slug in readers]
-    unknown = [slug for slug, bot_id in zip(readers, ids) if not bot_id]
+    unknown = [slug for slug, bot_id in zip(readers, ids, strict=True) if not bot_id]
     if unknown:
         raise Problem("slack_reader", "No bot named " + ", ".join(unknown) + ". Readers are bots' slugs (Settings > Bots).", 422)
     return ids

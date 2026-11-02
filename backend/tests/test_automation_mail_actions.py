@@ -377,7 +377,7 @@ def test_a_late_mail_report_after_its_held_run_was_dropped_is_recorded_and_the_r
     assert post(api, f"automations/{aid}/held", {"action": "drop"})["moved"] == 1
     late = post(api, f"automations/mail-actions/{action['id']}/result",
                 {"ok": ok, "detail": "sent" if ok else "no such thread", "retry": False}, computer.token)
-    assert late["saved_state"] == ("done" if ok else "failed")
+    assert late["state"] == ("done" if ok else "failed")
     run = last_run(api, aid)
     assert run["status"] == "skipped" and run["finished_at"]
     step = run["steps"][0]

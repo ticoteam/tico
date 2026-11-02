@@ -20,7 +20,7 @@
 #   F402         1   owner: engineering
 #   F541         6   owner: engineering
 #   F811         2   owner: engineering
-#   F841        20   owner: engineering
+#   F841        19   owner: engineering
 #   PLW1510     29   owner: engineering
 #   S110        33   owner: engineering
 
@@ -157,7 +157,6 @@
 "backend/tests/test_system_routines.py" = ["F841"]
 "backend/tests/test_task_manager_rights.py" = ["F841"]
 "backend/tests/test_triggers_incoming.py" = ["F841"]
-"backend/tests/test_updates.py" = ["F841"]
 "backend/tico_storage.py" = ["BLE001", "F401"]
 "backend/topic_change.py" = ["BLE001"]
 "backend/triggers.py" = ["BLE001"]

@@ -247,7 +247,7 @@ def test_a_members_cited_strategy_change_is_refused_and_the_strategy_bot_cannot_
     # The Strategy Bot works her task as itself: the owner's strategy stays the owner's to change.
     done(api, r, coo)
     attempt = post(api, "jobs/claim", {"bot": "goal-manager"}, token=r["token"])["attempt"]
-    assert attempt["task"]["id"] == task["id"] and attempt["task"]["requester_id"] == "human:cara"
+    assert attempt["task"]["id"] == task["id"] and attempt["task"]["requester"] == "human:cara"
     api_put = api.put("/api/v2/strategy/draft", json=draft, headers=headers(attempt["token"]))
     assert api_put.status_code == 403, api_put.text
 

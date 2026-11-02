@@ -23,7 +23,7 @@ KINDS = {
 def run_kind(kind, files, env, verbose):
     command = [sys.executable, "-m", "pytest", "-q", "-rs", "-o", "addopts=", "-m", "", "-p", "no:cacheprovider", *files]
     started = time.time()
-    result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True)
+    result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, check=False)
     seconds = time.time() - started
     output = result.stdout + result.stderr
     verdict = "PASS" if result.returncode == 0 else "FAIL"

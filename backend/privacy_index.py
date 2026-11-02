@@ -166,7 +166,7 @@ class ReadIndex:
         if self._intervals is None:
             groups = defaultdict(list)
             for row in self.attempts().values():
-                groups[row["bot"]].append(row)
+                groups[row["bot_id"]].append(row)
             def build(rows):
                 if not rows:
                     return None

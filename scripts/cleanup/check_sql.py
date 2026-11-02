@@ -87,7 +87,7 @@ def main():
         fresh_database(path)
         conn = sqlite3.connect(path)
         counts = {"ok": 0, "missing": 0, "unchecked": 0}
-        files = subprocess.run(["git", "ls-files", "*.py"], cwd=ROOT, capture_output=True, text=True).stdout.split()
+        files = subprocess.run(["git", "ls-files", "*.py"], cwd=ROOT, capture_output=True, text=True, check=False).stdout.split()
         for rel in files:
             if not rel.startswith(DIRS) or rel.startswith(SKIP):
                 continue

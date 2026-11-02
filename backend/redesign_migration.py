@@ -324,7 +324,7 @@ def _builtins(c, done, me):
         if job.key == "stale_review":
             control = cfg[job.key]
             flow = {"name": job.name, "owner": me, "enabled": bool(control["on"]),
-                    "trigger": {"type": "schedule", "cron": _cron(control["preset"], control["daily_at"]), "tz": _zone()},
+                    "trigger": {"type": "schedule", "cron": _cron(control["preset"], control["at"]), "tz": _zone()},
                     "steps": [{"id": "tasks", "type": "find", "source": "tasks", "query": "open tasks that look finished "
                                "or forgotten", "limit": 20},
                               {"id": "verdict", "type": "decide", "set": "stale-review@1", "out": "d1", "level": "low"},

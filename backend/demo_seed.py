@@ -271,11 +271,11 @@ class Builder:
             self.at(days=3.8)
             market.update_entity(c, market.CURATOR, "company/northwind",
                                  summary="A large suite vendor with a self-serve tool. Cheapest starter plan: $29, down from $39.",
-                                 evidence_ids=["ev-northwind-pricing"], last_verified=self.ago(days=3.8).date().isoformat())
+                                 evidence_ids=["ev-northwind-pricing"], last_verified_at=self.ago(days=3.8).date().isoformat())
             self.at(days=3.0)
             market.update_entity(c, market.CURATOR, "company/brightline",
                                  summary="A venture-backed competitor. Launched a mobile app for studios last month.",
-                                 evidence_ids=["ev-brightline-app"], last_verified=self.ago(days=3.0).date().isoformat())
+                                 evidence_ids=["ev-brightline-app"], last_verified_at=self.ago(days=3.0).date().isoformat())
             for index, (actor, kind, about, claim, url, quote, confidence) in enumerate(D.INSIGHTS):
                 self.at(days=1.4 - index * 0.3)
                 market.report(c, actor, kind=kind, about=about, claim=claim, source_url=url, quote=quote,

@@ -16,16 +16,16 @@ class TaskRow(TypedDict):
     id: str
     title: str | None
     body: str | None
-    requester: str | None
-    owner: str | None
+    requester_id: str | None
+    owner_id: str | None
     status: str | None
-    due: str | None
+    due_at: str | None
     conversation_id: str | None
     created_at: str | None
     updated_at: str | None
     done_at: str | None
     closed_at: str | None
-    closed_by: str | None
+    closed_by_id: str | None
     note: str | None
     goal_id: str | None
     labels: str
@@ -46,12 +46,12 @@ class TaskRow(TypedDict):
     rule_due_id: str | None
     checkpoint: str | None
     checkpoint_at: str | None
-    checkpoint_by: str | None
+    checkpoint_by_id: str | None
     checkpoint_state: str | None
     stale_asked_at: str | None
     checkpoint_blocked: int
     snoozed_until: str | None
-    snoozed_by: str | None
+    snoozed_by_id: str | None
     snoozed_note: str | None
     verdict: str | None
     verdict_head: str | None
@@ -78,7 +78,7 @@ class AttemptRow(TypedDict):
     """One `attempts` row (SELECT *)."""
     id: str
     job_id: str
-    bot: str
+    bot_id: str
     runner_id: str
     generation: int
     token_hash: str
@@ -104,7 +104,7 @@ class RunnerRow(TypedDict):
     """One `runners` row (SELECT *)."""
     id: str
     label: str
-    operator: str
+    owner_id: str
     token_hash: str
     created_at: str
     last_seen_at: str | None
@@ -134,8 +134,8 @@ class ApprovalRow(TypedDict):
     message_id: str | None
     payload: str | None
     payload_hash: str | None
-    requested_by: str | None
-    decided_by: str | None
+    requested_by_id: str | None
+    decided_by_id: str | None
     decision: str | None
     decided_at: str | None
     consumed_at: str | None

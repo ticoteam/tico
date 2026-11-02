@@ -496,7 +496,7 @@ class Files:
                 digest=digest, size=size, source_digest=str(fields.get("etag") or "") or None,
                 commit=str(fields.get("commit") or "")[:64] if re.fullmatch(r"[0-9a-f]{7,64}", str(fields.get("commit") or "")) else "",
                 repo_path=relative, explicit_title=bool(fields.get("title")))
-            H.event(c, actor, "file.publish", row["id"], {"bot_id": bot, "version": row["current_version"], "size": size})
+            H.event(c, actor, "file.publish", row["id"], {"bot": bot, "version": row["current_version"], "size": size})
             if changed:
                 # Video and audio have no text to search; their bytes are never read back here.
                 file_library.index(c, row["id"], row["current_version"], row["title"],
@@ -610,7 +610,7 @@ class Files:
             c.execute("UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), row["id"]))
             file_library.index(c, row["id"], 0, fields.get("title") or row["title"], url)
             self.activity(c, row["id"], actor, "created" if created else "link_updated", attempt=attempt, task=task, now=now)
-            H.event(c, actor, "file.link", row["id"], {"bot_id": bot})
+            H.event(c, actor, "file.link", row["id"], {"bot": bot})
             return {"file": self.brief(c, c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone()),
                     "created": created}
         result = self.write(request, who, {**body.model_dump(), "actor": who.actor}, work)

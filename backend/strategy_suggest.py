@@ -329,7 +329,7 @@ def offer_view(c):
 def offer_made(c, actor):
     """The Strategy Bot records that its Monday note offered level 3. Refused unless the offer is due, so it is made
     once and never more often than every 30 days."""
-    if not offer_view(c)["due_at"]:
+    if not offer_view(c)["due"]:
         raise H.Refused("state", f"Level 3 can be offered after {STREAK_FOR_OFFER} approvals in a row at level 2, "
                                  f"at most once every {OFFER_EVERY_DAYS} days; it is not due now")
     record = strategy_bot._record(c)

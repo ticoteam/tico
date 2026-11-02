@@ -2928,7 +2928,7 @@ class Execution:
             settle_status(c, row["bot_id"], "crashed" if state == "failed" else "idle",
                           reason if state == "failed" else "Last run didn't start; it is back in the queue",
                           claimed=row["created_at"], stop=row["id"])
-        H.event(c, H.KEEPER, event, row["id"], {"bot_id": row["bot_id"], "job_id": row["job_id"], "job_state": state})
+        H.event(c, H.KEEPER, event, row["id"], {"bot": row["bot_id"], "job_id": row["job_id"], "job_state": state})
         return state
 
     def hand_back(self, c, row, body):
@@ -4116,7 +4116,7 @@ class Execution:
             c.execute("UPDATE jobs SET redirect=1 WHERE id=?", (job["id"],))
         if not row["stop_requested_at"]:
             c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=?", (who.actor, row["id"]))
-            H.event(c, who.actor, "attempt.stop", row["id"], {"bot_id": bot, **({"redirect": redirect} if redirect else {})})
+            H.event(c, who.actor, "attempt.stop", row["id"], {"bot": bot, **({"redirect": redirect} if redirect else {})})
         return {"attempt_id": row["id"], "stopping": True, **({"redirect": redirect} if redirect else {})}
 
     def start_place(self, c, who, aid, body):
@@ -5200,7 +5200,7 @@ class Execution:
             hit = H.now()
             tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
             retry = H.shift(hit, seconds=GATEWAY_BACKOFF * 2 ** max(tries - 1, 0))
-            save_metadata(c, GATEWAY_WAIT + row["bot_id"], {"changed_at": hit, "until": retry})
+            save_metadata(c, GATEWAY_WAIT + row["bot_id"], {"since": hit, "until": retry})
             settle_status(c, row["bot_id"], "idle", f"{refused} ({hit[11:16]} UTC); the run is back in the queue and "
                           f"retries after {retry[11:16]} UTC (try {tries} of {NO_EFFECT_TRIES})",
                           claimed=row["created_at"])

@@ -734,7 +734,7 @@ def install(app, store, auth, mutate, settings):
             if bet and not S.bet(c, bet):
                 raise Problem("not_found", f"Change {n}: no strategy bet {bet}", 404)
             why = plain(raw.get("why"))
-            step("/api/v2/goals", {"title": title, "owner_id": owner, "parent_id": parent and parent["id"], "bet_id": bet})
+            step("/api/v2/goals", {"title": title, "owner": owner, "parent_id": parent and parent["id"], "bet_id": bet})
             words = [bold(title), "owner " + owner_name(c, owner)]
             if parent:
                 words.append("supports " + q(parent["title"]))

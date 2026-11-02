@@ -181,7 +181,7 @@ def test_the_task_page_follows_its_session_live_and_each_reply_keeps_its_steps(a
     events(api, machine, aid, [("tool", {"tool": "mcp__hub__task_create", "status": "started", "item_id": "c1"}),
                                ("tool", {"tool": "mcp__hub__task_create", "status": "completed", "item_id": "c1"})])
     live = get(api, f"tasks/{tid}")["execution"]
-    assert (live["state"], live["run_id"], live["bot"]) == ("running", aid, "ops")
+    assert (live["state"], live["run_id"], live["bot_id"]) == ("running", aid, "ops")
     assert live["parts"][-1] == {**live["parts"][-1], "kind": "tool", "text": "Ran hub task create"}
     events(api, machine, aid, [("message", {"text": "Counted: 42 words.", "final": True})], first=3)
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Counted: 42 words.", "last_seq": 3},

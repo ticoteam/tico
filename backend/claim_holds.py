@@ -52,7 +52,7 @@ def hold(c, settings, job_id, error):
     retry = H.shift(H.now(), seconds=delay(tries))
     c.execute("UPDATE jobs SET held=1,hold_until=?,hold_reason=?,hold_streak=? WHERE id=?",
               (retry, REASON, tries, job_id))
-    H.event(c, H.KEEPER, "job.claim_failed", job_id, {"bot_id": bot, "error": error, "tries": tries, "retry_at": retry})
+    H.event(c, H.KEEPER, "job.claim_failed", job_id, {"bot": bot, "error": error, "tries": tries, "retry_at": retry})
     item = _needs_you(c, settings, bot)
     c.execute("UPDATE jobs SET hold_task_id=? WHERE id=?", (item, job_id))
     if tries == 1:

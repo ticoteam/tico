@@ -350,7 +350,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "turns": f"{bots_visible('bot')} AND (message_id IS NULL OR {by_message}) AND "
                  f"(task_id IS NULL OR {by_task}) AND " + attempt_gate,
         "deltas": "turn_id IN (SELECT id FROM turns)" + (f" AND turn_id NOT IN ({unsettled})" if unsettled else ""),
-        "jobs": f"{bots_visible('bot')} AND {by_message}",
+        "jobs": f"{bots_visible('bot_id')} AND {by_message}",
         "attempts": by_job + " AND " + attempt_gate, "job_recovery": by_job + " AND " + by_attempt,
         "attempt_events": by_attempt + " AND " + content_gate(("payload",)) + (
             f" AND NOT (kind IN ('delta','message') AND attempt_id IN ({unsettled}))" if unsettled else ""),
@@ -421,7 +421,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "bot_files": (file_gate + " AND " + (f"bot_id={q(H.actor_id(who.actor))} AND " if bot else "")
                       + f"(CASE WHEN scope LIKE 'task:%' THEN substr(scope,6) IN (SELECT id FROM tasks) "
                         "WHEN scope LIKE 'conversation:%' THEN substr(scope,14) IN (SELECT id FROM conversations) "
-                        f"ELSE {bots_visible('bot')} END)"),
+                        f"ELSE {bots_visible('bot_id')} END)"),
         "bot_file_versions": "file_id IN (SELECT id FROM bot_files)",
         "bot_file_activity": "file_id IN (SELECT id FROM bot_files)",
         # The company owner is not thereby the owner of everyone's private attachments (media.py).

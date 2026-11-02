@@ -169,7 +169,7 @@ function strategyStatusText(data, view) {
 // The line above the page: the published version and who published it, then (for the owner) where the draft stands.
 function strategyMetaHtml(data, view) {
   const v = data.current, status = strategyStatusText(data, view);
-  const head = v ? `v${esc(v.n)}${v.published ? ` · published <time datetime="${esc(v.published)}" title="${esc(fmt(v.published))}">${esc(stratDate(v.published))}</time>` : ''}${v.published_by ? ` by ${esc(firstName(goalActorName(v.published_by)) || goalActorName(v.published_by))}` : ''}` : '';
+  const head = v ? `v${esc(v.n)}${v.published_at ? ` · published <time datetime="${esc(v.published_at)}" title="${esc(fmt(v.published_at))}">${esc(stratDate(v.published_at))}</time>` : ''}${v.published_by ? ` by ${esc(firstName(goalActorName(v.published_by)) || goalActorName(v.published_by))}` : ''}` : '';
   if (!head && !status) return '';
   return `<p class="strat-meta">${head}${head && status ? ' · ' : ''}${status ? `<span class="strat-status" data-strat-status>${esc(status)}</span>` : ''}</p>`;
 }
@@ -845,7 +845,7 @@ async function strategyVersionsOpen() {
 function strategyVersionsList(dlg, rows) {
   dlg.innerHTML = strategyDrawerHtml('Versions', rows.length ? `<ul class="strat-sv-list">${rows.map(v =>
     `<li><button type="button" class="strat-sv-row" data-sv-open="${esc(v.n)}"><span class="strat-sv-n tnum">v${esc(v.n)}</span><span class="strat-sv-note">${esc(v.note || '')}</span>
-      <span class="muted strat-sv-meta">${v.published_by ? esc(goalActorName(v.published_by)) + ' · ' : ''}<time datetime="${esc(v.published || '')}" title="${esc(fmt(v.published))}">${esc(ago(v.published))}</time></span></button></li>`).join('')}</ul>`
+      <span class="muted strat-sv-meta">${v.published_by ? esc(goalActorName(v.published_by)) + ' · ' : ''}<time datetime="${esc(v.published_at || '')}" title="${esc(fmt(v.published_at))}">${esc(ago(v.published))}</time></span></button></li>`).join('')}</ul>`
     : '<p class="muted">No versions yet.</p>');
   dlg.querySelector('[data-sv-close]').onclick = () => dlg.close();
   for (const b of dlg.querySelectorAll('[data-sv-open]')) b.onclick = () => void strategyVersionShow(dlg, Number(b.dataset.svOpen));
@@ -861,7 +861,7 @@ function strategyVersionShow(dlg, n) {
       const v = await get(`/v2/strategy/versions/${encodeURIComponent(n)}`), label = state.data.label || 'Bets';
       const bets = (v.bets || []).slice().sort(stratRank).filter(c => c.status !== 'retired');
       const block = (title, inner) => inner ? `<section class="strat-sv-sec"><h3 class="strat-k">${esc(title)}</h3>${inner}</section>` : '';
-      html = `<div class="strat-sv-title"><b>v${esc(v.n)}</b>${v.note ? ` · ${esc(v.note)}` : ''}<div class="muted">${v.published_by ? esc(goalActorName(v.published_by)) : ''}${v.published_by && v.published ? ' · ' : ''}${v.published ? esc(fmt(v.published)) : ''}</div></div>
+      html = `<div class="strat-sv-title"><b>v${esc(v.n)}</b>${v.note ? ` · ${esc(v.note)}` : ''}<div class="muted">${v.published_by ? esc(goalActorName(v.published_by)) : ''}${v.published_by && v.published_at ? ' · ' : ''}${v.published_at ? esc(fmt(v.published_at)) : ''}</div></div>
         ${block('Summary', stratText(v.summary) ? `<p>${esc(v.summary)}</p>` : '')}
         ${block(label, bets.length ? `<ol class="strat-sv-bets">${bets.map(c => `<li><b>${esc(c.statement)}</b>${stratText(c.why) ? `<div class="muted">${esc(c.why)}</div>` : ''}</li>`).join('')}</ol>` : '')}
         ${strategySectionList(v).map(sec => block(sec.title, stratText(sec.text) ? `<div class="md strat-md">${safeMd(sec.text)}</div>` : '')).join('')}`;

@@ -136,7 +136,7 @@ def row(c, settings, rule, who=None, auth=None, now=None, last=None):
             "when": when, "then": then, "department": {"id": department, "name": chart.get(department, department), "in_chart": department in chart},
             "triggers": triggers, "actions": actions, "schedule": SR.PRESETS[cfg["preset"]][0].format(at=cfg["daily_at"] or ""),
             "ai": False, "needed": False, "records": True, "controllable": False, "group": "task_rules",
-            "switch": True, "on": cfg["on"], "preset": cfg["preset"], "daily_at": cfg["daily_at"], "owner_only": False,
+            "switch": True, "on": cfg["on"], "preset": cfg["preset"], "at": cfg["daily_at"], "owner_only": False,
             "presets": [{"key": p, "label": SR.PRESETS[p][0].format(at="a time")} for p in SR.EVERY_PRESET],
             "can_change": can_change(c, settings, auth, who, department),
             "last": {k: bool(last[k]) if k == "ok" else last[k] for k in ("started_at", "finished_at", "ok", "result", "runs")} if last else None,

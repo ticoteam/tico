@@ -133,7 +133,7 @@ def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
     # Health's row for the bot carries Pipeline's split, not the sum of both: 1 queued, 1 behind the interrupted run.
     with api.app.state.store.read() as c:
         _, slow, stuck = health._waiting(c, {r["runner_id"]})
-    rows = [row for row in slow + stuck if row["bot_id"] == "ops"]
+    rows = [row for row in slow + stuck if row["bot"] == "ops"]
     assert rows and all((row["queued"], row["dead"]) == (pipe["queued"], pipe["dead"]) for row in rows)
 
 

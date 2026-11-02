@@ -43,7 +43,7 @@ def table_state(path):
             cursor = conn.execute('SELECT * FROM "%s"' % table.replace('"', '""'))
             names = [d[0] for d in cursor.description]
             rows = cursor.fetchall()
-            cells = [{name: _digest(value) for name, value in zip(names, row)} for row in rows]
+            cells = [{name: _digest(value) for name, value in zip(names, row, strict=True)} for row in rows]
             state[table] = {"rows": len(rows), "cells": cells,
                             "columns": {name: _combine([row[name] for row in cells]) for name in names}}
     return state

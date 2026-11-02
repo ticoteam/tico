@@ -20,7 +20,6 @@ only look like columns); --check ignores them too.
 
 import argparse
 import ast
-import fnmatch
 import io
 import re
 import subprocess
@@ -773,10 +772,10 @@ class PyFile:
                         mark(kw.value)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 args = node.args
-                for arg, default in zip(args.args[len(args.args) - len(args.defaults):], args.defaults):
+                for arg, default in zip(args.args[len(args.args) - len(args.defaults):], args.defaults, strict=True):
                     if arg.arg in self.EVENT_ARGS:
                         mark(default)
-                for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+                for arg, default in zip(args.kwonlyargs, args.kw_defaults, strict=True):
                     if default is not None and arg.arg in self.EVENT_ARGS:
                         mark(default)
         return found
@@ -1444,7 +1443,7 @@ def rust_file(rel, text, wave, report, keep):
     # SQL in Rust string literals (the runner's own state files are not hub tables: only global names, and only in
     # statements naming a hub table)
     out = text
-    for (a, b), (new, kind, old) in sorted(edits.items(), reverse=True):
+    for (a, b), (new, kind, _old) in sorted(edits.items(), reverse=True):
         out = out[:a] + new + out[b:]
         report.edit(rel, kind)
     return out
@@ -1681,7 +1680,7 @@ def settle_sql_sites(wave, report, write):
             text = lines[no - 1] if no <= len(lines) else ""
             window = " ".join(lines[max(0, no - NEAR):no + NEAR])
 
-            def by_alias(m):
+            def by_alias(m, window=window, per_table=per_table):
                 bound = re.search(rf"\b(?:FROM|JOIN|UPDATE)\s+(\w+)(?:\s+AS)?\s+{re.escape(m[1])}\b", window)
                 table = bound[1] if bound else USUAL_ALIAS.get(m[1])
                 new = per_table.get(table)

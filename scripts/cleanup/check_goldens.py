@@ -31,7 +31,7 @@ def differences(old, new, path=""):
     elif isinstance(old, list) and isinstance(new, list):
         if len(old) != len(new):
             yield f"{path}: {len(old)} items at REF, {len(new)} here"
-        for i, (a, b) in enumerate(zip(old, new)):
+        for i, (a, b) in enumerate(zip(old, new, strict=False)):
             yield from differences(a, b, f"{path}[{i}]")
     elif old != new:
         yield f"{path}: {old!r} at REF, {new!r} here"
@@ -41,7 +41,7 @@ def main(ref):
     rename_map = renames.load(ROOT / "scripts/cleanup/renames.yaml")
     found = 0
     for path in sorted((ROOT / GOLDENS).glob("*.json")):
-        shown = subprocess.run(["git", "show", f"{ref}:{GOLDENS}/{path.name}"], cwd=ROOT, capture_output=True, text=True)
+        shown = subprocess.run(["git", "show", f"{ref}:{GOLDENS}/{path.name}"], cwd=ROOT, capture_output=True, check=False, text=True)
         if shown.returncode:
             print(f"{path.stem}: new golden")
             continue

@@ -78,6 +78,10 @@ keys:
   connectors/slack.py: [owner]         # hub-access.yaml
   backend/repo_waits.py: [owner]       # worktree_waits keeps owner
   backend/config.py: [owner]           # hub-access.yaml
+  backend/live_meetings.py: [owner_actor]   # live_meetings keeps owner_actor
+  backend/live_privacy.py: [owner_actor]
+  backend/triggers.py: [created_by]    # triggers keeps created_by
+  backend/settings_catalog.py: [owner] # who may change a setting: the owner, not a column
 # Request models a runner (or another separately updated client) sends: their fields keep the wire names.
 wire_models:
   - WatcherReport      # POST /api/v2/runners/watchers (runner-rs watchers.rs)
