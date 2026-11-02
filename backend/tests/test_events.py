@@ -260,7 +260,7 @@ def test_a_runs_output_and_state_reach_the_room_and_respect_bot_read_access(api,
                                                        "payload": {"text": "Working on it", "delta_kind": "text"}}]},
          token=r["token"])
     out = ana.until(lambda e: e["event"] == "runs" and "output" in e["data"])
-    assert out["data"]["attempt_id"] == aid and out["data"]["conversation_id"] == msg["conversation_id"]
+    assert out["data"]["run_id"] == aid and out["data"]["conversation_id"] == msg["conversation_id"]
     assert out["data"]["output"]["payload"]["text"] == "Working on it" and out["data"]["bot"] == "ops"
     states = [e["data"]["state"] for e in ana.seen if e["event"] == "runs" and "state" in e["data"]]
     assert "running" in states, states

@@ -1317,7 +1317,10 @@ GOAL_YES = _s("The owner's plain yes to a goal read-back: turn or its message id
 def goal_read_back(api, args):
     changes = args["changes"]
     if isinstance(changes, str):
-        changes = json.loads(changes)
+        try:
+            changes = json.loads(changes)
+        except ValueError:          # not JSON at all: say what it must be, not the parser's message
+            changes = None
     if not isinstance(changes, list) or not 1 <= len(changes) <= 20 or any(not isinstance(c, dict) for c in changes):
         raise ValueError("changes must be a JSON array of 1 to 20 change objects")
     return api.post("goals/read-back", {"changes": changes}, key=_key(args))

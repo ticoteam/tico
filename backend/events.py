@@ -1342,7 +1342,7 @@ def _runs(view, rows):
                 readable[aid] = privacy.attempt_readable(c, view.principal, aid)
             if not readable[aid]:
                 continue
-        entry = {"run_id": aid, "conversation_id": cid, "bot_id": bot}
+        entry = {"run_id": aid, "conversation_id": cid, "bot": bot}
         if row["kind"] == "output":
             event = outputs.get(str(row["ref"]))
             if event is None:
