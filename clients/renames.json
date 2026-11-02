@@ -750,6 +750,44 @@
       "old": [
         "judge"
       ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "strategy",
+        "show",
+        "--section",
+        "how"
+      ],
+      "old": [
+        "gtm",
+        "show"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "strategy",
+        "show",
+        "--section",
+        "how"
+      ],
+      "old": [
+        "gtm",
+        "summary"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "growth",
+        "source",
+        "list"
+      ],
+      "old": [
+        "gtm",
+        "sources"
+      ]
     }
   ],
   "commands_exempt": [
