@@ -45,8 +45,8 @@ STATES = ("running", "done", "failed", "no_model")
 POWERS = ("scale", "network", "counter-positioning", "switching", "brand", "cornered", "process", "none")
 FINDINGS = ("supports", "challenges", "gap")
 # The order the list shows, strategy first; a lens not named here follows by id.
-ORDER = ("playing-to-win", "blue-ocean", "scenarios", "seven-powers", "good-strategy", "pre-mortem", "positioning",
-         "where-to-play", "five-forces")
+ORDER = ("playing-to-win", "blue-ocean", "scenarios", "seven-powers", "good-strategy", "startup-idea", "pre-mortem",
+         "positioning", "where-to-play", "five-forces")
 TEXT_MAX = 2_000            # an answer in words
 LIST_MAX = 12               # items in a list answer
 ITEM_MAX = 200
@@ -119,7 +119,9 @@ def _load(path):
         if raw.get("hint"):
             step["hint"] = str(raw["hint"])
         if step["input"] == "choice":
-            step["options"] = [str(o) for o in raw.get("options") or []]
+            if not all(isinstance(o, str) for o in raw.get("options") or []):
+                _bad(path, f"step {step['key']} options are words; quote a Yes or a No, which YAML reads as true or false")
+            step["options"] = list(raw.get("options") or [])
             if len(step["options"]) < 2:
                 _bad(path, f"step {step['key']} is a choice with at least two options")
         if step["input"] == "scores":
@@ -139,6 +141,8 @@ def _load(path):
     return {"id": lens_id, "name": str(data["name"]), "applies_to": data["applies_to"],
             "description": str(data.get("description") or ""), "minutes": data["minutes"],
             "listed": bool(data.get("listed")), "steps": steps,
+            # A strategy lens that weighs market size reads the sizes too, as every market lens does.
+            "market_spend": data["applies_to"] == "market" or bool(data.get("market_spend")),
             "output": {"chart": chart, "sections": [str(s) for s in output.get("sections") or []]},
             "sharpen": [str(s) for s in data.get("sharpen") or []]}
 
@@ -352,7 +356,8 @@ INSTRUCTIONS = (
     "- assumptions: every answer you had to fill in yourself, because the team skipped the step: say what you assumed "
     "and from what. Never present an assumption as something the team said.\n"
     "- changes: at most eight changes the team could make to its strategy draft. A payload is a partial draft: "
-    "{\"summary\"?, \"vision\"?, \"sections\"?: {\"serve\"|\"sell\"|\"know\"|\"how\"|\"not\": markdown}, \"bets\"?: [{\"id\"? "
+    "{\"summary\"?, \"vision\"?, \"sections\"?: {\"serve\"|\"sell\"|\"proof\"|\"now\"|\"know\"|\"how\"|\"not\": "
+    "markdown}, \"bets\"?: [{\"id\"? "
     "(a bet id to change it; no id adds a bet), \"statement\", \"why\", \"rules_out\", \"wrong_if\": {\"kind\": "
     "\"text\", \"text\": \"what would show it wrong\", \"check_by\": \"YYYY-MM-DD\"}}]}. A wrong-if in words always "
     "has a check_by date. Send only fields that change; the summary stays under 400 characters, the vision under 400. "
@@ -419,10 +424,10 @@ def _market_input(c, the, bets):
 
 
 def _spend_input(c, the):
-    """For a market lens, the market's definition and its segments' sizes (backend/market_spend.py), compact: what the
+    """For a market lens (or one with `market_spend: true`), the market's definition and its segments' sizes (backend/market_spend.py), compact: what the
     market is and what each part is worth, how sure, and which one is ours. None when nothing is defined."""
     from . import market_spend as MS
-    if the["applies_to"] != "market":
+    if not the["market_spend"]:
         return None
     try:
         found = MS.spend(c)

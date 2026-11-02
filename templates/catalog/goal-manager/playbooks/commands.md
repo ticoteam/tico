@@ -7,7 +7,8 @@ Not commands, so never run them: --json on task, goal or kpi commands, proposal 
 with --all, kpi readings, and any `--help` or `--version` probe of a name not listed here. Use the lines below instead.
 
 ## Read the strategy
-- `hub strategy show`: the published strategy: summary, vision, bets (id, statement, wrong-if), their goals and health.
+- `hub strategy show`: the published strategy: summary, vision, the sections, bets (id, statement, wrong-if), their goals and
+  health, and `proof_since` (when How we know they want it last changed; null when empty).
 - `hub strategy versions`: published versions, newest first. `hub strategy diff --from <n> --to <n>`: what changed between two.
 - `hub goal strategy-bot`: your level, whether the regular checks run, and `asked_today` per person.
 - Level 3 only: `hub goal strategy-bot-decide "<reason>" '<changes json>' --goal-id <goal>`: creates or reorders bot tasks
@@ -52,6 +53,11 @@ with --all, kpi readings, and any `--help` or `--version` probe of a name not li
 ## Questions and messages
 - `hub question ask <bot> "<question>"`: asks another bot. `hub question answer <message-id> "<answer>"`: answers one asked of you.
 - `hub message send <person-or-bot> "<text>"`: a message, only when a playbook says to send one.
+
+## What customers do and say (`playbooks/keep-proof-current.md`)
+- `hub growth numbers`: new customers by month and channel, the share kept at 30, 90 and 180 days, and the economics.
+- `hub meeting search "<words>" [--since <YYYY-MM-DD>]`, then `hub meeting read <id>`: team meetings, never private ones.
+- `hub task list --owner <bot> --updated-since <ISO time> --brief`, then `hub task show <id>`: a customer-facing bot's work.
 
 ## Market, team and health
 - `hub market briefing latest`: the Librarian's latest weekly briefing: the bets it touched and its items.

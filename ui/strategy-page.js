@@ -1,5 +1,5 @@
 /* Strategy: how the team means to win (backend/strategy.py, docs/strategy.md#the-page). One line on top (the summary),
-   then Where we play beside the bets, the competitors beside related news, then five fixed sections and any the owner
+   then Where we play beside the bets, the competitors beside related news, then seven fixed sections and any the owner
    adds. The owner edits the draft in place and publishes numbered versions with a note; everyone else reads the latest
    published version. Where we play and Competitors are the market graph's own rows (backend/strategy_market.py), and
    Related news is what Listening found. Lenses (ui/lenses-page.js) and Market (ui/market-page.js) are the section's
@@ -12,12 +12,15 @@ let STRAT_MKT = {};
 const isStrategyRoute = r => r === '#/strategy' || r.startsWith('#/strategy?');
 const STRAT_STATUS = {proposed: 'Proposed', active: 'Active', retired: 'Retired'};
 const STRAT_MAX_ACTIVE = 7;
-// The five sections every strategy has, in this order. The placeholder is the question; nothing else is shown.
+// The seven sections every strategy has, in this order (backend/strategy.py FIXED). The placeholder is the question;
+// nothing else is shown.
 const STRAT_SECTIONS = [
-  {key: 'serve', title: 'Who we serve', prompt: 'The customer, what they use today, and the one you turned down'},
+  {key: 'serve', title: 'Who we serve', prompt: 'The customer, how badly they need it, and what they use today'},
   {key: 'sell', title: 'What we sell, and for how much', prompt: 'The product, the price, and the price that would break if doubled or halved'},
-  {key: 'know', title: "What we know that others don't", prompt: 'What the team understands that the obvious competitors miss'},
-  {key: 'how', title: 'How we sell', prompt: 'How customers find us, who does the selling, and what closes a sale'},
+  {key: 'proof', title: 'How we know they want it', prompt: 'Who uses it, how often, who comes back, and what they say'},
+  {key: 'now', title: 'Why now', prompt: 'What changed recently that makes this possible or needed now'},
+  {key: 'know', title: "What we know that others don't", prompt: 'What the team understands that the obvious competitors miss, and why this team'},
+  {key: 'how', title: 'How we sell', prompt: 'Where the next 100 customers come from, who sells, and what closes a sale'},
   {key: 'not', title: "What we won't do", prompt: 'The trade-offs: what the team refuses'},
 ];
 const STRAT_WRONG_KINDS = {kpi: 'KPI', thesis: 'Market', text: 'Sentence'};
@@ -412,7 +415,7 @@ function strategyPaintMarket(key) {
 }
 
 // ---------------------------------------------------------------- the sections
-// The five fixed sections, then the extra ones in the order they were added. The owner writes each, one at a time;
+// The seven fixed sections, then the extra ones in the order they were added. The owner writes each, one at a time;
 // an extra one can be renamed or removed, and nothing else ever drops it.
 function strategySectionList(version) {
   const s = version?.sections || {};
