@@ -253,7 +253,7 @@ gh workflow run ci.yml --ref main -f candidate_sha=<full-40-character-commit-SHA
 ```
 
 The run is titled `Validate <sha> as <version> from <previous>`, which is how the Release workflow finds it. It builds
-once: the Linux (static, musl) and macOS runner and relay binaries, then the server, runner and updater images for
+once: the Linux (static, musl) runner and relay binaries, then the server, runner and updater images for
 amd64 and arm64 from those Linux binaries (`--build-arg NATIVE=prebuilt`), pushed to ghcr.io by digest with no tag.
 The gate VMs test exactly those: the native checks use the built Linux binaries, and the product part pulls the images
 by digest (`TICO_RELEASE_IMAGES`, `TICO_RELEASE_VERSION`) instead of building its own. A digest nobody tags is never
@@ -433,9 +433,15 @@ The workflow then:
 - runs `scripts/build_install_bundle.py`, which attaches the one-line installers: `install.sh` and the Windows
   `install-wsl.ps1` with the tag baked into them, `tico-bundle-vX.Y.Z.tar.gz` (`compose.yaml`, `.env.example`,
   `docker/runner.compose.yaml` and the `setup/` wizard) and `SHA256SUMS` over all three. `install.sh` checks the bundle against `SHA256SUMS` before it unpacks anything;
-- attaches the validated Rust runner for checkouts, `tico-runner-{macos-arm64,macos-x86_64,linux-x86_64,linux-arm64}.gz`
-  (Linux static, musl), with the relay's, and `tico-runner-SHA256SUMS` over them. A Mac or Linux checkout on the tag
-  downloads its one ([updates](updates.md#the-runner-engine));
+- attaches the validated Rust runner for checkouts, `tico-runner-{linux-x86_64,linux-arm64}.gz` (static, musl), with
+  the relay's, and `tico-runner-SHA256SUMS` over them. A Mac or Linux checkout on the tag downloads its one
+  ([updates](updates.md#the-runner-engine));
+- attaches the Mac runner and relay, `tico-runner-{macos-arm64,macos-x86_64}.gz`. No gate part runs on a Mac, so they
+  are not built by validation: when `runner-rs`, `relay-rs` and `runner/harnesses` did not change since the previous
+  release, its Mac binaries are published with this one (a checkout checks a binary's `--build-id`, the source
+  fingerprint). When they did change, the `macos` job builds them beside the publication and `macos-assets` adds them
+  to the published release, then rewrites both checksum files. Until then a Mac checkout's update says `waiting`
+  (runner/release_update.py `binary_pending`) and tries again, instead of failing and waiting hours;
 - checks each validated image says it is `vX.Y.Z`, then points `ghcr.io/ticoteam/{tico,tico-runner,tico-updater}:vX.Y.Z`
   (and `latest` for a stable version) at those digests before publishing, so no installer runs against missing images;
 - marks a tag with a suffix such as `v0.2.0-rc.1` a prerelease, which the update check ignores;

@@ -125,6 +125,26 @@ def prepare_binary(root, run=subprocess.run):
     return (done.stderr.strip().splitlines() or ["could not get the Rust runner ready"])[-1]
 
 
+# What the runner binary is built from: runner-rs/build.rs's source fingerprint (runner/engine.py source_id).
+RUNNER_SOURCES = ("runner-rs/build.rs", "runner-rs/Cargo.toml", "runner-rs/Cargo.lock", "runner-rs/src", "runner/harnesses")
+
+
+def binary_pending(root, old, target, version, run=subprocess.run, listed=None, which=shutil.which):
+    """Why this checkout should wait before moving to `target` (release `version`), or "". A release whose runner
+    changed is published before its Mac binaries (release.yml macos-assets adds them minutes later). Moving now would
+    fail to get a binary, go back, and not try again for hours, so the update waits while the release's checksum
+    file does not list this computer's binary yet. Same runner sources: the binary it has fits. With cargo it builds one."""
+    if git(root, "diff", "--quiet", old, target, "--", *RUNNER_SOURCES, run=run).returncode == 0:
+        return ""
+    if which("cargo"):
+        return ""
+    if listed is None:
+        from .engine import published as listed
+    if listed(version) is False:
+        return f"release v{version} does not have this computer's runner binary yet; the update waits for it"
+    return ""
+
+
 def in_flight(directory):
     import sqlite3
     try:
@@ -300,7 +320,8 @@ def apply(root, version, directory, *, run=subprocess.run, lock_wait=LOCK_WAIT_S
 
 
 def update(root, version, directory, *, run=subprocess.run, install=pip_install, prepare=prepare_binary,
-           restart=None, healthy=None, busy=None, clock=time.time, helpers=None, started=""):
+           restart=None, healthy=None, busy=None, clock=time.time, helpers=None, started="", listed=None,
+           which=shutil.which):
     """Move the checkout to release `version`, get its Rust runner ready (`prepare`), and bring the runner back on
     it; undo that if either fails or the runner does not come back. Once it is healthy, `helpers` restarts the helper jobs so they run the new code too (a rollback
     needs nothing: a helper that saw the new revision exits again when the old one returns).
@@ -351,6 +372,10 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
         return {"state": "waiting", "target": version, "error": ""}
     if target == old and started in ("", target):
         return say("healthy")
+    if target != old:
+        pending = binary_pending(root, old, target, version, run=run, listed=listed, which=which)
+        if pending:
+            return say("waiting", pending)
     say("updating")
 
     def restarted_helpers():

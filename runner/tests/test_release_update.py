@@ -154,6 +154,44 @@ def test_a_release_whose_rust_runner_cannot_be_had_goes_back_before_any_restart(
     assert head(checkout) == before and calls.restarts == 1 and calls.checks == [before]   # the restart is the way back
 
 
+def runner_release(public, checkout):
+    """Release 0.3.0 changes the runner's sources, so its binary is a new build."""
+    commit(public, "runner-rs/src/main.rs", "fn main() {}")
+    sh(public, "git", "tag", "v0.3.0")
+
+
+def test_a_release_whose_new_runner_binary_is_not_published_yet_waits_without_moving(repos):
+    public, checkout, state = repos
+    runner_release(public, checkout)
+    before, asked = head(checkout), []
+    result, calls = run_apply(checkout, state, version="0.3.0", which=lambda name: None,
+                              listed=lambda version: asked.append(version) or False)
+    assert result["state"] == "waiting" and "does not have this computer's runner binary yet" in result["error"]
+    assert asked == ["0.3.0"] and head(checkout) == before and calls.restarts == 0 and calls.prepared == []
+    assert ru.read_status(state)["state"] == "waiting"
+    # Once release.yml adds the binary, the next try moves.
+    result, calls = run_apply(checkout, state, version="0.3.0", which=lambda name: None, listed=lambda version: True)
+    assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.3.0"
+
+
+def test_only_a_changed_runner_without_cargo_asks_whether_its_binary_is_published(repos):
+    public, checkout, state = repos
+    asked = []
+    listed = lambda version: asked.append(version) or False
+    result, _ = run_apply(checkout, state, which=lambda name: None, listed=listed)      # 0.2.0: same runner sources
+    assert result["state"] == "healthy" and asked == []
+    runner_release(public, checkout)
+    result, _ = run_apply(checkout, state, version="0.3.0", which=lambda name: "/usr/bin/cargo", listed=listed)
+    assert result["state"] == "healthy" and asked == []                                  # cargo builds one
+
+
+def test_a_release_whose_checksums_cannot_be_read_updates_as_before(repos):
+    public, checkout, state = repos
+    runner_release(public, checkout)
+    result, _ = run_apply(checkout, state, version="0.3.0", which=lambda name: None, listed=lambda version: None)
+    assert result["state"] == "healthy"
+
+
 def test_the_prepare_step_is_a_new_process_of_the_new_tree(tmp_path, monkeypatch):
     seen = []
 
