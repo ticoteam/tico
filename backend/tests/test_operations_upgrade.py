@@ -7,7 +7,6 @@ of this branch is loaded there. Every row is synthetic (the Acme demo and genera
 while this branch's server runs (demo.network_blocked). The QuickBooks fake is not needed: no books connection is made."""
 import contextlib
 import csv
-import datetime
 import dataclasses
 import io
 import json
@@ -366,7 +365,7 @@ def csv_rows(company, name):
 
 def warranties(company):
     """The equipment whose warranty still runs: an end already past adds no due date (finance/equipment.py)."""
-    today = datetime.date.today().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     with open(DATA / company / "equipment.csv", encoding="utf-8", newline="") as f:
         return sum(1 for row in csv.DictReader(f) if row.get("warranty_ends_on", "") >= today)
 
