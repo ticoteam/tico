@@ -508,6 +508,7 @@ ADDED = (
     ("fin_cards", "sync_status", "TEXT NOT NULL DEFAULT ''"), ("fin_cards", "sync_error", "TEXT"),
     ("fin_cards", "synced_at", "TEXT"),
     ("fin_cards", "freeze_by", "TEXT"), ("fin_cards", "freeze_budget_id", "TEXT"),
+    ("fin_cards", "merchant", "TEXT NOT NULL DEFAULT ''"),
     ("fin_connections", "name", "TEXT NOT NULL DEFAULT ''"),
     ("fin_connections", "settings_json", "TEXT NOT NULL DEFAULT '{}'"), ("fin_connections", "events_cursor", "TEXT"),
     ("fin_connections", "last_sync_at", "TEXT"), ("fin_connections", "next_sync_at", "TEXT"),
@@ -515,6 +516,8 @@ ADDED = (
     ("fin_inbox", "attempts", "INTEGER NOT NULL DEFAULT 0"), ("fin_inbox", "next_try_at", "TEXT"),
     ("fin_inbox", "tried_json", "TEXT NOT NULL DEFAULT '[]'"),
     ("fin_payments", "counted_json", "TEXT NOT NULL DEFAULT '[]'"),
+    # a finance admin's cancel of an unknown payment, waiting for Mercury's lookup by its key (migration 83)
+    ("fin_payments", "cancel_asked_at", "TEXT"), ("fin_payments", "cancel_asked_by", "TEXT NOT NULL DEFAULT ''"),
     # phase 2: bills, invoices, contacts, posting rules and the cash view (migration 66)
     ("fin_entries", "basis", "TEXT NOT NULL DEFAULT 'both' CHECK (basis IN ('both','accrual'))"),
     ("fin_bills", "terms_days", "INTEGER"), ("fin_bills", "memo", "TEXT NOT NULL DEFAULT ''"),
@@ -840,6 +843,17 @@ def delivery(c: sqlite3.Connection) -> None:
             if name not in have:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
     create(c)
+
+def payment_cancel_asks(c: sqlite3.Connection) -> None:
+    """Cloud migration 83: the cancel a finance admin asks of an unknown payment (fin_payments.cancel_asked_at), which the
+    worker resolves by a lookup by its key. Idempotent: `_add_columns` adds only what is missing."""
+    _add_columns(c)
+
+
+def card_merchant(c: sqlite3.Connection) -> None:
+    """Cloud migration 84: the merchant a card was asked for (fin_cards.merchant), kept as the request's intent.
+    Idempotent: `_add_columns` adds only what is missing."""
+    _add_columns(c)
 
 
 def catalog(c: sqlite3.Connection, at: str) -> None:

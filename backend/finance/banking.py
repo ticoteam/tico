@@ -36,6 +36,7 @@ from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import raw_totals as SR
+from .store import tico
 
 NEW_EVENT, CATEGORY_EVENT, DECLINED_EVENT = "finance.feed.new", "finance.feed.needs_category", "finance.card.declined"
 OTHER, BANK, CARDS, OPENING = "6900", "1000", "2100", "3900"
@@ -153,6 +154,11 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             if (kept := _reuse(ctx, cid, a)) is not None:
                 mapped.append(kept)
                 continue
+            if str(a.get("kind") or "").lower() == "debit":
+                # A debit card program spends cash it holds: an asset with its own account, no card liability (§8.1).
+                gl = new_account(ctx, BANK, f"{a.get('name') or 'Mercury'} debit card", "asset", "bank", who)
+                mapped.append(_money(ctx, cid, a, "card_program", "debit", gl, who))
+                continue
             cards = by_code(ctx, CARDS)
             gl = cards if cards is not None and not any(
                 str(r["account_id"]) == cards.id for r in SK.money_accounts(ctx.c, ctx.book.id)) else None
@@ -184,7 +190,8 @@ def _money(ctx: Ctx, cid: str, a: Mapping[str, object], kind: str, subtype: str,
     mid = SK.insert(ctx.c, "fin_money_accounts", {
         "book_id": ctx.book.id, "kind": kind, "subtype": subtype, "name": str(a.get("name") or "Mercury")[:120],
         "provider": "mercury", "connection_id": cid, "account_id": gl.id, "provider_account_id": str(a.get("id")),
-        "last4": str(a.get("last4") or "")[-4:] or None, "holds_cash": 0 if kind == "card_program" else 1,
+        "last4": str(a.get("last4") or "")[-4:] or None,
+        "holds_cash": 0 if kind == "card_program" and subtype == "credit" else 1,  # a credit program holds no cash
         "balance": current if isinstance(current, int) else None,
         "available_balance": available if isinstance(available, int) else None,
         "balance_currency": ctx.book.base_currency, "balance_as_of": ctx.at if isinstance(current, int) else None,
@@ -442,6 +449,8 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     fid = str(row["id"])
     if ctx.book.mode == "mirror":
         from .mirror import settle_row
+        if not (t.pending or t.void or t.reversed):
+            _cancelled_debit(ctx, money, fid, t)     # a mirror's Mercury can still pay: the same ask, then mirror it
         settle_row(ctx, row, money, t)
         return
     program = str(money["kind"]) == "card_program"
@@ -483,6 +492,8 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         row = SK.get(ctx.c, "fin_feed_txns", fid)
     if str(row["status"]) == "ignored":
         return
+    if _cancelled_debit(ctx, money, fid, t):
+        return          # the payment stays cancelled and its bill stays open (payment_ended reopened it); nothing pays
     gl = gl_account(ctx, money)
     pay = SK.payment_by_request(ctx.c, t.request_id) if t.request_id else None
     if pay is None and t.amount < 0:
@@ -574,6 +585,32 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
             entry = post_row(ctx, fid, t, [feed_line(spend.id, -t.amount, {}, t.counterparty)], gl.id, [])
             mark_posted(ctx, [fid], entry)
     event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+
+
+def _cancelled(ctx: Ctx, money: Any, t: F.FeedTxn) -> Any:
+    """A cancelled payment whose key (`tico:<key>`) this debit shows (in `note` or `externalMemo`), at the same amount
+    from the same account: Mercury sent what Finance had cancelled. None when no such payment."""
+    shown = f"{t.note} {t.raw.get('externalMemo') or ''}"
+    for pay in SK.payments_cancelled(ctx.c, str(money["id"]), -t.amount):
+        if f"{payments.NOTE}{pay['idempotency_key']}" in shown:
+            return pay
+    return None
+
+
+def _cancelled_debit(ctx: Ctx, money: Any, fid: str, t: F.FeedTxn) -> bool:
+    """A debit that carries a cancelled payment's key: Mercury sent what Finance had cancelled. One Needs-you asks a
+    person; nothing here pays the bill. True when the debit is one (its caller then stops the normal settlement)."""
+    if t.amount >= 0:
+        return False
+    cut = _cancelled(ctx, money, t)
+    if cut is None:
+        return False
+    tico.needs_you(ctx.c, payments.admin_person(ctx) or ctx.org.owner,
+                   f"Check a bank debit for cancelled payment {cut['id']}",
+                   f"Bank transaction {fid} carries the key of payment {cut['id']}, which Finance cancelled: "
+                   "Mercury may have sent it after all. The payment stays cancelled and its bill stays open. "
+                   "Check Mercury before anything else.", private=True)
+    return True
 
 
 def _marked(ctx: Ctx, money: Any, t: F.FeedTxn) -> Any:
@@ -1203,5 +1240,27 @@ def connection_map(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 (f" ({posted} posted row(s) stay on {old.code} {old.name})" if posted and old else ""), apply)
 
 
-__all__ = ["connection_create", "connection_sync", "connection_disconnect", "connection_map", "ingest", "categorize_feed", "reconcile", "reconcile_undo", "set_balance", "event",
+def connection_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Set the Mercury user a card is issued to when the card names none (`card_user_id`): one of the connection's own
+    users, or empty to clear it. A card never falls back to a guessed user (cards.py `_mercury_user`)."""
+    V.only(p, ("connection_id", "card_user_id"))
+    row = _connection(ctx, who, p)
+    if str(row["status"]) == "disconnected":
+        raise FinanceError(CONFLICT, "that connection is disconnected")
+    user = V.opt_text(p, "card_user_id", 120) or ""
+    if user and user not in {str(u["provider_user_id"]) for u in SK.provider_users_on(ctx.c, str(row["id"]))}:
+        raise invalid("that is not a Mercury user on this connection")
+
+    def apply(aid: str) -> Result:
+        settings = {k: v for k, v in SK.loads(row["settings_json"]).items() if k != "card_user_id"}
+        if user:
+            settings["card_user_id"] = user
+        SK.update(ctx.c, "fin_connections", str(row["id"]), {"settings_json": SK.dump(settings), "updated_at": ctx.at})
+        return {"connection_id": str(row["id"]), "card_user_id": user or None}
+    return Plan(K.ALLOW, f"Issue cards on {row['name']} to {user}" if user else
+                f"Clear the card user on {row['name']}", apply)
+
+
+__all__ = ["connection_create", "connection_sync", "connection_disconnect", "connection_map", "connection_settings",
+           "ingest", "categorize_feed", "reconcile", "reconcile_undo", "set_balance", "event",
            "card_line", "undo", "reversal_locked", "new_account", "MATCH_DAYS", "card_used"]

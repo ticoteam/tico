@@ -20,7 +20,8 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "account_create", "account_update", "right_grant", "right_revoke",
        # not in §5: the Finance tab's Access and Sources pages (§12), attaching receipts and documents (§8.4), and
        # linking a bank row to payments marked paid when the automatic match cannot tell which (feed_match)
-       "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach",
+       "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "connection_settings",
+       "attach",
        "books_disconnect", "bills_address_set", "finance_approver_set",
        "feed_match", "mirror_start", "mirror_stop", "mirror_tags", "mirror_xero_location", "tax_jurisdiction_add",
        "tax_remit",
@@ -42,7 +43,7 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "card_freeze", "card_unfreeze", "card_cancel", "card_resolve", "recipient_add", "payment_create",
         "payment_cancel",
         "rule_create", "rule_update", "rule_enable", "rule_disable", "rule_test",
-        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map",
+        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "connection_settings",
         "books_disconnect", "bills_address_set", "finance_approver_set",
         # phase 2: contacts, bills, invoices and attachments
         "contact_create", "contact_update", "bill_create", "bill_update", "bill_approve", "bill_schedule",
@@ -88,12 +89,14 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "estimate_convert": R.AR}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
-              "connection_disconnect", "connection_map", "books_disconnect", "bills_address_set")
+              "connection_disconnect", "connection_map", "connection_settings", "books_disconnect",
+              "bills_address_set")
 # Only the owner turns direct send on or off for the company (§9) and sets what each role sees by default (§7.5).
 OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags", "mirror_xero_location",
               "finance_approver_set")
-# System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
-SYSTEM_KINDS = ("card_freeze",)
+# System work may freeze cards at a budget's cutoff and lift those freezes once the budgets have room (§6.4 rule 4,
+# §8.2), and nothing else card-side.
+SYSTEM_KINDS = ("card_freeze", "card_unfreeze")
 SPEND = ("payment_create",)
 # Resolved values kept on the stored action only: a fingerprint of a hidden total must not reach an approval, a
 # rule test or anything a requester reads. Drift still compares it, from the stored body.
@@ -248,6 +251,9 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "books_disconnect": (("connection_id", "str", ""),), "bills_address_set": (("address", "str", "the bills address, or empty to clear it"),),
     "finance_approver_set": (("approver", "str", "a person, or empty for the owner"),),
     "connection_map": (("money_account_id", "str", ""), ("account_id", "str", "")),
+    "connection_settings": (("connection_id", "str", ""),
+                            ("card_user_id?", "str", "the Mercury user cards are issued to when a card names none "
+                             "(empty clears it)")),
     "payment_settings": (("direct_send?", "bool", ""),
                          ("cash_below?", "minor", "finance.cash.below fires when cash drops under this; 0 turns "
                           "it off")),
@@ -255,7 +261,10 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                     ("kind?", "standing|person", "standing for a bot (the default for one), person for a teammate; "
                      "single_use is not on Mercury yet"),
                     ("nickname?", "str", ""), ("money_account_id?", "str", ""),
-                    ("provider_user_id?", "str", "the Mercury user the card is issued to")),
+                    ("merchant?", "str", "the merchant it is for: recorded, not enforced (Mercury has no "
+                     "merchant locks)"),
+                    ("provider_user_id?", "str", "the Mercury user the card is issued to; left out, Tico uses the "
+                     "holder's Mercury user (same email) or the connection's card user")),
     "card_update_limit": (("card_id", "str", ""), ("amount", "minor", "")),
     "card_freeze": (("card_id", "str", ""), ("budget_id?", "str", ""), ("reason?", "str", "")),
     "card_unfreeze": (("card_id", "str", ""), ("reason?", "str", "")),
@@ -264,13 +273,20 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "card_save": (("card_id", "str", ""), ("vendor", "str", "a vendor contact's id, or the name the vendor goes by")),
     "card_unsave": (("card_id", "str", ""), ("vendor", "str", "the vendor the card was saved on")),
     "recipient_add": (("name", "str", ""), ("method", "ach|wire|check", ""), ("account_type?", "str", ""),
-                      ("address?", "obj", ""), ("email?", "str", ""), ("contact_id?", "str", ""),
+                      ("address", "obj", "the payee's address in Mercury's keys (every method needs one): address1, "
+                       "city, region, postalCode, country; address2 is optional"),
+                      ("email?", "str", ""), ("contact_id?", "str", ""),
                       ("replaces?", "str", ""), ("money_account_id?", "str", ""),
-                      ("details", "obj", "bank details; sealed, never stored readable")),
-    "payment_create": (("recipient_id?", "str", "the payee (not for method internal)"), ("amount", "minor", ""),
+                      ("account_number?", "str", "ach or wire: the account number, digits; sealed, never stored "
+                       "readable"),
+                      ("routing_number?", "str", "ach or wire: the 9-digit routing number; sealed, never stored "
+                       "readable")),
+    "payment_create": (("recipient_id", "str", "the payee (required unless method is internal)"),
+                       ("amount", "minor", ""),
                        ("money_account_id?", "str", "the bank to pay from"),
                        ("memo?", "str", ""), ("obligation?", "str", "one live payment per obligation (bill:<id>)"),
-                       ("account_id?", "str", "the line it posts to (not for method internal)"), ("tags?", "obj", ""),
+                       ("account_id", "str", "the line it posts to (required unless method is internal)"),
+                       ("tags?", "obj", ""),
                        ("mode?", "approval_queue|direct", "default approval_queue"),
                        ("purpose?", "obj", ""),
                        ("method?", "internal", "a move between our own bank accounts: from_account and to_account"),
@@ -418,6 +434,7 @@ WORDS: dict[str, str] = {
     "books_disconnect": "Disconnect a books connection (its HQ grant is revoked first).",
     "bills_address_set": "Set or clear the address vendors send bills to (empty clears it).",
     "finance_approver_set": "Name the one person who approves finance-admin actions (empty returns them to the owner).",
+    "connection_settings": "Set the Mercury user cards are issued to when a card names none.",
     "payment_settings": "Turn direct send on or off and set the cash alert.",
     "card_create": "Issue a card on a budget.", "card_update_limit": "Change a card's limit.",
     "card_freeze": "Freeze a card.", "card_unfreeze": "Unfreeze a card.", "card_cancel": "Cancel a card.",

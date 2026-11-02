@@ -10,8 +10,8 @@ from backend.finance import reads as FR
 from backend.finance.store import actions as SX
 from backend.finance.context import load
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template, reopen_rows, store,
-    sync_once)
+    ACME_ADDRESS, AT, MERCURY, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template,
+    reopen_rows, store, sync_once)
 
 SALARY = -812_345
 
@@ -31,7 +31,8 @@ def _checking(c) -> str:
 def _payee(store, fake) -> str:
     with store.transaction() as c:
         made = act(c, OWNER, "recipient_add", {"name": "Eve Example", "method": "ach",
-                                               "account_number": "000011112222", "routing_number": "000000000"})
+                                               "account_number": "000011112222", "routing_number": "000000000",
+                                               "address": ACME_ADDRESS})
         assert made.status == "committed", made
     sync_once(store, fake)
     return str(made.result["recipient_id"])

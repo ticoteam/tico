@@ -6,7 +6,7 @@ import sqlite3
 from contextlib import closing
 from datetime import date
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -148,6 +148,19 @@ def set_manager(c: sqlite3.Connection, person: str, manager: str) -> None:
 
 # ------------------------------------------------------------------------------------------------ a fake Mercury
 MERCURY = json.loads((Path(__file__).parent / "fixtures" / "mercury" / "responses.json").read_text())
+ACME_ADDRESS = {"address1": "1 Acme Way", "city": "Springfield", "region": "IL", "postalCode": "62701", "country": "US"}
+ADDRESS_REQUIRED = ("address1", "city", "region", "postalCode", "country")
+
+
+def recipient_address_gaps(body: dict[str, Any]) -> list[str]:
+    """What a POST /recipients body lacks in the address each routing info needs (Mercury's docs; address2 optional).
+    scripts/fake_mercury.py refuses the same way."""
+    gaps: list[str] = []
+    for key in ("checkInfo", "domesticWireRoutingInfo", "electronicRoutingInfo"):
+        if key in body:
+            address = (body[key] or {}).get("address") or {}
+            gaps += [f"{key}.address.{f}" for f in ADDRESS_REQUIRED if not str(address.get(f) or "").strip()]
+    return gaps
 
 
 class FakeMercury:
@@ -164,7 +177,9 @@ class FakeMercury:
         self.calls: list[tuple[str, object]] = []
         self.cards_list: list[dict[str, object]] = []
         self.balances: dict[str, float] = {}       # account id -> currentBalance, in place of the recorded one
+        self.unlisted: set[str] = set()            # request ids Mercury no longer lists (sent): still answered by id
         self.card_page = 500
+        self.txn_page = 500                        # most rows one account-transactions answer gives (its limit caps it)
 
     def _answer(self, name: str, arg: object, default: object):
         self.calls.append((name, arg))
@@ -204,11 +219,16 @@ class FakeMercury:
         raw = self.txns.get(txn_id)
         return self._answer("transaction", txn_id, raw if raw is not None else self.Answer(404, {}))
 
-    def account_transactions(self, account_id, search=None, start=None, end=None, start_after=None, limit=500):
-        """Mercury's search over one account's transactions: `search` matches a transaction's note, description or
-        counterparty; `start` and `end` (dates, YYYY-MM-DD) bound its created day. The whole match comes in one page."""
+    def account_transactions(self, account_id, search=None, start=None, end=None, offset=0, request_id=None, limit=500):
+        """One account's transactions as Mercury lists them: offset paging (no start_after or nextPage), and an answer's
+        `total` counts every match. `search` finds a note, description or counterparty name (not a memo-only
+        key: the docs' "recipient memo" is not mapped to externalMemo); `start` and `end` bound the created day
+        (YYYY-MM-DD); `request_id` finds the transaction a request became.
+        One answer gives at most `txn_page` rows."""
         def hit(txn: dict) -> bool:
             if str(txn.get("accountId")) != account_id:
+                return False
+            if request_id and str(txn.get("requestId") or "") != request_id:
                 return False
             if search and not any(search.lower() in str(txn.get(f) or "").lower()
                                   for f in ("note", "bankDescription", "counterpartyName")):
@@ -216,8 +236,9 @@ class FakeMercury:
             day = str(txn.get("createdAt") or "")[:10]
             return (not start or day >= start) and (not end or day <= end)
         hits = [t for t in self.txns.values() if hit(t)]
+        chunk = hits[offset:offset + min(limit, self.txn_page)]
         return self._answer("account_transactions", (account_id, search, start, end),
-                            {"transactions": hits, "page": {}})
+                            {"transactions": chunk, "total": len(hits)})
 
     def events(self, start_after, limit=500, newest=False):
         found = list(reversed(self.events_list))[:limit] if newest else self.events_list
@@ -256,7 +277,10 @@ class FakeMercury:
         return self._answer("card_state", (card_id, op), {})
 
     def create_recipient(self, body):
-        return self._answer("create_recipient", dict(body), {"id": f"rcp-{len(self.sent('create_recipient')) + 1}"})
+        gaps = recipient_address_gaps(body)
+        refused = self.Answer(400, {"message": f"address: {', '.join(gaps)} required"}) if gaps else None
+        made = {"id": f"rcp-{len(self.sent('create_recipient')) + 1}"}
+        return self._answer("create_recipient", dict(body), refused if refused is not None else made)
 
     def recipient(self, recipient_id):
         return self._answer("recipient", recipient_id, {"id": recipient_id})
@@ -301,12 +325,15 @@ class FakeMercury:
 
     page_size = 1000
 
-    def send_requests(self, account_id, start_after=None):
-        rows = list(self.requests.values())
+    def send_requests(self, account_id, start_after=None, status=None):
+        """The list filtered to one status when given (Mercury's documented filters), and without the requests in
+        `unlisted` (sent and approved: no longer listed, though still answered by id)."""
+        rows = [r for r in self.requests.values() if str(r["requestId"]) not in self.unlisted
+                and (status is None or r["status"] == status)]
         ids = [str(r["requestId"]) for r in rows]
         rows = rows[ids.index(start_after) + 1:] if start_after in ids else rows
         page, more = rows[:self.page_size], len(rows) > self.page_size
-        return self._answer("send_requests", (account_id, start_after),
+        return self._answer("send_requests", (account_id, start_after, status),
                             {"requests": page, "page": {"nextPage": str(page[-1]["requestId"]) if more else None}})
 
 

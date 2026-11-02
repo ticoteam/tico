@@ -14,6 +14,14 @@ Control endpoints under /_fake/ are not Mercury's:
                                frozen or cancelled card is declined (a failed transaction), as Mercury does
   GET  /_fake/calls            every Mercury call Tico made, in order (method, path, query, body; never the token)
 
+Its lists follow the documented behavior: GET /request-send-money takes one status (pendingApproval, approved, rejected
+or cancelled; any other is a 400) and a limit from 1 to 1000 (else a 400). A request that was approved and sent is a
+transaction, and the request list no longer shows it (the docs do not say whether it stays): it is still answered by
+id, and its transaction carries its request id and the key in externalMemo, as a finance lookup reads it back.
+POST /account/<id>/transactions is a direct send: a transaction at once, with no approver.
+GET /account/<id>/transactions pages by offset (limit 1 to 1000, and an answer's `total` counts every match); it has
+no start_after.
+
   python3 scripts/fake_mercury.py --port 18790
 """
 import argparse
@@ -31,6 +39,7 @@ FIXTURES = json.loads((Path(__file__).resolve().parent.parent / "backend" / "tes
 PREFIX = "/api/v1"
 BANK, CARD = "acct-chk", "credit-io"          # the checking account and the IO credit account in the fixtures
 SEED_TXNS = ("txn_card_posted", "txn_card_bill_bank", "txn_card_bill_io", "txn_bank_fee", "txn_deposit")
+REQUEST_STATUSES = ("pendingApproval", "approved", "rejected", "cancelled")   # the request list's documented filters
 # The last four Mercury gives each new card, in turn (fictional; never a real card's).
 LAST_FOUR = ("4021", "7713", "3390", "5168", "8842", "2207", "6634", "1958", "9071", "3546")
 
@@ -179,10 +188,7 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
         chunk = events[:limit]
         return 200, {"events": chunk, "page": {"nextPage": chunk[-1]["id"]} if len(events) > limit and chunk else {}}
     if method == "GET" and len(parts) == 3 and parts[0] == "account" and parts[2] == "transactions":
-        mine = [t for t in STATE.txns if str(t.get("accountId")) == parts[1] and in_search(t, one(q, "search"))
-                and in_days(t, one(q, "start"), one(q, "end"))]
-        chunk, nxt = page(mine, "id", after, limit)
-        return 200, {"transactions": chunk, "page": nxt}
+        return account_transactions(parts[1], q)
     if method == "POST" and path == "/transfer":
         return transfer(body)
     if method == "GET" and parts[0] == "account" and parts[-1] == "statements":
@@ -214,6 +220,9 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
     if method == "POST" and path == "/cards":
         return 200, new_card(body)
     if method == "POST" and path == "/recipients":
+        gaps = recipient_address_gaps(body)
+        if gaps:
+            return 400, {"message": f"address: {', '.join(gaps)} required"}
         rid = STATE.new("rcp")
         STATE.recipients[rid] = {**body, "id": rid}
         return 200, {"id": rid}
@@ -228,24 +237,47 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
         return 200, req
     if method == "GET" and parts[0] == "request-send-money" and len(parts) == 2:
         return found(next((r for r in STATE.requests if r["requestId"] == parts[1]), None))
+    if method == "POST" and len(parts) == 3 and parts[0] == "account" and parts[2] == "transactions":
+        return direct_send(parts[1], body)
     if method == "GET" and path == "/request-send-money":
-        mine = [r for r in STATE.requests if r["accountId"] == one(q, "accountId")]
+        status = one(q, "status")
+        if status is not None and status not in REQUEST_STATUSES:
+            return 400, {"message": f"status is one of {', '.join(REQUEST_STATUSES)}"}
+        if not 1 <= limit <= 1000:
+            return 400, {"message": "limit is from 1 to 1000"}
+        mine = [r for r in STATE.requests if r["accountId"] == one(q, "accountId") and not r.get("sent")
+                and (status is None or r["status"] == status)]
         chunk, nxt = page(mine, "requestId", after, limit)
         return 200, {"requests": chunk, "page": nxt}
     return 404, {"message": f"fake Mercury does not answer {method} {path}"}
 
 
+def direct_send(account: str, body: dict) -> tuple[int, dict]:
+    """POST /account/<id>/transactions: a direct send, Mercury's transaction at once (no approver), with the note and
+    external memo it was sent with, pending until its bank row posts."""
+    try:
+        amount = abs(float(body["amount"]))
+    except (KeyError, TypeError, ValueError):
+        return 400, {"message": "amount (a number) is required"}
+    txn = {"id": STATE.new("txn-direct"), "accountId": account, "amount": -amount, "createdAt": now(), "postedAt": None,
+           "status": "pending", "kind": "outgoingPayment", "counterpartyName": str(body.get("recipientId") or ""),
+           "bankDescription": "ACH", "cardId": None, "requestId": None, "note": body.get("note"),
+           "externalMemo": body.get("externalMemo")}
+    STATE.add_txn(txn)
+    return 200, txn
+
+
 def new_card(body: dict) -> dict:
-    """POST /cards: a virtual card, usable at once, in Mercury's card shape (the create answer's cardId and
-    lastFourDigits beside the card fields). A credit card with no accountId is on the org's IO credit account."""
+    """POST /cards: a virtual card, usable at once, in Mercury's Card shape (id, lastFour, and the rest of the card
+    fields). A credit card with no accountId is on the org's IO credit account."""
     cid = STATE.new("card")
     four = LAST_FOUR[len(STATE.cards) % len(LAST_FOUR)]
-    user = next((u for u in FIXTURES["users"]["users"] if u["id"] == body.get("userId")), None)
+    user = next((u for u in FIXTURES["users"]["users"] if u["userId"] == body.get("userId")), None)
     holder = f"{user['firstName']} {user['lastName']}" if user else "Acme"
     at = now()
-    card = {**copy.deepcopy(FIXTURES["card_created"]), "id": cid, "cardId": cid, "userId": body.get("userId"),
+    card = {**copy.deepcopy(FIXTURES["card_created"]), "id": cid, "userId": body.get("userId"),
             "accountId": body.get("accountId") or CARD, "nameOnCard": holder, "nickname": body.get("nickname"),
-            "lastFour": four, "lastFourDigits": four, "expiration": {"month": 11, "year": int(at[:4]) + 3},
+            "lastFour": four, "expiration": {"month": 11, "year": int(at[:4]) + 3},
             "type": "virtual", "kind": body.get("kind", "credit"), "status": "active",
             "spendLimit": body.get("spendLimit"), "spendLimitType": "cardLimit", "isAgentCard": False,
             "physicalCardStatus": None, "createdAt": at, "updatedAt": at}
@@ -280,10 +312,42 @@ def card_spend(body: dict) -> tuple[int, dict]:
     return 200, {"transaction": txn}
 
 
+ADDRESS_REQUIRED = ("address1", "city", "region", "postalCode", "country")
+
+
+def recipient_address_gaps(body: dict) -> list[str]:
+    """What a POST /recipients body lacks in the address each routing info needs. Mercury's docs: checkInfo,
+    domesticWireRoutingInfo and electronicRoutingInfo each require an address with these fields (address2 optional)."""
+    gaps: list[str] = []
+    for key in ("checkInfo", "domesticWireRoutingInfo", "electronicRoutingInfo"):
+        if key in body:
+            address = (body[key] or {}).get("address") or {}
+            gaps += [f"{key}.address.{f}" for f in ADDRESS_REQUIRED if not str(address.get(f) or "").strip()]
+    return gaps
+
+
 def in_search(txn: dict, search: str | None) -> bool:
-    """Mercury's search of an account's transactions: the text sits in the note, description or counterparty."""
+    """Mercury's search of an account's transactions: the text sits in the note, description or counterparty name. The
+    docs also say "recipient memo", which they never map to externalMemo, so a memo-only key is not assumed to match."""
     text = (search or "").lower()
-    return not text or any(text in str(txn.get(f) or "").lower() for f in ("note", "bankDescription", "counterpartyName"))
+    return not text or any(text in str(txn.get(f) or "").lower()
+                           for f in ("note", "bankDescription", "counterpartyName"))
+
+
+def account_transactions(account: str, q: dict) -> tuple[int, dict]:
+    """GET /account/<id>/transactions as documented: `search`, `start` and `end` (the created day), `requestId`, and
+    offset paging with `total` (every match). `limit` is 1 to 1000 (1000 when left out); there is no start_after."""
+    try:
+        limit = int(one(q, "limit", "1000") or 1000)
+        offset = int(one(q, "offset", "0") or 0)
+    except ValueError:
+        return 400, {"message": "limit and offset are whole numbers"}
+    if not 1 <= limit <= 1000 or offset < 0:
+        return 400, {"message": "limit is from 1 to 1000; offset is 0 or more"}
+    request = one(q, "requestId")
+    mine = [t for t in STATE.txns if str(t.get("accountId")) == account and in_search(t, one(q, "search"))
+            and in_days(t, one(q, "start"), one(q, "end")) and (not request or t.get("requestId") == request)]
+    return 200, {"transactions": mine[offset:offset + limit], "total": len(mine)}
 
 
 def in_days(txn: dict, start: str | None, end: str | None) -> bool:
@@ -349,6 +413,7 @@ def decide(verb: str, rid: str) -> tuple[int, dict]:
         req["reviews"] = [{"userId": "user-ben", "decision": "rejected"}]
         return 200, req
     req["status"] = "approved"
+    req["sent"] = True                      # sent as the transaction below: no longer in the request list
     req["reviews"] = [{"userId": "user-ben", "decision": "approved"}]
     txn = {"id": STATE.new("txn-req"), "accountId": req["accountId"], "amount": -abs(float(req["amount"])),
            "createdAt": now(), "postedAt": now(), "status": "sent", "kind": "outgoingPayment",

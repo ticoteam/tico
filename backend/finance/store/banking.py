@@ -117,6 +117,12 @@ def set_provider_users(c: sqlite3.Connection, connection_id: str, users: Sequenc
                                                       str(u.get("email") or ""), str(u.get("role") or ""), at))
 
 
+def provider_users_on(c: sqlite3.Connection, connection_id: str) -> list[Any]:
+    """The users of one connection, as its provider last listed them (set_provider_users)."""
+    return c.execute("SELECT * FROM fin_provider_users WHERE connection_id=? AND provider_user_id<>'' "
+                     "ORDER BY provider_user_id", (connection_id,)).fetchall()
+
+
 def provider_users(c: sqlite3.Connection) -> list[Any]:
     """Users of every connected (not disconnected) provider account, by name."""
     return c.execute("SELECT u.* FROM fin_provider_users u JOIN fin_connections k ON k.id=u.connection_id "
@@ -496,6 +502,12 @@ def recipient_current(c: sqlite3.Connection, recipient_id: str) -> Any:
     return c.execute("SELECT * FROM fin_recipients WHERE id=?", (recipient_id,)).fetchone()
 
 
+def recipient_replacing(c: sqlite3.Connection, recipient_id: str) -> Any:
+    """The newest version that replaced this recipient's (its details changed), if any."""
+    return c.execute("SELECT * FROM fin_recipients WHERE replaces_id=? ORDER BY version DESC LIMIT 1",
+                     (recipient_id,)).fetchone()
+
+
 def recipients(c: sqlite3.Connection, most: int) -> list[Any]:
     return c.execute("SELECT * FROM fin_recipients WHERE status='active' ORDER BY name, id LIMIT ?", (most,)).fetchall()
 
@@ -631,9 +643,17 @@ def payment_debit(c: sqlite3.Connection, money_account_id: str, request_id: str)
 
 
 def payments_unlinked(c: sqlite3.Connection, money_account_id: str, amount: int) -> list[Any]:
-    """Live payments from this account for this amount whose Mercury request is not known yet (a lost send answer)."""
-    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? AND COALESCE(provider_request_id, '')='' "
-                     "AND status IN ('unknown','sending') ORDER BY created_at", (money_account_id, amount)).fetchall()
+    """Live payments from this account for this amount whose Mercury request is not known yet: a lost send answer, or
+    a transaction found with no request id (payments.found), whose bank row is then tied to it by its key."""
+    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? "
+                     "AND COALESCE(provider_request_id, '')='' AND status IN ('unknown','sending','submitted') "
+                     "ORDER BY created_at", (money_account_id, amount)).fetchall()
+
+
+def payments_cancelled(c: sqlite3.Connection, money_account_id: str, amount: int) -> list[Any]:
+    """Cancelled payments from this account for this amount: a bank debit that carries one's key was sent after all."""
+    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? AND status='cancelled' "
+                     "ORDER BY created_at", (money_account_id, amount)).fetchall()
 
 
 def unknown_transfers(c: sqlite3.Connection, connection_id: str) -> list[Any]:

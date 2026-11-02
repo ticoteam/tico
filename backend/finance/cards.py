@@ -29,6 +29,7 @@ from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import tico as T
 
 STATE_OPS = {"card_freeze": ("freeze", "frozen"), "card_unfreeze": ("unfreeze", "active"),
              "card_cancel": ("cancel", "cancelled")}
@@ -307,10 +308,34 @@ def card_kind(p: V.Payload, bot: bool) -> str:
     return kind
 
 
+def _mercury_user(ctx: Ctx, p: V.Payload, holder: str, program: Any) -> tuple[str, str]:
+    """The Mercury user a card is issued to, and how it was found: the one the request names; else the one on the card's
+    connection whose email is the holder's (a teammate, exactly one); else the connection's card user (set by
+    `connection_settings`). Mercury issues a card to one of its own users, so nothing else is guessed: with none of
+    these the card is refused."""
+    named = V.opt_text(p, "provider_user_id", 120) or ""
+    if named:
+        return named, "named"
+    connection = str(program["connection_id"] or "")
+    email = T.person_email(ctx.c, holder)
+    if email:
+        found = [u for u in SK.provider_users_on(ctx.c, connection) if str(u["email"] or "").strip().lower() == email]
+        if len(found) == 1:
+            return str(found[0]["provider_user_id"]), "the holder's email"
+    row = SK.get(ctx.c, "fin_connections", connection)
+    setting = str(SK.loads(row["settings_json"] if row is not None else None).get("card_user_id") or "")
+    if setting:
+        return setting, "the connection's card user"
+    raise invalid("a Mercury user is needed to issue the card: name one (provider_user_id), or set the connection's "
+                  "card user")
+
+
 def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A card for a teammate or a bot under a budget, with `amount` a month set aside for it. `provider_user_id` is the
-    Mercury user the card is issued to (Mercury issues cards to its own users)."""
-    V.only(p, ("holder", "budget_id", "amount", "kind", "nickname", "money_account_id", "provider_user_id"))
+    Mercury user the card is issued to (Mercury issues cards to its own users); left out, `_mercury_user` finds one.
+    `merchant` is the merchant the card is
+    asked for, kept as the request's intent: Mercury has no merchant locks (§8.1), so the limit is what it enforces."""
+    V.only(p, ("holder", "budget_id", "amount", "kind", "nickname", "money_account_id", "provider_user_id", "merchant"))
     holder = V.text(p, "holder", 120)
     if holder not in ctx.org.humans | ctx.org.bots:
         raise invalid("no such teammate")
@@ -326,15 +351,16 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     alloc = handlers.allocation_plan(ctx, who, {"budget_id": budget_id, "target_kind": "card", "target_id": card_id,
                                                 "amount": amount}, route)
     nickname = V.opt_text(p, "nickname", 50) or holder.split(":", 1)[-1]
-    user = V.text(p, "provider_user_id", 120)
+    merchant = V.opt_text(p, "merchant", 120) or ""
+    user, found = _mercury_user(ctx, p, holder, program)
 
     def apply(aid: str) -> Result:
         alloc.apply(aid)
         SK.insert(ctx.c, "fin_cards", {
             "id": card_id, "provider": str(program["provider"] or "mercury"), "holder": holder, "budget_id": budget_id,
             "money_account_id": str(program["id"]), "kind": kind, "limit_amount": amount, "limit_interval": "month",
-            "currency": ctx.book.base_currency, "status": "active", "nickname": nickname, "created_at": ctx.at,
-            "created_by": who, "updated_at": ctx.at})
+            "currency": ctx.book.base_currency, "status": "active", "nickname": nickname, "merchant": merchant,
+            "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
         queue(ctx, SK.get(ctx.c, "fin_cards", card_id), "card_create",
               {"user_id": user, "nickname": nickname, "monthly": amount}, f"card-create-{card_id}", aid, who)
         return {"card_id": card_id, "sync_status": "pending"}
@@ -343,7 +369,9 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 f"Issue a {kind} card to {holder} with {amount / 100:.2f} a month from {ctx.budgets()[budget_id].name}",
                 apply,
                 facts={"amount": amount, "holder": holder, "budget_id": budget_id, "card.kind": kind,
-                       "holder.kind": "bot" if bot else "human"})
+                       "holder.kind": "bot" if bot else "human"},
+                impact={"provider_user_id": user, "provider_user_from": found},
+                resolved={"provider_user_id": user})
 
 
 def card_update_limit(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -403,6 +431,8 @@ def _state(kind: str) -> handlers.Planner:
                 raise FinanceError(CONFLICT, "that card is cancelled")
         if kind == "card_unfreeze":
             from .core import dates
+            if who == SYSTEM and any(str(card["freeze_by"] or "") != "budget" for card in cards):
+                raise FinanceError(CONFLICT, "only a budget's cutoff lifts its own freeze")
             leaf = str(cards[0]["budget_id"] or "")
             blocker = blocking_budget(ctx, leaf, dates.day(ctx.today))
             if blocker:
@@ -438,24 +468,48 @@ def _state(kind: str) -> handlers.Planner:
 
 
 def unfreeze_with_room(ctx: Ctx, budget_id: str = "", aid: str = "") -> int:
-    """Lift the freezes a budget's cutoff made once every budget over the card has room again: a new period, a raise, or
-    a hold or reserve released (§8.2). A card a person froze is never lifted. With `budget_id`, only cards under that
-    budget are looked at. Each lift goes to Mercury through `sync`, like any change. How many."""
-    from .budgeting import subtree
-    from .core import dates
-    budgets = ctx.budgets()
-    scope = subtree(ctx, budget_id) if budget_id else None
-    today = dates.day(ctx.today)
+    """Lift the freezes a budget's cutoff made, inside the action that gave the room (a raise): each lift goes to
+    Mercury through `sync` as part of that action. The hourly look lifts through `lift_through_actions` instead."""
     lifted = 0
-    for card in SK.budget_frozen_cards(ctx.c, scope):
-        leaf = str(card["budget_id"] or "")
-        if leaf not in budgets or blocking_budget(ctx, leaf, today):
-            continue
+    for card in lift_eligible(ctx, budget_id):
         cid = str(card["id"])
         SK.update(ctx.c, "fin_cards", cid, {"status": "active", "freeze_by": None, "freeze_budget_id": None,
                                             "updated_at": ctx.at})
         sync(ctx, cid, aid, SYSTEM)
         lifted += 1
+    return lifted
+
+
+def lift_eligible(ctx: Ctx, budget_id: str = "") -> list[Any]:
+    """The cards a budget's cutoff froze that every budget over them now has room for: a new period, a raise, or a
+    hold or reserve released (§8.2). A card a person froze is never among them. With `budget_id`, only cards under
+    that budget are looked at."""
+    from .budgeting import subtree
+    from .core import dates
+    budgets = ctx.budgets()
+    scope = subtree(ctx, budget_id) if budget_id else None
+    today = dates.day(ctx.today)
+    eligible: list[Any] = []
+    for card in SK.budget_frozen_cards(ctx.c, scope):
+        leaf = str(card["budget_id"] or "")
+        if leaf in budgets and not blocking_budget(ctx, leaf, today):
+            eligible.append(card)
+    return eligible
+
+
+def lift_through_actions(ctx: Ctx) -> int:
+    """The hourly look's lift (§8.2): each card lift_eligible names is unfrozen as system work through the action path,
+    one action a card, so the lift is logged, refused like any unfreeze and replay-safe. How many."""
+    from . import actions
+    lifted = 0
+    for card in lift_eligible(ctx):
+        cid = str(card["id"])
+        # The key carries the hour: a lift refused this hour (its failed result is stored under the key) is tried again
+        # the next hour, while a lift that committed is replayed by the same key and not sent again.
+        res = actions.act(ctx.c, SYSTEM, "card_unfreeze", {"card_id": cid, "reason": "budget has room"},
+                          f"cutoff-lift-{cid}-{card['updated_at']}-{ctx.at[:13]}", at=ctx.at)
+        if res.status == "committed":
+            lifted += 1
     return lifted
 
 
