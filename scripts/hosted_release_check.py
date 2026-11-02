@@ -208,8 +208,8 @@ def main():
         gate_temp = temp / "tico-release-gate"
         gate_temp.mkdir(mode=0o700, exist_ok=True)
         env = {**os.environ, "TMPDIR": str(gate_temp)}
-        # Only the VMs that test native binaries wait for the native-linux build: product, desktop and python shard 1
-        # (release_checks.py gives it every native test file; a shard without binaries refuses native tests).
+        # Only the VMs that test native binaries wait for the native-linux build: product, desktop and python shards 1-2
+        # (release_checks.py NATIVE_SHARDS gives them the native test files; a shard without binaries refuses native tests).
         # Browser tests use none. Where the binaries were placed, they must be the candidate's.
         placed = (root / "runner-rs/target/release/tico-runner").exists()
         if args.part == "python" and not placed and "native_first" not in (root / "scripts/release_checks.py").read_text():
