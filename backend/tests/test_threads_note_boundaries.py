@@ -310,7 +310,7 @@ def test_the_wake_for_a_note_narrower_than_its_public_thread_runs_in_a_private_s
 
 
 def test_a_narrower_note_enters_only_a_private_session_of_its_own_thread(api):
-    r = bot_runner(api)
+    bot_runner(api)
     company = new_thread(api, audience="company", title="Launch")
     tid = task_about(api)
     posted = bot_says(api, company, "@cpo Zebrawire", refs={"task": tid})
