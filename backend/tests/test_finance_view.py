@@ -353,3 +353,23 @@ def test_access_says_where_the_viewer_may_grant(books):
         assert not any(may("human:cara").values())
         assert act(c, "human:cara", "view_grant", {"subject": "human:eve", "what": "expenses", "whose": "own"}).code \
             == "denied"
+
+
+def _on_team(person: str, team: str) -> list[dict[str, object]]:
+    return [{**p, "team": team} if p["id"] == person.removeprefix("human:") else p for p in PEOPLE]
+
+
+def test_a_team_grant_ends_at_once_for_a_member_who_leaves_the_team(books):
+    """A team grant reaches the people on the team when it was made (spec §7.5). Someone who moves to another team
+    loses it at once, and someone who joins later does not get it unless the grant says new_members."""
+    with books.transaction() as c:
+        spend(c, "6100", 1_000, team="web", teammate="human:eve")
+        spend(c, "6100", 2_000, team="sales", teammate="human:dan")
+        grant = act(c, OWNER, "view_grant", {"subject_kind": "team", "subject": "web", "what": "expenses",
+                                             "whose": "company"})
+        assert grant.status == "committed"
+        assert FR.expenses(c, "human:eve", by="team", at=AT)["total"] == 3_000
+        _org(c, _on_team("eve", "sales"), GROUPS)
+        assert FR.expenses(c, "human:eve", by="team", at=AT)["total"] == 1_000          # her own line only
+        _org(c, _on_team("dan", "web"), GROUPS)
+        assert FR.expenses(c, "human:dan", by="team", at=AT)["total"] == 2_000          # a later joiner: own only
