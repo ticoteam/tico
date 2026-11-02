@@ -34,12 +34,12 @@ def _maps(values: list[Any]) -> list[dict[str, Any]]:
     return [v for v in values if isinstance(v, dict)]
 
 
-def _dict(value: object) -> dict[str, Any]:
+def _dict(value: Any) -> dict[str, Any]:
     """A JSON object, as a dict of Any (empty when the value is not one)."""
     return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
-def _list(value: object) -> list[Any]:
+def _list(value: Any) -> list[Any]:
     """A JSON array, as a list of Any (empty when the value is not one)."""
     return cast(list[Any], value) if isinstance(value, list) else []
 
