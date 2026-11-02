@@ -233,7 +233,7 @@ def kpi_record(ctx, kid):
 def owner_sql(actors):
     if actors is None:
         return "1", []
-    return "owner IN (SELECT value FROM json_each(?))", [json.dumps(sorted(actors))]
+    return "owner_id IN (SELECT value FROM json_each(?))", [json.dumps(sorted(actors))]
 
 
 def tasks_by_status(ctx, s):
