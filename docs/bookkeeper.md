@@ -11,8 +11,10 @@ install from before it gets it at the next start. Pausing or archiving it is res
 
 ## What it may do
 
-It comes with finance.book, ap, ar, pay and cards, granted once. Revoking one in Finance → Access sticks. It is never a
-finance admin and never changes views, rights, payment settings or bank connections.
+It comes with finance.book, ap, ar, pay, cards and rules, granted once. Revoking one in Finance → Access sticks. An
+install from before rules was a default gets that one right at its next start. It may propose a posting rule, and a
+person approves each one. It is never a finance admin and never changes views, rights, payment settings or bank
+connections.
 
 It sees only what its Finance view covers. The owner gets one task, "Let the Bookkeeper see the books", to give it
 Everything in Finance → Access. Payroll's private lines stay private either way.
@@ -29,7 +31,7 @@ rules; it never approves its own action. The owner approves a month's close and 
 | An invoice 1, 7, 30, 60 or 90 days overdue | `finance.invoice.overdue` routine | One per invoice and stage |
 | A month ready to close | `finance.period.ready` routine | One per month |
 | Monthly report into Docs | Routine on the 3rd at 09:00 | One a month |
-| Runway under six months, a month's spend well above its usual, a duplicate charge, a recurring charge that rose | **Watch**, daily: plain code reads the books | One private "Watch (n)" task, only for something new |
+| Runway under six months, a month's spend well above its usual, a duplicate charge, a recurring charge that rose, an unused subscription | **Watch**, daily: plain code reads the books | One private "Watch (n)" task, only for something new |
 | Posting rules made in the last seven days | **Rules digest**, weekly: plain code | One "Rules digest (n)" task, only when there are rules |
 
 **Books check** (system routine `bookkeeper_check`) runs hourly by default; change it under
@@ -38,7 +40,7 @@ in the last day is not news unless its facts changed. A still-open Books check t
 instead of a second task opening. The task is private to the Bookkeeper. It opens nothing while the Bookkeeper is
 paused.
 
-**Watch** (system routine `bookkeeper_watch`) runs daily and **Rules digest** (`bookkeeper_rules_digest`) weekly, each on its own schedule. Neither is a switch in [System routines](system-routines.md), and the Bookkeeper's pause stops both from opening tasks. Watch reads runway under six months of average burn, a month at least twice the median of the three before it (and $100 more), two charges of one amount to one payee within three days, and a recurring charge that rose 10% (and $10 more). Unused subscriptions are not watched: posted data says nothing about use. Nothing new is a quiet run. A Watch finding is news once: a reviewed one is not listed again after a day, and comes back only when its facts change. The Watch task is private to the Bookkeeper. The digest task is private too: its readers are the company owner and the Bookkeeper, so teammates who are not the owner do not see the rule names it lists.
+**Watch** (system routine `bookkeeper_watch`) runs daily and **Rules digest** (`bookkeeper_rules_digest`) weekly, each on its own schedule. Neither is a switch in [System routines](system-routines.md), and the Bookkeeper's pause stops both from opening tasks. Watch reads runway under six months of average burn, a month at least twice the median of the three before it (and $100 more), two charges of one amount to one payee within three days, and a recurring charge that rose 10% (and $10 more). An unused subscription is a monthly charge seen three months running (the three calendar months before this one) on a card whose bot is archived or ran no turn in 30 days. Nothing new is a quiet run. A Watch finding is news once: a reviewed one is not listed again after a day, and comes back only when its facts change. The Watch task is private to the Bookkeeper. The digest task is private too: its readers are the company owner and the Bookkeeper, so teammates who are not the owner do not see the rule names it lists.
 
 ## The bills address
 

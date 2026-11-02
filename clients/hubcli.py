@@ -528,10 +528,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub health-monitor findings            the Health Monitor: what the last hourly scan found
     hub health-monitor report <key> | --process process:<name> --cpu N --mb N
                                            report a finding as a Tico bug, one ticket per signature
-    hub finance search [--kind entry|feed|bill|invoice|contact|rule|card] [--q words] [--status S] [--vendor V]
+    hub finance search [--kind entry|feed|bill|invoice|contact|rule|card|account] [--q words] [--status S] [--vendor V]
                     [--start D] [--end D] [--cursor C] [--limit N]   the books you may see; name a kind to page
-    hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close> [--start D]
-                    [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
+    hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close|sales_tax|1099>
+                    [--start D] [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
+                    [--year YYYY]
     hub finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
     hub finance act <kind|help> [--payload JSON|-] [--dry-run] [--operation-id KEY]
                                            ask for one Finance action; help lists kinds, `help --payload
@@ -3373,7 +3374,7 @@ def parser():
     fin = sub.add_parser("finance", help="the books, as you: search, reports, metrics, actions, your work queue "
                          "(docs/finance-tools.md)").add_subparsers(dest="sub")
     s = fin.add_parser("search", help="entries, bank and card rows, bills, invoices, contacts and rules you may see")
-    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule", "card"])
+    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule", "card", "account"])
     s.add_argument("--q")
     for flag in ("--status", "--contact-id", "--vendor", "--account-id", "--money-account-id", "--start", "--end",
                  "--cursor"):
@@ -3386,8 +3387,9 @@ def parser():
     s.set_defaults(fn="finance search")
     s = fin.add_parser("report", help="one report cut to your view; rows past --top-n fold into Other")
     s.add_argument("kind", choices=["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging",
-                                    "spend_by", "close"])
+                                    "spend_by", "close", "sales_tax", "1099"])
     s.add_argument("--start"); s.add_argument("--end")
+    s.add_argument("--year", type=int, help="sales_tax, 1099: the calendar year (this year when omitted)")
     s.add_argument("--period", choices=["day", "week", "month", "quarter", "year"])
     s.add_argument("--basis", choices=["cash", "accrual"])
     s.add_argument("--compare", choices=["prior"])
@@ -3398,7 +3400,7 @@ def parser():
     s = fin.add_parser("metric", help="one number you may see, with when it was worked out")
     s.add_argument("name", choices=["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining",
                                     "budget_pct_used", "ap_due", "ar_overdue", "uncategorized_count",
-                                    "unreconciled_days"])
+                                    "unreconciled_days", "duplicate_charges", "price_increases"])
     for flag in ("--budget-id", "--start", "--end", "--account-id", "--team", "--teammate"):
         s.add_argument(flag)
     s.add_argument("--days", type=int)
@@ -3414,7 +3416,8 @@ def parser():
     s.set_defaults(fn="finance action")
     s = fin.add_parser("inbox", help="your Finance work queue")
     s.add_argument("--kind", choices=["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due",
-                                      "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready"],
+                                      "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready",
+                                      "unreconciled", "bill_email"],
                    help="only this kind, paged on with --cursor past its first 200")
     s.add_argument("--cursor"); s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance inbox")

@@ -17,9 +17,11 @@ or kept as an unmatched receipt, makes it `filed`). A fetch that fails is tried 
 is `failed`, listed in one check, then `reported`: never listed or woken on again."""
 import hashlib
 import re
+import sqlite3
 import urllib.parse
 from email.utils import getaddresses
 from types import SimpleNamespace
+from typing import Any
 
 from fastapi import Request
 from pydantic import Field
@@ -130,7 +132,7 @@ def reconcile(c):
     return len(held)
 
 
-def for_bookkeeper(c, limit=50):
+def for_bookkeeper(c: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
     """Bills from the address the Bookkeeper enters by hand: Finance did not take them as they came, or their bytes
     could not be fetched (listed once, see `listed`)."""
     return [dict(r) for r in c.execute("SELECT id, received_at, sender, subject, name, file_id, code, state "

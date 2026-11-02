@@ -10682,7 +10682,9 @@
                 "ap_due",
                 "ar_overdue",
                 "uncategorized_count",
-                "unreconciled_days"
+                "unreconciled_days",
+                "duplicate_charges",
+                "price_increases"
               ],
               "type": "string",
               "title": "Name"
@@ -11702,7 +11704,8 @@
                     "location",
                     "project",
                     "po",
-                    "estimate"
+                    "estimate",
+                    "account"
                   ],
                   "type": "string"
                 },
@@ -41547,7 +41550,9 @@
                     "invoice_overdue",
                     "budget_near_limit",
                     "sync_failed",
-                    "period_ready"
+                    "period_ready",
+                    "unreconciled",
+                    "bill_email"
                   ]
                 },
                 "id": {

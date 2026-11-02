@@ -194,9 +194,10 @@ def run_now(store, auth, key, actor):
 
 
 class Scheduler:
-    def __init__(self, store, execution):
+    def __init__(self, store, execution, onboarding=None, auth=None):
         self.store, self.execution = store, execution
         self.listening_since = H.now()  # when this server began listening; a computer is not silent before it
+        self.onboarding, self.auth = onboarding, auth   # the Bookkeeper is built the tick Finance is set up
         self.swept = None
         self.stranded = None
         self.asks_checked = None
@@ -225,6 +226,7 @@ class Scheduler:
         waiting `finance.*` events every tick, run holds past expiry every ten minutes, Gateway usage postings hourly
         (the Gateway worker fetches the meter), bills due, reminders, the cash alert and ready closes hourly, setup
         when missing and next month's period daily."""
+        from . import bookkeeper
         from .finance import actions as finance, reads as finance_reads
         steps = []
         try:
@@ -239,6 +241,8 @@ class Scheduler:
         if not ready:
             if self.finance_due("setup", at, timedelta(hours=1)):
                 steps.append(("finance_setup", lambda c: finance.ensure_setup(c, self.store.settings.owner_email)))
+                if self.onboarding is not None:        # its own step: a Finance set up now builds the Bookkeeper now
+                    steps.append(("bookkeeper", lambda c: bookkeeper.ensure(c, self.onboarding, self.auth)))
         else:
             if waiting:
                 steps.append(("finance_events", lambda c: finance.drain_events(c, stamp(at))))

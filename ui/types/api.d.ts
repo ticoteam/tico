@@ -1577,7 +1577,7 @@ export type FinanceInbox = {
   currency: string;
   items: Array<{
   id: string;
-  kind: "uncategorized" | "bill_to_enter" | "unmatched_receipt" | "missing_receipt" | "bill_due" | "invoice_overdue" | "budget_near_limit" | "sync_failed" | "period_ready";
+  kind: "uncategorized" | "bill_to_enter" | "unmatched_receipt" | "missing_receipt" | "bill_due" | "invoice_overdue" | "budget_near_limit" | "sync_failed" | "period_ready" | "unreconciled" | "bill_email";
   label: string;
 }>;
   more: Array<string>;
@@ -6065,7 +6065,7 @@ export type GetFinanceMetricParams = {
   budget_id?: string | null;
   days?: number | null;
   end?: string | null;
-  name: "cash" | "burn" | "runway_months" | "revenue" | "spend" | "budget_remaining" | "budget_pct_used" | "ap_due" | "ar_overdue" | "uncategorized_count" | "unreconciled_days";
+  name: "cash" | "burn" | "runway_months" | "revenue" | "spend" | "budget_remaining" | "budget_pct_used" | "ap_due" | "ar_overdue" | "uncategorized_count" | "unreconciled_days" | "duplicate_charges" | "price_increases";
   start?: string | null;
   team?: string | null;
   teammate?: string | null;
@@ -8123,7 +8123,7 @@ export type SearchFinanceParams = {
   contact_kind?: "vendor" | "customer" | "both" | null;
   cursor?: string | null;
   end?: string | null;
-  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | "account" | null;
   limit?: number;
   money_account_id?: string | null;
   q?: string;

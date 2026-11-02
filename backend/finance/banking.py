@@ -59,6 +59,28 @@ def _review_match(ctx: Ctx, fid: str, t: F.FeedTxn, found: str) -> None:
         payload["candidates"] = documents.match_candidates(ctx, t)
     event(ctx, CATEGORY_EVENT, fid, payload)
 
+def sync_failed(ctx: Ctx, cid: str, prior: str, why: str) -> None:
+    """A bank sync that failed tells the owner what failed (spec 11: no BotOps in the way). `prior` is the connection's
+    status before this run: only the first failure of a run is told (one finance.sync.failed event and one keeper
+    notice, as budget warnings send theirs). A retry that still fails says nothing more; a run after a clean sync is
+    a new run."""
+    if prior == "error":
+        return
+    row = ctx.c.execute("SELECT name, provider FROM fin_connections WHERE id=?", (cid,)).fetchone()
+    label = (str(row[0]) if row and row[0] else f"the {row[1] if row else 'bank'} connection")
+    event(ctx, "finance.sync.failed", cid, {"connection_id": cid}, ctx.at)
+    owner = ctx.org.owner
+    if not owner:
+        return
+    ctx.c.execute("SAVEPOINT fin_sync_notice")
+    try:
+        tico.notice(ctx.c, owner, f"Finance could not sync {label}: {why[:300]}. Tico keeps retrying on its own; "
+                                  "this is the one notice for this failure.")
+        ctx.c.execute("RELEASE fin_sync_notice")
+    except tico.Refused:
+        ctx.c.execute("ROLLBACK TO fin_sync_notice")
+        ctx.c.execute("RELEASE fin_sync_notice")
+
 
 def by_code(ctx: Ctx, code: str) -> L.Account | None:
     return next((a for a in ctx.accounts.values() if a.code == code), None)

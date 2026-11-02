@@ -29,7 +29,7 @@ DAY = r"^\d{4}-\d{2}-\d{2}$"
 Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
 Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
 Metric = Literal["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
-                 "ar_overdue", "uncategorized_count", "unreconciled_days"]
+                 "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases"]
 
 
 class FinanceConnectionRequest(Contract):
@@ -488,7 +488,7 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/finance/search")
     def finance_search(request: Request,
                        kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location",
-                                     "project", "po", "estimate"] | None = None,
+                                     "project", "po", "estimate", "account"] | None = None,
                        q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
                        vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),

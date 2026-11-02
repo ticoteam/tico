@@ -1150,9 +1150,24 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
 
 
 METRICS = ("cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
-           "ar_overdue", "uncategorized_count", "unreconciled_days")
+           "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases")
 STALE_HOURS = 24            # bank data older than this marks a cash metric stale
+WATCH_LABELS = 10           # the Watch findings a metric names (its count is the whole)
 RUNWAY_MONTHS = 3           # runway divides cash by the average burn of this many full months
+
+
+def _worst_gap(s: _Seen, money_ids: Sequence[str]) -> int | None:
+    """Days since the oldest reconciliation among these money accounts; None when none has a feed yet."""
+    today = dates.day(s.ctx.today)
+    worst: int | None = None
+    for m in money_ids:
+        through = SK.locked_through(s.ctx.c, m)
+        first = SK.first_feed_day(s.ctx.c, m)
+        if not first:
+            continue
+        gap = max(0, (today - dates.day(through)).days) if through else (today - dates.day(first)).days
+        worst = gap if worst is None else max(worst, gap)
+    return worst
 
 
 def _data_as_of(s: _Seen, money_ids: Sequence[str]) -> tuple[str | None, bool]:
@@ -1212,7 +1227,8 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
     window (this month by default); budget_remaining / budget_pct_used: one budget; ap_due: open bills due within
     `days` (default 7, overdue included); ar_overdue: invoices at least `days` (default 1) late;
     uncategorized_count: settled rows waiting for a category (last 90 days); unreconciled_days: days since the
-    oldest reconciliation of the money accounts the viewer sees."""
+    oldest reconciliation of the money accounts the viewer sees; duplicate_charges, price_increases: how many Watch
+    findings of that kind the posted debits show now, with their first labels."""
     if name not in METRICS:
         raise invalid(f"a metric is {'|'.join(METRICS)}")
     s = _open(c, viewer, at)
@@ -1265,16 +1281,16 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
         return {**base, "value": len(rows), "more": more, "unit": "count", "data_as_of": data_as_of, "stale": stale}
     if name == "unreconciled_days":
         money_ids, _ = tab.feed_scope(s.ctx, s.view)
-        worst: int | None = None
-        for m in money_ids:
-            through = SK.locked_through(c, m)
-            first = SK.first_feed_day(c, m)
-            if not first:
-                continue
-            gap = max(0, (today - dates.day(through)).days) if through else (today - dates.day(first)).days
-            worst = gap if worst is None else max(worst, gap)
         data_as_of, stale = _data_as_of(s, money_ids)
-        return {**base, "value": worst or 0, "unit": "days", "data_as_of": data_as_of, "stale": stale}
+        return {**base, "value": _worst_gap(s, money_ids) or 0, "unit": "days", "data_as_of": data_as_of, "stale": stale}
+    if name in ("duplicate_charges", "price_increases"):
+        # The same Watch checks the daily Watch runs (watch_findings), read as a count with the first few labels; plain
+        # code over the viewer's posted debits, no model call.
+        found = (W.duplicate_charges if name == "duplicate_charges" else W.price_increases)(_charges(c, viewer, s.ctx.at))
+        money_ids, _ = tab.feed_scope(s.ctx, s.view)
+        data_as_of, stale = _data_as_of(s, money_ids)
+        return {**base, "value": len(found), "unit": "count", "labels": [str(f["label"])[:160] for f in found[:WATCH_LABELS]],
+                "data_as_of": data_as_of, "stale": stale}
     a, z = _window(start, end, s.ctx)
     if name == "burn":
         burn, excluded = _net_burn(c, viewer, a, z, at)
@@ -1410,6 +1426,7 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 # ------------------------------------------------------------------------------------------------ search
 SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project", "po",
               "estimate")
+NAMED_ONLY_KINDS = ("account",)     # searched when named (the chart a bot codes lines to), not in the first few of each
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
@@ -1437,6 +1454,24 @@ def _search_rules(ctx: Ctx, viewer: str, q: str, filters: Mapping[str, object], 
              "words": str(r["words"]), "active": bool(r["active"]),
              "priority": int(r["priority"]) if str(r["kind"]) == "posting" else None} for r in page], \
         (str(page[-1]["id"]) if len(rows) > most else None)
+
+
+def _search_accounts(ctx: Ctx, viewer: str, q: str, most: int, cursor: str | None) -> tuple[list[Row], str | None]:
+    """The active accounts the viewer may post to, matched by code or name, in code order: the same lines the bill,
+    invoice and journal forms list (tab_ap.chart), so a bot can find the account id of a line. Paged by (code, id)."""
+    held = ctx.rights(viewer)
+    if not any(R.has(ctx.org, viewer, r, held) for r in (R.BOOK, R.AP, R.AR)):
+        raise denied("the chart is for teammates who write to the books")
+    view = ctx.view(viewer)
+    parts = tab.decode_cursor(cursor) or []
+    after = (parts[0], parts[1]) if len(parts) == 2 else ("", "")
+    found = [a for a in sorted(ctx.accounts.values(), key=lambda x: (x.code, x.id))
+             if a.active and (view.everything or view.sees_account(a)) and (a.code, a.id) > after
+             and (not q or q.lower() in f"{a.code} {a.name}".lower())]
+    page = found[:most]
+    nxt = tab.encode_cursor([page[-1].code, page[-1].id]) if len(found) > most and page else None
+    return [{"kind": "account", "id": a.id, "code": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
+             "label": f"{a.code} {a.name}"} for a in page], nxt
 
 
 def _record_row(kind: str, r: Any) -> Row:
@@ -1528,9 +1563,10 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
     start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
     po/estimate: status, contact_id, and a search over number, memo and contact name;
-    item/location/project: active (1 keeps only active records)."""
-    if kind is not None and kind not in SEARCH_KINDS:
-        raise invalid(f"kind is {'|'.join(SEARCH_KINDS)}")
+    item/location/project: active (1 keeps only active records); account (named only): a search over code and name,
+    the active accounts the forms list, in code order."""
+    if kind is not None and kind not in (*SEARCH_KINDS, *NAMED_ONLY_KINDS):
+        raise invalid(f"kind is {'|'.join((*SEARCH_KINDS, *NAMED_ONLY_KINDS))}")
     if cursor and kind is None:
         raise invalid("a cursor pages one kind; name it")
     f = filters or {}
@@ -1587,6 +1623,9 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 results += [{**r, "label": f"{r['nickname'] or r['holder']} ••{r['last4'] or ''}".strip()}
                             for r in cast(list[Row], found["cards"])]
                 nxt = cast(str | None, found["next"])
+            elif k == "account":
+                listed_accounts, nxt = _search_accounts(ctx, viewer, text, most, cursor)
+                results += listed_accounts
             elif k in RECORD_KINDS:
                 _in_view_or_refuse(view)
                 parts = tab.decode_cursor(cursor)
@@ -1611,9 +1650,10 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
 
 # ------------------------------------------------------------------------------------------------ inbox
 INBOX_KINDS = ("uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due",
-               "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready")
+               "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready", "unreconciled", "bill_email")
 INBOX_EACH = 200            # items one kind contributes before its count says "more"
 RECEIPT_DAYS = 90
+STATEMENT_DAYS = 35         # a money account reconciled longer ago than a statement month is an unreconciled item
 
 
 def _money(amount: int) -> str:
@@ -1624,7 +1664,8 @@ def inbox(c: sqlite3.Connection, viewer: str, *, limit: int = 50, cursor: str | 
           at: str | None = None) -> Row:
     """The viewer's Finance work queue (§7.1): uncategorized rows, bills to enter (drafts, e.g. from the bills
     address), unmatched and missing receipts, bills due within a week, overdue invoices, budgets near their limit,
-    failed syncs and months ready to close. Each item has its ids and a short label; `counts` covers every kind
+    failed syncs, months ready to close, books not reconciled for over a month, and emailed bills Finance did not take
+    (bill_email). Each item has its ids and a short label; `counts` covers every kind
     (`more` when a kind has over 200). With `kind`, that kind alone, paged from its own query past the 200 (to
     INBOX_DEEP), so a reader that follows `next_cursor` reaches every item."""
     s = _open(c, viewer, at)
@@ -1739,6 +1780,24 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
                    "label": f"{x['name'] or x['provider']}: {str(x['last_error'] or 'sync failed')[:120]}"}
                   for x in SK.connections(c) if str(x["status"]) == "error"]
         return failed[skip:skip + n], len(failed) > skip + n
+    if kind == "unreconciled":
+        if not R.has(ctx.org, s.view.viewer, R.BOOK, held):
+            return None
+        money_ids, _ = tab.feed_scope(ctx, view)
+        days = _worst_gap(s, money_ids)
+        late: list[Row] = ([{"id": "books", "days": days, "label": f"{days} days since the books were reconciled"}]
+                           if days is not None and days > STATEMENT_DAYS else [])
+        return late[skip:skip + n], len(late) > skip + n
+    if kind == "bill_email":                 # a bill to enter (bill_create needs AP): by the right, not the view
+        if not R.has(ctx.org, s.view.viewer, R.AP, held):
+            return None
+        from .. import bills_address       # the emailed bills keep their own rows, outside the fin_ tables
+        emailed = bills_address.for_bookkeeper(c, skip + n + 1)
+        return [{"id": str(r["id"]), "file_id": str(r["file_id"] or ""), "date": str(r["received_at"] or "")[:10],
+                 "status": str(r["state"]) + str(r["code"] or ""),
+                 "label": (f"{r['sender'] or 'Unknown sender'}: {r['subject'] or r['name']}"[:160]
+                           + (f" (file {r['file_id']})" if r["file_id"] else ""))}
+                for r in emailed[skip:skip + n]], len(emailed) > skip + n
     if not R.has(ctx.org, s.view.viewer, R.BOOK, held):      # period_ready
         return None
     ready: list[Row] = [{"id": p, "month": p, "label": f"{p} is ready to close"} for p in _closable(c, ctx)
@@ -1870,7 +1929,7 @@ def transactions(c: sqlite3.Connection, viewer: str, *, teams: Iterable[str] = (
 
 
 # ------------------------------------------------------------------------------------------------ watch
-WATCH_HISTORY_DAYS = 120       # posted debits read for duplicate charges and price increases
+WATCH_HISTORY_DAYS = 120       # posted debits read for duplicate charges, price increases and unused subscriptions
 WATCH_PAGES = 10              # pages of 200 read per check of the debits
 
 
@@ -1905,7 +1964,8 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
                     or not payee:
                 continue
             out.append(W.Charge(id=str(row["id"]), payee=payee, amount=-amount,
-                                day=date.fromisoformat(str(row["date"])[:10])))
+                                day=date.fromisoformat(str(row["date"])[:10]),
+                                shown=str(row.get("counterparty") or "").strip(), card=str(row.get("card_id") or "")))
         cursor = cast(str | None, page.get("next"))
         if not cursor:
             break
@@ -1914,7 +1974,8 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
 
 def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str, Any]]:
     """Every Watch check's findings now: runway, unusual spend per payee over the last four months, and the posted
-    debits read for duplicate charges and price increases. Every read goes through the viewer's view."""
+    debits read for duplicate charges, price increases and unused subscriptions (the cards an archived or idle bot holds
+    come from the hub's bot facts). Every read goes through the viewer's view."""
     today = date.fromisoformat(at[:10])
     found: list[dict[str, Any]] = []
     figures: Row = {}
@@ -1941,6 +2002,7 @@ def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str
     found += W.unusual_spend(series, months[-1][0])
     charges = _charges(c, viewer, at)
     found += W.duplicate_charges(charges) + W.price_increases(charges)
+    found += W.unused_subscriptions(charges, ST.idle_bot_cards(c, at, W.UNUSED_IDLE_DAYS), today)
     return found
 
 

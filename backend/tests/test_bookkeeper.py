@@ -18,7 +18,7 @@ from backend.tests.test_onboarding import draft, environment, machine, signed_in
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper"
 DIGEST = "a" * 64
-DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards"}
+DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.rules"}
 PDF = b"%PDF-1.4 Acme invoice 1042"
 
 
@@ -73,6 +73,28 @@ def test_it_is_built_once_outside_the_org_chart_with_exactly_its_default_rights(
     check(api)
     with store.read() as c:
         assert "finance.pay" not in rights(c)
+
+
+def test_an_install_from_before_rules_gets_that_one_right_once(environment):
+    """An install built before finance.rules was a default has the five rights and no rights_version event. Its next
+    start grants rules once, and a later revoke of rules sticks."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        owner = "human:" + api.app.state.auth.owner_id(c)
+        assert FA.act(c, owner, "right_revoke", {"teammate": BK.ACTOR, "right": "finance.rules"}, "revoke-rules").status == "committed"
+        c.execute("DELETE FROM events WHERE action='bookkeeper.rights_version'")
+    ensure(api)
+    with store.read() as c:
+        assert rights(c) == DEFAULT_RIGHTS
+        assert c.execute("SELECT count(*) FROM events WHERE action='bookkeeper.rights_version'").fetchone()[0] == 1
+    with store.transaction() as c:
+        owner = "human:" + api.app.state.auth.owner_id(c)
+        assert FA.act(c, owner, "right_revoke", {"teammate": BK.ACTOR, "right": "finance.rules"}, "revoke-rules-again").status == "committed"
+    ensure(api)
+    with store.read() as c:
+        assert "finance.rules" not in rights(c)
 
 
 def test_an_empty_queue_is_a_quiet_check_and_news_opens_one_private_task_once(environment):
@@ -255,3 +277,25 @@ def test_only_the_failed_bills_the_body_lists_are_reported(environment, monkeypa
     text, shown = BK.render_shown(items, {"bill_email": 25})
     assert 0 < len(shown) < 25 and all(f"- {x['id']} " in text for x in shown)
     assert all(f"- {x['id']} " not in text or x in shown for x in items[len(shown) + 1:])
+
+
+def test_the_tick_that_sets_finance_up_builds_the_bookkeeper_too(environment):
+    """Finance set up by the hourly scheduler tick (not at a start) builds the Bookkeeper in that same tick. The
+    scheduler gets the onboarding and auth the app built it with (backend/app.py), else the Bookkeeper waited for the
+    next restart or a computer's enrollment."""
+    from backend.scheduler import Scheduler
+    api = built(environment)
+    store = api.app.state.store
+
+    def granted(c):   # the Bookkeeper's Finance rights; only ensure grants them, once Finance is set up
+        if not FR.is_set_up(c):
+            return set()
+        return {r for t in FR.access(c, BK.ACTOR)["teammates"] if t["teammate"] == BK.ACTOR for r in t["rights"]}
+    with store.read() as c:
+        assert not FR.is_set_up(c) and granted(c) == set()
+    failures = []
+    Scheduler(store, api.app.state.execution, onboarding=api.app.state.onboarding,
+              auth=api.app.state.auth).finance_tick(H.parse_ts(H.now()), failures)
+    assert failures == []
+    with store.read() as c:
+        assert FR.is_set_up(c) and granted(c) == DEFAULT_RIGHTS
