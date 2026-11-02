@@ -1165,7 +1165,7 @@ def sweep(conn, actor, unverified, *, today=None, owner_email=None):
         listening.append({"id": task["id"], "entity_id": row["id"]})
     return {"owner_task": owner_task["id"] if owner_task else None,
             "listening_tasks": listening,
-            "delta": {"updated_at": delta["updated_at"]} if delta else None}
+            "delta": {"updated": delta["updated"]} if delta else None}
 
 
 # ----------------------------------------------------------------------------- narrative pages

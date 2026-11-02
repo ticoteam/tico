@@ -7,14 +7,13 @@ from collections.abc import Mapping
 from typing import cast
 
 from . import handlers
-from .budgeting import LIMIT_EVENT, WARN_EVENT, actual, event_period, state, subtree
+from .budgeting import LIMIT_EVENT, WARN_EVENT, event_period, state, subtree
 from .context import is_set_up, load
 from .core import budgets as B
 from .core import dates
 from .core.org import SYSTEM
 from .posting import ensure_period
 from .setup import AI, VIDEO, setup
-from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
 from .store import usage as SU
@@ -107,6 +106,32 @@ def open_next_period(c: sqlite3.Connection, at: str | None = None) -> str | None
     return ensure_period(ctx, dates.add_months(dates.day(ctx.today).replace(day=1), 1).isoformat())
 
 
+def amortize(c: sqlite3.Connection, at: str | None = None) -> int:
+    """Expense the prepaid bill months that have come due (spec §4.4, backend/finance/prepaids.py), as system work
+    through the one write path. A dry run first: a month that would be refused writes nothing. A month that does not
+    post is asked for (one Needs-you per line and month) and tried again on the next look. How many months posted."""
+    from . import actions, prepaids
+    if not is_set_up(c):
+        return 0
+    ctx = load(c, at)
+    if ctx.book.mode == "mirror":
+        return 0
+    posted = 0
+    for line_id, month in prepaids.due_months(c, ctx):
+        body = {"bill_line_id": line_id, "month": month}
+        key = f"prepaid:{line_id}:{month}"
+        check = actions.act(c, SYSTEM, prepaids.KIND, body, key, dry_run=True, at=at)
+        if check.status != "committed":
+            prepaids.ask_not_posted(ctx, line_id, month, check.reason)
+            continue
+        done = actions.act(c, SYSTEM, prepaids.KIND, body, key, at=at)
+        if done.status == "committed":
+            posted += 1
+        else:
+            prepaids.ask_not_posted(ctx, line_id, month, done.reason)
+    return posted
+
+
 CASH_EVENT, READY_EVENT = "finance.cash.below", "finance.period.ready"
 CASH_STATE = "finance_cash_below_state"  # whether cash was under the floor at the last look, and how many crossings
 
@@ -118,12 +143,13 @@ def watch(c: sqlite3.Connection, at: str | None = None) -> int:
     froze lift once their budgets have room again. How many it raised, paid or lifted."""
     if not is_set_up(c):
         return 0
-    from . import documents, reads
+    from . import delivery, documents, reads
     from .banking import event
     from .payments import CASH_BELOW_KEY
     n = documents.pay_due(load(c, at))
     ctx = load(c, at)
     n += documents.watch(ctx)
+    n += delivery.watch(ctx)
     floor = SL.setting(c, CASH_BELOW_KEY)
     cash = reads.company_cash(c, at) if isinstance(floor, int) and floor > 0 else None
     was = cast(dict[str, object], SL.setting(c, CASH_STATE) or {})
@@ -141,7 +167,7 @@ def watch(c: sqlite3.Connection, at: str | None = None) -> int:
         event(ctx, READY_EVENT, month, {"month": month})
         n += 1
     from . import cards
-    n += cards.unfreeze_with_room(ctx)      # a new period (or any room again) lifts the cutoff freezes (§8.2)
+    n += cards.lift_through_actions(ctx)    # a new period (or any room again) lifts the cutoff freezes (§8.2)
     return n
 
 
@@ -158,9 +184,7 @@ def company_ai_budget(c: sqlite3.Connection, at: str | None = None) -> tuple[str
             st = state(ctx, b.id, dates.day(ctx.today))
             if st.amount is None:
                 return None
-            spent = actual(ctx, b, st.period_start, st.period_end) + \
-                SB.held(c, subtree(ctx, b.id), st.period_start, st.period_end)
-            return b.at_limit, st, spent
+            return b.at_limit, st, st.spent
     return None
 
 

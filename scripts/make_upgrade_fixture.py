@@ -21,20 +21,38 @@ from pathlib import Path
 TS = "2026-01-01T00:00:00Z"
 
 
+def _cols(c, table, *names):
+    """`names` as this database spells them: each is a (current, before the cleanup renames) pair or one name, and the
+    pair's older spelling is used when the table has no column by the current one (journey-test.sh seeds the previous
+    release, which may predate the renames)."""
+    have = {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
+    return ",".join(n if isinstance(n, str) else (n[0] if n[0] in have else n[1]) for n in names)
+
+
 def seed(c, bots="INSERT"):
     """Bots, a conversation with messages and tasks, written as an older release wrote them: the rows an upgrade
     must keep."""
+    created = ("created_at", "created")
+    keyed = "id" in {row[1] for row in c.execute("PRAGMA table_info(bots)")}   # bots gained an id in the cleanup
     for slug in ("coo", "cmo", "seo"):
-        c.execute(f"{bots} INTO bots(slug,display_name,runtime,state,created_at) VALUES(?,?,?,?,?)",
-                  (slug, slug.upper(), "codex", "active", TS))
-    c.execute("INSERT INTO conversations(id,kind,subject,participants,created_at,last_message_at) "
-              "VALUES('c1','direct','Launch plan','[\"bot:coo\",\"human:ana\"]',?,?)", (TS, TS))
+        names = _cols(c, "bots", *(["id"] if keyed else []), "slug", "display_name", "runtime", "state", created)
+        # a bot's id is its slug (hubdb.new_bot_id for product bots), and actors are `bot:<id>`, so `bot:coo` resolves
+        values = ([slug] if keyed else []) + [slug, slug.upper(), "codex", "active", TS]
+        c.execute(f"{bots} INTO bots({names}) VALUES({','.join('?' * len(values))})", values)
+    names = _cols(c, "conversations", "id", "kind", "subject", ("participants", "participants_json"), created,
+                  "last_message_at")
+    c.execute(f"INSERT INTO conversations({names}) VALUES('c1','direct','Launch plan','[\"bot:coo\",\"human:ana\"]',?,?)",
+              (TS, TS))
+    names = _cols(c, "messages", "id", "conversation_id", ("sender_id", "from_actor"), ("recipient_id", "to_actor"), "kind",
+                  "body", created)
     for n in (1, 2):
-        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
-                  "VALUES(?,?,?,?,?,?,?)", (f"m{n}", "c1", "human:ana", "bot:coo", "message", f"hello {n}", TS))
+        c.execute(f"INSERT INTO messages({names}) VALUES(?,?,?,?,?,?,?)",
+                  (f"m{n}", "c1", "human:ana", "bot:coo", "message", f"hello {n}", TS))
+    names = _cols(c, "tasks", "id", "title", "body", ("requester_id", "requester"), ("owner_id", "owner"), "status",
+                  "conversation_id", created, ("updated_at", "updated"))
     for n in (1, 2, 3):
-        c.execute("INSERT INTO tasks(id,title,body,requester_id,owner_id,status,conversation_id,created_at,updated_at) "
-                  "VALUES(?,?,?,?,?,?,?,?,?)", (f"t{n}", f"Task {n}", "", "human:ana", "bot:coo", "open", "c1", TS, TS))
+        c.execute(f"INSERT INTO tasks({names}) VALUES(?,?,?,?,?,?,?,?,?)",
+                  (f"t{n}", f"Task {n}", "", "human:ana", "bot:coo", "open", "c1", TS, TS))
 
 
 def build(out):

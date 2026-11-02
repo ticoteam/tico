@@ -57,6 +57,11 @@ def update(c: sqlite3.Connection, table: str, row_id: str, fields: Mapping[str, 
     return c.execute(sql, [*(fields[k] for k in cols), row_id, *args]).rowcount
 
 
+def set_auth_commitment(c: sqlite3.Connection, hold_id: str, commitment_id: str) -> int:
+    """The commitment of the card authorizations a hold was taken for, moved with the hold's (a bill claims both)."""
+    return c.execute("UPDATE fin_card_auths SET commitment_id=? WHERE hold_id=?", (commitment_id, hold_id)).rowcount
+
+
 def get(c: sqlite3.Connection, table: str, row_id: str) -> Any:
     assert table in TABLES
     return c.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone()
@@ -110,6 +115,12 @@ def set_provider_users(c: sqlite3.Connection, connection_id: str, users: Sequenc
         c.execute("INSERT OR REPLACE INTO fin_provider_users(connection_id, provider_user_id, name, email, role, "
                   "updated_at) VALUES(?,?,?,?,?,?)", (connection_id, str(u.get("id") or ""), str(u.get("name") or ""),
                                                       str(u.get("email") or ""), str(u.get("role") or ""), at))
+
+
+def provider_users_on(c: sqlite3.Connection, connection_id: str) -> list[Any]:
+    """The users of one connection, as its provider last listed them (set_provider_users)."""
+    return c.execute("SELECT * FROM fin_provider_users WHERE connection_id=? AND provider_user_id<>'' "
+                     "ORDER BY provider_user_id", (connection_id,)).fetchall()
 
 
 def provider_users(c: sqlite3.Connection) -> list[Any]:
@@ -238,18 +249,27 @@ def rows_of_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
 
 def feed_window(c: sqlite3.Connection, money_account_id: str, through: str) -> list[Any]:
     """Settled rows on or before `through` that are in the books (posted or matched to an entry) and that no done
-    reconciliation cleared yet. A `new` row is not in the books, so it can't be cleared: it stays outstanding."""
+    reconciliation cleared yet. A `new` row is not in the books, so it can't be cleared: it stays outstanding. A covered
+    row (spec §4.1) is history the raw totals carry, so it counts without an entry."""
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND txn_date<=? AND pending=0 AND "
-                     "status NOT IN ('ignored','new') AND entry_id IS NOT NULL AND reconciliation_id IS NULL "
-                     "ORDER BY txn_date, id",
+                     "status NOT IN ('ignored','new') AND (entry_id IS NOT NULL OR status='covered') AND "
+                     "reconciliation_id IS NULL ORDER BY txn_date, id",
                      (money_account_id, through)).fetchall()
+
+
+def open_feed_rows(c: sqlite3.Connection, book_id: str) -> list[Any]:
+    """A book's settled rows that no entry holds (new or covered): what a raw-totals month can cover or uncover."""
+    return c.execute("SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id WHERE "
+                     "m.book_id=? AND f.status IN ('new','covered') AND f.pending=0 AND f.entry_id IS NULL "
+                     "ORDER BY f.txn_date, f.id", (book_id,)).fetchall()
 
 
 def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_account_id: str,
                 through: str) -> list[Any]:
     """This money account's rows no done reconciliation cleared, each with what its entries moved on the account's GL
-    line: `through`, every entry ever posted for it (originals, their reversals, replacements, a shared transfer)
-    dated through that day; `live`, its current posted entry, whatever its date. A Stripe row in a day's summary shares
+    line: `through`, every entry ever posted for it (originals, their reversals, replacements, a shared transfer, and
+    the entry the row took for a payment marked paid from the account, expected_match) dated through that day; `live`,
+    its current posted entry, whatever its date. A Stripe row in a day's summary shares
     its entry with the day's other rows, so it counts its own amount (its net) rather than the whole entry's line. A row
     that left its summary keeps that summary's amount through the days before the summary was reversed (`summary_entry`),
     since the closed period it was booked in still holds it."""
@@ -262,9 +282,10 @@ def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_a
         f"SELECT f.id, (CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
         "AND e.status='posted' AND e.entry_date<=:through) THEN f.amount ELSE 0 END ELSE "
         "COALESCE((SELECT SUM(l.amount) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id AND "
-        "l.account_id=:gl WHERE e.book_id=:book AND e.source IN ('bank','card') AND e.entry_date<=:through AND "
-        "(e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':' OR (e.source_id LIKE 'transfer:%' "
-        "AND instr(e.source_id, f.id)>0))), 0) END) + "
+        "l.account_id=:gl WHERE e.book_id=:book AND e.entry_date<=:through AND (e.id=f.entry_id OR "
+        "e.reverses_id=f.entry_id OR (e.source IN ('bank','card') AND (e.source_id=f.id OR "
+        "substr(e.source_id, 1, length(f.id) + 1)=f.id || ':' OR (e.source_id LIKE 'transfer:%' "
+        "AND instr(e.source_id, f.id)>0))))), 0) END) + "
         f"{left_share} AS through_amount, "
         f"CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
         "AND e.status='posted') THEN f.amount ELSE 0 END ELSE "
@@ -274,14 +295,37 @@ def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_a
         {"gl": gl_account_id, "book": book_id, "through": through, "money": money_account_id}).fetchall()
 
 
-def settled_total(c: sqlite3.Connection, money_account_id: str) -> tuple[int, str]:
-    """What the provider's current balance holds of this account's feed: the total of its settled rows (a canceled,
-    failed, blocked or reversed one moved nothing) and the earliest such row's day ("" with none). provider_status is
-    Mercury's own word for the row, so it keeps Mercury's spelling."""
-    row = c.execute("SELECT COALESCE(SUM(amount), 0), COALESCE(MIN(txn_date), '') FROM fin_feed_txns WHERE "
-                    "money_account_id=? AND pending=0 AND COALESCE(provider_status, '') NOT IN "
-                    "('cancelled','failed','blocked','reversed')", (money_account_id,)).fetchone()
+def holding(kind: str) -> str:
+    """The rows a provider's balance holds, as SQL. A Stripe balance holds every balance transaction, pending ones too.
+    A bank or card balance holds the settled rows that moved: a pending hold, or a row a provider canceled, failed,
+    blocked or reversed, moved nothing. provider_status is Mercury's own word for the row, so it keeps Mercury's
+    spelling."""
+    if kind == "stripe":
+        return "1=1"
+    return "pending=0 AND COALESCE(provider_status, '') NOT IN ('cancelled','failed','blocked','reversed')"
+
+
+def settled_total(c: sqlite3.Connection, money_account_id: str, kind: str = "") -> tuple[int, str]:
+    """What the provider's current balance holds of this account's feed (holding): the total of those rows, and the
+    earliest one's day ("" with none)."""
+    row = c.execute(f"SELECT COALESCE(SUM(amount), 0), COALESCE(MIN(txn_date), '') FROM fin_feed_txns WHERE "
+                    f"money_account_id=? AND {holding(kind)}", (money_account_id,)).fetchone()
     return int(row[0]), str(row[1])
+
+
+def uncovered_total(c: sqlite3.Connection, money_account_id: str, kind: str = "") -> int:
+    """The total of the rows the balance holds that the books carry (spec §4.1): the rows whose effect they hold, or will
+    once they post. Covered history and a row a person ignored (it never posts) are left out: the opening carries them."""
+    row = c.execute(f"SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=? AND "
+                    f"{holding(kind)} AND status NOT IN ('covered','ignored')", (money_account_id,)).fetchone()
+    return int(row[0])
+
+
+def money_on_line(c: sqlite3.Connection, book_id: str, account_id: str) -> str:
+    """The lowest-id money account on one GL line ("" with none): the one that counts the line's raw-totals movement."""
+    row = c.execute("SELECT MIN(id) FROM fin_money_accounts WHERE book_id=? AND account_id=?",
+                    (book_id, account_id)).fetchone()
+    return str(row[0] or "")
 
 
 def opening_entry(c: sqlite3.Connection, book_id: str, money_account_id: str) -> Any:
@@ -408,6 +452,14 @@ def cards_on_budgets(c: sqlite3.Connection, budget_ids: Sequence[str]) -> list[A
                      list(budget_ids)).fetchall()
 
 
+def budgets_with_cards(c: sqlite3.Connection, budget_ids: Sequence[str]) -> set[str]:
+    """The budgets a card that isn't canceled draws on: enforced by that card's limit (spec §8.2)."""
+    if not budget_ids:
+        return set()
+    return {str(r[0]) for r in c.execute(f"SELECT DISTINCT budget_id FROM fin_cards WHERE budget_id IN "
+                                         f"({_marks(budget_ids)}) AND status<>'canceled'", list(budget_ids))}
+
+
 def budget_frozen_cards(c: sqlite3.Connection, budget_ids: Sequence[str] | None) -> list[Any]:
     """Cards a budget's cutoff froze and no person has claimed since, on these budgets (every budget when None)."""
     if budget_ids is not None and not budget_ids:
@@ -451,6 +503,12 @@ def cards_unsynced(c: sqlite3.Connection, most: int) -> list[Any]:
 # ------------------------------------------------------------------------------------------------ recipients, payments
 def recipient_current(c: sqlite3.Connection, recipient_id: str) -> Any:
     return c.execute("SELECT * FROM fin_recipients WHERE id=?", (recipient_id,)).fetchone()
+
+
+def recipient_replacing(c: sqlite3.Connection, recipient_id: str) -> Any:
+    """The newest version that replaced this recipient's (its details changed), if any."""
+    return c.execute("SELECT * FROM fin_recipients WHERE replaces_id=? ORDER BY version DESC LIMIT 1",
+                     (recipient_id,)).fetchone()
 
 
 def recipients(c: sqlite3.Connection, most: int) -> list[Any]:
@@ -588,9 +646,17 @@ def payment_debit(c: sqlite3.Connection, money_account_id: str, request_id: str)
 
 
 def payments_unlinked(c: sqlite3.Connection, money_account_id: str, amount: int) -> list[Any]:
-    """Live payments from this account for this amount whose Mercury request is not known yet (a lost send answer)."""
-    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? AND COALESCE(provider_request_id, '')='' "
-                     "AND status IN ('unknown','sending') ORDER BY created_at", (money_account_id, amount)).fetchall()
+    """Live payments from this account for this amount whose Mercury request is not known yet: a lost send answer, or
+    a transaction found with no request id (payments.found), whose bank row is then tied to it by its key."""
+    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? "
+                     "AND COALESCE(provider_request_id, '')='' AND status IN ('unknown','sending','submitted') "
+                     "ORDER BY created_at", (money_account_id, amount)).fetchall()
+
+
+def payments_canceled(c: sqlite3.Connection, money_account_id: str, amount: int) -> list[Any]:
+    """Canceled payments from this account for this amount: a bank debit that carries one's key was sent after all."""
+    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? AND status='canceled' "
+                     "ORDER BY created_at", (money_account_id, amount)).fetchall()
 
 
 def unknown_transfers(c: sqlite3.Connection, connection_id: str) -> list[Any]:
@@ -913,12 +979,23 @@ def document_counts(c: sqlite3.Connection, book_id: str) -> dict[str, int]:
 
 
 def lines_page(c: sqlite3.Connection, book_id: str, *, account_ids: Sequence[str], before: tuple[str, str] | None,
-               most: int, start: str = "", end: str = "", q: str = "", sources: Sequence[str] = ()) -> list[Any]:
-    """Posted lines newest first, keyset-paged on (entry_date, line id), with their entry's memo and source."""
-    if not account_ids:
+               most: int, start: str = "", end: str = "", q: str = "", sources: Sequence[str] = (),
+               balance_only_ids: Sequence[str] = ()) -> list[Any]:
+    """Posted lines newest first, keyset-paged on (entry_date, line id), with their entry's memo and source. Lines on
+    `balance_only_ids` count only when their entry has no income or expense line, on any account."""
+    if not account_ids and not balance_only_ids:
         return []
-    where = ["l.book_id=?", f"l.account_id IN ({_marks(account_ids)})"]
-    args: list[object] = [book_id, *account_ids]
+    picks: list[str] = []
+    args: list[object] = [book_id]
+    if account_ids:
+        picks.append(f"l.account_id IN ({_marks(account_ids)})")
+        args += list(account_ids)
+    if balance_only_ids:
+        picks.append(f"(l.account_id IN ({_marks(balance_only_ids)}) AND NOT EXISTS (SELECT 1 FROM fin_lines x "
+                     "JOIN fin_accounts a ON a.id=x.account_id WHERE x.entry_id=l.entry_id "
+                     "AND a.type IN ('income', 'expense')))")
+        args += list(balance_only_ids)
+    where = ["l.book_id=?", f"({' OR '.join(picks)})"]
     if sources:
         where.append(f"e.source IN ({_marks(sources)})")
         args += list(sources)
@@ -967,11 +1044,6 @@ def recipient_paid(c: sqlite3.Connection, recipient_id: str) -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ Stripe
-def feed_total(c: sqlite3.Connection, money_account_id: str) -> int:
-    """What a money account's feed rows add up to: a Stripe balance's nets, every row taken in so far."""
-    row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=?",
-                    (money_account_id,)).fetchone()
-    return int(row[0])
 
 
 def stripe_source(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], link: str) -> Any:
@@ -1013,6 +1085,19 @@ def stripe_reversal(c: sqlite3.Connection, money_account_id: str, kinds: Sequenc
                      "json_extract(raw, '$.source')=? AND json_extract(raw, '$.amount')<0 AND "
                      "status='posted' AND entry_id IS NOT NULL ORDER BY json_extract(raw, '$.created') LIMIT 1",
                      (money_account_id, *kinds, source)).fetchone()
+
+
+def refund_candidates(c: sqlite3.Connection, money_account_id: str, start: str, end: str) -> list[Any]:
+    """Posted money-out rows on this money account dated in a window: a refund's possible originals, newest first."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND amount<0 AND txn_date BETWEEN ? AND ? AND "
+                     "status='posted' AND entry_id IS NOT NULL AND pending=0 ORDER BY txn_date DESC, id DESC",
+                     (money_account_id, start, end)).fetchall()
+
+
+def refunds_of(c: sqlite3.Connection, original_id: str) -> list[Any]:
+    """The posted money-in rows that refund this money-out row (fin_feed_txns.refund_of)."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE refund_of=? AND status='posted' AND entry_id IS NOT NULL "
+                     "ORDER BY txn_date, id", (original_id,)).fetchall()
 
 
 def stripe_summary_rows(c: sqlite3.Connection, money_account_id: str) -> list[Any]:

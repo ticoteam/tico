@@ -51,9 +51,10 @@ def marker(c: sqlite3.Connection, book_id: str, month: str) -> dict[str, Any] | 
     return {"month": month, "restatements": len(json.loads(str(row["restated"])))}
 
 
-def restate(c: sqlite3.Connection, book_id: str, month: str, by: str, at: str) -> int:
-    """Flag a closed month whose accrual totals now differ from its snapshot: the accounts that moved, with their old
-    and new totals (spec 10). Returns how many accounts changed; a month that still matches takes no flag."""
+def restate(c: sqlite3.Connection, book_id: str, month: str) -> int:
+    """How many accounts of a closed month now total differently from its snapshot (spec 10). Reports only: it writes
+    no flag. The edit that moved the totals flags the snapshot once, where it posts (mirror._restate), so a check that
+    runs alongside that edit cannot count it twice. A month that still matches returns 0."""
     row = SL.snapshot(c, book_id, month)
     if row is None:
         return 0
@@ -61,12 +62,24 @@ def restate(c: sqlite3.Connection, book_id: str, month: str, by: str, at: str) -
     was_doc: dict[str, Any] = json.loads(str(row["pnl"]))
     was = {str(k): int(v) for k, v in was_doc["accrual"].items()}
     now = _sums(SL.rollup_rows(c, book_id, first.isoformat(), last.isoformat()))
-    changes = {k: [was.get(k, 0), now.get(k, 0)] for k in sorted(set(was) | set(now)) if was.get(k, 0) != now.get(k, 0)}
-    if changes:
-        restated: list[Any] = json.loads(str(row["restated"]))
-        restated.append({"at": at, "by": by, "changes": changes})
-        SL.set_restated(c, str(row["id"]), json.dumps(restated, sort_keys=True))
-    return len(changes)
+    return len({k for k in set(was) | set(now) if was.get(k, 0) != now.get(k, 0)})
+
+
+def flag(c: sqlite3.Connection, book_id: str, month: str, by: str, at: str, change: str) -> int:
+    """Flag a closed month on its snapshot because an edit landed in it (spec 10: a mirrored record edited inside a
+    closed month). The flag keeps when it happened and what kind of change it was, never the entries or amounts, so a
+    private line's detail stays private. Returns the flags the snapshot holds; 0 without a snapshot."""
+    row = SL.snapshot(c, book_id, month)
+    if row is None:
+        return 0
+    return _append(c, row, {"at": at, "by": by, "change": change})
+
+
+def _append(c: sqlite3.Connection, row: Any, entry: dict[str, Any]) -> int:
+    restated: list[Any] = json.loads(str(row["restated"]))
+    restated.append(entry)
+    SL.set_restated(c, str(row["id"]), json.dumps(restated, sort_keys=True))
+    return len(restated)
 
 
 def _sums(rows: Iterable[Any]) -> dict[str, int]:

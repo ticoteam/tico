@@ -53,7 +53,7 @@ def runner_restarts(when):
         if run.running_at_restart:
             # The runner's list still names the first bot it was running as busy for its first rounds, though that
             # bot's turn is lost with the restart.
-            run.stale_busy = {"bot": run.running_at_restart[0], "rounds": STALE_ROUNDS, "sent": 0,
+            run.stale_busy = {"bot_id": run.running_at_restart[0], "rounds": STALE_ROUNDS, "sent": 0,
                               "corrected_at": None}
         for bot in team.all:
             if bot.running:

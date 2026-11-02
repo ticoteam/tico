@@ -267,7 +267,7 @@ data: {"seq": 4120, "actor": "human:ben", "at": "2026-10-05T10:00:01.120Z", "id"
 
 id: 4121
 event: runs
-data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot": "ops", "output": {"kind": "delta", "payload": {"text": "Filed"}}}
+data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "output": {"kind": "delta", "payload": {"text": "Filed"}}}
 
 : keepalive
 ```
@@ -276,7 +276,7 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot": "ops", "outp
 |---|---|
 | `tasks` | `id` and `task`, or `gone: true` for a deleted task; `bulk: true` (no `id`) when one change touched more than 100 tasks, such as a type edit: read task lists in full |
 | `messages` | `id`, `conversation_id` and `message`, or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal` |
-| `runs` | `run_id`, `conversation_id`, `bot`, and `output` (one step of the run) or `state` (the job's state, or the run's: [Runs](status-and-state.md#runs)) |
+| `runs` | `run_id`, `conversation_id`, `bot_id`, and `output` (one step of the run) or `state` (the job's state, or the run's: [Runs](status-and-state.md#runs)) |
 | `bots` | `bot` and `status`, as `GET /api/v2/status` lists it |
 | `needs` | your own Needs-you `count` and `items`, as `GET /api/v2/needs-you`, whenever anything on it may have moved |
 

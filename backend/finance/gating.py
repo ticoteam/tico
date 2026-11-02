@@ -11,7 +11,6 @@ from .context import Ctx
 from .core import dates
 from .core import gates as G
 from .core import kinds as K
-from .core import rights as R
 from .core import validate as V
 from .core.errors import CONFLICT, DENIED, NOT_FOUND, FinanceError
 from .core.org import SYSTEM, Principal
@@ -103,6 +102,7 @@ def judge(ctx: Ctx, p: Principal, kind: str, gate: K.Gate, plan: Plan, action_id
     if verdict.outcome == "deny":
         raise Denied(verdict, found, p.actor)
     log(ctx, verdict, found, action_id, p.actor)
+    plan = replace(plan, asks=_asks(gate, verdict, plan))
     if not verdict.counts:
         return Judged(stricter(gate, verdict), plan)
     amount = found.get("amount")
@@ -117,11 +117,19 @@ def judge(ctx: Ctx, p: Principal, kind: str, gate: K.Gate, plan: Plan, action_id
     return Judged(stricter(gate, verdict), replace(plan, apply=apply))
 
 
+def _asks(gate: K.Gate, verdict: G.Verdict, plan: Plan) -> tuple[tuple[str, str], ...]:
+    """Every rule that needs approval: the planned gate, the planner's own asks (a budget past its limit) and the gate
+    rules' verdict, each with its reason. stricter() keeps only one of the gates for the approver, so the others are
+    named here too."""
+    out: dict[str, str] = dict(plan.asks)
+    if gate.outcome == "needs_approval":
+        out.setdefault(gate.rule, "")
+    if verdict.outcome == "needs_approval":
+        out.setdefault(verdict.rule, verdict.reason)
+    return tuple(out.items())
+
+
 # ------------------------------------------------------------------------------------------------ writing rules
-def _is_admin(ctx: Ctx, who: str) -> bool:
-    return R.is_admin(ctx.org, who, ctx.rights(who))
-
-
 def _gate(ctx: Ctx, who: str, kind: str) -> K.Gate:
     """A rule a bot writes or changes always needs a finance admin (§6.2); a person with finance.rules commits."""
     if who in ctx.org.bots:
@@ -235,6 +243,11 @@ rule_enable = _toggle(True)
 rule_disable = _toggle(False)
 
 
+# the rule outcomes that leave an action with the status it already has (a limit that still fits leaves a committed
+# action committed, so a rule test does not list it as a change)
+ALREADY = {"committed": ("allow", "limit"), "needs_approval": ("needs_approval",), "denied": ("deny",)}
+
+
 def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Run a draft (or saved) rule over the last 90 days of actions and feed rows the tester can see and say what it
     would have changed (a posting rule: the feed rows it would post, and where). Writes nothing but the action's own
@@ -253,7 +266,7 @@ def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         rule = rule_from(row)
     else:
         rule = G.rule_of("draft", "draft", G.parse_when(p.get("when")), G.parse_outcome(p.get("outcome")))
-    everything = _is_admin(ctx, who)
+    everything = ctx.view(who).everything  # whoever sees everything tests every actor's actions, not only their own
     day = dates.day(ctx.today)
     changed: list[Result] = []
     checked = 0
@@ -266,7 +279,7 @@ def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                                     **{k: v for k, v in body.items() if isinstance(v, (int, str, bool))}}
         checked += 1
         got = G.evaluate([replace(rule, active=True)], found, day).outcome
-        if got != "allow":
+        if got not in ("allow", *ALREADY.get(str(row["status"]), ())):
             changed.append({"action_id": str(row["id"]), "kind": str(row["kind"]), "was": str(row["status"]),
                             "would": got, "at": str(row["created_at"])})
     from .tab import sees_money_account

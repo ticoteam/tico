@@ -1317,7 +1317,10 @@ GOAL_YES = _s("The owner's plain yes to a goal read-back: turn or its message id
 def goal_read_back(api, args):
     changes = args["changes"]
     if isinstance(changes, str):
-        changes = json.loads(changes)
+        try:
+            changes = json.loads(changes)
+        except ValueError:
+            raise ValueError("changes must be a JSON array of 1 to 20 change objects") from None
     if not isinstance(changes, list) or not 1 <= len(changes) <= 20 or any(not isinstance(c, dict) for c in changes):
         raise ValueError("changes must be a JSON array of 1 to 20 change objects")
     return api.post("goals/read-back", {"changes": changes}, key=_key(args))
@@ -1344,7 +1347,10 @@ def goal_save(api, args):
         raise ValueError("path must be a goal read-back save step")
     if not args.get("on_behalf_of"):
         raise ValueError("cite the owner's plain yes with on_behalf_of")
-    body = json.loads(args["body"])
+    try:
+        body = json.loads(args["body"])
+    except ValueError:
+        raise ValueError("body must be a JSON object") from None
     if not isinstance(body, dict):
         raise ValueError("body must be a JSON object")
     return _asked(api, args).post(path.removeprefix("/api/v2/"), body, key=_key(args))
@@ -6729,12 +6735,14 @@ FINANCE_CHARS = 16000            # about 4k tokens
 FIN_OTHER = " other"             # an "Other · n" row's key, as backend/finance/reads.py OTHER: no real key starts
                                  # with a space, so a vendor named Other stays its own row
 FINANCE_MAX_CHARS = 64000        # about 16k tokens
-FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
+FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close",
+                   "sales_tax", "1099"]
+TAX_WORKPAPERS = {"sales_tax": "finance/tax/sales-tax", "1099": "finance/tax/1099"}   # spec 11: whole, full view only
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
-                   "ar_overdue", "uncategorized_count", "unreconciled_days"]
-FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card"]
+                   "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases"]
+FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card", "account"]
 FINANCE_INBOX = ["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
-                 "budget_near_limit", "sync_failed", "period_ready"]
+                 "budget_near_limit", "sync_failed", "period_ready", "unreconciled", "bill_email"]
 FIN_DAY = {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"}
 # Whole-number fields an "Other · n" row does not add up: they describe one row, not an amount.
 _FIN_NOT_ADDED = {"pct", "days_late", "priority", "depth", "level", "version", "revision", "view_version"}
@@ -6886,6 +6894,17 @@ def _fin_guard(result, budget, key=None):
     return marker
 
 
+def _fin_whole(result, budget):
+    """A tax workpaper goes whole or not at all (spec 11): a cut-down one would be partial totals, so it is never shrunk.
+    Over `budget` it is not read here; a person exports it from Finance -> Tax."""
+    size = _fin_size(result)
+    if size <= budget:
+        return result
+    return {"error": "too_big", "chars": size, "cap": budget,
+            "message": "This tax workpaper is too long to read whole here, and a part of it would be a partial total. "
+                       "A person can export it from Finance -> Tax."}
+
+
 def _fin_query(args, names):
     return {k: args[k] for k in names if args.get(k) is not None and args.get(k) != ""}
 
@@ -6907,8 +6926,9 @@ def _fin_paged(api, path, query, key, budget):
 
 
 @tool("hub_finance_search", "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
-      "rules and cards (each card with the vendor accounts it is saved on). Name a kind to page with cursor; without "
-      "one you get the first few of each kind.",
+      "rules and cards (each card with the vendor accounts it is saved on). account finds the chart's lines by code or "
+      "name, with their ids, for categorize, bill_create and rule_create. Name a kind to page with cursor; without "
+      "one you get the first few of each kind (not accounts: name that kind).",
       {"kind": _s("What to search", enum=FINANCE_SEARCH), "q": _s("Words to match"),
        "status": _s("Row, document or card status"), "contact_id": _s("Bills/invoices: this vendor or customer"),
        "vendor": _s("Cards: saved on this vendor (a contact's id or name): which of your cards works there"),
@@ -6943,20 +6963,28 @@ def finance_search(api, args):
 
 
 @tool("hub_finance_report", "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-      "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\".",
+      "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\". sales_tax and "
+      "1099 are the tax workpapers for a year: whole or not at all, and only for someone who sees everything.",
       {"kind": _s("The report", enum=FINANCE_REPORTS), "start": FIN_DAY, "end": FIN_DAY,
        "period": _s("Column size", enum=["day", "week", "month", "quarter", "year"]),
        "basis": _s("cash or accrual (default: the company's)", enum=["cash", "accrual"]),
        "compare": _s("prior adds the window before", enum=["prior"]),
        "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows before Other (default 20)"},
-       "by": _s("spend_by: group by", enum=["department", "team", "teammate", "bot", "person", "vendor", "account"]),
-       "month": _s("close: the month, YYYY-MM")},
+       "by": _s("spend_by: group by", enum=["department", "team", "teammate", "bot", "person", "vendor", "account",
+                                             "location", "class", "project", "location_class", "location_project",
+                                             "class_project"]),
+       "month": _s("close: the month, YYYY-MM"),
+       "year": {"type": "integer", "minimum": 2000, "maximum": 2100,
+                "description": "sales_tax, 1099: the calendar year (this year when omitted)"}},
       ("kind",))
 def finance_report(api, args):
     if args["kind"] == "close":
         if not args.get("month"):
             raise APIError("validation", "close needs month (YYYY-MM)")
-        return _fin_guard(api.get("finance/close/" + quote(str(args["month"]), safe="")), FINANCE_CHARS)
+        query = _fin_query(args, ("top_n",))
+        return _fin_guard(api.get("finance/close/" + quote(str(args["month"]), safe=""), **query), FINANCE_CHARS)
+    if args["kind"] in TAX_WORKPAPERS:
+        return _fin_whole(api.get(TAX_WORKPAPERS[args["kind"]], **_fin_query(args, ("year",))), FINANCE_CHARS)
     query = _fin_query(args, ("start", "end", "period", "basis", "compare", "top_n", "by"))
     result = api.get("finance/reports/" + quote(str(args["kind"]), safe=""), **query)
     budget = _fin_budget(args.get("top_n"), 20)
@@ -6999,7 +7027,8 @@ def finance_action(api, args):
 
 
 @tool("hub_finance_inbox", "Your Finance work queue: uncategorized rows, bills to enter, receipts, bills due, overdue "
-      "invoices, budgets near limit, failed syncs, months ready to close; with counts per kind. Name a kind to page "
+      "invoices, budgets near limit, failed syncs, months ready to close, books not reconciled for over a month "
+      "(unreconciled), emailed bills Finance did not take (bill_email); with counts per kind. Name a kind to page "
       "through that kind alone, past its first 200.",
       {"kind": _s("Only this kind of work, paged on with cursor", enum=FINANCE_INBOX),
        "cursor": _s("next_cursor from the last page (same kind)"),

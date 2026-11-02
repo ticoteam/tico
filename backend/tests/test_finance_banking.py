@@ -20,7 +20,8 @@ from backend.finance.mercury import IP_HINT, Answer, Mercury, dollars, error_tex
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_triggers import hook
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template, reopen_rows, store,
+    sync_once)
 
 LATER = "2026-10-15T12:30:00.000000Z"
 NEXT_DAY = "2026-10-16T12:30:00.000000Z"
@@ -40,6 +41,21 @@ class _Opener:
         response = io.BytesIO(json.dumps(body).encode())
         response.status = status
         return response
+
+
+def test_a_debit_card_program_holds_cash_and_a_credit_program_is_a_liability_that_holds_none(books):
+    """§8.1: a debit card program holds against cash and creates no liability; a credit card program is a liability and
+    holds no cash. Each program's money account says which."""
+    fake = FakeMercury()
+    credit = MERCURY["credit"]["accounts"][0]
+    fake.queue["credit"] = [Answer(200, {"accounts": [
+        credit, {**credit, "id": "debit-1", "name": "Acme debit", "last4": "9876", "kind": "debit"}]})]
+    connect(books, fake)
+    with books.read() as c:
+        rows = {r[0]: tuple(r[1:]) for r in c.execute(
+            "SELECT m.provider_account_id, m.subtype, m.holds_cash, a.type FROM fin_money_accounts m "
+            "JOIN fin_accounts a ON a.id=m.account_id WHERE m.kind='card_program'")}
+    assert rows == {"credit-io": ("credit", 0, "liability"), "debit-1": ("debit", 1, "asset")}
 
 
 def test_the_adapter_reads_recorded_answers_waits_out_429_and_names_the_ip_allowlist():
@@ -216,6 +232,7 @@ def test_an_authorization_holds_settles_in_place_posts_once_and_the_io_bill_clea
         assert _card_holds(c) == [(4_250, "held")]                   # an authorization is a hold, not spend
     # Mercury posts it for a little more: a webhook delivery (deduped on its event id) brings version 2.
     fake.txns["txn-card-1"] = dict(MERCURY["txn_card_posted"])
+    fake.balances["credit-io"] = -45.0              # the owed balance moves with the spend (owed negative)
     with books.transaction() as c:
         assert sync.delivery(c, None, MERCURY["event_txn_updated"], LATER) is True
         assert sync.delivery(c, None, MERCURY["event_txn_updated"], LATER) is False        # a replay is kept once
@@ -238,6 +255,8 @@ def test_an_authorization_holds_settles_in_place_posts_once_and_the_io_bill_clea
     # The IO bill: checking pays the card; both sides become one transfer and the liability is cleared.
     _arrives(fake, MERCURY["txn_card_bill_bank"], 1, "evt-bill-bank")
     _arrives(fake, MERCURY["txn_card_bill_io"], 1, "evt-bill-io")
+    fake.balances["acct-chk"] = 125_205.5          # both balances move with the bill: checking pays 45.00, IO clears
+    fake.balances["credit-io"] = 0
     sync_once(books, fake, "2026-10-17T12:30:00.000000Z")
     with books.read() as c:
         assert _entries(c, "card") == 1
@@ -260,6 +279,33 @@ def test_a_voided_authorization_releases_its_hold(books):
     with books.read() as c:
         assert _card_holds(c) == [(4_250, "released")]
         assert c.execute("SELECT status FROM fin_feed_txns").fetchone()[0] == "ignored"
+        assert _entries(c, "card") == 0
+
+
+def test_a_hold_made_while_pending_is_released_when_its_covered_row_settles(books):
+    """A card authorization holds while its row is pending. If the row's month then takes raw totals, the settled row
+    is covered history (§4.1) and posts nothing, so its hold is released with it rather than left against the budget."""
+    fake = FakeMercury()
+    connect(books, fake)
+    _card_for_eve(books, fake)
+    sync_once(books, fake)
+    # Dated in March: an opening balance made today (October) would itself block an October import (source sync).
+    pending = {**MERCURY["txn_card_pending"], "createdAt": "2026-03-14T18:01:02Z"}
+    settled = {**MERCURY["txn_card_posted"], "createdAt": "2026-03-14T18:01:02Z", "postedAt": "2026-03-15T09:00:00Z"}
+    _arrives(fake, pending, 1, "evt-0001")
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        assert _card_holds(c) == [(4_250, "held")]
+    march = "month,line,amount,team\n2026-03,Software subscriptions,1000,web\n"
+    with books.transaction() as c:
+        imported = act(c, OWNER, "import_raw_totals", {"csv": march, "basis": "cash",
+                                                       "mapping": {"Software subscriptions": "6100"}})
+        assert imported.status == "committed", imported.reason
+    _arrives(fake, settled, 2, "evt-0002")
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        assert _card_holds(c) == [(4_250, "released")]
+        assert tuple(c.execute("SELECT status, hold_id, entry_id FROM fin_feed_txns").fetchone()) == ("covered", None, None)
         assert _entries(c, "card") == 0
 
 
@@ -473,7 +519,8 @@ def test_a_correction_to_a_charge_in_a_closed_month_reverses_on_an_open_day(book
     _arrives(fake, raw, 1, "evt-sep-1")
     sync_once(books, fake)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
+        reopen_rows(c)
     _arrives(fake, {**raw, "amount": -25.0}, 2, "evt-sep-2")
     sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
     with books.read() as c:
@@ -484,6 +531,23 @@ def test_a_correction_to_a_charge_in_a_closed_month_reverses_on_an_open_day(book
     sync_once(books, fake, "2026-10-15T15:00:00.000000Z")
     with books.read() as c:
         assert _entries(c, "bank") == 3                                          # the open-day shift is no change
+
+
+def test_a_late_row_for_a_closed_month_posts_today_and_names_its_own_date_in_the_memo(books):
+    """Spec §4.1: a late item dated in a closed month posts in the open period with its original date in the description."""
+    fake = FakeMercury()
+    connect(books, fake)
+    _arrives(fake, _txn("txn-sep", "acct-chk", -15.0, "wireFee", day="2026-09-20"), 1, "evt-sep-1")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert close_month(c, "2026-09").status == "committed"
+    _arrives(fake, _txn("txn-late-sep", "acct-chk", -12.0, "wireFee", day="2026-09-25"), 2, "evt-late-sep")
+    sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
+    with books.read() as c:
+        memos = [str(r[0]) for r in c.execute("SELECT memo FROM fin_entries WHERE source='bank' AND entry_date=?",
+                                              (AT[:10],))]
+        [memo] = memos                                   # the late row's one entry, today
+        assert memo.endswith("(dated 2026-09-25)"), memo
 
 
 def test_a_reconciliation_is_done_only_when_the_whole_gl_line_is_the_statement(books):
@@ -511,6 +575,40 @@ def test_a_reconciliation_is_done_only_when_the_whole_gl_line_is_the_statement(b
         done = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
                                            "statement_balance": -1_500})
         assert (done.result["status"], done.result["book_difference"]) == ("done", 0)
+
+
+def test_a_bank_row_that_took_a_marked_payment_counts_once_in_the_reconciliation(books):
+    """A bill paid from checking posts its entry at once and waits for its bank row; the row takes that entry
+    (expected_match), so the GL line holds the payment once. The cleared row must count once in the book gap too:
+    the reconciliation is done, not open by the payment's amount."""
+    fake = FakeMercury()
+    fake.balances["acct-chk"] = -15.0
+    connect(books, fake)
+    fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])                           # -15.00 on Oct 12
+    sync_once(books, fake)
+    with books.transaction() as c:
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        vendor = act(c, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor"}).result["contact_id"]
+        bill = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10", "number": "GAP-1",
+                                             "lines": [{"account_id": account(c, "6100"), "amount": 25_000}]})
+        assert bill.status == "committed", bill
+        bill_id = str(bill.result["bill_id"])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill_id}).status == "committed"
+        paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bill_id, "money_account_id": bank, "date": "2026-10-13"})
+        assert (paid.status, paid.result["from"]) == ("committed", "expected"), paid
+    # The bank row arrives after the mark-paid (the Events path, which the fake does not feed here): ingested directly.
+    from backend.finance import banking
+    from backend.finance.context import load
+    with books.transaction() as c:
+        cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+        banking.ingest(load(c, AT), cid, F.mercury_txn(_txn("txn-pay", "acct-chk", -250.0, "outgoingPayment",
+                                                              day="2026-10-14"), 0))
+    with books.transaction() as c:
+        linked = c.execute("SELECT entry_id, status FROM fin_feed_txns WHERE provider_id='txn-pay'").fetchone()
+        assert (linked[0], linked[1]) == (paid.result["entry_id"], "posted"), tuple(linked)
+        done = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
+                                           "statement_balance": -26_500})
+        assert (done.result["status"], done.result["difference"], done.result["book_difference"]) == ("done", 0, 0)
 
 
 def _opening(c):
@@ -541,7 +639,7 @@ def test_a_backfill_posts_the_opening_balance_so_the_first_reconcile_is_done_wit
         assert (done.result["status"], done.result["difference"], done.result["book_difference"]) == ("done", 0, 0)
         sheet = FR.balance_sheet(c, OWNER, at=AT)
         assert next(r for r in sheet["assets"] if r["code"] == "1000")["balance"] == 12_525_050    # Mercury's own
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
     sync_once(books, fake, LATER)                         # idempotent: still one opening
     with books.transaction() as c:
         assert len(_opening(c)) == 2
@@ -570,7 +668,9 @@ def test_a_closed_month_correction_reconciles_that_month_at_the_new_amount(books
     _arrives(fake, raw, 1, "evt-sep-1")
     sync_once(books, fake)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
+        reopen_rows(c)
+    fake.balances["acct-chk"] = -120.0             # Mercury's balance moves with the correction
     _arrives(fake, {**raw, "amount": -120.0}, 2, "evt-sep-2")
     sync_once(books, fake, LATER)
     with books.transaction() as c:
@@ -612,7 +712,8 @@ def test_a_closed_month_card_correction_counts_only_the_change_in_the_open_month
     _arrives(fake, moved, 1, "evt-c11-1")
     sync_once(books, fake, LATER)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
+        reopen_rows(c)
 
     def october(c):
         s = FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z")
@@ -658,7 +759,8 @@ def test_card_use_follows_each_entrys_posted_card_line_after_the_card_account_is
     _arrives(fake, charge, 1, "evt-c14-1")
     sync_once(books, fake, LATER)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
+        reopen_rows(c)
         other = act(c, OWNER, "account_create", {"code": "2110", "name": "Acme card program", "type": "liability"})
         program = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='credit-io'")
                       .fetchone()[0])
@@ -753,7 +855,8 @@ def test_card_use_follows_the_ledger_across_open_months_and_a_reopened_month(boo
     _arrives(fake, charge, 1, "evt-c13-1")
     sync_once(books, fake, LATER)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
+        reopen_rows(c)
     _arrives(fake, {**charge, "amount": -120.0}, 2, "evt-c13-2")
     sync_once(books, fake, NEXT_DAY)
     _arrives(fake, {**charge, "amount": -130.0}, 3, "evt-c13-3")
@@ -843,3 +946,28 @@ def test_a_response_cut_short_and_an_amount_too_big_to_send_exactly_answer_unrea
     sent = []
     assert Mercury("tok", opener=lambda r, *, timeout: sent.append(r)).request_send_money(
         "acct", {"amount": Decimal("1e13")}) == Answer(None, {}) and not sent
+
+
+def test_a_person_ignored_row_is_carried_by_the_opening_so_the_bank_line_is_the_balance(books):
+    """Phase 2 #4 (§4.1 opening): a settled credit nobody has posted counts toward the opening, since it will post, so the
+    bank line is short of the balance by that credit until it does. Ignoring it posts nothing: the books let go of it, the
+    opening takes it, the bank line equals the balance, and the opening keeps its day (the first row the balance holds)."""
+    fake = FakeMercury()
+    fake.txns["txn-x"] = _txn("txn-x", "acct-chk", 1500.0, "wireFee", day="2026-02-10")
+    fake.balances["acct-chk"] = -500.0                  # the bank holds -500.00 after the +1,500.00 credit
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        fid, status = c.execute("SELECT id, status FROM fin_feed_txns WHERE provider_id='txn-x'").fetchone()
+        assert status == "new", status
+        assert ("2026-02-09", "1000", -200_000) in _opening(c)
+        assert _checking(c) == -200_000                 # the credit is not posted yet: the line is short of the balance
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "ignore": True}).status == "committed"
+        assert ("2026-02-09", "1000", -50_000) in _opening(c)
+        assert _checking(c) == -50_000
+        held = c.execute("SELECT balance FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0]
+        assert _checking(c) == held
+
+
+def _checking(c) -> int:
+    return next(r["balance"] for r in FR.balance_sheet(c, OWNER, at=AT)["assets"] if r["code"] == "1000")

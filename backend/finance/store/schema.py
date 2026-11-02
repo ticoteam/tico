@@ -1,5 +1,7 @@
 """Every Finance table (spec §4), created by the core migration chain (backend/store.py: cloud migration 64, and 65
 for phase 1's additions, 66 for phase 2's, 67 for phase 3's), including the ones later phases fill, so the schema has one starting point.
+A change made after cloud step 77 reaches an existing install as a file in backend/migrations (0037_finance_combined);
+the statements here carry it for a new install, where cloud step 64 runs `create` after the migration files.
 
 Every row has `id` (core's id format), `created_at` and `created_by` (a teammate, `system:finance` or `rule:<id>`).
 Money is BIGINT minor units beside its ISO currency. Booleans are 0/1 integers, times ISO text, JSON is text.
@@ -107,7 +109,8 @@ CREATE TABLE IF NOT EXISTS fin_invoices (
   number TEXT NOT NULL DEFAULT '', invoice_date TEXT NOT NULL, due_date TEXT,
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','partial','paid','void')),
   currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, amount_paid BIGINT NOT NULL DEFAULT 0, payment_link TEXT,
-  entry_id TEXT REFERENCES fin_entries(id), created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+  entry_id TEXT REFERENCES fin_entries(id), created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
+  send_approval_id TEXT, send_to TEXT, send_text TEXT, delivered_at TEXT, delivery_reason TEXT);
 
 CREATE TABLE IF NOT EXISTS fin_invoice_lines (
   id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES fin_invoices(id), account_id TEXT REFERENCES fin_accounts(id),
@@ -130,11 +133,11 @@ CREATE TABLE IF NOT EXISTS fin_feed_txns (
   id TEXT PRIMARY KEY, money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id), provider_id TEXT NOT NULL,
   txn_date TEXT NOT NULL, amount BIGINT NOT NULL, currency TEXT NOT NULL, counterparty TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','matched','posted','ignored')),
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','matched','posted','ignored','covered')),
   entry_id TEXT REFERENCES fin_entries(id), commitment_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   updated_at TEXT, pending INTEGER NOT NULL DEFAULT 0, provider_status TEXT NOT NULL DEFAULT '', posted_at TEXT,
   kind TEXT NOT NULL DEFAULT '', card_id TEXT, hold_id TEXT, reconciliation_id TEXT, version INTEGER NOT NULL DEFAULT 0,
-  request_id TEXT, raw TEXT NOT NULL DEFAULT '{}', UNIQUE (money_account_id, provider_id));
+  request_id TEXT, raw TEXT NOT NULL DEFAULT '{}', entry_line_id TEXT, UNIQUE (money_account_id, provider_id));
 
 CREATE TABLE IF NOT EXISTS fin_reconciliations (
   id TEXT PRIMARY KEY, money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id), statement_end TEXT NOT NULL,
@@ -412,6 +415,7 @@ CREATE INDEX IF NOT EXISTS fin_feed_txns_card ON fin_feed_txns(card_id, txn_date
 CREATE INDEX IF NOT EXISTS fin_feed_txns_request ON fin_feed_txns(request_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry ON fin_feed_txns(entry_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry_line ON fin_feed_txns(entry_line_id);
+CREATE INDEX IF NOT EXISTS fin_feed_txns_refund ON fin_feed_txns(refund_of);
 CREATE INDEX IF NOT EXISTS fin_money_accounts_provider ON fin_money_accounts(connection_id, provider_account_id);
 CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_card_id);
 CREATE INDEX IF NOT EXISTS fin_card_saves_vendor ON fin_card_saves(book_id, vendor_key, active);
@@ -498,6 +502,7 @@ ADDED = (
     ("fin_cards", "sync_status", "TEXT NOT NULL DEFAULT ''"), ("fin_cards", "sync_error", "TEXT"),
     ("fin_cards", "synced_at", "TEXT"),
     ("fin_cards", "freeze_by", "TEXT"), ("fin_cards", "freeze_budget_id", "TEXT"),
+    ("fin_cards", "merchant", "TEXT NOT NULL DEFAULT ''"),
     ("fin_connections", "name", "TEXT NOT NULL DEFAULT ''"),
     ("fin_connections", "settings", "TEXT NOT NULL DEFAULT '{}'"), ("fin_connections", "events_cursor", "TEXT"),
     ("fin_connections", "last_sync_at", "TEXT"), ("fin_connections", "next_sync_at", "TEXT"),
@@ -505,6 +510,8 @@ ADDED = (
     ("fin_inbox", "attempts", "INTEGER NOT NULL DEFAULT 0"), ("fin_inbox", "next_try_at", "TEXT"),
     ("fin_inbox", "tried", "TEXT NOT NULL DEFAULT '[]'"),
     ("fin_payments", "counted", "TEXT NOT NULL DEFAULT '[]'"),
+    # a finance admin's cancel of an unknown payment, waiting for Mercury's lookup by its key (migration 0037)
+    ("fin_payments", "cancel_asked_at", "TEXT"), ("fin_payments", "cancel_asked_by", "TEXT NOT NULL DEFAULT ''"),
     # phase 2: bills, invoices, contacts, posting rules and the cash view (migration 66)
     ("fin_entries", "basis", "TEXT NOT NULL DEFAULT 'both' CHECK (basis IN ('both','accrual'))"),
     ("fin_bills", "terms_days", "INTEGER"), ("fin_bills", "memo", "TEXT NOT NULL DEFAULT ''"),
@@ -521,6 +528,8 @@ ADDED = (
     # phase 4: the mirror's external refs (kind, revision, status) on installs made before them (migration 68)
     ("fin_external_refs", "kind", "TEXT NOT NULL DEFAULT ''"), ("fin_external_refs", "revision", "TEXT NOT NULL DEFAULT ''"),
     ("fin_external_refs", "status", "TEXT NOT NULL DEFAULT 'active'"), ("fin_external_refs", "updated_at", "TEXT"),
+    # the generation of a full re-read that the books returned the ref in (migration 0037); negative once swept in it
+    ("fin_external_refs", "seen_gen", "INTEGER"),
     # the provider's id for a journal or credit memo line, so its tags follow the line across a revision
     ("fin_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
@@ -535,6 +544,11 @@ ADDED = (
     # the shared item a bill or invoice line names (migration 76, backend/records)
     ("fin_bill_lines", "item_id", "TEXT"), ("fin_invoice_lines", "item_id", "TEXT"),
     ("fin_bill_lines", "po_line_id", "TEXT"),
+    # a prepaid bill line: the month its expense starts and the months it is spread over (migration 0037)
+    ("fin_bill_lines", "prepaid_start", "TEXT"), ("fin_bill_lines", "prepaid_months", "INTEGER"),
+    # the money-out row a money-in row refunds (migration 0037, backend/finance/refunds.py). A column, not raw: a
+    # provider's update rewrites raw, and the link must survive it.
+    ("fin_feed_txns", "refund_of", "TEXT"),
 )
 
 
@@ -591,9 +605,28 @@ CREATE TABLE IF NOT EXISTS fin_bill_retained (
   amount BIGINT NOT NULL CHECK (amount > 0), PRIMARY KEY (bill_id, po_line_id));
 """
 
+# Prepaid expenses (backend/finance/prepaids.py): one row per month of a prepaid bill line that was expensed. The
+# month is the key, so a month posts once; the entry is that month's expense, reversed when the bill is voided.
+PREPAIDS = """
+CREATE TABLE IF NOT EXISTS fin_prepaid_postings (
+  bill_line_id TEXT NOT NULL REFERENCES fin_bill_lines(id), month TEXT NOT NULL,
+  amount BIGINT NOT NULL CHECK (amount > 0), entry_id TEXT NOT NULL REFERENCES fin_entries(id),
+  action_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (bill_line_id, month));
+"""
+
+# Invoice reminders (backend/finance/documents.py invoice_remind): one row per invoice and stage (1, 7, 30, 60 or 90 days
+# late), so a stage is reminded once. The text and the address it went to are kept as the reminder was made.
+REMINDERS = """
+CREATE TABLE IF NOT EXISTS fin_invoice_reminders (
+  id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES fin_invoices(id), stage INTEGER NOT NULL CHECK (stage > 0),
+  text TEXT NOT NULL, sent_to TEXT NOT NULL, action_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  send_approval_id TEXT, delivered_at TEXT, delivery_reason TEXT,
+  UNIQUE (invoice_id, stage));
+"""
+
 def table_names() -> list[str]:
     """Every fin_* table the migration makes."""
-    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX + PURCHASING)
+    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX + PURCHASING + PREPAIDS + REMINDERS)
 
 
 def statements(script: str) -> list[str]:
@@ -623,7 +656,7 @@ def _add_columns(c: sqlite3.Connection) -> None:
 def create(c: sqlite3.Connection) -> None:
     """Every table, index and trigger, statement by statement inside the caller's transaction (executescript would
     commit it). Idempotent: on an install made before a later phase it adds the new tables and columns too."""
-    for script in (TABLES, TAX, PURCHASING):
+    for script in (TABLES, TAX, PURCHASING, PREPAIDS, REMINDERS):
         for statement in statements(script):
             c.execute(statement)
     _add_columns(c)
@@ -781,6 +814,7 @@ def _widen(c: sqlite3.Connection, table: str, marker: str) -> None:
     c.execute(f"ALTER TABLE {table} RENAME TO {table}_before")
     definition = next(s for s in statements(TABLES) if s.startswith(f"CREATE TABLE IF NOT EXISTS {table} "))
     c.execute(definition)
+    _add_columns(c)  # the rebuilt table needs the ADDED columns the old rows carry (e.g. refund_of), or the copy fails
     cols = ",".join(str(r[1]) for r in c.execute(f"PRAGMA table_info({table}_before)").fetchall())
     c.execute(f"INSERT INTO {table}({cols}) SELECT {cols} FROM {table}_before")
     c.execute(f"DROP TABLE {table}_before")
