@@ -160,7 +160,7 @@ A page with nothing found says what you looked for, in one line. Do not pad it.
 2. From here on you keep the map current from what others report: the daily "Curate the market" routine
    (`playbooks/curate-the-market.md`). Note in `state.md` what is thin and which sources could not be read, so
    the next curate pass knows where to look.
-3. Put unreadable sources in `_librarian/missing.md` under broken sources (`playbooks/faq-and-gaps.md`).
+3. Put unreadable sources in `_librarian/missing.md` under **Sources I could not read** (`playbooks/faq-and-gaps.md`).
 4. Rewrite `state.md`. Record anything durable about reading these kinds of sites in `memory/learnings.md`.
    Commit this repository.
 5. Finish the task: `hub task update <id> --status done --note "<the update>"`. This note is what the owner

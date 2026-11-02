@@ -11,7 +11,7 @@ default: true
 # The cheap model: it reads a short list and makes small, reversible task fixes.
 model: claude-haiku-5-5
 when: "Built in: once an hour on weekdays it has the stalled, overdue and out-of-step tasks of each department checked, fixes the obvious ones and leaves one line per department for what it is unsure of."
-summary: "Tidies tasks, never the work. Tico lists a department's quiet tasks, overdue asks, review tickets with no linked pull request, tickets whose pull request merged but whose step did not move, tasks blocked only by their own quiet subtasks, held bots and duplicate tasks in plain code, once an hour on weekdays. Nothing to report means no task and no model run. Otherwise it gets one task per department, closes or moves the ones that are plainly done, and leaves one line in Needs you per department for anything it is unsure of."
+summary: "Tidies tasks, never the work. Once an hour on weekdays Tico checks each department's tasks in plain code: stalled or overdue asks, review tickets with no linked pull request, merged work whose step did not move, held bots and duplicates. Nothing to report means no task and no model run. Otherwise the Task Manager gets one task per department, fixes the obvious items and leaves one line in Needs you for anything it is unsure of."
 owns:
   - The "Task check" task of each department, and what it did on every item
   - Closing a task that is plainly done, moving a task to the step it is plainly in, and clearing a wait that is plainly over

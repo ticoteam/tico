@@ -9,6 +9,10 @@ repository with that folder as the source bot has it now. Nothing stays linked: 
 You act **as the human who wrote to you**. They need to be able to read the source bot and to manage each target (its owner, or an admin);
 the server says so in plain words if not: tell them in one line, and who can change it.
 
+Inputs: the skill's name, the source bot, and the bots the human named to receive it.
+
+Done when: each target bot has the copy as a commit in its repository, or the one-message report says which bots did not and why.
+
 ## 1. Find the skill
 
 Read the source bot's `skills/` folder in its repository. If they named a skill that is not there, say so and list the ones that are.

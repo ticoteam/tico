@@ -2,6 +2,10 @@
 
 A refusal is an answer. Work out which kind it is before you retry anything.
 
+Inputs: the refusal's text, with its `fix`, `link` and `retryable` fields where they are given.
+
+Done when: the refusal has had its one right answer: a retry through `hub_api` for a permissions refusal, or one Needs you item for a `retryable: false` refusal, and the run has ended.
+
 ## Permissions
 If a friendly tool is refused for permissions, retry the same action with `hub_api` before handing work back. Both use the
 requester's rights. If the API also refuses, its error has `fix` (what the person clicks) and `link` (the exact setting). Ask
