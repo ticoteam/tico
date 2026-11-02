@@ -2,13 +2,17 @@
 
 Growth (`#/growth`, under Strategy in the sidebar) is a place of cards, like the Dashboard: what each channel spent, how
 many customers it brought, how many stayed, what a customer was worth, the funnel, the channels, and the marketing tests.
-Anyone may read it; an admin or a bot arranges it. **Sources**, the systems each number comes from, sits behind a link
-on the page. Marketing work is not on this page: marketing ideas are tasks, and the KPIs the numbers feed are read on
+Anyone may read it; an admin or a bot arranges it. **Sources**, the systems each number comes from, is linked from the
+page (an admin finds it in **Settings**). Marketing work is not on this page: marketing ideas are tasks, and the KPIs the numbers feed are read on
 Strategy's Goals tab.
 
 Examples use Acme, a home-cleaning company.
 
 ## The page
+
+The head shows the North Star line, a **Growth board** link and, when two or more months have numbers, a month picker. An
+admin gets **Settings**, which holds the channels, the numbers the maths uses and a **Where numbers come from** link to
+Sources; anyone else gets a **Sources** link.
 
 The page is the place `growth` (`backend/cards.py`, the same grid and card forms as the Dashboard). A Growth page nobody
 arranged shows these cards, each a template below:

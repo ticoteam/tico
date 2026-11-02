@@ -29,7 +29,7 @@ in the sidebar tree; its arrow still folds it) is the same grid for one group. B
 | `person:<id>` | That person only (My dashboard) | That person, or BotOps and the Assistant acting for them |
 
 A Dashboard nobody arranged shows Tasks by status, Done per week, Needs you and Latest pages for the company; a team page
-shows the first three for its team; the Growth page shows its five growth cards (see [growth.md](growth.md)). The first
+shows the first three for its team; the Growth page shows its default growth cards (see [growth.md](growth.md)). The first
 change saves them as real pins. Arranging: drag a card by its grip, and its
 ⋯ menu edits it, resizes it (small, medium, large) or removes it; **Add card** and **Add page** add one. On a phone the
 grid is one column.
