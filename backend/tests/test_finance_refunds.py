@@ -216,3 +216,29 @@ def test_money_in_that_refunds_a_row_which_paid_a_bill_stays_new_names_the_bill_
         assert _row(c, "txn-back") == ("new", False, None)       # a person decides; the rule does not post it
         assert _asked(c, back) and _asked(c, back)[0]["bills"] == [bill]
         assert _balance(c, "4000") == 0
+
+
+def test_a_row_with_a_refund_posted_against_it_cannot_be_recategorized_or_ignored(books):
+    """The refund reverses the charge's lines where they were posted: moving or ignoring the charge would leave that
+    reversal on the old account, so the action is refused with the reason."""
+    fake = FakeMercury()
+    connect(books, fake)
+    sync_once(books, fake)
+    _arrives(fake, "txn-buy", -100.0, "2026-10-16")
+    sync_once(books, fake, LATER)
+    _arrives(fake, "txn-back", 100.0, "2026-10-17")
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        buy = _fid(c, "txn-buy")
+        entry = c.execute("SELECT entry_id FROM fin_feed_txns WHERE id=?", (buy,)).fetchone()[0]
+        assert _row(c, "txn-back") == ("posted", True, buy)
+    with books.transaction() as c:
+        moved = act(c, OWNER, "categorize", {"feed_id": buy, "account_id": account(c, "6000")})
+        ignored = act(c, OWNER, "categorize", {"feed_id": buy, "ignore": True})
+    assert moved.status == "failed" and moved.code == "conflict" and "refund" in moved.reason, moved
+    assert ignored.status == "failed" and ignored.code == "conflict" and "refund" in ignored.reason, ignored
+    with books.read() as c:
+        assert c.execute("SELECT entry_id FROM fin_feed_txns WHERE id=?", (buy,)).fetchone()[0] == entry
+        assert _balance(c, "6900") == 0                          # the charge and its reversal still net to nothing
+        assert _balance(c, "6000") == 0
+        assert _row(c, "txn-back") == ("posted", True, buy)

@@ -772,6 +772,9 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     from .topups import is_top_up        # lazy: topups posts through this module's helpers
     if row["entry_id"] and is_top_up(SL.entry_row(ctx.c, str(row["entry_id"]))):
         raise FinanceError(CONFLICT, "that row is the bank side of a Gateway top-up; its entry is the top-up's")
+    if SK.refunds_of(ctx.c, str(row["id"])):      # a refund reverses this row's lines where they were posted
+        raise FinanceError(CONFLICT, "that row has a refund posted against it, which reverses its lines on the account "
+                                     "they were posted to; it cannot be moved or ignored")
     amount = int(row["amount"])
     money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
     mirrored = ctx.book.mode == "mirror"
