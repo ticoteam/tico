@@ -6,9 +6,10 @@ from datetime import date
 import pytest
 
 from backend.finance import reads as FR
+from clients import hubtools
 from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
 
 OCT = ("2026-10-01", "2026-10-31")
 
@@ -57,3 +58,33 @@ def test_runway_is_withheld_for_a_slice_and_burn_says_it_is_scoped(books):
         assert ben["scoped"] is True and ben["value"] is None
         assert owner["scoped"] is False and owner["value"] is not None
         assert FR.metric(c, "human:ben", "burn", start="2026-08-01", end="2026-08-31", at=AT)["scoped"] is True
+
+
+def test_close_checklist_lists_the_money_accounts_behind_up_to_top_n_and_folds_the_rest(books):
+    """§7.1: every read takes top_n and folds the rest into "Other · n"; the count stays the whole number."""
+    fake = FakeMercury()
+    connect(books, fake)
+    for acct in MERCURY["accounts"]["accounts"]:            # one settled bank line on each account, so each has a feed
+        fake.txns[f"txn-{acct['id']}"] = {**MERCURY["txn_bank_fee"], "id": f"txn-{acct['id']}", "accountId": acct["id"],
+                                          "createdAt": "2026-10-14T10:00:00Z", "postedAt": "2026-10-14T10:00:00Z"}
+    sync_once(books, fake)
+    with books.read() as c:
+        whole = next(k for k in FR.close_checklist(c, OWNER, "2026-10", at=AT)["checks"] if k["key"] == "reconciled")
+        assert whole["count"] >= 2
+        cut = next(k for k in FR.close_checklist(c, OWNER, "2026-10", at=AT, top_n=1)["checks"]
+                   if k["key"] == "reconciled")
+        assert cut["count"] == whole["count"] and len(cut["accounts"]) == 2
+        assert cut["accounts"][-1]["key"] == FR.OTHER and cut["accounts"][-1]["count"] == whole["count"] - 1
+
+
+def test_the_hub_close_passes_top_n_and_spend_by_offers_every_group_the_server_has():
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Api:
+        def get(self, path, **query):
+            calls.append((path, query))
+            return {"checks": []}
+    hubtools.finance_report(Api(), {"kind": "close", "month": "2026-10", "top_n": 5})
+    assert calls == [("finance/close/2026-10", {"top_n": 5})]
+    report = next(t for t in hubtools.TOOLS if t["name"] == "hub_finance_report")
+    assert set(report["inputSchema"]["properties"]["by"]["enum"]) == set(FR.GROUPS)

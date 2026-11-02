@@ -1746,8 +1746,9 @@ def _closable(c: sqlite3.Connection, ctx: Ctx) -> list[str]:
     return out
 
 
-def _checklist(s: _Seen, month: str) -> Row:
-    """What stands between a month and its close, for whoever does the books."""
+def _checklist(s: _Seen, month: str, top_n: int = 20) -> Row:
+    """What stands between a month and its close, for whoever does the books. The money accounts still behind are
+    listed up to `top_n`, and the rest fold into one "Other · n" row; `count` is always the whole number."""
     ctx = s.ctx
     first = dates.month(month)
     last = dates.month_end(first)
@@ -1759,10 +1760,15 @@ def _checklist(s: _Seen, month: str) -> Row:
     behind = [{"money_account_id": str(m["id"]), "name": str(m["name"]),
                "locked_through": SK.locked_through(ctx.c, str(m["id"])) or None} for m in live
               if (SK.locked_through(ctx.c, str(m["id"])) or "") < last.isoformat()]
+    top = max(1, min(int(top_n), MAX_TOP))
+    folded = behind[top:]
+    listed = behind[:top] + ([{"key": OTHER, "label": f"Other · {len(folded)}", "count": len(folded),
+                               "money_account_id": None, "name": f"Other · {len(folded)}", "locked_through": None}]
+                             if folded else [])
     rows, more = _uncategorized(s, first, last, INBOX_EACH)
     accrual = ctx.book.basis == "accrual"
     checks: list[Row] = [
-        {"key": "reconciled", "ok": not behind, "count": len(behind), "accounts": behind,
+        {"key": "reconciled", "ok": not behind, "count": len(behind), "accounts": listed,
          "label": "Every money account reconciled through month end"},
         {"key": "uncategorized", "ok": not rows, "count": len(rows), "more": more,
          "label": "Nothing left in Other expenses or uncategorized"}]
@@ -1788,7 +1794,8 @@ def _checklist(s: _Seen, month: str) -> Row:
             "checks": checks}
 
 
-def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | None = None) -> Row:
+def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | None = None, *,
+                    top_n: int = 20) -> Row:
     """A month's close checklist (§10): reconciled through month end, nothing uncategorized, receipts matched, draft
     bills entered, and notes for accruals and budget vs actual. `ready` is what finance.period.ready fires on (the
     first two, on an open month that has ended). For teammates with finance.book, cut to their view: only the money
@@ -1796,7 +1803,7 @@ def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | N
     s = _open(c, viewer, at)
     if not R.has(s.ctx.org, viewer, R.BOOK, s.ctx.rights(viewer)):
         raise denied("the close is for teammates who do the books")
-    return {**_checklist(s, dates.month(period).isoformat()[:7]), "view_version": s.view.version}
+    return {**_checklist(s, dates.month(period).isoformat()[:7], top_n), "view_version": s.view.version}
 
 
 def ready_months(c: sqlite3.Connection, at: str | None = None) -> list[str]:
