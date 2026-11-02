@@ -59,6 +59,21 @@ def test_saved_demo_reopens_with_edits_and_the_same_owner_session(built, monkeyp
         assert api.get("/api/v2/tasks/" + task_id).json()["task"]["title"] == "Keep this demo edit"
 
 
+def test_every_bot_has_a_profile_and_no_one_is_told_of_a_change(built):
+    """The demo is made with its bots, so a start finds no bot to give a profile to, and no owner gets the notice that
+    explains a change (it would read as just now, at the top of Threads)."""
+    _, settings = built
+    with signed_in(settings) as api:
+        assert api.get("/api/v2/tasks", params={"limit": 1}).status_code == 200    # a start has run
+    with sqlite3.connect(settings.db_path) as db:
+        told = db.execute("SELECT count(*) FROM messages WHERE body LIKE 'Tico gave each of your bots a profile%'")
+        assert told.fetchone()[0] == 0
+        from backend import profiles
+        from backend.store import H
+        configs = [H._json(config, {}) for (config,) in db.execute("SELECT config FROM bot_config")]
+        assert configs and all(profiles.name_of(config) for config in configs)
+
+
 def test_demo_refuses_existing_unrecognized_data_without_writing(tmp_path):
     database = tmp_path / "hub.sqlite"
     database.write_bytes(b"existing install or incomplete seed")

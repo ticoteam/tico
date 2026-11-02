@@ -631,6 +631,10 @@ class Builder:
         and random bytes stamp some rows (triggers, the change feed, a census), so those take this build's time and ids:
         the same build then writes the same rows."""
         self.read_task_threads()
+        # Every bot gets its profile, as the next start would, without the notice that explains a change to bots an
+        # owner already had (backend/profiles.py).
+        from . import profiles as Profiles
+        self.write(lambda c: Profiles.migrate(c, tell=False))
 
         def work(c):
             c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND recipient_id LIKE 'bot:%'")
