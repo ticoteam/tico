@@ -420,7 +420,7 @@ const DAY = '2026-10-20';       // the scenario world's frozen day; the pages' c
     // A viewer without finance.records sees the file and no way to change it.
     await omar.evaluate(id => finContactShow({id, name: '', kind: 'vendor'}), supplier);
     await rail(omar).getByRole('link', {name: 'acme-contract.txt'}).waitFor({timeout: t(10000)});
-    assert.equal(await rail(omar).locator('[data-fin-file-add],[data-fin-file-remove]').count(), 0);
+    assert.equal(await rail(omar).locator('[data-file-add],[data-file-remove]').count(), 0);
     await page.route(actions, waits);
     await rail(page).getByRole('button', {name: 'Remove acme-contract.txt'}).click();
     await page.waitForTimeout(t(300));

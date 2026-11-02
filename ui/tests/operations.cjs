@@ -463,7 +463,7 @@ const close = async (o, label) => { assert.deepEqual(o.errors, [], label + ' pag
   {
     const w = world();
     w.items[0].currency = 'EUR';
-    w.pnlOf = {'pr-2': {income: 12300, expense: 0, net: 12300}};
+    w.pnlOf = {'pr-2': {income: 12300, expense: 0, net: 12300, cost_of_goods: 4100, gross_margin: 8200}};
     w.projects.push({id: 'pr-2', name: 'Small job', status: 'open', source: 'tico', archived_at: null});
     // Due 60 days out with a 90-day lead: soon by the server's answer, which no fixed window on this side would know.
     w.equipment[1] = {...w.equipment[1], next_due_on: iso(60), next_due_status: 'due'};
@@ -472,6 +472,14 @@ const close = async (o, label) => { assert.deepEqual(o.errors, [], label + ' pag
     await page.locator('tr[data-ops-row="it-1"]').waitFor();
     assert.match(await page.locator('tr[data-ops-row="it-1"]').textContent(), /€89\.00/);
     assert.doesNotMatch(await page.locator('tr[data-ops-row="it-1"]').textContent(), /\$/);
+    await page.evaluate(() => { location.hash = '#/operations/projects?id=pr-2'; });
+    await page.locator('#ops-m-pnl', {hasText: '$123'}).waitFor();
+    const totals = (await page.locator('#ops-m-pnl .fin-kv').allInnerTexts()).map(t => t.replace(/\s+/g, ' '));
+    assert.deepEqual(totals.slice(3), ['Cost of goods $41', 'Gross margin $82'], 'after the totals, as Finance orders them');
+    await page.evaluate(() => { location.hash = '#/operations/projects?id=pr-1'; });
+    await page.locator('#ops-panel h2', {hasText: 'North Store refit'}).waitFor();
+    await page.locator('#ops-m-pnl', {hasText: '$5,000'}).waitFor();
+    assert.doesNotMatch(await page.locator('#ops-m-pnl').textContent(), /Cost of goods|Gross margin/, 'a read without them shows neither');
     await page.evaluate(() => { location.hash = '#/operations/projects?id=pr-2'; });
     await page.locator('#ops-m-pnl', {hasText: '$123'}).waitFor();
     assert.doesNotMatch(await page.locator('tr[data-ops-row="pr-2"]').textContent(), /\$/, 'a row the list read left out stays blank');
@@ -566,18 +574,18 @@ const close = async (o, label) => { assert.deepEqual(o.errors, [], label + ' pag
     await files.locator('[data-file-add]').click();
     const dlg = page.locator('dialog.fin-dlg');
     await dlg.locator('[type=submit]').click();
-    await dlg.locator('[data-error]', {hasText: 'Choose a file'}).waitFor();
+    await dlg.locator('[data-error]', {hasText: 'Pick a file'}).waitFor();
     await dlg.locator('[name=find]').fill('warr');
-    await dlg.locator('[data-file-pick="f-1"]').waitFor({state: 'detached'});
-    await dlg.locator('[data-file-pick="f-2"]').click();
+    await dlg.getByRole('option', {name: 'Manual.pdf'}).waitFor({state: 'detached'});
+    await dlg.getByRole('option', {name: 'Warranty.pdf'}).click();
     await dlg.locator('[type=submit]').click();
     await files.getByRole('link', {name: 'Warranty.pdf'}).waitFor();
     assert.deepEqual(w.actions.at(-1), {kind: 'record_file_add', payload: {subject_type: one, subject_id: id, file_id: 'f-2'}});
     assert.match(await files.getByRole('link', {name: 'Warranty.pdf'}).getAttribute('href'), /\/v2\/files\/f-2$/);
     // A linked file isn't offered again.
     await files.locator('[data-file-add]').click();
-    await dlg.locator('[data-file-pick="f-1"]').waitFor();
-    assert.equal(await dlg.locator('[data-file-pick="f-2"]').count(), 0);
+    await dlg.getByRole('option', {name: 'Manual.pdf'}).waitFor();
+    assert.equal(await dlg.getByRole('option', {name: 'Warranty.pdf'}).count(), 0);
     await dlg.locator('[data-close]').first().click();
     if (tab === 'equipment') await shot(page, 'desktop-equipment-files');
     // Sent for approval: no success toast, the link stays.

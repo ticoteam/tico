@@ -118,6 +118,8 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       const accounts = await page.locator('[data-ops-pnl-accounts]').innerText();
       assert.ok(accounts.includes(income.name) && accounts.includes(costs.name), accounts);
       assert.match(accounts, /\$300/);
+      const totals = await page.locator('#ops-m-pnl').innerText();
+      assert.ok(/Cost of goods/.test(totals) && /Gross margin/.test(totals), totals);
       await shot(page, 'real-desktop-project-panel');
 
       await go(page, '#/operations/equipment');
@@ -183,7 +185,7 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       assert.ok(upload.ok, await upload.clone().text());
       const library = page.locator('#ops-m-files');
       await library.locator('[data-file-add]').click();
-      await page.locator('dialog.fin-dlg [data-file-pick]', {hasText: 'Acme manual'}).click({timeout: t(15000)});
+      await page.locator('dialog.fin-dlg .ru-pick', {hasText: 'Acme manual'}).click({timeout: t(15000)});
       await page.locator('dialog.fin-dlg [type=submit]').click();
       const linked = library.locator('a', {hasText: /acme.manual/i});
       await linked.waitFor({timeout: t(15000)});
@@ -191,7 +193,7 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       await library.locator('[data-file-remove]').click();
       await linked.waitFor({state: 'detached', timeout: t(15000)});
       await library.locator('[data-file-add]').click();
-      await page.locator('dialog.fin-dlg [data-file-pick]', {hasText: 'Acme manual'}).waitFor({timeout: t(15000)});
+      await page.locator('dialog.fin-dlg .ru-pick', {hasText: 'Acme manual'}).waitFor({timeout: t(15000)});
       await page.locator('dialog.fin-dlg [data-close]').first().click();
 
       // The customer's panel, from a location's panel, as the owner.
