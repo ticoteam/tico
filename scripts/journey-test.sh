@@ -263,7 +263,7 @@ services:
     pull_policy: missing
   updater:
     environment:
-      TICO_HEALTH_SECONDS: "180"   # what installs use (docker/updater.py); the cleanup renames slow the first start
+      TICO_HEALTH_SECONDS: "90"    # installs use 180; an upgrade from v0.5.55+ starts in ~30s, and the rollback step waits all of it
       TICO_UPDATER_POLL: "0.5"
       TICO_RELEASES_URL: http://$RELEASE_SERVER:8000
 EOF
