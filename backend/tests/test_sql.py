@@ -216,7 +216,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
         "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field",
         "roadmaps_explicit_public_text", "strategy-bot", "task_session_default", "threads-audit-scrub",
-        "threads-migration", "usage-count"]
+        "threads-migration", "threads-neutral-titles", "usage-count"]
 
 
 def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, world):

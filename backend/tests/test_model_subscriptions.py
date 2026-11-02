@@ -3,6 +3,7 @@ on that computer (backend/model_subscriptions.py)."""
 
 import base64
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -15,7 +16,10 @@ from backend.tests.test_credentials import setup
 
 TOKEN = "sk-ant-oat01-" + "a" * 24
 OTHER = "sk-ant-oat01-" + "b" * 24
-CLAUDE_LIMIT = "You've hit your limit · resets 2:40am (UTC)"
+# A reset two hours ahead, whatever the hour: a time most of a day away reads as just passed (login_holds.reset_from_text),
+# so a fixed time fails these tests for four hours a day.
+_RESET = datetime.now(timezone.utc) + timedelta(hours=2)
+CLAUDE_LIMIT = f"You've hit your limit · resets {_RESET.hour % 12 or 12}:{_RESET.minute:02d}{'am' if _RESET.hour < 12 else 'pm'} (UTC)"
 
 
 def codex_file(account="acct-1", refresh="r-1", email="ana@acme.example"):
