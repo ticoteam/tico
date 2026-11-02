@@ -11,9 +11,17 @@ import json
 
 from backend import hubdb as H
 from backend import marketing_tasks as MT
+from backend.migrations import statements
 
-RETIRED = ("growth_idea_channels", "growth_idea_segments", "growth_channel_segments", "growth_ideas", "growth_segments",
-           "gtm_versions", "gtm_drafts")
+DROP = """
+DROP TABLE IF EXISTS growth_idea_channels;
+DROP TABLE IF EXISTS growth_idea_segments;
+DROP TABLE IF EXISTS growth_channel_segments;
+DROP TABLE IF EXISTS growth_ideas;
+DROP TABLE IF EXISTS growth_segments;
+DROP TABLE IF EXISTS gtm_versions;
+DROP TABLE IF EXISTS gtm_drafts;
+"""
 
 
 def _json_object(text):
@@ -102,5 +110,5 @@ def up(conn):
         for column in ("framework", "verdict_win_pct"):
             if column in columns:
                 conn.execute(f"ALTER TABLE growth_settings DROP COLUMN {column}")
-    for table in RETIRED:
-        conn.execute(f"DROP TABLE IF EXISTS {table}")
+    for statement in statements(DROP):
+        conn.execute(statement)

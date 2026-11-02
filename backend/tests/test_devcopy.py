@@ -116,6 +116,8 @@ def test_every_table_is_classified(tmp_path):
         text = source.read_text()
         names |= set(re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+) ?\(", text)) - virtual
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", text))     # and a migration script drops again
+    for source in (Path(devcopy.__file__).parent / "migrations").glob("*.py"):  # and a migration file drops for good
+        dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", source.read_text()))
     names -= dropped
     groups = (devcopy.KEEP, set(devcopy.HISTORY), set(devcopy.EMPTY))
     assert {t: n for t in names if (n := sum(t in g for g in groups)) != 1} == {}

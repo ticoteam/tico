@@ -331,9 +331,9 @@ def test_a_trashed_idea_whose_snapshot_holds_a_dropped_growth_row_comes_back_and
     with store.transaction() as c:
         # A trash row from before the growth rethink dropped the idea tables: its snapshot still holds one of their rows.
         assert c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='growth_ideas'").fetchone() is None
-        snap = json.loads(c.execute("SELECT rows_json FROM task_trash WHERE task_id=?", (ticket["id"],)).fetchone()[0])
+        snap = json.loads(c.execute("SELECT rows FROM task_trash WHERE task_id=?", (ticket["id"],)).fetchone()[0])
         snap["rows"]["growth_ideas"] = [{"_rowid": 1, "id": "idea-1", "task_id": ticket["id"], "hypothesis": "Try it."}]
-        c.execute("UPDATE task_trash SET rows_json=? WHERE task_id=?", (json.dumps(snap), ticket["id"]))
+        c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(snap), ticket["id"]))
         report = restore_tasks(c, [ticket["id"]])
     assert report["restored"] == [ticket["id"]] and report["skipped"] == {"growth_ideas": 1}
     assert get(api, "tasks/" + ticket["id"], token="ben-test")["task"]["title"] == "Try referral cards"

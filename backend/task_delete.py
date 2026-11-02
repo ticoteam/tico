@@ -374,12 +374,15 @@ def _current(snap):
 def _unplaced(c, snap):
     """{table: [keys]} a snapshot holds, after the renames, that this database has no column for. Restoring it would
     drop them, and the snapshot goes once the task is back, so a restore with any is refused and the trash row kept.
-    The relations are left out: they go back through task_relations.restore_row, which reads each by name."""
+    The relations are left out: they go back through task_relations.restore_row, which reads each by name, and so are
+    the rows of a table a migration has dropped, which the restore's report counts."""
     out = {}
     for table, found in snap["rows"].items():
         if table == "task_relations" or not found:
             continue
         present = set(_columns(c, table))
+        if not present:
+            continue
         keys = {k for row in found for k in row} - present - NOT_COLUMNS - HANDLED.get(table, set())
         if keys:
             out[table] = sorted(keys)
