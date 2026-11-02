@@ -2151,7 +2151,7 @@ export type GoalList = {
 
 export type GoalProposalCreate = {
   goal_id?: string | null;
-  kind: "goal_wording" | "goal_kpi" | "kpi_definition" | "kpi_target" | "flag" | "goal_why" | "recovery" | "strategy_draft" | "brand_draft" | "gtm_draft";
+  kind: "goal_wording" | "goal_kpi" | "kpi_definition" | "kpi_target" | "flag" | "goal_why" | "recovery" | "strategy_draft" | "brand_draft";
   kpi_id?: string | null;
   payload?: Record<string, unknown>;
   reason?: string;
@@ -2429,6 +2429,75 @@ export type GroupUpdate = {
   name?: string | null;
   parent?: string | null;
   remove?: GroupMembers;
+};
+
+export type GrowthChannel = {
+  name: string;
+  owner_ref: string | null;
+  series: Array<GrowthMonth>;
+  slug: string;
+  stage: string | null;
+};
+
+export type GrowthKpi = {
+  goal_id: string | null;
+  growth_role: string | null;
+  id: string;
+  latest: number | null;
+  latest_at: string | null;
+  loop_name: string | null;
+  loop_step: number | null;
+  name: string;
+  parent_kpi_id: string | null;
+  series: Array<{
+  at: string | null;
+  value: number;
+}>;
+  stage: string | null;
+  target: number | null;
+  unit: string;
+};
+
+export type GrowthMarker = {
+  at: string;
+  channels: Array<string>;
+  goal_id: string | null;
+  kind: "started" | "finished";
+  outcome: "won" | "lost" | "inconclusive" | "dropped" | null;
+  task_id: string;
+  title: string;
+};
+
+export type GrowthMonth = {
+  bot_cost: number | null;
+  cac: number | null;
+  expected_months: number | null;
+  kept_d180: number | null;
+  kept_d30: number | null;
+  kept_d90: number | null;
+  ltv: number | null;
+  ltv_cac: number | null;
+  margin_pct: number | null;
+  month: string;
+  new_customers: number | null;
+  payback_months: number | null;
+  quality: string | null;
+  revenue_month: number | null;
+  spend: number | null;
+};
+
+export type GrowthNumbers = {
+  channels: Array<GrowthChannel>;
+  kpis: {
+  guardrails: Array<GrowthKpi>;
+  inputs: Array<GrowthKpi>;
+  north_star: GrowthKpi | null;
+  other: Array<GrowthKpi>;
+};
+  markers: Array<GrowthMarker>;
+  may_edit: boolean;
+  months: Array<string>;
+  series: Array<GrowthMonth>;
 };
 
 export type HeaderIn = {
@@ -6901,6 +6970,13 @@ export type GetGroupAccessParams = {
 };
 export type GetGroupAccessBody = never;
 export type GetGroupAccessResponse = TeammateAccessView;
+
+/** GET /api/v2/growth/numbers */
+export type GetGrowthNumbersParams = {
+  months?: number;
+};
+export type GetGrowthNumbersBody = never;
+export type GetGrowthNumbersResponse = GrowthNumbers;
 
 /** GET /api/v2/health */
 export type GetHealthParams = Record<string, never>;

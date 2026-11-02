@@ -170,10 +170,8 @@ KEEP = frozenset((
     "fin_purchase_orders", "fin_po_lines", "fin_estimates", "fin_estimate_lines",
     # Shared records (backend/records): locations, items and projects
     "items", "locations", "projects", "record_aliases",
-    # Growth, brand and go-to-market (backend/growth.py, backend/brand_gtm.py)
-    "brand_drafts", "brand_versions", "gtm_drafts", "gtm_versions", "gtm_sources", "growth_channels", "growth_ideas",
-    "growth_idea_channels", "growth_cohorts", "growth_settings", "growth_segments", "growth_channel_segments",
-    "growth_idea_segments",
+    # Growth and brand (backend/growth.py, backend/brand.py)
+    "brand_drafts", "brand_versions", "gtm_sources", "growth_channels", "growth_cohorts", "growth_settings",
     # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
     # outside destination that has not gone is made moot below, so the copy never sends it.
     "message_deliveries", "message_mentions", "message_reactions", "message_revisions", "sequences",

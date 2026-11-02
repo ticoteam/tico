@@ -461,7 +461,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         # A strategy proposal carries the unpublished draft or every affected goal's title (goal_routes.strategy_visible):
         # the owner's, and the bot's that proposed it.
         "goal_proposals": "(goal_id IS NULL OR goal_id IN (SELECT id FROM goals)) AND " + (
-            "1" if owner else f"(kind NOT IN ('strategy_draft','strategy_realign','brand_draft','gtm_draft') "
+            "1" if owner else f"(kind NOT IN ('strategy_draft','strategy_realign','brand_draft') "
                               f"OR proposed_by={me})"),
         "goal_asks": "task_id IN (SELECT id FROM tasks)",
         # The company's Vision and Description and their history: everyone's to read, like the company's goals.
