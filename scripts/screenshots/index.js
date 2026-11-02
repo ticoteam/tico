@@ -80,6 +80,16 @@ const PAGES = [
     await page.locator('#docs-h-linked').waitFor();
   }},
   {name: 'market', route: '#/strategy/market?note=company%2Fnorthwind', ready: 'Cheapest starter plan'},
+  {name: 'strategy', route: '#/strategy', ready: 'Who we serve'},
+  {name: 'growth', route: '#/growth', ready: 'Growth'},
+  {name: 'finance', route: '#/finance', ready: 'P&L'},
+  {name: 'rules', route: '#/rules', ready: 'Rules'},
+  {name: 'automations', route: '#/automations', ready: 'Automations'},
+  {name: 'learnings', route: '#/learnings', ready: 'Learnings'},
+  {name: 'threads', route: '#/threads', ready: 'Threads'},
+  {name: 'recruit', route: async page => '#/seat/' + encodeURIComponent(await page.evaluate(async () =>
+    (await (await fetch('/api/v2/seats')).json()).seats[0].id)), ready: 'Job post'},
+  {name: 'settings-email-phone', route: '#/settings', tab: 'inbound', ready: 'Email & Phone'},
 ];
 
 function argument(name, fallback = '') {
