@@ -82,6 +82,31 @@ async function restrictPerson(hub) {
     await dana.waitForURL(new RegExp('#/thread/' + risks.thread_id), {timeout: t(15000)});
     await dana.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});
     await dana.getByText(RISKS).waitFor({timeout: t(15000)});
+
+    // Dana: Keep messages saves through the real PATCH: the server holds it, a fresh load shows it, and it clears.
+    const keepDialog = async () => {
+      await dana.locator('[data-thv-menu]').click();
+      await dana.locator('.thv-pop').getByText('Keep messages').click();
+      return dana.locator('#thread-keep select');
+    };
+    const saveKeep = async () => {
+      await dana.locator('#thread-keep [type=submit]').click();
+      await dana.waitForFunction(() => !document.querySelector('#thread-keep')?.open, null, {timeout: t(15000)});
+    };
+    await dana.goto(hub.url + '/#/thread/' + plan.id);
+    await dana.getByText(PLAN).waitFor({timeout: t(15000)});
+    const keep = await keepDialog();
+    assert.equal(await keep.inputValue(), '', 'a thread keeps its messages by default');
+    await keep.selectOption('90');
+    await saveKeep();
+    assert.equal((await api(hub, 'dana', 'GET', `/v2/threads/${plan.id}`)).retention_days, 90, 'the server holds the length');
+    await dana.reload();
+    await dana.getByText(PLAN).waitFor({timeout: t(15000)});
+    const kept = await keepDialog();
+    assert.equal(await kept.inputValue(), '90', 'a fresh load shows the saved length');
+    await kept.selectOption('');
+    await saveKeep();
+    assert.equal((await api(hub, 'dana', 'GET', `/v2/threads/${plan.id}`)).retention_days, null, 'and it clears');
     await dana.context().close();
 
     // Dana: the bot page's Home and DM are two tabs, and each one selects on its own.
