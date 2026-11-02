@@ -684,7 +684,7 @@ function goalTreeShape() {
   }
   // Drawn as the Org tab draws it: the top person at the root and each department under whoever runs it.
   const key = n => (n.kind === 'group' ? 'g:' : n.kind === 'person' ? 'p:' : 'b:') + n.id;
-  return {byParent: orgChartShape(orgTreeWithHelpers(byParent), key, id => (S.orgGroups || []).find(g => g.id === id)?.lead || '')};
+  return {byParent: orgChartShape(orgTreeWithHelpers(byParent), key, id => (typeof rdoGroup === 'function' && rdoGroup(id)?.lead) || '')};   // the lead from GET /v2/groups when the Org tab has it, else orgGroupHead goes by who the group's top reports to
 }
 // The org chart's order: a group's humans and bots first, then the groups in it; a manager's reports in the order
 // someone put them; then the chart's own order (chartFallback).
