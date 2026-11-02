@@ -93,9 +93,8 @@ function finDecideDialog(title, body, label, build, done) {
       return false;
     }
     if (r.status === 'committed') toast(done);
-    // A new bill or invoice opens in the rail when its tab is the one showing it.
-    const made = r.result?.bill_id ? ['bill', r.result.bill_id] : r.result?.invoice_id ? ['invoice', r.result.invoice_id] : null;
-    if (made && FIN?.doc?.kind === made[0]) FIN.doc.sel = String(made[1]);
+    if (r.result?.bill_id) finDocShow('bill', r.result.bill_id);
+    else if (r.result?.invoice_id) finDocShow('invoice', r.result.invoice_id);
     finDocsReload();
   });
   const form = dlg.querySelector('form');
@@ -106,11 +105,23 @@ function finDecideDialog(title, body, label, build, done) {
   });
   return dlg;
 }
+// A new bill or invoice is a draft: its list turns to Draft (All stays All) with no search, and it opens in the rail.
+function finDocShow(kind, id) {
+  const f = FIN_DOC_F[kind];
+  if (f.status) f.status = 'draft';
+  f.q = '';
+  if (FIN?.doc?.kind !== kind) return;
+  FIN.doc.sel = String(id);
+  const body = $('#fin-body'), search = body?.querySelector('[data-fin-q]'), seg = body?.querySelector(`[data-fin-seg="status"] button[data-v="${f.status}"]`);
+  if (search) search.value = '';
+  if (seg) finSegSet(seg);
+}
 // After a write: the list (and the open document) read again, wherever the person is.
 function finDocsReload() {
   if (FIN?.doc) void finDocLoad(false);
   if (FIN?.bs) void finBsLoad();
   if (FIN?.tx) void finTxLoad(false);
+  if (FIN?.line) void finLineLoad();
 }
 
 // ----------------------------------------------------------------- the bills address
