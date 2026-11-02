@@ -226,6 +226,8 @@ DO = _routes(
     # A person's or a group's access (backend/teammate_access.py): the route checks the person manages them.
     ("POST", rf"(people|humans|groups)/{_S}/access"), ("PUT", rf"(people|humans|groups)/{_S}/access"),
     ("PUT", rf"bots/{_S}/repositories"), ("PUT", rf"repositories/{_S}/{_S}"),
+    # One repository's Run workflows on the person's yes in conversation; without it, their Confirm card (the route).
+    ("POST", rf"bots/{_S}/repositories/run-workflows(/read-back)?"),
     ("PUT", "repositories/settings"), ("POST", "repositories/refresh"),
     ("PUT", rf"bots/{_S}/github-repos"), ("POST", r"github/repos"), ("DELETE", rf"github/repos/{_S}/{_S}"),
     # Automations (backend/automations.py): the route checks the person's place on the org chart.

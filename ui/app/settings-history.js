@@ -10,6 +10,7 @@ function settingsValue(field, value) {
   if (field === 'profile') return profileHistoryWords(value);
   if (field === 'wake_preset') return SETTINGS_WAKE_PRESETS.find(([preset]) => preset === value)?.[1] || String(value);
   if (field === 'keep_tasks_going') return value == null ? 'No limit' : value === 0 ? 'Off' : `${value} tasks`;
+  if (field === 'run_workflows') return value ? `${value.repository}: ${value.on ? 'on' : 'off'}` : 'off';
   if (field === 'turns_at_once') return value == null ? 'No limit' : `${value} ${value === 1 ? 'turn' : 'turns'}`;
   if (field === 'task_model') return value?.model ? settingsChoiceLabel(value.harness || value.runtime, value.model, value.reasoning_effort) : 'Same as bot';
   if (field === 'identity') return [value?.display_name, value?.description].filter(Boolean).join(' · ') || 'blank';
@@ -99,7 +100,7 @@ function renderSettingsHistory(el = $('#set-history'), history = SETTINGS_DATA.h
     const e = botRow(change.bot), transition = transitionById.get(change.transition_id);
     const field = {owners:'who it works for',access:'access',model:'model',placement:'computer',fallback:'fallback',
       compact_at:'compact at',wake_preset:'wakes',profile:'profile',keep_tasks_going:'keep tasks going',
-      turns_at_once:'Turns at once',definition:'setup',task_model:'task model',identity:'name and description',
+      turns_at_once:'Turns at once',definition:'setup',run_workflows:'Run workflows',task_model:'task model',identity:'name and description',
       manages_reports:'manages its reports', lifecycle:'archive or restore'}[change.field] || change.field;
     // A change too big for a page comes without its values (backend/settings_admin.py `truncated`).
     const what = change.truncated ? 'Too big to show here.'
@@ -108,7 +109,7 @@ function renderSettingsHistory(el = $('#set-history'), history = SETTINGS_DATA.h
     // A manager bot's change says so: it acted for the bot, as its manager (backend/report_managers.py).
     const by = change.via === 'report_manager' ? `${actorLabel(change.actor)}, as its manager` : actorLabel(change.actor);
     return `<div class="settings-history-row"><span>${avatar(change.bot, 24, stateOf(change.bot))}</span><div><strong>${esc(settingsBotName(change.bot))} · ${esc(field)}</strong>
-      <p>${esc(what)}</p><p>${esc(by)} · ${esc(fmt(change.created_at))}${change.undone_at ? ` · undone ${esc(ago(change.undone_at))}` : ''}</p></div>
+      <p>${esc(what)}</p><p>${esc(by)}${change.field === 'run_workflows' && change.after?.yes_message ? ` said yes in conversation · carried by ${esc(change.via === 'botops' ? 'BotOps' : change.via === 'assistant' ? 'their Assistant' : String(change.via || ''))}` : ''} · ${esc(fmt(change.created_at))}${change.undone_at ? ` · undone ${esc(ago(change.undone_at))}` : ''}</p></div>
       <div class="history-action">${change.can_undo && e ? `<button class="ghost" type="button" data-settings-undo="${esc(change.id)}" data-bot="${esc(change.bot)}" data-revision="${e.revision}">Undo</button>` : ''}</div>
       ${settingsCheckpointDetails(transition)}</div>`;
   }).join('');
