@@ -8,12 +8,13 @@ import urllib.request
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from clients import gateway as G
 
-from backend import demo, gateway_tiers, github_app
+from backend import demo, demo_billing, gateway_tiers, github_app
 from backend.app import create_app
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
@@ -167,14 +168,71 @@ def test_the_demo_sends_nothing_with_its_gateway_key(built, monkeypatch):
 
     monkeypatch.setattr(urllib.request.OpenerDirector, "open", refused)
     with as_ana(built) as api:
-        assert api.get("/api/v2/billing").json()["state"] == "unreachable"
-        assert api.get("/api/v2/billing/usage", params={"day": "2026-09-24"}).json()["state"] == "unreachable"
-        assert api.get("/api/v2/billing/statements/2026-09.csv").status_code == 409
+        assert api.get("/api/v2/billing").json()["state"] == "active"
+        assert api.get("/api/v2/billing/usage", params={"day": "2026-09-24"}).json()["state"] == "ok"
+        assert api.get("/api/v2/billing/statements/2026-09.csv").status_code == 200
         assert api.get("/api/v2/hosted-servers").json()["state"] == "none"
         assert api.post("/api/v2/hosted-servers/pv-0123456789abcdef/start").status_code == 409
         assert api.get("/api/v2/bots/coo/pause-state").json()["company_paused"] is False
         assert api.post("/api/v2/gateway/search", json={"query": "projector"}).status_code == 409
     assert sent == []
+
+
+def test_email_and_phone_writes_refuse_in_the_demo_before_any_call_out(built, monkeypatch):
+    """The Email & Phone buttons (a new inbox, a phone request, the phone quote, the company connection) are refused by
+    the product in the demo before any request leaves: no HTTP client sends. Every send is recorded here."""
+    sent = []
+    local_send, local_async_send = httpx.Client.send, httpx.AsyncClient.send
+
+    def sync_send(self, request, *args, **kwargs):
+        if request.url.host in ("127.0.0.1", "localhost"):      # the test's own client, which talks to the app
+            return local_send(self, request, *args, **kwargs)
+        sent.append(str(request.url))
+        raise OSError("the demo sent a request")
+
+    async def async_send(self, request, *args, **kwargs):
+        if request.url.host in ("127.0.0.1", "localhost"):
+            return await local_async_send(self, request, *args, **kwargs)
+        sent.append(str(request.url))
+        raise OSError("the demo sent a request")
+
+    monkeypatch.setattr(httpx.Client, "send", sync_send)
+    monkeypatch.setattr(httpx.AsyncClient, "send", async_send)
+    with as_ana(built) as api:
+        create = api.post("/api/v2/inbound/inboxes", headers={"Idempotency-Key": "demo-services-create"},
+                          json={"kind": "email", "name": "Sales two"})
+        assert create.status_code == 409 and create.json()["error"]["code"] == "inbound_unconfigured"
+        phone = api.post("/api/v2/inbound/phone-requests", headers={"Idempotency-Key": "demo-services-phone"},
+                         json={"name": "Mobile number"})
+        assert phone.status_code == 409
+        assert api.get("/api/v2/inbound/phone-quote").status_code == 409
+        connect = api.post("/api/v2/inbound/company-connection", json={"action": "preview", "code": "x" * 43})
+        assert connect.status_code == 503
+    assert sent == []
+
+
+def test_billing_is_a_sample_that_agrees_with_the_usage_page(built):
+    """Billing comes from the demo's own usage: each day is the usage page's day to the micro, its hours and models add
+    up to it, the statement's debits are the usage, and the CSV gives the statement's lines."""
+    with as_ana(built) as api:
+        billing = api.get("/api/v2/billing").json()
+        page = api.get("/api/v2/usage", params={"group": "day", "from": "2026-09-01", "to": "2026-09-25"}).json()
+        priced = {row["day"]: row["est_cost_usd"] for row in page["rows"] if row["est_cost_usd"]}
+        assert billing["usage"] and {row["period"] for row in billing["usage"]} == set(priced)
+        for day in billing["usage"]:
+            assert abs(day["total_micros"] - round(priced[day["period"]] * 1_000_000)) <= 1
+            assert sum(line["amount_micros"] for line in day["lines"]) == day["total_micros"]
+            hours = api.get("/api/v2/billing/usage", params={"day": day["period"]}).json()["hours"]
+            assert sum(hour["total_micros"] for hour in hours) == day["total_micros"]
+        statement = billing["statement"]
+        debits = sum(day["total_micros"] for day in billing["usage"])
+        assert statement["debits_micros"] == debits == statement["debits_by_product"]["gateway"]
+        assert billing["credits"][0]["amount_micros"] == demo_billing.GRANT
+        assert billing["balance_micros"] == billing["credits"][0]["left_micros"] == statement["closing_micros"]
+        assert statement["closing_micros"] == statement["opening_micros"] + statement["credits_micros"] - debits
+        csv_lines = api.get("/api/v2/billing/statements/2026-09.csv").text.splitlines()
+        assert csv_lines == ["month,line,amount_micros", "2026-09,opening,0", f"2026-09,credits:grant,{demo_billing.GRANT}",
+                             f"2026-09,debits:gateway,{-debits}", f"2026-09,closing,{statement['closing_micros']}"]
 
 
 def test_a_build_long_after_its_dates_keeps_every_message_body(tmp_path):

@@ -36,6 +36,8 @@ from . import org_rule_check
 from .roadmaps import exact_approval
 from . import login_holds
 from . import cloud_access
+from . import demo_billing
+from .usage import own_bots as usage_bots
 from . import counsel
 from . import thread_api
 from . import step_age
@@ -1902,8 +1904,9 @@ def create_app(settings=None):
         """The company's balance and status, credits, usage by day and the month's statement, from Tico HQ; a Tico
         Cloud company's access (`cloud`) too, kept at once so the app and the page agree (backend/cloud_access.py)."""
         key_base = billing_key(request.state.identity)
-        if settings.demo:       # the sample key goes nowhere: HQ is not reached, and cloud access is left as it is
-            return {"state": "unreachable"}
+        if settings.demo:       # a sample from the demo's own usage (backend/demo_billing.py); HQ is not reached
+            with store.read() as c:
+                return demo_billing.read(c, usage_bots(c, auth, request.state.identity), month)
         answer = company_billing.read(*key_base, month)
         cloud_access.from_billing(store, answer)
         return answer
@@ -1919,17 +1922,20 @@ def create_app(settings=None):
     def billing_day(request: Request, day: str = ""):
         """One day's usage by hour, from Tico HQ."""
         key_base = billing_key(request.state.identity)
-        if settings.demo:       # the sample key goes nowhere: HQ is not reached
-            return {"state": "unreachable"}
+        if settings.demo:       # the same sample as the page's, hour by hour (backend/demo_billing.py)
+            with store.read() as c:
+                return demo_billing.day(c, usage_bots(c, auth, request.state.identity), day)
         return company_billing.day(*key_base, day)
 
     @app.get("/api/v2/billing/statements/{month}.csv")
     def billing_statement_csv(request: Request, month: str):
         """The month's statement as CSV, the same lines and numbers as on screen."""
         key_base = billing_key(request.state.identity)
-        if settings.demo:       # the sample key goes nowhere: a demo has no statement to give
-            raise Problem("demo", "The demo does not reach Tico HQ, so it has no statement to download.", 409)
-        body = company_billing.statement_csv(*key_base, month)
+        if settings.demo:       # the same lines as the page's statement (backend/demo_billing.py)
+            with store.read() as c:
+                body = demo_billing.statement_csv(c, usage_bots(c, auth, request.state.identity), month)
+        else:
+            body = company_billing.statement_csv(*key_base, month)
         return Response(body, media_type="text/csv; charset=utf-8", headers={
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": 'attachment; filename="tico-statement-%s.csv"' % month})

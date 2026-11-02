@@ -193,6 +193,21 @@ def save_limit(c, auth, who, bot, body, via=None):
     return default, allowed
 
 
+def query(c, key, join, slugs, first, last, filters=None):
+    """Grouped sums for the runs that finished in the window on these bots. Module level so the demo's billing sample
+    (backend/demo_billing.py) sums the same runs the usage page does."""
+    if not slugs:
+        return []
+    marks = ",".join("?" * len(slugs))
+    sql = (f"SELECT {key} AS k, {SUMS} FROM {RUNS} t {join} WHERE t.finished_at IS NOT NULL AND t.started_at >= ? "
+           f"AND t.started_at < ? AND t.bot IN ({marks})")
+    args = [first.isoformat() + "T00:00:00", (last + timedelta(days=1)).isoformat() + "T00:00:00", *sorted(slugs)]
+    for dimension, value in (filters or {}).items():
+        sql += f" AND {DIMENSIONS[dimension]} = ?"
+        args.append("" if value == "__unknown__" else value)
+    return c.execute(sql + " GROUP BY k", args).fetchall()
+
+
 def install(app, store, auth, mutate, settings):
     def window(start, end):
         """(first day, last day) from the query; the default is the last seven days."""
@@ -206,19 +221,6 @@ def install(app, store, auth, mutate, settings):
         if (last - first).days >= MAX_DAYS:
             raise Problem("range", f"A range is at most {MAX_DAYS} days", 422)
         return first, last
-
-    def query(c, key, join, slugs, first, last, filters=None):
-        """Grouped sums for the runs that finished in the window on these bots."""
-        if not slugs:
-            return []
-        marks = ",".join("?" * len(slugs))
-        sql = (f"SELECT {key} AS k, {SUMS} FROM {RUNS} t {join} WHERE t.finished_at IS NOT NULL AND t.started_at >= ? "
-               f"AND t.started_at < ? AND t.bot IN ({marks})")
-        args = [first.isoformat() + "T00:00:00", (last + timedelta(days=1)).isoformat() + "T00:00:00", *sorted(slugs)]
-        for dimension, value in (filters or {}).items():
-            sql += f" AND {DIMENSIONS[dimension]} = ?"
-            args.append("" if value == "__unknown__" else value)
-        return c.execute(sql + " GROUP BY k", args).fetchall()
 
     def totals(rows):
         keys = ("runs", "input_tokens", "cached_tokens", "output_tokens", "api_usd", "subscription_usd",
