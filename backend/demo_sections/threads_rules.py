@@ -4,6 +4,7 @@ added, Ben's rule suggestion, and one draft that a rule held for Ben."""
 from .. import org_rule_check as OC
 from .. import org_rules as R
 from .. import threads as T
+from ..auth import Identity
 
 # Hours ago, oldest first within each list. Every name is fictional (acme.example and .example domains only).
 CONTENT = {
@@ -19,11 +20,11 @@ CONTENT = {
     "suggestion": {"ago": 50, "by": "human:ben", "bot": "marketplace",
                    "text": "Marketplace listings say ships in 3 to 5 days only while the unit is in stock at the warehouse."},
     "threads": {
-        "ops": {"home": "bot:ops-manager"},
-        "care": {"home": "bot:support-lead"},
-        "eng": {"home": "bot:product-manager"},
-        "growth": {"home": "bot:marketing-lead"},
-        "finance": {"home": "bot:finance-lead"},
+        "ops": {"home": "bot:ops-manager", "follow": True},
+        "care": {"home": "bot:support-lead", "follow": True},
+        "eng": {"home": "bot:product-manager", "follow": True},
+        "growth": {"home": "bot:marketing-lead", "follow": True},
+        "finance": {"home": "bot:finance-lead", "follow": True},
         "all": {"title": "This week", "by": "human:ana"},
         "coo": {"dm": ["human:ana", "bot:coo"]},
         "pricing": {"dm": ["human:ana", "bot:pricing"]},
@@ -186,6 +187,8 @@ def _thread(c, ids, key):
         spec = CONTENT["threads"][key]
         if "home" in spec:
             ids[key] = T.home(c, spec["home"])["id"]
+            if spec.get("follow"):     # Ana follows these Homes, so they stay in her sidebar
+                T.follow(c, Identity("human:ana", "owner"), ids[key], notify="digest")
         elif "dm" in spec:
             ids[key] = T.dm(c, spec["dm"][0], spec["dm"][1:])["id"]
         else:

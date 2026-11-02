@@ -83,13 +83,28 @@ def test_the_refund_draft_is_held_for_ben_and_written_nowhere(built):
 
 def test_the_engineering_home_has_the_pause_and_its_fix_thread(built):
     _, settings = built
+    # The Home is shared with the other sections' posts (recruit, automations), so this checks this section's own messages.
+    said = [item["say"] for item in CONTENT["messages"] if item["in"] == "eng"]
     with signed_in(settings) as api:
-        messages = timeline(api, home_id(api, "bot:product-manager"))
+        messages = [m for m in timeline(api, home_id(api, "bot:product-manager")) if m["body"] in said]
+    assert len(messages) == len(said)
     bodies = [m["body"] for m in messages]
     assert any(text.startswith("Rollout paused") for text in bodies)
     assert sum(1 for m in messages if m["depth"] == 1) == 4      # the fix's sub-thread
     stamps = [datetime.strptime(m["created_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc) for m in messages]
     assert all(NOW - timedelta(days=7) <= stamp <= NOW for stamp in stamps)
+
+
+def test_ana_sidebar_lists_her_department_homes_and_her_dms(built):
+    _, settings = built
+    with signed_in(settings) as api:
+        sidebar = api.get("/api/v2/threads").json()          # rooms and DMs are paged apart: threads, dms
+        listed = {t["id"] for key in ("threads", "dms") for t in sidebar.get(key, [])}
+        homes = [home_id(api, spec["home"]) for spec in CONTENT["threads"].values() if "home" in spec]
+        dms = [api.get("/api/v2/threads/dm", params={"with": with_, "create": "false"}).json()["id"]
+               for with_ in ("bot:coo", "bot:pricing")]
+    assert [h for h in homes if h not in listed] == [], "department homes missing from the sidebar"
+    assert [d for d in dms if d not in listed] == [], "DMs missing from the sidebar"
 
 
 def test_the_company_thread_and_ana_assistant_dm_show(built):
