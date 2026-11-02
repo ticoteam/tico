@@ -25,6 +25,10 @@ _DASHES = "\\-\u2010-\u2015\u2212"
 _GAP = re.compile(rf"[\s\u00ad\u200b-\u200d\u2060\ufeff{_DASHES}]*")
 _DASH = re.compile(rf"[{_DASHES}]")
 _WORD = re.compile(r"\w")
+# A CVC (or CVV, CSC) typed beside its three or four digits, in any sentence: `CVC 123`, `cvv2: 4567`, `security code
+# 987`, `CVC is 123`. Its digits are the code, whatever else the text says (§8.3, §13).
+_CVC_TEXT = re.compile(r"(?i)\b(?:cvc2?|cvv2?|csc|security\s+code)(?![a-z])(?:\s*(?:is|was|no\.?|number|code)\b)?"
+                       r"[\W_]{0,3}\d{3,4}(?!\d)")
 
 
 def _luhn(digits: str) -> bool:
@@ -71,6 +75,8 @@ def _code_before(text: str, spans: list[tuple[int, int]], i: int) -> bool:
 
 
 def _card_text(text: str) -> bool:
+    if _CVC_TEXT.search(text):
+        return True
     spans = [m.span() for m in _DIGITS.finditer(text)]
     for i, (start, _) in enumerate(spans):
         if _joined_left(text, start) and not _code_before(text, spans, i):
@@ -89,9 +95,10 @@ def _card_text(text: str) -> bool:
 
 
 def has_card_number(value: object) -> bool:
-    """Whether a payload (or part of one) holds a card number: a field named like one, or text or a JSON number with a
-    Luhn-valid run of 13 to 19 digits standing as its own token (not inside an id). Tico never takes or keeps one (spec
-    §8.3), so such a payload is refused before it is stored."""
+    """Whether a payload (or part of one) holds a card number or a CVC: a field named like one, text or a JSON number
+    with a Luhn-valid run of 13 to 19 digits standing as its own token (not inside an id), or text with a CVC typed
+    beside its digits. Tico never takes or keeps either (spec §8.3, §13), so such a payload is refused before it is
+    stored."""
     if isinstance(value, Mapping):
         items_ = cast(Mapping[object, object], value).items()
         return any(str(k).lower() in CARD_NUMBER_KEYS or has_card_number(v) for k, v in items_)

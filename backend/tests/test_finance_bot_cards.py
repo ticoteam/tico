@@ -487,7 +487,24 @@ def test_a_card_number_is_refused_however_its_digits_are_spaced_or_followed(book
     assert not V.has_card_number({"budget_id": "ab4222222222222cd", "card_id": "12345678-1234-1234-1234-123456789012"})
 
 
-DASHED_CARD_SHAPES = ("4242-4242-4242-4242-123", "4242 4242 4242 4242-123", "4242-4242-4242-4242-7",
+def test_a_cvc_typed_as_free_text_is_refused_and_never_stored(books):
+    """§8.3, §13: a CVC is never stored, logged or sent to a model, whatever sentence it is typed into."""
+    for typed in ("CVC 123", "cvc: 4567", "CVV2=123", "CVC123", "security code 987", "card CSC 321 on file",
+                  "cvc is 123"):
+        assert V.has_card_number({"memo": typed}), typed
+    for text in ("invoice 123 for cvc work", "CVC check passed on 3 runs", "security code 123456",
+                  "order 2026-10-31 ref 0001"):
+        assert not V.has_card_number({"memo": text}), text
+    with books.transaction() as c:
+        budgets = c.execute("SELECT count(*) FROM fin_budgets").fetchone()[0]
+        refused = act(c, OWNER, "budget_create", {"name": "CVC 123", "account_id": account(c, "6100"),
+                                                  "amount": 10_000, "at_limit": "decline"})
+        assert (refused.status, refused.code, refused.reason) == ("failed", "invalid", FA.CARD_NUMBER_REFUSED)
+        assert c.execute("SELECT count(*) FROM fin_budgets").fetchone()[0] == budgets
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE payload_json LIKE '%CVC%'").fetchone()[0] == 0
+
+
+DASHED_CARD_SHAPES =("4242-4242-4242-4242-123", "4242 4242 4242 4242-123", "4242-4242-4242-4242-7",
                       "4242-4242-4242-4242-", "-4242424242424242", "4242424242424242-", "-4242-4242-4242-4242",
                       "123-4242-4242-4242-4242")
 
