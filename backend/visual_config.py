@@ -90,11 +90,16 @@ def observe(*, root=ROOT, environ=None, database=Path("/data/hub.sqlite"), direc
     env = server_environment() if environ is None else environ
     app = env.get("TICO_DOMAIN", "")
     enabled = env.get("TICO_CADDY_VISUALS") == "1"
-    runner = caddy_assets._runner_host(env.get("TICO_RUNNER_URL", ""), app) if enabled else ""
-    config, generation, serving, reason = caddy_assets._configuration(
-        app, env.get("TICO_VISUAL_ORIGIN", ""), runner, enabled)
+    # The same inputs the writer uses for the reader origin, so a generated file with the Company page's reader site is
+    # observed as written. Without a reader origin this is the configuration observed before it existed.
+    reader_origin = env.get("TICO_READER_ORIGIN", "")
+    serve_reader = bool(reader_origin.strip())
+    runner = caddy_assets._runner_host(env.get("TICO_RUNNER_URL", ""), app) if enabled or serve_reader else ""
+    config, generation, serving, reason, reading, reader_reason = caddy_assets._configuration(
+        app, env.get("TICO_VISUAL_ORIGIN", ""), runner, enabled, reader_origin, serve_reader)
     actual = read_file(directory / "caddy.json", 262144)
-    if reason or serving != enabled or actual != caddy_assets._encoded(config) + b"\n":
+    if (reason or reader_reason or serving != enabled or reading != serve_reader
+            or actual != caddy_assets._encoded(config) + b"\n"):
         raise wire.Pending("generated_configuration_mismatch")
     if read_file(directory / "supervisor.sh", 65536) != read_file(root / "docker/caddy-supervisor.sh", 65536):
         raise wire.Pending("supervisor_source_mismatch")
