@@ -236,31 +236,34 @@ TEST_IMPORT = re.compile(r'from\s+((?:backend|runner|scripts)\.tests(?:\.\w+)*)\
 
 
 def native_test_files(names):
-    """The files of `names` that run the native binaries: they name them, or import a test module that does."""
-    sources = {}
-    for name in {*names, *(str(p.relative_to(ROOT)) for d in ('backend', 'runner', 'scripts')
-                           for p in (ROOT / d).rglob('tests/**/*.py'))}:
-        try:
-            sources[name] = (ROOT / name).read_text(errors='replace')
-        except OSError:   # not a file here (a test's stand-in name): nothing to run natively
-            pass
-    native = {name for name, text in sources.items() if NATIVE_TEST.search(text)}
+    """The files of `names` that run the native binaries: they name them, or import a test module that does. Only the
+    named files and the test modules they import are read (no folder listing: PR checks' selector would take one as
+    reading every test, and run the whole suite for any test change)."""
+    texts, verdicts = {}, {}
 
-    def imports(text):
-        for package, members, module in TEST_IMPORT.findall(text):
+    def text(name):
+        if name not in texts:
+            try:
+                texts[name] = (ROOT / name).read_text(errors='replace')
+            except OSError:   # not a file here (a test's stand-in name, a package): nothing to run natively
+                texts[name] = ''
+        return texts[name]
+
+    def imports(source):
+        for package, members, module in TEST_IMPORT.findall(source):
             if module:
                 yield module.replace('.', '/') + '.py'
             else:
                 yield package.replace('.', '/') + '.py'
                 yield from (f"{package.replace('.', '/')}/{m.strip()}.py" for m in members.split(',') if m.strip())
-    grown = True
-    while grown:
-        grown = False
-        for name, text in sources.items():
-            if name not in native and any(path in native for path in imports(text)):
-                native.add(name)
-                grown = True
-    return {name for name in names if name in native}
+
+    def native(name, seen=()):
+        if name not in verdicts:
+            source = text(name)
+            verdicts[name] = bool(NATIVE_TEST.search(source)) or any(
+                native(path, (*seen, name)) for path in imports(source) if path not in seen and path != name)
+        return verdicts[name]
+    return {name for name in names if native(name)}
 
 
 def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False):
