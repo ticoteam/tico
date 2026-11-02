@@ -6,6 +6,7 @@ private task, makes a private task. The body ends with where it came from (autho
 itself is `POST /api/v2/tasks` (its rule check, privacy refusals, audit and events), handed in as `create_task`.
 """
 
+import re
 from urllib.parse import quote
 
 from fastapi import Request
@@ -63,4 +64,11 @@ def install(app, store, auth, create_task, public_url=""):
         links = [href] if public_url else []
         create = M.TaskCreate(title=body.title.strip(), body=text, owner=body.owner,
                               private=True if keep_private else None, links=links)
-        return create_task(request, create)
+        try:
+            return create_task(request, create)
+        except Problem as refused:
+            # The refusal's words name the task it repeats, when the viewer may know it: Make task links to it.
+            twin = re.match(r"(\S+) already asks ", refused.detail) if refused.code == "duplicate" else None
+            if twin:
+                refused.extra = {**refused.extra, "task_id": twin.group(1)}
+            raise

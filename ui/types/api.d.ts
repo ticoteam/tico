@@ -683,6 +683,7 @@ export type CallJoin = {
 };
 
 export type CallList = {
+  available: boolean;
   calls: Array<CallSummary>;
   next_before: string | null;
 };
@@ -3941,6 +3942,7 @@ export type SlackLink = {
 };
 
 export type SlackLinkList = {
+  available: boolean;
   links: Array<SlackLink>;
   next_cursor: string | null;
 };
@@ -8145,6 +8147,7 @@ export type OpenEarlierMessagesResponse = ThreadEarlier;
 
 /** GET /api/v2/threads/dm */
 export type OpenThreadDmParams = {
+  create?: boolean;
   with: string;
 };
 export type OpenThreadDmBody = never;

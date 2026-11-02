@@ -836,7 +836,8 @@ def install_calls(app, store, auth, write):
 
     @app.get("/api/v2/threads/{thread_id}/calls")
     def list_calls(request: Request, thread_id: str, limit: int = 25, before: str = ""):
-        """A thread's calls, newest first, a page at a time. `next_before` is the cursor for the next page, or null."""
+        """A thread's calls, newest first, a page at a time. `next_before` is the cursor for the next page, or null.
+        `available` is whether this server can start one (Tico Meet is set up)."""
         who = request.state.identity
         human_only(who)
         auth.domain(who)
@@ -855,7 +856,8 @@ def install_calls(app, store, auth, write):
             used += cost
             shown.append(item)
         more = len(found) > len(shown)
-        return {"calls": shown, "next_before": f"{shown[-1]['started_at']}|{shown[-1]['id']}" if more else None}
+        return {"calls": shown, "next_before": f"{shown[-1]['started_at']}|{shown[-1]['id']}" if more else None,
+                "available": calls.media is not None}
 
     @app.post("/api/v2/threads/{thread_id}/calls")
     def start_call(request: Request, thread_id: str, body: StartCall):

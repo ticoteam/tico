@@ -5,6 +5,7 @@ Admins only. No Slack is needed: these routes only write the rows the gateway ac
 
 import pytest
 
+from backend import slack_app
 from backend.store import H
 from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
 
@@ -90,3 +91,12 @@ def test_the_list_pages_newest_first_and_every_link_is_read_once(api):
         if not cursor:
             break
     assert sorted(seen) == sorted(made) and len(seen) == len(set(seen))
+
+
+def test_the_list_says_whether_slack_is_set_up(api, thread):
+    read = lambda: api.get("/api/v2/slack/links", params={"thread": THREAD}, headers=headers(ADMIN)).json()["available"]
+    assert read() is False
+    with api.app.state.store.transaction() as c:
+        c.executescript(slack_app.SCHEMA)
+        c.execute("INSERT INTO slack_credentials VALUES('app',?,?,'','',?,?)", (b"sealed", b"nonce", H.now(), "human:ana"))
+    assert read() is True

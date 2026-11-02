@@ -35,7 +35,7 @@ async function callLoad(view) {
   try {
     const r = await get(`/v2/threads/${encodeURIComponent(view.id)}/calls?limit=1`, {fresh: true});
     const live = (r.calls || []).find(c => c.state === 'live') || null;
-    CALL_THREADS.set(view.id, {...CALL_THREADS.get(view.id), call: live, none: false});
+    CALL_THREADS.set(view.id, {...CALL_THREADS.get(view.id), call: live, none: false, off: r.available === false});
   } catch (e) {
     // 404 from a server without calls; a call the viewer cannot read is the same answer.
     CALL_THREADS.set(view.id, e?.status === 503 ? {off: true} : {none: true});
@@ -47,8 +47,13 @@ function callHeadHTML(view) {
   if (!t || !info || info.none) return '';
   if (CALL?.threadId === view.id) return '<span class="thv-call-note thv-call-on" role="status">In call</span>';
   if (info.removed) return '<span class="thv-call-note muted">Removed from call</span>';
-  // Calls are set up in the server's environment, so only the owner can do anything about it.
-  if (info.off) return S.me?.role === 'owner' ? `<a class="thv-call-note" href="${GH}/blob/main/docs/meet.md#self-hosting" target="_blank" rel="noopener noreferrer">Set up calls</a>` : '';
+  // Calls are set up in the server's environment, so only the owner can do anything about it. A hosted server's
+  // environment is Tico support's.
+  if (info.off) {
+    if (S.me?.role !== 'owner') return '';
+    return S.config?.hosted && window.supportStart ? '<button type="button" class="ghost small thv-call-note" data-call-setup>Set up calls</button>'
+      : `<a class="thv-call-note" href="${GH}/blob/main/docs/meet.md#self-hosting" target="_blank" rel="noopener noreferrer">Set up calls</a>`;
+  }
   const icon = '<span class="nav-icon" aria-hidden="true">call</span>';
   if (info.call) return `<button type="button" class="ghost small thv-call" data-call="join" aria-label="Join call">${icon}<span class="thv-call-word">Join</span></button>`;
   return t.me?.can_post ? `<button type="button" class="ghost small thv-call" data-call="start" aria-label="Start call">${icon}<span class="thv-call-word">Start call</span></button>` : '';

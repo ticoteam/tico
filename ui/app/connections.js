@@ -85,6 +85,7 @@ async function cnSlackSection(view) {
     if (view !== CN_VIEW || !sec.isConnected) return;
     rows = (fresh ? [] : rows).concat(data.links || []);
     cursor = data.next_cursor || '';
+    sec.querySelector('[data-cn-open]').hidden = data.available === false;
     more.hidden = !cursor;
     await draw();
   };

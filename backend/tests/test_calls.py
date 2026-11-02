@@ -308,6 +308,15 @@ def test_a_thread_refusal_of_the_end_of_call_post_leaves_an_audit_row_and_a_hold
     assert not any(text.startswith("Call transcript") for text in thread_texts(meet, cid))
 
 
+def test_the_list_says_whether_this_server_can_start_a_call(meet):
+    cid = thread(meet)
+    assert get(meet, f"threads/{cid}/calls")["available"] is True
+    meet.app.state.call_media = None
+    assert get(meet, f"threads/{cid}/calls")["available"] is False
+    refused = meet.post(f"/api/v2/threads/{cid}/calls", json={}, headers=headers("ana-test"))
+    assert refused.status_code == 503 and refused.json()["error"]["code"] == "meet_unavailable"
+
+
 def test_a_person_outside_a_members_thread_cannot_see_or_join_its_call(meet):
     cid = thread(meet)
     call_id = start_call(meet, cid)["id"]

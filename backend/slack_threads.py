@@ -383,9 +383,12 @@ def list_links(store, who, thread_id="", limit=50, cursor="", auth=None):
     """The links the admin can see, newest first, a page at a time: a listed thread must be readable (a hidden or missing
     one is a 404), and an unfiltered listing leaves out the links to threads the admin cannot read. `next_cursor` (the
     last row read's `created_at|id`) reads on; one page reads at most `_LINKS_SCAN` rows, so a run of hidden links ends
-    a short page with a cursor rather than an unbounded scan."""
+    a short page with a cursor rather than an unbounded scan. `available` is whether Slack is set up here: a link made
+    before that waits with nothing to carry it."""
+    from . import slack_app
     core, limit = _core(), max(1, min(int(limit or 50), 100))
     with store.read() as c:
+        available = slack_app.status(c)["configured"]
         auth = auth or _auth(store)
         viewer = core.viewer(auth, who)
         sql, args = "SELECT * FROM slack_thread_links WHERE state<>'unlinked'", []
@@ -406,7 +409,8 @@ def list_links(store, who, thread_id="", limit=50, cursor="", auth=None):
             last = dict(row)
             if core.readable(c, viewer, last["thread_id"]):
                 out.append(view(last))
-    return {"links": out, "next_cursor": f"{last['created_at']}|{last['id']}" if more and last else None}
+    return {"links": out, "next_cursor": f"{last['created_at']}|{last['id']}" if more and last else None,
+            "available": available}
 
 
 def _event_key(event):

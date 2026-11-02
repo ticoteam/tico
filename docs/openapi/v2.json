@@ -32706,7 +32706,7 @@
     },
     "/api/v2/threads/dm": {
       "get": {
-        "summary": "My DM with `with`: the open one with exactly those two, or a new one; needs Write on them (the reply-back rule applies)",
+        "summary": "My DM with `with`: the open one with exactly those two, or a new one; needs Write on them (the reply-back rule applies). `create=false` makes nothing and answers 404 `no_dm` when there is none yet",
         "operationId": "openThreadDm",
         "parameters": [
           {
@@ -32716,6 +32716,16 @@
             "schema": {
               "type": "string",
               "title": "With"
+            }
+          },
+          {
+            "name": "create",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Create"
             }
           }
         ],
@@ -41279,9 +41289,13 @@
               "string",
               "null"
             ]
+          },
+          "available": {
+            "type": "boolean"
           }
         },
         "required": [
+          "available",
           "calls",
           "next_before"
         ],
@@ -57364,9 +57378,13 @@
               "string",
               "null"
             ]
+          },
+          "available": {
+            "type": "boolean"
           }
         },
         "required": [
+          "available",
           "links",
           "next_cursor"
         ],

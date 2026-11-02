@@ -2422,7 +2422,7 @@ SCHEMAS['SlackLink'] = obj({
     'audience': 's', 'state': {'enum': ['requested', 'active', 'suspended', 'refused', 'unlinked']}, 'reason': 's',
     'history': obj({'state': {'enum': ['off', 'pending', 'running', 'done', 'failed']}, 'count': 'i'}),
     'linked_by': 's', 'created_at': 's', 'updated_at': 's'})
-SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink')), 'next_cursor': 'n'})
+SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink')), 'next_cursor': 'n', 'available': 'b'})
 
 # Independent reviewer cards: task closure never changes this audience or lifetime.
 TAGS['Memory tidy'] = "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
@@ -2544,7 +2544,7 @@ STABLE.extend([
      "that teammate, else the same 404 whether or not they exist", "ThreadView"),
     ("/api/v2/threads/dm", "get", "Threads", "openThreadDm",
      "My DM with `with`: the open one with exactly those two, or a new one; needs Write on them (the reply-back rule "
-     "applies)", "ThreadView"),
+     "applies). `create=false` makes nothing and answers 404 `no_dm` when there is none yet", "ThreadView"),
     ("/api/v2/threads/dm", "post", "Threads", "createThreadDm",
      "A DM with these teammates (`members`), the open one or a new one, with an optional first message (`body`); needs "
      "Write on each of them, and a bot's or person's first message passes the org rules", "ThreadView"),
@@ -2619,7 +2619,7 @@ SCHEMAS.update({
                        "description": "Posts the thread refused at the call's end. Only the connector sees them"},
                 speak_replies={"type": "boolean", "description": "Whether bots were asked to speak their replies "
                                "on this call; off unless the call asked. Spoken replies are not sent yet"}),
-    "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n"}),
+    "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n", "available": "b"}),
     "CallJoin": obj({"call": ref("Call"), "url": "s", "expires_in": "i", "token": "s"}),
     "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
 })

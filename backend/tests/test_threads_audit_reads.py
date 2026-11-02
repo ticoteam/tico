@@ -65,6 +65,26 @@ def test_narrowed_write_keeps_an_existing_dm_open_and_gates_only_starting_one(ac
     assert call(api, "GET", "threads/dm?with=human:eve", "fay-test").status_code == 403
 
 
+def test_looking_for_a_dm_makes_none_and_answers_as_starting_one_would(acme):
+    api, _ = acme
+    def rows(token):
+        return [t["id"] for t in ok(call(api, "GET", "threads", token))["dms"]]
+    before = rows("cara-test")
+    looked = call(api, "GET", "threads/dm?create=false&with=human:eve", "cara-test")
+    assert looked.status_code == 404 and looked.json()["error"]["code"] == "no_dm"
+    assert rows("cara-test") == before, "opening a DM tab leaves no DM behind"
+    # A first send still makes it, and then the same look finds it.
+    made = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve"], "body": "Hi Eve"}))
+    found = made.get("thread") or made
+    assert ok(call(api, "GET", "threads/dm?create=false&with=human:eve", "cara-test"))["id"] == found["id"]
+    # The refusals are the ones starting a DM gives, and older callers of the route still get one made.
+    set_access(api, "humans/eve", token="eve-test", write=NOBODY)
+    assert ok(call(api, "GET", "threads/dm?create=false&with=human:eve", "cara-test"))["id"] == found["id"]
+    assert call(api, "GET", "threads/dm?create=false&with=human:eve", "fay-test").status_code == 403
+    assert call(api, "GET", "threads/dm?create=false&with=human:nobody", "fay-test").status_code == 404
+    assert ok(call(api, "GET", "threads/dm?with=human:fay", "cara-test"))["id"] not in before
+
+
 def test_a_teammate_i_may_not_see_answers_as_one_who_does_not_exist(acme):
     api, _ = acme
     set_access(api, "humans/eve", token="eve-test", see=NOBODY, read=NOBODY, write=NOBODY)

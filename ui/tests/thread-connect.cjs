@@ -91,7 +91,7 @@ async function open(browser, who, {viewport = DESKTOP} = {}) {
       // Two a page here, so the page's More is the server's next_cursor.
       const start = Number(url.searchParams.get('cursor') || 0), size = Math.min(limit, 2);
       const page = rows.slice(start, start + size);
-      return json({links: page, next_cursor: start + size < rows.length ? String(start + size) : null});
+      return json({links: page, next_cursor: start + size < rows.length ? String(start + size) : null, available: !state.slackOff});
     }
     if (p === '/api/v2/slack/links' && method === 'POST') {
       const b = body();
@@ -255,6 +255,24 @@ async function sheet(page) {
         const dlg = await sheet(page);
         await dlg.locator('[data-tcn="slack"] [name=tcn-channel]').waitFor();
         await dlg.locator('[data-tcn="shared"]').waitFor();
+        assert.deepEqual(seen.errors, []);
+        await page.close();
+      }
+
+      // ---- Slack off and no Gateway: nothing on offer that cannot work, and what is already linked still shows.
+      {
+        const {page, seen, state} = await open(browser, 'ana', {viewport});
+        state.slackOff = true; state.federation = {gateway: false}; state.peerings = []; state.shared = {}; state.links = [];
+        await page.goto('https://tico-ui.test/#/library/connections');
+        await page.locator('#cn-slack .cn-none').waitFor();
+        assert.equal(await page.locator('#cn-slack [data-cn-open]').isHidden(), true, `${tag}: no Link a thread`);
+        const dlg = await sheet(page);
+        await page.waitForLoadState('networkidle');
+        assert.equal(await dlg.locator('[name=tcn-channel]').count(), 0, `${tag}: no Slack form with Slack off`);
+        assert.equal(await dlg.locator('[data-tcn="slack"]').isHidden(), true, `${tag}: no Slack section`);
+        assert.equal(await dlg.locator('[data-tcn="shared"]').isHidden(), true, `${tag}: no Shared with without the Gateway`);
+        assert.equal(await dlg.locator('a[href="#/library/connections"]').count(), 0, `${tag}: no Connect a company`);
+        assert.equal(await dlg.locator('.tcn').isHidden(), true, `${tag}: no empty section left behind`);
         assert.deepEqual(seen.errors, []);
         await page.close();
       }

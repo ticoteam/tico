@@ -219,6 +219,103 @@ async function restrictPerson(hub) {
     await phone.locator('#btabs [data-bt="home"]').tap();
     await selected('home');
     await phone.context().close();
+
+    // Dana: opening a bot's DM tab makes nothing; the DM exists once she sends the first message.
+    const dmCount = async () => (await api(hub, 'dana', 'GET', '/v2/threads?limit=50')).dms.length;
+    const dmsBefore = await dmCount();
+    const talk = await pageAs(browser, hub, 'dana');
+    await talk.goto(hub.url + '/#/bot/' + BOT + '/home');
+    await talk.locator('.bot-talk-switch [data-talk="dm"]').click();
+    await talk.locator('#bot-thread .thv-composer .p-text').waitFor({timeout: t(15000)});
+    assert.equal(await dmCount(), dmsBefore, 'opening the DM tab made no DM');
+    await talk.locator('#bot-thread .thv-composer .p-text').fill('First words to the bot.');
+    await talk.locator('#bot-thread .thv-composer .p-send').click();
+    await talk.getByText('First words to the bot.').waitFor({timeout: t(15000)});
+    assert.equal(await dmCount(), dmsBefore + 1, 'the first message made the DM');
+    await talk.context().close();
+
+    // Omar may see Priya but not write to her: no DM button, and the server refuses it too. Dana keeps hers.
+    const seer = await pageAs(browser, hub, 'omar');
+    await seer.goto(hub.url + '/#/person/priya');
+    await seer.locator('#ptabs').waitFor({timeout: t(15000)});
+    assert.equal(await seer.locator('#person-dm').count(), 0, 'no DM without Write on them');
+    await seer.context().close();
+    const refused = await fetch(hub.url + '/api/v2/threads/dm', {method: 'POST', headers: {Authorization: 'Bearer ' + hub.tokens.omar,
+      'content-type': 'application/json', 'Idempotency-Key': crypto.randomUUID()}, body: JSON.stringify({members: ['human:priya'], body: 'Hi'})});
+    assert.equal(refused.status, 403, 'the server refuses a DM without Write');
+
+    const groups = await api(hub, 'dana', 'GET', '/v2/groups');
+    const eng = (groups.groups || groups).find(g => g.name === 'Engineering');
+    for (const isPhone of [false, true]) {
+      const tag = isPhone ? 'phone' : 'desktop';
+      const page = await pageAs(browser, hub, 'dana', {phone: isPhone});
+
+      // Calls are not set up on this hub: the owner sees so on load, with no Start call to find out from.
+      await page.goto(hub.url + '/#/thread/' + plan.id);
+      await page.locator('.thv-call-note', {hasText: 'Set up calls'}).waitFor({timeout: t(15000)});
+      assert.equal(await page.locator('[data-call]').count(), 0, `${tag}: no Start call without calls`);
+
+      // The audience shows in the thread's header on either screen.
+      assert.equal(await page.locator('.thv-aud').innerText(), 'Company', `${tag}: the header names the audience`);
+
+      // Who can read: one title, a one-line team row, and neither Slack nor another company with neither set up here.
+      await page.goto(hub.url + '/#/thread/' + secret.id);
+      await page.locator('[data-thv-menu]').click();
+      await page.locator('.thv-pop').getByText('Who can read').click();
+      const share = page.locator('#thread-share[open]');
+      await share.locator('.thd-aud-word').waitFor({timeout: t(15000)});
+      await page.waitForLoadState('networkidle');
+      assert.equal(await share.locator('.thd-aud legend').count(), 0, `${tag}: the title is the only Who can read`);
+      const word = await share.locator('.thd-aud-word').boundingBox();
+      assert.ok(word.height < 26, `${tag}: A team stays on one line (${word.height}px)`);
+      assert.equal(await share.locator('[name=tcn-channel]').count(), 0, `${tag}: no Slack with Slack off`);
+      assert.equal(await share.getByText('Connect a company').count(), 0, `${tag}: no company without the Gateway`);
+      await share.locator('[data-close]').first().click();
+
+      // Make task twice: the refusal links to the task it repeats, and the button keeps its one line.
+      await page.goto(hub.url + '/#/thread/' + plan.id);
+      const makeTask = async () => {
+        const row = page.locator('[data-message]', {hasText: KICKOFF}).first();
+        await row.hover();
+        await row.locator('[data-th-more]').click();
+        await page.locator('.thv-pop').getByText('Make task').click();
+        await page.locator('#thread-task[open] [type=submit]').click();
+      };
+      if (!isPhone) {
+        await makeTask();
+        await page.waitForFunction(() => !document.querySelector('#thread-task')?.open, null, {timeout: t(15000)});
+      }
+      await makeTask();
+      const twin = page.locator('#thread-task [data-status] a[href^="#/task/"]');
+      await twin.waitFor({timeout: t(15000)});
+      const buttons = page.locator('#thread-task .dash-form-foot');
+      const [cancel, make] = [await buttons.locator('[data-close]').boundingBox(), await buttons.locator('[type=submit]').boundingBox()];
+      assert.ok(Math.abs(cancel.height - make.height) < 2, `${tag}: Make task is one line beside Cancel`);
+      await twin.click();
+      await page.waitForURL(/#\/task\//, {timeout: t(15000)});
+      assert.equal(await page.locator('#thread-task[open]').count(), 0, `${tag}: following the link closes the dialog`);
+
+      // A group's Home sits in the same gutters as its cards.
+      await page.goto(hub.url + '/#/team/' + encodeURIComponent(eng.id));
+      await page.locator('#dash-home').waitFor({timeout: t(15000)});
+      const off = await page.evaluate(() => {
+        const home = document.querySelector('#dash-home').getBoundingClientRect(), grid = document.querySelector('#dash-grid');
+        const box = grid.getBoundingClientRect(), css = getComputedStyle(grid);
+        return [home.left - box.left - parseFloat(css.paddingLeft), box.right - parseFloat(css.paddingRight) - home.right];
+      });
+      assert.ok(off.every(px => Math.abs(px) < 1.5), `${tag}: the Home card lines up with the cards: ${off}`);
+
+      // The Access editor at its tallest: Save stays on screen and on top, over the bottom nav too.
+      await page.goto(hub.url + '/#/person/priya');
+      await page.locator('#person-access-edit').click();
+      await page.locator('#access-editor[open] [name="preset"][value="custom"]').check();
+      const save = await page.evaluate(() => {
+        const b = document.querySelector('#access-editor[open] [type=submit]'), r = b.getBoundingClientRect();
+        return {inside: r.top >= 0 && r.bottom <= innerHeight, top: b.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))};
+      });
+      assert.deepEqual(save, {inside: true, top: true}, `${tag}: Save can be reached`);
+      await page.context().close();
+    }
     console.log('threads-real-hub: ok');
   } finally {
     await browser?.close();

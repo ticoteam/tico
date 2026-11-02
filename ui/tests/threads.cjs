@@ -139,7 +139,7 @@ async function open(browser, who, {phone = false} = {}) {
     if (tl && timeline[tl[1]]) return json(timeline[tl[1]]());
     const one = p.match(/^\/api\/v2\/threads\/([^/]+)\/read$/);
     if (one) { seen.reads.push(one[1]); seen.readSeqs.push(one[1] + ':' + JSON.parse(req.postData() || '{}').seq); return json({ok: true}); }
-    if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: [], next_before: null});
+    if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff && method === 'POST' ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: [], next_before: null, available: !callsOff});
     const settings = p.match(/^\/api\/v2\/threads\/([^/]+)$/);
     if (settings && method === 'PATCH') {
       const body = JSON.parse(req.postData() || '{}');
@@ -660,6 +660,15 @@ async function shot(page, name) {
     await page.locator('a.thv-call-note').waitFor();
     assert.match(await page.locator('a.thv-call-note').getAttribute('href'), /docs\/meet\.md/);
     assert.equal(await page.locator('[data-call]').count(), 0);
+    // A hosted server's owner has no environment to edit, so the same words ask Tico support.
+    await page.evaluate(() => {
+      S.config.hosted = 'own';
+      window.supportStart = text => { window.supportAsked = text; };
+      THV_VIEWS.forEach(v => thvDraw(v));
+    });
+    await page.locator('button[data-call-setup]').click();
+    assert.ok(await page.evaluate(() => window.supportAsked), 'a hosted owner reaches Tico support');
+    await page.evaluate(() => { delete S.config.hosted; });
     assert.deepEqual(seen.errors, []);
     await page.close();
     const member = await open(browser, 'bob', {phone: true});
