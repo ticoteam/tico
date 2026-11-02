@@ -115,7 +115,7 @@ label.cp-check-l{display:flex;flex-direction:row;align-items:center;gap:var(--s2
 .cp-lag[hidden]{display:none}
 .cp-lag input{width:48px;height:var(--ctl-sm);padding:0 4px;text-align:right;font-size:var(--t-sm)}
 .cp-fold th{padding:var(--s2) 0 var(--s1);border-bottom:1px solid var(--line);text-transform:none;letter-spacing:var(--track-normal)}
-.cp-fold button{display:inline-flex;align-items:center;gap:var(--s1);font-size:var(--t-base);font-weight:600;color:var(--ink)}
+.cp-fold button{display:inline-flex;align-items:center;gap:var(--s1);font-size:var(--t-base);font-weight:600;color:var(--ink);text-decoration:none}
 .cp-pick{display:inline-flex;align-items:center;gap:var(--s2);min-width:0;font-size:var(--t-sm);color:var(--muted)}
 .cp-pick select{height:var(--ctl-sm);min-width:0;max-width:220px;padding-top:0;padding-bottom:0;font-size:var(--t-sm);color:var(--ink)}
 .cp-sec>.cp-pick{margin-bottom:var(--s2)}
@@ -143,7 +143,7 @@ button.cp-icon{flex:none;width:var(--ctl-sm);height:var(--ctl-sm);padding:0;bord
 .cp-held span{color:var(--muted);font-size:var(--t-sm)}
 
 /* Readers */
-.cp-reader{display:flex;align-items:center;gap:var(--s3);min-height:36px;padding:var(--s1) 0;border-bottom:1px solid var(--line)}
+.cp-reader{display:flex;align-items:center;gap:var(--s3);min-height:36px;padding:var(--s2) 0;border-bottom:1px solid var(--line)}
 .cp-reader:last-child{border-bottom:0}
 .cp-reader>button{flex:none}
 .cp-reader-t{display:flex;flex:1;flex-direction:column;min-width:0;line-height:var(--lh-tight);overflow-wrap:anywhere}
@@ -179,3 +179,7 @@ a.cp-preview .nav-icon{font-size:16px;width:16px;height:16px;color:var(--muted)}
   .cp-form input:not([type=checkbox]),.cp-form select{height:40px}
   a.cp-preview{height:36px}
 }
+.cp-dlg input[type=file]{display:block;width:100%;height:auto;box-sizing:border-box;padding:var(--s1)}
+.cp-dlg button.primary.people-danger{background:var(--fail);border-color:var(--fail);color:var(--surface)}
+.cp-dlg button.primary.people-danger:hover:not(:disabled){background:color-mix(in srgb,var(--fail) 88%,var(--ink));border-color:color-mix(in srgb,var(--fail) 88%,var(--ink))}
+[data-cp-email-off]{margin:0 0 var(--s2)}

@@ -329,7 +329,7 @@ function cpLogoRemove() {
 // Saving can be the step before turning the page on: `after` runs once there is an address to publish to.
 function cpEditAddress(after) {
   const s = CP.settings || {}, live = s.slug && s.transparency !== 'closed';
-  cpDialog('Address', `${live ? '<p class="cp-line">Links to the old address stop working.</p>' : ''}<label>Address<span class="cp-slug"><input name="slug" value="${esc(s.slug || '')}" maxlength="63" autocomplete="off" spellcheck="false"><span class="muted">.${esc(s.page_domain || '')}</span></span></label>`, 'Save', async form => {
+  cpDialog('Page address', `${live ? '<p class="cp-line">Links to the old address stop working.</p>' : ''}<label>Address<span class="cp-slug"><input name="slug" value="${esc(s.slug || '')}" maxlength="63" autocomplete="off" spellcheck="false"><span class="muted">.${esc(s.page_domain || '')}</span></span></label>`, 'Save', async form => {
     const slug = form.slug.value.trim();
     if (!slug) throw new Error('Enter an address');
     const r = await patch('/v2/company-page', {slug});

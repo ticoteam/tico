@@ -511,6 +511,7 @@ async function shotPart(page, id, name) {
     await page.locator('select[data-cp-mode][data-aud="a-board"][data-class="revenue"]').selectOption('hidden');
     await page.locator('[data-cp-tightened] .cp-alert').waitFor();
     assert.match(await page.locator('[data-cp-tightened]').innerText(), /3 published updates may mention this/);
+    await page.locator('#cp-disclosure').scrollIntoViewIfNeeded();
     await shot(page, 'disclosure-tightened-1280');
     await page.locator('[data-cp-tightened] [data-cp-editions-of]').click();
     await page.waitForFunction(() => [...document.querySelectorAll('.cp-ed-row')].every(r => r.dataset.cpEdition === 'e-pub'));
