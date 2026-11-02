@@ -122,7 +122,7 @@ class TriggerUpdate(Contract):
     unheard: Optional[str] = Field(default=None, max_length=10)
 
 
-def digest(secret):
+def digest(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
 
 

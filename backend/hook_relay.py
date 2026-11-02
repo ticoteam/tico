@@ -140,7 +140,7 @@ def attach(c, items):
         item["relay"] = public(relays.get(item["id"]))
 
 
-def forget(c, trigger_id):
+def forget(c: Any, trigger_id: str) -> None:
     """A deleted trigger loses its relay. Marked here, in the trigger's own transaction; HQ is told by the loop, so no
     network call waits inside a write."""
     c.execute("UPDATE trigger_relays SET deleted_at=? WHERE trigger_id=? AND deleted_at IS NULL", (H.now(), trigger_id))
@@ -154,7 +154,7 @@ def keep(c, *, relay_id, trigger_id, prefix, by):
     H.event(c, by, "trigger.relay_created", trigger_id, {"relay": relay_id})
 
 
-def keep_answer(c, answer, *, trigger_id, by):
+def keep_answer(c: Any, answer: dict[str, Any], *, trigger_id: str, by: str) -> bool:
     """HQ's answer to a relay this install asked for (`POST relays`), kept as the trigger's live relay. False, and nothing
     kept, when the answer is not one this install can use."""
     relay_id = str(answer.get("relay_id") or "")
