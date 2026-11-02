@@ -16,20 +16,21 @@ journey('e2e-new-bot', async ({hub, browser, phone}) => {
   assert.match(bot, UUID, `${where}: a new bot's id is a UUIDv7`);
 
   // A link by its slug moves to its id; the page names it.
-  const page = await open(browser, hub, 'dana', {phone, hash: '#/bot/sales-helper'});
+  const page = await open(browser, hub, 'dana', {phone, hash: '#/bot/sales-helper/dm'});
   // No team icon is set on the scenario install: Settings asks for it and is answered 404 ("No team icon is set").
   expectFailure(page, 404, '^/api/v2/team/icon$', 'GET');
-  await page.waitForFunction(id => location.hash === '#/bot/' + id, bot, {timeout: t(20000)});
+  expectFailure(page, 404, '^/api/v2/threads/dm$', 'GET');     // the DM is made by the first message
+  await page.waitForFunction(id => location.hash.startsWith('#/bot/' + id), bot, {timeout: t(20000)});
   await drawn(page, '.bot-nameline h1', text => text.includes('Sales Helper'), `${where}: the bot's page names it`);
 
-  // Chat: the message goes to the bot, by its id.
-  const composer = page.locator('#conv textarea.p-text, textarea[aria-label="Message this bot"]').first();
+  // DM: the message goes to the bot, by its id.
+  const composer = page.locator('#bot-thread .thv-composer textarea.p-text').first();
   await composer.waitFor({timeout: t(20000)});
-  const sent = page.waitForRequest(r => r.method() === 'POST' && /\/api\/v2\/chat\//.test(new URL(r.url()).pathname));
+  const sent = page.waitForRequest(r => r.method() === 'POST' && /^\/api\/v2\/threads\/dm$/.test(new URL(r.url()).pathname));
   await composer.fill('What did we sell last week?');
-  await page.locator('#conv button.p-send, button.p-send[aria-label="Send"]').first().click();
-  assert.equal(new URL((await sent).url()).pathname, '/api/v2/chat/' + bot, `${where}: chat posts to the bot's id`);
-  await page.locator('#conv .bubble.you', {hasText: 'What did we sell last week?'}).first().waitFor({timeout: t(20000)});
+  await page.locator('#bot-thread .thv-composer button.p-send').first().click();
+  assert.deepEqual((await sent).postDataJSON().members, ['bot:' + bot], `${where}: the DM names the bot by its id`);
+  await page.locator('#bot-thread [data-message]', {hasText: 'What did we sell last week?'}).first().waitFor({timeout: t(20000)});
   assertClean(page, `${where}: chat`);
 
   // A task for it, made in the Tasks page: the owner choice is its id, labelled with its name.
