@@ -1602,6 +1602,33 @@ def _source_readable(c, thread, message, bot):
     return task_privacy.message_readable(c, bot, message)
 
 
+def note_readable(c, note, bot):
+    """Whether a waiting note may still reach `bot`'s run. A deferred thread message (`message_id`) goes only while the
+    bot may read its source now: a bot removed from the thread, or one whose access to the message has gone, loses it.
+    A note with no source message has nothing to lose."""
+    mid = (note or {}).get("message_id")
+    if not mid:
+        return True
+    message = H.message(c, mid)
+    if not message:
+        return False
+    return _source_readable(c, thread_row(c, message["conversation_id"]), message, bot)
+
+
+def revalidate_notes(c, bot, notes):
+    """The notes out of `notes` that `bot` may still be told: each one whose source it can no longer read is cancelled
+    and its copied words cleared, so no run carries them. Called where a run claims its notes (execution.claim)."""
+    kept = []
+    for item in notes:
+        if note_readable(c, item, bot):
+            kept.append(item)
+            continue
+        c.execute("UPDATE notes SET body='', cancelled_at=COALESCE(cancelled_at,?), cancelled_by=? WHERE id=?",
+                  (_now(), H.KEEPER, item["id"]))
+        H.event(c, H.KEEPER, "note.cancel", item["id"], {"reason": "source_unreadable"})
+    return kept
+
+
 def _carrier(c, thread, message, bot, reason, rule):
     """A keeper notice to `bot` in the same thread whose job starts its run for `message`, or None when the bot may not
     read that message. No seq: no timeline, counter or SSE thread view shows it. It carries the source's provenance

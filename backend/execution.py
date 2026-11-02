@@ -3761,7 +3761,9 @@ class Execution:
         notes = []
         if getattr(body, "next_run", False) and not check and not scope:
             from . import bot_to_bot
-            waiting = H.notes_waiting(c, row["bot"])
+            from . import threads
+            # A deferred thread note goes only while the bot still reads its source: a lost one is cancelled here.
+            waiting = threads.revalidate_notes(c, "bot:" + row["bot"], H.notes_waiting(c, row["bot"]))
             for item in waiting:
                 c.execute("UPDATE notes SET carried_by=? WHERE id=?", (aid, item["id"]))
             # A bot's message that waited for this run is read now; a backlog past one run's notes gets a run of its own.

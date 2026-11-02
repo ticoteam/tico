@@ -186,3 +186,29 @@ def test_the_waiting_scan_reads_only_the_unsettled_index(api):
                            "GROUP BY n.to_actor", ("bot:ops",))):
             plan = " ".join(str(row[3]) for row in c.execute("EXPLAIN QUERY PLAN " + sql, args))
             assert "notes_waiting" in plan, plan
+
+
+def test_a_deferred_thread_note_the_bot_lost_access_to_is_cancelled_not_carried(api):
+    # A thread message deferred into a bot's notes must not outlive the bot's access: removing the bot from the thread
+    # cancels what it would carry, and the bot's next unrelated run reads only the notes it can still read.
+    from backend import threads
+    from backend.tests.test_threads_delivery import new_thread, say
+    r = setup(api)
+    store = api.app.state.store
+    lost = new_thread(api, members=("human:ben", "bot:ops"), title="Lost")
+    kept = new_thread(api, members=("human:ben", "bot:ops"), title="Kept")
+    lost_msg = say(api, lost["id"], "Private: the payroll numbers")
+    kept_msg = say(api, kept["id"], "Ben's note for ops")
+    with store.transaction() as c:
+        threads._defer_note(c, H.message(c, lost_msg["id"]), "bot:ops")
+        threads._defer_note(c, H.message(c, kept_msg["id"]), "bot:ops")
+        ana = api.app.state.auth.identity_for_actor(c, "human:ana")
+        threads.remove_member(c, ana, lost["id"], "bot:ops")
+    post(api, "chat/ops", {"text": "Unrelated run"})
+    run = claim(api, r)
+    carried = [n["text"] for n in run["notes"]]
+    assert not any("payroll" in text for text in carried), carried
+    assert any("Ben's note for ops" in text for text in carried), carried
+    with store.read() as c:
+        cancelled = c.execute("SELECT cancelled_at FROM notes WHERE message_id=?", (lost_msg["id"],)).fetchone()[0]
+    assert cancelled
