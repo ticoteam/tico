@@ -165,6 +165,16 @@ def feed_counts(c: sqlite3.Connection) -> dict[str, dict[str, int]]:
 
 
 # ------------------------------------------------------------------------------------------------ feed rows
+def known_txns(c: sqlite3.Connection, connection_id: str, provider_ids: Sequence[str]) -> int:
+    """How many of these provider transactions the connection already took in (a backfill page's end check)."""
+    ids = sorted(set(provider_ids))
+    if not ids:
+        return 0
+    return int(c.execute(f"SELECT count(DISTINCT f.provider_id) FROM fin_feed_txns f JOIN fin_money_accounts m ON "
+                         f"m.id=f.money_account_id WHERE m.connection_id=? AND f.provider_id IN ({_marks(ids)})",
+                         (connection_id, *ids)).fetchone()[0])
+
+
 def feed_row(c: sqlite3.Connection, money_account_id: str, provider_id: str) -> Any:
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND provider_id=?",
                      (money_account_id, provider_id)).fetchone()
