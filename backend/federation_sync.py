@@ -25,6 +25,7 @@ import base64
 import hashlib
 import json
 import re
+from datetime import datetime, timedelta, timezone
 
 from . import federation as F
 from . import federation_envelope as E
@@ -35,7 +36,8 @@ from . import screening
 from .store import Problem
 
 CATCH_UP_EVERY = 300        # seconds between catch-up requests for one thread
-CATCH_UP_BATCH = 200        # items one catch-up answer queues
+CATCH_UP_BATCH = 200        # items one page of a catch-up queues; the next page goes when this one has left
+CATCH_UP_QUIET = 86_400     # seconds a shared thread stays quiet before its replica asks whether it missed the end
 MESSAGE_KINDS = ("say", "ask", "answer")          # what a remote author may write (core: say, ask or answer)
 RETRY_FIRST = 15            # seconds before a failed send is tried again; doubled per attempt
 BACKOFF_MAX = 300
@@ -267,6 +269,8 @@ def stage(c, vault, now, limit=100):
         return 0
     sync_rosters(c, vault, now)
     subtrees(c, me, limit)
+    continue_catch_ups(c)
+    repair_gaps(c, me, now)
     staged = 0
     for row in T.due(c, limit):
         delivery = row["id"]
@@ -320,10 +324,15 @@ def share(c, vault, now, thread_id, install_id):
         raise Problem("not_set_up", "Connect the Tico Gateway first: federation needs this install's id", 409)
     if not T.exists(c, thread_id):
         raise Problem("not_found", "No such thread", 404)
+    if T.is_sub_thread(c, thread_id):
+        raise Problem("sub_thread", "Share the thread itself: its sub-threads go with it", 422)
     if T.audience(c, thread_id) != "members":
         raise Problem("audience", "Only a thread whose audience is members can be shared with another install", 422)
     if F.active(c, install_id) is None:
         raise Problem("not_peered", "Make the peering with that install first: it must be active", 409)
+    if T.slack_linked(c, thread_id):
+        raise Problem("slack_linked", "This thread is linked to a Slack channel. Unlink it first: another company's words "
+                      "must not reach your workspace's channel", 409)
     top = c.execute("SELECT COALESCE(MAX(seq),0) FROM messages").fetchone()[0]
     row = thread_local(c, thread_id)
     if row is None:
@@ -581,15 +590,57 @@ def on_catch_up(c, me, sender, payload):
     after = payload.get("after")
     if member is None or type(after) is not int or after < 0:
         return "not_member" if member is None else "invalid"
-    bound = member["removed_at_seq"] if member["status"] == "removed" else None
     start = max(after, member["joined_at_seq"] - 1)
-    items = c.execute("SELECT * FROM federation_items WHERE thread_id=? AND home_seq>? ORDER BY home_seq LIMIT ?",
-                      (thread["thread_id"], start, CATCH_UP_BATCH)).fetchall()
-    for item in items:
-        if bound is not None and item["home_seq"] > bound:
-            break
-        queue(c, recipient=sender, kind="item", item_id=item["id"], thread_origin=thread["origin_id"])
+    if member["catch_up_after"] is not None:
+        start = min(start, member["catch_up_after"])
+    catch_up_page(c, thread, {**member, "catch_up_after": start})
     return "applied"
+
+
+def catch_up_page(c, thread, member):
+    """Queues one page of a member's catch-up and stores how far it got, or clears that when the page reaches the end. A
+    removed member's pages end at its removal."""
+    after = max(member["catch_up_after"], member["joined_at_seq"] - 1)
+    bound = member["removed_at_seq"] if member["status"] == "removed" else None
+    items = c.execute("SELECT id,home_seq FROM federation_items WHERE thread_id=? AND home_seq>? "
+                      "AND (? IS NULL OR home_seq<=?) ORDER BY home_seq LIMIT ?",
+                      (thread["thread_id"], after, bound, bound, CATCH_UP_BATCH + 1)).fetchall()
+    for item in items[:CATCH_UP_BATCH]:
+        queue(c, recipient=member["install"], kind="item", item_id=item["id"], thread_origin=thread["origin_id"])
+    reached = items[CATCH_UP_BATCH - 1]["home_seq"] if len(items) > CATCH_UP_BATCH else None
+    c.execute("UPDATE federation_members SET catch_up_after=?, updated_at=? WHERE id=?", (reached, stamp(), member["id"]))
+
+
+def continue_catch_ups(c):
+    """The next page for each member still catching up, once its last page has left: the outbox never holds more than a
+    page of catch-up for a lane, and paging does not wait for the member to ask again, however far behind it is."""
+    rows = c.execute("SELECT m.* FROM federation_members m JOIN federation_threads t ON t.thread_id=m.thread_id "
+                     "WHERE m.catch_up_after IS NOT NULL AND NOT EXISTS (SELECT 1 FROM federation_outbox o "
+                     "WHERE o.recipient=m.install AND o.thread_origin=t.origin_id AND o.kind='item')").fetchall()
+    for row in rows:
+        catch_up_page(c, thread_local(c, row["thread_id"]), dict(row))
+
+
+def gap(c, now, thread, seq):
+    """An item past the next number: the stream's end is at least `seq`, and the items before it are asked for now. A
+    request the throttle holds back goes later, from `repair_gaps`, even when nothing more ever arrives."""
+    c.execute("UPDATE federation_threads SET high_seq=max(high_seq,?), updated_at=? WHERE id=?", (seq, stamp(), thread["id"]))
+    request_catch_up(c, now, thread, thread["applied_through"])
+    return "gap"
+
+
+def repair_gaps(c, me, now, limit=50):
+    """A replica asks again for what it has not got: the rest of a gap it saw, or, on a thread quiet for a day, whatever
+    came last and never reached it. The answer to the second is usually nothing. One request waits per thread."""
+    quiet = (datetime.now(timezone.utc) - timedelta(seconds=CATCH_UP_QUIET)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    rows = c.execute("SELECT * FROM federation_threads t WHERE home_install<>? AND removed_at_seq IS NULL "
+                     "AND (high_seq>applied_through OR updated_at<?) "
+                     "AND (catch_up_requested_at IS NULL OR catch_up_requested_at<=?) AND NOT EXISTS (SELECT 1 FROM "
+                     "federation_outbox o WHERE o.kind='catch_up' AND o.recipient=t.home_install "
+                     "AND o.thread_origin=t.origin_id) ORDER BY updated_at LIMIT ?",
+                     (me, quiet, now - CATCH_UP_EVERY, limit)).fetchall()
+    for row in rows:
+        request_catch_up(c, now, dict(row), row["applied_through"])
 
 
 def step(c, now, thread, seq):
@@ -599,8 +650,7 @@ def step(c, now, thread, seq):
     if seq <= thread["applied_through"]:
         return "duplicate"
     if seq > thread["applied_through"] + 1:
-        request_catch_up(c, now, thread, thread["applied_through"])
-        return "gap"
+        return gap(c, now, thread, seq)
     advance(c, thread, seq)
     return "applied"
 
@@ -658,8 +708,7 @@ def on_item(c, now, me, sender, peer, wrapper, fetched, gate=None):
         return "invalid"
     fields["first"] = wrapper.get("first") is True      # the home's word: this is the stream's first of this message
     if seq > thread["applied_through"] + 1:
-        request_catch_up(c, now, thread, thread["applied_through"])
-        return "gap"
+        return gap(c, now, thread, seq)
     outcome = apply_message(c, me, thread, author, seq, fields, gate, sender)
     if outcome == "unknown_message":
         request_catch_up(c, now, thread, 0)             # the message's create comes back with the next catch-up
@@ -767,8 +816,7 @@ def on_membership(c, now, me, sender, thread, seq, payload):
         return "unknown_thread"
     if target == me and change == "removed":
         if seq > thread["applied_through"] + 1:          # the items before the removal come first
-            request_catch_up(c, now, thread, thread["applied_through"])
-            return "gap"
+            return gap(c, now, thread, seq)
         c.execute("UPDATE federation_threads SET removed_at_seq=?, applied_through=max(applied_through,?), "
                   "high_seq=max(high_seq,?), updated_at=? WHERE id=?", (seq, seq, seq, stamp(), thread["id"]))
         T.remove_outside(c, thread["thread_id"], sender)
@@ -776,8 +824,7 @@ def on_membership(c, now, me, sender, thread, seq, payload):
     if seq <= thread["applied_through"]:
         return "duplicate"
     if seq > thread["applied_through"] + 1:
-        request_catch_up(c, now, thread, thread["applied_through"])
-        return "gap"
+        return gap(c, now, thread, seq)
     T.set_guests(c, thread["thread_id"], sender, members)
     advance(c, thread, seq)
     return "applied"
@@ -926,8 +973,7 @@ def on_roster(c, now, sender, thread, seq, payload):
     if seq <= thread["applied_through"]:
         return "duplicate"
     if seq > thread["applied_through"] + 1:
-        request_catch_up(c, now, thread, thread["applied_through"])
-        return "gap"
+        return gap(c, now, thread, seq)
     T.set_guests(c, thread["thread_id"], sender, members)
     advance(c, thread, seq)
     return "applied"

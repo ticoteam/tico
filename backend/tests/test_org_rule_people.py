@@ -2,6 +2,10 @@
 for them, is checked as that person and held as theirs. Acme is test_org_rules' fictional company: Ana owns it, Ben is
 above Ops, Cara is on Support, and Eve is on no team."""
 import json
+import pathlib
+import subprocess
+import sys
+import textwrap
 import threading
 
 import pytest
@@ -105,6 +109,51 @@ def test_send_anyway_is_for_the_rule_author_and_refused_to_the_author_and_to_oth
     sent = post(api, f"rule-holds/{hold_id}/send", {"nonce": view["nonce"]}, token="ana-test")
     assert sent["hold"]["state"] == "sent"
     assert len(bodies(api, "favorite color is gold")) == 1
+
+
+@pytest.fixture
+def first_built(monkeypatch):
+    """The registries as the first app of a server process finds them: nothing its own parts register is there yet."""
+    for table in (K.REPLAY, K.PREPARE, K.AUDIENCE):
+        for operation in list(table):
+            monkeypatch.delitem(table, operation)
+
+
+def test_send_anyway_makes_a_held_edit_on_the_first_app_a_server_builds(first_built, ruled):
+    api, _ = ruled
+    thread = new_thread(api)
+    message = say(api, thread["id"], "Hello there.", token="ben-test")
+    block_everyone(api)
+    r = api.patch(f"/api/v2/messages/{message['id']}", json={"text": "Our favorite color is gold."},
+                  headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    hold_id = r.json()["held"]["id"]
+    assert not bodies(api, "favorite color is gold")
+    view = get(api, f"rule-holds/{hold_id}", token="ana-test")
+    assert view["can_send"]
+    sent = post(api, f"rule-holds/{hold_id}/send", {"nonce": view["nonce"]}, token="ana-test")
+    assert sent["hold"]["state"] == "sent"
+    assert len(bodies(api, "favorite color is gold")) == 1
+    assert set(K.REPLAY) <= set(api.app.state.rule_tables[0])
+
+
+def test_a_new_server_process_can_send_every_write_it_registered(tmp_path):
+    """The real first build, in its own process: the writes that install after the rule checks are in its tables too."""
+    code = textwrap.dedent(f"""
+        import pathlib, yaml
+        from backend import org_rule_check as K
+        from backend.app import create_app
+        from backend.config import Settings
+        root = pathlib.Path({str(tmp_path)!r}); registry = root / "registry"; registry.mkdir()
+        (registry / "hub-access.yaml").write_text(yaml.safe_dump({{"owner": "ana@acme.example", "bot_admins": []}}))
+        table, prepare, audience = create_app(Settings(db_path=root / "hub.db", registry_dir=registry)).state.rule_tables
+        assert set(K.REPLAY) == set(table), set(K.REPLAY) ^ set(table)
+        assert set(K.PREPARE) == set(prepare) and set(K.AUDIENCE) == set(audience)
+        assert {{"threads_edit", "assistant_message", "slack_message", "federated_message"}} <= set(table), set(table)
+    """)
+    root = pathlib.Path(__file__).resolve().parents[2]
+    done = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr[-2000:]
 
 
 def test_send_anyway_writes_the_message_as_its_person_not_as_a_bot(ruled):

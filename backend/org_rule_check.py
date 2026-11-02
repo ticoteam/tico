@@ -1586,13 +1586,24 @@ def record_misses(c, author, ids):
     return {"recorded": recorded, "known": known}
 
 
+def seal(app):
+    """Gives a built app every write registered while it was built, whatever order its parts installed in. Send anyway
+    finds its replay here: a write missing from these tables is answered "can't be sent from here"."""
+    table, prepare, audience = app.state.rule_tables
+    table.update(REPLAY)
+    prepare.update(PREPARE)
+    audience.update(AUDIENCE)
+
+
 def install(app, store, auth, mutate):
     from fastapi import Request
     from pydantic import Field
     from typing import Literal
     from .models import Contract
-    # This app's writes, as registered while it was built (one server builds one app; tests build many).
+    # This app's writes, as registered while it was built (one server builds one app; tests build many). Routes that
+    # install after this one register theirs later, so `seal` fills these once the app is whole.
     table, prepare, audience = dict(REPLAY), dict(PREPARE), dict(AUDIENCE)
+    app.state.rule_tables = (table, prepare, audience)
 
     class HoldSend(Contract):
         nonce: str = Field(min_length=1, max_length=200)
@@ -1834,4 +1845,4 @@ def install(app, store, auth, mutate):
 
 __all__ = ["ACTIONS", "BUDGET", "OPERATIONS", "REPLAY", "answer", "apply", "author_of", "check_as", "checked_as",
            "digest", "ensure", "health_findings", "held_for", "held_note", "holds", "inbound", "install", "on", "place_for",
-           "preflight", "replayer", "reviewer_for", "stats", "warned_text", "watched"]
+           "preflight", "replayer", "reviewer_for", "seal", "stats", "warned_text", "watched"]

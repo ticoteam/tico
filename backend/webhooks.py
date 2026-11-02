@@ -252,7 +252,18 @@ def _thread_view(c, actor, type_, subject, data, cache):
     if type_ == "message.held":
         subject = (data or {}).get("thread_id") or subject
     from . import threads
-    return data if threads.readable(c, threads.viewer(auth, who), subject) else None
+    if not threads.readable(c, threads.viewer(auth, who), subject):
+        return None
+    return _without_outside_words(c, threads, data or {})
+
+
+def _without_outside_words(c, threads, data):
+    """What another company wrote stays out of an endpoint: a title that may be theirs goes blank, and a remote author
+    is named by their install alone."""
+    if data.get("title") and data.get("id") and threads.title_from_outside(c, data):
+        data = {**data, "title": ""}
+    install = threads.remote_guest(c, data.get("from_actor"))
+    return {**data, "from_actor": f"peer:{install}"} if install else data
 
 
 # ------------------------------------------------------------------------------------------------------------ publish

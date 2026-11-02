@@ -1,8 +1,9 @@
 /* ui/app/thread-connect.js — A thread's links outside this Tico, drawn in its Who can read sheet: Slack, where an admin
    links the thread to a Slack channel or unlinks it (GET/POST/DELETE /api/v2/slack/links, backend/slack_threads.py), and
    Shared with, where an admin shares it with another company's Tico or stops (GET /api/v2/federation and
-   /api/v2/federation/threads/{id}/installs, backend/federation_routes.py). renderThreadConnect(thread, el) draws into
-   `el`, and hides it for anyone who may do neither. The rows, labels and remote-author helpers here are shared with
+   /api/v2/federation/threads/{id}/installs, backend/federation_routes.py), and whoever manages the thread can retry what
+   that company has not taken. renderThreadConnect(thread, el) draws into `el`, and hides it for anyone who may do none
+   of these. The rows, labels and remote-author helpers here are shared with
    Library › Connections (ui/app/connections.js) and the timeline (ui/app/thread-view.js).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -97,12 +98,12 @@ async function tcnThreadTitle(id) {
 }
 
 // ----------------------------------------------------------------- the thread's sheet
-// `thread` is the thread view (docs/dev/threads-contract.md §10). Draws nothing, and hides `el`, for a reader who is
-// not an admin, or a thread neither Slack nor Shared with applies to.
+// `thread` is the thread view (docs/dev/threads-contract.md §10). Draws nothing, and hides `el`, for a reader who neither
+// manages the thread nor is an admin, or a thread neither Slack nor Shared with applies to.
 function renderThreadConnect(thread, el) {
   if (!el) return;
   const slack = tcnAdmin() && !!thread && !thread.parent_id;
-  const shared = tcnAdmin() && tcnShareable(thread);
+  const shared = (tcnAdmin() || !!thread?.me?.can_manage) && tcnShareable(thread);
   el.hidden = !slack && !shared;
   if (el.hidden) { el.innerHTML = ''; return; }
   el.innerHTML = `<div class="tcn">${slack ? '<section class="tcn-sec" data-tcn="slack" hidden><h3 class="thd-lbl">Slack</h3><div class="tcn-body"></div></section>' : ''}${
@@ -154,7 +155,31 @@ async function tcnSlackDraw(thread, sec) {
   };
 }
 
+// Someone who manages the thread and is no admin: Needs you names the companies it has not reached, and Retry is theirs.
+function tcnUnsentDraw(thread, sec) {
+  const body = sec.querySelector('.tcn-body');
+  const stuck = (S.v2.needs || []).filter(it => it.kind === 'thread_unsent' && it.conversation_id === thread.id)
+    .map(it => String(it.id).split(':peer:')[1]).filter(Boolean);
+  sec.hidden = !stuck.length;
+  if (sec.hidden) return;
+  body.innerHTML = `<ul class="cn-list tcn-list">${stuck.map(install => `<li class="cn-row cn-xrow" data-install="${esc(install)}">
+      <span class="nav-icon" aria-hidden="true">handshake</span><span class="cn-name"><strong class="mono" title="${esc(install)}">${esc(connectInstallName(install))}</strong></span>
+      <span class="cn-status"></span><span class="cn-acts"><button type="button" class="ghost small" data-tcn-retry>Retry</button></span></li>`).join('')}</ul>
+    <span class="err" role="status" data-tcn-err></span>`;
+  body.querySelector('ul').onclick = async ev => {
+    const b = ev.target.closest('[data-tcn-retry]'); if (!b) return;
+    const row = b.closest('[data-install]'), err = body.querySelector('[data-tcn-err]');
+    b.disabled = true; err.textContent = '';
+    try {
+      await post('/v2/federation/threads/' + encodeURIComponent(thread.id) + '/installs/' + encodeURIComponent(row.dataset.install) + '/retry', {});
+      row.remove();
+      if (!body.querySelector('[data-install]')) sec.hidden = true;
+    } catch (e) { err.textContent = e.message; b.disabled = false; }
+  };
+}
+
 async function tcnSharedDraw(thread, sec) {
+  if (!tcnAdmin()) { tcnUnsentDraw(thread, sec); return; }
   const body = sec.querySelector('.tcn-body');
   let fed;
   try { fed = await get('/v2/federation', {fresh: true}); }

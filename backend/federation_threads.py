@@ -315,5 +315,16 @@ def title(c, thread_id):
     return (row[0] or "") if row else ""
 
 
+def is_sub_thread(c, thread_id):
+    return c.execute("SELECT 1 FROM conversations WHERE id=? AND parent_message_id IS NOT NULL",
+                     (thread_id,)).fetchone() is not None
+
+
+def slack_linked(c, thread_id):
+    """Whether a Slack channel is linked to this thread, or a link is on its way."""
+    return c.execute("SELECT 1 FROM slack_thread_links WHERE thread_id=? AND state IN ('requested','active','suspended') "
+                     "LIMIT 1", (thread_id,)).fetchone() is not None
+
+
 def exists(c, thread_id):
     return c.execute("SELECT 1 FROM conversations WHERE id=?", (thread_id,)).fetchone() is not None

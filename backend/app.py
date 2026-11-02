@@ -8290,4 +8290,5 @@ def create_app(settings=None):
         demo.install(app, auth, settings)
     from . import cors
     cors.install(app, settings)          # last, so it is outermost: a preflight is answered before sign-in
+    org_rule_check.seal(app)             # every write registered above can be sent from a hold, whatever installed when
     return app

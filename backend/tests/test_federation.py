@@ -25,6 +25,7 @@ from backend import hook_relay
 from backend import hubdb as H
 from backend import org_rule_check as OR
 from backend import screening
+from backend import thread_digest as DIGEST
 from backend import threads as CORE
 from backend.app import create_app
 from backend.auth import Identity
@@ -384,6 +385,193 @@ def test_an_edit_that_arrives_before_its_message_waits_for_a_catch_up(make_side,
     with b.app.state.store.read() as c:
         assert c.execute("SELECT catch_up_requested_at FROM federation_threads WHERE thread_id=?",
                          (there,)).fetchone()[0] is not None
+
+
+def lose_messages_to(hq, sender, to):
+    """HQ loses every message item from `sender` to `to` until the switch this returns is turned off."""
+    lost = {"on": True}
+    hq.lose = lambda frm, recipient, body: (lost["on"] and frm == sender.id and recipient == to.id
+                                            and json.loads(body).get("item_type") == "message")
+    return lost
+
+
+def test_a_replica_missing_more_than_a_page_gets_all_of_it_in_order_with_a_create_past_the_page(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    lost = lose_messages_to(hq, a, b)
+    ids = [say(a, tid, f"note {n}") for n in range(S.CATCH_UP_BATCH + 40)]
+    edit(a, ids[S.CATCH_UP_BATCH + 20], "past the page, edited")      # a create and its edit, both past one page
+    drive(a, rounds=3)
+    assert texts(b, local_thread(b, tid, a)) == []
+    lost["on"] = False
+    say(a, tid, "back")                                               # the gap shows, and the catch-up pages to the end
+    drive(a, b, rounds=8)
+    there = local_thread(b, tid, a)
+    want = [f"note {n}" for n in range(S.CATCH_UP_BATCH + 40)]
+    want[S.CATCH_UP_BATCH + 20] = "past the page, edited"
+    assert texts(b, there) == [*want, "back"]
+    with a.app.state.store.read() as c:
+        assert c.execute("SELECT catch_up_after FROM federation_members WHERE thread_id=?", (tid,)).fetchone()[0] is None
+    with b.app.state.store.read() as c:
+        row = c.execute("SELECT applied_through,high_seq FROM federation_threads WHERE thread_id=?", (there,)).fetchone()
+    assert row[0] == row[1]
+
+
+def test_paging_holds_back_while_the_last_page_is_waiting_to_leave(make_side, hq, clock):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    lost = lose_messages_to(hq, a, b)
+    [say(a, tid, f"note {n}") for n in range(S.CATCH_UP_BATCH + 5)]
+    drive(a, rounds=3)
+    lost["on"] = False
+    with a.app.state.store.transaction() as c:
+        thread = S.thread_local(c, tid)
+        S.on_catch_up(c, a.id, b.id, {"thread": thread["origin_id"], "after": 0})
+        waiting = c.execute("SELECT COUNT(*) FROM federation_outbox WHERE recipient=? AND kind='item'", (b.id,)).fetchone()[0]
+        S.continue_catch_ups(c)
+        assert waiting == S.CATCH_UP_BATCH
+        assert c.execute("SELECT COUNT(*) FROM federation_outbox WHERE recipient=? AND kind='item'",
+                         (b.id,)).fetchone()[0] == waiting
+        assert c.execute("SELECT catch_up_after FROM federation_members WHERE thread_id=?", (tid,)).fetchone()[0] is not None
+    drive(a, b, rounds=6)
+    assert len(texts(b, local_thread(b, tid, a))) == S.CATCH_UP_BATCH + 5
+
+
+def test_a_removed_member_is_paged_up_to_its_removal_and_no_further(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    lost = lose_messages_to(hq, a, b)
+    say(a, tid, "before")
+    drive(a, rounds=2)
+    lost["on"] = False
+    assert a.client.delete(f"/api/v2/federation/threads/{tid}/installs/{b.id}", headers=OWNER).status_code == 200
+    say(a, tid, "after")
+    drive(a, b)
+    assert texts(b, local_thread(b, tid, a)) == ["before"]
+
+
+def test_a_gap_closes_without_a_later_message_once_the_throttle_lets_it_ask_again(make_side, hq, clock):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    lost = lose_messages_to(hq, a, b)
+    say(a, tid, "one")
+    say(a, tid, "two")
+    drive(a, rounds=2)
+    lost["on"] = False
+    say(a, tid, "three")
+    tick(a)
+    tick(b)                                      # "three" shows the gap and the replica asks
+    lost["on"] = True
+    drive(a, b, rounds=3)                        # what the home sends back is lost too: nothing more will arrive by itself
+    there = local_thread(b, tid, a)
+    assert texts(b, there) == []
+    lost["on"] = False
+    drive(a, b, rounds=3)
+    assert texts(b, there) == []                 # the throttle holds the next request back
+    clock["t"] += S.CATCH_UP_EVERY + 1
+    drive(a, b, rounds=4)
+    assert texts(b, there) == ["one", "two", "three"]
+
+
+def test_a_quiet_replica_asks_once_a_day_for_a_last_message_that_never_reached_it(make_side, hq, clock):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    lost = lose_messages_to(hq, a, b)
+    say(a, tid, "the last word")
+    drive(a, b)
+    lost["on"] = False
+    there = local_thread(b, tid, a)
+    assert texts(b, there) == []
+    with b.app.state.store.read() as c:
+        assert c.execute("SELECT catch_up_requested_at FROM federation_threads WHERE thread_id=?",
+                         (there,)).fetchone()[0] is None   # an active thread does not ask
+    with b.app.state.store.transaction() as c:
+        c.execute("UPDATE federation_threads SET updated_at='2026-01-01T00:00:00.000000Z' WHERE thread_id=?", (there,))
+    drive(a, b, rounds=3)
+    assert texts(b, there) == ["the last word"]
+
+
+def test_a_sub_thread_is_refused_and_the_thread_itself_is_what_gets_shared(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    root = say(a, tid, "the root")
+    with a.app.state.store.transaction() as c:
+        sub = CORE.post(c, "human:ana", tid, "a reply", parent_message_id=root)["conversation_id"]
+    assert sub != tid
+    r = a.client.post(f"/api/v2/federation/threads/{sub}/installs", json={"install": b.id}, headers=OWNER)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "sub_thread"
+    assert rows(a, "SELECT 1 FROM federation_members") == []
+    share(a, tid, b)
+
+
+def test_a_slack_link_and_sharing_with_another_company_refuse_each_other(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    linked = make_thread(a, "Linked")
+    link = {"thread_id": linked, "channel": "#launch"}
+    assert a.client.post("/api/v2/slack/links", json=link, headers=OWNER).status_code == 200
+    r = a.client.post(f"/api/v2/federation/threads/{linked}/installs", json={"install": b.id}, headers=OWNER)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "slack_linked"
+    assert rows(a, "SELECT 1 FROM federation_members") == []
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    for side, thread in ((a, tid), (b, there)):              # the home's thread shared out, and the replica of it
+        r = side.client.post("/api/v2/slack/links", json={"thread_id": thread, "channel": "#launch"}, headers=OWNER)
+        assert r.status_code == 409 and r.json()["error"]["code"] == "shared_thread"
+
+
+def test_another_companys_words_stay_out_of_webhooks_and_digests(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    for side in (a, b):
+        with side.app.state.store.transaction() as c:
+            c.execute("INSERT INTO webhooks(id,name,url,host,events_json,created_by,created,updated) VALUES('ep_1','Acme',"
+                      "'https://hooks.acme.example/x','hooks.acme.example','[\"*\"]','human:ana',?,?)", (H.now(), H.now()))
+    tid = make_thread(a, "Secret launch title")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    words = say(a, tid, "Secret first line")
+    drive(a, b)
+    with b.app.state.store.transaction() as c:
+        message = c.execute("SELECT id FROM messages WHERE conversation_id=?", (there,)).fetchone()[0]
+        sub = CORE.post(c, "human:ana", there, "A reply here", parent_message_id=message)["conversation_id"]
+        c.execute("UPDATE thread_followers SET notify='digest' WHERE actor='human:ana'")
+    with a.app.state.store.transaction() as c:
+        CORE.post(c, "human:ana", tid, "A reply at home", parent_message_id=words)
+    drive(a, b)
+    sent = [json.loads(r[0])["data"] for r in rows(b, "SELECT body FROM webhook_sends")]
+    created = [d for d in sent if "title" in d]
+    assert [d["id"] for d in created] == [sub] and created[0]["title"] == ""
+    guests = {d["from_actor"] for d in sent if d.get("from_actor", "").endswith(a.id)}
+    assert guests == {f"peer:{a.id}"}
+    with b.app.state.store.transaction() as c:
+        titles = {item["title"] for item in DIGEST._plan(c, "human:ana")["items"]}
+    assert titles == {DIGEST.FALLBACK_TITLE}
+    # The home's own title may go; a sub-thread there may hang from a message of the other company's, so its title may not.
+    with a.app.state.store.read() as c:
+        assert not CORE.title_from_outside(c, {"id": tid, "root_id": tid})
+        home_sub = c.execute("SELECT id,root_id FROM conversations WHERE root_id=? AND id<>?", (tid, tid)).fetchone()
+        assert CORE.title_from_outside(c, dict(home_sub))
+    assert not any("Secret" in json.dumps(d) for d in sent)
 
 
 def test_a_removed_install_gets_the_removal_and_nothing_after(make_side, hq):

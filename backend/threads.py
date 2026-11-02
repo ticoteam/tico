@@ -2136,6 +2136,15 @@ def replica_root(c, root_id):
                      (root_id,)).fetchone() is not None
 
 
+def title_from_outside(c, thread):
+    """Whether a thread's stored title may be another company's words, so it stays out of what leaves this install: any
+    title on a copy of another install's thread, and a sub-thread's on a thread ever shared, which is the first line of
+    the message it hangs from (`sub_thread_title`). A thread this install shared keeps its own title."""
+    root = thread.get("root_id") or thread["id"]
+    row = c.execute("SELECT origin_id FROM federation_threads WHERE thread_id=?", (root,)).fetchone()
+    return row is not None and (row["origin_id"] != root or root != thread["id"])
+
+
 def shared_root(c, root_id):
     """Whether this root is another company's copy here (`replica_root`), or this install's own with a company in it now."""
     return replica_root(c, root_id) or c.execute(

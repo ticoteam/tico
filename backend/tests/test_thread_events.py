@@ -151,6 +151,27 @@ def test_a_person_is_sent_attention_for_their_own_delivery_and_nobody_elses(api)
     assert len(threads_kind(api, "ben-test", after, "attention")) == 1          # leaving the needs-you set is a change too
 
 
+def test_a_message_another_companys_tico_has_not_taken_tells_the_threads_readers_when_it_sticks_and_when_it_clears(api):
+    thread = new_thread(api, members=("human:ben",))
+    add_delivery(api, "d-out-1", "m-out-1", "peer:gi_acme", thread["id"], "none", "pending")
+
+    def change(sql):
+        after = cursor(api)
+        with api.app.state.store.transaction() as c:
+            c.execute(sql)
+        return after
+
+    after = change("UPDATE message_deliveries SET attempts=3 WHERE id='d-out-1'")
+    assert threads_kind(api, "ben-test", after, "unsent") == []             # still trying: not stuck yet
+    after = change("UPDATE message_deliveries SET attempts=8 WHERE id='d-out-1'")
+    assert [d["thread_id"] for d in threads_kind(api, "ben-test", after, "unsent")] == [thread["id"]]
+    assert threads_kind(api, "cara-test", after, "unsent") == []            # not a reader
+    after = change("UPDATE message_deliveries SET attempts=9 WHERE id='d-out-1'")
+    assert threads_kind(api, "ben-test", after, "unsent") == []             # already stuck
+    after = change("UPDATE message_deliveries SET state='delivered' WHERE id='d-out-1'")
+    assert len(threads_kind(api, "ben-test", after, "unsent")) == 1         # cleared
+
+
 def test_a_capped_root_says_how_many_are_capped_to_the_people_who_may_read_it(api):
     thread = new_thread(api, members=("human:ben",))
     after = cursor(api)

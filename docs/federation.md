@@ -110,10 +110,19 @@ the thread. A paused or revoked peering lists nothing: its messages wait for it.
 - **Refusals.** A receiver that refuses a message (rules, namespace or unknown thread) sends a signed refusal to the
   install that sent it. That install posts a quiet note to the message's author in the thread, like a held message's note.
   If the author can no longer read the thread, nothing is posted and the refusal is recorded as `refused`.
+- **Other company's words stay in.** A thread shared with another company can't be linked to Slack, on either side, and
+  a thread linked to Slack can't be shared until it is unlinked (`shared_thread`, `slack_linked`). A message from another
+  company never goes to a Slack channel, whatever the link. Webhooks and email digests leave out a title that may be
+  theirs: any title on a copy, and a sub-thread's title on a shared thread (the first line of its parent message). A
+  webhook names a remote author by install only. Message text never goes to either. A sub-thread is not shared by itself
+  (`sub_thread`): it goes with its thread. Only the home can add a company, so a replica can't pass a thread on.
 - **Order.** The home numbers each shared thread's messages (`home_seq`). A replica applies them in that order. An edit
   or delete for a message the replica does not have yet waits for a catch-up, and is never made into a message: only the
   first send of a message (`first`) can create one, whatever its revision. A catch-up asks the home for everything after
-  the last `home_seq` the replica applied. The home refuses an edit of a message it does not have.
+  the last `home_seq` the replica applied. The home sends it a page at a time from a stored place, and the next page goes
+  when the last has left, so nothing is missed however long a peer was offline. A replica that saw a gap asks again until
+  it is closed, even if nothing more arrives, and a replica of a thread quiet for a day asks once in case the last item
+  never reached it. The home refuses an edit of a message it does not have.
 - **Lanes.** Order is kept per peer and per root, in both directions. A lane is one peer and one root. Outbound, a
   message waits behind an earlier one for the same peer and root, and only the first is sent next. A send HQ refuses
   for a reason that will not change (a 4xx other than a pause, a timeout or a rate limit) is settled as failed; a
