@@ -255,6 +255,47 @@ def test_a_bank_row_takes_the_provider_entry_it_matches_instead_of_a_duplicate(b
         assert (refused.status, refused.code) == ("failed", CONFLICT)
 
 
+def test_a_bank_row_written_out_is_not_sent_when_the_provider_entry_came_after_the_last_change_read(books):
+    """Their own bank feed made the entry after the books were last read, and no change read is due: the write out waits
+    for the books to be read up to now, so the row takes that entry and the provider is not sent a second one."""
+    fake = FakeBooks()
+    _chart(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        _bank_row(c, -1500, "2026-10-05")
+        fid = str(c.execute("SELECT id FROM fin_feed_txns").fetchone()[0])
+        done = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100"), "tags": {}})
+        assert done.status == "committed", done
+    fake.changes = [journal(60, 1, "2026-10-05", 1500, debit="Account:2", credit="Account:1")]
+    assert mirror.sync_once(books, fake, cid, AT) == []
+    assert fake.sent == []
+    with books.read() as c:
+        assert c.execute("SELECT status, entry_id FROM fin_feed_txns").fetchone()[:] == (
+            "matched", _entry_of(c, "JournalEntry:60"))
+        assert c.execute("SELECT status FROM fin_outbox").fetchone()[0] == "failed"
+        assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 1
+
+
+def test_a_bank_row_write_out_waits_when_the_provider_books_cannot_be_read_first(books):
+    fake = FakeBooks()
+    _chart(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        _bank_row(c, -1500, "2026-10-05")
+        fid = str(c.execute("SELECT id FROM fin_feed_txns").fetchone()[0])
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100"), "tags": {}}).status == "committed"
+    fake.changed = lambda since: mirror.Read(False, error="the provider is down")
+    assert mirror.sync_once(books, fake, cid, AT) == ["changes: the provider is down"]
+    assert fake.sent == []
+    with books.read() as c:
+        assert c.execute("SELECT status, next_try_at IS NOT NULL FROM fin_outbox").fetchone()[:] == ("pending", 1)
+        assert c.execute("SELECT status FROM fin_feed_txns").fetchone()[0] == "new"
+
+
 def test_switching_previews_first_and_a_mirrored_book_refuses_what_the_provider_holds(books):
     cid = _connection(books)
     with books.transaction() as c:

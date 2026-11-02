@@ -2165,6 +2165,19 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
                                                        "updated_at": now})
         due = SK.outbox_due(c, now, OUTBOX_MOST, cid)
     problems: list[str] = []
+    # A write for a feed row (a bank, card or Stripe line) goes out only once the books are read up to now: the provider
+    # may hold the entry already (their own bank feed made it after the last change read), and a copy sent would be a
+    # duplicate. A read that fails holds those writes for the next pass.
+    bank = [o for o in due if int(o["attempts"]) == 0 and SK.loads(o["payload_json"]).get("feed_id")]
+    if bank:
+        read = _changes(store, books, cid, now, waiting=True)
+        if read:
+            problems.append(read)
+            with store.transaction() as c:
+                for o in bank:
+                    _later(c, o, "the provider's changes could not be read before this went out", now)
+            held = {str(o["id"]) for o in bank}
+            due = [o for o in due if str(o["id"]) not in held]
     for listed in due:
         with store.transaction() as c:
             if not SK.outbox_claim(c, str(listed["id"]), now):
