@@ -159,7 +159,7 @@ def _claimed(books: Any, vault: object) -> str:
 def test_a_consent_for_a_company_already_connected_repairs_that_connection(books, monkeypatch):
     vault = T._VAULT[0]
     other = {**tokens("acc-4", "ref-4"), "realm_id": "456"}
-    hq = HQ(claim=[tokens("acc-1", "ref-1"), tokens("acc-3", "ref-3"), other])
+    hq = HQ(claim=[tokens("acc-1", "ref-1"), tokens("acc-3", "ref-3"), other, other])
     monkeypatch.setattr(books_link, "_call", hq)
     first = _claimed(books, vault)
     assert _claimed(books, vault) == first                                  # the same realm: the same connection
@@ -167,10 +167,13 @@ def test_a_consent_for_a_company_already_connected_repairs_that_connection(books
         assert [row[0] for row in SX.books_connections(c, "quickbooks")] == [first]
         assert SX.books_status(c, first) == "active"
         assert T.credential_secret(c, vault, str(SX.books_settings(c, first)["refresh"])) == "ref-3"
-    second = _claimed(books, vault)                                         # another realm: a connection of its own
-    assert second != first
+    with pytest.raises(books_link.AlreadyConnected):                        # another realm for this company: refused (spec 3.4)
+        _claimed(books, vault)
     with books.read() as c:
-        assert {row[0] for row in SX.books_connections(c, "quickbooks")} == {first, second}
+        assert [row[0] for row in SX.books_connections(c, "quickbooks")] == [first]
+    second = books_link.connect_claim(books, vault, LINK, provider="quickbooks", company_id="co-other", claim_id="clm_o",
+                                      name="Other books", by=OWNER, now=AT)           # another company may connect it
+    assert second != first
 
 
 def test_a_refresh_whose_vault_write_fails_once_keeps_the_connection_active(books, monkeypatch):

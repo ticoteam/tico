@@ -345,6 +345,21 @@ def _same_account(c: Any, provider: str, tokens: Tokens) -> str | None:
     return None
 
 
+def _other_book(c: Any, provider: str, *, company_id: str, tokens: Tokens) -> bool:
+    """Whether the company already has a books connection of this provider for another QuickBooks company or Xero
+    organisation. A company connects one (spec 3.4), so a consent for a second one makes no connection."""
+    quickbooks = provider == "quickbooks"
+    key = tokens.realm_id if quickbooks else tokens.tenant_id
+    if not key:
+        return False
+    for cid, _, _ in SX.books_connections(c, provider):
+        books = SX.books_settings(c, cid)
+        held = str(books.get("realm_id" if quickbooks else "tenant_id") or "")
+        if str(books.get("company_id") or "") == company_id and held and held != key:
+            return True
+    return False
+
+
 def connect_claim(store: Any, vault: object, link: Link, *, provider: str, company_id: str, claim_id: str,
                   name: str, by: str, now: str) -> str:
     """Claim the pair HQ holds for a finished consent and keep its tokens in the vault for the books connection.
@@ -358,7 +373,8 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
 
     HQ may refuse the claim `already_connected`, because this install holds another organisation for the provider. Then
     nothing is made here, and a `replacement` for the held organisation is first kept for its connection
-    (_replace_held). The connect ends as AlreadyConnected either way."""
+    (_replace_held). The connect ends as AlreadyConnected either way. So does a pair for a second QuickBooks company or
+    Xero organisation of a company that already has one (_other_book): nothing is made."""
     try:
         tokens = claim(link, provider, company_id, claim_id)
     except AlreadyConnected as refused:
@@ -367,6 +383,8 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
         raise
     with store.transaction() as c:
         cid = _same_account(c, provider, tokens)
+        if cid is None and _other_book(c, provider, company_id=company_id, tokens=tokens):
+            raise AlreadyConnected(None)
         if cid is None:
             cid = tico.new_id()
             SX.books_connection_insert(c, cid=cid, provider=provider, name=name, by=by, at=now)
