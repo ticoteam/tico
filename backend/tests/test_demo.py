@@ -7,6 +7,7 @@ import signal
 import socket
 import sqlite3
 import tempfile
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -97,6 +98,8 @@ def test_a_public_demo_is_read_only(tmp_path):
         blocked = api.post("/api/v2/tasks", json={"title": "x", "owner": "bot:support"}, headers={"Idempotency-Key": "p1"})
         assert blocked.status_code == 403 and blocked.json()["error"]["code"] == "demo"
         assert api.post("/api/v2/updates/read", json={"ids": []}, headers={"Idempotency-Key": "p2"}).status_code == 200
+    # The server copies the settings to add its screen relay; the copy is checked again and must still pass.
+    assert replace(settings, screen_relay_url="http://127.0.0.1:1", screen_relay_key="k" * 32).public_url == "https://demo.example.com"
 
 
 def test_nothing_leaves_the_machine(built):

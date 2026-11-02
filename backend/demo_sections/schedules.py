@@ -24,8 +24,9 @@ START_LAG = timedelta(seconds=12)  # a run's start after its time: the pass fire
 CLAIM_POLL = timedelta(seconds=5)   # the gap between two claim polls on the demo clock (a computer takes work after 120 s)
 CLAIM_TRIES = 60                    # polls a computer makes for a bot's job before it gives up
 # Occurrences this close to the build's now are not played: their runs (a few minutes each, one after another) would
-# finish after now. Their schedule's next time is still its first one after now.
-SETTLE = timedelta(minutes=20)
+# finish after now (the three at 9:00 Los Angeles on a weekday take up to 25 minutes). Their schedule's next time is
+# still its first one after now.
+SETTLE = timedelta(hours=1)
 
 # Routines whose summaries are not in D.ROUTINES: the Strategy, Librarian and BotOps bots.
 EXTRA_SUMMARIES = {
