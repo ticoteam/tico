@@ -152,12 +152,12 @@ def _updated_at(stats, updates):
 def view_model(c, audience, stats, updates, next_before=None, badge="private", settings=None):
     """The view model in the package docstring, built field by field from what the projection and the stream returned.
     This is where a value becomes something a reader can see, so a signed-in reader's page is built here too."""
-    from .. import company as company_profile
     from . import settings as page_settings
     settings = settings or _settings_of_connection(c)
     page = page_settings.get(c) or {}
-    profile = company_profile.profile(c)
-    mission = profile.get("vision") or (profile.get("description") or "").strip().split("\n")[0][:200]
+    # The mission is the audience's to read or not, by its disclosure rule. An audience with no id (the signed-out door)
+    # gets none: there is no rule to read.
+    mission = page_settings.mission_for(c, audience["id"]) if audience.get("id") else ""
     sources = _sources_of_stats(c, [s for s in stats if isinstance(s, dict) and isinstance(s.get("id"), str)])
     clean_stats = [_clean_stat(s, {i for i, k in sources.items() if k == "finance_line"}) for s in stats]
     clean_updates = [_clean_update(u) for u in updates]
@@ -212,7 +212,8 @@ def public_view(c, at, settings=None):
     sources = _sources_of_stats(c, [s for s in stats if isinstance(s.get("id"), str)])
     # Open company: the company is showing its money. Public: it publishes, and keeps the books to itself.
     badge = "open" if any(k in ("finance_line", "finance_metric") for k in sources.values()) else "public"
-    return view_model(c, {"kind": "public", "name": row["name"]}, stats, updates, badge=badge, settings=settings)
+    return view_model(c, {"id": row["id"], "kind": "public", "name": row["name"]}, stats, updates, badge=badge,
+                      settings=settings)
 
 
 # ------------------------------------------------------------------------------------------------- files
