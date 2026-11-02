@@ -135,6 +135,10 @@ def create_app(settings=None):
     from . import flight
     recorder = flight.Recorder() if settings.flight_recorder else None
     store = Store(settings, recorder)
+    # An upgraded database gets its pending migrations (the cleanup's column renames) before any install below opens a
+    # transaction: install-time code and every commit's hooks use the new names. Startup's store.initialize does the rest.
+    if settings.db_path.exists():
+        store.migrate()
     census = Census(store, settings)
     releases.CHECKER.bind(census)
     auth = Auth(store)
