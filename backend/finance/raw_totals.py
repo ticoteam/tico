@@ -53,7 +53,7 @@ def _mapping(ctx: Ctx, raw: object) -> dict[str, L.Account]:
             raise invalid(f"account {account.code} is inactive")
         if account.type == "equity" and account.subtype == RT.OFFSET_SUBTYPE:
             raise invalid(f"{name} maps to the opening balance account")
-        key = L.name_key(name)
+        key = L.name_key(RT.line_name(name))
         if key in out:
             raise invalid(f"two mapping names fold to {key}")
         out[key] = account
@@ -154,7 +154,8 @@ def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     return Plan(gate=K.default_gate(ctx.org, who, "import_raw_totals"), apply=apply,
                 summary=f"Import {len(sheet.rows)} raw total rows across {len(months)} months ({sheet.basis} basis)",
                 impact={"rows": len(sheet.rows), "zero_rows": sheet.zero_rows, "basis": sheet.basis,
-                        "months": len(months), "accounts": accounts},
+                        "months": len(months), "accounts": accounts,
+                        "warnings": [w for w in (RT.cents_warning(sheet),) if w]},
                 facts={"amount": gross, "months": len(months), "accounts": sorted(totals)})
 
 

@@ -10,6 +10,7 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.core import raw_totals as RT
 from backend.finance.core.errors import CONFLICT, DENIED, INVALID, PERIOD_CLOSED, FinanceError
+from backend.finance.core.ledger import name_key
 from backend.finance.raw_totals import OUTSIDE
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
 
@@ -151,6 +152,34 @@ def test_a_bad_sheet_is_refused_and_the_same_rows_hash_the_same():
     two = RT.parse("month,line,amount\n2026-02,Rent,200\n2026-01,Rent,100\n", "cash")
     assert one.digest == two.digest
     assert one.digest != RT.parse("month,line,amount\n2026-01,Rent,100\n2026-02,Rent,200\n", "accrual").digest
+
+
+def test_amounts_and_months_are_ascii_digits_only():
+    # Arabic-Indic and fullwidth digits are \d in Python's regex, so the sheet reader itself must refuse them.
+    for digits in ("١٢٣٤", "１２３４"):
+        with pytest.raises(FinanceError):
+            RT.parse(f"month,line,amount\n2026-01,Rent,{digits}\n", "cash")
+    with pytest.raises(FinanceError):
+        RT.parse("month,line,amount\n٢٠٢٦-01,Rent,100\n", "cash")
+
+
+def test_a_leading_byte_order_mark_is_stripped():
+    sheet = RT.parse("﻿month,line,amount\n2026-01,Rent,100\n", "cash")
+    assert [(r.month, r.line, r.amount) for r in sheet.rows] == [("2026-01", "Rent", 100)]
+    assert sheet.digest == RT.parse("month,line,amount\n2026-01,Rent,100\n", "cash").digest
+
+
+def test_internal_runs_of_spaces_collapse_in_line_names():
+    sheet = RT.parse("month,line,amount\n2026-01,Office  Rent,100\n2026-02,  Office \t Rent ,200\n", "cash")
+    assert {r.line for r in sheet.rows} == {"Office Rent"}
+    assert RT.unmapped(sheet, {name_key("Office Rent")}) == []
+
+
+def test_a_sheet_whose_amounts_all_end_in_00_gets_a_dry_run_warning_and_no_refusal():
+    dollars = RT.parse("month,line,amount\n2026-01,Rent,290000\n2026-02,Rent,300000\n", "cash")
+    assert RT.cents_warning(dollars) != ""
+    assert RT.cents_warning(RT.parse("month,line,amount\n2026-01,Rent,290000\n2026-02,Rent,300050\n", "cash")) == ""
+    assert RT.cents_warning(RT.parse("month,line,amount\n2026-01,Rent,300000\n", "cash")) == ""
 
 
 def test_a_scoped_replay_is_denied_the_same_as_a_fresh_import(books):

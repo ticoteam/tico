@@ -60,7 +60,8 @@ def _eom(month: str) -> str:
 
 
 def _fold(name: str) -> str:
-    return name.strip().casefold()
+    """A line name as the import keys it: runs of spaces collapse, then case folds (core/raw_totals.line_name)."""
+    return " ".join(name.split()).casefold()
 
 
 def _csv(rows: list[list[str]], header: tuple[str, ...] = HEAD, eol: str = "\n") -> str:
@@ -387,7 +388,6 @@ class Rehearsal:
             ("duplicate column", f"month,month,line,amount\n{y}-01,{y}-01,Software subscriptions,100\n", "the header is month"),
             ("missing amount column", f"month,line\n{y}-01,Software subscriptions\n", "the header is month"),
             ("notes column", f"month,line,amount,notes\n{y}-01,Software subscriptions,100,vendor\n", "the header is month"),
-            ("byte order mark", f"﻿month,line,amount\n{y}-01,Software subscriptions,100\n", "the header is month"),
         ]
         for label, text, reason in refusals:
             self.refuse(c, label, text, STANDARD, "invalid", reason)
@@ -395,6 +395,9 @@ class Rehearsal:
         text = _csv([[m, "Café subscriptions", "12345"]], header=("Month", "Line", "Amount"), eol="\r\n")
         self.post(c, "CRLF, capitalised header, accented line", text, {"Café subscriptions": "6100"},
                   [(m, "Café subscriptions", 12345)])
+        bom = self.commit_month()
+        self.post(c, "a leading byte order mark is stripped", "\ufeff" + _csv([[bom, "Software subscriptions", "100"]]),
+                  STANDARD, [(bom, "Software subscriptions", 100)])
 
     def check2(self) -> None:
         c, y = self.checks[2], self.year - 2
@@ -423,16 +426,8 @@ class Rehearsal:
                        "+100", '"12,345"', "1 234", "1234 USD", "--1234", "", "-"]:
             reason = "has 4 fields" if amount == "$1,234.56" else "amount is whole cents"
             self.refuse(c, f"amount {amount}", one(amount), STANDARD, "invalid", reason)
-        for amount, label in (("١٢٣٤", "Arabic-Indic digits"), ("１２３４", "fullwidth digits")):
-            dry = self.send(label, one(amount), STANDARD, dry=True)
-            if dry.get("status") == "committed":
-                impact = {a["code"]: a["total"] for a in dry["impact"]["accounts"]}
-                check = c.expect(impact == {"6100": 1234}, f"{label} read as {impact}, not 1234 cents")
-                self.record(3, label, "accepted (dry)", f"read as 1234 cents: {check}")
-            else:
-                c.expect(dry.get("status") == "failed" and dry.get("code") == "invalid",
-                         f"{label}: {dry.get('status')}/{dry.get('code')}")
-                self.record(3, label, "refused", dry.get("reason") or "")
+        for amount in ("١٢٣٤", "１２３４"):      # Arabic-Indic and fullwidth digits: ASCII digits only
+            self.refuse(c, f"digits {amount}", one(amount), STANDARD, "invalid", "amount is whole cents")
         m = self.commit_month()
         text = (f"month,line,amount\n{m}, Office rent , 1234\n{m},Software subscriptions,-1234\n"
                 f"{m},Sales revenue,000001234\n")
@@ -457,8 +452,6 @@ class Rehearsal:
             ("extra field on a row", f"month,line,amount\n{y}-01,Sales revenue,100,extra\n", "has 4 fields"),
             ("same line twice in a month", f"month,line,amount\n{y}-01,Sales revenue,100\n{y}-01,sales revenue,50\n",
              "repeats"),
-            ("double space inside a line name", f"month,line,amount\n{y}-01,Software  subscriptions,100\n",
-             "no account is mapped for: Software  subscriptions"),
             ("unknown team", f"month,line,amount,team\n{y}-01,Sales revenue,100,Nope\n",
              "no team on the org chart for: Nope"),
             ("team name in another case", f"month,line,amount,team\n{y}-01,Sales revenue,100,Leadership\n",
@@ -467,6 +460,15 @@ class Rehearsal:
         ]
         for label, text, reason in refusals:
             self.refuse(c, label, text, STANDARD, "invalid", reason)
+        spaced = self.commit_month()
+        self.post(c, "a double space inside a line name is one space", _csv([[spaced, "Software  subscriptions", "100"]]),
+                  STANDARD, [(spaced, "Software  subscriptions", 100)])
+        dollars = self.commit_month()
+        warned = self.send("every amount ends in 00", _csv([[dollars, "Sales revenue", "290000"],
+                                                             [dollars, "Office rent", "300000"]]),
+                           {"Sales revenue": "4000", "Office rent": "6900"}, dry=True)
+        c.expect(warned.get("status") == "committed" and any("00" in w for w in warned.get("impact", {}).get("warnings", [])),
+                 f"a sheet of whole dollars gave no dry-run warning: {warned.get('status')} {warned.get('impact', {}).get('warnings')}")
 
     def _retired_account(self) -> None:
         if "6977" not in self.chart:
