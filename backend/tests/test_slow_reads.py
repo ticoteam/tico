@@ -96,13 +96,14 @@ def test_covering_indexes_return_the_same_rows(tmp_path):
         hidden = H.task_create(conn, "human:ben", "Hidden", "Secret", "human:ben", private=True, lint=False)
         conn.commit()
         names = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-        assert {"tasks_private_parties", "conversations_id_task"} <= names
+        assert {"tasks_private_status", "conversations_id_task"} <= names
+        assert "tasks_private_parties" not in names     # a prefix of tasks_private_status (migration 0043)
         id_plan = " ".join(row[3] for row in conn.execute("EXPLAIN QUERY PLAN SELECT id FROM tasks"))
         assert "COVERING INDEX" in id_plan
         plain = [tuple(row) for row in conn.execute(
             "SELECT id,requester_id,owner_id,guest,private FROM tasks WHERE private IS NOT 0 ORDER BY id")]
         covered = [tuple(row) for row in conn.execute(
-            "SELECT id,requester_id,owner_id,guest,private FROM tasks INDEXED BY tasks_private_parties "
+            "SELECT id,requester_id,owner_id,guest,private FROM tasks INDEXED BY tasks_private_status "
             "WHERE private IS NOT 0 ORDER BY id")]
         assert plain == covered
         assert {row[0] for row in plain} == {hidden["id"]}

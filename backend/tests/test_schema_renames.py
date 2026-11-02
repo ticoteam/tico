@@ -69,7 +69,7 @@ def restore(path):
 
 
 # Dropped as redundant by backend/migrations/0040_prune_redundant_indexes.sql; kpis_goal goes with kpis.goal_id (0042).
-DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "kpis_goal"}
+DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "kpis_goal", "tasks_private_parties"}
 # Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
            "gtm_versions", "gtm_drafts"}

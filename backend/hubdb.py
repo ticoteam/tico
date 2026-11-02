@@ -1334,12 +1334,10 @@ def migrate(conn, adopt_legacy=False):
     task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
     if "private" in task_columns:
         if "guest" in task_columns:
-            # The few private tasks, which every privacy-checked read loads (backend/privacy_index.py). The predicate
-            # matches privacy_index's query word for word and the index holds only these columns, so no body is read.
-            conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_parties ON tasks("
-                         "id, requester_id, owner_id, guest, private) WHERE private IS NOT 0")
-            # A bot's private tasks for its status rows (task_privacy.status_tasks_sql) with the two columns it reads
-            # beyond the parties: each private row was a body-page read before this.
+            # The few private tasks: their parties, which every privacy-checked read loads (backend/row_clock.py PARTIES,
+            # backend/privacy_index.py), and a bot's private tasks for its status rows (task_privacy.status_tasks_sql)
+            # with the two columns those read beyond the parties. The predicate matches both queries word for word and
+            # the index holds every column they read, so no body is read.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_status ON tasks("
                          "id, requester_id, owner_id, guest, private, status, waiting_on) WHERE private IS NOT 0")
             # A task list's visibility and queue order, and a bot's status rows (task_privacy.status_tasks_sql), each

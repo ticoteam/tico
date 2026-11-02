@@ -2028,10 +2028,8 @@ class Store:
                                     "bot_file_versions(poster_blob_id) WHERE poster_blob_id IS NOT NULL"),
                                    ("bot_file_versions_thumb",
                                     "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL"),
-                                   # privacy_index names these two with INDEXED BY. hubdb.migrate also makes them,
-                                   # but runs before cloud migration 57 adds tasks.private on an upgraded database.
-                                   ("tasks_private_parties",
-                                    "tasks(id, requester_id, owner_id, guest, private) WHERE private IS NOT 0"),
+                                   # row_clock and task_privacy name this with INDEXED BY. hubdb.migrate also makes
+                                   # it, but runs before cloud migration 57 adds tasks.private on an upgraded database.
                                    ("tasks_private_status",
                                     "tasks(id, requester_id, owner_id, guest, private, status, waiting_on) WHERE private IS NOT 0"),
                                    # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
