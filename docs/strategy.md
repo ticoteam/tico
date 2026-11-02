@@ -76,11 +76,12 @@ removes a thing.
   1. **Who we serve** (`serve`): the customer, the alternative they use today, the one you turned down.
   2. **What we sell, and for how much** (`sell`): the product and the pricing model, and the price that would break if
      doubled or halved.
-  3. **What we know that others don't** (`know`): the thing the team understands about the business that the obvious
+  3. **How we sell** (`how`): the motion the company sells with (self-serve, sales-led, partner, marketplace, local,
+     community or e-commerce) and the playbooks behind it. Who buys is Where we play. Bots read it with
+     `hub strategy show`; it is not put into every run. A bot proposes a change the way it proposes any strategy
+     change, and the owner confirms it.
+  4. **What we know that others don't** (`know`): the thing the team understands about the business that the obvious
      competitors miss. This is where "how we win" lives, and it is the heart of the page.
-  4. **How we sell**: the motion the company sells with (self-serve, sales-led, partner, marketplace, local, community
-     or e-commerce) and the playbooks behind it. Who buys is Where we play. Bots read it with `hub strategy show`; it is
-     not put into every run. A bot proposes a change the way it proposes any strategy change, and the owner confirms it.
   5. **What we won't do** (`not`): required before publishing. A strategy with no trade-offs is a description.
 - **Extra sections.** The owner can add any heading (brand, channels, capabilities). They are stored by key and never
   dropped.
@@ -270,7 +271,7 @@ Librarian applies it to the entity.
 hub strategy show                       the published version: bets, goals_by_bet, health_by_bet (the draft too, for the owner)
 hub strategy summary                    the text every bot gets in context
 hub strategy draft [--summary S] [--vision V] [--section KEY=TEXT ...] [--extra KEY --title T --body B]
-                                        owner only; KEY is serve, sell, know or not; "" clears a key
+                                        owner only; KEY is serve, sell, how, know or not; "" clears a key
 hub strategy publish --note "<why>"     owner only
 hub strategy versions                   n, note, who published, when
 hub strategy diff <from> <to>           fields changed; bets added, retired, changed
