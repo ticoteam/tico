@@ -209,6 +209,19 @@ def test_a_finance_admin_adds_no_view_of_its_own_so_emails_tax_ids_and_sync_erro
         assert [m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]] == ["human:fay"]
 
 
+
+def test_the_bills_address_and_a_books_disconnect_are_actions_only_a_finance_admin_may_ask_for(books):
+    """Spec §5: the bills address and a books connection's local part change only through actions. A teammate without
+    finance.admin is refused; a bad address is refused with its reason."""
+    with books.transaction() as c:
+        assert act(c, "human:dan", "bills_address_set", {"address": "bills@acme.example"}).code == "denied"
+        assert act(c, OWNER, "bills_address_set", {"address": "not-an-address"}).code == "invalid"
+        assert act(c, OWNER, "bills_address_set", {"address": "Bills@Acme.example"}).status == "committed"
+        assert act(c, "human:dan", "books_disconnect", {"connection_id": "nope"}).code == "denied"
+        assert act(c, OWNER, "books_disconnect", {"connection_id": "nope"}).code == "not_found"
+    with books.read() as c:
+        assert FR.bills_email(c) == "bills@acme.example"
+
 def test_budgets_read_at_a_date_show_the_version_in_effect_then(books):
     with books.transaction() as c:
         soft = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 1_000})

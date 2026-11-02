@@ -42,12 +42,46 @@ budget_for = budgeting.budget_for
 SYSTEM = O.SYSTEM
 Principal = O.Principal
 
+def bills_address_set(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+    """The bills address vendors send bills to (spec §5), set or cleared (""): the settings route asks through here."""
+    V.only(p, ("address",))
+    if "address" not in p:
+        raise FinanceError(INVALID, "address is the bills address, or empty to clear it")
+    value = str(p["address"] or "").strip().lower()
+
+    def apply(aid: str) -> handlers.Result:
+        set_bills_email(ctx.c, value, by=who, at=ctx.at)
+        return {"address": value or None}
+    return handlers.Plan(K.ALLOW, "Set the bills address" if value else "Clear the bills address", apply)
+
+
+def books_disconnect(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+    """A books connection's local part (spec §5): its credentials leave Tico's vault and its ids are cleared, and the
+    connection is disconnected. Its HQ grant is revoked first, outside any transaction, by books_link.drop."""
+    from .store import mirror as SM
+    V.only(p, ("connection_id",))
+    cid = V.text(p, "connection_id", 80)
+    if cid not in {str(row[0]) for row in SM.books_connections(ctx.c)}:
+        raise FinanceError(NOT_FOUND, "no such books connection")
+
+    def apply(aid: str) -> handlers.Result:
+        books = SM.books_settings(ctx.c, cid)
+        for key in ("access", "refresh"):
+            if books.get(key):
+                tico.drop_credential(ctx.c, str(books[key]))
+        SM.set_books_settings(ctx.c, cid, {"access": "", "refresh": "", "expires_at": ""})
+        SM.disconnect(ctx.c, cid, ctx.at)
+        return {"connection_id": cid, "status": "disconnected"}
+    return handlers.Plan(K.ALLOW, "Disconnect the books connection", apply)
+
+
 # Every live kind's planner: phase 0's in handlers, then banking, cards, payments, rules, and payables/receivables.
 PLANNERS: dict[str, handlers.Planner] = {
     **handlers.PLANNERS, "connection_create": banking.connection_create, "reconcile": banking.reconcile,
     "reconcile_undo": banking.reconcile_undo,
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
-    "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
+    "connection_map": banking.connection_map, "bills_address_set": bills_address_set,
+    "books_disconnect": books_disconnect, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
     **documents.PLANNERS, **mirror.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS, **catalog.PLANNERS,
     **purchasing.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
@@ -562,6 +596,7 @@ def set_bills_email(c: sqlite3.Connection, address: str | None, by: str = O.SYST
     if value and ("@" not in value or len(value) > 200):
         raise FinanceError(INVALID, "a bills address is an email address")
     SL.set_setting(c, BILLS_EMAIL_KEY, value or None, by, at or tico.now())
+
 RunHold = runs.RunHold
 run_hold = runs.hold
 run_ended = runs.ended
