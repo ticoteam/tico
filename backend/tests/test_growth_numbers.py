@@ -161,11 +161,10 @@ def test_a_kpi_series_is_the_sparkline_rule_one_value_per_period_without_partial
 
 
 def test_a_test_gives_a_started_and_a_finished_marker_newest_first(api):
-    made = post(api, "growth/ideas", {"title": "Weekend discount", "assignee": "ops"})["idea"]
-    tid = made["task_id"]
-    post(api, f"growth/ideas/{tid}/start", {"test_to": "2026-11-14", "change": "10% off Saturdays",
-                                            "stop_if": "Refunds pass 5%"})
-    post(api, f"growth/ideas/{tid}/verdict", {"status": "won", "result": "Bookings up 14%"})
+    tid = post(api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner": "ops",
+                              "type": "idea"})["id"]
+    move(api, tid, "idea-doing")
+    move(api, tid, "idea-won")
     found = get(api, "growth/numbers")["markers"]
     assert [(m["kind"], m["outcome"], m["task_id"], m["title"]) for m in found] == [
         ("finished", "won", tid, "Weekend discount"), ("started", None, tid, "Weekend discount")]
@@ -221,9 +220,9 @@ def test_the_live_answer_matches_the_declared_contract(api):
     north = post(api, "kpis", {"name": "Active customers"})["kpi"]
     post(api, f"kpis/{north['id']}", {"growth_role": "north_star"})
     post(api, f"kpis/{north['id']}/readings", {"value": 412, "period_end": "2026-10-31T00:00:00Z"})
-    made = post(api, "growth/ideas", {"title": "Weekend discount", "assignee": "ops"})["idea"]
-    post(api, f"growth/ideas/{made['task_id']}/start", {"test_to": "2026-11-14", "change": "10% off",
-                                                        "stop_if": "Refunds pass 5%"})
+    tid = post(api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner": "ops",
+                              "type": "idea"})["id"]
+    move(api, tid, "idea-doing")
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
     operation = document["paths"]["/api/v2/growth/numbers"]["get"]["responses"]["200"]
     schema = operation["content"]["application/json"]["schema"]
