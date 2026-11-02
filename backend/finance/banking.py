@@ -35,6 +35,7 @@ from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import raw_totals as SR
 
 NEW_EVENT, CATEGORY_EVENT, DECLINED_EVENT = "finance.feed.new", "finance.feed.needs_category", "finance.card.declined"
 OTHER, BANK, CARDS, OPENING = "6900", "1000", "2100", "3900"
@@ -208,6 +209,7 @@ def set_opening(ctx: Ctx, money: Any, amount: int, day: str) -> str | None:
     balance equity). Unchanged: nothing. Changed: the old entry is reversed and the new one posted, each on an open
     day (a closed month keeps its meaning). The live entry's id, or None when the opening is 0."""
     gl = _gl(ctx, money)
+    day = _opening_day(ctx, day)
     prior = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
     if prior is not None:
         moved = sum(line.amount for _, line in SL.entry_lines(ctx.c, str(prior["id"])) if line.account_id == gl.id)
@@ -237,6 +239,22 @@ def opening_balance(ctx: Ctx, money_id: str) -> str | None:
     total, first = SK.settled_total(ctx.c, money_id)
     day = (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
     return set_opening(ctx, money, int(money["balance"]) - total, day)
+
+
+def _opening_day(ctx: Ctx, day: str) -> str:
+    """An opening balance posts before the first raw-totals month, never inside one: a posting there is refused (§4.1),
+    and the raw totals already carry what happened from that month on."""
+    span = SR.live_span(ctx.c, ctx.book.id)
+    if span is None:
+        return day
+    return min(day, (dates.day(f"{span[0]}-01") - timedelta(days=1)).isoformat())
+
+
+def covered_day(ctx: Ctx, day: str) -> bool:
+    """Whether a settled row dated `day` is covered history (spec §4.1): its month is the latest one holding raw totals
+    or an earlier one. Covered rows post nowhere and still count toward reconciling the bank."""
+    span = SR.live_span(ctx.c, ctx.book.id)
+    return span is not None and day[:7] <= span[1]
 
 
 def _before_opening(ctx: Ctx, money: Any, amount: int, day: str) -> None:
@@ -296,6 +314,30 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
     return fid
 
 
+def _txn_of(row: Any) -> F.FeedTxn:
+    """A stored feed row as the provider transaction it came from, to settle it again."""
+    return F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
+                     txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
+                     counterparty=str(row["counterparty"]), description=str(row["description"]),
+                     card_id=str(row["card_id"] or ""), request_id=str(row["request_id"] or ""),
+                     version=int(row["version"]), raw=SK.loads(row["raw_json"]))
+
+
+def refresh_covered(ctx: Ctx) -> None:
+    """Keep covered history (spec §4.1) in step with the raw-totals months. A settled row without an entry, dated on or
+    before the latest such month, becomes `covered`: out of the review queues, posted nowhere, still counted by
+    reconciliation. A covered row that a reversal uncovers settles now, as if it had just arrived."""
+    for row in SK.open_feed_rows(ctx.c, ctx.book.id):
+        covered = covered_day(ctx, str(row["txn_date"]))
+        if covered and row["status"] == "new":
+            SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"status": "covered", "updated_at": ctx.at})
+        elif not covered and row["status"] == "covered":
+            SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"status": "new", "updated_at": ctx.at})
+            money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+            card = SK.get(ctx.c, "fin_cards", str(row["card_id"])) if row["card_id"] else None
+            _settle(ctx, SK.get(ctx.c, "fin_feed_txns", str(row["id"])), money, card, _txn_of(row))
+
+
 def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     fid = str(row["id"])
     if ctx.book.mode == "mirror":
@@ -318,6 +360,13 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     if t.pending:
         if program and card is not None and t.amount < 0:
             _card_hold(ctx, row, card, -t.amount)
+        return
+    if covered_day(ctx, t.txn_date):    # covered history (§4.1): no route posts it, Stripe, card or Gateway alike
+        if row["entry_id"]:
+            _unpost(ctx, row, "its month holds raw totals")
+        if str(row["status"]) != "ignored":
+            SK.update(ctx.c, "fin_feed_txns", fid, {"status": "covered", "entry_id": None, "entry_line_id": None,
+                                                     "updated_at": ctx.at})
         return
     if str(money["kind"]) == "stripe":    # a Stripe row posts once and never changes: stripe_post settles or waits
         from . import stripe_post        # lazy: it posts through this module's helpers
@@ -729,6 +778,9 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(NOT_FOUND, "no such feed row in your view")
     if row["reconciliation_id"]:
         raise FinanceError(CONFLICT, "that row is reconciled; undo the reconciliation to change it")
+    if str(row["status"]) == "covered" or covered_day(ctx, str(row["txn_date"])):
+        raise FinanceError(CONFLICT, "that row is covered history: its month holds raw totals, so it is not posted "
+                                     "here, and it still counts toward reconciliation")
     if row["entry_id"] and len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1:
         raise FinanceError(CONFLICT, "that row is a transfer between your own accounts")
     amount = int(row["amount"])

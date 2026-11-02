@@ -238,11 +238,19 @@ def rows_of_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
 
 def feed_window(c: sqlite3.Connection, money_account_id: str, through: str) -> list[Any]:
     """Settled rows on or before `through` that are in the books (posted or matched to an entry) and that no done
-    reconciliation cleared yet. A `new` row is not in the books, so it can't be cleared: it stays outstanding."""
+    reconciliation cleared yet. A `new` row is not in the books, so it can't be cleared: it stays outstanding. A covered
+    row (spec §4.1) is history the raw totals carry, so it counts without an entry."""
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND txn_date<=? AND pending=0 AND "
-                     "status NOT IN ('ignored','new') AND entry_id IS NOT NULL AND reconciliation_id IS NULL "
-                     "ORDER BY txn_date, id",
+                     "status NOT IN ('ignored','new') AND (entry_id IS NOT NULL OR status='covered') AND "
+                     "reconciliation_id IS NULL ORDER BY txn_date, id",
                      (money_account_id, through)).fetchall()
+
+
+def open_feed_rows(c: sqlite3.Connection, book_id: str) -> list[Any]:
+    """A book's settled rows that no entry holds (new or covered): what a raw-totals month can cover or uncover."""
+    return c.execute("SELECT f.* FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id WHERE "
+                     "m.book_id=? AND f.status IN ('new','covered') AND f.pending=0 AND f.entry_id IS NULL "
+                     "ORDER BY f.txn_date, f.id", (book_id,)).fetchall()
 
 
 def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_account_id: str,

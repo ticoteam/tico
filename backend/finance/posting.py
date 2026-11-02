@@ -116,6 +116,9 @@ def reverse(ctx: Ctx, entry_id: str, *, day: str | None, memo: str, by: str, act
     rid, _ = post(ctx, e, by=by, action_id=action_id, reverses_id=entry_id, reversing=True)
     if SL.mark_reversed(ctx.c, entry_id) != 1:
         raise FinanceError(CONFLICT, "that entry is already reversed")
+    if str(row["source"]) == "import" and str(row["source_id"]).startswith("raw_totals:"):
+        from .banking import refresh_covered    # a reversed raw-totals month uncovers the feed rows behind it (§4.1)
+        refresh_covered(ctx)
     return rid
 
 

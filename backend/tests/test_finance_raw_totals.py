@@ -12,7 +12,8 @@ from backend.finance.core import raw_totals as RT
 from backend.finance.core.errors import CONFLICT, DENIED, INVALID, PERIOD_CLOSED, FinanceError
 from backend.finance.core.ledger import name_key
 from backend.finance.raw_totals import OUTSIDE
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
+from backend.tests.test_finance_fixtures import (  # noqa: F401
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
 
 CSV = (Path(__file__).parent / "fixtures" / "finance" / "raw_totals.csv").read_text()
 MAPPING = {"Software subscriptions": "6100", "Office rent": "6900", "Sales revenue": "4000", "Cash at bank": "1000"}
@@ -286,3 +287,52 @@ def test_a_posting_dated_in_a_raw_totals_month_is_refused_until_its_raw_entry_is
         assert _count(c, "fin_entries") == before
         assert act(c, OWNER, "journal", {"reverses": feb}).status == "committed"
         assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+
+
+def _feed(raw_id: str, amount: int, day: str) -> dict[str, object]:
+    return {**MERCURY["txn_bank_fee"], "id": raw_id, "amount": amount, "createdAt": f"{day}T10:00:00Z",
+            "postedAt": f"{day}T10:00:00Z"}
+
+
+def _feed_state(c):
+    return c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE provider_id='txn-feb'").fetchone()
+
+
+def test_a_feed_row_in_a_raw_totals_month_is_covered_history_and_posts_nowhere(books):
+    """§4.1: a settled feed row dated on or before the latest raw-totals month stays unposted as covered history, out
+    of the review queues, and still counts toward reconciling the bank. Categorize refuses it with the reason."""
+    fake = FakeMercury()
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", _body()).status == "committed"
+    connect(books, fake)
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500, "2026-02-10")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        status, entry = _feed_state(c)
+        assert status == "covered" and entry is None, (status, entry)
+        fid, money = c.execute("SELECT id, money_account_id FROM fin_feed_txns WHERE provider_id='txn-feb'").fetchone()
+        refused = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900")})
+        assert refused.status == "failed" and refused.code == CONFLICT and "covered" in refused.reason, refused
+        made = act(c, OWNER, "reconcile", {"money_account_id": money, "statement_end": "2026-02-28",
+                                           "statement_balance": -1_500})
+        assert made.result["cleared"] == 1 and made.result["outstanding"] == 0, made.result
+
+
+def test_reversing_the_months_a_covered_row_sits_behind_lets_it_post_once(books):
+    """§4.1: a reversal of a later month leaves a covered row covered; reversing back past it lets it settle, once, as
+    if it had just arrived."""
+    fake = FakeMercury()
+    with books.transaction() as c:
+        r = act(c, OWNER, "import_raw_totals", _body())
+        assert r.status == "committed", r.reason
+        months = {m["month"]: m["entry_id"] for m in r.result["months"]}
+    connect(books, fake)
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500, "2026-02-10")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "journal", {"reverses": months["2026-03"]}).status == "committed"
+        assert _feed_state(c)[0] == "covered"
+        assert act(c, OWNER, "journal", {"reverses": months["2026-02"]}).status == "committed"
+        status, entry = _feed_state(c)
+        assert status == "posted" and entry is not None, (status, entry)
+        assert c.execute("SELECT count(*) FROM fin_entries WHERE source='bank' AND status='posted'").fetchone()[0] == 1

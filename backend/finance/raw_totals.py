@@ -149,6 +149,8 @@ def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         SR.insert(ctx.c, {"id": batch, "book_id": ctx.book.id, "content_hash": sheet.digest, "basis": sheet.basis,
                           "source_name": source, "periods": len(months), "row_count": len(sheet.rows),
                           "gross": gross, "action_id": aid, "created_at": ctx.at, "created_by": who})
+        from .banking import refresh_covered    # the months just posted cover the feed rows dated on or before them
+        refresh_covered(ctx)
         return {"batch_id": batch, "basis": sheet.basis, "months": posted}
 
     return Plan(gate=K.default_gate(ctx.org, who, "import_raw_totals"), apply=apply,

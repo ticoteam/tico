@@ -1231,6 +1231,8 @@ def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     row = SK.get(ctx.c, "fin_feed_txns", V.text(p, "feed_id", 80))
     if row is None or not seen(ctx, who, row):
         raise FinanceError(NOT_FOUND, "no such feed row in your view")
+    if str(row["status"]) == "covered":
+        raise FinanceError(CONFLICT, "that row is covered history: its month holds raw totals, so it is not linked")
     if int(row["pending"]) or str(row["status"]) == "ignored" or row["entry_id"]:
         raise FinanceError(CONFLICT, "only a settled row not yet in the books is linked; re-categorize a posted one")
     kind = "bill" if int(row["amount"]) < 0 else "invoice"
