@@ -233,16 +233,20 @@ def _is_date(text, start, raw):
     return bool(words) and words[-1].lower() in MONTHS and raw.isdigit() and 1 <= int(raw) <= 31
 
 
-NOT_FIGURES = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
-                         r"[0-9a-f]{4}-[0-9a-f]{12}\b|\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b", re.I)
+NOT_FIGURES = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?|\b\d{4}-\d{2}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-"
+                         r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b", re.I)
 
 
-def leak_findings(title, sections, facts, period_start, period_end, names=()):
-    """Numbers, proper names and links in an edition that are not in the filtered facts. A person reads what this flags
-    and may override it; so it errs toward flagging, and a word it can't place counts as a name."""
+def leak_findings(title, sections, facts, period_start, period_end, names=(), sources=()):
+    """Numbers, proper names and links in an edition that are not in the filtered facts or the approved update text it
+    was drafted from. A person reads what this flags and may override it; so it errs toward flagging, and a word it
+    can't place counts as a name."""
     strings = []
     _gather(facts, strings)
     strings.extend(n for n in names if n)
+    # The approved updates an edition is drafted from are what the page may say: a sentence copied from one is not news
+    # to the check. Their own dates and times are not figures, as in the facts.
+    strings.extend(s for s in sources if s)
     # Dates, times and ids in the facts are not figures: "2026-10-01" or "00:01:30" would otherwise make "1" an allowed
     # number, and which one is there depends on when the check runs.
     corpus = NOT_FIGURES.sub(" ", " ".join(strings))
@@ -260,7 +264,7 @@ def leak_findings(title, sections, facts, period_start, period_end, names=()):
         for link in LINK.findall(text):
             if link.lower() not in links:
                 add("links", link)
-        text = LINK.sub(" ", text)
+        text = NOT_FIGURES.sub(" ", LINK.sub(" ", text))     # "2026-10" in a title is a date, not the figure "10"
         for m in NUMBER.finditer(text):
             if _number(m.group()) not in numbers and not _is_date(text, m.start(), m.group()):
                 add("numbers", m.group().rstrip(",."))
@@ -672,7 +676,9 @@ def check(store, edition_id, primary=None):
                          store.settings.company_name)
                 # The correction note is published with the text, so the leak check reads it too.
                 checked = sections + ([{"key": "correction_note", "items": [{"body": note}]}] if note else [])
-                leaks = leak_findings(row["title"], checked, _facts(c, row), row["period_start"], row["period_end"], names)
+                sources = [r["body"] for r in c.execute("SELECT body FROM edition_sources WHERE edition_id=?", (row["id"],))]
+                leaks = leak_findings(row["title"], checked, _facts(c, row), row["period_start"], row["period_end"], names,
+                                      sources)
             except Exception as exc:  # noqa: BLE001 - facts that can't be read can't clear anything
                 LOG.warning("Edition leak check failed: %s", type(exc).__name__)
                 failed = "facts"

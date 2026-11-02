@@ -276,10 +276,6 @@ def world(tmp_path, monkeypatch):
     store.initialize()
     state = SimpleNamespace(store=store, settings=settings, approved=True, stats=[], held=[], root=tmp_path / "company-page-public")
 
-    def get(c):
-        row = c.execute("SELECT * FROM company_page_settings WHERE id='company'").fetchone()
-        return dict(row) if row else {"transparency": "closed"}
-
     def stream(c, audience_ids, before=None, limit=10):
         rows = c.execute("SELECT * FROM editions WHERE audience_id=? AND status='published' AND (? IS NULL OR published_at<?) "
                          "ORDER BY published_at DESC LIMIT ?", (audience_ids[0], before, before, limit)).fetchall()
@@ -287,7 +283,6 @@ def world(tmp_path, monkeypatch):
                  "published_at": r["published_at"], "version": r["version"], "correction_note": r["correction_note"],
                  "edition_source": "SECRETSOURCE", "sections": json.loads(r["body_json"])} for r in rows]
 
-    monkeypatch.setattr(package, "settings", SimpleNamespace(get=get), raising=False)
     monkeypatch.setattr(package, "editions", SimpleNamespace(stream=stream), raising=False)
     monkeypatch.setattr(package, "stats", SimpleNamespace(
         board_approved=lambda c, audience: state.approved,
@@ -471,6 +466,24 @@ def test_retract_leaves_no_trace_in_any_served_file(world):
         text = (served(world) / name).read_text()
         assert "Mistaketitle" not in text and "Keeper" in text
     assert not old.exists() and b"Mistaketitle" not in on_disk(world)
+
+
+def test_a_take_back_rebuilds_the_folder_the_server_serves_without_the_environment(world, monkeypatch, tmp_path):
+    """The folder comes from the server's settings. With the environment not saying so, a take-back must still rebuild
+    the folder being served: a take-back that wrote somewhere else would answer 200 and leave the title up."""
+    monkeypatch.delenv("TICO_COMPANY_PAGE_DIR", raising=False)
+    world.settings.company_page_dir = str(tmp_path / "served")
+    world.root = tmp_path / "served"
+    open_page(world)
+    publish(world, "e1", "Keeper", "2026-10-01T00:00:00Z")
+    publish(world, "e2", "Mistaketitle", "2026-10-02T00:00:00Z")
+    release.rebuild(world.store, "publish", at=AT)
+    with world.store.transaction() as c:
+        c.execute("UPDATE editions SET status='retracted' WHERE id='e2'")
+        release.rebuild(c, "retract", at=AT)
+    for name in ("index.html", "data.json", "feed.xml"):
+        text = (served(world) / name).read_text()
+        assert "Mistaketitle" not in text and "Keeper" in text
 
 
 def test_current_is_valid_at_every_step_of_a_swap(world, monkeypatch):

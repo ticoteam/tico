@@ -2182,6 +2182,7 @@ class Store:
         c.after_commit = []
         c.provenance_changes = c.total_changes
         c.provenance_start = None
+        c.settings = self.settings      # the server's own settings, for work that holds only the connection
         return c
 
     def _give(self, c):

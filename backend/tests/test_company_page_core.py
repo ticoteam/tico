@@ -399,6 +399,52 @@ def test_parts_that_add_up_to_a_hidden_total_are_held(books):
     assert held_labels(result) == {"Subscriptions"} and "add up to revenue" in result["held"][0]["reason"]
 
 
+def _private_payroll(c, amount):
+    """Payroll, a private line, the only expense posted: total spend is Payroll and nothing else."""
+    made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                            "parent_id": account(c, "6000")})
+    pay = str(made.result["account_id"])
+    assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
+    spend(c, "6200", amount, day="2026-09-10")
+    return pay
+
+
+def test_a_total_alone_is_held_when_its_only_active_account_is_private(books):
+    """With no line stat beside it, a total is still the sum of what's posted under it. When that is one private
+    account, the total is the private figure and is held with it."""
+    setup(books, shown("pnl_line"), shown("burn"))
+    with books.transaction() as c:
+        _private_payroll(c, 10_000_00)
+        ST.create_stat(c, OWNER, "finance_metric", "spend")
+        result = ST.project(c, "investors", "2026-10-15")
+    assert held_labels(result) == {"Spend"} and "only active line under total spend" in result["held"][0]["reason"]
+    assert "10,000" not in json.dumps(result)
+
+
+def test_a_total_of_several_active_accounts_is_not_held_for_one_private_part(books):
+    """Only a single active account is the total's figure. Two or more are a sum over several, so a private part
+    among them doesn't hold the total on its own."""
+    setup(books, shown("pnl_line"), shown("burn"))
+    with books.transaction() as c:
+        _private_payroll(c, 10_000_00)
+        spend(c, "6000", 4_000_00, day="2026-09-10")
+        ST.create_stat(c, OWNER, "finance_metric", "spend")
+        result = ST.project(c, "investors", "2026-10-15")
+    assert held_labels(result) == set() and by_label(result)["Spend"]["display"] == "$14,000"
+
+
+def test_a_shown_total_is_held_when_the_books_cannot_be_read(books):
+    """The check can't tell what a total would give away, so the totals shown are held."""
+    setup(books, shown("pnl_line"), shown("burn"))
+    with books.transaction() as c:
+        spend(c, "6000", 4_000_00, day="2026-09-10")
+        ST.create_stat(c, OWNER, "finance_metric", "spend")
+    with mock.patch.object(ST._Books, "active_accounts", side_effect=ST._Books._errors()("forbidden", "books unreadable")):
+        with books.transaction() as c:
+            result = ST.project(c, "investors", "2026-10-15")
+    assert held_labels(result) == {"Spend"} and "couldn't be read" in result["held"][0]["reason"]
+
+
 # ------------------------------------------------------------------------------------------- presets and loosening
 def modes(c, audience_id):
     rules = D.all_rules(c, audience_id)
