@@ -40514,6 +40514,24 @@
               "null"
             ]
           },
+          "location_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_due_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_due_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "source": {
             "type": "string"
           },
@@ -40552,6 +40570,9 @@
               ],
               "additionalProperties": true
             }
+          },
+          "files_more": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -42531,6 +42552,18 @@
               },
               "created_at": {
                 "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "as_of": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "stale": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -42570,11 +42603,15 @@
               ],
               "additionalProperties": true
             }
+          },
+          "files_more": {
+            "type": "boolean"
           }
         },
         "required": [
           "contact",
           "files",
+          "files_more",
           "view_version"
         ],
         "additionalProperties": true
@@ -42884,6 +42921,13 @@
                 "type": [
                   "string",
                   "null"
+                ]
+              },
+              "book_mode": {
+                "type": "string",
+                "enum": [
+                  "native",
+                  "mirror"
                 ]
               },
               "schedule": {
@@ -47904,6 +47948,9 @@
               ],
               "additionalProperties": true
             }
+          },
+          "files_more": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -49501,8 +49548,20 @@
               "null"
             ]
           },
+          "next_due_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "in_books": {
             "type": "boolean"
+          },
+          "parent_name": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "source": {
             "type": "string"
@@ -49542,6 +49601,9 @@
               ],
               "additionalProperties": true
             }
+          },
+          "files_more": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -52172,6 +52234,9 @@
                   ],
                   "additionalProperties": true
                 }
+              },
+              "linked_bills_more": {
+                "type": "boolean"
               }
             },
             "required": [

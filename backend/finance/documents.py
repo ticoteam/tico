@@ -48,6 +48,8 @@ from .store import ledger as SL
 from .store import purchasing as SP
 from .store import tico
 
+# hubdb is untyped; this alias makes its results Any for strict pyright, as finance/tax.py does.
+_H: Any = H
 RECEIVED, DUE_SOON, OVERDUE = "finance.bill.received", "finance.bill.due_soon", "finance.invoice.overdue"
 RENEWAL_DUE = "finance.vendor.renewal_due"
 CONTROL = {"bill": ("2000", "payable", "accounts payable"), "invoice": ("1200", "receivable", "accounts receivable")}
@@ -1678,8 +1680,8 @@ def _renewal_task(ctx: Ctx, vendor: Any, today: date) -> None:
     body = (f"{name} renews on {renewal_on}, and its notice runs out on {cancel_by.isoformat()}. Decide before then "
             "whether to renew, renegotiate or cancel.")
     try:
-        task = H.task_create(ctx.c, H.KEEPER, title, body, actor, due=automation_due.due_end(cancel_by, FLOW.zone()),
-                             deduplicate=False, trigger="schedule", trigger_source="vendor_renewal")
+        task = _H.task_create(ctx.c, H.KEEPER, title, body, actor, due=automation_due.due_end(cancel_by, FLOW.zone()),
+                             deduplicate=False, trigger="schedule", trigger_source="vendor_renewal", private=True)
     except H.Refused as exc:
         _renewal_notice(ctx, key, install, f"Vendor renewal could not open: {name}", f"{title} was refused: {exc}")
         return
@@ -1692,7 +1694,7 @@ def _renewal_notice(ctx: Ctx, key: str, install: str, title: str, body: str) -> 
     told = f"{key}:told"
     if not install or ctx.c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (told,)).fetchone() is not None:
         return
-    tico.needs_you(ctx.c, install, title[:200], body)
+    tico.needs_you(ctx.c, install, title[:200], body, private=True)     # the notice names a vendor
     ctx.c.execute("INSERT INTO registry_metadata(key, value_json) VALUES(?,'true')", (told,))
 
 

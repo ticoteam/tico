@@ -364,8 +364,10 @@ def csv_rows(company, name):
 
 
 def warranties(company):
+    """The equipment whose warranty still runs: an end already past adds no due date (finance/equipment.py)."""
+    today = datetime.now(timezone.utc).date().isoformat()
     with open(DATA / company / "equipment.csv", encoding="utf-8", newline="") as f:
-        return sum(1 for row in csv.DictReader(f) if row.get("warranty_ends_on"))
+        return sum(1 for row in csv.DictReader(f) if row.get("warranty_ends_on", "") >= today)
 
 
 @pytest.mark.parametrize("company", ["", "heating-air", "kitchen", "works"])
@@ -405,7 +407,7 @@ def test_each_demo_starts_as_the_docs_say_and_its_records_load(tmp_path, company
             expected = {"locations": "locations", "items": "items", "equipment": "equipment", "due-dates": "due_dates"}
             for route, name in expected.items():
                 listed = get(route)
-                # A piece of equipment with a warranty end carries its own due date as well (finance/equipment.py).
+                # Equipment whose warranty still runs carries its own due date as well.
                 extra = warranties(company) if name == "due_dates" else 0
                 assert len(listed[route.replace("-", "_")]) == csv_rows(company, name) + extra, route
             assert get("company/sidebar")["business_type"] == {"heating-air": "field_service", "kitchen": "restaurant",

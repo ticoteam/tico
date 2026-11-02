@@ -6,6 +6,7 @@ import pytest
 from backend.finance import equipment as EQ
 from backend.finance import reads as FR
 from backend.finance.core.errors import NOT_AVAILABLE, NOT_FOUND
+from backend.records import store as RS
 from backend.tests.test_finance_fixtures import AT, OWNER, act, books, finance_template, store  # noqa: F401
 
 COA = "lib-coa-gadget"          # a Library file everyone can read
@@ -104,3 +105,84 @@ def test_linking_a_file_needs_the_records_right(books, library):
         assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.records"}).status == "committed"
         granted = act(c, "human:dan", "record_file_add", {"subject_type": "item", "subject_id": item, "file_id": COA})
         assert granted.status == "committed", granted.reason
+
+
+@pytest.fixture
+def open_and_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Files named lib-open-* are readable by everyone; lib-owner-* only by the owner."""
+    monkeypatch.setattr(EQ, "file_readable",
+                        lambda c, who, file_id: file_id.startswith("lib-open") or
+                        (who == OWNER and file_id.startswith("lib-owner")))
+
+
+def _at(i: int) -> str:
+    """The time of the i-th link, a second apart, so the read's oldest-first order is known."""
+    return f"2026-10-15T10:{i // 60:02d}:{i % 60:02d}.000000Z"
+
+
+def _bulk(c, record_table: str, record_id: str, file_ids: list[str]) -> None:
+    """Links the files to a record in order, straight through the store: the planner has its own tests above."""
+    for i, file_id in enumerate(file_ids):
+        RS.link_file(c, record_table, record_id, file_id, _at(i), OWNER)
+
+
+def _open(*numbers: int) -> list[str]:
+    return [f"lib-open-{i:03d}" for i in numbers]
+
+
+def test_a_record_shows_the_first_fifty_files_and_says_there_are_more(books, open_and_owner):
+    with books.transaction() as c:
+        item = _made(c, "item_create", {"name": "Gadget", "kind": "service"}, "item_id")
+        _bulk(c, "items", item, _open(*range(55)))
+        shown = FR.record(c, OWNER, kind="item", record_id=item, at=AT)["item"]
+        assert [f["file_id"] for f in shown["files"]] == _open(*range(50))
+        assert shown["files_more"] is True
+        few = _made(c, "item_create", {"name": "Plate", "kind": "service"}, "item_id")
+        _bulk(c, "items", few, _open(0, 1))
+        assert FR.record(c, OWNER, kind="item", record_id=few, at=AT)["item"]["files_more"] is False
+
+
+def test_a_file_the_viewer_cannot_read_does_not_count_toward_the_fifty(books, open_and_owner):
+    with books.transaction() as c:
+        item = _made(c, "item_create", {"name": "Gadget", "kind": "service"}, "item_id")
+        _bulk(c, "items", item, [f"lib-owner-{i:03d}" for i in range(30)] + _open(*range(60)))
+        assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
+        eve = FR.record(c, EVE, kind="item", record_id=item, at=AT)["item"]
+        assert [f["file_id"] for f in eve["files"]] == _open(*range(50))      # the 30 hidden ones skipped, not counted
+        assert eve["files_more"] is True                                       # ten more she can read
+        owner = FR.record(c, OWNER, kind="item", record_id=item, at=AT)["item"]
+        assert len(owner["files"]) == 50 and owner["files_more"] is True
+
+
+def test_a_viewer_with_fewer_than_fifty_readable_files_sees_them_all_and_no_more(books, open_and_owner):
+    with books.transaction() as c:
+        item = _made(c, "item_create", {"name": "Gadget", "kind": "service"}, "item_id")
+        _bulk(c, "items", item, [f"lib-owner-{i:03d}" for i in range(40)] + _open(*range(30)))
+        assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
+        eve = FR.record(c, EVE, kind="item", record_id=item, at=AT)["item"]
+        assert [f["file_id"] for f in eve["files"]] == _open(*range(30))
+        assert eve["files_more"] is False
+
+
+def test_a_record_reads_at_most_two_hundred_links_and_says_more_past_them(books, open_and_owner):
+    with books.transaction() as c:
+        item = _made(c, "item_create", {"name": "Gadget", "kind": "service"}, "item_id")
+        _bulk(c, "items", item, [f"lib-owner-{i:03d}" for i in range(200)] + _open(*range(5)))
+        assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
+        # The first 200 links are all hidden from her, so the five readable ones past the read are not seen, and
+        # files_more says the Library holds more.
+        eve = FR.record(c, EVE, kind="item", record_id=item, at=AT)["item"]
+        assert eve["files"] == [] and eve["files_more"] is True
+        owner = FR.record(c, OWNER, kind="item", record_id=item, at=AT)["item"]
+        assert len(owner["files"]) == 50 and owner["files_more"] is True
+
+
+def test_a_vendors_files_cap_at_fifty_and_its_location_says_no_more_with_no_files(books, open_and_owner):
+    with books.transaction() as c:
+        vendor = _made(c, "contact_create", {"name": "Acme Supplies", "kind": "vendor"}, "contact_id")
+        _bulk(c, "fin_contacts", vendor, _open(*range(52)))
+        contact = FR.contact(c, OWNER, vendor, at=AT)
+        assert len(contact["files"]) == 50 and contact["files_more"] is True
+        site = _made(c, "location_create", {"name": "Denver", "kind": "store"}, "location_id")
+        assert FR.record(c, OWNER, kind="location", record_id=site, at=AT)["location"]["files"] == []
+        assert FR.record(c, OWNER, kind="location", record_id=site, at=AT)["location"]["files_more"] is False

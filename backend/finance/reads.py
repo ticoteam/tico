@@ -1504,16 +1504,18 @@ def _hours_between(now: str, then: str) -> float:
             ).total_seconds() / 3600
 
 
-def _freshness(ctx: Ctx, sync: tuple[str, str | None, str] | None) -> Row:
+def _freshness(ctx: Ctx, sync: tuple[str, str | None, str, str | None] | None) -> Row:
     """Where a record came from and how old its copy is. Tico's own record is as of the read and never stale. A record a
-    provider's books hold is as of that connection's last successful sync, and stale when the connection is failing or
-    that sync is older than STALE_HOURS (the cash reads' threshold). A copy never synced has no as_of and is stale."""
+    provider's books hold is as of that connection's last successful sync, and stale when the connection is failing,
+    when its last sync failed (a timeout leaves last_ok_at where it was, so the copy is still as of that sync), or
+    when that good sync is older than STALE_HOURS (the cash reads' threshold). A copy never synced has no as_of and is
+    stale."""
     if sync is None:
         return {"source": "tico", "as_of": ctx.at, "stale": False}
-    provider, last_ok, status = sync
+    provider, last_ok, status, error = sync
     if last_ok is None:
         return {"source": provider, "as_of": None, "stale": True}
-    stale = status == "error" or _hours_between(ctx.at, last_ok) > STALE_HOURS
+    stale = status == "error" or bool(error) or _hours_between(ctx.at, last_ok) > STALE_HOURS
     return {"source": provider, "as_of": last_ok, "stale": stale}
 
 
@@ -1564,6 +1566,12 @@ def _customer_names(ctx: Ctx, kind: str, rows: Sequence[Any]) -> dict[str, str]:
     """The name of each customer the rows name, by contact id. An item names none."""
     ids = sorted({str(r["customer_id"]) for r in rows if kind != "item" and r["customer_id"]})
     return {cid: str(row["name"]) for cid, row in SAP.contacts(ctx.c, ids).items()}
+
+
+def _place_names(ctx: Ctx, kind: str, rows: Sequence[Any]) -> dict[str, str]:
+    """The name of each location the rows name: a location's parent, a piece of equipment's location."""
+    column = {"location": "parent_id", "equipment": "location_id"}.get(kind)
+    return RR.names_of(ctx.c, "locations", [str(r[column]) for r in rows if r[column]]) if column else {}
 
 
 def _account_shown(view: VW.View, accounts: Mapping[str, Account], account_id: object) -> bool:
@@ -1638,23 +1646,26 @@ def _in_books(ctx: Ctx, kind: str, rows: Sequence[Any]) -> set[str] | None:
 
 
 def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, fresh: Mapping[str, object], names: Mapping[str, str],
-                due: Mapping[str, str] | None = None, books: set[str] | None = None) -> Row:
+                due: Mapping[str, str] | None = None, books: set[str] | None = None,
+                places: Mapping[str, str] | None = None, due_status: Mapping[str, str] | None = None) -> Row:
     """A record as the records API shows it, to a teammate: an item's sale price and description whatever the viewer's
     Finance view; an item's accounts show to the viewers who see them. A location's, equipment's or project's customer
-    shows by id and name. A location's or equipment's next due day comes from `due` (records/due_dates.next_due_for),
-    null when none is open. On a mirrored book a location says whether it is `in_books` (see _in_books). An item carries
+    shows by id and name, a location's parent and equipment's location too (`places`). A location's or equipment's next
+    due day comes from `due` (records/due_dates.next_due_and_status), null when none is open, and its status from `due_status`. On a mirrored book a location says whether it is `in_books` (see _in_books). An item carries
     its last synced quantity, null on books that keep none. Only teammates reach this (see _teammate_or_refuse)."""
     out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"], **fresh}
     if kind == "location":
         out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"),
-                   next_due_on=(due or {}).get(str(r["id"])))
+                   parent_name=(places or {}).get(str(r["parent_id"])), next_due_on=(due or {}).get(str(r["id"])),
+                   next_due_status=(due_status or {}).get(str(r["id"])))
         if books is not None:
             out["in_books"] = str(r["id"]) in books
         out.update(_customer_out(r["customer_id"], names))
     elif kind == "equipment":
         out.update(kind=str(r["kind"]), location_id=r["location_id"], make=str(r["make"]), model=str(r["model"]),
                    serial=str(r["serial"]), installed_on=r["installed_on"], warranty_ends_on=r["warranty_ends_on"],
-                   photo_file_id=r["photo_file_id"], next_due_on=(due or {}).get(str(r["id"])))
+                   photo_file_id=r["photo_file_id"], location_name=(places or {}).get(str(r["location_id"])),
+                   next_due_on=(due or {}).get(str(r["id"])), next_due_status=(due_status or {}).get(str(r["id"])))
         out.update(_customer_out(r["customer_id"], names))
     elif kind == "item":
         out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), currency=str(r["currency"]),
@@ -1665,6 +1676,14 @@ def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, fresh: Mapping[str, 
         out.update(status=str(r["status"]))
         out.update(_customer_out(r["customer_id"], names))
     return out
+
+
+def _due_of(ctx: Ctx, kind: str, rows: Sequence[Any]) -> tuple[dict[str, str], dict[str, str]]:
+    """The rows' next due days and statuses; only locations and equipment have them."""
+    if kind not in ("location", "equipment"):
+        return {}, {}
+    both = RD.next_due_and_status(ctx.c, kind, [str(r["id"]) for r in rows], DD.today_of(ctx))
+    return {k: day.isoformat() for k, (day, _) in both.items()}, {k: state for k, (_, state) in both.items()}
 
 
 def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archived: str = "hide",
@@ -1689,10 +1708,11 @@ def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archi
     nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
     syncs = SM.record_syncs(c, RECORD_TABLE[kind], [str(r["id"]) for r in shown])
     names = _customer_names(ctx, kind, shown)
-    due = RD.next_due_for(c, kind, [str(r["id"]) for r in shown]) if kind in ("location", "equipment") else {}
-    books = _in_books(ctx, kind, shown)
+    due, states = _due_of(ctx, kind, shown)
+    books, places = _in_books(ctx, kind, shown), _place_names(ctx, kind, shown)
     return {RECORD_PLURAL[kind]: [_record_out(ctx, kind, r, view, _freshness(ctx, syncs.get(str(r["id"]))), names,
-                                              due=due, books=books) for r in shown], "next_cursor": nxt}
+                                              due=due, books=books, places=places, due_status=states) for r in shown],
+            "next_cursor": nxt}
 
 
 def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at: str | None = None) -> Row:
@@ -1704,12 +1724,20 @@ def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at:
     if row is None:
         raise FinanceError(NOT_FOUND, f"no such {kind}")
     syncs = SM.record_syncs(c, RECORD_TABLE[kind], [str(row["id"])])
-    due = RD.next_due_for(c, kind, [str(row["id"])]) if kind in ("location", "equipment") else {}
+    due, states = _due_of(ctx, kind, [row])
     out = _record_out(ctx, kind, row, view, _freshness(ctx, syncs.get(str(row["id"]))),
-                      _customer_names(ctx, kind, [row]), due=due, books=_in_books(ctx, kind, [row]))
+                      _customer_names(ctx, kind, [row]), due=due, books=_in_books(ctx, kind, [row]),
+                      places=_place_names(ctx, kind, [row]), due_status=states)
     if kind in ("location", "item", "equipment"):
-        out["files"] = RFILES.visible(c, viewer, RECORD_TABLE[kind], str(row["id"]))
+        files, more = RFILES.visible(c, viewer, RECORD_TABLE[kind], str(row["id"]))
+        out.update(files=files, files_more=more)
     return {kind: out}
+
+
+def books_connected(c: sqlite3.Connection) -> tuple[bool, bool]:
+    """Whether a books connection (QuickBooks or Xero) exists, and whether one still has provider records waiting."""
+    books = SM.books_connections(c)
+    return bool(books), any(bool(SM.mirror_state(c, cid).get("pending")) for cid, _, _ in books)
 
 
 def customer_extras(c: sqlite3.Connection, viewer: str, customer_id: str, at: str | None = None) -> Row:
@@ -1724,10 +1752,11 @@ def customer_extras(c: sqlite3.Connection, viewer: str, customer_id: str, at: st
     ids = [str(r["id"]) for r in equipment]
     syncs = SM.record_syncs(c, "equipment", ids)
     names = _customer_names(ctx, "equipment", equipment)
-    due = RD.next_due_for(c, "equipment", ids)
+    due, states = _due_of(ctx, "equipment", equipment)
+    places = _place_names(ctx, "equipment", equipment)
     return {
-        "equipment": [_record_out(ctx, "equipment", r, view, _freshness(ctx, syncs.get(str(r["id"]))), names, due=due)
-                      for r in equipment],
+        "equipment": [_record_out(ctx, "equipment", r, view, _freshness(ctx, syncs.get(str(r["id"]))), names, due=due,
+                                  places=places, due_status=states) for r in equipment],
         "due_dates": DD.customer_due_dates(ctx, viewer, contact_id=customer_id,
                                            location_ids=[str(r["id"]) for r in locations], equipment_ids=ids),
     }
@@ -1765,8 +1794,8 @@ def customer_panel(c: sqlite3.Connection, viewer: str, contact_id: str, at: str 
     names = _customer_names(ctx, "location", locations)
     out: Row = {
         "contact": {"id": str(row["id"]), "name": str(row["name"])},
-        "locations": [_record_out(ctx, "location", r, view, _freshness(ctx, syncs.get(str(r["id"]))), names)
-                      for r in locations],
+        "locations": [_record_out(ctx, "location", r, view, _freshness(ctx, syncs.get(str(r["id"]))), names,
+                                  places=_place_names(ctx, "location", locations)) for r in locations],
         "estimates": None,
         "invoices": None,
     }
@@ -2218,8 +2247,13 @@ bills = tab_ap.bills
 invoices = tab_ap.invoices
 contacts = tab_ap.contacts
 def contact(c: sqlite3.Connection, viewer: str, contact_id: str, at: str | None = None) -> Row:
-    """One vendor or customer (tab_ap.contact), with the Library files its record links that the viewer may read."""
-    return {**tab_ap.contact(c, viewer, contact_id, at), "files": RFILES.visible(c, viewer, "fin_contacts", contact_id)}
+    """One vendor or customer (tab_ap.contact), with how fresh its copy is and the Library files its record links that
+    the viewer may read."""
+    out = tab_ap.contact(c, viewer, contact_id, at)
+    sync = SM.record_syncs(c, "fin_contacts", [contact_id]).get(contact_id)
+    files, more = RFILES.visible(c, viewer, "fin_contacts", contact_id)
+    return {**out, "contact": {**cast(Row, out["contact"]), **_freshness(load(c, at), sync)},
+            "files": files, "files_more": more}
 bill = tab_ap.bill
 invoice = tab_ap.invoice
 chart = tab_ap.chart

@@ -149,7 +149,10 @@ def status(row: Mapping[str, object], next_on: date | None, today: date) -> str:
         return "done"
     if next_on < today:
         return "overdue"
-    return "due" if next_on <= today + timedelta(days=int(row["lead_days"])) else "upcoming"
+    lead = row["lead_days"]
+    if not isinstance(lead, int):
+        raise TypeError("a due date's lead_days is a whole number of days")
+    return "due" if next_on <= today + timedelta(days=lead) else "upcoming"
 
 
 # ---------------------------------------------------------------------------------------------------------- the rows
@@ -296,10 +299,11 @@ def subject_ids(c: sqlite3.Connection, subject_type: str, subject_id: str) -> tu
     return tuple(sorted(ids))
 
 
-def next_due_for(c: sqlite3.Connection, subject_type: str, subject_ids_asked: Iterable[str]) -> dict[str, str]:
-    """The earliest open day of each record's live due dates, as ISO days, keyed by the ids asked for (a merged location's
-    old id answers with its record's). A record with no open due date has no key. Archived due dates count for nothing.
-    An equipment or location row calls this for its next_due_on."""
+def next_due_and_status(c: sqlite3.Connection, subject_type: str, subject_ids_asked: Iterable[str], today: date
+                        ) -> dict[str, tuple[date, str]]:
+    """Each record's earliest open day and its most pressing status (see status): overdue, due or upcoming, by the rule the
+    due filter and each due date's own pill use. Keyed by the ids asked for: a merged location's old id answers with its
+    record's."""
     canon_of: dict[str, str] = {}
     for given in subject_ids_asked:
         canon_of[given] = RS.resolve(c, "locations", given) if subject_type == "location" else given
@@ -308,6 +312,8 @@ def next_due_for(c: sqlite3.Connection, subject_type: str, subject_ids_asked: It
         for stored in subject_ids(c, subject_type, canon):
             lookup[stored] = canon
     best: dict[str, date] = {}
+    state: dict[str, str] = {}
+    pressing = ("overdue", "due", "upcoming")
     if lookup:
         marks = ",".join("?" * len(lookup))
         rows = c.execute(f"SELECT * FROM due_dates WHERE archived_at IS NULL AND subject_type=? AND subject_id IN ({marks})",
@@ -317,4 +323,8 @@ def next_due_for(c: sqlite3.Connection, subject_type: str, subject_ids_asked: It
             nxt = next_open(row, completed_days(c, str(row["id"])))
             if nxt is not None and (canon not in best or nxt < best[canon]):
                 best[canon] = nxt
-    return {given: best[canon_of[given]].isoformat() for given in canon_of if canon_of[given] in best}
+            if nxt is not None:
+                now = status(row, nxt, today)
+                if canon not in state or pressing.index(now) < pressing.index(state[canon]):
+                    state[canon] = now
+    return {given: (best[canon_of[given]], state[canon_of[given]]) for given in canon_of if canon_of[given] in best}

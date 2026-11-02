@@ -165,10 +165,43 @@ async function finSplitLoad() {
   const rows = [...(d.rows || [])].sort((a, b) => (a.key === 'unattributed') - (b.key === 'unattributed'));
   if (!rows.length) { box.innerHTML = finNote('Nothing in this window.'); return; }
   const excl = finExcl(d), partial = finCaps()?.all ? '' : ' · Your view';
-  const money = r => `<td class="fin-n">${finNum(r.income)}</td><td class="fin-n">${finNum(r.expense)}</td><td class="fin-n">${finNum(r.net)}</td>`;
-  box.innerHTML = `<table class="fin-t fin-split-t"><thead><tr><th>${esc(FIN_SPLITS.find(([v]) => v === by)?.[1] || '')}</th><th class="fin-n">Income</th><th class="fin-n">Expenses</th><th class="fin-n">Net income</th></tr></thead>
-    <tbody>${rows.map(r => `<tr data-fin-group="${esc(r.key)}"${r.key === 'unattributed' ? ' class="muted"' : ''}><td>${esc(r.label)}</td>${money(r)}</tr>`).join('')}
-    <tr class="fin-tot"><td>Total${excl}${partial}</td>${money(d)}</tr></tbody></table>`;
+  // Expenses include the cost of goods, so income less expenses reads across and the margin pair stands apart.
+  const money = r => ['income', 'expense', 'net', 'cost_of_goods', 'gross_margin'].map(k => `<td class="fin-n">${finNum(r[k])}</td>`).join('');
+  const opens = r => (by === 'location' || by === 'project') && r.key !== 'unattributed' && r.key !== 'other';
+  const name = r => opens(r) ? `<button type="button" class="fin-link" data-fin-group-open="${esc(r.key)}">${esc(r.label)}</button>` : esc(r.label);
+  box.innerHTML = `<div class="fin-scroll"><table class="fin-t fin-split-t"><thead><tr><th>${esc(FIN_SPLITS.find(([v]) => v === by)?.[1] || '')}</th><th class="fin-n">Income</th><th class="fin-n">Expenses</th><th class="fin-n">Net income</th><th class="fin-n">Cost of goods</th><th class="fin-n">Gross margin</th></tr></thead>
+    <tbody>${rows.map(r => `<tr data-fin-group="${esc(r.key)}"${r.key === 'unattributed' ? ' class="muted"' : ''}><td>${name(r)}</td>${money(r)}</tr>`).join('')}
+    <tr class="fin-tot"><td>Total${excl}${partial}</td>${money(d)}</tr></tbody></table></div>`;
+  box.onclick = ev => {
+    const b = ev.target.closest('[data-fin-group-open]');
+    if (b) void finSplitDrill(state, load, by, b.dataset.finGroupOpen, b.textContent);
+  };
+}
+// One location's or project's row, account by account, in the rail.
+async function finSplitDrill(state, load, by, id, label) {
+  const p = FIN_PNL, live = () => FIN?.pnl === state && state.load === load && state.drill === id;
+  state.drill = id;
+  const head = `<button type="button" class="ghost fin-rail-back" data-fin-drill-back>‹ Back</button><div class="fin-rail-title"><h2>${esc(label)}</h2></div>`;
+  const show = html => {
+    finRail(head + html);
+    $('#fin-pl')?.querySelectorAll('tr[data-fin-group]').forEach(r => r.classList.toggle('fin-on', r.dataset.finGroup === id));
+    $('#fin-rail [data-fin-drill-back]')?.addEventListener('click', () => {
+      state.drill = null;
+      finRail('');
+      $('#fin-pl tr.fin-on')?.classList.remove('fin-on');
+    });
+  };
+  show('');
+  $('#fin-rail')?.scrollIntoView?.({block: 'nearest'});
+  const qs = new URLSearchParams({by, id, start: p.start, end: p.end, basis: p.basis});
+  let d;
+  try { d = await get('/v2/finance/reports/pnl_by_account?' + qs + finAs(), {fresh: true}); }
+  catch (e) { if (live()) show(finFail(e)); return; }
+  if (!live()) return;
+  const rows = d.rows || [];
+  show(rows.map(r => finKv(r.label, esc(finUsd(r.amount)))).join('') + `<h3 class="fin-h">Total</h3>
+    ${finKv('Income', esc(finUsd(d.income)))}${finKv('Expenses', esc(finUsd(d.expense)))}${finKv('Net income', esc(finUsd(d.net)))}
+    ${finKv('Cost of goods', esc(finUsd(d.cost_of_goods)))}${finKv('Gross margin', esc(finUsd(d.gross_margin)))}`);
 }
 async function finPnlLoad() {
   if (FIN.pnl.view === 'company' && FIN_PNL.split) return finSplitLoad();

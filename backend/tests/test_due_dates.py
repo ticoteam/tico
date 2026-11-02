@@ -98,6 +98,12 @@ def _counted(c, due_date_id: str) -> str:
     return str(c.execute("SELECT counted_from_on FROM due_dates WHERE id=?", (due_date_id,)).fetchone()[0])
 
 
+def _readable(store, actor: str, task_id: str) -> bool:
+    """Whether the hub lets `actor` read the task (a private task admits its owner, requester and guest only)."""
+    with store.read() as c:
+        return bool(H.task_private_readable(c, actor, H.task(c, task_id)))
+
+
 # ---------------------------------------------------------------------------------------------------- H8, H9, subjects
 def test_h8_a_warranty_ending_in_60_days_opens_one_task_for_whoever_added_the_piece(books):
     with books.transaction() as c:
@@ -158,6 +164,84 @@ def test_h8_a_warranty_end_added_later_makes_one_due_date_and_a_past_one_makes_n
         assert RD.get(c, f"warranty-{unit}")["starts_on"] == "2026-12-14"
         past = _equipment(c, "Pump 8", warranty="2026-09-01")
         assert RD.get(c, f"warranty-{past}") is None
+
+
+def test_h8_moving_a_warranty_end_closes_its_open_task_and_the_next_pass_opens_the_new_day(books):
+    with books.transaction() as c:
+        unit = _equipment(c, "Kiln 4", warranty="2026-12-14", who="bot:coder")
+    _tick(books)
+    assert [t["status"] for t in _tasks(books, "bot:coder")] == ["open"]
+    with books.transaction() as c:
+        assert act(c, OWNER, "equipment_update", {"equipment_id": unit, "warranty_ends_on": "2027-01-13"}).status == \
+            "committed"
+    assert [t["status"] for t in _tasks(books, "bot:coder")] == ["closed"]
+    with books.transaction() as c:
+        late = act(c, OWNER, "due_date_occurrence_complete", {"due_date_id": f"warranty-{unit}", "due_on": DAY})
+    assert late.status != "committed" and "not one of this due date's days" in late.reason
+    assert _tick(books, later(30))["tasks"] == [{"actor": "bot:coder", "task": _tasks(books, "bot:coder")[1]["id"],
+                                                 "occurrences": 1}]
+    [_, new] = _tasks(books, "bot:coder")
+    assert new["status"] in H.ACTIVE_STATUSES and "2027-01-13" in new["body"] and "Warranty ends" in new["body"]
+
+
+def test_h8_clearing_a_warranty_end_closes_its_open_task_and_nothing_reopens_it(books):
+    with books.transaction() as c:
+        unit = _equipment(c, "Kiln 5", warranty="2026-12-14", who="bot:coder")
+    _tick(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "equipment_update", {"equipment_id": unit, "warranty_ends_on": None}).status == "committed"
+    assert [t["status"] for t in _tasks(books, "bot:coder")] == ["closed"]
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM due_date_occurrences WHERE due_date_id=?",
+                         (f"warranty-{unit}",)).fetchone()[0] == 0
+    assert _tick(books, later(30))["tasks"] == []
+
+
+def test_h8_moving_a_warranty_end_off_a_shared_task_keeps_that_task_open_for_the_other_due_date(books):
+    with books.transaction() as c:
+        unit = _equipment(c, "Kiln 6", warranty="2026-12-14", who="bot:coder")
+        service = _due(c, "equipment", unit, name="Kiln service", assignee="bot:coder")
+    _tick(books)
+    [shared] = _tasks(books, "bot:coder")
+    assert shared["title"] == "Due dates: 2 due"
+    with books.transaction() as c:
+        assert act(c, OWNER, "equipment_update", {"equipment_id": unit, "warranty_ends_on": "2027-01-13"}).status == \
+            "committed"
+    with books.read() as c:
+        assert c.execute("SELECT status FROM tasks WHERE id=?", (shared["id"],)).fetchone()[0] in H.ACTIVE_STATUSES
+        assert tuple(c.execute("SELECT task_id, completed_at FROM due_date_occurrences WHERE due_date_id=?",
+                               (service,)).fetchone()) == (shared["id"], None)
+        assert c.execute("SELECT COUNT(*) FROM due_date_occurrences WHERE due_date_id=?",
+                         (f"warranty-{unit}",)).fetchone()[0] == 0
+        events = [str(tuple(r)) for r in c.execute("SELECT * FROM task_events WHERE task_id=?", (shared["id"],))]
+    assert any("Warranty ends changed" in event for event in events), "the teammate is told on the task"
+    with books.transaction() as c:
+        assert act(c, "bot:coder", "due_date_occurrence_complete", {"due_date_id": service, "due_on": DAY}).status == \
+            "committed"
+
+
+def test_a_task_naming_a_vendor_is_private_to_its_assignee_and_an_ordinary_task_stays_company_visible(books):
+    with books.transaction() as c:
+        vendor = _vendor(c, "Laser Service Co")
+        _due(c, "contact", vendor, name="Laser service contract renewal", assignee="bot:coder")
+        _due(c, "location", _location(c, "Acme Visible Store"), name="Visible check", assignee="bot:coder")
+    _tick(books)
+    tasks = {"vendor" if "Laser" in t["body"] else "store": t for t in _tasks(books, "bot:coder")}
+    assert set(tasks) == {"vendor", "store"}, "a vendor's due date does not share a task with a store's"
+    assert _readable(books, "bot:coder", tasks["vendor"]["id"])
+    assert not _readable(books, "human:zed", tasks["vendor"]["id"])
+    assert _readable(books, "human:zed", tasks["store"]["id"])
+
+
+def test_a_needs_you_notice_naming_a_vendor_is_private_to_the_install_owner(books):
+    with books.transaction() as c:
+        vendor = _vendor(c, "Laser Service Co")
+        _due(c, "contact", vendor, name="Laser service contract renewal", assignee="bot:coder")
+        c.execute("UPDATE bots SET state='archived' WHERE slug='coder'")
+    _tick(books)
+    [notice] = _tasks(books, "human:ana", prefix="Due dates need a teammate")
+    assert _readable(books, "human:ana", notice["id"])
+    assert not _readable(books, "human:zed", notice["id"])
 
 
 def test_h9_van_registration_opens_30_days_before_to_the_office_manager_and_not_earlier(books):
@@ -535,7 +619,8 @@ def test_a_merged_location_answers_under_its_record_and_next_due_is_read_for_it(
         assert [r["name"] for r in listed] == ["Merged store check"]  # type: ignore[index]
         assert listed[0]["subject_name"] == "Acme Kept Store"  # type: ignore[index]
         assert FD.listing(c, OWNER, subject_type="equipment")["due_dates"] == []  # type: ignore[index]
-        assert RD.next_due_for(c, "location", [kept, merged]) == {kept: DAY, merged: DAY}
+        days = RD.next_due_and_status(c, "location", [kept, merged], date.fromisoformat(DAY))
+        assert {given: day.isoformat() for given, (day, _) in days.items()} == {kept: DAY, merged: DAY}
         with pytest.raises(FinanceError):
             FD.listing(c, OWNER, subject_id=kept)
 
@@ -594,6 +679,33 @@ def test_reopening_an_early_completion_puts_the_chain_back_on_its_occurrence(boo
         back = act(c, OWNER, "due_date_occurrence_reopen", {"due_date_id": chain, "due_on": "2026-11-08"}, at=NOV1)
     assert back.status == "committed" and back.result["reopened"] is True
     assert _next(books, chain, NOV1) == "2026-11-08"
+
+
+def test_a_new_schedule_or_a_stop_closes_the_open_task_and_a_rename_does_not(books):
+    def open_tasks():
+        return [t for t in _tasks(books, "human:eve") if t["status"] != "closed"]
+
+    with books.transaction() as c:
+        due = _due(c, "location", _location(c, "Acme Moved Store"), name="Moved check", assignee="human:eve")
+    _tick(books)
+    [task] = _tasks(books, "human:eve")
+    with books.transaction() as c:
+        assert act(c, OWNER, "due_date_update", {"due_date_id": due, "name": "Moved check 2"}).status == "committed"
+    assert [t["id"] for t in open_tasks()] == [task["id"]], "a rename keeps the task"
+    with books.transaction() as c:
+        assert act(c, OWNER, "due_date_update", {"due_date_id": due, "starts_on": "2027-06-01"}).status == "committed"
+    assert open_tasks() == [], "the old day's task closed"
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM due_date_occurrences WHERE due_date_id=? AND completed_at IS NULL",
+                         (due,)).fetchone()[0] == 0
+    with books.transaction() as c:
+        back = act(c, OWNER, "due_date_update", {"due_date_id": due, "starts_on": DAY})
+        assert back.status == "committed", back.reason
+    _tick(books, later(1))
+    assert len(open_tasks()) == 1, "the next pass opens the current day"
+    with books.transaction() as c:
+        assert act(c, OWNER, "due_date_update", {"due_date_id": due, "active": False}).status == "committed"
+    assert open_tasks() == [], "a stopped due date asks for nothing"
 
 
 def test_reassigning_a_due_date_moves_its_open_task_to_the_new_assignee(books):

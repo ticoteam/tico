@@ -1105,13 +1105,17 @@ export type Equipment = {
   file_id: string;
   id: string;
 }>;
+  files_more?: boolean;
   id: string;
   installed_on?: string | null;
   kind: "owned" | "customer";
   location_id?: string | null;
+  location_name?: string | null;
   make: string;
   model: string;
   name: string;
+  next_due_on?: string | null;
+  next_due_status?: string | null;
   photo_file_id?: string | null;
   serial: string;
   source?: string;
@@ -1534,6 +1538,7 @@ export type FinanceConnectionResult = {
 export type FinanceContact = {
   contact: {
   active: boolean;
+  as_of?: string | null;
   created_at?: string;
   default_account?: Record<string, unknown> | null;
   emails?: Array<string>;
@@ -1547,6 +1552,8 @@ export type FinanceContact = {
   invoices?: number;
 };
   recipient_id?: string | null;
+  source?: string;
+  stale?: boolean;
   tax_id_last4?: string | null;
 };
   files: Array<{
@@ -1555,6 +1562,7 @@ export type FinanceContact = {
   file_id: string;
   id: string;
 }>;
+  files_more: boolean;
   view_version: number;
 };
 
@@ -1599,6 +1607,7 @@ export type FinanceDocument = (FinanceDocumentRow & {
   id: string;
 }>;
   attachments_more?: boolean;
+  book_mode?: "native" | "mirror";
   lines: Array<{
   account: Record<string, unknown> | null;
   amount: number;
@@ -2623,6 +2632,7 @@ export type Item = {
   file_id: string;
   id: string;
 }>;
+  files_more?: boolean;
   id: string;
   income_account_id?: string | null;
   kind: "service" | "inventory" | "non_inventory" | "bundle" | "category" | "raw_material" | "assembly";
@@ -2925,12 +2935,15 @@ export type Location = {
   file_id: string;
   id: string;
 }>;
+  files_more?: boolean;
   id: string;
   in_books?: boolean;
   kind: string;
   name: string;
   next_due_on?: string | null;
+  next_due_status?: string | null;
   parent_id?: string | null;
+  parent_name?: string | null;
   source?: string;
   stale?: boolean;
 };
@@ -3487,6 +3500,7 @@ export type PurchaseOrder = (FinanceOrderRow & {
   total: number;
   vendor?: string;
 }>;
+  linked_bills_more?: boolean;
   view_version?: number;
 });
 

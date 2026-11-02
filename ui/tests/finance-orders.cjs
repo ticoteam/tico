@@ -97,6 +97,7 @@ const DAY = '2026-10-20';       // the scenario world's frozen day; the pages' c
     await sale(120000, {location: north});
     await sale(45000, {});
     await spend(200000, {location: north, project: big});
+    await act('dana', 'journal', {date: DAY, memo: 'Parts', lines: [{account_id: code('5100'), amount: 30000, tags: {location: north, project: big}}, {account_id: bank, amount: -30000}]});
     const page = await open('dana', '#/finance/pnl');
     const table = page.locator('#fin-pl table');
     await page.locator('[data-fin-split]').waitFor({timeout: t(20000)});
@@ -105,19 +106,39 @@ const DAY = '2026-10-20';       // the scenario world's frozen day; the pages' c
     const cells = async () => table.locator('tbody tr').evaluateAll(rows => rows.map(r => [...r.children].map(c => c.textContent.trim())));
     const money = s => Math.round(Number(s.replace(/[^0-9.()-]/g, '').replace(/^\((.*)\)$/, '-$1')) * 100);
     const byLabel = Object.fromEntries((await cells()).map(c => [c[0], c.slice(1).map(money)]));
-    assert.deepEqual(byLabel['North shop · Warehouse install'], [500000, 200000, 300000]);
-    assert.deepEqual(byLabel['South shop · Warehouse install'], [300000, 0, 300000]);
-    assert.deepEqual(byLabel['North shop · Unattributed'], [120000, 0, 120000], JSON.stringify(byLabel));
+    // Income, expenses, net income, cost of goods, gross margin. Expenses include the cost of goods.
+    assert.deepEqual(byLabel['North shop · Warehouse install'], [500000, 230000, 270000, 30000, 470000]);
+    assert.deepEqual(byLabel['South shop · Warehouse install'], [300000, 0, 300000, 0, 300000]);
+    assert.deepEqual(byLabel['North shop · Unattributed'], [120000, 0, 120000, 0, 120000], JSON.stringify(byLabel));
     const got = await cells();
     const un = got[got.length - 2];
     assert.equal(un[0], 'Unattributed', 'Unattributed is the last row before the total');
     assert.equal(money(un[1]), 45000);
-    assert.deepEqual(got[got.length - 1].slice(1).map(money), [965000, 200000, 765000], 'the total is every line posted');
+    assert.deepEqual(got[got.length - 1].slice(1).map(money), [965000, 230000, 735000, 30000, 935000], 'the total is every line posted');
     await shot(page, 'pnl-split-desktop');
     for (const [by, label] of [['location', 'North shop'], ['class', 'Commercial'], ['project', 'Warehouse install']]) {
       await page.locator('[data-fin-split]').selectOption(by);
       await until(async () => (await cells()).some(c => c[0] === label), by);
     }
+    // A location's row by account, with the margin in its totals; Unattributed and a rolled-up row don't open.
+    await page.locator('[data-fin-split]').selectOption('location');
+    await until(async () => (await cells()).some(c => c[0] === 'North shop'), 'by location');
+    assert.equal(await page.locator('tr[data-fin-group="unattributed"] button').count(), 0);
+    await page.getByRole('button', {name: 'North shop', exact: true}).click();
+    await rail(page).getByText('Gross margin').waitFor({timeout: t(10000)});
+    const drill = await rail(page).locator('.fin-kv').evaluateAll(rows => Object.fromEntries(rows.map(r => [r.firstElementChild.textContent.trim(), r.lastElementChild.textContent.trim()])));
+    assert.deepEqual(['Income', 'Expenses', 'Net income', 'Cost of goods', 'Gross margin'].map(k => money(drill[k])), [620000, 230000, 390000, 30000, 590000], JSON.stringify(drill));
+    await shot(page, 'pnl-drill-desktop');
+    await rail(page).getByRole('button', {name: '‹ Back'}).click();
+    assert.equal(await rail(page).locator('.fin-kv').count(), 0);
+    const rolled = {by: 'location', rows: [{key: 'other', label: 'Other · 3', count: 3, income: 900, expense: 400, net: 500, cost_of_goods: 100, gross_margin: 800}],
+      income: 900, expense: 400, net: 500, cost_of_goods: 100, gross_margin: 800, excluded: 0};
+    await page.route('**/api/v2/finance/reports/pnl_by?*', r => r.fulfill({json: rolled}));
+    await page.locator('[data-fin-split]').selectOption('project');
+    await until(async () => (await cells()).some(c => c[0] === 'Other · 3'), 'the rolled-up row');
+    assert.deepEqual((await cells())[0].slice(1).map(money), [900, 400, 500, 100, 800]);
+    assert.equal(await page.locator('tr[data-fin-group="other"] button').count(), 0);
+    await page.unroute('**/api/v2/finance/reports/pnl_by?*');
     await page.locator('[data-fin-split]').selectOption('');
     await page.locator('[data-fin-seg="period"]').waitFor({timeout: t(5000)});
     assert.ok(!page.url().includes('split='), 'clearing the split clears the address');
@@ -369,6 +390,135 @@ const DAY = '2026-10-20';       // the scenario world's frozen day; the pages' c
     await save(page); await closed(page);
     await rail(page).getByText('Payment terms').waitFor({timeout: t(10000)});
 
+    // ---- A contact's Library files. A request that waits on approval says nothing was added or removed.
+    const upload = async name => {
+      const r = await call('engineering-lead', 'POST', '/v2/files/uploads', {name, text: 'Acme contract', scope: 'bot'});
+      assert.ok(r.status < 300, JSON.stringify(r.data));
+      return (r.data.file || r.data).id;
+    };
+    const contract = await upload('acme-contract.txt');
+    const waits = r => r.fulfill({json: {status: 'needs_approval', approver: 'human:dana'}});
+    const actions = '**/api/v2/finance/actions';
+    const pickFile = async name => {
+      await rail(page).getByRole('button', {name: 'Add file'}).click();
+      await dlg(page).getByRole('option', {name}).click();
+      await shot(page, 'file-pick-desktop');
+      await dlg(page).getByRole('button', {name: 'Add', exact: true}).click();
+      await closed(page);
+    };
+    await page.route(actions, waits);
+    await pickFile('acme-contract.txt');
+    await page.getByText('Sent to').first().waitFor({timeout: t(5000)});
+    assert.equal(await rail(page).getByRole('link', {name: 'acme-contract.txt'}).count(), 0);
+    assert.equal(await page.getByText('Added', {exact: true}).count(), 0, 'no success while it waits');
+    await page.unroute(actions);
+    await page.getByText('Sent to').first().waitFor({state: 'detached', timeout: t(15000)}).catch(() => {});
+    await pickFile('acme-contract.txt');
+    await rail(page).getByRole('link', {name: 'acme-contract.txt'}).waitFor({timeout: t(10000)});
+    assert.deepEqual((await read('dana', '/v2/finance/contacts/' + supplier)).files.map(f => f.file_id), [contract]);
+    await shot(page, 'vendor-files-desktop');
+    // A viewer without finance.records sees the file and no way to change it.
+    await omar.evaluate(id => finContactShow({id, name: '', kind: 'vendor'}), supplier);
+    await rail(omar).getByRole('link', {name: 'acme-contract.txt'}).waitFor({timeout: t(10000)});
+    assert.equal(await rail(omar).locator('[data-file-add],[data-file-remove]').count(), 0);
+    await page.route(actions, waits);
+    await rail(page).getByRole('button', {name: 'Remove acme-contract.txt'}).click();
+    await page.waitForTimeout(t(300));
+    assert.equal(await rail(page).getByRole('link', {name: 'acme-contract.txt'}).count(), 1, 'still linked while it waits');
+    assert.equal(await page.getByText('Removed', {exact: true}).count(), 0);
+    await page.unroute(actions);
+    await rail(page).getByRole('button', {name: 'Remove acme-contract.txt'}).click();
+    await rail(page).getByRole('link', {name: 'acme-contract.txt'}).waitFor({state: 'detached', timeout: t(10000)});
+    assert.deepEqual((await read('dana', '/v2/finance/contacts/' + supplier)).files, []);
+    await act('dana', 'record_file_add', {subject_type: 'contact', subject_id: supplier, file_id: contract});
+    await act('dana', 'record_file_add', {subject_type: 'contact', subject_id: customer, file_id: contract});
+    await go(page, `#/finance/receivables/estimates?contact=${customer}`);
+    await rail(page).getByRole('link', {name: 'acme-contract.txt'}).waitFor({timeout: t(10000)});
+
+    // ---- A provider's copy says when it last synced; Tico's own record says nothing.
+    const fresh = async extra => {
+      const route = `**/api/v2/finance/contacts/${supplier}*`;
+      await page.route(route, async r => { const res = await r.fetch(), json = await res.json(); await r.fulfill({response: res, json: {...json, contact: {...json.contact, ...extra}}}); });
+      await page.evaluate(id => finContactShow({id, name: '', kind: 'vendor'}), supplier);
+      await rail(page).getByText('Payment terms').waitFor({timeout: t(10000)});
+      const text = await rail(page).innerText();
+      await page.unroute(route);
+      return [text.includes('Last sync'), text.includes('May be out of date')];
+    };
+    await go(page, '#/finance/payables/orders');
+    await page.locator('tr[data-fin-ord]').first().waitFor({timeout: t(10000)});
+    await page.waitForTimeout(t(500));
+    assert.deepEqual(await fresh({}), [false, false], 'the real read of Tico\'s own record');
+    assert.deepEqual(await fresh({source: 'quickbooks', as_of: '2026-10-19T15:00:00Z', stale: false}), [true, false]);
+    assert.deepEqual(await fresh({source: 'quickbooks', as_of: '2026-10-01T15:00:00Z', stale: true}), [true, true]);
+    await shot(page, 'vendor-stale-desktop');
+    assert.deepEqual(await fresh({source: 'quickbooks', as_of: null, stale: true}), [false, true]);
+    // Past the 50 cap the files point to the Library; the real read of one file doesn't.
+    await page.evaluate(id => finContactShow({id, name: '', kind: 'vendor'}), supplier);
+    await rail(page).getByRole('link', {name: 'acme-contract.txt'}).waitFor({timeout: t(10000)});
+    assert.equal(await rail(page).locator('[data-files-more]').count(), 0);
+    const contactRoute = `**/api/v2/finance/contacts/${supplier}*`;
+    await page.route(contactRoute, async r => { const res = await r.fetch(), json = await res.json(); await r.fulfill({response: res, json: {...json, files_more: true}}); });
+    await page.evaluate(id => finContactShow({id, name: '', kind: 'vendor'}), supplier);
+    await rail(page).locator('[data-files-more]').waitFor({timeout: t(10000)});
+    assert.equal(await rail(page).locator('[data-files-more]').getAttribute('href'), '#/library/files');
+    await page.unroute(contactRoute);
+    await page.evaluate(() => finContactClose());
+
+    // ---- A bill of any vendor links to an order: not a billed line, not in its total.
+    const unlinked = await po(id);
+    assert.deepEqual(unlinked.linked_bills || [], []);
+    await go(page, `#/finance/payables/orders?doc=${id}`);
+    await rail(page).getByText('Billed').waitFor({timeout: t(10000)});
+    assert.equal(await rail(page).getByRole('heading', {name: 'Linked bills'}).count(), 0, 'no section when none is linked');
+    await go(page, '#/finance/payables');
+    await page.getByRole('button', {name: /^\+ /}).first().click();
+    await dlg(page).locator('[name=po]').waitFor({timeout: t(10000)});
+    await dlg(page).locator('[name=contact]').selectOption(factory);
+    await dlg(page).locator('[name=number]').fill('L-1');
+    await dlg(page).locator('[name=amount]').fill('250');
+    await dlg(page).locator('[name=po]').selectOption(id);
+    await save(page); await closed(page);
+    let linked;
+    await until(async () => { linked = (await po(id)).linked_bills?.[0]; return !!linked; }, 'the bill links');
+    assert.deepEqual([linked.number, linked.vendor, linked.total], ['L-1', 'Acme Factory', 25000]);
+    assert.equal((await po(id)).billed, unlinked.billed, 'a link is not billed');
+    await go(page, `#/finance/payables/orders?doc=${id}`);
+    await rail(page).getByRole('heading', {name: 'Linked bills'}).waitFor({timeout: t(10000)});
+    await shot(page, 'po-linked-desktop');
+    // Past the 50 cap the panel says there are more; the real read of one bill doesn't.
+    assert.equal(await rail(page).locator('[data-bills-more]').count(), 0);
+    const orderRoute = `**/api/v2/purchase-orders/${id}*`;
+    await page.route(orderRoute, async r => { const res = await r.fetch(), json = await res.json(); await r.fulfill({response: res, json: {...json, linked_bills_more: true}}); });
+    await go(page, '#/finance/payables/orders');
+    await go(page, `#/finance/payables/orders?doc=${id}`);
+    await rail(page).locator('[data-bills-more]').waitFor({timeout: t(10000)});
+    await page.unroute(orderRoute);
+    await rail(page).locator(`a[href*="${linked.id}"]`).click();
+    await rail(page).getByRole('button', {name: 'Change', exact: true}).waitFor({timeout: t(10000)});
+    assert.ok(page.url().includes(linked.id), page.url());
+    await shot(page, 'bill-order-desktop');
+    // A mirrored book refuses the change, and a link to an order the viewer can't read isn't shown.
+    const billRead = async extra => {
+      const route = `**/api/v2/finance/bills/${linked.id}*`;
+      await page.route(route, async r => { const res = await r.fetch(), json = await res.json(); await r.fulfill({response: res, json: {...json, ...extra}}); });
+      await page.evaluate(() => finDocOne());
+      await rail(page).getByText('Status').waitFor({timeout: t(5000)});
+      await page.waitForTimeout(t(500));
+      const text = await rail(page).innerText();
+      await page.unroute(route);
+      return [text.includes('Open'), text.includes('Change')];
+    };
+    assert.deepEqual(await billRead({book_mode: 'mirror'}), [true, false]);
+    assert.deepEqual(await billRead({book_mode: 'mirror', purchase_order_id: null}), [false, false]);
+    await page.evaluate(() => finDocOne());
+    await rail(page).getByRole('button', {name: 'Change', exact: true}).click();
+    await dlg(page).locator('[name=po]').selectOption('');
+    await save(page); await closed(page);
+    await until(async () => !(await po(id)).linked_bills?.length, 'an empty choice clears the link');
+    assert.equal((await read('dana', '/v2/finance/bills/' + linked.id)).purchase_order_id, null);
+    await act('dana', 'bill_update', {bill_id: linked.id, purchase_order_id: id});
+
     // ---- A teammate without the rights: no Purchase orders or Estimates switch, and the routes fall back.
     const priya = await open('priya', '#/finance');
     await priya.waitForTimeout(t(800));
@@ -387,6 +537,10 @@ const DAY = '2026-10-20';       // the scenario world's frozen day; the pages' c
     await phone.locator('[data-fin-split]').selectOption('location_project');
     await phone.locator('.fin-split-t').waitFor({timeout: t(10000)});
     await fits('split'); await shot(phone, 'pnl-split-phone');
+    await phone.locator('[data-fin-split]').selectOption('location');
+    await phone.getByRole('button', {name: 'North shop', exact: true}).click();
+    await rail(phone).getByText('Gross margin').waitFor({timeout: t(10000)});
+    await fits('drill'); await shot(phone, 'pnl-drill-phone');
     await go(phone, `#/finance/payables/orders?doc=${id}`);
     await rail(phone).getByText('Billed').waitFor({timeout: t(10000)});
     await fits('orders'); await shot(phone, 'po-panel-phone');

@@ -560,7 +560,7 @@ def _gone(c: sqlite3.Connection, ctx: Ctx, cid: str, ext: M.Ext, at: str) -> Non
     elif table == "fin_purchase_orders":
         SP.update(c, table, local, {"status": "void", "voided_at": at, "updated_at": at},
                   "status IN ('draft','sent','approved')")
-        PU._settle(load(c, at), SYSTEM, local)  # a void order gives back the budget its unbilled lines held
+        PU.settle_order(load(c, at), SYSTEM, local)  # a void order gives back the budget its unbilled lines held
     elif table == "fin_estimates":
         SP.update(c, table, local, {"status": "declined", "decided_at": at, "updated_at": at},
                   "status IN ('draft','sent')")
@@ -1614,7 +1614,7 @@ def _doc_out(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any])
     tax, not as a line, since it has no item to sell the tax on; Xero's document takes no tax, so there it stays a line."""
     lines: list[dict[str, Any]] = []
     quickbooks = any(row[0] == cid and row[1] == "quickbooks" for row in SX.books_connections(c))
-    taxes = _sales_tax_accounts(c) if op == "invoice.create" and quickbooks else set()
+    taxes: set[str] = _sales_tax_accounts(c) if op == "invoice.create" and quickbooks else set()
     tax = 0
     for x in cast(list[dict[str, Any]], local["lines"]):
         if str(x["account_id"]) in taxes and not x.get("item_id"):
@@ -2532,7 +2532,7 @@ _ONE_LOCATION = (("location", "location"),)
 _ONE_LOCATION_AND_JOB = (("location", "location"), ("project", "job"))
 
 
-def _one_per_transaction(lines: list, keys: tuple[tuple[str, str], ...]) -> None:
+def _one_per_transaction(lines: Sequence[AP.DocLine], keys: tuple[tuple[str, str], ...]) -> None:
     """Lines that name more than one location (or job, where the header takes one) are refused at plan time, before
     anything is queued for the provider."""
     for tag, what in keys:
@@ -2932,7 +2932,7 @@ def _order(c: sqlite3.Connection, ctx: Ctx, cid: str, o: M.Order, at: str) -> No
         moved = _kept_status(row, o, purchase, at)  # raises before anything is written when the order was reopened
         held = purchase and not same and _held_on(ctx, local) > 0
         if held:
-            PU._release(ctx, local, SP.lines(c, "po", local))
+            PU.release_order_holds(ctx, local, SP.lines(c, "po", local))
         SP.update(c, table, local, {**head, **moved})
         if not same:
             SP.delete_lines(c, line_kind, local)
@@ -2948,7 +2948,7 @@ def _order(c: sqlite3.Connection, ctx: Ctx, cid: str, o: M.Order, at: str) -> No
             for account, item, amount, description, tags in lines])
     _bind(c, cid, table, local, o.ext, at)
     if purchase and (held or moved.get("status") == "closed"):
-        PU._settle(load(c, at), SYSTEM, local, force=held)
+        PU.settle_order(load(c, at), SYSTEM, local, force=held)
 
 
 def _mapped_status(o: M.Order, purchase: bool, at: str) -> dict[str, object]:
@@ -3022,7 +3022,7 @@ def _confirm_po_close(c: sqlite3.Connection, cid: str, local: Mapping[str, Any],
     po = str(local["local_id"])
     if SP.update(c, "fin_purchase_orders", po, {"status": "closed", "closed_by": "hand", "closed_at": now,
                                                 "updated_at": now}, "status='approved'") == 1:
-        PU._settle(load(c, now), SYSTEM, po)
+        PU.settle_order(load(c, now), SYSTEM, po)
 
 
 def _po_close_planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
@@ -3032,8 +3032,8 @@ def _po_close_planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     _quickbooks_only(ctx, "a purchase order's close")
     cid = _cid(ctx)
     po_id = V.text(p, "po_id", 80)
-    po, lines = PU._seen(ctx, who, "fin_purchase_orders", "po", po_id, "purchase order")
-    PU._visible(ctx, who, lines)
+    po, lines = PU.load_document_for_action(ctx, who, "fin_purchase_orders", "po", po_id, "purchase order")
+    PU.check_lines_in_view(ctx, who, lines)
     if str(po["status"]) not in PU.OPEN_ORDER:
         raise FinanceError(CONFLICT, "only an approved order closes")
     ref = SX.ref_for_local(ctx.c, cid, "fin_purchase_orders", po_id)

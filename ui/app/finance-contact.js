@@ -1,9 +1,11 @@
 /* ui/app/finance-contact.js — a vendor's or customer's panel in the Payables and Receivables rail. A customer's: their sites
    and equipment, open estimates and invoices, and due dates, "everything we service" for a person or a bot. A vendor's: payment
-   terms, owner, renewal date and notice period, and linked contract docs; who can pay stays a Finance right.
+   terms, owner, renewal date and notice period, and linked contract docs; who can pay stays a Finance right. Either: its Library
+   files, and when a provider's books hold it, how fresh this copy is.
    Opens from a document's title or from an address with ?contact=<id>. A part that is missing or not in the viewer's view
    just leaves its heading out.
-   Reads: GET /api/v2/customers/{id}, /api/v2/finance/contacts/{id}. Write: contact_update through POST /api/v2/finance/actions.
+   Reads: GET /api/v2/customers/{id}, /api/v2/finance/contacts/{id}, /api/v2/files. Writes through POST /api/v2/finance/actions:
+   contact_update, record_file_add, record_file_remove.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -38,23 +40,37 @@ async function finContactShow({id, name, kind}) {
   if (FIN_CONTACT !== me || FIN !== page) return;
   finContactDraw(me, parts);
 }
-// A customer's panel is one read; a vendor's is the contact. A contact opened from an address may be the other kind.
+// A vendor's panel is the contact read. A customer's adds its panel read; a teammate who can't see the contact's side still
+// reads that one, without files. A contact opened from an address may be the other kind.
 async function finContactRead(me) {
   const id = encodeURIComponent(me.id), as = finAs('?');
+  const record = me.kind === 'customer' ? await get(`/v2/finance/contacts/${id}${as}`, {fresh: true}).catch(() => null)
+    : await get(`/v2/finance/contacts/${id}${as}`, {fresh: true});
+  if (record) me.name = record.contact.name;
+  const files = record ? await recordFileNames(record.files) : null;
   if (me.kind !== 'customer') {
-    const {contact} = await get(`/v2/finance/contacts/${id}${as}`, {fresh: true});
-    me.name = contact.name;
-    if (contact.kind !== 'customer') return {contact};
+    if (record.contact.kind !== 'customer') return {contact: record.contact, record: record.contact, files, filesMore: record.files_more};
     me.kind = 'customer';
   }
   const d = await get(`/v2/customers/${id}${as}`, {fresh: true});
   me.name = d.contact?.name || me.name;
-  return {contact: d.contact, sites: d.locations, gear: d.equipment, due: d.due_dates, estimates: d.estimates, invoices: d.invoices?.invoices};
+  return {contact: d.contact, record: record?.contact, files, filesMore: record?.files_more, sites: d.locations, gear: d.equipment, due: d.due_dates, estimates: d.estimates, invoices: d.invoices?.invoices};
+}
+// A copy from a provider's books: when it last synced, and whether it may be behind. Tico's own record says nothing.
+function finContactFresh(c) {
+  if (!c?.source || c.source === 'tico') return '';
+  return (c.as_of ? finKv('Last sync', esc(fmt(c.as_of))) : '') + (c.stale ? '<p class="fin-stale" data-fin-stale>May be out of date</p>' : '');
+}
+function finContactFilesHtml(files, more) {
+  const edit = finCaps()?.may('finance.records');
+  if (!files || (!files.length && !edit)) return '';
+  return `<h3 class="fin-h">Files</h3>${recordFileRows(files, edit)}${recordFilesMore(more)}
+    ${edit ? '<div class="fin-acts"><button type="button" class="ghost" data-file-add>Add file</button></div>' : ''}`;
 }
 function finContactDraw(me, parts) {
   const head = `<button type="button" class="ghost fin-rail-back" data-fin-contact-back>‹ Back</button><div class="fin-rail-title"><h2>${esc(me.name || '—')}</h2></div>`;
   if (!parts) { finRail(head); finContactWire(me, null); return; }
-  const c = parts.contact, out = [head];
+  const c = parts.contact, out = [head, finContactFresh(parts.record)];
   if (me.kind === 'vendor') {
     const docs = c.contract_docs || c.docs || [];
     out.push(finKv('Payment terms', c.payment_terms_days != null ? `Net ${esc(c.payment_terms_days)}` : '—'),
@@ -67,21 +83,77 @@ function finContactDraw(me, parts) {
   } else {
     const list = (title, rows, row) => rows?.length ? `<h3 class="fin-h">${title}</h3>${rows.map(row).join('')}` : '';
     const open = (href, label) => `<a class="fin-link" href="${esc(href)}">${esc(label)}</a>`;
-    out.push(list('Sites', parts.sites, s => finKv(s.name, esc([s.address?.city, s.address?.state].filter(Boolean).join(', ')))),
+    out.push(list('Locations', parts.sites, s => finKv(s.name, esc([s.address?.city, s.address?.state].filter(Boolean).join(', ')))),
       list('Equipment', parts.gear, e => finKv(e.name, esc([e.make, e.model].filter(Boolean).join(' ')))),
       list('Estimates', parts.estimates, e => finKv(e.number || 'Estimate', open(finHref('/receivables/estimates', {doc: e.id}), finUsd(e.total)))),
       list('Invoices', parts.invoices, i => finKv(i.number || 'Invoice', open(finHref('/receivables', {doc: i.id}), finUsd(i.status === 'draft' ? i.total : i.remaining ?? i.total)))),
       list('Due dates', parts.due, d => finKv(d.name, d.next_due_on ? esc(finDayLabel(d.next_due_on)) : '—')));
   }
+  out.push(finContactFilesHtml(parts.files, parts.filesMore));
   finRail(out.join(''));
-  finContactWire(me, c);
+  finContactWire(me, c, parts.files);
 }
-function finContactWire(me, c) {
+function finContactWire(me, c, files) {
   const rail = $('#fin-rail'); if (!rail) return;
   rail.onclick = ev => {
     if (ev.target.closest('[data-fin-contact-back]')) { finContactBack(); return; }
     if (c && ev.target.closest('[data-fin-contact-edit]')) finVendorEdit(me, c);
+    const again = () => { if (FIN_CONTACT === me) void finContactShow(me); };
+    if (ev.target.closest('[data-file-add]')) void recordFilePick('contact', me.id, files || [], again);
+    const gone = ev.target.closest('[data-file-remove]');
+    if (gone) void recordFileRemove(gone, again);
   };
+}
+// A record's Library files, for a contact's panel here and an Operations record's. A link names only the file, so each one's
+// name comes from its own meta read.
+const recordFileNames = files => Promise.all((files || []).map(async f =>
+  ({...f, name: (await get(`/v2/files/${encodeURIComponent(f.file_id)}/meta`).catch(() => null))?.name})));
+const recordFileRows = (files, edit) => files.map(f => `<div class="fin-rec-file"><a href="${API}/v2/files/${encodeURIComponent(f.file_id)}" target="_blank" rel="noopener" data-name="${esc(f.name || 'File')}">${esc(f.name || 'File')}</a>
+    ${edit ? `<button type="button" class="ghost tmodal-x" data-file-remove="${esc(f.id)}" aria-label="Remove ${esc(f.name || 'file')}">✕</button>` : ''}</div>`).join('');
+// A read holds at most 50 links; the rest are in the Library.
+const recordFilesMore = more => more ? `<p class="fin-note"><a class="fin-link" data-files-more href="${RD_FILES}">More in Library</a></p>` : '';
+// The same reads and rows as the rules' document picker: recent files whose name fits, then search hits. Stored files only:
+// a link has no copy to open from here. `done` runs once the link is made, not when it waits on a person.
+async function recordFilePick(subject_type, subject_id, linked, done) {
+  const taken = new Set(linked.map(f => f.file_id));
+  const fits = f => f.locator !== 'remote_link' && !f.url && !f.archived && !taken.has(f.id);
+  let pick = '', found = [], recent = [], seq = 0, soon = 0;
+  const dlg = finDialog('Add file', `<input name="find" type="search" placeholder="Search files" aria-label="Search files" autocomplete="off">
+    <div class="ru-picks" role="listbox" aria-label="Files"></div>`, 'Add', async () => {
+    if (!pick) throw new Error('Pick a file');
+    const r = await finAct('record_file_add', {subject_type, subject_id, file_id: pick});
+    if (r.status === 'committed') { toast('Added'); await done(); }
+  });
+  const find = dlg.querySelector('[name=find]'), box = dlg.querySelector('.ru-picks');
+  const label = f => f.title || f.name || f.id;
+  const draw = () => {
+    const q = find.value.trim().toLowerCase();
+    const local = recent.filter(f => label(f).toLowerCase().includes(q));
+    const rows = [...local, ...found.filter(f => !local.some(x => x.id === f.id))].slice(0, 8);
+    box.innerHTML = rows.map(f => `<button type="button" class="ru-pick" role="option" aria-selected="${f.id === pick}" data-id="${esc(f.id)}"><span class="ru-pick-t">${esc(label(f))}</span></button>`).join('')
+      || `<p class="ru-pick-none">${q ? 'No files match.' : 'No files yet.'}</p>`;
+  };
+  box.onclick = ev => { const b = ev.target.closest('.ru-pick'); if (b) { pick = b.dataset.id; draw(); } };
+  find.oninput = () => {
+    found = []; pick = ''; draw();
+    clearTimeout(soon);
+    const q = find.value.trim(), mine = ++seq;
+    if (q) soon = setTimeout(async () => {
+      const r = await get('/v2/files/search?limit=8&q=' + encodeURIComponent(q)).catch(() => null);
+      if (mine === seq && dlg.open) { found = (r?.results || []).filter(fits); draw(); }
+    }, 250);
+  };
+  recent = await get('/v2/files?limit=50', {fresh: true}).then(r => (r.files || []).filter(fits)).catch(() => []);
+  if (dlg.open) draw();
+}
+// The file stays in the Library; only the link goes.
+async function recordFileRemove(btn, done) {
+  btn.disabled = true;
+  try {
+    const r = await finAct('record_file_remove', {record_file_id: btn.dataset.fileRemove});
+    if (r.status === 'committed') { toast('Removed'); await done(); return; }
+  } catch (e) { toast(e.message, true); }
+  btn.disabled = false;
 }
 // Payment terms, owner, renewal and notice: only what changed goes to contact_update.
 function finVendorEdit(me, c) {

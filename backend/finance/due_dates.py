@@ -126,8 +126,14 @@ def due_date_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if "active" in p:
         changes["archived_at"] = None if V.flag(p, "active", True) else ctx.at
 
+    # A new schedule or a stop leaves no day for an open occurrence to be completed on: its task must not keep asking.
+    moved = any(changes.get(f, row[f]) != row[f] for f in ("starts_on", "repeats", "every_count", "next_due_on"))
+    stopped = changes.get("archived_at") is not None and row["archived_at"] is None
+
     def apply(aid: str) -> Result:
         RD.update(ctx.c, due_date_id, {**changes, "updated_at": ctx.at, "updated_by_id": who})
+        if moved or stopped:
+            FLOW.withdraw(ctx.c, due_date_id, str(row["name"]))
         new_assignee = changes.get("assignee_id")
         if new_assignee is not None and new_assignee != row["assignee_id"]:
             FLOW.reassign(ctx.c, due_date_id, str(new_assignee), str(row["name"]))   # its open task goes with it

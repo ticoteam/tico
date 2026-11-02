@@ -266,6 +266,7 @@ function finDocRail(d, full) {
   const pay = bill ? finBillPay(d) : null;
   if (pay) rows.push(finKv('Payment', `${finPayPill(pay)}${pay.error && !FIN_PAY_LIVE.has(pay.status) ? ' ' + esc(pay.error) : ''}`));
   if (bill && d.approved_by) rows.push(finKv('Approved by', esc(finWho(d.approved_by))));
+  if (bill && full) rows.push(finBillOrderRow(d));
   if (d.paid) rows.push(finKv('Paid', finUsd(d.paid)));
   if (d.remaining && d.remaining !== d.total) rows.push(finKv('Left', finUsd(d.remaining)));
   if (!bill && d.written_off) rows.push(finKv('Written off', finUsd(d.written_off)));
@@ -313,6 +314,7 @@ function finDocDo(what, d, btn) {
   if (what === 'approve') void finDocRun('bill_approve', id, 'Approved', btn);
   else if (what === 'send') void finDocRun('invoice_send', id, 'Sent', btn);
   else if (what === 'schedule') void finBillSchedule(d);
+  else if (what === 'order') void finBillOrderEdit(d);
   else if (what === 'paid') void finDocMarkPaid(d);
   else if (what === 'void') finDecideDialog('Void bill', '<label>Reason<input name="reason" maxlength="200" autocomplete="off"></label>', 'Void', form => {
     const reason = form.elements.reason.value.trim();
@@ -405,12 +407,31 @@ async function finDocMarkPaid(d) {
 async function finContacts(kind) {
   try { return (await get(`/v2/finance/contacts?kind=${kind}&limit=200${finAs()}`, {fresh: true}))?.contacts || []; } catch { return []; }
 }
+// The orders a bill can link to, of any vendor. The picker is only ever a convenience: a refused read offers none.
+const finBillOrders = () => get('/v2/purchase-orders?limit=200' + finAs(), {fresh: true}).then(r => (r.orders || []).filter(o => o.status !== 'void')
+  .map(o => ({id: o.id, name: [o.number || 'Purchase order', o.contact?.name].filter(Boolean).join(' · ')}))).catch(() => []);
+// A bill's purchase order, and its change where the bill still changes. A mirrored book takes the link only at create.
+function finBillOrderRow(d) {
+  const may = d.book_mode === 'native' && ['draft', 'open', 'scheduled'].includes(d.status) && finCaps()?.may('finance.ap');
+  const open = d.purchase_order_id ? `<a class="fin-link" href="${esc(finHref('/payables/orders', {doc: d.purchase_order_id}))}">Open</a>` : '';
+  if (!open && !may) return '';
+  return finKv('Purchase order', `${open}${open && may ? ' · ' : ''}${may ? `<button type="button" class="fin-link" data-fin-do="order">${open ? 'Change' : 'Add'}</button>` : ''}`);
+}
+async function finBillOrderEdit(d) {
+  const orders = await finBillOrders(), now = d.purchase_order_id || '';
+  if (now && !orders.some(o => o.id === now)) orders.unshift({id: now, name: 'Purchase order'});
+  finDecideDialog('Purchase order', `<label>Purchase order<select name="po"><option value=""></option>${finOpts(orders, now)}</select></label>`, 'Save', form => {
+    const po = form.elements.po.value;
+    if (po === now) throw new Error('Nothing changed');
+    return ['bill_update', {bill_id: d.id, purchase_order_id: po}];
+  }, 'Saved');
+}
 // A bill, an invoice, a purchase order or an estimate: its contact (or a new one), number, dates, its lines, memo. A
 // bill takes one line; the others several, each with its amount, and a sale's say whether they are taxable.
 async function finDocAdd(kind) {
   const k = FIN_DOC[kind], bill = kind === 'bill', sale = k.contactKind === 'customer';
-  let contacts, lines, picks;
-  try { [contacts, lines, picks] = await Promise.all([finContacts(k.contactKind), finChart(k.chart || kind), finPicks()]); }
+  let contacts, lines, picks, orders;
+  try { [contacts, lines, picks, orders] = await Promise.all([finContacts(k.contactKind), finChart(k.chart || kind), finPicks(), bill ? finBillOrders() : []]); }
   catch (e) { toast(e.message, true); return; }
   // A sale may also carry its sales tax: a line on a jurisdiction's sales tax account (a liability).
   if (sale) lines = [...lines, ...(await finChart('journal').catch(() => [])).filter(l => l.subtype === 'sales_tax')];
@@ -430,6 +451,7 @@ async function finDocAdd(kind) {
     ${hasDue ? `<div class="fin-pair"><label>Date<input type="date" name="date" required value="${finToday()}"></label><label>Due<input type="date" name="due"></label></div>`
     : `<label>Date<input type="date" name="date" required value="${finToday()}"></label>`}
     ${lineHtml}
+    ${orders.length ? `<label>Purchase order<select name="po"><option value=""></option>${finOpts(orders)}</select></label>` : ''}
     <label>Memo<input name="memo" maxlength="200" autocomplete="off"></label>`, 'Save', async form => {
     const el = form.elements;
     let docLines;
@@ -478,6 +500,7 @@ async function finDocAdd(kind) {
     if (el.due?.value) payload.due_date = el.due.value;
     if (el.memo.value.trim()) payload.memo = el.memo.value.trim();
     if (bill) payload.origin = 'manual';
+    if (el.po?.value) payload.purchase_order_id = el.po.value;
     return [k.action || `${kind}_create`, payload];
   }, 'Saved');
   const form = dlg.querySelector('form'), pick = form.elements.contact;

@@ -118,6 +118,8 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       const accounts = await page.locator('[data-ops-pnl-accounts]').innerText();
       assert.ok(accounts.includes(income.name) && accounts.includes(costs.name), accounts);
       assert.match(accounts, /\$300/);
+      const totals = await page.locator('#ops-m-pnl').innerText();
+      assert.ok(/Cost of goods/.test(totals) && /Gross margin/.test(totals), totals);
       await shot(page, 'real-desktop-project-panel');
 
       await go(page, '#/operations/equipment');
@@ -146,7 +148,7 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       await row.locator('[data-due-done]').click();
       await page.waitForFunction(() => document.querySelectorAll('[data-due-reopen]').length === 1, null, {timeout: t(15000)});
       await page.waitForFunction(was => document.querySelector('tr.ops-on td[data-l="Next due"]')?.innerText !== was, before, {timeout: t(15000)});
-      await page.locator('.ops-due summary').click();
+      await row.locator('summary').click();   // a warranty adds a due date of its own
       assert.equal(await page.locator('[data-due-reopen]').getAttribute('data-on'), first, 'history lists the day just done');
       await shot(page, 'real-desktop-equipment-panel');
       await page.locator('[data-due-reopen]').click();
@@ -176,12 +178,50 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       await page.locator('#ops-panel h2', {hasText: 'Acme South Yard'}).waitFor();
       await page.locator('#ops-panel').getByText('9 Dock Rd').waitFor();
 
+      // Tico's own record says nothing about a copy. A Library file links to it and leaves it again, by the real name.
+      assert.equal(await page.locator('[data-ops-copy]').count(), 0);
+      const upload = await fetch(hub.url + '/api/v2/files/uploads?name=acme-manual.png&title=Acme%20manual&scope=bot', {method: 'POST', body: PNG,
+        headers: {Authorization: 'Bearer ' + hub.tokens['engineering-lead'], 'Content-Type': 'image/png', 'Idempotency-Key': 'ops-record-file'}});
+      assert.ok(upload.ok, await upload.clone().text());
+      const library = page.locator('#ops-m-files');
+      await library.locator('[data-file-add]').click();
+      await page.locator('dialog.fin-dlg .ru-pick', {hasText: 'Acme manual'}).click({timeout: t(15000)});
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      const linked = library.locator('a', {hasText: /acme.manual/i});
+      await linked.waitFor({timeout: t(15000)});
+      await shot(page, 'real-desktop-location-files');
+      await library.locator('[data-file-remove]').click();
+      await linked.waitFor({state: 'detached', timeout: t(15000)});
+      await library.locator('[data-file-add]').click();
+      await page.locator('dialog.fin-dlg .ru-pick', {hasText: 'Acme manual'}).waitFor({timeout: t(15000)});
+      await page.locator('dialog.fin-dlg [data-close]').first().click();
+
       // The customer's panel, from a location's panel, as the owner.
       await page.locator('#ops-panel [data-ops-customer]').click();
       await page.locator('[data-ops-customer-panel]').waitFor();
       assert.equal(await page.locator('#ops-panel h2').innerText(), 'Beta Foods');
       await page.locator('#ops-panel').getByText('EST-77').waitFor({timeout: t(15000)});
       await shot(page, 'real-desktop-customer-panel-owner');
+
+      // The panel's link opens that document in Finance, not the list.
+      const estimate = page.locator('#ops-panel a', {hasText: 'EST-77'});
+      assert.match(await estimate.getAttribute('href'), /receivables\/estimates\?doc=/);
+      await estimate.click();
+      await page.locator('#fin-rail', {hasText: 'EST-77'}).waitFor({timeout: t(15000)});
+
+      // Light mode, for a look at contrast.
+      await page.evaluate(() => window.ticoTheme?.set('light'));
+      await go(page, '#/operations/equipment');
+      await tabReady(page, 'equipment');
+      await shot(page, 'real-light-equipment');
+      await page.locator('#ops-table').getByText('Rooftop unit 3').click();
+      await page.locator('#ops-panel h2').waitFor();
+      await page.locator('[data-due]').first().waitFor({timeout: t(15000)});
+      await shot(page, 'real-light-equipment-panel');
+      await go(page, '#/operations/locations');
+      await tabReady(page, 'locations');
+      await shot(page, 'real-light-locations');
+      await page.evaluate(() => window.ticoTheme?.set('dark'));
       assert.deepEqual(errors, [], 'owner page errors');
       await page.context().close();
     }
