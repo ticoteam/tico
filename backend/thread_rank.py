@@ -21,12 +21,7 @@ from .store import H
 
 LOG = logging.getLogger("tico.thread_rank")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS thread_rankings(
- thread_id TEXT PRIMARY KEY, score INTEGER, ranked_seq INTEGER NOT NULL DEFAULT 0, tried_at TEXT NOT NULL,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-"""
-
+# The `thread_rankings` table: backend/migrations/0039_thread_rankings.sql.
 QUESTION_SET = "thread-rank"
 LEVELS = 10
 DEFAULT = 5             # a thread no pass has ranked yet

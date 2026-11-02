@@ -1138,8 +1138,6 @@ class Store:
             c.executescript(_learnings.SCHEMA)
             from . import stale_review as _stale_review
             c.executescript(_stale_review.SCHEMA)
-            from . import thread_rank as _thread_rank
-            c.executescript(_thread_rank.SCHEMA)
             from . import stall_triage as _stall_triage
             c.executescript(_stall_triage.SCHEMA)
             from . import ask_ingest as _ask_ingest
