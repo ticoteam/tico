@@ -1,24 +1,46 @@
 # Growth
 
-Growth (`#/growth`, under Strategy in the sidebar) is one page of numbers: what each channel spent, how many customers
-it brought, how many stayed, and what a customer was worth. It has no tabs. **Sources**, the systems each number comes
-from, sits behind a link on the page. Marketing work is not on this page: marketing ideas are tasks, and the KPIs the
-numbers feed are read on Strategy's Goals tab.
+Growth (`#/growth`, under Strategy in the sidebar) is a place of cards, like the Dashboard: what each channel spent, how
+many customers it brought, how many stayed, what a customer was worth, the funnel, the channels, and the marketing tests.
+Anyone may read it; an admin or a bot arranges it. **Sources**, the systems each number comes from, sits behind a link
+on the page. Marketing work is not on this page: marketing ideas are tasks, and the KPIs the numbers feed are read on
+Strategy's Goals tab.
 
 Examples use Acme, a home-cleaning company.
 
 ## The page
 
-The page reads top to bottom in this order. Each section is a few words; a section with no data is hidden.
+The page is the place `growth` (`backend/cards.py`, the same grid and card forms as the Dashboard). A Growth page nobody
+arranged shows these cards, each a template below:
 
-- **North Star**: the one KPI the company is judged on.
-- **Growth**: new customers.
-- **Cost**: spend and bot cost.
-- **Retention**: the share kept at 30, 90 and 180 days.
-- **Value**: revenue, profit, LTV, LTV:CAC and payback.
-- **Channels**: one row per channel, and Unknown.
-- **Tried**: the marketing tasks that started or finished. A task's mark (Testing, Won, Lost and so on) shows when it
-  moved, not what caused the numbers to move.
+- **Funnel**, large: the five stages (Reach, Acquire, Activate, Retain, Refer), each with its KPI's reading and the share
+  of the stage before, and the North Star.
+- **Number**, small, six of them: new customers, CAC, spend, LTV:CAC, payback and the share kept at 30 days.
+- **Channels**, large: one row per channel, and Unknown.
+- **Retention**, medium: the share kept at 30, 90 and 180 days, cohort by cohort.
+- **Growth board**, medium: the open marketing tests by stage.
+
+The first change saves them as real pins. A **month** picker reads the cards for one month: the page offers the newest 24
+months that have cohort rows, and the newest one is the default. A month with no cohorts yet shows the last month that
+has one for the figures that carry back (retention, LTV, LTV:CAC), saying which month they are from.
+
+## Cards
+
+| Template | Shows | Settings |
+|---|---|---|
+| Number | One metric for the month, its change from the month before, and a sparkline over the year to that month | `metric` (required): new_customers, spend, bot_cost, cac, revenue_month, margin_pct, ltv, ltv_cac, payback_months, kept_d30, kept_d90, kept_d180; `channel`: a channel slug, empty for all |
+| Funnel | The five stages' KPIs, each reading (as of the picked month's end), conversion from the stage before, and the North Star | none |
+| Channels | Each channel's new customers and CAC for the month, LTV:CAC, six months of new customers, and up to three open tests | `count` (1 to 20, 10 by default) |
+| Retention | The newest cohort months' share kept at 30, 90 and 180 days | `months` (3 to 12, 6 by default) |
+| Growth board | Open tests in lanes: Testing, Scaling, Idea; each lane's count and its newest cards | `count` per lane (1 to 5, 3 by default) |
+
+Growth cards go on the Growth page only: a Number pinned to the Dashboard is refused. Any other card (a KPI, tasks, pages)
+may go on the Growth page as on any place.
+
+Figures follow the rules in [The numbers](#the-numbers). A Number card's change is from the month before the one it shows;
+for retention and LTV it is from the newest earlier month that has the figure, as the page draws it. Cohort money is the
+company's: anyone who may see the Growth page sees it. A KPI shows only to someone who may read its owner. Marketing tests
+show only to someone who may read the task, so a private test is listed for its reader alone.
 
 ## The numbers
 
@@ -81,6 +103,9 @@ view.
 A channel's stage and budget are its owner's, and the owning bot may change its why, stage and budget. Anyone else
 proposes the change. The owner and admins may change any channel, source or setting.
 
+Everyone signed in reads the Growth page. The owner and admins arrange it, and so does a bot acting as itself, which
+pins its own cards there (a bot pins no pages to it). Its audience is everyone; it has no audience to change.
+
 ## Commands
 
 ```
@@ -95,9 +120,13 @@ hub growth settings [--set KEY=VALUE]
 hub kpi log <kpi id> <value> [note] --period-start YYYY-MM-DD --period-end YYYY-MM-DD
 hub task create --owner <who> --type idea --label channel:<slug> --title "..." --body "..."
 hub task list --type idea
+hub card add growth_number --place growth --metric cac [--channel SLUG]
+hub card add growth_channels --place growth --count 10
+hub card list --place growth
 ```
 
 ## Related
 
-[Strategy](strategy.md), [Goals and KPIs](goals-and-kpis.md), [Routines](routines.md), [Tasks](tasks.md).
+[Strategy](strategy.md), [Goals and KPIs](goals-and-kpis.md), [Routines](routines.md), [Tasks](tasks.md). The Dashboard
+and its cards are in [overview.md](overview.md#dashboard-team-pages-and-cards).
 </content>

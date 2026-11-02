@@ -1,5 +1,5 @@
-/* Growth and Brand (ui/app/growth-page.js, growth-charts.js, growth-channels.js, growth-sources.js, brand-page.js), and
-   the Brand strip on the Strategy page. Rows, not tables: each works at phone width. */
+/* Growth and Brand (ui/app/growth-page.js: the Growth cards, growth-charts.js, growth-channels.js, growth-sources.js, brand-page.js), and
+   the Brand strip on the Strategy page. Each works at phone width; the Growth cards' tables stack on a narrow card. */
 
 /* ---------- shared */
 .gr-body{display:flex;flex-direction:column;gap:14px;min-width:0}
@@ -69,101 +69,118 @@ a.gr-row:hover .gr-row-t{text-decoration:underline}
 .gr-row .pill{margin:0}
 .gr-num{font-variant-numeric:tabular-nums;white-space:nowrap}
 
-/* ---------- the Growth page: calm, one column of parts, the North Star loudest */
+/* ---------- the Growth page head (Sources keeps the old head with its way back) */
 .gr-head .strat-actions{display:flex;align-items:center;gap:8px}
 .gr-head .strat-actions:empty{display:none}
 @media (max-width:760px){#main .gr-head h1{flex:none}#main .gr-head>.spacer{display:block}#main .gr-head .strat-actions{order:0;flex:none}}
 .gr-back{color:var(--muted);text-decoration:none;font-size:var(--t-lg)}
 .gr-back:hover{color:var(--ink)}
 .gr-head:has(.gr-back){gap:8px}
-.gr-page{display:flex;flex-direction:column;gap:36px;padding-bottom:24px}
 .growth-layout>.gr-head,.growth-layout>.gr-body{max-width:1080px}
-.gr-part{display:flex;flex-direction:column;gap:14px;min-width:0}
-.gr-empty{margin:24px 0;color:var(--muted);font-size:var(--t-md)}
-.gr-stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:24px 20px}
-.gr-stat{display:flex;flex-direction:column;gap:3px;min-width:0;color:var(--ink);text-decoration:none}
-a.gr-stat:hover .gr-stat-l,.gr-hero:hover .gr-hero-n{color:var(--ink);text-decoration:underline}
-a.gr-stat:hover{text-decoration:none}
-.gr-stat-l{font-size:var(--t-sm);color:var(--muted);overflow-wrap:anywhere}
-.gr-stat-v{font-size:var(--t-xl);font-weight:600;line-height:var(--lh-display);letter-spacing:var(--track-tight)}
-.gr-stat-d{display:flex;align-items:baseline;gap:6px;min-height:16px;font-size:var(--t-sm);line-height:16px}
 .gr-d{color:var(--muted);white-space:nowrap}
 .gr-d-good{color:var(--ok)}
 .gr-d-bad{color:var(--fail)}
-.gr-spark{display:block;margin-top:6px;max-width:100%;overflow:visible}
+.gr-spark{display:block;max-width:100%;overflow:visible;flex:none}
 .gr-spark path{fill:none;stroke:var(--g5);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .gr-spark-one{fill:var(--g5)}
-.gr-spark-dot{fill:var(--accent);stroke:var(--bg);stroke-width:2}
-/* the North Star */
-.gr-body .card.gr-ns-card{display:flex;flex-direction:column;gap:24px;padding:20px}
-.gr-hero{display:flex;flex-direction:column;gap:6px;color:var(--ink);text-decoration:none}
-.gr-hero:hover{text-decoration:none}
-.gr-hero-n{font-size:var(--t-md);color:var(--muted)}
-.gr-hero-v{--hero:48px;font-size:var(--hero);font-weight:600;line-height:var(--lh-display);letter-spacing:-.02em}
-.gr-hero-u{margin-left:8px;font-size:var(--t-lg);font-weight:500;letter-spacing:var(--track-normal);color:var(--muted)}
-.gr-hero-d{display:flex;align-items:baseline;flex-wrap:wrap;gap:10px;font-size:var(--t-md)}
-.gr-sub{display:flex;flex-direction:column;gap:12px;padding-top:20px;border-top:1px solid var(--line)}
-.gr-sub-k{margin:0;font-size:var(--t-sm);font-weight:500;color:var(--muted)}
-.gr-ns-card .gr-spark-dot{stroke:var(--surface)}
-/* the larger chart: the host sets the height, the svg fills it */
-.gr-chart{position:relative;height:160px;min-width:0;touch-action:pan-y;outline-offset:4px}
-.gr-chart-l{height:180px}
-@media (min-width:761px){.gr-chart-l{height:240px}}
-.gr-chart-svg{display:block;overflow:visible}
-.gr-grid-l{stroke:var(--line);stroke-width:1}
-.gr-ax{font-size:var(--t-xs);fill:var(--muted);font-variant-numeric:tabular-nums}
-.gr-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.gr-area{fill:var(--accent);opacity:.1}
-.gr-one{fill:var(--accent)}
-.gr-end,.gr-cross-dot{fill:var(--accent);stroke:var(--surface);stroke-width:2}
-.gr-cross{stroke:var(--muted);stroke-width:1}
-/* a task's tick: the mark is 2x10, the target a finger's */
-.gr-tick{position:absolute;width:24px;height:20px;margin:0 0 0 -12px;padding:0;border:0;background:none;cursor:pointer;min-height:0}
-.gr-tick>i{position:absolute;left:11px;top:2px;width:2px;height:10px;border-radius:1px;background:var(--muted)}
-.gr-tick:hover>i,.gr-tick:focus-visible>i{background:var(--ink)}
-.gr-chart-tip{position:absolute;top:-6px;z-index:2;max-width:min(280px,100%);padding:6px 9px;border:1px solid var(--line);border-radius:8px;background:var(--raised);color:var(--ink);font-size:var(--t-sm);line-height:1.35;pointer-events:none;width:max-content}
-.gr-chart-tip[hidden]{display:none}
-.gr-chart-tip b{font-weight:600}
-/* lists: Channels and Tried */
-.gr-body .card.gr-list{padding:0;overflow:hidden}
-.gr-ul{list-style:none;margin:0;padding:0}
-.gr-ul>li+li{border-top:1px solid var(--line)}
-.gr-more{display:block;width:100%;border:0;border-top:1px solid var(--line);border-radius:0;color:var(--muted);min-height:40px}
-.gr-try{display:flex;flex-direction:column;gap:4px;padding:12px var(--s4);color:var(--ink);text-decoration:none}
-.gr-try:hover{background:var(--surface2);text-decoration:none}
-.gr-try-t{font-size:var(--t-base);font-weight:500;line-height:1.35}
-.gr-try-m{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px;font-size:var(--t-sm);color:var(--muted)}
-.gr-mk{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
-.gr-mk>i{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
-.gr-mk-started>i{background:var(--run)}
-.gr-mk-inconclusive>i{background:var(--wait)}
-.gr-mk-won>i{background:var(--ok)}
-.gr-mk-lost>i{background:var(--fail)}
-.gr-foot-bar{gap:12px;font-size:var(--t-base)}
-.gr-foot-bar>a{color:var(--muted)}
-.gr-month select{width:auto;min-width:0}
-.gr-set{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;padding:0;border-radius:6px;color:var(--muted)}
-.gr-set:hover{color:var(--ink);background:var(--surface2)}
-.gr-set .nav-icon{width:20px;height:20px;font-size:20px;color:inherit}
+.gr-spark-dot{fill:var(--accent);stroke:var(--surface);stroke-width:2}
 
-/* ---------- Channels */
-.gc-row{display:grid;grid-template-columns:minmax(0,1fr) 44px 64px 64px;align-items:center;gap:8px;width:100%;padding:12px var(--s4);border:0;border-radius:0;background:none;color:var(--ink);font:inherit;text-align:left;box-sizing:border-box;min-height:0}
-button.gc-row{cursor:pointer}
-button.gc-row:hover{background:var(--surface2)}
-.gc-on>.gc-row{background:var(--surface2)}
-.gc-headrow{padding-top:10px;padding-bottom:8px;border-bottom:1px solid var(--line);font-size:var(--t-xs);color:var(--muted)}
-.gc-headrow>span:not(:first-child){text-align:right}
-.gc-name{display:flex;flex-direction:column;gap:2px;min-width:0}
-.gc-n{font-weight:600;font-size:var(--t-base);overflow-wrap:anywhere}
-.gc-flag{display:inline-block;width:7px;height:7px;margin-left:6px;border-radius:50%;background:var(--wait);vertical-align:1px}
-.gc-meta{font-size:var(--t-sm);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.gc-m{font-size:var(--t-base);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
-.gc-old{color:var(--muted)}
-.gc-detail{display:flex;flex-direction:column;gap:24px;padding:16px var(--s4) 20px;border-top:1px solid var(--line)}
-.gc-dh{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px}
-.gc-dcols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
-.gc-months>summary{cursor:pointer;font-size:var(--t-sm);color:var(--muted);padding:4px 0}
-.gc-months[open]>summary{margin-bottom:6px}
+/* ---------- the Growth page: the Dashboard's grid (ui/styles/dashboard.css) under one head row */
+.grh-ns{display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:0 6px;min-width:0;font-size:var(--t-sm);color:var(--ink);text-decoration:none}
+.grh-ns[hidden]{display:none}
+.grh-ns:hover .grh-ns-n{text-decoration:underline}
+.grh-ns b{font-weight:600;font-variant-numeric:tabular-nums}
+.grh-month[hidden]{display:none}
+.grh-month select{width:auto;min-width:0;height:var(--ctl);padding-top:0;padding-bottom:0}
+a.gr-btn.grh-btn,button.grh-btn{min-height:var(--ctl);font-size:var(--t-base)}
+.grc-table{width:100%;border-collapse:collapse;font-size:var(--t-sm);font-variant-numeric:tabular-nums}
+.grc-table th,.grc-table td{padding:5px 8px;border-top:1px solid var(--line);text-align:left;vertical-align:middle}
+.grc-table thead th{border-top:0;border-bottom:0;padding-top:0}
+.grc-table tbody th{font-size:var(--t-sm);font-weight:600;color:var(--ink);text-transform:none;letter-spacing:var(--track-normal);border-bottom:0}
+.grc-table :is(th,td):first-child{padding-left:0}
+.grc-table :is(th,td):last-child{padding-right:0}
+.grc-table .grc-n{text-align:right;white-space:nowrap}
+.grc-old{color:var(--muted)}
+.grc-more{font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
+.grc-more:hover{color:var(--ink)}
+/* a task's stage: Idea grey, Testing blue, Scaling green */
+.grc-sq{display:inline-block;flex:none;width:8px;height:8px;border-radius:2px;background:var(--g5)}
+.grc-sq[data-stage=testing]{background:var(--run)}
+.grc-sq[data-stage=scaling]{background:var(--ok)}
+
+/* a Number: the value, its trend, its change */
+.grc-num{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;min-width:0}
+.grc-num-v{font-size:var(--t-xl);font-weight:600;line-height:var(--lh-display);letter-spacing:var(--track-tight);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.grc-num-d{display:flex;align-items:baseline;gap:6px;margin-top:4px;min-height:16px;font-size:var(--t-sm);line-height:16px}
+
+/* the Funnel: five cells split by hairlines, the North Star's raised */
+/* five across on a wide card; two on a narrow one, Refer across the bottom */
+.grc-fun{container-type:inline-size;min-width:0}
+.grc-funnel{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.grc-st{display:flex;min-width:0;background:var(--surface)}
+@container (max-width:700px){.grc-funnel{grid-template-columns:repeat(2,minmax(0,1fr))}.grc-st:last-child:nth-child(odd){grid-column:1/-1}}
+.grc-st-ns{background:var(--surface2)}
+.grc-st-in{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0;padding:8px 10px;color:var(--ink);text-decoration:none}
+a.grc-st-in:hover{text-decoration:none;background:var(--hover)}
+a.grc-st-in:hover .grc-st-n{text-decoration:underline}
+.grc-st-h{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+.grc-st-k{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
+.grc-st-c{font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+.grc-st-n{font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grc-st-v{display:flex;align-items:baseline;flex-wrap:wrap;gap:0 6px;font-size:var(--t-sm)}
+.grc-st-v b{font-size:var(--t-lg);font-weight:600;font-variant-numeric:tabular-nums}
+.grc-st-s{display:block;min-height:22px}
+.grc-st-t{font-size:var(--t-xs);color:var(--muted);min-height:16px}
+.grc-st-ns .grc-st-t{color:var(--accent);font-weight:600}
+
+/* Channels: a table on a wide card, a stack of rows on a narrow one */
+.grc-ch{container-type:inline-size;min-width:0}
+.grc-ch .grc-sp{width:72px}
+.grc-tasks{min-width:0}
+.grc-ch td.grc-tasks{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+.grc-chip{display:inline-flex;align-items:center;gap:6px;max-width:220px;min-width:0;height:24px;padding:0 9px;border-radius:999px;background:var(--surface2);color:var(--ink);font-size:var(--t-xs);text-decoration:none;box-sizing:border-box}
+.grc-chip:hover{background:var(--hover);text-decoration:none}
+.grc-chip-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@container (max-width:560px){
+  .grc-ch .grc-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .grc-ch .grc-table,.grc-ch tbody{display:block}
+  .grc-ch tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:4px 10px;padding:8px 0;border-top:1px solid var(--line)}
+  .grc-ch tbody tr:first-child{border-top:0;padding-top:0}
+  .grc-ch tbody :is(th,td){display:block;padding:0;border:0;min-width:0}
+  .grc-ch tbody th{overflow:hidden;text-overflow:ellipsis}
+  .grc-ch td.grc-sp{display:none}
+  .grc-ch td.grc-tasks{display:flex;grid-column:1/-1}
+  .grc-ch td.grc-tasks:empty{display:none}
+  .grc-ch td.grc-n::before{content:attr(data-k) " ";color:var(--muted);font-size:var(--t-xs)}
+}
+
+/* Retention: cells shaded by the share kept, from the page's ink to jade; the text stays dark on the light cells */
+.grc-ret{overflow-x:auto;min-width:0}
+.grc-ret{--grr-hi:var(--accent);--grr-lo:var(--g8);--grr-ink:var(--accent-ink)}
+:root[data-theme="light"] .grc-ret{--grr-hi:color-mix(in srgb,var(--accent) 55%,var(--g0));--grr-lo:var(--g0);--grr-ink:var(--g8)}
+@media (prefers-color-scheme:light){:root[data-theme="system"] .grc-ret{--grr-hi:color-mix(in srgb,var(--accent) 55%,var(--g0));--grr-lo:var(--g0);--grr-ink:var(--g8)}}
+.grc-ret-t td.grc-k,.grc-ret-t th.grc-k-h{text-align:center;white-space:nowrap}
+.grc-ret-t td.grc-k{min-width:56px;border:2px solid var(--surface);border-radius:4px;color:var(--grr-ink);background:color-mix(in srgb,var(--grr-hi) calc(var(--k,0) * 1%),var(--grr-lo))}
+.grc-ret-t td.grc-k-none{background:var(--surface2)}
+
+/* the Growth board: a lane per stage, its newest tasks */
+.grc-board{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.grc-lane{display:flex;flex-direction:column;gap:4px;min-width:0}
+.grc-lane-h{display:flex;align-items:center;gap:6px;margin:0;font-size:var(--t-sm);font-weight:600}
+.grc-lane-h .muted{font-weight:500}
+.grc-cards{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.grc-card{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"t f" "c f";align-items:center;gap:0 8px;padding:6px 8px;border-radius:6px;background:var(--surface2);color:var(--ink);text-decoration:none;font-size:var(--t-sm)}
+.grc-card:hover{background:var(--hover);text-decoration:none}
+.grc-card-t{grid-area:t;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grc-card-c{grid-area:c;min-width:0;font-size:var(--t-xs);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grc-face{grid-area:f;display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--g3);color:var(--ink);font-size:var(--t-2xs);font-weight:600}
+
+/* ---------- Settings: the channels and their months */
+.gs-sec{margin-top:14px}
+.gs-ch .muted{font-size:var(--t-xs)}
+.gs-add{align-self:flex-start;margin-top:8px}
+.gs-src{display:inline-block;margin-top:14px;font-size:var(--t-sm)}
+.gc-months{max-height:min(420px,60vh);overflow:auto}
 .gc-add{margin-top:8px}
 .gc-kept{display:inline-flex;gap:4px}
 .gc-h{display:inline-block;min-width:38px;padding:1px 4px;border-radius:4px;text-align:center;font-size:var(--t-xs);font-variant-numeric:tabular-nums;background:color-mix(in srgb,var(--ok) calc(var(--k,0) * .35%),transparent)}
@@ -271,7 +288,8 @@ button.gsrc-row:hover{background:var(--surface2)}
   #main.growth-layout{padding-left:16px;padding-right:16px}
     .gr-crumbs h2{font-size:var(--t-md)}
   .gr-crumbs .spacer{flex-basis:100%;height:0}
-  .gc-dcols,.gr-pair,.gr-trio{grid-template-columns:minmax(0,1fr)}
+  .gr-pair,.gr-trio{grid-template-columns:minmax(0,1fr)}
+  .grh-ns{order:9;flex-basis:100%}
   .br-edit{grid-template-columns:minmax(0,1fr)}
   .br-subs{position:static;flex-direction:row;overflow-x:auto;scrollbar-width:none}
   .br-subs button{flex:none}
@@ -287,12 +305,9 @@ button.gsrc-row:hover{background:var(--surface2)}
   .gr-rowed>.gr-x{grid-column:2;grid-row:1}
   .gr-rowed .gr-cap{position:static!important;width:auto!important;height:auto!important;clip:auto!important}
   .gr-rowed+.gr-rowed{padding-top:8px;border-top:1px solid var(--line)}
-  .gr-f>:is(input,select,textarea),.br-check textarea,.gr-month select{font-size:16px}
+  .gr-f>:is(input,select,textarea),.br-check textarea,.grh-month select{font-size:16px}
 }
 @media (max-width:640px){
-  .gr-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .gr-page{gap:32px}
-  .gr-body .card.gr-ns-card{padding:16px}
   .gsrc-row{display:flex;flex-wrap:wrap;gap:2px 10px}
   .gsrc-t{flex:1 1 auto}
   .gsrc-r,.gsrc-m,.gsrc-o{flex-basis:100%;font-size:var(--t-xs)}
