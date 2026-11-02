@@ -355,23 +355,31 @@ def test_sales_tax_turn(api):
     assert not err and remit["status"] in ("committed", "needs_approval"), remit
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: AGENT.md 'Sales tax return due' says to check the amount tax_remit shows "
-                   "against the quarter's sales tax before approving. No hub read gives sales tax (FINANCE_REPORTS has no "
-                   "sales tax kind; the route finance/tax/sales-tax is not a hub tool).")
 def test_gap_sales_tax_is_readable_before_approval(api):
+    """AGENT.md 'Sales tax return due': the amount tax_remit shows is checked against the year's sales tax workpaper before
+    approval. The workpaper is a whole read for someone who sees everything (the hire helper's Everything grant)."""
     token = hire(api)
-    err, report = call(api, "hub_finance_report", {"kind": "sales_tax", "period": "quarter"}, token=token)
-    assert not err, report
+    err, authority = ask(api, token, "contact_create", {"name": "California CDTFA", "kind": "vendor"}, "vendor:cdtfa")
+    assert not err and authority["status"] == "committed", authority
+    err, jurisdiction = ask(api, token, "tax_jurisdiction_add", {"code": "US-CA", "name": "California sales tax",
+                                                                 "authority_id": authority["result"]["contact_id"],
+                                                                 "due_day": 28}, "tax-jurisdiction:US-CA")
+    assert not err and jurisdiction["status"] == "committed", jurisdiction
+    err, report = call(api, "hub_finance_report", {"kind": "sales_tax", "year": 2026}, token=token)
+    assert not err and report["year"] == 2026 and "rows" in report, report
+    assert any(r["code"] == "US-CA" for r in report["rows"]), report
 
 
 # ----------------------------------------------------------------------------- year end (spec 11: 1099-NEC by Jan 31)
-@pytest.mark.xfail(strict=True, reason="GAP: AGENT.md asks the owner to review the 1099-NEC flagged vendors before the due "
-                   "date. No hub read gives the 1099 list: the route finance/tax/1099 is not a hub tool and is not a "
-                   "hub_finance_report kind.")
 def test_gap_year_end_1099_list_is_readable(api):
+    """AGENT.md asks the owner to review the 1099-NEC flagged vendors before the due date: the workpaper lists them."""
     token = hire(api)
-    err, flagged = call(api, "hub_finance_report", {"kind": "1099"}, token=token)
-    assert not err, flagged
+    err, vendor = ask(api, token, "contact_create", {"name": "Northwind Hosting", "kind": "vendor", "is_1099": True},
+                      "vendor:northwind-1099")
+    assert not err and vendor["status"] == "committed", vendor
+    err, flagged = call(api, "hub_finance_report", {"kind": "1099", "year": 2026}, token=token)
+    assert not err and flagged["year"] == 2026 and "threshold" in flagged and "rows" in flagged, flagged
+    assert any(r["vendor"] == "Northwind Hosting" for r in flagged["rows"]), flagged
 
 
 # ----------------------------------------------------------------------------- what the bot may never do (AGENT.md, Never)

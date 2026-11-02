@@ -6435,7 +6435,9 @@ FINANCE_CHARS = 16000            # about 4k tokens
 FIN_OTHER = " other"             # an "Other · n" row's key, as backend/finance/reads.py OTHER: no real key starts
                                  # with a space, so a vendor named Other stays its own row
 FINANCE_MAX_CHARS = 64000        # about 16k tokens
-FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
+FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close",
+                   "sales_tax", "1099"]
+TAX_WORKPAPERS = {"sales_tax": "finance/tax/sales-tax", "1099": "finance/tax/1099"}   # spec 11: whole, full view only
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                    "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases"]
 FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card"]
@@ -6592,6 +6594,17 @@ def _fin_guard(result, budget, key=None):
     return marker
 
 
+def _fin_whole(result, budget):
+    """A tax workpaper goes whole or not at all (spec 11): a cut-down one would be partial totals, so it is never shrunk.
+    Over `budget` it is not read here; a person exports it from Finance -> Tax."""
+    size = _fin_size(result)
+    if size <= budget:
+        return result
+    return {"error": "too_big", "chars": size, "cap": budget,
+            "message": "This tax workpaper is too long to read whole here, and a part of it would be a partial total. "
+                       "A person can export it from Finance -> Tax."}
+
+
 def _fin_query(args, names):
     return {k: args[k] for k in names if args.get(k) is not None and args.get(k) != ""}
 
@@ -6649,20 +6662,25 @@ def finance_search(api, args):
 
 
 @tool("hub_finance_report", "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-      "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\".",
+      "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\". sales_tax and "
+      "1099 are the tax workpapers for a year: whole or not at all, and only for someone who sees everything.",
       {"kind": _s("The report", enum=FINANCE_REPORTS), "start": FIN_DAY, "end": FIN_DAY,
        "period": _s("Column size", enum=["day", "week", "month", "quarter", "year"]),
        "basis": _s("cash or accrual (default: the company's)", enum=["cash", "accrual"]),
        "compare": _s("prior adds the window before", enum=["prior"]),
        "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows before Other (default 20)"},
        "by": _s("spend_by: group by", enum=["department", "team", "teammate", "bot", "person", "vendor", "account"]),
-       "month": _s("close: the month, YYYY-MM")},
+       "month": _s("close: the month, YYYY-MM"),
+       "year": {"type": "integer", "minimum": 2000, "maximum": 2100,
+                "description": "sales_tax, 1099: the calendar year (this year when omitted)"}},
       ("kind",))
 def finance_report(api, args):
     if args["kind"] == "close":
         if not args.get("month"):
             raise APIError("validation", "close needs month (YYYY-MM)")
         return _fin_guard(api.get("finance/close/" + quote(str(args["month"]), safe="")), FINANCE_CHARS)
+    if args["kind"] in TAX_WORKPAPERS:
+        return _fin_whole(api.get(TAX_WORKPAPERS[args["kind"]], **_fin_query(args, ("year",))), FINANCE_CHARS)
     query = _fin_query(args, ("start", "end", "period", "basis", "compare", "top_n", "by"))
     result = api.get("finance/reports/" + quote(str(args["kind"]), safe=""), **query)
     budget = _fin_budget(args.get("top_n"), 20)

@@ -54,7 +54,10 @@ Work the items in this order, then mark the task done with one line: what you di
 - **Sales tax return due** (one per jurisdiction, each quarter) or **1099-NEC due** (January 31): these are outside
   obligations the company owns. For a sales tax return, `tax_remit` with the jurisdiction and the quarter (`2026-Q3`)
   makes the bill to the tax authority; check the amount it shows against the quarter's sales tax before approving.
-  For the 1099-NEC, ask the owner to review the flagged vendors before the due date. Closing the task marks the due
+  Read the sales tax workpaper with `hub_finance_report` (kind `sales_tax`, the year). For the 1099-NEC, ask the owner
+  to review the flagged vendors, which `hub_finance_report` (kind `1099`, the year) lists, before the due date. The
+  workpapers come whole or not at all: if one is too long to read here, say so and ask the owner to export it from
+  Finance -> Tax. Closing the task marks the due
   date Satisfied. Never write a TIN into a task, note or memory.
 
 ## Never
