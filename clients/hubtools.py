@@ -6735,6 +6735,86 @@ def finance_card_fill(api, args):
     raise APIError("not_available", "Card fill is not available yet")
 
 
+# ----------------------------------------------------------------------------- Operations records (backend/finance/reads.py)
+# One tool per record type, over the routes that already answer it: with `id` that record (archived or not), without it
+# the list by name with the route's filters, paged by `next_cursor`. Answers are cut to the Finance payload budget. Writes
+# stay on hub_finance_act. The route cuts what the caller may not see (an item's accounts, a customer's invoices).
+RECORD_ID = _s("One record by id, archived or not; omit for the list")
+RECORD_ARCHIVED = _s("hide (default), only or all", enum=["hide", "only", "all"])
+RECORD_PAGE = {"cursor": _s("next_cursor from the last page"),
+               "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows per page (default 50)"}}
+RECORD_Q = _s("Words to match by name")
+LOCATION_KINDS = ["store", "office", "warehouse", "plant", "customer_site", "vehicle", "other"]
+ITEM_KINDS = ["service", "inventory", "non_inventory", "bundle", "category", "raw_material", "assembly"]
+
+
+def _record_read(api, route, key, args, names):
+    """One record by its id, or a page of the list whose filters are `names`, each answer cut to the Finance budget."""
+    if args.get("id"):
+        return _fin_guard(api.get(f"{route}/{quote(str(args['id']), safe='')}"), FINANCE_CHARS)
+    return _fin_paged(api, route, _fin_query(args, names), key, _fin_budget(args.get("limit"), 50))
+
+
+@tool("hub_locations", "Locations you may see, by name; with id, that one. next_due_on is its earliest open due day.",
+      {"id": RECORD_ID, "q": RECORD_Q, "archived": RECORD_ARCHIVED,
+       "kind": _s("Location kind", enum=LOCATION_KINDS), "customer_id": _s("Locations of this customer (a contact's id)"),
+       **RECORD_PAGE})
+def record_locations(api, args):
+    return _record_read(api, "locations", "locations", args, ("q", "archived", "kind", "customer_id", "cursor", "limit"))
+
+
+@tool("hub_items", "Products and services you may see, by name or SKU; with id, that one (accounts only where you see them).",
+      {"id": RECORD_ID, "q": RECORD_Q, "archived": RECORD_ARCHIVED,
+       "kind": _s("Item kind", enum=ITEM_KINDS), **RECORD_PAGE})
+def record_items(api, args):
+    return _record_read(api, "items", "items", args, ("q", "archived", "kind", "cursor", "limit"))
+
+
+@tool("hub_projects", "Projects you may see, by name; with id, that one.",
+      {"id": RECORD_ID, "q": RECORD_Q, "archived": RECORD_ARCHIVED,
+       "status": _s("Project status", enum=["open", "closed"]),
+       "customer_id": _s("Projects of this customer (a contact's id)"), **RECORD_PAGE})
+def record_projects(api, args):
+    return _record_read(api, "projects", "projects", args, ("q", "archived", "status", "customer_id", "cursor", "limit"))
+
+
+@tool("hub_equipment", "Equipment and vans you may see, by name, serial, make or model; with id, that one. "
+      "next_due_on is its earliest open due day.",
+      {"id": RECORD_ID, "q": RECORD_Q, "archived": RECORD_ARCHIVED,
+       "kind": _s("owned (a van or tool) or customer (a unit at a customer)", enum=["owned", "customer"]),
+       "customer_id": _s("Equipment at this customer (a contact's id)"),
+       "location_id": _s("Equipment kept at this location"),
+       "warranty_ends_by": {**FIN_DAY, "description": "Warranties ending on or before this day"},
+       "warranty": _s("ending: warranties ending within 90 days", enum=["ending"]),
+       "due": _s("soon or overdue: a due date within its lead time, or past due", enum=["soon", "overdue"]),
+       **RECORD_PAGE})
+def record_equipment(api, args):
+    return _record_read(api, "equipment", "equipment", args,
+                        ("q", "archived", "kind", "customer_id", "location_id", "warranty_ends_by", "warranty", "due",
+                         "cursor", "limit"))
+
+
+@tool("hub_due_dates", "Due dates you may see: what each falls on, its repeat and next day due; with id, that one and its days.",
+      {"id": RECORD_ID, "q": RECORD_Q, "archived": RECORD_ARCHIVED,
+       "subject_type": _s("The record it falls on", enum=["location", "equipment", "contact"]),
+       "subject_id": _s("Due dates on this record"), **RECORD_PAGE})
+def record_due_dates(api, args):
+    return _record_read(api, "due-dates", "due_dates", args, ("q", "archived", "subject_type", "subject_id", "cursor", "limit"))
+
+
+@tool("hub_customers", "Active customers you may see, by name; with id, that customer's panel: its locations, open estimates "
+      "and unpaid invoices where you see them.",
+      {"id": _s("A customer's contact id: its panel instead of the list"), "q": RECORD_Q, **RECORD_PAGE})
+def record_customers(api, args):
+    return _record_read(api, "customers", "customers", args, ("q", "cursor", "limit"))
+
+
+# The CLI's `hub <records> list` and `hub <records> get` leaves run these tools (clients/hubcli.py).
+CLI_TOOL_ALIASES.update({f"hub_{word}_{verb}": (f"hub_{word}",) for word in
+                         ("locations", "items", "projects", "equipment", "due_dates", "customers")
+                         for verb in ("list", "get")})
+
+
 # ----------------------------------------------------------------------------- org rules (backend/org_rules.py)
 def _rule_scope(description):
     names = {"type": "array", "items": {"type": "string"}}

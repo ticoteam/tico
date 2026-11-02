@@ -25,7 +25,8 @@ HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 SUBCOMMANDS = ["whoami", "inbound", "mail", "meeting", "message", "conversation", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
                "proposal", "rules", "strategy", "brand", "gtm", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
-               "credential", "slack", "support", "health-monitor", "finance", "task-manager", "stall-triage", "roadmap", "service-key"]
+               "credential", "slack", "support", "health-monitor", "finance", "locations", "items", "projects", "equipment",
+               "due-dates", "customers", "task-manager", "stall-triage", "roadmap", "service-key"]
 
 
 def run_hub(*args, env=None):
@@ -97,6 +98,70 @@ def test_gateway_fetch_command_asks_the_route_with_the_url_and_size(monkeypatch)
     remotecli.run(hubcli.parser().parse_args(["gateway", "fetch", "https://example.test/b", "--max-tokens", "2000"]))
     assert calls == [("gateway/fetch", {"url": "https://example.test/a", "max_tokens": 10000}),
                      ("gateway/fetch", {"url": "https://example.test/b", "max_tokens": 2000})]
+
+
+def test_record_commands_reach_their_read_tools_with_their_flags(monkeypatch):
+    from clients import hubtools, remotecli
+    calls = []
+    class Api:
+        def __init__(self, *args, **kw):
+            pass
+        def get(self, path, **query):
+            calls.append((path, query))
+            return {"path": path}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    cases = [
+        (["locations", "list", "--q", "acme", "--kind", "warehouse", "--customer-id", "ct_1", "--limit", "5"],
+         ("locations", {"q": "acme", "kind": "warehouse", "customer_id": "ct_1", "limit": 5})),
+        (["locations", "get", "loc_1"], ("locations/loc_1", {})),
+        (["items", "list", "--kind", "service", "--cursor", "c1"], ("items", {"kind": "service", "cursor": "c1"})),
+        (["items", "get", "it_1"], ("items/it_1", {})),
+        (["projects", "list", "--status", "open"], ("projects", {"status": "open"})),
+        (["projects", "get", "pr_1"], ("projects/pr_1", {})),
+        (["equipment", "list", "--kind", "owned", "--warranty", "ending", "--due", "overdue", "--location-id", "loc_1",
+          "--warranty-ends-by", "2026-01-31"],
+         ("equipment", {"kind": "owned", "warranty": "ending", "due": "overdue", "location_id": "loc_1",
+                        "warranty_ends_by": "2026-01-31"})),
+        (["equipment", "get", "eq_1"], ("equipment/eq_1", {})),
+        (["due-dates", "list", "--subject-type", "location", "--subject-id", "loc_1"],
+         ("due-dates", {"subject_type": "location", "subject_id": "loc_1"})),
+        (["due-dates", "get", "dd_1"], ("due-dates/dd_1", {})),
+        (["customers", "list", "--q", "north"], ("customers", {"q": "north"})),
+        (["customers", "get", "ct_1"], ("customers/ct_1", {})),
+    ]
+    for words, (path, query) in cases:
+        calls.clear()
+        remotecli.run(hubcli.parser().parse_args(words))
+        assert calls == [(path, query)], words
+    assert {"hub_locations", "hub_items", "hub_projects", "hub_equipment", "hub_due_dates", "hub_customers"} <= set(
+        hubtools.BY_NAME)
+
+
+def test_record_commands_keep_each_answer_inside_the_finance_cap(monkeypatch):
+    from clients import hubtools, remotecli
+    rows = [{"id": f"loc_{i:02}", "name": "Site " + "x" * 195, "note": "y" * 120} for i in range(50)]
+    calls = []
+    class Api:
+        def __init__(self, *args, **kw):
+            pass
+        def get(self, path, **query):
+            calls.append((path, query))
+            if path == "locations":
+                n = query.get("limit", 50)
+                return {"locations": rows[:n], "next_cursor": "c-next"}
+            return {"location": {"id": "huge", "name": "Huge", "notes": "n" * 50_000}}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    out = remotecli.run(hubcli.parser().parse_args(["locations", "list"]))
+    assert len(json.dumps(out)) <= hubtools.FINANCE_CHARS
+    shown = [r for r in out["locations"] if r.get("key") != hubtools.FIN_OTHER]
+    assert 0 < len(shown) < 50 and out["locations"][-1]["count"] == 50 - len(shown), out["locations"][-1]
+    assert out["next_cursor"] == "c-next"
+    assert calls == [("locations", {}), ("locations", {"limit": len(shown)})]
+    out = remotecli.run(hubcli.parser().parse_args(["locations", "get", "huge"]))
+    assert len(json.dumps(out)) <= hubtools.FINANCE_CHARS
+    assert len(out["location"]["notes"]) <= 401
 
 
 def test_product_repository_cli_previews_and_requires_the_exact_typed_confirmation(monkeypatch):
