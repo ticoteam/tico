@@ -427,7 +427,7 @@ def _spend_input(c, the):
     """For a market lens (or one with `market_spend: true`), the market's definition and its segments' sizes (backend/market_spend.py), compact: what the
     market is and what each part is worth, how sure, and which one is ours. None when nothing is defined."""
     from . import market_spend as MS
-    if not the["market_spend"]:
+    if not the.get("market_spend", the.get("applies_to") == "market"):
         return None
     try:
         found = MS.spend(c)
