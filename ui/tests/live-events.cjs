@@ -28,6 +28,9 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
   const errors = [], streams = [], reads = {snapshot: 0, tasks: 0, active: 0, changed: [], labels: [], needs: []};
   page.on('pageerror', e => errors.push(e.message));
+  // Diagnostics only, read on a failed wait below: the event streams the page closed, and the last events sent on them.
+  const capture = {closed: [], sent: []};
+  page.on('requestfailed', r => { if (r.url().includes('/api/v2/events')) capture.closed.push({search: new URL(r.url()).search.slice(0, 160), error: r.failure()?.errorText}); });
   const threads = threadsFake({bot: 'ops'});
   let snapshot = {messages: [{id: 'm1', sender_id: 'human:ana', body: 'Draft the release notes', created_at: now}], execution: null};
   await page.route('**/*', route => {
@@ -86,6 +89,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     streams.splice(streams.indexOf(stream), 1);
     for (const old of streams.splice(0)) await old.route.abort().catch(() => {});   // superseded ones the page closed
     await stream.route.fulfill({contentType: 'text/event-stream', body: blocks.join('')});
+    capture.sent = [...capture.sent.slice(-4), {search: stream.url.search.slice(0, 160), body: blocks.join('').slice(0, 400)}];
     return stream.url;
   };
   const following = url => url.searchParams.get('conversation') === 'c-ops';
@@ -210,6 +214,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
       console.error('tooltip live state', await page.evaluate(() => ({width: innerWidth,
         hidden: document.querySelector('#bot-tip')?.hidden, text: document.querySelector('#bot-tip')?.textContent,
         status: S.v2.status.ops, stream: LIVE.es?.url, cursor: LIVE.after, queued: [...LIVE_SOON.keys()]})));
+      console.error('live-events capture', JSON.stringify({streamsHeld: streams.map(s => s.url.search.slice(0, 160)), closed: capture.closed, sent: capture.sent}));
       throw error;
     });
     await send(() => true, block(seq++, 'bots', {bot: 'ops', status: null}));
