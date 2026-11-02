@@ -65,6 +65,7 @@ mod checkout_groups;
 mod mail_key;
 mod manifest;
 mod memory_history;
+mod memory_tidy_keep;
 mod mcp;
 mod model_subscriptions;
 mod op;
