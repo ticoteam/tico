@@ -514,14 +514,17 @@ def end(ctx: Ctx, pay: Any, status: str, why: str = "") -> None:
     payment_ended(ctx, pay)                        # a bill it paid is owed again
     if status == "failed":
         maker = str(pay["created_by"])
-        person = maker if maker in ctx.org.humans else admin_person(ctx)
+        person = maker if maker in ctx.org.humans else (admin_person(ctx, maker) or maker)
         tico.needs_you(ctx.c, person, f"Payment of {int(pay['amount']) / 100:.2f} failed",
                        f"Mercury refused payment {pay['id']}: {why[:300]}. Fix it and pay again.", private=True)
 
 
-def admin_person(ctx: Ctx) -> str:
-    """The finance admin who gets Finance's Needs-you items (the company's approver setting, else the owner)."""
-    return O.approver(ctx.org, "finance_admin", SYSTEM, ctx.approver_setting()) or ctx.org.owner
+def admin_person(ctx: Ctx, requester: str = SYSTEM) -> str:
+    """The finance admin who decides a payment's approval or gets its Needs-you item: the company's approver setting,
+    else the owner. Never the requester (§6.3): "" when nobody else is, and an approval then fails rather than going to
+    the requester, as `actions._reask` fails one nobody else decides."""
+    who = O.approver(ctx.org, "finance_admin", requester, ctx.approver_setting()) or ctx.org.owner
+    return "" if who == requester else who
 
 
 def _hold(ctx: Ctx, pay: Any, why: str) -> str:
@@ -530,7 +533,9 @@ def _hold(ctx: Ctx, pay: Any, why: str) -> str:
     SK.update(ctx.c, "fin_payments", str(pay["id"]), {"status": "queued", "last_error": why[:300],
                                                       "next_try_at": _later(ctx, len(RETRY)), "updated_at": ctx.at})
     if first:
-        tico.needs_you(ctx.c, admin_person(ctx), f"Payment of {int(pay['amount']) / 100:.2f} is waiting",
+        maker = str(pay["created_by"])            # the finance admin's item, or the maker's when no one else is one
+        tico.needs_you(ctx.c, admin_person(ctx, maker) or maker,
+                       f"Payment of {int(pay['amount']) / 100:.2f} is waiting",
                        f"Payment {pay['id']} was not sent: {why}. Cancel it, or fix what stops it and it goes on its "
                        "own.", private=True)
     return "wait"

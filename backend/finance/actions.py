@@ -485,7 +485,10 @@ def void_for_recipient(ctx: Ctx, old_action_id: str, kind: str, body: Mapping[st
               rules=[{"rule": RECIPIENT_RULE, "outcome": "needs_approval"}], status="needs_approval",
               result={"what": what}, code="", reason="the recipient's details changed; asked again", by=p.actor,
               at=ctx.at)
-    approver = payments.admin_person(ctx)
+    approver = payments.admin_person(ctx, p.who)
+    if not approver:            # nobody else decides the new details (§6.3): the ask fails, as _reask fails one
+        _close(ctx, SX.by_id(ctx.c, action_id), "failed", DENIED, "nobody else decides this now; ask again")
+        return ""
     approval_id = _ask(ctx, action_id, kind, body, what, p.who, approver, RECIPIENT_RULE)
     _audit(ctx.c, p, action_id, kind, "needs_approval", "reask", {"void": old_action_id, "approval_id": approval_id,
                                                                   "to": approver})
@@ -511,7 +514,7 @@ def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body:
     except FinanceError as e:
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.named)
     if payments.moved(body, plan.resolved):
-        approver = payments.admin_person(ctx)           # new payment details are a finance admin's to approve (§6.4)
+        approver = payments.admin_person(ctx, p.who)    # new payment details are a finance admin's to approve (§6.4)
     if not approver:
         return _close(ctx, row, "failed", DENIED, "nobody else decides this now; ask again")
     fresh = {**body, **plan.resolved}

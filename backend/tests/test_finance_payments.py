@@ -15,6 +15,7 @@ from backend import rules as TR
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance import context as FC
+from backend.finance.store import ledger as SL
 from backend.finance.store import tico as FT
 from backend.finance.actions import FinanceError
 from backend.finance.mercury import Answer
@@ -289,7 +290,42 @@ def _replace_payee(c, rid):
 def test_a_queued_payment_whose_recipient_changes_is_asked_again_not_cancelled_quietly(books):
     """Item 3 (spec §5, §6.4 rule 1): a payment approved and queued whose recipient's details change before the send is
     not cancelled quietly. It ends cancelled (its hold released), and the same action is asked again for the new details
-    of a finance admin. Nothing reaches Mercury meanwhile, and only the approved new details are paid."""
+    of a finance admin who did not make the payment (the owner paid, so ben decides). Nothing reaches Mercury meanwhile.
+    The approved new version is what the payment is then for."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        queued = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "obligation": "bill-40",
+                                                  "tags": {"team": "eng"}, "account_id": account(c, "6100"),
+                                                  "money_account_id": _checking(c)})
+        assert queued.status == "committed" and queued.result["status"] == "queued", queued
+        pid = str(queued.result["payment_id"])
+        # after it is queued (the owner paid): ben, not the owner, decides the re-ask
+        SL.set_setting(c, FC.APPROVER_KEY, "human:ben", by=OWNER, at=AT)
+        _replace_payee(c, rid)
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("request_send_money") == []                                 # never sent at the old details
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _hold_of(c, pid) == (50_000, "released")
+        waiting = c.execute("SELECT approval_id FROM fin_actions WHERE status='needs_approval' AND "
+                            "kind='payment_create'").fetchall()
+        assert len(waiting) == 1 and waiting[0][0], "asked again for the new details, not left cancelled"
+        approval = str(waiting[0][0])
+        H.approval_decide(c, "human:ben", approval, "approved")
+        decided = FA.approval_decided(c, approval, AT)
+        assert decided.status == "committed", decided
+        new_pid = str(decided.result["payment_id"])
+        new_rid = c.execute("SELECT recipient_id FROM fin_payments WHERE id=?", (new_pid,)).fetchone()[0]
+        assert new_rid != rid and _hold_of(c, new_pid) == (50_000, "held")
+
+
+def test_a_finance_admin_whose_payment_changes_is_not_asked_to_approve_their_own_request(books):
+    """Spec §6.3: an approver is never the requester. The owner, who is the finance admin, paid a vendor and then the
+    vendor's details changed. The new details go to a finance admin, and the only one is the owner who asked, so nobody
+    else decides: the ask fails, as a re-ask nobody else can decide does. Nothing reaches Mercury, the payment is
+    cancelled with its hold released, and no approval waits for the owner."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -301,25 +337,14 @@ def test_a_queued_payment_whose_recipient_changes_is_asked_again_not_cancelled_q
         pid = str(queued.result["payment_id"])
         _replace_payee(c, rid)
     sync_once(books, fake, HOURS[1])
-    assert fake.sent("request_send_money") == []                                 # never sent at the old details
+    assert fake.sent("request_send_money") == []
     with books.transaction() as c:
         assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
         assert _hold_of(c, pid) == (50_000, "released")
-        waiting = c.execute("SELECT approval_id FROM fin_actions WHERE status='needs_approval' AND "
-                            "kind='payment_create'").fetchall()
-        assert len(waiting) == 1 and waiting[0][0], "asked again for the new details, not left cancelled"
-        approval = str(waiting[0][0])
-        H.approval_decide(c, OWNER, approval, "approved")
-        decided = FA.approval_decided(c, approval, AT)
-        assert decided.status == "committed", decided
-        new_pid = str(decided.result["payment_id"])
-        new_rid = c.execute("SELECT recipient_id FROM fin_payments WHERE id=?", (new_pid,)).fetchone()[0]
-        assert new_rid != rid and _hold_of(c, new_pid) == (50_000, "held")
-        new_provider = c.execute("SELECT provider_recipient_id FROM fin_recipients WHERE id=?",
-                                 (new_rid,)).fetchone()[0]
-    sync_once(books, fake, HOURS[2])
-    sent = fake.sent("request_send_money")
-    assert len(sent) == 1 and sent[0]["recipientId"] == new_provider
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE status='needs_approval'").fetchone()[0] == 0
+        reasons = [r[0] for r in c.execute("SELECT reason FROM fin_actions WHERE kind='payment_create' AND "
+                                           "status='failed'").fetchall()]
+        assert reasons == ["nobody else decides this now; ask again"]
 
 
 def test_a_pending_approval_is_void_once_its_recipient_details_change(books):
