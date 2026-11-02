@@ -928,3 +928,19 @@ def test_a_push_after_a_marked_head_clears_the_dropped_marker_with_its_checks(ap
     assert H._json(link["detail_json"], {})["head_sha"] == NEW
     assert link["checks"] == "passing"
     assert "checks_dropped" not in H._json(link["detail_json"], {})
+
+
+@pytest.mark.parametrize("state", ["failing", "pending"])
+def test_a_webhook_that_drops_a_non_passing_check_marks_the_head_before_any_full_read(api, state):
+    """Dev 731 review: the first webhook past 100 non-passing checks sets the dropped-check marker itself, with no full
+    read first. The retained checks then pass one by one; the head must stay on the dropped check's state and wake no merge."""
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    for n in range(101):
+        _status(api, f"shard {n}", "failure" if state == "failing" else "pending")
+    detail = H._json(_link(api, task)["detail_json"], {})
+    assert detail["checks_dropped"] == state, "the 101st non-passing check dropped `shard 0` on the webhook path"
+    for n in range(1, 101):
+        _status(api, f"shard {n}", "success")
+        assert _link(api, task)["checks"] != "passing", n
+    assert _link(api, task)["checks"] == state
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
