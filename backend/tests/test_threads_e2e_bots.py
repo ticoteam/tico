@@ -105,6 +105,18 @@ def test_the_loop_guard_stops_bots_pinging_each_other_and_a_person_resumes_them(
     assert claim(api, r, "cpo") is not None, "a person's message resumes the deferred wakes"
 
 
+def test_a_bots_plain_mention_waits_for_the_other_bots_next_run_and_its_ask_wakes_it(api):
+    require_threads_api(api)
+    r = bot_runner(api, "cpo", "product-design")
+    t = create_thread(api, title="Hand-off", members=["bot:cpo", "bot:product-design"])
+    say(api, "ana-test", t["id"], "@cpo have a look")
+    bot = claim(api, r, "cpo")["token"]
+    say(api, bot, t["id"], "@product-design for when you next run")
+    assert claim(api, r, "product-design") is None, "a plain @mention from a bot waits (bot_to_bot, contract 4.3)"
+    say(api, bot, t["id"], "@product-design which tier?", kind="ask")
+    assert claim(api, r, "product-design") is not None, "a bot's ask wakes the other bot"
+
+
 def test_a_bot_only_sees_the_thread_it_was_woken_in_and_its_sub_threads(api):
     require_threads_api(api)
     r = bot_runner(api, "cpo")

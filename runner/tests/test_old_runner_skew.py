@@ -5,11 +5,10 @@ turn tests and two conformance chat and task turns, run unchanged with the old b
 The binary path comes from OLD_RUNNER_BINARY (built from origin/main's runner-rs by the check, never from this tree);
 without it the module is skipped. Only the claude and codex harnesses run: they are the threads suite's own.
 
-Known failures on an old runner (run on RunsOn, origin/main 672057c92, 2026-11-01, before the server gave old runners a
-per-turn bot epoch): replies land in the right thread and every turn completes, but the old runner resumed one provider
-session per bot, so a turn in another thread or a direct message's text continued into a public thread. With
-bot_session_epoch unique to each turn (backend/execution.py old_runner_bot_epoch) an old runner starts that session anew
-every turn, and these tests must pass on it too.
+An old runner resumes one provider session per bot, so a turn in another thread or a direct message's text could continue
+into a public thread (run on RunsOn, origin/main 672057c92, 2026-11-01). The server now sends an old runner's chat as
+session `task`, so each chat keeps its own provider session (backend/execution.py start_claimed), and the privacy
+assertions here must pass on it too.
 """
 
 import json

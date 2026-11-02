@@ -378,7 +378,9 @@ linked to the thread (`slack:<channel>`, `peer:<install>`, written by those trac
 
 ### 4.3 Wake rule (in `backend/rules.py`, rule `thread_wake`)
 Per (message, bot), deduplicated, first match wins:
-1. a DM, or an explicit @mention / ask / assign of the bot → `queue` (`steer` when it is running in that root);
+1. a DM, or an explicit @mention / ask / assign of the bot → `queue` (`steer` when it is running in that root); a person's
+   @mention queues, and a plain @mention from a bot waits under `bot_to_bot` for the receiving bot's next run unless a
+   wake rule says otherwise;
 2. the bot's Home → `queue`;
 3. a reply in a sub-thread the bot last posted in → `queue`;
 4. routing (the Slack gateway's decision model, ≤3 bots) when the message names nobody and the thread has several
