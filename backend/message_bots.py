@@ -19,6 +19,7 @@ from . import access as Access
 from . import bot_access as BA
 from . import routines
 from .store import H, P, Problem, readiness_document
+from . import bot_settings as BS
 
 TEMPLATES = frozenset({"inbox"})
 LINE = re.compile(r"^Mailbox:[ \t]*(\S+@\S+)[ \t]*$", re.M)
@@ -75,7 +76,7 @@ def owner_of(c, bot, roster, requester=None):
 
 
 def _config(c, bot):
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     try:
         return json.loads(row["config"] or "{}") if row else {}
     except ValueError:

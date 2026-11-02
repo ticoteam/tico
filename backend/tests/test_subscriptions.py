@@ -2,6 +2,7 @@
 import json
 
 from backend.tests.test_api import api, assign, claim, get, post, put, ready, runner  # noqa: F401
+from backend import bot_settings as BS
 
 
 def test_the_api_refuses_a_bot_its_own_sign_in(api):
@@ -116,9 +117,9 @@ def test_a_refused_bot_key_marks_only_that_bot_and_a_computer_refusal_marks_ever
 
 def set_runtime(api, runtime, harness=None, bot="ops"):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config.update(runtime=runtime, harness=harness or runtime)
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), bot))
+        BS.write(c, bot, config)
 
 
 def test_a_login_whose_turns_cannot_save_a_session_names_the_folder_not_a_sign_in(api):

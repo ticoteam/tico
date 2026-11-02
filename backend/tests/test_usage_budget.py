@@ -8,6 +8,7 @@ from backend.store import H, encode
 from backend.tests.test_api import api, get, headers  # noqa: F401  (the api fixture)
 from backend.tests.test_groups import send
 from backend.tests.test_usage_limits import finish, fleet, groups, put, start
+from backend import bot_settings as BS
 
 
 def test_every_bot_and_pool_row_says_what_it_spent_in_each_window_capped_or_not(api):
@@ -58,8 +59,8 @@ def big_org(api, first, last, groups_=8):
             slug = f"acme-bot-{n:03d}"
             c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                       "VALUES(?,?,?,?,?,?,'','keeper','active',?)", (slug, slug, slug, "fake", "m", "", H.now()))
-            c.execute("INSERT INTO bot_config(bot,config,owner_id,team) VALUES(?,?,?,?)",
-                      (slug, encode({"name": slug}), "ana", teams[n % len(teams)]))
+            c.execute('INSERT INTO bot_config(bot,owner_id,team) VALUES(?,?,?)', (slug, 'ana', teams[n % len(teams)]))
+            BS.write(c, slug, {'name': slug})
             c.execute("INSERT INTO turns(id,bot,started_at,finished_at,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
                       (H.new_id(), slug, H.now(), H.now(), 0.25, "api"))
             c.execute("INSERT INTO usage_limits(bot,daily_usd,updated_at,updated_by) VALUES(?,?,?,?)",

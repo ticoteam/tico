@@ -5,6 +5,7 @@ import pytest
 
 from backend import memory_tidy_controls as tidy, providers
 from backend.tests.test_api import api, get, post, put  # noqa: F401
+from backend import bot_settings as BS
 
 PATH = "system-routines/memory_tidy"
 
@@ -92,15 +93,15 @@ def test_confirmed_pilot_defaults_use_exact_slugs_low_effort_and_preserve_everyd
     with store.transaction() as c:
         for p in tidy.DEFAULT_PILOTS:
             c.execute("INSERT INTO bots(id,slug,model,effort) VALUES(?,?,?,?)", ('id-' + p['bot'], p['bot'], 'claude-haiku-5-5', 'high'))
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')", ('id-' + p['bot'], json.dumps(
-                {'model': 'claude-haiku-5-5', 'task_model': {'model': 'gpt-6-luna'}})))
-        before = [tuple(r) for r in c.execute("SELECT bot,config FROM bot_config ORDER BY bot")]
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", ('id-' + p['bot'],))
+            BS.write(c, 'id-' + p['bot'], {'model': 'claude-haiku-5-5', 'task_model': {'model': 'gpt-6-luna'}})
+        before = [tuple(r) for r in c.execute(f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} ORDER BY bot")]
     by_id = [{**p, 'bot': 'id-' + p['bot'], 'slug': p['bot']} for p in tidy.DEFAULT_PILOTS]
     assert job(api)['pilots'] == by_id
     assert all(p['slug'] != 'pr-reviewer-sol' for p in job(api)['pilots'])
     assert put(api, PATH, {'pilots': tidy.DEFAULT_PILOTS})['job']['pilots'] == by_id
     with store.read() as c:
-        assert [tuple(r) for r in c.execute("SELECT bot,config FROM bot_config ORDER BY bot")] == before
+        assert [tuple(r) for r in c.execute(f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} ORDER BY bot")] == before
         assert c.execute("SELECT model,effort FROM bots WHERE slug='botops'").fetchone()[:] == ('claude-haiku-5-5', 'high')
     put(api, PATH, {'pilots': []})
     assert job(api)['pilots'] == []

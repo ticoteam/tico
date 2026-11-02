@@ -19,6 +19,7 @@ from . import models as M
 from .memory_tidy import Result
 from .still_needed import crossed_at
 from .store import H, Problem
+from . import bot_settings as BS
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_tidy_cards (
@@ -219,9 +220,9 @@ def install(app, store, auth, mutate):
         rid = computer(request)
         with store.transaction() as c:
             reconcile_queued(c)
-            rows = c.execute("SELECT k.id,k.card_id,t.bot,t.memory_commit,t.edits,t.diary,t.created_at,b.config "
-                             "FROM memory_tidy_keeps k JOIN memory_tidy_cards t ON t.id=k.card_id "
-                             "JOIN bot_config b ON b.bot=t.bot JOIN runners r ON r.id=k.runner_id "
+            rows = c.execute("SELECT k.id,k.card_id,t.bot,t.memory_commit,t.edits,t.diary,t.created_at,"
+                             f"{BS.CONFIG} AS config FROM memory_tidy_keeps k JOIN memory_tidy_cards t ON t.id=k.card_id "
+                             f"JOIN bot_config bc ON bc.bot=t.bot {BS.JOIN} JOIN runners r ON r.id=k.runner_id "
                              "WHERE k.runner_id=? AND r.revoked_at IS NULL AND k.status IN ('queued','applying') ORDER BY k.created_at LIMIT 1", (rid,)).fetchall()
             for row in rows:
                 c.execute("UPDATE memory_tidy_keeps SET status='applying' WHERE id=?", (row['id'],))

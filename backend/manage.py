@@ -17,6 +17,7 @@ from .blobs import Blobs
 from .config import ROOT, Settings
 from .execution import Execution
 from .store import H, P, Problem, Store, encode, repo_url
+from . import bot_settings as BS
 
 
 CORE_HISTORY = ("conversations", "messages", "tasks", "task_events", "turns", "meetings",
@@ -249,12 +250,12 @@ def main(argv=None):
         repo = repo_reference(args.repo)
         with store.transaction() as c:
             bot = (H.resolve_bot(c, args.bot) or {}).get("id", args.bot)
-            row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
             if not row:
                 raise SystemExit("Unknown bot: " + args.bot)
             config = {**json.loads(row["config"] or "{}"), "repo": repo}
-            c.execute("UPDATE bot_config SET repo=?,config=?,revision=revision+1 WHERE bot=?",
-                      (repo, encode(config), bot))
+            BS.write(c, bot, config)
+            c.execute("UPDATE bot_config SET repo=?,revision=revision+1 WHERE bot=?", (repo, bot))
             H.event(c, H.KEEPER, "bot.repo_set", bot, {"repo": repo})
         report = {"bot": bot, "repo": repo,
                   "repo_url": repo_url(repo, store.settings.github_owner)}

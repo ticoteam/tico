@@ -23,6 +23,7 @@ import logging
 import re
 
 from . import hubdb as H
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.check_pools")
 
@@ -229,7 +230,7 @@ def _task_model(c, slug):
     from clients import sessions
     from . import task_models
     from .shared_bots import follow
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
     config = follow(c, slug, H._json(row["config"], {}) or {}) if row else {}
     task = task_models.of(config) if sessions.session_key(config, slug, "check", None).startswith("task:") else None
     if not task:
@@ -323,7 +324,7 @@ def candidate_details(c, slugs):
         bot = c.execute("SELECT slug,display_name FROM bots WHERE id=? AND coalesce(state,'')<>'archived'", (slug,)).fetchone()
         if not bot:
             continue
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         config = follow(c, slug, H._json(row["config"], {}) or {}) if row else {}
         runtime, model = providers.bot_choice(c, None, config)
         configured = providers.MODEL_BY_ID.get(model or "") or {}

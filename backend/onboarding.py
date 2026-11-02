@@ -30,6 +30,7 @@ from . import access as Access
 from . import groups as Groups
 from . import message_bots as MessageBots
 from .store import H, Problem, encode, readiness_document
+from . import bot_settings as BS
 
 KEY = "onboarding"
 BOTOPS = "botops"
@@ -501,7 +502,7 @@ class Onboarding:
     def _bots(self, c):
         rows = []
         labels = {r["id"]: r["slug"] for r in c.execute("SELECT id,slug FROM bots")}   # one read: a manager's label
-        for row in c.execute("SELECT bot,config,onboarding_state,reports_to FROM bot_config ORDER BY bot").fetchall():
+        for row in c.execute(f"SELECT bot,{BS.CONFIG} AS config,onboarding_state,reports_to FROM bot_config bc {BS.JOIN} ORDER BY bot").fetchall():
             declared = _json(row["config"], {}) or {}
             bot = H.bot(c, row["bot"]) or {}
             if bot.get("state") == "archived":          # the assistant a company chose not to have
@@ -838,7 +839,7 @@ class Onboarding:
         placed = []
         computer = c.execute("SELECT owner_id,accepts_member_bots FROM runners WHERE id=? AND revoked_at IS NULL",
                              (runner_id,)).fetchone()
-        for row in c.execute("SELECT bc.bot,bc.config,bc.owner_id FROM bot_config bc "
+        for row in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config,bc.owner_id FROM bot_config bc {BS.JOIN} "
                              "LEFT JOIN bots b ON b.id=bc.bot WHERE COALESCE(b.state,'active')<>'archived' "
                              "ORDER BY bc.bot").fetchall():
             if not (_json(row["config"], {}) or {}).get("template"):
@@ -880,12 +881,12 @@ class Onboarding:
         if not row or not company or (row["display_name"] or "").strip().lower() != company:
             return False
         c.execute("UPDATE bots SET display_name='Assistant' WHERE id=?", (slug,))
-        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        config = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         if config and config["config"]:
             try:
                 declared = json.loads(config["config"])
                 declared["display_name"] = "Assistant"
-                c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), slug))
+                BS.write(c, slug, declared)
             except ValueError:
                 pass
         return True
@@ -1145,7 +1146,7 @@ class Onboarding:
         planned, so leaving these to a separate click strands the whole setup."""
         cards = {card["template"]: card for card in read_cards(self.settings)}
         who = self.auth.owner_identity(c)
-        for row in c.execute("SELECT bc.bot,bc.revision,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+        for row in c.execute(f"SELECT bc.bot,bc.revision,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
                              "WHERE b.state='planned' AND (EXISTS(SELECT 1 FROM assignments a WHERE a.bot=bc.bot) OR "
                              "EXISTS(SELECT 1 FROM cloud_machines m WHERE m.bot=bc.bot AND m.mode='cloud')) "
                              "ORDER BY bc.bot").fetchall():
@@ -1187,14 +1188,14 @@ class Onboarding:
 
     @staticmethod
     def _declared(c, slug):
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         if not row:
             raise Problem("not_found", "Bot not found: " + str(slug), 404)
         return _json(row["config"], {}) or {}
 
     @staticmethod
     def _write_config(c, slug, declared):
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), slug))
+        BS.write(c, slug, declared)
 
     def _runtime(self, c, card):
         """The model a bot built from this card runs on: the card's own pick when it names a
@@ -1238,7 +1239,7 @@ class Onboarding:
                 model=model, effort=effort, owners=[H.actor_id(who.actor)]))
             bot_id = H.resolve_bot(c, slug)["id"]          # the id create_bot gave it
             if card.get("session") == "task":
-                c.execute("UPDATE bot_config SET config=json_set(config,'$.session','task') WHERE bot=?", (bot_id,))
+                BS.update(c, bot_id, {"session": "task"})
             if not picked:
                 self._follow_default(c, bot_id)
         else:

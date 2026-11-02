@@ -7,6 +7,7 @@ import pytest
 from backend import models_preset, providers
 from backend.tests.test_api import api, assign, claim, post, runner  # noqa: F401
 from backend.tests.test_gateway_connection import KEY, fake_gateway, handed_to, save, setup
+from backend import bot_settings as BS
 
 CLAUDE = {"runtime": "claude", "harness": "claude-code", "model": "claude-opus-5-5"}
 
@@ -20,9 +21,9 @@ def choose(api, preset, enabled=("anthropic", "openai")):
 
 def on_claude(api, bot):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config = {k: v for k, v in config.items() if k != "fallback"}
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps({**config, **CLAUDE}), bot))
+        BS.write(c, bot, {**config, **CLAUDE})
 
 
 def heartbeat(api, machine, bot, signed_in, isolated):
@@ -77,7 +78,7 @@ def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_o
     heartbeat(api, machine, "ops", signed_in=True, isolated=True)
     post(api, "chat/ops", {"text": "Use only the synthetic fixture again"})
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])["model"] \
+        assert BS.read(c, 'ops')["model"] \
             == CLAUDE["model"]
         record = providers.load(c, api.app.state.store.settings)
     ready = {"isolated": True, "runtimes": {"claude": {"authenticated": "ready"}}}

@@ -164,3 +164,31 @@ class PrincipalRow(TypedDict):
     id: str
     kind: str
     deleted_at: str | None
+
+
+class BotSettingsRow(TypedDict):
+    """One `bot_settings` row (SELECT *): a bot's declared settings (backend/bot_settings.py)."""
+    bot_id: str
+    harness: str | None
+    runtime: str | None
+    model: str | None
+    reasoning_effort: str | None
+    host: str | None
+    template: str | None
+    profile: str | None
+    session: str | None
+    wake_preset: str | None
+    shared_from: str | None
+    bot_contact: str | None
+    repo_access_mode: str | None
+    folder: str | None
+    github_login: str | None
+    compact_at: int | None
+    turns_per_hour: int | None
+    turns_per_day: int | None
+    max_run_minutes: int | None
+    stateless: int | None
+    fallback: str | None
+    app_delivery: str | None
+    extra: str
+    updated_at: str | None

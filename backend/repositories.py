@@ -14,6 +14,7 @@ from . import hubdb as H
 from . import read_cache
 from .auth import validate_identity
 from .store import Problem
+from . import bot_settings as BS
 
 SETTINGS = 'repos_new_bot_default'
 # {bot: [owner/name, ...]}: write grants an Owner or admin let start and manage workflow runs (Actions: write).
@@ -87,11 +88,11 @@ def migrate(c):
     for bot, repos in metadata(c, 'github-extra-repos').items():
         if not repos:
             continue
-        row = c.execute('SELECT config FROM bot_config WHERE bot=?', (bot,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         if row:
             config = json.loads(row[0] or '{}')
             config['repo_access_mode'] = 'chosen'
-            c.execute('UPDATE bot_config SET config=? WHERE bot=?', (json.dumps(config), bot))
+            BS.write(c, bot, config)
         for repo in repos:
             c.execute('INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
                       'ON CONFLICT(full_name) DO UPDATE SET enabled=1', (uuid.uuid4().hex, repo, H.now()))
@@ -181,9 +182,9 @@ class Reads:
         from .shared_bots import _json, source_of
         self.c = c
         bots = list(dict.fromkeys(bots))
-        self.configs = self._rows('SELECT bot,config,repo FROM bot_config WHERE bot IN ({})', bots)
+        self.configs = self._rows(f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN ({{}})', bots)
         sources = {source_of(_json(row['config'])) for row in self.configs.values()} - {''} - set(self.configs)
-        self.configs.update(self._rows('SELECT bot,config,repo FROM bot_config WHERE bot IN ({})', sorted(sources)))
+        self.configs.update(self._rows(f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN ({{}})', sorted(sources)))
         self.chosen = {bot: [] for bot in bots}
         for part in H.chunks(bots):
             for r in c.execute('SELECT bot,full_name,access FROM bot_repo_access WHERE bot IN (%s) ORDER BY bot,full_name'
@@ -358,9 +359,9 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
             if not flags[bot]:
                 flags.pop(bot)
             save_metadata(c, stored, flags)
-    config = json.loads(c.execute('SELECT config FROM bot_config WHERE bot=?', (bot,)).fetchone()[0] or '{}')
+    config = json.loads(c.execute(BS.ONE_SQL, (bot,)).fetchone()[0] or '{}')
     config.update(repo_access_mode=body.mode, repo_all_access=all_access)
-    c.execute('UPDATE bot_config SET config=? WHERE bot=?', (json.dumps(config), bot))
+    BS.write(c, bot, config)
     if body.chosen is not None:
         c.execute('DELETE FROM bot_repo_access WHERE bot=?', (bot,))
         c.executemany('INSERT INTO bot_repo_access VALUES(?,?,?)', [(bot, name, level) for name, level in wanted.values()])

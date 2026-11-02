@@ -3,6 +3,7 @@ import json
 
 import pytest
 from backend.tests.test_api import api, assign, runner, setup_attempt, post, get, expire, ready, claim, headers
+from backend import bot_settings as BS
 
 
 def interrupted(api):
@@ -296,9 +297,9 @@ def tool_reporting(api, bot='ops'):
     import json
     from backend.store import encode
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config['runtime'] = 'gemini'
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), bot))
+        BS.write(c, bot, config)
 
 
 def sweep(api):

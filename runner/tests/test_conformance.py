@@ -23,6 +23,7 @@ from backend.store import H, encode
 from backend.tests.test_api import api, assign, get, headers, post, runner, settled  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from runner import engine
+from backend import bot_settings as BS
 
 pytestmark = pytest.mark.slow
 
@@ -84,9 +85,7 @@ class Computer:
         assign(api, self.registration, "ops")
         self.runtime = RUNTIMES.get(harness, harness)
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                      (encode({"name": "ops", "runtime": self.runtime, "harness": harness, "model": MODELS[harness],
-                               "status": "active", **(bot or {})}),))
+            BS.write(c, 'ops', {'name': 'ops', 'runtime': self.runtime, 'harness': harness, 'model': MODELS[harness], 'status': 'active', **(bot or {})})
         if harness in GRANTED_KEYS:
             # The Gemini CLI and Pi sign in with the bot's own key; readiness wants it granted.
             from backend.tests.test_credentials import create, setup
@@ -231,7 +230,7 @@ def add_bot(api, computer, tmp_path, slug, bot=None):
     config = {"name": slug, "runtime": computer.runtime, "harness": computer.harness, "model": MODELS[computer.harness],
               "status": "active", **(bot or {})}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), slug))
+        BS.write(c, slug, config)
     repo = tmp_path / "projects" / f"bot-{slug}"
     repo.mkdir(parents=True)
     (repo / "AGENT.md").write_text(f"# {slug.title()}\n\nAnswer the Acme team.\n")
@@ -1205,9 +1204,7 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
     git(base, "remote", "set-url", "origin", "https://github.com/org/product.git")
     git(base, "worktree", "add", "-q", "-b", "tico/feature", str(projects / "work" / "product"))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                  (encode({"name": "ops", "runtime": computer.harness, "model": MODELS[computer.harness],
-                           "status": "active", "session": "task"}),))
+        BS.write(c, 'ops', {'name': 'ops', 'runtime': computer.harness, 'model': MODELS[computer.harness], 'status': 'active', 'session': 'task'})
     computer.start()
 
     task = post(api, "tasks", {"owner": "ops", "title": "Build product", "body": "Please build the product."})
@@ -1220,8 +1217,7 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
     def certified():
         # Each config change is a full readiness pass, which inspects the computer's worktrees.
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.touched',?) WHERE bot='ops'",
-                      (time.monotonic(),))
+            BS.update(c, 'ops', {'touched': time.monotonic()})
             row = c.execute("SELECT state, detail FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
         time.sleep(0.5)
         return row["state"] == "present" and json.loads(row["detail"])["checkout_state"] == "ready"

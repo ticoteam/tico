@@ -7,6 +7,7 @@ import pytest
 
 from backend import hubdb as H, task_trigger_rules as T
 from backend.tests.test_api import api, headers, post, unrelated_task_managers  # noqa: F401
+from backend import bot_settings as BS
 
 
 def rule(api, event="task.created", action="note", params=None, *, scope_kind="team", scope_id="", when=None,
@@ -249,7 +250,8 @@ def test_scopes_and_all_five_conditions_match_task_owner_not_message_recipient(a
         roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         roster["org_groups"] = {"engineering": {"name": "Engineering"}, "web": {"name": "Web", "parent": "engineering"}}
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
-        c.execute("UPDATE bot_config SET team='web',config=json_set(config,'$.team','web') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET team='web' WHERE bot='ops'")
+        BS.update(c, 'ops', {'team': 'web'})
     condition = {"type": typ["id"], "step": "Open", "tag": "triage", "owner": "ops", "requester": "ana"}
     scoped = [rule(api, scope_kind=kind, scope_id=ident, when=condition) for kind, ident in
               (("team", ""), ("type", typ["id"]), ("department", "engineering"), ("bot", "ops"))]

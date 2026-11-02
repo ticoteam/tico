@@ -32,6 +32,7 @@ import re
 from datetime import datetime, timedelta
 
 from .store import H, Problem
+from . import bot_settings as BS
 
 KEY = "release-schedule"
 FIRED = "release-schedule-fired"
@@ -95,8 +96,8 @@ def save(c, actor, changes):
 
 def _with_template(c, template):
     return [r[0] for r in c.execute(
-        "SELECT b.id FROM bots b JOIN bot_config bc ON bc.bot=b.id WHERE b.state='active' "
-        "AND json_extract(bc.config,'$.template')=? ORDER BY b.slug", (template,))]
+        f"SELECT b.id FROM bots b JOIN bot_config bc ON bc.bot=b.id {BS.JOIN} WHERE b.state='active' "
+        f"AND s.template=? ORDER BY b.slug", (template,))]
 
 
 def _named(c, slug, template):

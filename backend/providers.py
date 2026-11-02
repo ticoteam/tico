@@ -20,6 +20,7 @@ from . import gateway_tiers, models_preset
 from .batch_work import shared_check
 from .harnesses import attach_harnesses, normalize_fallback
 from .store import Problem
+from . import bot_settings as BS
 
 KEY = "providers"
 # What a bot's config says when it has no opinion and follows the company default.
@@ -774,8 +775,8 @@ def runtimes_run_on(c, settings):
     from .shared_bots import follow
     from .task_models import of as task_model_of
     record, found = load(c, settings), {}
-    for row in c.execute("SELECT a.runner_id, a.bot, bc.config FROM assignments a "
-                         "LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+    for row in c.execute(f"SELECT a.runner_id, a.bot, {BS.CONFIG} AS config FROM assignments a "
+                         f"LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"):
         try:
             config = follow(c, row["bot"], json.loads(row["config"] or "{}"))
         except ValueError:
@@ -797,8 +798,8 @@ def runtimes_needed(c, settings):
     record = load(c, settings)
     wanted = wanted_runtimes(record)
     need = {}
-    for row in c.execute("SELECT a.runner_id, bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
-                         "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+    for row in c.execute(f"SELECT a.runner_id, {BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                         f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"):
         try:
             config = json.loads(row["config"] or "{}")
         except ValueError:

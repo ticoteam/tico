@@ -21,6 +21,7 @@ from backend import threads as TH
 from backend.auth import Auth, Identity
 from backend.config import Settings
 from backend.store import Problem, Store, encode
+from backend import bot_settings as BS
 
 TEAM, APP, BOT_USER, BOT_ID = "T02F3S2SD", "A0BU75YSGT1", "U0BUS6WA4SY", "B0BUNG973DY"
 MARKETING, PRIVATE, LOUNGE, PARTNERS = "C0000000001", "G0000000001", "C0000000002", "C0000000003"
@@ -173,8 +174,8 @@ def hub(tmp_path):
         c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({
             "default_user": "ana", "teams": {}, "people": PEOPLE}),))
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
-                      (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
+            c.execute('INSERT INTO bot_config(bot,team,owner_id,description,reports_to) VALUES(?,?,?,?,?)', (slug, None, 'ana', entry['description'], entry['reports_to']))
+            BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
         now = H.now()
         for thread_id, audience, subject in ((COMPANY, "company", "Marketing"), (MEMBERS, "members", "Plans")):
             c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",

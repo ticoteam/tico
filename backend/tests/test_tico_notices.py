@@ -8,6 +8,7 @@ from backend import hook_relay, rules
 from backend import hubdb as H
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_hook_relay import hq, relay_for, service  # noqa: F401
+from backend import bot_settings as BS
 
 TICO = "hr_00000000000000a1"
 
@@ -33,7 +34,8 @@ def botops(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('botops','botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('botops','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('botops',NULL,'ana')")
+        BS.write(c, 'botops', {})
 
 
 @pytest.fixture

@@ -1,6 +1,6 @@
 """Bot profiles: how a bot is woken and what work it takes (quiet task flow, section 5).
 
-`bot_config.profile` is `doer`, `reviewer`, `lead`, `manager`, `responder`, `monitor` or `custom`. A profile is a fixed set of
+`bot_settings.profile` is `doer`, `reviewer`, `lead`, `manager`, `responder`, `monitor` or `custom`. A profile is a fixed set of
 bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
 
     profile    wakes now                               everything else      pulls open tasks  sweeps  takes
@@ -38,6 +38,7 @@ from pydantic import Field
 
 from . import hubdb as H
 from .models import Contract
+from . import bot_settings as BS
 
 DOER, REVIEWER, LEAD, MANAGER, RESPONDER, MONITOR, CUSTOM = (
     "doer", "reviewer", "lead", "manager", "responder", "monitor", "custom")
@@ -179,12 +180,12 @@ def choices():
 
 def of_bot(c, bot):
     """The bot's profile name as the engine reads it (doer when it has none)."""
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     return name_of(H._json(row[0], {}) if row else {}) or DOER
 
 
 def config_of(c, bot):
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     return H._json(row[0], {}) or {} if row else {}
 
 
@@ -396,7 +397,8 @@ def set_profile(admin, c, who, bot, body, undo_change_id=None):
         options = given
     apply(declared, name, {k: v for k, v in options.items() if _valid(k, v)})
     after = snapshot(declared)
-    c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+    BS.write(c, bot, declared)
+    c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
     from . import wake_presets
     wake_presets.replan(c, bot)
     admin.record(c, who.actor, bot, "profile", before, after)
@@ -469,7 +471,7 @@ def migrate(c):
     from . import rules
     from .store import encode
     told = {}
-    for row in c.execute("SELECT bc.bot,bc.config,bc.owner_id,bc.bot_owners,b.state,b.slug,b.display_name FROM bot_config bc "
+    for row in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config,bc.owner_id,bc.bot_owners,b.state,b.slug,b.display_name FROM bot_config bc {BS.JOIN} "
                          "JOIN bots b ON b.id=bc.bot ORDER BY bc.bot").fetchall():
         declared = H._json(row["config"], {}) or {}
         if not isinstance(declared, dict) or name_of(declared):
@@ -480,7 +482,8 @@ def migrate(c):
         except Exception:  # noqa: BLE001 - a start never fails on a guess about one bot: it is a Doer
             name, options, source = DOER, {}, None
         apply(declared, name, options)
-        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), row["bot"]))
+        BS.write(c, row["bot"], declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (row["bot"],))
         if name == CUSTOM and source and rules.PROFILE_RULES.get(source):
             materialise(c, row["bot"], source)
         H.event(c, H.KEEPER, "bot.profile_migrated", row["bot"], {"profile": name, "options": options})
@@ -514,7 +517,7 @@ def mismatches(c):
     with tasks queued, a doer whose runs for a week all did nothing. [(kind, bot, count)]."""
     out = []
     since = H.shift(H.now(), days=-IDLE_DAYS)
-    for row in c.execute("SELECT bc.bot,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+    for row in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
                          "WHERE b.state='active' ORDER BY bc.bot").fetchall():
         declared = H._json(row["config"], {}) or {}
         name, bot = name_of(declared), row["bot"]

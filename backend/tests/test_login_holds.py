@@ -7,6 +7,7 @@ from pathlib import Path
 from backend import health_monitor, login_holds
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, expire, get, headers, post, ready, runner
+from backend import bot_settings as BS
 
 CLAUDE = "You've hit your session limit · resets 2:40am (UTC)"
 
@@ -251,7 +252,7 @@ def test_a_same_login_named_fallback_uses_the_next_company_row_or_waits_without_
     config = {"runtime": "codex", "harness": "codex", "model": "gpt-6-luna",
               "fallback": {"harness": "codex", "model": "gpt-6-luna"}}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_patch(config,?) WHERE bot='ops'", (json.dumps(config),))
+        BS.update(c, "ops", config)
     signed_in(api, machine, ["ops"], ["codex", "claude"])
     for n in range(2):
         post(api, "tasks", {"owner": "ops", "title": f"Same login work {n}", "body": "Please do it."})
@@ -284,8 +285,7 @@ def test_a_bot_whose_fallback_is_off_or_not_signed_in_waits_out_the_hold(api, mo
     signed_in(api, machine, ["ops"], [])
     assert claim(api, machine) is None                      # no other provider is signed in here
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback',json('{\"off\":true}')) "
-                  "WHERE bot='ops'")
+        BS.update(c, 'ops', {'fallback': {'off': True}})
     signed_in(api, machine, ["ops"], ["codex"])
     assert claim(api, machine) is None                      # the bot turned its fallback off
 
@@ -548,8 +548,7 @@ def test_a_named_fallback_that_is_not_ready_here_leaves_the_job_waiting_not_leas
 
     def names(fallback):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback',json(?)) WHERE bot='ops'",
-                      (json.dumps(fallback),))
+            BS.update(c, 'ops', {'fallback': fallback})
     names({"harness": "codex", "model": "gpt-5.5"})
     for minute in ("01:50", "01:55", "02:00"):                      # Codex is not signed in here: no lease, ever
         at(monkeypatch, f"2026-10-19T{minute}:00.000000Z", api)
@@ -778,8 +777,7 @@ def test_a_limit_keeps_the_provider_and_login_it_came_from_after_settings_and_ho
     with api.app.state.store.transaction() as c:
         assert H.status(c, "ops")["focus"].startswith(said + " at 01:46")
         # The bot moves to Codex and another turn replaces the login's hold: the run still names what refused it.
-        assert c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                         (json.dumps({"runtime": "codex"}),)).rowcount == 1
+        BS.write(c, "ops", {"runtime": "codex"})
         assert login_holds.get(c, machine["runner_id"], "work", "fake"), "an in-flight turn keeps its reported home"
         login_holds.record(c, machine["runner_id"], "work", "fake", "2026-10-19T01:47:00.000000Z", attempt_id="other",
                            bot="finance", error=CLAUDE)

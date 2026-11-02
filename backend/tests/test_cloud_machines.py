@@ -22,6 +22,7 @@ from backend.tests.test_model_subscriptions import OTHER, TOKEN, add, codex_file
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR
+from backend import bot_settings as BS
 
 SIZES = [{"name": name, "cpu": cpu, "memory_gb": cpu * 2, "usd_per_hour": 0.05 * cpu, "start_usd": 0.04,
           "idle_stop_s": idle} for name, cpu, idle in (("small", 1, 600), ("default", 2, 300), ("large", 4, 180),
@@ -815,9 +816,8 @@ def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
         # coo is in Engineering on the team chart; finance was made from the video producer's template.
         c.execute("UPDATE registry_metadata SET value=json_set(value,'$.org_groups',json(?)) WHERE key='people'",
                   (json.dumps({"engineering": {"name": "Engineering", "parent": ""}}),))
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','engineering') WHERE bot='coo'")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','video-producer') "
-                  "WHERE bot='finance'")
+        BS.update(c, 'coo', {'team': 'engineering'})
+        BS.update(c, 'finance', {'template': 'video-producer'})
         for bot in ("ops", "coo", "finance"):
             assert placement.auto_place(c, execution, bot) is None
     assert [cloud.row(bot)["placement"] for bot in ("ops", "coo", "finance")] == ["shared", "own", "own"]
@@ -1107,9 +1107,9 @@ def shared_for(cloud, bot, token="ana-test"):
 def task_on(api, bot, model, harness):
     """The bot's task model: a model on `harness` (its runtime), beside its own model."""
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         config["task_model"] = {"model": model, "harness": harness, "runtime": harness}
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), bot))
+        BS.write(c, bot, config)
 
 
 def given(cloud, runner_id):
@@ -1325,8 +1325,7 @@ def test_a_setup_finished_before_hq_listed_sizes_goes_on_cloud_machines_when_it_
     monkeypatch.setattr(manager, "client", fake)
     with store.transaction() as c:                              # a bootstrap bot setup left planned, with no computer
         c.execute("UPDATE bots SET state='planned' WHERE slug='coo'")
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.materialize',json('true')) "
-                  "WHERE bot='coo'")
+        BS.update(c, 'coo', {'materialize': True})
         c.execute("UPDATE bots SET state='archived' WHERE slug='doc-updater'")
     manager.tick()
     with store.read() as c:

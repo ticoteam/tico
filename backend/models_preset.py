@@ -16,6 +16,7 @@ handed to it and the bot waits for a sign-in instead (it never fails for it).
 import json
 
 from . import gateway_tiers
+from . import bot_settings as BS
 
 RECOMMENDED = "subscriptions-gateway"
 PRESETS = (RECOMMENDED, "subscriptions", "gateway", "own-keys")
@@ -149,7 +150,7 @@ def gateway_line(c, bot, ready, settings=None, config=None):
         return ""
     record = load(c, settings)
     if config is None:
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         config = fill(record, json.loads(row[0] or "{}") if row else {})
     if not waiting(record, ready, config):
         return ""

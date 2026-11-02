@@ -23,6 +23,7 @@ import yaml
 from . import hubdb as H
 from . import people as P
 from .store import Problem
+from . import bot_settings as BS
 
 OWNER = "owner"
 ACCESS = "access"
@@ -579,7 +580,7 @@ def _keep_mailbox(c, person, address):
     sign-in change is not a mail change, so the address it reads now is written down before the email moves."""
     from . import routines
     bot = person.get("inbox_bot")
-    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone() if bot else None
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone() if bot else None
     if found and not routines.declared_mailbox(json.loads(found["config"] or "{}")):
         routines.set_declared_mailbox(c, bot, address)
 

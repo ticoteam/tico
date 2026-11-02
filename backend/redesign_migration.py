@@ -23,6 +23,7 @@ import sys
 
 from . import automation_flow as F
 from .store import H, Problem
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.redesign_migration")
 CUTOVER = "redesign_cutover"                 # registry_metadata: {state: running|done, migration, at, ...}
@@ -454,7 +455,7 @@ def _budgets(c, done):
     if ("turn_budget", "budget:team") not in done:
         out.append({"kind": "turn_budget", "id": "budget:team", "title": "Team turn budgets", "becomes": after,
                     "flags": [], "_do": ("budget_team", {"raise": after != team and bool(stored)})})
-    for row in c.execute("SELECT bot, config FROM bot_config ORDER BY bot").fetchall():
+    for row in c.execute(f"SELECT bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} ORDER BY bot").fetchall():
         mine = {k: v for k, v in TB.own(_json(row["config"], {})).items() if v is not None}
         if not mine or ("turn_budget", "budget:" + row["bot"]) in done:
             continue
@@ -568,11 +569,11 @@ def _convert_one(c, who, mid, obj, group_done):
         _mark(c, "turn_budget", obj["id"], mid, None)
         return None
     if kind == "budget_bot":
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (args["bot"],)).fetchone()
+        row = c.execute(BS.ONE_SQL, (args["bot"],)).fetchone()
         declared = _json(row["config"] if row else None, {})
         declared.update(args["values"])
-        c.execute("UPDATE bot_config SET config=?, revision=revision+1 WHERE bot=?",
-                  (json.dumps(declared, sort_keys=True), args["bot"]))
+        BS.write(c, args["bot"], declared)
+        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (args["bot"],))
         _mark(c, "turn_budget", obj["id"], mid, None)
         return None
     raise AssertionError(kind)
@@ -1332,7 +1333,7 @@ def pending(c):
 
     add("turn_budget", int(low(_json(_meta(c, TB.TEAM_KEY), {}))))
     if _table(c, "bot_config"):
-        add("turn_budget", sum(low(_json(r[0], {})) for r in c.execute("SELECT config FROM bot_config")))
+        add("turn_budget", sum(low(_json(r[0], {})) for r in c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}")))
     if team_rules.load(c).get("stale_review") and ("system_job", "job:stale_review") not in done:
         add("system_job", 1)
     row = bots.get(strategy_bot.SLUG)

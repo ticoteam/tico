@@ -8,6 +8,7 @@ from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.test_api import api, get  # noqa: F401
 from backend.tests.test_dev_ticket_rules import dev_type
+from backend import bot_settings as BS
 
 HEAD = "a" * 40
 
@@ -16,8 +17,7 @@ def board(c, profile="manager"):
     found = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
     typ = H.type_get(c, found[0]) if found else dev_type(c)
     c.execute("UPDATE task_types SET manager='coo' WHERE id=?", (typ["id"],))
-    c.execute("UPDATE bot_config SET config=? WHERE bot='coo'",
-              (encode({"name": "coo", "runtime": "fake", "status": "active", "profile": profile}),))
+    BS.write(c, 'coo', {'name': 'coo', 'runtime': 'fake', 'status': 'active', 'profile': profile})
     if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
         c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) VALUES('r1','box','ana','h',?,?)",
                   (H.now(), H.now()))
@@ -25,7 +25,7 @@ def board(c, profile="manager"):
 
 
 def profile(c, slug, name):
-    c.execute("UPDATE bot_config SET config=json_set(config,'$.profile',?) WHERE bot=?", (name, slug))
+    BS.update(c, slug, {'profile': name})
 
 
 def settled(c):

@@ -8,6 +8,7 @@ import os
 import sqlite3
 
 from . import auto_tasks, hubdb as H, task_privacy as privacy
+from . import bot_settings as BS
 
 EVENT = 'task.assignment-rewake'
 WAKE_HOURS = 1
@@ -230,8 +231,8 @@ def _bot_state(c, bot, settings):
     owner = H.bot(c, bot)
     if owner and owner['state'] != 'active':
         return owner['state'], None
-    config = c.execute(f"SELECT bc.config,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
-                       "FROM bot_config bc WHERE bc.bot=?", (bot,)).fetchone()
+    config = c.execute(f"SELECT {BS.CONFIG} AS config,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
+                       f"FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (bot,)).fetchone()
     runner = c.execute('SELECT r.* FROM assignments a JOIN runners r ON r.id=a.runner_id '
                        'WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
     if not runner:

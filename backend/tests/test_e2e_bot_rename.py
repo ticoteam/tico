@@ -15,6 +15,7 @@ from backend.store import encode
 from backend.tests.test_api import api, assign, get, headers, post  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from runner.tests.test_conformance import MODELS, Computer, reply_to, rust_binary, until  # noqa: F401
+from backend import bot_settings as BS
 
 pytestmark = pytest.mark.slow
 
@@ -33,11 +34,11 @@ def test_a_new_bot_runs_in_its_named_folder_and_keeps_it_after_a_rename(api, mac
     bot = get(api, "bots/sales-helper")["id"]
     assert uuid.UUID(bot).version == 7
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = BS.read(c, bot)
         assert config["folder"] == "bot-sales-helper"           # named once, from the slug it was made with
         config.update({"runtime": machine.runtime, "harness": "claude", "model": MODELS["claude"],
                        "model_managed_by": None, "status": "active"})
-        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), bot))
+        BS.write(c, bot, config)
         placed = c.execute("SELECT generation FROM assignments WHERE bot=?", (bot,)).fetchone()
     # placed on this computer by its slug (it may already be placed by its creation); stored by its id
     assign(api, machine.registration, "sales-helper", generation=placed[0] if placed else 0)

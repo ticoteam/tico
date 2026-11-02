@@ -25,6 +25,7 @@ def _harness_name(runtime):
     return HARNESS_NAMES.get(runtime) or str(runtime).title()
 from .store import H, Problem, readiness_document
 from .views import roster
+from . import bot_settings as BS
 
 QUEUE_MINUTES = 15          # work that has waited this long on a computer that is up is stuck
 PERSON_QUEUE_MINUTES = 2    # a person's own message, sooner: someone is sitting there waiting for the reply
@@ -113,8 +114,8 @@ def _login_dependencies(c, settings):
     from .harnesses import harness_caps, normalize_fallback, resolve_harness
     from .shared_bots import follow
     record, found = providers.load(c, settings), {}
-    for row in c.execute("SELECT a.runner_id,a.bot,bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
-                         "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
+    for row in c.execute(f"SELECT a.runner_id,a.bot,{BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                         f"AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN}"):
         config = providers.fill(record, follow(c, row['bot'], H._json(row['config'], {}) or {}))
         fallback = normalize_fallback(config.get('fallback')) or {}
         for choice in (config, fallback):
@@ -264,7 +265,8 @@ def harness_denies(c, settings):
     configs = {}
     for part in H.chunks(bots):
         configs.update((r["bot"], r) for r in c.execute(
-            f"SELECT bot,repo,config FROM bot_config WHERE bot IN ({','.join('?' * len(part))})", part))
+            f"SELECT bot,repo,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot IN ({','.join('?' * len(part))})",
+            part))
     out = []
     for bot, rest in reported:
         prefixes = [p.strip() for p in rest.split(",") if p.strip()]
@@ -864,7 +866,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     for part in H.chunks(sorted({row["bot"] for row in rows})):
         marks = ",".join("?" * len(part))
         found = {r["bot"]: r for r in c.execute(
-            f"SELECT bot,config,owner_id FROM bot_config WHERE bot IN ({marks})", part)}
+            f"SELECT bot,{BS.CONFIG} AS config,owner_id FROM bot_config bc {BS.JOIN} WHERE bot IN ({marks})", part)}
         prime(c, readiness.CONFIG_SQL, {(s,): found.get(s) for s in part})
         prime(c, OPERATOR_SQL, {(s,): found.get(s) for s in part})
     out = []

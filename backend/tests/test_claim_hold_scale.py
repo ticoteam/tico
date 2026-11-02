@@ -16,6 +16,7 @@ import pytest
 from backend import auto_tasks, execution, flight, org_turns
 from backend.store import H, encode, _pooled
 from backend.tests.test_api import api, assign, headers, post, runner  # noqa: F401
+from backend import bot_settings as BS
 
 BOTS, COMPUTERS, ROUTINES, ROUNDS, LAPSES = 102, 12, 291, 30, 3
 
@@ -26,8 +27,8 @@ def seed(api):
     with store.transaction() as c:
         H.sync_registry(c, {s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs}, [])
         for s in slugs:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
-                      (s, encode({"name": s, "runtime": "fake"})))
+            c.execute("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", (s,))
+            BS.write(c, s, {'name': s, 'runtime': 'fake'})
     computers = [runner(api, label=f"Synthetic {n}") for n in range(COMPUTERS)]
     places = {}
     for i, s in enumerate(slugs):

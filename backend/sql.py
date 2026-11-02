@@ -102,6 +102,7 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
         out["message_mentions"] = {"actor": masked("actor", member(said))}
     if people or groups:
         out["bot_config"] = bot_config_masks(people, bare, groups)
+        out["bot_settings"] = bot_settings_masks(people, bare, groups)
     if people:
         out["conversations"] = {"participants": (
             "CASE WHEN source.participants IS NULL OR NOT json_valid(source.participants) THEN NULL "
@@ -119,8 +120,7 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
 
 def bot_config_masks(people, bare, groups):
     """bot_config columns less the people (`human:<id>` in `people`, bare ids in `bare`) and groups the caller may
-    not see: ids read '', owner lists drop them, and the configuration loses a `team`, `reports_to` or `owner_id`
-    naming one."""
+    not see: ids read '' and owner lists drop them."""
     nobody = "(SELECT NULL WHERE 0)"              # an IN list that matches nothing
     actors, ids, teams = qlist(people) if people else nobody, qlist(bare) if bare else nobody, \
         qlist(groups) if groups else nobody
@@ -136,12 +136,19 @@ def bot_config_masks(people, bare, groups):
         out[column] = (f"CASE WHEN source.{column} IS NULL OR NOT json_valid(source.{column}) THEN source.{column} "
                        f"ELSE (SELECT json_group_array(value) FROM json_each(source.{column}) "
                        f"WHERE value NOT IN {ids} AND value NOT IN {actors}) END")
-    out["config"] = (
-        "CASE WHEN source.config IS NULL OR NOT json_valid(source.config) THEN source.config "
-        "ELSE json_patch(source.config, (SELECT json_group_object(key, NULL) FROM json_each(source.config) "
-        f"WHERE (key='team' AND value IN {teams}) OR (key IN ('reports_to','operator') "
-        f"AND (value IN {ids} OR value IN {actors})))) END")
     return out
+
+
+def bot_settings_masks(people, bare, groups):
+    """bot_settings less the people and groups the caller may not see: the declaration's other keys (`extra`) lose a
+    `team`, `reports_to` or `operator` naming one."""
+    nobody = "(SELECT NULL WHERE 0)"
+    actors, ids, teams = qlist(people) if people else nobody, qlist(bare) if bare else nobody,         qlist(groups) if groups else nobody
+    return {"extra": (
+        "CASE WHEN source.extra IS NULL OR NOT json_valid(source.extra) THEN source.extra "
+        "ELSE json_patch(source.extra, (SELECT json_group_object(key, NULL) FROM json_each(source.extra) "
+        f"WHERE (key='team' AND value IN {teams}) OR (key IN ('reports_to','operator') "
+        f"AND (value IN {ids} OR value IN {actors})))) END")}
 
 
 def unsettled_watched(c, inner):
@@ -432,7 +439,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
                       ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
         "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"), "bot_status_history": bots_visible("bot"),
-        "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_control": bots_visible("bot"),
+        "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_settings": bots_visible("bot_id"),
+        "bot_control": bots_visible("bot"),
         "bot_transitions": bots_visible("bot"), "assignments": bots_visible("bot"),
         "schedule_config": by_schedule, "schedule_occurrences": f"{by_schedule} AND (task_id IS NULL OR {by_task})",
         "turns": f"{bots_visible('bot')} AND (message_id IS NULL OR {by_message}) AND "

@@ -19,6 +19,7 @@ from backend.blobs import register
 from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
 from backend.tests.test_org_rules import as_bot, org
+from backend import bot_settings as BS
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 CONTRACT = ("Acme Vendor Terms\n\n4. Messaging\n\nCustomer messages must include an opt-out line in every send. "
@@ -29,7 +30,8 @@ def counsel_on(api):
     """Counsel is built in and active, as onboarding makes it: a bot row, a config, and its own token."""
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('tico-counsel','{}','','ana')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES('tico-counsel','','ana')")
+        BS.write(c, 'tico-counsel', {})
     as_bot(api, "tico-counsel", "counsel-test")
 
 
@@ -570,7 +572,8 @@ def test_another_bot_cannot_cite_a_file_it_cannot_read(api):
     read_document(api, file_id)
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('scout', 'scout', 'Scout', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('scout','{}','','ana')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES('scout','','ana')")
+        BS.write(c, 'scout', {})
     as_bot(api, "scout", "scout-test")
     r = api.post("/api/v2/rules", headers=headers("scout-test"), json={
         "kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}, "source_id": source(api),
@@ -1019,7 +1022,7 @@ def test_a_link_read_is_private_to_its_requester_and_counsel(api, monkeypatch):
 def test_counsel_tasks_are_private_by_default(api):
     counsel_on(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='tico-counsel'", (json.dumps({"template": "tico-counsel"}),))
+        BS.write(c, 'tico-counsel', {'template': 'tico-counsel'})
     with api.app.state.store.read() as c:
         assert H.private_tasks_default(c, "bot:tico-counsel") is True
 
@@ -1301,8 +1304,8 @@ def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on
     from backend.tests.test_api import assign, claim, runner
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('tico-counsel', ?, '', 'ana')",
-                  (json.dumps({"template": "tico-counsel", "session": "bot"}),))
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES('tico-counsel','','ana')")
+        BS.write(c, 'tico-counsel', {'template': 'tico-counsel', 'session': 'bot'})
         task = H.task_create(c, "human:ana", "Read the synthetic contract", "Use only fixture text.",
                              "bot:tico-counsel", lint=False)["id"]
     r = runner(api)

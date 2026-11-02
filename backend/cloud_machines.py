@@ -97,6 +97,7 @@ from clients.gateway import user_agent
 
 from . import cloud_access, outbound_tls, releases
 from .store import H, Problem, digest
+from . import bot_settings as BS
 
 log = logging.getLogger(__name__)
 
@@ -312,7 +313,7 @@ def default_placement(c, bot):
     """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES or a bot in an
     OWN_DEPARTMENTS department of the team chart (its group, or its manager's up the chain), the shared one for the
     rest. Read once, when its row is made: moving it on the chart later moves no machine."""
-    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     try:
         config = json.loads(found["config"] or "{}") if found else {}
     except ValueError:

@@ -22,6 +22,7 @@ from .statuses import PARKED_SQL
 from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
 from .config import Settings
+from . import bot_settings as BS
 
 # The wait after a usage limit whose provider gave no reset time; a reported reset is used instead.
 LIMIT_COOLDOWN = 1800        # seconds a bot waits after its runtime reported a usage limit
@@ -338,7 +339,7 @@ def ran_another_model(c, settings, attempt):
     if task_models.off_bot_model(c, attempt["id"]):
         return False
     from .shared_bots import follow
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (attempt["bot_id"],)).fetchone()
+    row = c.execute(BS.ONE_SQL, (attempt["bot_id"],)).fetchone()
     now = providers.bot_choice(c, settings, follow(c, attempt["bot_id"], json.loads(row[0]) if row and row[0] else {}))
     handed = c.execute("SELECT handed_runtime,handed_model FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
     if not handed or handed["handed_runtime"] is None:
@@ -348,7 +349,7 @@ def ran_another_model(c, settings, attempt):
 
 def model_choice(c, settings, bot):
     """The (runtime, model) the bot's own turns are handed now."""
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     return tuple(providers.bot_choice(c, settings, json.loads(row[0]) if row and row[0] else {}))
 
 
@@ -428,7 +429,7 @@ def fallback_takes(c, settings, bot):
     place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
     if not place or not place["runner_id"]:
         return False
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     config = follow(c, bot, json.loads(row[0]) if row and row[0] else {})
     return fallback_choice(c, settings, place["runner_id"], bot, config) is not None
 
@@ -441,7 +442,7 @@ def lift_limited_on_computer(c, settings, actor, runner_id, runtime):
     record = providers.load(c, settings)
     for row in c.execute("SELECT s.bot FROM bot_status s JOIN assignments a ON a.bot=s.bot "
                          "WHERE s.state='limited' AND a.runner_id=? ORDER BY s.bot", (runner_id,)).fetchall():
-        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (row[0],)).fetchone()
+        config = c.execute(BS.ONE_SQL, (row[0],)).fetchone()
         filled = providers.fill(record, follow(c, row[0], json.loads(config[0]) if config and config[0] else {}))
         if runtime == filled.get("runtime") or runtime in model_subscriptions.turn_runtimes(filled):
             lift_after_connection_change(c, settings, actor, row[0])
@@ -497,7 +498,7 @@ def task_goal(c, bot, config, task):
 def current_task_goal(c, bot, task):
     """task_goal with the bot's config as its turns read it (shared_bots.follow)."""
     from .shared_bots import follow
-    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     return task_goal(c, bot, follow(c, bot, json.loads(found[0] or "{}")) if found else {}, task)
 
 
@@ -829,7 +830,7 @@ def retry_facts(c, job, started, finished):
     the review card that recommends a person's choice (`review_jobs`), so the two can never disagree: its recorded
     calls, the ones that can change things, approvals it used up, whether its host's silence proves anything, how
     many times it has started, and named outside actions that can hold a computer-reported restart."""
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (job['bot_id'],)).fetchone()
+    config = c.execute(BS.ONE_SQL, (job['bot_id'],)).fetchone()
     declared = json.loads(config[0]) if config else {}
     calls = recorded_tools(c, job['attempt_id'])
     acted = sorted({call['tool'] for call in calls if call['tool'] not in READ_ONLY_TOOLS})
@@ -1595,7 +1596,7 @@ def limit_lifted(c, settings, bot, attempt_id, finished):
     if (not cooling_off(c, bot) and (hold.get("until") or "") <= now
             and not any(at and at > H.parse_ts(now) for at in named)):
         return "reset"
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     config = json.loads(row[0] or "{}") if row else {}
     place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
     if (isinstance(config.get("fallback"), dict) and config["fallback"].get("harness") and place and place["runner_id"]
@@ -1644,7 +1645,7 @@ def clear_limits(c, settings, actor, bot):
     from .shared_bots import follow
 
     def config(slug):
-        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         return follow(c, slug, json.loads(row[0]) if row and row[0] else {})
 
     def runtime(slug):
@@ -1673,7 +1674,7 @@ def own_login_hold(c, settings, bot):
     not `limited`, its work going on on a fallback. The bot's config is the one a claim runs (shared_bots.follow)."""
     from .shared_bots import follow
     place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
-    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     if not place or not place["runner_id"] or not row:
         return {}
     config = follow(c, bot, json.loads(row[0] or "{}"))
@@ -2237,8 +2238,8 @@ def bot_refusal(c, settings, runner_id, bot):
 
 
 RUNNER_SQL = "SELECT * FROM runners WHERE id=?"
-CLAIM_CONFIG_SQL = (f"SELECT bc.config,{DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
-                    "FROM bot_config bc WHERE bc.bot=?")
+CLAIM_CONFIG_SQL = (f"SELECT {BS.CONFIG} AS config,{DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
+                    f"FROM bot_config bc {BS.JOIN} WHERE bc.bot=?")
 
 
 def queued_jobs_sql(bots=None):
@@ -2264,7 +2265,7 @@ def prime_claimables(c, bots, first=3):
     for part in H.chunks(sorted(set(bots))):
         marks = ",".join("?" * len(part))
         found = {r["bot"]: r for r in c.execute(
-            f"SELECT bc.bot,bc.config,{DRAINING_SQL.replace('a.bot', 'bc.bot')} draining FROM bot_config bc "
+            f"SELECT bc.bot,{BS.CONFIG} AS config,{DRAINING_SQL.replace('a.bot', 'bc.bot')} draining FROM bot_config bc {BS.JOIN} "
             f"WHERE bc.bot IN ({marks})", part)}
         prime(c, CLAIM_CONFIG_SQL, {(s,): found.get(s) for s in part})
         prime(c, readiness.CONFIG_SQL, {(s,): found.get(s) for s in part})
@@ -2695,8 +2696,8 @@ class Execution:
         runner = self.runner(c, who)
         # The environment owner hosts any bot; every other operator hosts only their own.
         owner = self.auth.owner_id(c)
-        rows = c.execute("SELECT a.*,b.state,bc.config,bc.owner_id,bc.onboarding_state FROM assignments a "
-                         "JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot "
+        rows = c.execute(f"SELECT a.*,b.state,{BS.CONFIG} AS config,bc.owner_id,bc.onboarding_state FROM assignments a "
+                         f"JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} "
                          "WHERE a.runner_id=? ORDER BY a.bot", (who.runner_id,)).fetchall()
         result = []
         from .views import roster
@@ -2711,7 +2712,7 @@ class Execution:
         def load(slugs):
             for part in H.chunks(slugs):
                 configs.update((r["bot"], r) for r in c.execute(
-                    "SELECT bot,config,repo,created_by FROM bot_config WHERE bot IN (%s)" % ",".join("?" * len(part)), part))
+                    f"SELECT bot,{BS.CONFIG} AS config,repo,created_by FROM bot_config bc {BS.JOIN} WHERE bot IN (%s)" % ",".join("?" * len(part)), part))
         load([row["bot"] for row in rows])
         load(sorted({source_of(_json(r["config"])) for r in configs.values()} - {""} - set(configs)))
         app, creators = (_github_app(c),), {}
@@ -3119,8 +3120,8 @@ class Execution:
         # holding the writer. Resolve its current bot, state and hold here.
         queued = ("a.bot=(SELECT bot_id FROM jobs WHERE id=? AND state='queued' AND held=0)" if job_id is not None else
                   "EXISTS(SELECT 1 FROM jobs j WHERE j.bot_id=a.bot AND j.state='queued' AND j.held=0)")
-        for row in c.execute(f"SELECT a.bot,bc.config,{DRAINING_SQL} draining FROM assignments a "
-                             "JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot "
+        for row in c.execute(f"SELECT a.bot,{BS.CONFIG} AS config,{DRAINING_SQL} draining FROM assignments a "
+                             f"JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} "
                              "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?) "
                              f"AND {queued}",
                              (who.runner_id, only, only, *((job_id,) if job_id is not None else ()))).fetchall():
@@ -3567,7 +3568,7 @@ class Execution:
             task = H.give_task_room(c, task)
         from .shared_bots import follow
         followed = follow(c, row["bot_id"], json.loads(
-            c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()[0]))
+            c.execute(BS.ONE_SQL, (row["bot_id"],)).fetchone()[0]))
         if isinstance(live_ref, dict):
             # A live-meeting reply runs on its meeting's model (backend/live_meetings.py turn_config), not the bot's.
             from .live_meetings import turn_config
@@ -4304,7 +4305,7 @@ class Execution:
         c.execute("UPDATE attempts SET thread_id=? WHERE id=?", (thread_id, row["id"]))
         c.execute("UPDATE turns SET thread_id=? WHERE id=?", (thread_id, row["id"]))
         from .shared_bots import follow
-        config = follow(c, row["bot_id"], json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()[0]))
+        config = follow(c, row["bot_id"], json.loads(c.execute(BS.ONE_SQL, (row["bot_id"],)).fetchone()[0]))
         runtime, model = providers.bot_choice(c, self.store.settings, config)
         if ran := task_models.handed_out(c, row["id"]):
             # Its thread is the task model's, kept under that model, never as the bot's own session.
@@ -4441,7 +4442,7 @@ class Execution:
         if lanes:
             from .shared_bots import follow
             followed = follow(c, attempt["bot_id"], json.loads(
-                c.execute("SELECT config FROM bot_config WHERE bot=?", (attempt["bot_id"],)).fetchone()[0]))
+                c.execute(BS.ONE_SQL, (attempt["bot_id"],)).fetchone()[0]))
         # A task turn whose message stayed in the chat the task moved out of (H.give_task_room) also takes
         # follow-ups from the task's own room; the lane and privacy checks below apply to both.
         task_room = ((H.task(c, origin_task) or {}).get("conversation_id")
@@ -5062,7 +5063,7 @@ class Execution:
         rejected = body.outcome == "failed" and body.auth_rejected is not None and not stopped
         if retryable and body.subscription_unavailable:
             from .repositories import save_metadata
-            config = c.execute("SELECT config FROM bot_config WHERE bot=?", (row['bot_id'],)).fetchone()
+            config = c.execute(BS.ONE_SQL, (row['bot_id'],)).fetchone()
             config = json.loads(config[0]) if config else {}
             primary_runtime = providers.bot_choice(c, self.store.settings, config)[0]
             save_metadata(c, f"subscription-unavailable:{row['bot_id']}",
@@ -5081,7 +5082,7 @@ class Execution:
         if reset_wait:
             # Do not try this empty fallback again in the same primary hold window.
             hold = own_login_hold(c, self.store.settings, row['bot_id'])
-            config_row = c.execute("SELECT config FROM bot_config WHERE bot=?", (row['bot_id'],)).fetchone()
+            config_row = c.execute(BS.ONE_SQL, (row['bot_id'],)).fetchone()
             hold.setdefault('failed_fallback', {})[row['bot_id']] = fallback_mark(json.loads(config_row[0] or '{}'))
             login_holds._save(c, hold)
         timeout_cut = run_limit_minutes(c, aid)
@@ -5178,7 +5179,7 @@ class Execution:
         else:
             checkpoint_task = H.task(c, turn_task_id) if turn_task_id else None
         if checkpoint_task:
-            bot_config = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
+            bot_config = c.execute(BS.ONE_SQL, (row["bot_id"],)).fetchone()
             # The followed config, as the turn's runner keyed it (a branch's session keys come from its original).
             from .shared_bots import follow
             followed_config = follow(c, row["bot_id"], json.loads(bot_config[0]) if bot_config else {})
@@ -5205,7 +5206,7 @@ class Execution:
                        checkpoint_task["id"]))
         usage_limits.after_run(c, row["bot_id"], self.store.settings.owner_email)
         finance_run_ended(c, row["job_id"], aid)
-        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
+        config = c.execute(BS.ONE_SQL, (row["bot_id"],)).fetchone()
         runtime, model = providers.bot_choice(c, self.store.settings, json.loads(config[0]) if config else {})
         # A turn on the bot's task model ran on that model (backend/task_models.py): its usage and limit are that login's.
         ran = None if check else task_models.handed_out(c, aid)

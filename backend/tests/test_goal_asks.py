@@ -9,6 +9,7 @@ from backend import goal_asks as GA
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_kpis import goal_with_kpi, log
+from backend import bot_settings as BS
 
 MANAGER = "bot:goal-manager"
 
@@ -19,7 +20,8 @@ def goal_manager(api, level=1):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('goal-manager','goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('goal-manager',NULL,'ana')")
+        BS.write(c, 'goal-manager', {})
     raise_level(api, level)
 
 

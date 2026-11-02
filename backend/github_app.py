@@ -34,6 +34,7 @@ from . import hubdb as H, task_privacy
 from .auth import validate_identity
 from .health import GITHUB_HEALTH, note_github_token
 from .store import Problem, digest, encode
+from . import bot_settings as BS
 
 log = logging.getLogger("tico.github_app")
 
@@ -1498,7 +1499,7 @@ def install_github_app(app, settings, store):
             access, moved = "none", None
         others = []
         if access != "none":
-            for r in c.execute("SELECT bc.bot,bc.config,b.slug FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+            for r in c.execute(f"SELECT bc.bot,{BS.CONFIG} AS config,b.slug FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
                                "WHERE b.state<>'archived' AND bc.bot<>? ORDER BY bc.bot", (bot,)).fetchall():
                 if json.loads(r["config"] or "{}").get("repo_access_mode") == "all":
                     others.append((H.bot(c, r["bot"]) or {}).get("display_name") or r["slug"])

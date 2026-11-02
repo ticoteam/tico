@@ -13,6 +13,7 @@ from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_company import bot, with_strategy_bot
 from backend.tests.test_goal_asks import asks, sync
 from backend.tests.test_strategy import draft, publish, ready, write
+from backend import bot_settings as BS
 
 ANSWERS = {"rivals": ["Globex", "Doing it by hand"], "factors": ["Price", "Setup time"],
            "scores": {"columns": ["Us", "Globex", "Doing it by hand"],
@@ -66,7 +67,8 @@ def librarian(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('librarian','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('librarian',NULL,'ana')")
+        BS.write(c, 'librarian', {})
     return bot(api, "librarian")
 
 

@@ -9,6 +9,7 @@ from backend import login_holds
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401 (fixture)
 from backend.tests.test_login_holds import CLAUDE, at, limit, providers_on, signed_in
+from backend import bot_settings as BS
 
 
 def revision(api, bot="ops"):
@@ -202,9 +203,9 @@ def test_after_the_gateways_cap_another_tico_model_waits_on_the_same_key(api, mo
     settings = api.app.state.store.settings
     with api.app.state.store.transaction() as c:
         for model, held in (("tico-mid-1.0", "gateway"), ("claude-haiku-5-5", "")):
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+            config = BS.read(c, 'ops')
             config.update({"model": model, "runtime": "pi" if held else "claude"})
-            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
+            BS.write(c, 'ops', config)
             assert execution.model_change_hold(c, settings, "ops") == held
 
 

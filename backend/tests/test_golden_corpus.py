@@ -19,6 +19,7 @@ from backend import docs
 from backend.store import H
 from backend.tests.test_api import api, headers, post  # noqa: F401
 from backend.tests.test_files import turn
+from backend import bot_settings as BS
 
 CORPUS = Path(__file__).parent / "fixtures" / "golden_corpus"
 KEPT = sorted((CORPUS / "kept").iterdir())
@@ -67,7 +68,8 @@ def _cases():
 def _librarian(c):
     c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
               "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-    c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id) VALUES('librarian','{}','ana')")
+    if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('librarian','ana')").rowcount:
+        BS.write(c, 'librarian', {})
 
 
 @pytest.fixture

@@ -4,6 +4,7 @@ from backend.events import prime_status_lines, status_line
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, post, ready  # noqa: F401
 from backend.tests.test_run_backoff import hold_bot, setup
+from backend import bot_settings as BS
 
 
 def lines(api, slugs, primed):
@@ -103,8 +104,8 @@ def busy(api, machine, first, count, live=1):
         H.sync_registry(c, {**bots, **{s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs}},
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for slug in slugs:
-            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,?)",
-                      (slug, encode({"name": slug, "runtime": "fake"}), "ana"))
+            c.execute('INSERT INTO bot_config(bot,owner_id) VALUES(?,?)', (slug, 'ana'))
+            BS.write(c, slug, {'name': slug, 'runtime': 'fake'})
     for slug in slugs:
         assign(api, machine, slug)
     with store.transaction() as c:

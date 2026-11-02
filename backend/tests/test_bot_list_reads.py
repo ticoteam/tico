@@ -13,6 +13,7 @@ from backend.settings_admin import SettingsAdmin, compact_at as compact_at_of
 from backend.store import H, P, encode, repo_url
 from backend.tests import test_api as T
 from backend.tests.test_api import api  # noqa: F401
+from backend import bot_settings as BS
 
 BASE = ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
 SEE_ONLY = ("slug", "display_name", "state", "description", "team", "owner_id", "reports_to", "owners",
@@ -24,7 +25,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     """The bot list's row as it was read before backend/bot_rows.py: one bot at a time."""
     row = {k: v for k, v in bot.items() if k not in ("token_hash", "cwd", "thread_id")}
     config = c.execute("SELECT team,owner_id,owner_ids,revision,description,reports_to,repo,"
-                       "thread_mode,config,onboarding_state FROM bot_config WHERE bot=?", (bot["slug"],)).fetchone()
+                       f"thread_mode,{BS.CONFIG} AS config,onboarding_state FROM bot_config bc {BS.JOIN} WHERE bot=?", (bot["slug"],)).fetchone()
     assignment = c.execute("SELECT a.bot,a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,"
                            "r.revoked_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
                            "WHERE a.bot=?", (bot["slug"],)).fetchone() if level["read"] else None
@@ -122,8 +123,8 @@ def add_bots(api, extra):
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in (*BASE, *extra)}
         H.sync_registry(c, bots, {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for slug, config in extra.items():
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                      (slug, encode({**bots[slug], **config}), None, "ana"))
+            c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, None, 'ana'))
+            BS.write(c, slug, {**bots[slug], **config})
 
 
 def test_bot_list_answers_as_read_one_bot_at_a_time(api):
@@ -136,8 +137,7 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
         T.restrict(c, "cpo", see={"people": ["ana", "cara"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
         c.execute("UPDATE bot_config SET reports_to='inbox' WHERE bot='doc-updater'")
         c.execute("UPDATE bot_config SET owner_ids=? WHERE bot='finance'", (encode(["ben", "nobody"]),))
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                  (encode({"name": "ops", "runtime": "fake", "private_tasks_default": True, "model": "m2"}),))
+        BS.write(c, 'ops', {'name': 'ops', 'runtime': 'fake', 'private_tasks_default': True, 'model': 'm2'})
         c.execute("INSERT INTO bot_control(bot,draining) VALUES('finance',1)")
         c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by,last_seen_at) VALUES(?,?,?,?,?,?)",
                   ("scout", "hermes", "h", H.now(), "human:ana", H.now()))

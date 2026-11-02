@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from backend import task_rules as R
 from backend.store import H
 from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
+from backend import bot_settings as BS
 
 AT = datetime(2026, 10, 24, 12, tzinfo=timezone.utc)
 
@@ -153,7 +154,8 @@ def test_bot_department_rights_and_aged_holds_do_not_starve_eligible_tasks(api, 
     _, _, attempt = setup_attempt(api)
     token = attempt['token']
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET team='engineering',config=json_set(config,'$.team','engineering') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET team='engineering' WHERE bot='ops'")
+        BS.update(c, 'ops', {'team': 'engineering'})
     rule = post(api, 'task-rules', {'name': 'Close exports'}, token=token)['job']
     assert rule['department']['id'] == 'engineering' and rule['can_change']
     put(api, 'task-rules/' + rule['key'], {'on': False}, token=token)

@@ -240,7 +240,7 @@ def _would_queue(conn, actor, target, refs):
     live = refs.get("live")
     if isinstance(live, dict) and live.get("kind") in ("transcript", "decision", "tool"):
         return False
-    row = conn.execute("SELECT json_extract(config,'$.harness') FROM bot_config WHERE bot=?",
+    row = conn.execute("SELECT harness FROM bot_settings WHERE bot_id=?",
                        (str(target)[4:],)).fetchone()
     return not (row and row[0] in EXTERNAL_HARNESSES)
 

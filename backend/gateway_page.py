@@ -6,6 +6,7 @@ fallback or its task model."""
 import json
 
 from . import gateway_connection, gateway_tiers, providers
+from . import bot_settings as BS
 
 
 def catalog(c, settings=None):
@@ -27,7 +28,7 @@ def picks(c, settings=None):
     """The Gateway picks the active bots use, most used first."""
     record = providers.load(c, settings)
     counts = {}
-    for row in c.execute("SELECT b.slug, bc.config FROM bots b JOIN bot_config bc ON bc.bot=b.id "
+    for row in c.execute(f"SELECT b.slug, {BS.CONFIG} AS config FROM bots b JOIN bot_config bc ON bc.bot=b.id {BS.JOIN} "
                          "WHERE b.state<>'archived'"):
         try:
             config = json.loads(row["config"] or "{}")

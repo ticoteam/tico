@@ -5,6 +5,7 @@ import json
 from . import bot_access as A
 from . import read_cache
 from .store import H, P, Problem, encode
+from . import bot_settings as BS
 
 
 PERSONAL = "personal"
@@ -68,7 +69,7 @@ def thread_mode(c, bot, row=None):
     `row` is the bot's bot_config row when the caller has read it already."""
     if bot == "coo":
         return PERSONAL
-    row = row or c.execute("SELECT thread_mode,config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = row or c.execute(f"SELECT bc.thread_mode,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bc.bot=?", (bot,)).fetchone()
     config = json.loads(row["config"] or "{}") if row else {}
     value = str((row["thread_mode"] if row else None) or config.get("thread_mode") or "").strip().lower()
     if value in (PERSONAL, SHARED):

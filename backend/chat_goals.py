@@ -7,6 +7,7 @@ from pydantic import Field
 
 from . import models as M, providers
 from .store import H, Problem, bot_readiness, readiness_document, encode
+from . import bot_settings as BS
 
 TICO_COMMANDS = [
     {"name": "goal", "args": "<objective>", "help": "Pin a goal the bot works toward", "kind": "tico",
@@ -37,7 +38,7 @@ def capabilities(c, auth, conv):
     if len(bots) != 1 or bots[0] == auth.settings.assistant_bot:
         return None, False, []
     bot = bots[0]
-    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     runtime, _ = providers.bot_choice(c, auth.settings, json.loads(config[0] or "{}") if config else {})
     row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()

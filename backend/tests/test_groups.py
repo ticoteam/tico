@@ -10,6 +10,7 @@ from backend import groups as Groups
 from backend import people as P
 from backend.store import H, encode
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
+from backend import bot_settings as BS
 
 EVERYONE = {"everyone": True, "people": [], "teams": [], "bots": []}
 
@@ -41,8 +42,8 @@ def add_bots(c, **bots):
             c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                       "VALUES(?,?,?,?,?,?,'','keeper','active',?)", (slug, slug, slug, "fake", "m", "", H.now()))
         c.execute("DELETE FROM bot_config WHERE bot=?", (slug,))
-        c.execute("INSERT INTO bot_config(bot,config,owner_id,reports_to) VALUES(?,?,?,?)",
-                  (slug, encode({"name": slug, **config}), "ana", reports_to))
+        c.execute('INSERT INTO bot_config(bot,owner_id,reports_to) VALUES(?,?,?)', (slug, 'ana', reports_to))
+        BS.write(c, slug, {'name': slug, **config})
 
 
 def teams_now(api):
@@ -133,7 +134,7 @@ def test_teams_org_groups_and_person_teams_become_groups_and_no_bot_changes_grou
     assert stored["org_groups"]["success-team"] == {"name": "Success Team"}
     assert {p["id"]: p["team"] for p in stored["people"]} == {"ana": "marketing", "ben": "success-team", "cara": "product"}
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='coach'").fetchone()[0])["team"] == ""
+        assert BS.read(c, 'coach')["team"] == ""
         assert c.execute("SELECT team FROM bot_config WHERE bot='design'").fetchone()[0] == "product"
         assert P.by_team(Groups._roster(c))["success-team"] == ["ben"]
         assert H.human(c, "ben")["teams"] == ["success-team"]

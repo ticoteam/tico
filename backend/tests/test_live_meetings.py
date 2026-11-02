@@ -13,6 +13,7 @@ from backend.auth import Identity
 from backend.store import H, digest, encode
 from backend.tests.test_api import api, assign, get, headers, post, restrict, runner  # noqa: F401
 from backend.tests.test_new_bot_flows import create_bot
+from backend import bot_settings as BS
 
 
 @pytest.fixture
@@ -435,9 +436,9 @@ def test_attachment_requires_write_and_keeper_delivery_keeps_human_contact_polic
     with live.app.state.store.transaction() as c:
         restrict(c, "ops", see={"people": ["cara"]}, read={"people": ["cara"]},
                  write={"people": ["ana"], "bots": ["finance"]})
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = BS.read(c, 'ops')
         config["bot_contact"] = "tasks"
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
+        BS.write(c, 'ops', config)
 
     meeting = connect(live, title="Write-authorized contact")
     mid = meeting["id"]
@@ -790,7 +791,7 @@ def test_each_meeting_is_its_own_thread_and_a_meetings_turns_continue_it(live):
     """A private meeting's words never reach another meeting or the bot's chats: each meeting and bot has one
     conversation, and its turns run on that conversation's own thread, whatever the bot's session setting."""
     with live.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.session','bot') WHERE bot='ops'")
+        BS.update(c, 'ops', {'session': 'bot'})
     private = post(live, "live-meetings", {"title": "Private A", "visibility": "private", "cooldown_seconds": 0})
     team = post(live, "live-meetings", {"title": "Team B", "cooldown_seconds": 0})
     for meeting in (private, team):
@@ -812,7 +813,7 @@ def test_each_meeting_is_its_own_thread_and_a_meetings_turns_continue_it(live):
     assert thread_of(first) == thread_of(second) == "conversation:" + first["conversation"]["id"]
     assert thread_of(other) == "conversation:" + other["conversation"]["id"] != thread_of(first)
     with live.app.state.store.read() as c:
-        own = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        own = BS.read(c, 'ops')
         kept = {row[0] for row in c.execute("SELECT conversation_id FROM live_meeting_bots WHERE bot='ops'")}
     from clients import sessions
     assert sessions.session_key(own, "ops", None, "any-direct-chat") == sessions.BOT_THREAD != thread_of(first)

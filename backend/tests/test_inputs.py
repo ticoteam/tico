@@ -4,6 +4,7 @@ import pytest
 
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner, setup_attempt, expire
 from backend.tests.test_member_bots import botops, turn, finish
+from backend import bot_settings as BS
 
 
 def test_interrupted_steered_question_is_not_silently_completed(api):
@@ -274,7 +275,7 @@ def test_a_persons_follow_up_in_their_botops_chat_joins_the_running_reply(api, b
     active = turn(api, botops, person="ana-test", text="Add a Software Engineer bot")
     post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, botops["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.harness','claude') WHERE bot='botops'")
+        BS.update(c, 'botops', {'harness': 'claude'})
     follow = post(api, "chat/botops", {"text": "Use Claude Opus 5.5, medium effort"}, token="ana-test")
     snapshot = get(api, f"conversations/{follow['conversation_id']}/snapshot", "ana-test")
     assert [m["id"] for m in post(api, f"attempts/{active['id']}/inputs", {}, botops["token"])["messages"]] == [follow["id"]]
@@ -287,7 +288,7 @@ def test_a_message_says_whether_it_steers_the_running_turn_and_stop_and_redirect
     r, origin, active = setup_attempt(api)
     post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.harness','gemini','$.runtime','gemini') WHERE bot='ops'")
+        BS.update(c, 'ops', {'harness': 'gemini', 'runtime': 'gemini'})
     earlier = post(api, "chat/ops", {"text": "And the March numbers"})
     redirect = post(api, "chat/ops", {"text": "Stop that; do the April numbers instead"})
     page = get(api, f"conversations/{origin['conversation_id']}/snapshot")
@@ -302,7 +303,7 @@ def test_a_message_says_whether_it_steers_the_running_turn_and_stop_and_redirect
     assert {m["id"]: m.get("delivery") for m in page["messages"]}[redirect["id"]]["mode"] == "redirect"
     # A steering host never folds the redirect into the turn it replaces.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.harness','claude','$.runtime','claude') WHERE bot='ops'")
+        BS.update(c, 'ops', {'harness': 'claude', 'runtime': 'claude'})
     assert [m["id"] for m in post(api, f"attempts/{active['id']}/inputs", {}, r["token"])["messages"]] == [earlier["id"]]
     post(api, f"attempts/{active['id']}/complete", {"outcome": "interrupted", "text": "", "last_seq": 0}, r["token"])
     nxt = claim(api, r)

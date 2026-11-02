@@ -10,6 +10,7 @@ from backend.store import H, Problem
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_memory_tidy import snapshot, proposal, run
 from backend.tests.test_tasks_board import bot_token
+from backend import bot_settings as BS
 
 
 @pytest.fixture
@@ -244,8 +245,7 @@ def test_undelivered_keep_lost_computer_is_refused_without_wedging_card(api, cha
 def test_delivery_only_contains_checkout_configuration_and_pending_retry_survives_expiry(api):
     rid, token = capable_computer(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
-                  (json.dumps({'repo': 'acme/bot-ops', 'shared_from': '', 'private_setting': 'synthetic-sensitive'}),))
+        BS.write(c, 'ops', {'repo': 'acme/bot-ops', 'shared_from': '', 'private_setting': 'synthetic-sensitive'})
         card = offer(c)
     path = 'memory-tidy/cards/' + card['id'] + '/decide'
     post(api, path, {'decision': 'keep'})

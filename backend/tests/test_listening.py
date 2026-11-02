@@ -6,6 +6,7 @@ import json
 from backend import listening as L
 from backend.store import H
 from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
+from backend import bot_settings as BS
 
 RECEIVERS = ("listening", "librarian", "content-social", "influencer", "sales-ops", "doc-updater", "recruiting")
 
@@ -28,8 +29,8 @@ def _bots(api):
                 c.execute("INSERT INTO bots (id, slug, display_name, runtime, model, effort, cwd, host, state, created_at) "
                           "VALUES (?,?,?,?,?,?,?,?,?,?)", (slug, slug, slug, "fake", "fake", "low", "", "keeper", "active", H.now()))
             if not c.execute("SELECT 1 FROM bot_config WHERE bot=?", (slug,)).fetchone():
-                c.execute("INSERT INTO bot_config (bot, config, team, owner_id, description, reports_to, repo) "
-                          "VALUES (?,?,?,?,?,?,?)", (slug, "{}", "marketing", "ana", slug, "cmo", "emp-" + slug))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id,description,reports_to,repo) VALUES(?,?,?,?,?,?)', (slug, 'marketing', 'ana', slug, 'cmo', 'emp-' + slug))
+                BS.write(c, slug, {})
 
 
 def _token(api, slug):

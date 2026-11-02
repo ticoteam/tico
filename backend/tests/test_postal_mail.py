@@ -15,6 +15,7 @@ from backend.tests.test_api import api, get, post, put  # noqa: F401
 from backend.tests.test_api import headers
 from backend.tests.test_hook_relay import hq, service  # noqa: F401
 from backend.tests.test_mcp import call
+from backend import bot_settings as BS
 
 SYSTEM = "hr_00000000000000a1"
 
@@ -78,7 +79,7 @@ def mail(api, hq, monkeypatch):
     svc.reader, svc.engine = Reader(), Decide()
     hq.relays[SYSTEM] = {"id": SYSTEM, "trigger_id": "_tico", "key": "hq", "system": True}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','finance-lead') WHERE bot='finance'")
+        BS.update(c, 'finance', {'template': 'finance-lead'})
     return fake
 
 
@@ -190,7 +191,7 @@ def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
     assert all("wire money" not in json.dumps(state["letter"]["summary"]) for state in api.app.state.postal_mail.engine.calls)
     # Without a Finance bot a bill goes to the owner.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config=json_remove(config,'$.template') WHERE bot='finance'")
+        BS.remove(c, 'finance', 'template')
     letter(api, "210", "bill")
     deliver(hq, "210")
     service(api).tick()

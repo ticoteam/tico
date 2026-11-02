@@ -1,6 +1,7 @@
 """Docs: internal docs (versions, locks, import, search) and linked docs (docs/docs.md)."""
 
 from backend.tests.test_api import api, assign, claim, headers, ready, runner  # noqa: F401  (the api fixture)
+from backend import bot_settings as BS
 
 ANA, BEN, CARA = "ana-test", "ben-test", "cara-test"      # owner, bot administrator, everyone else
 
@@ -157,7 +158,8 @@ def test_upgrade_repairs_generated_docs_once_and_queues_next_run_refresh(api):
         c.execute("DELETE FROM registry_metadata WHERE key='librarian_fix33'")
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('librarian','{}','ana')")
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('librarian','ana')")
+        BS.write(c, 'librarian', {})
         c.execute("UPDATE docs SET archived=1 WHERE id=?", (source["id"],))  # Older archive, stale cache.
         c.execute("UPDATE docs SET updated_by_id='bot:librarian' WHERE id=?", (faq["id"],))
     api.app.state.store.initialize(seed_market=False)

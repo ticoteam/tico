@@ -15,6 +15,7 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.execution import AWAKE_SETTLE
 from backend.store import H, encode
+from backend import bot_settings as BS
 
 
 def api_settings(tmp_path):
@@ -51,8 +52,8 @@ def api(tmp_path, api_database):
                 {"id": "cara", "email": "cara@acme.example"}]}),))
             for slug, config in bots.items():
                 product = slug in ("cpo", "product-design")
-                c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
-                          (slug, encode(config), "product" if product else None, "ben" if product else "ana"))
+                c.execute('INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)', (slug, 'product' if product else None, 'ben' if product else 'ana'))
+                BS.write(c, slug, config)
             # The company's mail bot is Ana's alone: nobody else sees it, reads it or writes to it.
             restrict(c, "inbox", people=["ana"])
             # A company with a fleet this size is long past first run; the wizard belongs to

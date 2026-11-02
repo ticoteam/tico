@@ -45,6 +45,7 @@ import re
 from clients import harness_manifests as manifests
 
 from .store import H, Problem
+from . import bot_settings as BS
 
 # The runtimes whose manifest has a [login] the runner can relay, and those whose CLI asks for a code to be pasted
 # back. A runner too old for one of them answers that browser sign-in is not available.
@@ -533,8 +534,8 @@ def _bots_on(c, rid, runtime, profile, settings, every):
     record = providers.load(c, settings)
     out = []
     active = "" if every else "AND b.state='active' "
-    for row in c.execute("SELECT a.bot, b.display_name, bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
-                         f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? "
+    for row in c.execute(f"SELECT a.bot, b.display_name, {BS.CONFIG} AS config FROM assignments a JOIN bots b ON b.id=a.bot "
+                         f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} WHERE a.runner_id=? "
                          "ORDER BY a.bot", (rid,)):
         try:
             config = providers.fill(record, follow(c, row["bot"], json.loads(row["config"] or "{}")))

@@ -32,6 +32,7 @@ from . import models as M
 from . import releases
 from . import recruit_rank as R
 from .store import Problem
+from . import bot_settings as BS
 
 CANDIDATES = 8
 CHART = "chart"                         # `description_by` for a chart model's text
@@ -736,7 +737,7 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
     and a cloud agent's add to a seat both land here, so they land the same way. Returns the setup task's id, if any."""
     from . import message_bots
     if card.get("session") == "task":
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.session','task') WHERE bot=?", (slug,))
+        BS.update(c, slug, {"session": "task"})
     if row["team"]:
         c.execute("UPDATE bot_config SET team=? WHERE bot=?", (row["team"], slug))
     declared = onboarding._declared(c, slug)

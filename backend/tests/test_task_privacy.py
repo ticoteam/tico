@@ -6,6 +6,7 @@ import pytest
 from backend import hubdb as H
 from backend import task_relations as TR
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post
+from backend import bot_settings as BS
 
 
 @pytest.mark.parametrize('requester,owner', [('human:ben', 'bot:cpo')])
@@ -55,9 +56,9 @@ def test_private_defaults_reassignment_and_human_publication(api):
     cpo = bot_token(api, 'cpo')
     with api.app.state.store.transaction() as c:
         for slug in ('ops', 'cpo'):
-            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+            config = BS.read(c, slug)
             config['private_tasks_default'] = True
-            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), slug))
+            BS.write(c, slug, config)
     assigned = post(api, 'tasks', {'owner': 'ops', 'title': 'Review the request', 'body': 'Review it.'})
     created = post(api, 'tasks', {'owner': 'cmo', 'title': 'Draft the response', 'body': 'Draft it.', 'private': False}, token=cpo)
     assert assigned['private'] and created['private']
@@ -112,7 +113,7 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
     with api.app.state.store.transaction() as c:
         counts = {name: c.execute('SELECT count(*) FROM ' + name).fetchone()[0]
                   for name in ('tasks', 'blobs', 'task_assets', 'bot_files')}
-        c.execute("UPDATE bot_config SET config=? WHERE bot='cpo'", (json.dumps({'template': 'general-counsel'}),))
+        BS.write(c, 'cpo', {'template': 'general-counsel'})
         c.execute("UPDATE tasks SET requester_id='human:missing' WHERE id=?", (orphan['id'],))
         c.execute("UPDATE tasks SET requester_id='keeper' WHERE id=?", (routine['id'],))
         # A database from before task privacy had no change log (backend/events.py) or parties counter (backend/row_clock.py).

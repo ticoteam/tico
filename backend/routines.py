@@ -15,7 +15,8 @@ from clients.manifest import tools_of
 from clients.routines import DEFAULT_ZONE, validate_schedules
 from . import people as P
 from .scheduler import next_due, stamp
-from .store import H, Problem, encode
+from .store import H, Problem
+from . import bot_settings as BS
 
 DEFAULT_TEXT = "Run this scheduled routine."
 # Every active bot looks at its own open tasks once a day, staggered across
@@ -232,7 +233,7 @@ def set_declared_mailbox(c, bot, address):
     address = str(address or "").strip().lower()
     if not MAILBOX.fullmatch(address):
         raise Problem("mailbox", "That is not an email address", 422)
-    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     if not found:
         raise Problem("not_found", "Bot not found", 404)
     config = json.loads(found["config"] or "{}")
@@ -244,7 +245,8 @@ def set_declared_mailbox(c, bot, address):
         gmail["identity"] = address
     config.pop("access", None)
     config["tools"] = tools
-    c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(config), bot))
+    BS.write(c, bot, config)
+    c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
 
 
 def message_bot_mailboxes(c, roster=None):
@@ -261,7 +263,7 @@ def message_bot_mailboxes(c, roster=None):
         row = H.bot(c, bot)
         if not row or row["state"] == "archived":
             continue
-        found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         try:
             config = json.loads(found["config"] or "{}") if found else {}
         except ValueError:
@@ -307,7 +309,7 @@ def token_mailboxes(c, bot, roster=None):
     if not who:
         return []
     boxes = message_bot_mailboxes(c, roster)
-    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     try:
         config = json.loads(found["config"] or "{}") if found else {}
     except ValueError:

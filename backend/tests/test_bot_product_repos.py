@@ -12,6 +12,7 @@ from backend.auth import Identity
 from backend.repositories import PRODUCT_GRANTS, metadata
 from backend.store import encode
 from backend.tests.test_github_app import api, gh, auth, botops_turn, connect, product_repo_request, runner_token  # noqa: F401
+from backend import bot_settings as BS
 
 PREVIEW = "/api/v2/github/product-repos/preview"
 ACCESS = "/api/v2/bots/cmo/repositories"
@@ -130,9 +131,8 @@ def test_a_chosen_bot_keeps_its_grants_and_bots_on_every_ticked_repo_are_named(a
     gh.repositories.append({"full_name": "Acme/tico"})            # the installation sees the ticked repository
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES('r-tico','Acme/tico',1,?)", (H.now(),))
-        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config=? WHERE bot='cpo'",
-                  (json.dumps({**config, "repo_access_mode": "all"}),))
+        config = BS.read(c, 'cpo')
+        BS.write(c, 'cpo', {**config, 'repo_access_mode': 'all'})
     assert api.put(ACCESS, json={"mode": "chosen", "chosen": [{"full_name": "Acme/tico", "access": "read"}],
                                  "create_product_repositories": True}, headers=auth()).status_code == 200
     made = product_repo_request(api, BODY, actor="bot-test", key="chosen-bot")

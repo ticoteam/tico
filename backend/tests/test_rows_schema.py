@@ -18,6 +18,7 @@ TABLES = {
     rows.ApprovalRow: "approvals",
     rows.AttemptEventRow: "attempt_events",
     rows.PrincipalRow: "principals",
+    rows.BotSettingsRow: "bot_settings",
 }
 
 

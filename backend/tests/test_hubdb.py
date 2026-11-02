@@ -19,6 +19,7 @@ from backend import marketing_tasks as MT
 from backend import strategy as S
 from backend import task_relations as TR
 from backend import wake_presets as WP
+from backend import bot_settings as BS
 
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex",
@@ -163,14 +164,15 @@ class GrowthRethink(unittest.TestCase):
         self.path = Path(self.dir.name) / "hub.db"
 
     def before_rethink(self):
-        """The file as the release before the rethink left it: every migration before it, and the strategy tables
-        store.py makes at startup."""
+        """The file as the release before the rethink left it: every migration before it (none after it: the runner
+        refuses one that sorts before a migration already applied), and the strategy tables store.py makes at
+        startup."""
         conn = sqlite3.connect(self.path, isolation_level=None)
         conn.row_factory = sqlite3.Row
         self.addCleanup(conn.close)
         every = migrations.files()
         with unittest.mock.patch.object(migrations, "files",
-                                        lambda directory=None: [m for m in every if m.version != "0035_growth_rethink"]):
+                                        lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]):
             H.migrate(conn)
         for statement in S.SCHEMA:
             conn.execute(statement)
@@ -432,10 +434,11 @@ class Rule5Tasks(HubCase):
         # Superseding its ask card exercises the server's versioned unblock path.
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
+        self.conn.execute(BS.TABLE)
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN access TEXT")
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN onboarding_state TEXT")
-        self.conn.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('cmo',?, 'ana')",
-                          (json.dumps({"bot_contact": "tasks"}),))
+        self.conn.execute("INSERT INTO bot_config(bot,owner_id) VALUES('cmo','ana')")
+        BS.write(self.conn, 'cmo', {'bot_contact': 'tasks'})
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
         H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
