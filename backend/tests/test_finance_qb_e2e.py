@@ -9,8 +9,10 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +131,7 @@ def test_an_order_and_an_estimate_are_stored_with_their_location_class_and_item(
 
 def test_a_connected_book_backfills_from_quickbooks_and_its_pnl_reads_by_location(books, fake_quickbooks):  # noqa: F811
     _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    _fake(fake_quickbooks, "POST", "/_fake/clock", {"now": AT})     # the book runs on AT's date, not the real one
     client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
     cid = _connection(books)
     _mirror(books, cid)
@@ -195,3 +198,45 @@ def test_a_query_answers_only_the_rows_its_where_clause_names(fake_quickbooks):
     assert [row["Id"] for row in widget] == ["40"]
     count = _read(fake_quickbooks, "SELECT COUNT(*) FROM Item WHERE Name = 'Widget'")["QueryResponse"]["totalCount"]
     assert count == 1
+
+
+def _cdc(base: str, entity: str, since: datetime) -> dict[str, Any]:
+    """A change feed read as the QuickBooks client sends it: entities and changedSince, answered with the fake's rows."""
+    stamp = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    url = f"{base}/v3/company/1234567/cdc?" + urllib.parse.urlencode({"entities": entity, "changedSince": stamp})
+    with _direct.open(urllib.request.Request(url, headers={"Authorization": "Bearer local-token"}), timeout=10) as reply:
+        return json.loads(reply.read())["CDCResponse"][0]["QueryResponse"][0]
+
+
+def test_the_change_feed_reports_writes_and_deletes_again_from_the_same_cursor_and_none_after_it(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", {**SEED, "Bill": [{"Id": "80", "SyncToken": "0",
+                                                                    "TxnDate": "2026-10-10", "Line": []}]})
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    made = client.send("item.create", {"name": "Gadget", "kind": "service", "active": True, "income": "Account:12",
+                                       "sku": "", "price": None, "day": "2026-10-10"}, "item:feed")
+    gone = client.send("bill.void", {"ext": "Bill:80", "revision": "0"}, "bill:feed-80")
+    assert made.ok and gone.ok, (made, gone)
+    first = _cdc(fake_quickbooks, "Item", hour_ago)
+    assert [row["Name"] for row in first["Item"]] == ["Gadget"]
+    assert _cdc(fake_quickbooks, "Item", hour_ago) == first                    # not consumed by the read
+    assert [(row["Id"], row.get("status")) for row in _cdc(fake_quickbooks, "Bill", hour_ago)["Bill"]] == [
+        ("80", "Deleted")]
+    assert _cdc(fake_quickbooks, "Item", datetime.now(timezone.utc) + timedelta(minutes=5)).get("Item", []) == []
+
+
+def test_a_change_feed_answer_holds_at_most_a_thousand_objects_per_entity(fake_quickbooks):
+    now = datetime.now(timezone.utc)
+    rows = [{"Id": str(i), "SyncToken": "0", "MetaData": {"LastUpdatedTime": (now - timedelta(minutes=5)).isoformat()}}
+            for i in range(1001)]
+    _fake(fake_quickbooks, "POST", "/_fake/change", {"Invoice": rows})
+    assert len(_cdc(fake_quickbooks, "Invoice", now - timedelta(hours=1))["Invoice"]) == 1000
+
+
+def test_a_change_feed_read_from_past_thirty_days_is_refused(fake_quickbooks):
+    since = (datetime.now(timezone.utc) - timedelta(days=31)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    url = f"{fake_quickbooks}/v3/company/1234567/cdc?" + urllib.parse.urlencode({"entities": "Item",
+                                                                              "changedSince": since})
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        _direct.open(urllib.request.Request(url, headers={"Authorization": "Bearer local-token"}), timeout=10)
+    assert refused.value.code == 400

@@ -7,6 +7,8 @@ Control endpoints under /_fake/ are not QuickBooks':
   POST /_fake/seed     {"Account": [...], "Vendor": [...], "Item": [...], ...} adds records of any entity
   POST /_fake/change   the same shape: records the change feed (CDC) reports next time it is read
   POST /_fake/expire   the next call is refused with 401 once (the token has expired)
+  POST /_fake/clock    {"now": "..."}: the time the 30-day change window is judged by (default: the real time); a
+                       test that runs on a fixed date sets it. Change stamps are always real time.
   POST /_fake/lose     {"path": "bill", "count": 1}: the next <count> creates at that path are written, then the
                        answer is lost (the connection closes with no reply); a retry with the same RequestId finds it
   GET  /_fake/calls    every call made, in order (method, path, query, body; never the token), plus "lost" and
@@ -20,6 +22,7 @@ import json
 import re
 import sys
 import threading
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -31,6 +34,8 @@ CREATE = {"account": "Account", "vendor": "Vendor", "customer": "Customer", "jou
           "purchaseorder": "PurchaseOrder", "estimate": "Estimate", "invoice": "Invoice", "bill": "Bill",
           "billpayment": "BillPayment", "payment": "Payment", "item": "Item", "department": "Department",
           "creditmemo": "CreditMemo"}
+CHANGE_CAP = 1000                       # the most objects one change feed answer holds, for each entity
+CHANGE_WINDOW = timedelta(days=30)      # how far back a change feed reaches
 LOCK = threading.Lock()
 STATE: dict[str, object] = {}
 
@@ -39,7 +44,7 @@ def reset() -> None:
     STATE.clear()
     STATE.update({"books": {e: [] for e in ENTITIES}, "changes": [], "by_request": {}, "calls": [], "expire": False,
                   # Ids are unique per entity, as in QuickBooks: a new record must not take a seeded id (101 to 706).
-                  "next_id": 1000, "lose": [], "lost": 0, "refused": 0})
+                  "next_id": 1000, "lose": [], "lost": 0, "refused": 0, "window_clock": None})
 
 
 def _rows(entity: str) -> list[dict[str, object]]:
@@ -126,14 +131,49 @@ def query(sql: str) -> tuple[int, dict[str, object]]:
     return 200, {"QueryResponse": {entity: page, "startPosition": start, "maxResults": len(page)}}
 
 
-def cdc(entities: str) -> tuple[int, dict[str, object]]:
-    wanted = [e for e in entities.split(",") if e]
-    block: dict[str, object] = {e: [] for e in wanted}
-    for entity, row in STATE["changes"]:  # type: ignore[index,misc]
-        if entity in wanted:
-            block[entity].append(row)  # type: ignore[union-attr]
-    # Rows of the entities this call did not ask for wait for their own call (the client reads one entity at a time).
-    STATE["changes"] = [(e, r) for e, r in STATE["changes"] if e not in wanted]  # type: ignore[index,misc]
+def _parse_time(text: str) -> datetime:
+    at = datetime.fromisoformat(text)
+    return at if at.tzinfo is not None else at.replace(tzinfo=timezone.utc)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _window_now() -> datetime:
+    """The clock the change window is judged by: the time a test set with /_fake/clock, else the real time."""
+    pinned = STATE.get("window_clock")
+    return _parse_time(str(pinned)) if pinned else _now()
+
+
+def _stamp_of(row: dict[str, object]) -> datetime:
+    meta = row.get("MetaData")
+    if isinstance(meta, dict) and meta.get("LastUpdatedTime"):
+        return _parse_time(str(meta["LastUpdatedTime"]))
+    return _now()
+
+
+def _changed(entity: str, row: dict[str, object]) -> None:
+    """Records a change the feed reports: a record written or edited here (its time is its MetaData's, else now), or a
+    deletion (its id and status)."""
+    when = _stamp_of(row)
+    STATE["changes"].append((entity, when, {**row, "MetaData": {"LastUpdatedTime": when.isoformat()}}))  # type: ignore[attr-defined]
+
+
+def cdc(entities: str, since: str) -> tuple[int, dict[str, object]]:
+    """The changes to each entity since `changedSince`, oldest first and at most CHANGE_CAP an entity. Reading does not
+    use them up: the same cursor is answered with the same changes, as QuickBooks' feed is."""
+    try:
+        floor = _parse_time(since)
+    except ValueError:
+        return _fault("changedSince is not a time")
+    if _window_now() - floor > CHANGE_WINDOW:
+        return _fault("changedSince is more than 30 days in the past")
+    block: dict[str, object] = {}
+    for entity in [e for e in entities.split(",") if e]:
+        found = sorted((c for c in STATE["changes"] if c[0] == entity and c[1] >= floor),  # type: ignore[union-attr]
+                       key=lambda c: c[1])
+        block[entity] = [row for _, _, row in found[:CHANGE_CAP]]
     return 200, {"CDCResponse": [{"QueryResponse": [block]}]}
 
 
@@ -177,6 +217,7 @@ def create(path: str, body: dict[str, object], request_id: str, operation: str) 
         STATE["next_id"] = int(made["Id"]) + 1  # type: ignore[call-overload]
         _complete(made, entity)
         _rows(entity).append(made)
+        _changed(entity, made)
         answer = (200, {entity: made})
     if request_id and answer[0] == 200:
         STATE["by_request"][request_id] = answer  # type: ignore[index]
@@ -202,6 +243,7 @@ def _update(entity: str, body: dict[str, object]) -> tuple[int, dict[str, object
             return _stale()
         row.update({k: v for k, v in body.items() if k not in ("Id", "SyncToken", "sparse")})
         row["SyncToken"] = _next_revision(row)
+        _changed(entity, row)
         return 200, {entity: dict(row)}
     return _missing()
 
@@ -218,8 +260,10 @@ def _remove(entity: str, entry_id: str, token: str, operation: str) -> tuple[int
         if operation == "void":
             row["TotalAmt"] = 0
             row["SyncToken"] = _next_revision(row)
+            _changed(entity, row)
             return 200, {entity: dict(row)}
         rows.remove(row)
+        _changed(entity, {"Id": entry_id, "status": "Deleted"})
         return 200, {entity: {"Id": entry_id, "status": "Deleted"}}
     return _missing()
 
@@ -263,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and parts[3] == "query":
                 return self._send(*query(query_string.get("query", "")))
             if method == "GET" and parts[3] == "cdc":
-                return self._send(*cdc(query_string.get("entities", "")))
+                return self._send(*cdc(query_string.get("entities", ""), query_string.get("changedSince", "")))
             if method == "POST":
                 answer = create(parts[3], body, query_string.get("requestid", ""), query_string.get("operation", ""))
                 if _lose(parts[3]):
@@ -279,6 +323,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/_fake/reset":
             reset()
             return self._send(200, {"ok": True})
+        if path == "/_fake/clock":
+            STATE["window_clock"] = str(body.get("now") or "") or None
+            return self._send(200, {"ok": True})
         if path == "/_fake/expire":
             STATE["expire"] = True
             return self._send(200, {"ok": True})
@@ -292,7 +339,7 @@ class Handler(BaseHTTPRequestHandler):
                         if path == "/_fake/seed":
                             _rows(entity).append(dict(row))
                         else:
-                            STATE["changes"].append((entity, dict(row)))  # type: ignore[attr-defined]
+                            _changed(entity, row)
             return self._send(200, {"ok": True})
         self._send(404, {})
 
