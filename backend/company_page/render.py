@@ -43,6 +43,8 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f￾￿]")
 _HEX = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\Z")
 # Same-release and relative only: no scheme, no leading slash, no `..`, and only image types that can't carry script.
 _LOGO = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*\.(?:png|jpe?g|webp|gif)\Z", re.I)
+# The owner's preview has no release folder to load from, so its logo arrives inline: a PNG, JPEG or WebP, base64.
+_LOGO_DATA = re.compile(r"data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}\Z")
 _ANCHOR = re.compile(r"[^A-Za-z0-9_-]+")
 
 
@@ -78,9 +80,9 @@ def accent_of(value):
     return "#" + "".join(c * 2 for c in text[1:]) if len(text) == 4 else text
 
 
-def logo_of(value):
+def logo_of(value, inline=False):
     text = value if isinstance(value, str) else ""
-    return text if _LOGO.match(text) else ""
+    return text if _LOGO.match(text) or (inline and _LOGO_DATA.match(text)) else ""
 
 
 def anchor_of(value):
@@ -512,9 +514,9 @@ def _document(view, body, title, description, canonical=""):
             f'<style>{theme}</style><style>{css}</style></head><body>{body}<script>{script}</script></body></html>')
 
 
-def _brand(company):
+def _brand(company, inline_logo=False):
     name = _text(company.get("name"))
-    logo = logo_of(company.get("logo_url"))
+    logo = logo_of(company.get("logo_url"), inline_logo)
     mark = (f'<img class="logo" src="{_e(logo)}" alt="" width="36" height="36">' if logo
             else f'<div class="logo" aria-hidden="true">{_e(name[:1].upper())}</div>')
     return f'<div class="brand">{mark}<div class="name">{_e(name)}</div></div>'
@@ -533,8 +535,9 @@ def _url(company):
     return text.rstrip("/") + "/"
 
 
-def page(view):
-    """The whole page. Stats sit above updates; the newest update is open, and it reads with no script at all."""
+def page(view, inline_logo=False):
+    """The whole page. Stats sit above updates; the newest update is open, and it reads with no script at all. The owner's
+    preview passes `inline_logo`: its logo arrives as a data URI, which a release never carries."""
     view = _map(view)
     company = _map(view.get("company"))
     updated = _date(company.get("updated_at"))
@@ -551,7 +554,7 @@ def page(view):
     mark = ('<i aria-hidden="true"></i>' if public else
             '<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13"><rect x="3" y="7" width="10" height="7" rx="1.5"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path></svg>')
     stamp = _day(company.get("updated_at"))
-    header = (f'<header><div class="top">{_brand(company)}<div class="tools">{tools}</div></div>'
+    header = (f'<header><div class="top">{_brand(company, inline_logo)}<div class="tools">{tools}</div></div>'
               f'<h1>{_e(mission or "Company updates")}</h1><div class="meta"><span class="badge">{mark}{_e(badge_label(view))}</span>'
               + (f'<span>Updated {_e(stamp)}</span>' if stamp else "") + "</div></header>")
     body = f'<div class="wrap">{header}{_stats(view, year)}{_updates(view, year)}{_footer()}</div>'

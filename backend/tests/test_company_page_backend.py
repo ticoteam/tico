@@ -8,11 +8,12 @@ from backend import company
 from backend import hubdb as H
 from backend.auth import Identity
 from backend.company_page import audiences as A, disclosure as D, editions as E, release, render, settings as S, stats as ST
-from backend.tests.test_company_page_core import numbers, setup, shown
+from backend.company_page.api import preview_view
+from backend.tests.test_company_page_core import numbers, post_income, setup, shown
 from backend.tests.test_company_page_editions import plain_sections
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_company_page_editions import page  # noqa: F401
-from backend.tests.test_finance_fixtures import OWNER, finance_template, store  # noqa: F401
+from backend.tests.test_finance_fixtures import OWNER, books, finance_template, store  # noqa: F401
 
 VISION = "Every landlord runs on Acme."
 
@@ -133,6 +134,25 @@ def test_a_public_update_names_the_company_as_the_board_does(page, monkeypatch):
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
 JPEG = b"\xff\xd8\xff\xe0" + b"\0" * 64
 WEBP = b"RIFF\0\0\0\0WEBP" + b"\0" * 64
+
+
+def test_the_preview_is_the_page_s_own_view_so_pnl_lines_and_the_logo_show_as_they_do_there(books, monkeypatch):  # noqa: F811
+    """The owner's preview is built the way the page is: a P&L line sits in the table, and the logo is there (inline, as the
+    preview can load nothing from a release folder)."""
+    setup(books, shown("revenue"))
+    with books.transaction() as c:
+        line = post_income(c, "4100", 70_000_00)
+        ST.create_stat(c, OWNER, "finance_line", line, label="Subscriptions")
+        D.set_rule(c, OWNER, "investors", "pnl_line", line, mode="show")
+        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) VALUES ('logo-p',?,?,?,?,?,?)",
+                  (OWNER, "ab" * 32, len(PNG), S.LOGO_NAME + ".png", "image/png", H.now()))
+        S.update(c, OWNER, logo_file_id="logo-p")
+        monkeypatch.setattr(release, "_logo_bytes", lambda c_read, settings, view: PNG)
+        view = preview_view(c, books.settings, A.get(c, "investors"), "2026-10-15")
+    assert [s["group"] for s in view["stats"] if s["label"] == "Subscriptions"] == ["pnl"]
+    assert view["company"]["logo_url"].startswith("data:image/png;base64,")
+    assert 'src="data:image/png;base64,' in render.page(view, inline_logo=True)
+    assert 'src="data:' not in render.page(view)     # a release page never carries an inline logo
 
 
 def upload(api, data, token="ana-test", expected=200):

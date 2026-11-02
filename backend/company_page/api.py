@@ -2,6 +2,7 @@
 every one of these shows what a company keeps back. A bot is refused; BotOps comes through as the person it acts for, so
 it can do what they can and no more."""
 import asyncio
+import base64
 import hashlib
 import json
 from typing import Any
@@ -127,15 +128,18 @@ def page(items, key, limit, offset):
 
 
 def preview_view(c, settings, audience, at):
-    """The view model for an audience as it stands, approved or not, so the owner sees what approving would publish."""
-    from . import editions
-    current = S.get(c)
+    """The view model for an audience as it stands, approved or not, so the owner sees what approving would publish. It is
+    built by the same code the page is, so the two can't differ; the logo is inlined, since the preview has no release
+    folder to load it from."""
+    from . import editions, release
     badge = "private" if audience["kind"] != "public" else "open"
-    return {"company": {"name": settings.company_name, "logo_url": None, "mission": S.mission_for(c, audience["id"]),
-                        "badge": badge, "accent": current["accent"], "updated_at": at},
-            "audience": {"kind": audience["kind"], "name": audience["name"]},
-            "stats": ST.project(c, audience["id"], at)["stats"],
-            "updates": editions.stream(c, [audience["id"]]), "next_before": None}
+    view = release.view_model(c, audience, ST.project(c, audience["id"], at)["stats"], editions.stream(c, [audience["id"]]),
+                              None, badge, settings)
+    if view["company"]["logo_url"]:
+        data = release._logo_bytes(c, settings, view)
+        mime = {ext: mime for mime, (ext, _) in release.LOGO_TYPES.items()}[view["company"]["logo_url"].rsplit(".", 1)[1]]
+        view["company"]["logo_url"] = f"data:{mime};base64,{base64.b64encode(data).decode()}" if data else ""
+    return view
 
 
 def next_due(c, audiences):
@@ -255,7 +259,7 @@ def register(app, store, auth, mutate, settings):
             found = A.get(c, audience)
             if not found:
                 raise Problem("not_found", "No such audience", 404)
-            html = render.page(preview_view(c, settings, found, H.now()))
+            html = render.page(preview_view(c, settings, found, H.now()), inline_logo=True)
         return HTMLResponse(html, headers={"Content-Security-Policy": PREVIEW_POLICY, "Cache-Control": "no-store"})
 
     # ------------------------------------------------------------------ audiences

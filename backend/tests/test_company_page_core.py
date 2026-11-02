@@ -933,9 +933,9 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
     seen = {}
     real_page = render.page
 
-    def page(view):
+    def page(view, **kw):
         seen.update(view)
-        return real_page(view)
+        return real_page(view, **kw)
     monkeypatch.setattr(render, "page", page)
     r = api.get("/api/v2/company-page/preview?audience=investors", headers=headers("ben-test"))
     assert r.status_code == 200 and r.text.startswith("<!doctype html>")
