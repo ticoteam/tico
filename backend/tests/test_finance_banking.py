@@ -577,6 +577,40 @@ def test_a_reconciliation_is_done_only_when_the_whole_gl_line_is_the_statement(b
         assert (done.result["status"], done.result["book_difference"]) == ("done", 0)
 
 
+def test_a_bank_row_that_took_a_marked_payment_counts_once_in_the_reconciliation(books):
+    """A bill paid from checking posts its entry at once and waits for its bank row; the row takes that entry
+    (expected_match), so the GL line holds the payment once. The cleared row must count once in the book gap too:
+    the reconciliation is done, not open by the payment's amount."""
+    fake = FakeMercury()
+    fake.balances["acct-chk"] = -15.0
+    connect(books, fake)
+    fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])                           # -15.00 on Oct 12
+    sync_once(books, fake)
+    with books.transaction() as c:
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        vendor = act(c, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor"}).result["contact_id"]
+        bill = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10", "number": "GAP-1",
+                                             "lines": [{"account_id": account(c, "6100"), "amount": 25_000}]})
+        assert bill.status == "committed", bill
+        bill_id = str(bill.result["bill_id"])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill_id}).status == "committed"
+        paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bill_id, "money_account_id": bank, "date": "2026-10-13"})
+        assert (paid.status, paid.result["from"]) == ("committed", "expected"), paid
+    # The bank row arrives after the mark-paid (the Events path, which the fake does not feed here): ingested directly.
+    from backend.finance import banking
+    from backend.finance.context import load
+    with books.transaction() as c:
+        cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+        banking.ingest(load(c, AT), cid, F.mercury_txn(_txn("txn-pay", "acct-chk", -250.0, "outgoingPayment",
+                                                              day="2026-10-14"), 0))
+    with books.transaction() as c:
+        linked = c.execute("SELECT entry_id, status FROM fin_feed_txns WHERE provider_id='txn-pay'").fetchone()
+        assert (linked[0], linked[1]) == (paid.result["entry_id"], "posted"), tuple(linked)
+        done = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
+                                           "statement_balance": -26_500})
+        assert (done.result["status"], done.result["difference"], done.result["book_difference"]) == ("done", 0, 0)
+
+
 def _opening(c):
     return [tuple(r) for r in c.execute(
         "SELECT e.entry_date, a.code, l.amount FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "

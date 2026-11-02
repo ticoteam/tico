@@ -267,8 +267,9 @@ def open_feed_rows(c: sqlite3.Connection, book_id: str) -> list[Any]:
 def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_account_id: str,
                 through: str) -> list[Any]:
     """This money account's rows no done reconciliation cleared, each with what its entries moved on the account's GL
-    line: `through`, every entry ever posted for it (originals, their reversals, replacements, a shared transfer)
-    dated through that day; `live`, its current posted entry, whatever its date. A Stripe row in a day's summary shares
+    line: `through`, every entry ever posted for it (originals, their reversals, replacements, a shared transfer, and
+    the entry the row took for a payment marked paid from the account, expected_match) dated through that day; `live`,
+    its current posted entry, whatever its date. A Stripe row in a day's summary shares
     its entry with the day's other rows, so it counts its own amount (its net) rather than the whole entry's line. A row
     that left its summary keeps that summary's amount through the days before the summary was reversed (`summary_entry`),
     since the closed period it was booked in still holds it."""
@@ -281,9 +282,10 @@ def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_a
         f"SELECT f.id, (CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
         "AND e.status='posted' AND e.entry_date<=:through) THEN f.amount ELSE 0 END ELSE "
         "COALESCE((SELECT SUM(l.amount) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id AND "
-        "l.account_id=:gl WHERE e.book_id=:book AND e.source IN ('bank','card') AND e.entry_date<=:through AND "
-        "(e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':' OR (e.source_id LIKE 'transfer:%' "
-        "AND instr(e.source_id, f.id)>0))), 0) END) + "
+        "l.account_id=:gl WHERE e.book_id=:book AND e.entry_date<=:through AND (e.id=f.entry_id OR "
+        "e.reverses_id=f.entry_id OR (e.source IN ('bank','card') AND (e.source_id=f.id OR "
+        "substr(e.source_id, 1, length(f.id) + 1)=f.id || ':' OR (e.source_id LIKE 'transfer:%' "
+        "AND instr(e.source_id, f.id)>0))))), 0) END) + "
         f"{left_share} AS through_amount, "
         f"CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
         "AND e.status='posted') THEN f.amount ELSE 0 END ELSE "
