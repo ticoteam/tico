@@ -11,8 +11,9 @@ times, spend the address's daily invites and hide the reason.
 One request sends at most one email (`once`). The browser repeats a write whose answer it lost with the same
 Idempotency-Key, so the request is bound in `idempotency` (binding 'invites', subject the person's id) before the issuer
 is asked: a repeat of a sent request answers from it, an overlapping copy or one whose outcome nobody recorded is
-refused without sending, and a refusal replays as itself. A new click is a new key and sends again. A route that binds
-a request does not also `mutate` under the same key: one row per key.
+refused without sending, and a refusal replays as itself. A route asks `replay` before it writes the roster, so a repeat
+never adds the person again, even one removed since (people_remove keeps the binding without the address). A new click
+is a new key and sends again. A route that binds a request does not also `mutate` under the same key: one row per key.
 
 Create password is the other way in (Chris, Oct 25): an owner or admin asks the same issuer to make the person a Tico
 account with a generated password (`Oidc.make_account`, the issuer's POST /oauth2/accounts) and the page shows it once.
@@ -42,6 +43,8 @@ REASONS = {
     "mail_unavailable": "Tico's sign-in mail isn't available right now. Try again later.",
     "not_sent": "Tico's sign-in mail couldn't deliver the invite to {email}. Check the address, then try again.",
 }
+# What a removed person's refused invite says on a repeat: the refusal named their address, which removal deletes.
+REMOVED = "The person this invite was for was removed."
 
 
 def sent(c):
@@ -86,6 +89,21 @@ def once(store, auth, settings, who, request, body, person):
     return _once(store, who, request, body, person, lambda: send(auth, settings, person)) is not None
 
 
+def replay(store, who, request, body):
+    """True when an earlier copy of this request bound its key: the binding answers the repeat (`_once`) and nothing is
+    written or sent. False when the key is new, and the route runs the request."""
+    key, operation = request_key(request), request.url.path
+    with store.read() as c:
+        bound = c.execute("SELECT 1 FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
+                          (BINDING, who.actor, operation, key)).fetchone()
+    if not bound:
+        return False
+    _once(store, who, request, body, None, None,
+          lambda name: ("invite_unknown", "This invite is still being sent, or Tico couldn't tell whether it went. Check "
+                                          "the People page before inviting again."))
+    return True
+
+
 def make_password(store, auth, settings, who, request, body, person):
     """Make `person` a Tico account with a generated password, at most once for this request: the password, for this
     answer only. A repeat of a request that made one raises (its password is gone); a refusal raises."""
@@ -111,13 +129,14 @@ def _once(store, who, request, body, person, work, unknown=None):
         row = c.execute("SELECT * FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
                         (BINDING, who.actor, operation, key)).fetchone()
         if row:
-            if row["request_hash"] != hashed:
+            # A binding whose person was removed has no hash (people_remove): any copy of its request gets its answer.
+            if row["request_hash"] not in ("", hashed):
                 raise Problem("idempotency_conflict", "This key was used for different content", 409)
             if row["state"] == "completed":
                 return None
             if row["state"] == "refused":
                 raise Problem(row["error_code"], row["error_detail"], 422)
-            name = person.get("name") or "this person"
+            name = (person or {}).get("name") or "this person"
             if unknown:
                 raise Problem(*unknown(name), 422)
             raise Problem("invite_unknown", f"This invite to {name} is still being sent, or Tico couldn't tell whether it "

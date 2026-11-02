@@ -2228,10 +2228,13 @@ def create_app(settings=None):
         from . import company_import
         who = request.state.identity
         owner_only(who, "invites the people from setup")
-        # Not `mutate`: the invite binding below is this request's record under the same key. add_invitee answers the
-        # same roster row again when the person is already added, so a repeat needs no stored answer. The key is
-        # checked first: a request without one writes nothing, as `mutate` refused it before its work.
+        # Not `mutate`: the invite binding below is this request's record under the same key. The key is checked first:
+        # a request without one writes nothing, as `mutate` refused it before its work. A key already bound answers from
+        # its binding before the roster is touched (invites.replay), so a repeat never adds a removed person again.
         invites.request_key(request)
+        if invites.replay(store, who, request, body):
+            with store.transaction() as c:
+                return onboarding.view(c, who)
         row = store.write(who, lambda c: company_import.add_invitee(onboarding, c, who, key, body.email))
         sent = invites.once(store, auth, settings, who, request, body, row)
         with store.transaction() as c:                  # not a second `mutate`: one request has one idempotency key
