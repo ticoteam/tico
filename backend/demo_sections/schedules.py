@@ -249,9 +249,9 @@ def _turn(flow, slug, index):
     texts = SUMMARIES.get(source, (f"{flow['name']} ran with nothing to report.",))
     text = texts[(index + len(source)) % len(texts)]
     model, _provider, billing = D.USAGE.get(slug, ("claude-haiku-5-5", "anthropic", "api"))
-    uncached = 14000 + ((index * 9 + len(source)) % 7) * 3500
+    uncached = (14000 + ((index * 9 + len(source)) % 7) * 3500) * D.RUN_REQUESTS
     cached = uncached * 2 // 3
-    output = 900 + ((index * 3 + len(source)) % 5) * 400
+    output = (900 + ((index * 3 + len(source)) % 5) * 400) * D.RUN_REQUESTS
     minutes = 2 + (index + len(source)) % 5
     body = {"outcome": "completed", "text": text, "last_seq": 0,
             "usage": {"input_tokens": uncached, "cached_tokens": cached, "output_tokens": output,

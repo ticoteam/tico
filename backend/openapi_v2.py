@@ -587,8 +587,8 @@ STABLE = [
     ("/api/v2/bots/{bot}/kpis", "get", "KPIs", "listBotKpis",
      "A bot's five automatic KPIs, computed from Tico's own data (Read on the bot)", "BotKpis"),
     ("/api/v2/usage", "get", "Usage", "getUsage",
-     "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, "
-     "filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run "
+     "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, task (the top 25), harness, model, effort or subscription, "
+     "filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run "
      "or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead", "Usage"),
     ("/api/v2/usage/limits", "get", "Usage", "getUsageLimits",
      "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots "
@@ -1313,9 +1313,10 @@ SCHEMAS = {
                          "low_estimate_runs": {"type": "integer", "description": "Priced runs whose estimate may be low: the model "
                                                "charges more for long prompts and the runner did not report every request's tokens"}}),
     "Usage": obj({"from": "s", "to": "s", "prices_as_of": {"type": "string", "description": "The date the price table was read"},
-                  "group": {"enum": ["bot", "day", "routine", "harness", "model", "effort", "subscription"]}, "department": "n", "totals": ref("UsageFigures"),
+                  "group": {"enum": ["bot", "day", "routine", "task", "harness", "model", "effort", "subscription"]}, "department": "n", "totals": ref("UsageFigures"),
                   "rows": items({"type": "object", "description": "By bot: bot, name, department; by day: day; by routine: "
-                                                 "routine (null for runs that came from none), title, bot, name. Every row has the "
+                                                 "routine (null for runs that came from none), title, bot, name; by task: value and name (its title, "
+                                                 "'A private task', or null and 'Chats and other runs' for runs with none). Every row has the "
                                                  "usage figures and `share`, its part of the total (estimate plus API-equivalent)",
                                                  "additionalProperties": True}),
                   "dimensions": {"type": "object", "description": "Available dimension filters, scoped to visible runs"},

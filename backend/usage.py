@@ -25,9 +25,13 @@ DIMENSIONS = {"harness": "coalesce(t.harness, '')", "model": "coalesce(t.model, 
               "effort": "coalesce(t.effort, '')", "subscription": "CASE WHEN t.billing='subscription' AND coalesce(t.profile, '') != '' "
               "THEN coalesce((SELECT 'subscription:' || json_array(a.runner_id, t.profile) FROM attempts a WHERE a.id=t.id), "
               "'legacy-profile:' || t.profile) ELSE '' END"}
-GROUPS = ("bot", "day", "routine", *DIMENSIONS)
+# A run's task by its title, so a routine's runs add up under one row; a private task is named only as one, and a run with
+# no task (a chat, a check) is "".
+TASK = "coalesce((SELECT CASE WHEN tk.private=1 THEN 'A private task' ELSE tk.title END FROM tasks tk WHERE tk.id=t.task_id), '')"
+GROUPS = ("bot", "day", "routine", "task", *DIMENSIONS)
 MAX_DAYS = 366
 TOP_ROUTINES = 10
+TOP_TASKS = 25
 
 # A priced run whose estimate may be low: its model's long prompts cost more and the runner did not send every
 # request's tokens (providers.estimate). A run recorded before that was marked is judged by its model alone.
@@ -338,8 +342,9 @@ def install(app, store, auth, mutate, settings):
 
     @app.get("/api/v2/usage")
     def usage(request: Request, group: str = "bot", department: str | None = None, bot: str | None = None):
-        """Estimated model spend per bot, per day or per routine over `from`..`to` (UTC dates, default the last
-        seven days); `bot` is one bot's daily series and top routines."""
+        """Estimated model spend per bot, per day, per routine, per task (its top TOP_TASKS by spend) or per dimension
+        over `from`..`to` (UTC dates, default the last seven days); `bots` (slugs, comma separated) narrows it to those
+        bots; `bot` is one bot's daily series and top routines."""
         who = request.state.identity
         auth.domain(who)
         if who.role not in ("owner", "human"):
@@ -371,7 +376,8 @@ def install(app, store, auth, mutate, settings):
                         "limit": limit_view(c, who, bot, usage_limits.company(c), allowed),
                         "totals": totals(query(c, "'all'", "", {bot}, first, last, filters)), "daily": series,
                         "routines": routines[:TOP_ROUTINES]}
-            slugs = {s for s in allowed if not department or depts.get(s) == department}
+            only = {s.strip() for s in (request.query_params.get("bots") or "").split(",") if s.strip()}
+            slugs = {s for s in allowed if (not department or depts.get(s) == department) and (not only or s in only)}
             total = totals(query(c, "'all'", "", slugs, first, last, filters))
             if group == "bot":
                 default = usage_limits.company(c)
@@ -380,6 +386,9 @@ def install(app, store, auth, mutate, settings):
                         for r in query(c, "t.bot", "", slugs, first, last, filters)]
             elif group == "day":
                 rows = [{"day": r["k"], **figures(r)} for r in query(c, "substr(t.started_at, 1, 10)", "", slugs, first, last, filters)]
+            elif group == "task":
+                rows = [{"value": r["k"] or None, "name": r["k"] or "Chats and other runs", **figures(r)}
+                        for r in query(c, TASK, "", slugs, first, last, filters)]
             elif group in DIMENSIONS:
                 rows = [{"value": r["k"] or None, "name": usage_label(c, r["k"] or "") if group == "subscription" else r["k"] or "Not recorded / not applicable", **figures(r)}
                         for r in query(c, DIMENSIONS[group], "", slugs, first, last, filters)]
@@ -392,6 +401,8 @@ def install(app, store, auth, mutate, settings):
                 rows.sort(key=lambda r: r["day"])
             else:
                 rows.sort(key=lambda r: (-spend(r), -(r["input_tokens"] + r["cached_tokens"] + r["output_tokens"]), -r["runs"]))
+            if group == "task":
+                rows = rows[:TOP_TASKS]
             dimensions = {key: query(c, expression, "", slugs, first, last)
                           for key, expression in DIMENSIONS.items()}
             return {**base, "group": group, "department": department or None, "totals": total, "rows": rows,

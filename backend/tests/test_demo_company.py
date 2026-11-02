@@ -3,13 +3,16 @@ check behaviour (who owns what, what waits for whom, what every bot has done), n
 
 import re
 import sqlite3
-from datetime import datetime, timezone
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import demo
+from backend import demo, hubdb
 from backend import demo_content as D
+from backend import usage_limits as U
+from backend.demo_sections import budgets as B
 from backend.app import create_app
 
 NOW = datetime(2026, 11, 6, 18, 30, tzinfo=timezone.utc)      # a Friday evening: the week is complete
@@ -85,7 +88,9 @@ def test_the_pricing_decision_waits_for_ana(ana):
 
 
 def test_tasks_cover_every_status_and_some_have_chains(ana):
-    tasks = ana.get("/api/v2/tasks?limit=200").json()["tasks"]
+    # As Tasks reads them: what is live, then the latest done (the weeks before hold hundreds more done).
+    tasks = [*ana.get("/api/v2/tasks?status=open,doing,waiting,review,declined&limit=200").json()["tasks"],
+             *ana.get("/api/v2/tasks?status=done,closed&sort=finished&limit=200").json()["tasks"]]
     assert {task["status"] for task in tasks} >= {"open", "doing", "waiting", "review", "done", "closed", "declined"}
     parents = [task for task in tasks if (task.get("children_summary") or {}).get("total")]
     assert parents, "some tasks split into child tasks"
@@ -185,6 +190,49 @@ def test_home_has_a_bot_page_settings_has_a_team_icon_and_granola_syncs(ana):
     assert [page["title"] for page in ana.get("/api/v2/pages").json()["pages"]] == [D.PAGE["title"]]
     assert ana.get("/api/v2/team/icon").status_code == 200
     assert ana.post("/api/v2/meetings/granola/sync").status_code == 200
+
+
+def test_budgets_set_a_monthly_company_limit_and_leave_one_group_and_one_bot_near_a_limit(built):
+    """Strategy › Budget at the build's time: the whole team on a monthly limit, a few groups and bots with limits, the
+    support pool and one bot at about 86% of theirs, and nothing paused."""
+    settings, _rows, _again = built
+    with closing(hubdb.connect(settings.db_path)) as c:
+        company = U.pool_state(c, U.COMPANY, at=NOW)
+        pools = {g: U.pool_state(c, "group:" + g, at=NOW) for g in (*B.CONTENT["groups"], B.CONTENT["near_group"])}
+        bots = {bot: U.state(c, bot, at=NOW) for bot in ROSTER}
+    assert company["monthly_usd"] and company["percent"] < 80 and not company["blocked"]
+    assert all(pools[g]["monthly_usd"] and pools[g]["percent"] < 80 for g in B.CONTENT["groups"])
+    assert 80 <= pools[B.CONTENT["near_group"]]["percent"] < 100
+    capped = {bot for bot, row in bots.items() if "bot" in row["source"].values()}
+    assert set(B.CONTENT["bots"]) <= capped
+    near = [bot for bot in capped if 80 <= bots[bot]["percent"] < 100]
+    assert len(near) == 1 and near[0] in B.CONTENT["near_bots"]
+    assert not [bot for bot, row in bots.items() if row["blocked"]]
+
+
+def test_run_and_task_budgets_are_set_for_the_team_two_bots_and_ana(ana):
+    team = ana.get("/api/v2/settings/turn-budgets").json()
+    assert (team["turns_per_hour"], team["turns_per_day"]) == (60, 500)
+    for bot, body in B.CONTENT["runs_bots"].items():
+        own = ana.get(f"/api/v2/bots/{bot}/budget").json()["own"]
+        assert {k: own[k] for k in body} == body
+    tasks = ana.get("/api/v2/ask-ingest/settings").json()
+    assert {k: tasks["team"][k] for k in B.CONTENT["tasks_team"]} == B.CONTENT["tasks_team"]
+    assert tasks["settings"]["own"] and {k: tasks["settings"][k] for k in B.CONTENT["tasks_ana"]} == B.CONTENT["tasks_ana"]
+
+
+def test_the_team_has_closed_tasks_every_week_for_two_months(built):
+    """Overview's Done per week: every one of the eight weeks before the build has work done, more as the team grew."""
+    settings, _rows, _again = built
+    monday = (NOW - timedelta(days=NOW.weekday())).date()
+    with closing(sqlite3.connect(settings.db_path)) as db:
+        days = db.execute("SELECT substr(done_at,1,10) FROM tasks WHERE status='done' AND done_at>=?",
+                          ((monday - timedelta(weeks=7)).isoformat(),)).fetchall()
+    weeks = [0] * 8
+    for (day,) in days:
+        done = datetime.strptime(day, "%Y-%m-%d").date()
+        weeks[7 - (monday - (done - timedelta(days=done.weekday()))).days // 7] += 1
+    assert all(n >= 20 for n in weeks[:-1]) and weeks[0] < weeks[-2], weeks
 
 
 def test_the_same_date_builds_the_same_company(built):

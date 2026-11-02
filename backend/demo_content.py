@@ -978,6 +978,53 @@ def _turns():
 
 TURNS = _turns()
 
+# The token counts above are one model request's. A run makes about this many requests (reads, tool calls, edits), and
+# the runner reports the run's sum: what the usage page, Billing and Strategy › Budget price.
+RUN_REQUESTS = 18
+
+# The weeks before the one the demo plays (2 to 8 weeks back): the routines ran on their schedules, the built-in
+# helpers ran every day, and the bots finished one-off work of their own, a little more each week as the team grew.
+# Overview's Done per week reads them. Nothing here needs a person: these tasks are long closed.
+PAST_WEEKS = 7
+# One-off tasks finished in each past week, the oldest week first.
+PAST_ONE_OFFS = (6, 10, 14, 18, 22, 26, 30)
+# The built-in routines that run every day: (bot, title). D.ROUTINES' own run on their cron.
+PAST_DAILY = (("botops", "Sweep stuck tasks"), ("librarian", "Curate the market"),
+              ("librarian", "Refresh the map of the docs"), ("goal-manager", "KPI pass"),
+              ("bookkeeper", "Post yesterday's orders to the ledger"))
+# (bot, title): finished work, handed out in order and round again, so a title comes back a month or more later.
+PAST_TASKS = [
+    ("support", "Answer the setup questions from the weekend"), ("firmware", "Fix the pairing timeout on older routers"),
+    ("content", "Write the guide to mounting on brick"), ("sales", "Quote 12 kits for Pinecrest Mall"),
+    ("procurement", "Get two quotes for lens covers"), ("marketing-lead", "Plan the October email calendar"),
+    ("cloud", "Move scene renders to the larger queue"), ("bookkeeper", "Close September's books"),
+    ("logistics", "Book freight for container 2"), ("seo", "Fix titles on the scene library pages"),
+    ("technical-support", "Write the reset steps for the Home Pro"), ("product-manager", "Write the spec for scene scheduling"),
+    ("sdr", "Research 40 hotel groups for holiday installs"), ("quality", "Inspect the lens batch from Lumen"),
+    ("mobile", "Ship the app's dark mode"), ("account-manager", "Renew the Crestview Library install"),
+    ("scene-designer", "Design the Harvest Moon scene"), ("returns", "Process 14 return requests"),
+    ("pr-reviewer", "Review the calibration retry change"), ("finance-lead", "Draft the Q4 spending plan"),
+    ("community", "Answer the forum thread on outdoor use"), ("inventory", "Recount the returns shelf"),
+    ("devops", "Rotate the render service keys"), ("customer-success", "Check in with the five newest business accounts"),
+    ("email-marketing", "Send the early-bird holiday email"), ("ar-followup", "Chase three late invoices"),
+    ("release-notes", "Write the release notes for app 3.0"), ("escalations", "Settle the cracked-lens complaint"),
+    ("paid-media", "Pause the low-performing search ads"), ("compliance", "Check the battery shipping labels"),
+    ("sales-engineer", "Draw the lobby layout for Crown Hotel"), ("product-analyst", "Find why first-try calibration dropped"),
+    ("video-producer", "Cut the 30-second setup video"), ("partners", "Sign up two installer partners in Ohio"),
+    ("issue-triage", "Sort the week's 31 bug reports"), ("support-qa", "Score 40 support replies"),
+    ("pricing", "Compare kit prices with three rivals"), ("reputation", "Reply to the week's store reviews"),
+    ("recruiter", "Screen candidates for the warehouse lead"), ("accounts-payable", "Pay the freight and packaging bills"),
+    ("ops-manager", "Plan warehouse hours for November"), ("bids", "Answer the Larkford parks bid questions"),
+    ("retail", "Send the retail restock order form"), ("support-lead", "Update the support macros for the holidays"),
+    ("creators", "Send kits to three holiday creators"), ("sales-ops", "Clean up stale deals in the pipeline"),
+    ("legal-review", "Review the installer partner contract"), ("tax", "File the September sales tax"),
+    ("marketplace", "Fix the marketplace listing photos"), ("spend-watcher", "Flag the duplicate software charges"),
+    ("health-monitor", "Watch the 2.3 rollout for crashes"), ("sales-lead", "Review the business pipeline with Cara"),
+    ("support", "Write the standing answer for late deliveries"), ("firmware", "Cut firmware 2.3 for ring 1"),
+    ("content", "Write the holiday gift guide"), ("cloud", "Clear the stuck render jobs"),
+    ("sales", "Send the Harbor & Vine install proposal"), ("seo", "Write the outdoor projector comparison page"),
+]
+
 # The status steps for the bots whose status history is worth showing: (hours ago, state, focus, why), oldest first.
 STATUS_STEPS = {
     "support-qa": [

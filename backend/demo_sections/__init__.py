@@ -9,7 +9,7 @@ address stays fictional (acme.example).
 import importlib
 
 SECTIONS = ("strategy", "threads_rules", "recruit", "automations_learnings", "finance", "growth", "services",
-            "schedules")
+            "schedules", "budgets")
 
 
 def seed_all(builder):
