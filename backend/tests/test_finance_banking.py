@@ -688,6 +688,59 @@ def test_an_unfinished_backfill_goes_on_at_once_and_then_polls(books, monkeypatc
         assert len(_opening(c)) == 2
 
 
+def test_a_backfill_ends_when_mercury_keeps_naming_a_next_page(books):
+    """A list whose end still names a next page that starts the list over: the backfill takes every row in, ends on
+    the second page in a row of rows it already has, posts the opening, and Sources says done (importing until then)."""
+    fake = FakeMercury()
+    for i in range(3):
+        fake.txns[f"txn-{i}"] = _txn(f"txn-{i}", "acct-chk", -10.0, "wireFee", day=f"2026-09-0{i + 1}")
+    rows = list(fake.txns.values())
+    asked = []
+
+    def endless(start_after, limit=500):
+        asked.append(start_after)
+        ids = [str(t["id"]) for t in rows]
+        start = ids.index(start_after) + 1 if start_after in ids else 0
+        chunk = rows[start:start + 2] or rows[:2]         # past the end: the list over again, never an empty page
+        return fake._answer("transactions", start_after,
+                            {"transactions": chunk, "page": {"nextPage": str(chunk[-1]["id"])}})
+
+    fake.transactions = endless
+    connect(books, fake)
+    with books.read() as c:
+        assert FR.sources(c, OWNER)["groups"][0]["rows"][0]["sync"]["history"] == "importing"
+    sync_once(books, fake)
+    assert asked == [None, "txn-1", "txn-2", "txn-1"]    # the cursor always moved: the known-rows end, not a stall
+    with books.read() as c:
+        assert json.loads(c.execute("SELECT settings FROM fin_connections").fetchone()[0]).get("backfilled")
+        got = c.execute("SELECT provider_id FROM fin_feed_txns WHERE provider_id LIKE 'txn-%' ORDER BY 1").fetchall()
+        assert [r[0] for r in got] == ["txn-0", "txn-1", "txn-2"]
+        assert len(_opening(c)) == 2
+        assert FR.sources(c, OWNER)["groups"][0]["rows"][0]["sync"]["history"] == "done"
+
+
+def test_a_backfill_cut_off_before_its_cursor_was_kept_goes_on_past_the_page_it_replays(books, monkeypatch):
+    """A pass took a short page's rows in but stopped before keeping its cursor: the next pass reads that page
+    again (all rows known, a next page named) and goes on to the rows after it before it ends and posts the opening."""
+    fake = FakeMercury()
+    for i in range(4):
+        fake.txns[f"txn-{i}"] = _txn(f"txn-{i}", "acct-chk", -10.0, "wireFee", day=f"2026-09-0{i + 1}")
+    paged = fake.transactions
+    monkeypatch.setattr(fake, "transactions", lambda start_after, limit=500: paged(start_after, 2))
+    connect(books, fake)
+    with books.read() as c:
+        cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+    sync._ingest_all(books, cid, list(fake.txns.values())[:2], AT)       # taken in, cursor never kept
+    with books.read() as c:
+        assert not json.loads(c.execute("SELECT settings FROM fin_connections").fetchone()[0]).get("backfilled")
+    sync_once(books, fake)
+    with books.read() as c:
+        assert json.loads(c.execute("SELECT settings FROM fin_connections").fetchone()[0]).get("backfilled")
+        got = c.execute("SELECT provider_id FROM fin_feed_txns WHERE provider_id LIKE 'txn-%' ORDER BY 1").fetchall()
+        assert [r[0] for r in got] == ["txn-0", "txn-1", "txn-2", "txn-3"]
+        assert len(_opening(c)) == 2
+
+
 def test_a_closed_month_correction_reconciles_that_month_at_the_new_amount(books):
     """Round 3 #2: Sept posts 100.00, Sept closes, Mercury corrects it to 120.00 (reversal and repost land in
     October): reconciling Sept to 120.00 is done, the original still in Sept's rollup notwithstanding."""
