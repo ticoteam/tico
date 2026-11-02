@@ -36,6 +36,8 @@ receiver is in) is refused.
 
 ## What counts and when it is checked
 
+Not enforced yet.
+
 - **Tasks a day:** tasks the party creates for someone else or hands to them since local midnight (the sends task caps
   already record). Own work is never counted.
 - **Chats a day:** messages the party posts that reach another internal teammate (a delivery), outside task threads and
@@ -56,6 +58,8 @@ receiver is in) is refused.
 
 ## Task caps
 
+Not enforced yet.
+
 Task caps (`/api/v2/task-caps`) become lines: each cap row moves to a line with its `per_day`, and the routes and the
 `task_cap` approval read and write lines.
 
@@ -67,6 +71,28 @@ Task caps (`/api/v2/task-caps`) become lines: each cap row moves to a line with 
 - `PUT /api/v2/reach/settings/{party}` with any of `mode`, `chats_per_day`, `tasks_per_day` (`null` clears).
 - `POST /api/v2/reach/lines` `{sender, receiver, per_day, rule}`; `POST /api/v2/reach/lines/{id}` to change one;
   `DELETE /api/v2/reach/lines/{id}`. One line per sender and receiver.
+
+Details of the API as built:
+
+- `GET` also returns `owner` (the owner's party, never in `may_edit`), each setting's `updated_at` and `updated_by`, and
+  each line's `created_at` and `updated_at`. `effective` has every party: Everyone, every team, person and bot that is
+  not archived. A `from` field is `null` when the value is the default. Parties are stored as ids: a bot by its id
+  (a slug is accepted on the way in), a person as `human:<id>` (`person:<id>` is accepted).
+- `PUT .../settings/{party}` returns `{setting, effective}`, the stored row (all `null` once nothing is set, and the row
+  is gone) and the party's effective values. A field left out of the body is left as it is.
+- `POST /api/v2/reach/lines` returns `{line}` (409 for a pair that already has a line, 422 for sender = receiver).
+  Either side may be `*`; a rule with receiver `*` has an empty With.
+- In POST bodies `rule` is a plain string or `null`; `null` or `""` retires the line's org rule. GET returns
+  `rule: {id, text} | null`.
+- `POST /api/v2/reach/lines/{id}` takes any of `sender`, `receiver`, `per_day` and `rule` (the full body is fine; only
+  what differs changes) and returns `{line}`. A changed sender or receiver (a flipped direction) moves the line and its
+  rule's Who and With; the caller must be able to change the new sender too, and a pair that already has a line is a
+  409.
+- `DELETE` returns `{id, removed: true}` and retires the line's rule.
+- Refusals: 403 for one's own party or a party the caller may not change, 422 for the owner's party, 404 for an
+  unknown party or line.
+- Audit objects are `reach_setting:<party>` and `reach_line:<id>`; events are `reach.setting_changed`,
+  `reach.line_added`, `reach.line_changed`, `reach.line_removed`.
 
 ## The panel
 
