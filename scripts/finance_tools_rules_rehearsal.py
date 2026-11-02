@@ -30,6 +30,7 @@ import urllib.request
 import uuid
 from datetime import date
 from pathlib import Path
+from urllib.parse import quote
 
 REPO = Path(__file__).resolve().parents[1]
 TODAY = date.today().isoformat()
@@ -50,6 +51,16 @@ SPEC_TOOLS = ("search", "report", "metric", "act", "action", "inbox", "card-fill
 RIGHTS = ("finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards")
 # business tables a refused or retried action must not change (counted, read-only)
 BUSINESS = ("fin_entries", "fin_bills", "fin_payments", "fin_cards", "fin_contacts", "fin_recipients", "fin_budgets")
+# each business list's API path, the key its rows come under and the key of its next page's cursor (None when unpaged)
+LISTS = {
+    "fin_entries": ("/api/v2/finance/transactions?source=entry", "rows", "next"),
+    "fin_bills": ("/api/v2/finance/bills", "bills", "next_cursor"),
+    "fin_payments": ("/api/v2/finance/payments", "payments", "next_cursor"),
+    "fin_cards": ("/api/v2/finance/cards", "cards", "next"),
+    "fin_contacts": ("/api/v2/finance/contacts", "contacts", "next_cursor"),
+    "fin_recipients": ("/api/v2/finance/recipients", "recipients", None),
+    "fin_budgets": ("/api/v2/finance/budgets", "budgets", None),
+}
 DEFAULT_RULES = ("rule:new-recipient", "rule:payment-over-1000", "rule:bot-card-standing", "rule:bot-books-over-5000",
                  "rule:bot-new-account", "rule:close-reopen-owner")
 # the rule outcomes that leave an action as it is (a limit that still fits leaves a committed action committed)
@@ -149,8 +160,34 @@ def denied(res):
                                 "outside the view"))
 
 
+def made(res, key):
+    """An id a committed action made, from its result."""
+    return str((res["raw"].get("result") or {}).get(key) or "")
+
+
+def rule_list(d):
+    """The finance rules the owner sees."""
+    return d.http("GET", "/api/v2/finance/rules", d.owner)[1].get("rules") or []
+
+
+def rules_named(d, part):
+    """How many of the finance rules have `part` in their name."""
+    return sum(1 for r in rule_list(d) if part in str(r.get("name", "")))
+
+
+def pay_from(d):
+    """The bank accounts the owner may pay from."""
+    return d.http("GET", "/api/v2/finance/pay-from", d.owner)[1].get("accounts") or []
+
+
+def banks(d):
+    """The bank accounts the owner sees, each with the connection it is linked to (the sources list)."""
+    groups = d.http("GET", "/api/v2/finance/sources", d.owner)[1].get("groups") or []
+    return [b for g in groups if g.get("group") == "banks" for b in (g.get("rows") or [])]
+
+
 class Demo:
-    """HTTP, MCP, CLI and read-only database access to the running demo."""
+    """HTTP, MCP and CLI access to the running demo, and read-only reads of its action and audit tables."""
 
     def __init__(self, base, fake, data_dir):
         self.base, self.fake = base.rstrip("/"), fake.rstrip("/")
@@ -253,8 +290,23 @@ class Demo:
         rows = self.rows(sql, args)
         return rows[0] if rows else None
 
+    def listed(self, path, rows_key, next_key=None):
+        """Every row of one finance list the owner sees, across its pages: the same reads the API gives."""
+        rows, cursor = [], ""
+        while True:
+            query = path + ("&" if "?" in path else "?") + "limit=200"
+            if cursor:
+                query += "&cursor=" + quote(cursor, safe="")
+            status, body = self.http("GET", query, self.owner)
+            if status != 200 or not isinstance(body, dict):
+                raise RuntimeError(f"{path} answered {status}")
+            rows += body.get(rows_key) or []
+            cursor = str(body.get(next_key) or "") if next_key else ""
+            if not cursor:
+                return rows
+
     def counts(self):
-        return {t: self.rows(f"SELECT COUNT(*) AS n FROM {t}")[0]["n"] for t in BUSINESS}
+        return {t: len(self.listed(*LISTS[t])) for t in BUSINESS}
 
     def insert_token(self, human, label):
         """A personal token for `human`, stored as the server stores one (sha256 of the plaintext)."""
@@ -349,20 +401,22 @@ def connect_mercury(d, run, rid):
     run.check("owner stores a rehearsal Mercury token in the vault", st < 300 and bool(cred), (st, str(body)[:200]))
     if not cred:
         return ""
+    before = {b.get("connection_id") for b in banks(d)}
     st, body = d.http("POST", "/api/v2/finance/connections", d.owner, {
         "provider": "mercury", "credential_id": cred, "name": name,
         "approver_email": "ben@acme.example", "token_creator_email": "ana@acme.example"}, key=f"{rid}-connect")
     run.check("owner connects the fake Mercury (ben approves, ana created the token)",
               st < 300 and body.get("status") == "committed", (st, str(body)[:300]))
-    row = d.scalar("SELECT m.id FROM fin_money_accounts m JOIN fin_connections c ON c.id = m.connection_id "
-                   "WHERE c.credential_ref = ? AND m.kind = 'bank' ORDER BY m.name LIMIT 1", (cred,))
-    return row["id"] if row else ""
+    payable = {a.get("id") for a in pay_from(d)}
+    mine = sorted((b for b in banks(d) if b.get("connection_id") not in before and b.get("id") in payable),
+                  key=lambda b: str(b.get("name")))
+    return str(mine[0]["id"]) if mine else ""
 
 
 def disable_stale_rules(d, run, rid):
     """Earlier rehearsal runs leave their rules live on the company, and a company rule judges every later action (a
     limit on all journals would deny this run's). Each run turns those off with the owner's audited rule_disable."""
-    stale = d.rows("SELECT id, name FROM fin_rules WHERE name LIKE 'rh %' AND active = 1")
+    stale = [r for r in rule_list(d) if str(r.get("name", "")).startswith("rh ") and r.get("active")]
     failed = []
     for i, rule in enumerate(stale):
         res = d.act(d.owner, "rule_disable", {"rule_id": rule["id"]}, op=f"{rid}-stale-{i}")
@@ -422,8 +476,7 @@ def fixtures(d, run, rid):
     run.check("owner grants cara finance.book (her journals then wait for ben)", res["status"] == "committed", res["raw"])
     res = d.act(d.owner, "contact_create", {"name": f"Rehearsal Vendor {rid}", "kind": "vendor",
                                             "default_account_id": fx["expense"]}, op=f"{rid}-vendor")
-    row = d.scalar("SELECT id FROM fin_contacts WHERE name=?", (f"Rehearsal Vendor {rid}",))
-    fx["vendor"] = row["id"] if row else ""
+    fx["vendor"] = made(res, "contact_id")
     run.check("owner makes a vendor contact", res["status"] == "committed" and fx["vendor"], res["raw"])
     fx["payee"] = add_payee(d, fx, f"Rehearsal Payee {rid}", run, "payee", "%09d" % secrets.randbelow(10**9))
     fx["fresh_payee"] = add_payee(d, fx, f"Rehearsal Fresh {rid}", run, "fresh", "%09d" % secrets.randbelow(10**9))
@@ -431,8 +484,7 @@ def fixtures(d, run, rid):
                                          "terms_days": 30, "lines": [{"account_id": fx["expense"], "amount": 5000,
                                                                       "description": "rehearsal bill"}]},
                 op=f"{rid}-bill-setup")
-    row = d.scalar("SELECT id FROM fin_bills WHERE number=?", (f"RH-{rid}",))
-    fx["bill"] = row["id"] if row else ""
+    fx["bill"] = made(res, "bill_id")
     run.check("owner records a bill for the vendor", res["status"] == "committed" and fx["bill"], res["raw"])
     return fx
 
@@ -445,10 +497,11 @@ def add_payee(d, fx, name, run, tag, account):
                 op=f"{fx['rid']}-{tag}-add")
     if res["status"] == "needs_approval" and res["approval_id"]:
         approve(d, res["approval_id"], note="setup payee")
-    row = d.scalar("SELECT id FROM fin_recipients WHERE name=?", (name,))
+    found = [r for r in (d.http("GET", "/api/v2/finance/recipients", d.owner)[1].get("recipients") or [])
+             if r.get("name") == name]
     run.check(f"owner adds the {tag} payee (its numbers are sealed)",
-              res["status"] in ("committed", "needs_approval") and row is not None, res["raw"])
-    return row["id"] if row else ""
+              res["status"] in ("committed", "needs_approval") and bool(found), res["raw"])
+    return str(found[0]["id"]) if found else ""
 
 
 def check1_surface(d, run, fx):
@@ -518,7 +571,7 @@ def check2_same_answer(d, run, fx):
               all(m[k] == c[k] for k in ("status", "code", "reason")),
               {k: (m[k], c[k]) for k in ("status", "code", "reason")})
     run.check("the dry run wrote nothing (no bill with that number)",
-              d.scalar("SELECT id FROM fin_bills WHERE number=?", ("RH-DRY-" + fx["rid"],)) is None)
+              not d.listed(f"/api/v2/finance/bills?q=RH-DRY-{fx['rid']}", "bills", "next_cursor"))
 
 
 def check3_bad_input(d, run, fx):
@@ -699,9 +752,10 @@ def check6_rules(d, run, fx):
                                             "money_account_id": fx["bank"], "account_id": fx["expense"]}, dry=True)
     run.check("6.4 #2: a bot's payment over $1,000 needs the owner", res["status"] == "needs_approval" and
               res["approver"] == owner, res["raw"])
-    res = d.act(d.owner, "card_create", {"holder": "bot:" + fin_slug, "budget_id": fx["ai_budget"],
+    res = d.act(fin_tok, "card_create", {"holder": "bot:" + fin_slug, "budget_id": fx["ai_budget"],
                                          "amount": 10000, "provider_user_id": "user-ana"}, dry=True)
-    run.check("6.4 #3: a standing card for a bot needs approval", res["status"] == "needs_approval", res["raw"])
+    run.check("6.4 #3: a bot's standing card for itself asks the finance admin (the owner)",
+              res["status"] == "needs_approval" and res["approver"] == owner, res["raw"])
     res = d.act(fin_tok, "journal", {"date": TODAY, "memo": "big", "lines": [
         {"account_id": fx["expense"], "amount": 600000}, {"account_id": fx["asset"], "amount": -600000}]}, dry=True)
     run.check("6.4 #5: a bot's books over $5,000 need approval", res["status"] == "needs_approval", res["raw"])
@@ -734,11 +788,11 @@ def check6_rules(d, run, fx):
                                             "money_account_id": fx["bank"], "account_id": fx["expense"]}, dry=True)
     run.check("deny beats the owner-approval default for a payment over $5,000",
               res["status"] == "denied" and "over $5,000" in res["reason"], res["raw"])
+    before_pay = d.counts()["fin_payments"]
     res = d.act(d.owner, "payment_create", {"recipient_id": fx["payee"], "amount": 600000,
                                             "money_account_id": fx["bank"], "account_id": fx["expense"]}, op=f"{rid}-big")
     run.check("the denied payment writes no payment row",
-              refused(res) and d.scalar("SELECT id FROM fin_payments WHERE idempotency_key=?",
-                                        (f"{rid}-big",)) is None, res["raw"])
+              refused(res) and d.counts()["fin_payments"] == before_pay, res["raw"])
     res = d.act(d.owner, "rule_create", {"kind": "gate", "name": f"rh {rid} limit journals",
                                          "words": "journals up to $1,000 at a time",
                                          "when": {"kind": "journal"},
@@ -795,8 +849,7 @@ def check6_rules(d, run, fx):
                                          "examples": [{"input": {"kind": "journal", "actor": "human:cara"},
                                                        "expect": "deny"}]}, op=f"{rid}-rule-freeze")
     run.check("a freeze rule saves", res["status"] == "committed", res["raw"])
-    freeze = d.scalar("SELECT id FROM fin_rules WHERE name=?", (f"rh {rid} freeze cara journals",))
-    freeze_id = freeze["id"] if freeze else ""
+    freeze_id = made(res, "rule_id")
     run.check("a rule change leaves a held action as it was (still waiting for ben)",
               approval_state(d, pending["approval_id"]) == "pending", approval_state(d, pending["approval_id"]))
     nxt = d.act(cara, "journal", small, op=f"{rid}-next")
@@ -820,10 +873,10 @@ def check6_rules(d, run, fx):
                                          "examples": []}, op=f"{rid}-rule-watch")
     run.check("a watch-kind rule is not created through the finance rule API (spec 6.1 keeps watch in Tico's rules)",
               refused(res), res["raw"])
-    before_rules = d.scalar("SELECT COUNT(*) AS n FROM fin_rules WHERE name LIKE ?", (f"%{rid}%",))["n"]
+    before_rules = rules_named(d, rid)
     res = d.act(d.owner, "rule_test", {"kind": "gate", "when": {"kind": "journal", "actor": "human:cara"},
                                        "outcome": {"outcome": "deny", "reason": "test"}}, op=f"{rid}-rule-test")
-    after_rules = d.scalar("SELECT COUNT(*) AS n FROM fin_rules WHERE name LIKE ?", (f"%{rid}%",))["n"]
+    after_rules = rules_named(d, rid)
     run.check("rule_test returns a result and writes no rule", res["status"] == "committed" and
               after_rules == before_rules, (res["status"], before_rules, after_rules, res["raw"]))
     changed = (res["raw"].get("result") or {}).get("changed") or []
