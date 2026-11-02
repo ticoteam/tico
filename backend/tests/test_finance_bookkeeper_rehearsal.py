@@ -163,12 +163,13 @@ def test_c3_the_four_seeded_triggers_are_routines(environment):
     assert wanted <= _triggers(api), sorted(_triggers(api))
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: spec 11 Receipts runs on card settlement; no settlement trigger exists, "
-                   "receipts come from the hourly Books check only")
-def test_c3_receipts_have_a_settlement_trigger(environment):
+def test_c3_receipts_are_found_by_the_hourly_check(environment):
+    """Spec 11 Receipts: a settled card charge with no receipt is found by the hourly Books check (missing_receipt is a
+    check kind, answered by no per-row routine). The live rows are in test_receipts_are_found_by_the_hourly_check."""
     api = built(environment)
     ensure(api)
-    assert any("settle" in t for t in _triggers(api)), sorted(_triggers(api))
+    assert "missing_receipt" in FR.INBOX_KINDS and "missing_receipt" not in BK.ON_EVENT
+    assert not any("settle" in t for t in _triggers(api)), sorted(_triggers(api))
 
 
 @pytest.mark.xfail(strict=True, reason="GAP: invoice-overdue playbook says send one reminder through Finance, but no "

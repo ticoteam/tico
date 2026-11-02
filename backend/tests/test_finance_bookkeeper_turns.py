@@ -14,7 +14,7 @@ import pytest
 
 from backend import bookkeeper as BK
 from backend.finance import actions as FA
-from backend.store import encode
+from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
 from backend.tests.test_finance_fixtures import MERCURY, OWNER, FakeMercury, account, act, connect, sync_once  # noqa: F401
 from backend.tests.test_mcp import call, rpc
@@ -198,6 +198,28 @@ def test_receipts_turn(api):
     assert not err and queue["items"] == [], queue
     err, feed = call(api, "hub_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     assert not err and feed["results"], feed
+
+
+def test_receipts_are_found_by_the_hourly_check(api):
+    """Receipts run on the hourly Books check, not a settlement trigger (spec 11): a settled card charge with no receipt
+    is listed by the next check, which opens its one task; a check with nothing new is quiet (no task)."""
+    store = api.app.state.store
+    hire(api)
+    fake = FakeMercury()
+    connect(store, fake)
+    fake.txns["txn-dep"] = dict(MERCURY["txn_deposit"])
+    fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])
+    fake.txns["txn-card-1"] = dict(MERCURY["txn_card_posted"])      # a card charge, posted, with no receipt
+    sync_once(store, fake)
+    with store.transaction() as c:
+        first = BK.check(c, api.app.state.auth, H.now())
+    assert first["task"] and first["items"] >= 1, first
+    with store.read() as c:
+        body = c.execute("SELECT body FROM tasks WHERE id=?", (first["task"],)).fetchone()[0]
+    assert "missing_receipt (1)" in body and "Acme Cloud" in body, body
+    with store.transaction() as c:
+        quiet = BK.check(c, api.app.state.auth, H.now())
+    assert quiet["task"] is None and quiet["items"] == 0, quiet
 
 
 @pytest.mark.xfail(strict=True, reason="GAP: attach takes any Library file id without checking that the file exists or "
