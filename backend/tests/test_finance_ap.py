@@ -283,7 +283,7 @@ def test_a_feed_row_pays_bills_in_parts_and_together_and_never_posts_expense_twi
     with books.transaction() as c:
         vendor = _vendor(c)
         one = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 30_000}], number="B-1")
-        two = _bill(c, vendor, [{"account_id": account(c, "6000"), "amount": 20_000}], number="B-2")
+        two = _bill(c, vendor, [{"account_id": account(c, "6900"), "amount": 20_000}], number="B-2")
         three = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 12_345}], number="B-3")
         for b in (one, two, three):
             assert act(c, OWNER, "bill_approve", {"bill_id": b}).status == "committed"
@@ -299,9 +299,9 @@ def test_a_feed_row_pays_bills_in_parts_and_together_and_never_posts_expense_twi
         assert act(c, OWNER, "bill_mark_paid", {"bill_id": two, "feed_id": fid}).code == "invalid"   # used up
         assert act(c, OWNER, "bill_mark_paid", {"bill_id": two, "account_id": account(c, "1000"),
                                                 "amount": 10_001}).code == "invalid"                # overpaid
-        assert (_balance(c, "6100"), _balance(c, "6000"), _balance(c, "6900")) == (42_345, 20_000, 0)
+        assert (_balance(c, "6100"), _balance(c, "6900")) == (42_345, 20_000)
         assert _balance(c, "2000") == -10_000                                    # bill two's unpaid half
-        assert _pnl(c, "cash") == {"6100": 42_345, "6000": 10_000}
+        assert _pnl(c, "cash") == {"6100": 42_345, "6900": 10_000}
         # The bank cancels the combined row: what it paid is owed again, in the books and the cash view.
         _ingest(c, {**_txn("txn-both", -400.0, who="Acme Supplies Ltd"), "status": "cancelled"}, LATER)
         assert FR.bill(c, OWNER, one)["status"] == "open" and FR.bill(c, OWNER, two)["remaining"] == 20_000
@@ -339,7 +339,7 @@ def test_cash_and_accrual_agree_exactly_once_documents_are_paid_and_partials_rec
     rng = random.Random(7)
     with books.transaction() as c:
         vendor = _vendor(c)
-        lines = [account(c, code) for code in ("6000", "6100", "5000")]
+        lines = [account(c, code) for code in ("6900", "6100")]
         paid_total = 0
         for n in range(12):
             parts = [{"account_id": rng.choice(lines), "amount": rng.randint(1, 99_999)} for _ in range(rng.randint(1, 4))]
@@ -1140,3 +1140,14 @@ def test_a_bill_or_invoice_dated_in_a_closed_month_names_its_own_date_in_the_mem
             "SELECT source_id, entry_date, memo FROM fin_entries WHERE source_id IN (?, ?)", (bid, iid))}
         assert rows[bid][0] == AT[:10] and rows[bid][1].endswith("(dated 2026-09-20)"), rows
         assert rows[iid][0] == AT[:10] and rows[iid][1].endswith("(dated 2026-09-21)"), rows
+
+
+def test_a_bill_line_cannot_post_to_a_bank_a_receivable_a_prepaid_balance_or_a_group_account(books):
+    """A bill's lines are expenses: a bank, receivable, prepaid or group account is refused, with the reason."""
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        for code in ("1000", "1100", "1200", "6000"):
+            got = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10",
+                                                 "lines": [{"account_id": account(c, code), "amount": 5_000}]})
+            assert (got.status, got.code) == ("failed", "invalid"), (code, got)
+        _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 5_000}])

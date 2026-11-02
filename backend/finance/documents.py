@@ -50,11 +50,22 @@ CONTACT_OF = {"bill": "vendor", "invoice": "customer"}
 SIGN = {"bill": 1, "invoice": -1}       # a bill's lines are debits, an invoice's credits
 OPEN = {"bill": AP.OPEN_BILL, "invoice": AP.OPEN_INVOICE}
 LINE_TYPES = {"bill": ("expense", "asset"), "invoice": ("income",)}
+# A bill's lines are expenses: money, receivables and prepaid balances are not, and a group account only holds others.
+NOT_BILL_SUBTYPES = ("bank", "credit_card", "clearing", "receivable", "prepaid", "prepaid_expense")
 
 
 def _line_type_ok(kind: str, account: L.Account) -> bool:
     """A line posts to the kind's own types, or to a sales tax account: a bill remits it, an invoice collects it."""
     return account.type in LINE_TYPES[kind] or account.subtype == SALES_TAX
+
+
+def _bill_line_refusal(ctx: Ctx, account: L.Account) -> str:
+    """Why a bill line may not post to this account, or '' when it may."""
+    if account.subtype in NOT_BILL_SUBTYPES:
+        return f"a bill line cannot post to {account.name}: a bill spends an expense account"
+    if any(a.parent_id == account.id for a in ctx.accounts.values()):
+        return f"{account.name} groups other accounts: post the bill line to one of them"
+    return ""
 NAME_MIN = 4                            # a counterparty matches a contact's name on at least this many characters
 CLEARING = ("1050", "Payments clearing", "asset", "clearing")
 
@@ -289,6 +300,9 @@ def resolve_lines(ctx: Ctx, who: str, kind: str, contact: Any,
         account = ctx.accounts.get(x.account_id)
         if account is None or not account.active or account.id == ctl or not _line_type_ok(kind, account):
             raise FinanceError(NOT_FOUND, f"no such {'/'.join(LINE_TYPES[kind])} account for a {kind} line")
+        why = _bill_line_refusal(ctx, account) if kind == "bill" else ""
+        if why:
+            raise invalid(why)
         if x.prepaid and account.type != "expense":
             raise invalid("a prepaid line posts to an expense account")
         tags = shared.check_tags(ctx, posting.with_team(ctx, x.tags))

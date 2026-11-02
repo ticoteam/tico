@@ -75,7 +75,7 @@ def test_cash_and_accrual_part_ways_until_the_bill_is_paid(books):  # noqa: F811
         _acme(c)
         vendor = str(act(c, OWNER, "contact_create", {"name": "Acme Tools", "kind": "vendor"}).result["contact_id"])
         bill = str(act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-03",
-                                                 "lines": [{"account_id": account(c, "6100"), "amount": 7_000}]}
+                                                 "lines": [{"account_id": account(c, "6110"), "amount": 7_000}]}
                        ).result["bill_id"])
         assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
         spend(c, "5100", 3_100, day="2026-10-10")
