@@ -4449,8 +4449,6 @@ class Execution:
                 continue
             incoming_conversation = H.conversation(c, row["conversation_id"])
             incoming_task = work_task_id(H.message(c, row["id"]), incoming_conversation)
-            if not threads.still_addressed(c, H.message(c, row["id"]), "bot:" + attempt["bot"]):
-                continue                    # left queued: its own claim settles it
             if incoming_task and incoming_task != origin_task and row["kind"] == "notice":
                 continue                    # a new task gets its own run, even in the same bot room
             if lanes and job_lane(c, attempt["bot"], followed, H.message(c, row["id"]), incoming_conversation,
@@ -4460,6 +4458,9 @@ class Execution:
                 # Folding another task's private message into this run would make the run private
                 # too, shutting out whoever started it. It waits queued and gets its own run.
                 continue
+            # After the checks above: this reads the thread and its root, and a poll passes over a whole backlog.
+            if not threads.still_addressed(c, H.message(c, row["id"]), "bot:" + attempt["bot"]):
+                continue                    # left queued: its own claim settles it
             if attempt["bot"] == H.FLEET_MAINTAINER:
                 refs = json.loads(row["refs_json"] or "{}")
                 origin = c.execute("SELECT j.message_id,m.from_actor FROM jobs j JOIN messages m ON m.id=j.message_id "
