@@ -79,7 +79,8 @@ def test_a_bot_woken_in_a_sub_thread_answers_there_from_that_subtree_and_no_sibl
     prompt = computer.prompts()[-1]["prompt"]
     assert "list the risks" in prompt, "the turn carries the message it was woken for"
     assert "SIDE-SECRET" not in prompt, "a turn in one sub-thread never carries a sibling sub-thread"
-    assert "Acme reply." not in bodies(api, t["id"]), "the root shows the answer only through the sub-thread summary"
+    in_tree = [row for row in timeline(api, "ana-test", t["id"]) if row.get("body") == "Acme reply."]
+    assert [row["thread_id"] for row in in_tree] == [sub], "the root's timeline shows the answer under its sub-thread"
     reply = next(row for row in timeline(api, "ana-test", sub) if row.get("body") == "Acme reply.")
     assert reply["thread_id"] == sub, "the answer lands in the sub-thread that asked"
 

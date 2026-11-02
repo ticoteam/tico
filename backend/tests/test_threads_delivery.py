@@ -362,6 +362,10 @@ def test_a_groups_people_join_with_it_by_their_own_read_marks(api, monkeypatch):
     assert joining == ["human:cara"]
 
 
+def sidebar_row(api, thread_id, token="ben-test"):
+    return next(row for row in api.get("/api/v2/threads", headers=headers(token)).json()["threads"] if row["id"] == thread_id)
+
+
 def test_migrated_and_imported_messages_are_never_unread(api):
     store = api.app.state.store
     thread = new_thread(api, members=("human:ben",))
@@ -370,6 +374,7 @@ def test_migrated_and_imported_messages_are_never_unread(api):
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
                   (threads.MIGRATION_KEY, json.dumps({"seq": carried["seq"]})))
     assert me(api, thread["id"], "ben-test")["unread"] == 0
+    assert sidebar_row(api, thread["id"])["me"]["unread"] == 0, "a root row counts from the same floor as its thread"
     before = rows(api, "SELECT last_unread_seq FROM conversations WHERE id=?", thread["id"])[0]["last_unread_seq"]
     with store.transaction() as c:
         imported = threads.post(c, "human:ana", thread["id"], "Imported", refs={"import": True})
@@ -379,6 +384,7 @@ def test_migrated_and_imported_messages_are_never_unread(api):
     assert delivery(api, imported["id"], "human:ben") is None
     say(api, thread["id"], "Live")
     assert me(api, thread["id"], "ben-test")["unread"] == 1
+    assert sidebar_row(api, thread["id"])["me"]["unread"] == 1
 
 
 # ----------------------------------------------------------------------------- edits and mentions (27)

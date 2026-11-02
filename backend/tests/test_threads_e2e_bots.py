@@ -72,8 +72,13 @@ def test_a_mention_in_a_bots_home_wakes_it_once_for_that_message(api):
     assert claim(api, r, "cpo") is None, "the same message does not wake the bot a second time"
 
 
-def test_the_loop_guard_stops_bots_pinging_each_other_and_a_person_resumes_them(api):
+def test_the_loop_guard_stops_bots_pinging_each_other_and_a_person_resumes_them(api, monkeypatch):
     require_threads_api(api)
+    # A plain message from one bot to another waits for its next run (bot_to_bot): here each one wakes, as a flagged
+    # message does, so the bots really do ping each other until the guard stops them.
+    from backend import rules
+    monkeypatch.setattr(rules, "bot_to_bot_decision", lambda *a, **k: None)
+    monkeypatch.setattr(rules, "judge", lambda *a, **k: None)
     r = bot_runner(api, "cpo", "product-design")
     t = create_thread(api, title="Ping pong", members=["bot:cpo", "bot:product-design"])
     say(api, "ana-test", t["id"], "@cpo start the loop")

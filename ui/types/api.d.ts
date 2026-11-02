@@ -4860,6 +4860,7 @@ export type ThreadPatch = {
   archived?: boolean | null;
   audience?: string | null;
   audience_group_id?: string | null;
+  retention_days?: number | null;
   title?: string | null;
 };
 
@@ -4934,6 +4935,7 @@ export type ThreadView = {
   parent_id?: string | null;
   parent_message_id?: string | null;
   path?: Array<unknown>;
+  retention_days?: number | null;
   root_id: string;
   task_id?: string | null;
   title: string;
