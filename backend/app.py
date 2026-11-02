@@ -5352,6 +5352,10 @@ def create_app(settings=None):
             if body.task_id:
                 auth.task(c, who, body.task_id)
             to = None
+            from .company_page import editions
+            if editions.own_click_approval(body.payload):
+                # Only the Company page's own routes ask for these: nobody words what an outside edition approves.
+                raise Problem("forbidden", "Ask for this from the Company page", 403)
             if body.kind in proposals.KINDS:     # a redesign proposal: checked now, decided by the top of the org
                 proposals.check(c, body.kind, body.payload)
                 to = proposals.decider(c)
@@ -5386,8 +5390,14 @@ def create_app(settings=None):
                 # Sending off the install is a person's own tap: not their token or the Assistant (which may have drafted it).
                 from .support import require_person
                 require_person(who)
+            from .company_page import editions
+            own_click = editions.own_click_approval(row.get("payload"))
+            if own_click:
+                editions.require_own_click(who)      # what goes outside the company: never a token or the Assistant
             privacy.require_payload(c, who, row)
             decided = H.approval_decide(c, who.actor, aid, body.decision, body.note)
+            if own_click:
+                editions.approval_decided(c, decided)
             if row["kind"] in proposals.KINDS and body.decision == "approved":
                 proposals.apply(c, auth, settings, who, row)     # the hub applies it itself (CONTRACT §5)
             if row["kind"] in ("finance", "spend"):
@@ -5414,6 +5424,9 @@ def create_app(settings=None):
             row = auth.approval(c, who, aid)
             if row["requested_by"] != who.actor or row["payload_hash"] != body.payload_hash:
                 raise Problem("approval", "Consume requires the requester and exact approved payload", 403)
+            from .company_page import editions
+            if editions.own_click_approval(row.get("payload")):
+                raise Problem("approval", "The Company page spends this approval when it publishes", 403)
             return H.approval_consume(c, who.actor, aid)
         return mutate(request, body, work)
 
@@ -7935,6 +7948,8 @@ def create_app(settings=None):
     screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
     from . import finance_routes
     finance_routes.install(app, store, auth, mutate)    # Finance: budgets, P&L, expenses, actions (backend/finance)
+    from .company_page import api_editions
+    api_editions.register(app, store, auth, mutate)     # the Company page's editions and their approvals
     from . import bills_address
     bills_address.install(app, store, auth)             # the bills address: emailed bills become draft bills
     outcome_stats.install(app, store, auth)

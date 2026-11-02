@@ -269,13 +269,24 @@ def require_addressed(c, who, path, body):
     for s in steps or []:
         target = str(s.get("path") or "") if isinstance(s, dict) else ""
         if (m := _DECIDING.fullmatch(target)):
-            message_id = (H.approval(c, m.group(1)) or {}).get("message_id")
+            row = H.approval(c, m.group(1)) or {}
+            refuse_own_click(row)
+            message_id = row.get("message_id")
         elif (m := re.fullmatch(r"/api/v2/messages/([^/]+)/answer", target)):
             message_id = m.group(1)
         else:
             continue
         if (H.message(c, message_id) or {}).get("to_actor") != who.actor:
             raise Problem("forbidden", "That approval or question is not addressed to you", 403)
+
+
+def refuse_own_click(row):
+    """A Company page edition or stats board is decided only by the person's own click in Tico, either way, whatever
+    "My assistant can decide approvals for me" says: not on a card, not on their words (backend/company_page/editions.py)."""
+    from .company_page.editions import own_click_approval
+    if own_click_approval(row.get("payload")):
+        raise Problem("approve_own_click", "What the Company page sends outside is decided only by the person's own "
+                      "click in Tico, so leave it out and tell them it is waiting", 403)
 
 
 def require_named_approval(c, who, ref):
@@ -1693,6 +1704,7 @@ def install(app, store, auth, mutate, onboarding):
                 if row["requested_by"] == "bot:" + bot:
                     raise Problem("own_request", "You asked for this approval yourself, so it stays the person's "
                                   "click: propose it on a card (`hub assistant propose`)", 403)
+                refuse_own_click(row)
                 if row["kind"] == "support":
                     raise Problem("approve_support", "A report to the Tico team is sent only on the person's own "
                                   "click, so leave it out of the read-back", 403)
