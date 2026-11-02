@@ -143,8 +143,9 @@ jobs:
             | while read -r tag; do git merge-base --is-ancestor "$tag" "$SHA" && { echo "$tag"; break; }; done)"
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           build=true
-          # runner/harnesses is part of the runner's source fingerprint (runner-rs/build.rs); this file holds the Mac build.
-          if [ -n "$previous" ] && git diff --quiet "$previous" "$SHA" -- runner-rs relay-rs runner/harnesses .github/workflows/release.yml \
+          # runner/harnesses is part of the runner's source fingerprint (runner-rs/build.rs). A change to the macos job
+          # alone (say, its Rust toolchain) does not rebuild: it takes effect with the next runner or relay change.
+          if [ -n "$previous" ] && git diff --quiet "$previous" "$SHA" -- runner-rs relay-rs runner/harnesses \
              && has_mac "$previous"; then
             build=false
           fi
