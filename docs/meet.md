@@ -81,7 +81,7 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 
 | Method and path | What it does |
 | --- | --- |
-| `GET /api/v2/threads/{thread_id}/calls` | The thread's calls, newest first. `limit` (1-50) and `before` page through them. A page also stays under 256 KB; `next_before` is the cursor for the next page, `null` at the end |
+| `GET /api/v2/threads/{thread_id}/calls` | The thread's calls, newest first. `limit` (1-50) and `before` page through them. A page also stays under 256 KB; `next_before` is the cursor for the next page, `null` at the end. `available` says whether this server can start a call |
 | `POST /api/v2/threads/{thread_id}/calls` | Start a call. Body: `title` (optional), `speak_replies` (optional, default false) |
 | `GET /api/v2/calls/{call_id}` | One call: state, connector, people, bots, `speak_replies`, how it ended, and `holds` (the connector only: posts the thread refused at the end) |
 | `POST /api/v2/calls/{call_id}/join` | Join. Returns `url`, `token` and `expires_in` (300) |

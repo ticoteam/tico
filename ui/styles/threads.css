@@ -175,6 +175,13 @@ a.th-who:hover{text-decoration:underline}
 .thd-aud{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;border:0}
 .thd-aud legend{margin-bottom:4px;color:var(--muted);font-size:var(--t-sm);font-weight:600}
 .thd-aud label{display:flex;align-items:center;gap:var(--s2)}
+.thd-aud-word{flex:none;white-space:nowrap}
+.dash-form .thd-aud select{flex:1 1 0;min-width:0;width:auto}
+/* a long error takes its own line; the buttons never shrink */
+.thd-dialog .dash-form-foot{flex-wrap:wrap}
+.thd-dialog .dash-form-foot button{flex:none;white-space:nowrap}
+.thd-dialog .dash-form-foot .err:not(:empty){flex:1 1 100%}
+.thd-dialog .dash-form-foot .err a{color:inherit;text-decoration:underline}
 .thd-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
 .thd-list li{display:flex;align-items:center;gap:var(--s2);padding:5px 4px}
 .thd-list li>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -184,7 +191,10 @@ a.th-who:hover{text-decoration:underline}
 @media (max-width:760px){
   .thread-page{max-width:none}
   /* the title needs the room: the mark before it says private or public, and the phone icon says call */
-  .thv-aud,.thv-call-word{display:none}
+  .thv-call-word{display:none}
+  /* no room beside the title and actions, so the audience takes a line of its own under them */
+  .thv-titleline{flex-wrap:wrap}
+  .thv-aud{order:1;flex:0 0 100%;font-size:var(--t-xs)}
   .th-msg{padding-left:calc(4px + var(--d) * 16px)}
   .th-sub::before{left:calc(var(--d) * 16px - 6px)}
   .th-subhead{margin-left:calc(4px + var(--d) * 16px)}
@@ -216,7 +226,9 @@ body.in-call #main.chat-layout{padding-bottom:72px}
   .call-lbl{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 }
 .th-followup .th-body{color:var(--muted);font-size:var(--t-sm)}
-.dash-home{margin-top:var(--s4)}
+/* the same side gutters as .dash-grid above it */
+.dash>.dash-home{margin:0 28px 24px}
+@media (max-width:760px){.dash>.dash-home{margin:0 12px 24px}}
 
 /* the bot page's Home and DM keep the thread's actions in one short row */
 .thv-compact{justify-content:flex-end;min-height:0;padding:2px 0}

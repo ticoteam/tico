@@ -152,8 +152,8 @@ The commands are `hub thread` in the CLI and `hub_thread_*` over MCP. The REST r
 and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The thread routes a client calls are:
 
 - `GET /api/v2/threads/home/{actor}`: a teammate's Home, with the actor in the path (`bot:ops` keeps its colon).
-- `GET /api/v2/threads/dm?with=<actor>`: your DM with one person or bot. `POST /api/v2/threads/dm` with `members` and an
-  optional `body` makes a group DM.
+- `GET /api/v2/threads/dm?with=<actor>`: your DM with one person or bot, made if there is none. With `create=false` it
+  makes nothing and answers 404 `no_dm`. `POST /api/v2/threads/dm` with `members` and an optional `body` makes a group DM.
 - `GET /api/v2/threads?with=<actor>&cursor=&limit=`: the threads shared with that actor that you can read.
 - `PUT` and `DELETE /api/v2/messages/{id}/reactions/{emoji}`: add or remove your reaction.
 - `POST /api/v2/threads/{id}/open-earlier`: a bot's manager opens its earlier messages to its Home readers.

@@ -475,7 +475,7 @@ async function messageMenu(page, text, item) {
         omar = await pageAs(browser, hub, 'omar', {phone: false});
         dana.on('dialog', d => d.accept());
         omar.on('dialog', d => d.accept());
-        // Calls need LiveKit; on a hub without it the header says "Calls are off" and the buttons are absent. Each call
+        // Calls need LiveKit; on a hub without it the owner's header says "Set up calls" from the start and the buttons are absent. Each call
         // step shoots what the header shows, and a missing button is recorded as a screen, not a failure.
         await step(dana, 'start a call', phone, name, async () => {
           await shell(dana, `#/thread/${S.plan.id}`, '.thv-composer')();

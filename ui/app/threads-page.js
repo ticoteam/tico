@@ -126,11 +126,12 @@ function threadPickerWire(root) {
     root.querySelectorAll('.thd-pick').forEach(l => { l.hidden = !!w && !l.dataset.label.includes(w) && !l.querySelector('input').checked; });
   };
 }
-function threadAudienceHTML(t = null) {
+// `titled`: the dialog's own title already says Who can read.
+function threadAudienceHTML(t = null, {titled = false} = {}) {
   const groups = S.orgGroups || [], aud = t?.audience || 'members';
-  return `<fieldset class="thd-aud"><legend>Who can read</legend>
+  return `<fieldset class="thd-aud"${titled ? ' aria-label="Who can read"' : ''}>${titled ? '' : '<legend>Who can read</legend>'}
     <label class="dash-pick-row"><input type="radio" name="audience" value="members"${aud === 'members' ? ' checked' : ''}>Only members</label>
-    ${groups.length ? `<label class="dash-pick-row"><input type="radio" name="audience" value="team"${aud === 'team' ? ' checked' : ''}>A team
+    ${groups.length ? `<label class="dash-pick-row"><input type="radio" name="audience" value="team"${aud === 'team' ? ' checked' : ''}><span class="thd-aud-word">A team</span>
       <select name="group" aria-label="Team">${groups.map(g => `<option value="${esc(g.id)}"${t?.audience_group_id === g.id ? ' selected' : ''}>${esc(g.name || g.id)}</option>`).join('')}</select></label>` : ''}
     <label class="dash-pick-row"><input type="radio" name="audience" value="company"${aud === 'company' ? ' checked' : ''}>Company</label></fieldset>`;
 }
@@ -294,7 +295,7 @@ async function threadEarlierOpen(view, homeId) {
 function threadShareOpen(view) {
   const t = view.thread;
   const dlg = threadDialog('thread-share', 'Who can read');
-  dlg.innerHTML = `<form>${threadDialogHead('Who can read')}<div class="dash-form">${threadAudienceHTML(t)}<div class="tcn-host"></div></div>${threadDialogFoot('Save')}</form>`;
+  dlg.innerHTML = `<form>${threadDialogHead('Who can read')}<div class="dash-form">${threadAudienceHTML(t, {titled: true})}<div class="tcn-host"></div></div>${threadDialogFoot('Save')}</form>`;
   threadDialogWire(dlg);
   renderThreadConnect(t, dlg.querySelector('.tcn-host'));   // Slack and Shared with (ui/app/thread-connect.js)
   const form = dlg.querySelector('form');
@@ -355,7 +356,10 @@ function threadMakeTask(m, view) {
       const id = r?.task?.id || r?.id;
       toast('Task made', false, id ? {label: 'Open', run: () => { location.hash = '#/task/' + id; }} : undefined);
     } catch (e) {
-      form.querySelector('[data-status]').textContent = e.body?.error?.code === 'duplicate' ? 'A task already asks for this' : e.message;
+      const status = form.querySelector('[data-status]'), dup = e.body?.error?.code === 'duplicate', twin = dup && e.body.error.task_id;
+      status.textContent = dup ? 'A task already asks for this' : e.message;
+      if (twin) status.innerHTML = `<a href="#/task/${encodeURIComponent(twin)}" data-close>A task already asks for this</a>`;
+      threadDialogWire(dlg);
     }
   };
   dlg.showModal();

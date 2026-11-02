@@ -466,12 +466,21 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .bot-filter-actions .spacer{flex:1}
 .bot-filter-actions .err:empty{display:none}
 .access-editor{width:min(660px,94vw);padding:0;border:0;background:var(--surface);color:var(--ink)}
-.access-body{padding:18px;display:flex;flex-direction:column;gap:12px;max-height:82vh;overflow:auto}
+.access-body{padding:18px;display:flex;flex-direction:column;gap:12px}
+/* As a dialog: the sections scroll between a head and a foot that stay, so Save never leaves the screen. */
+dialog.access-editor{max-height:min(88dvh,960px);border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.45);overflow:hidden}
+dialog.access-editor[open]{display:flex;flex-direction:column}
+dialog.access-editor::backdrop{background:rgba(0,0,0,.5)}
+dialog.access-editor>form{display:flex;flex-direction:column;min-height:0;flex:1}
+dialog.access-editor .tmodal-head{flex:none;padding:14px 14px 12px 18px;border-bottom:1px solid var(--line)}
+dialog.access-editor .access-body{flex:1;min-height:0;overflow:auto}
+.access-foot{flex:none;padding:12px 18px;border-top:1px solid var(--line);flex-wrap:wrap}
 .access-body p{margin:0}
 .access-presets,.access-level{margin:0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;min-width:0}
 .access-presets legend,.access-level legend{padding:0 4px;font-size:var(--t-sm);color:var(--muted)}
 .access-presets label{display:flex;align-items:flex-start;gap:8px;padding:5px 0;cursor:pointer}
-.access-presets small,.access-level legend small{display:block;color:var(--muted);font-weight:400}
+.access-presets small{display:block;color:var(--muted);font-weight:400}
+.access-level .access-hint{margin:0 0 6px;font-size:var(--t-sm);color:var(--muted)}
 .access-level .access-everyone{display:flex;align-items:center;gap:6px;padding:2px 0 6px}
 .access-group{margin:6px 0 0}.access-group>span{display:block;font-size:var(--t-sm);color:var(--muted);margin-bottom:3px}
 .access-list{display:flex;flex-wrap:wrap;gap:4px 14px;max-height:132px;overflow:auto;padding:2px}

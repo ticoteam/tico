@@ -121,9 +121,11 @@ function renderThreadConnect(thread, el) {
 async function tcnSlackDraw(thread, sec) {
   const body = sec.querySelector('.tcn-body');
   const fail = e => { sec.hidden = false; body.innerHTML = `<span class="err" role="status">${esc(e.message)}</span>`; };
-  let link;
-  try { link = (await get('/v2/slack/links?limit=1&thread=' + encodeURIComponent(thread.id), {fresh: true})).links?.[0] || null; }
-  catch (e) { fail(e); return; }
+  let link, slackOn;
+  try {
+    const r = await get('/v2/slack/links?limit=1&thread=' + encodeURIComponent(thread.id), {fresh: true});
+    link = r.links?.[0] || null; slackOn = r.available !== false;
+  } catch (e) { fail(e); return; }
   if (!sec.isConnected) return;
   if (link) {
     sec.hidden = false;
@@ -138,7 +140,8 @@ async function tcnSlackDraw(thread, sec) {
     };
     return;
   }
-  sec.hidden = !tcnSlackLinkable(thread);
+  // With Slack off a link has nothing to carry it; Connections says how to turn it on.
+  sec.hidden = !slackOn || !tcnSlackLinkable(thread);
   if (sec.hidden) return;
   body.innerHTML = `<div class="tcn-form"><input name="tcn-channel" placeholder="#channel" aria-label="Slack channel" maxlength="200" autocomplete="off">
       <label class="tcn-check"><input type="checkbox" name="tcn-history">Copy history</label>
@@ -201,6 +204,9 @@ async function tcnSharedDraw(thread, sec) {
     return;
   }
   const members = (entry?.members || []).filter(m => m.status === 'active');
+  // Without the Gateway no company can be reached, so there is nothing to offer here (Connections says what comes first).
+  sec.hidden = !fed.federation?.gateway && !members.length;
+  if (sec.hidden) return;
   const inside = new Set(members.map(m => m.install));
   const open = (fed.peerings || []).filter(p => p.status === 'active' && !p.paused && !inside.has(p.peer));
   body.innerHTML = `<ul class="cn-list tcn-list">${members.map(m => `<li class="cn-row cn-xrow" data-install="${esc(m.install)}">

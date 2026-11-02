@@ -74,7 +74,7 @@ async function thvResolve(view) {
   }
   if (o.dm) {
     try {
-      const r = await get('/v2/threads/dm?with=' + encodeURIComponent(o.dm), {fresh: true});
+      const r = await get('/v2/threads/dm?create=false&with=' + encodeURIComponent(o.dm), {fresh: true});
       const t = r?.thread !== undefined ? r.thread : r;
       if (t?.id) { view.thread = t; return t.id; }
     } catch (e) { if (e?.status !== 404) throw e; }
@@ -685,6 +685,12 @@ async function thvSend(view, {text, files = [], lib = [], parent = null}) {
   const body = {text, ...(refs ? {refs} : {}), ...(parent ? {parent_message_id: parent.id} : {})};
   try {
     let r;
+    // An upload goes to a thread, so a first message with files makes the DM before it sends.
+    if (!view.id && view.opts.dm && files.length) {
+      const made = await post('/v2/threads/dm', {members: [view.opts.dm]});
+      const t = made?.thread || made;
+      if (t?.id) { view.thread = t; thvSetId(view, t.id); }
+    }
     if (!view.id && view.opts.dm) {
       r = await post('/v2/threads/dm', {members: [view.opts.dm], body: text, ...(refs ? {refs} : {})});
       const t = r?.thread || r;
@@ -769,6 +775,7 @@ async function thvClick(view, ev) {
   if (t.closest('[data-th-file]')) { const b = t.closest('[data-th-file]'); void openFileLink(b.dataset.thFile, b.dataset.name); return; }
   if (t.closest('[data-th-expand]')) { void thvExpand(view, t.closest('[data-th-expand]')); return; }
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }
+  if (t.closest('[data-call-setup]')) { window.supportStart('Please set up calls on our Tico server.'); return; }
   if (t.closest('[data-call]')) { void callAction(view, t.closest('[data-call]').dataset.call); return; }
   if (t.closest('[data-thv-menu]')) { threadMenuOpen(view, t.closest('[data-thv-menu]')); return; }
   if (t.closest('[data-th-earlier]')) {

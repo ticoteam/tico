@@ -214,7 +214,7 @@ async function accessEditor({path, name, levels, presets, skipBot = '', skipPers
     : '<span class="muted">None</span>'}</div></div>`;
   const picker = (levels, title, hint, withEveryone) => {
     const level = draft[levels[0]];
-    return `<fieldset class="access-level" data-access-levels="${levels.join(',')}"><legend>${esc(title)}${hint ? `<small>${esc(hint)}</small>` : ''}</legend>
+    return `<fieldset class="access-level" data-access-levels="${levels.join(',')}"><legend>${esc(title)}</legend>${hint ? `<p class="access-hint">${esc(hint)}</p>` : ''}
       ${withEveryone ? `<label class="access-everyone"><input type="checkbox" data-access-everyone ${level.everyone ? 'checked' : ''}> Everyone</label>` : ''}
       <div data-access-lists ${level.everyone ? 'hidden' : ''}>${list(level, 'people', people.map(p => ({id: p.id, name: p.name || p.id})), 'Humans')}
       ${teams.length ? list(level, 'teams', teams, 'Groups') : ''}${bots.length ? list(level, 'bots', bots.map(b => ({id: b.name, name: b.display_name || b.name})), 'Bots') : ''}</div></fieldset>`;
@@ -230,8 +230,8 @@ async function accessEditor({path, name, levels, presets, skipBot = '', skipPers
     <div class="access-body">
       <fieldset class="access-presets"><legend>Access</legend>${presets.map(([value, label, hint]) =>
         `<label><input type="radio" name="preset" value="${value}" ${value === preset ? 'checked' : ''}><span>${esc(label)}<small>${esc(hint)}</small></span></label>`).join('')}</fieldset>
-      <div data-access-pickers></div>
-      <div class="row"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-access-close>Cancel</button><span class="muted" data-access-status role="status"></span></div></div></form>`;
+      <div data-access-pickers></div></div>
+    <div class="row access-foot"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-access-close>Cancel</button><span class="muted" data-access-status role="status"></span></div></form>`;
   paintPickers();
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-access-status]');
   dialog.querySelectorAll('[data-access-close]').forEach(button => button.onclick = () => settingsPanelClose(dialog));

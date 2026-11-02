@@ -239,11 +239,14 @@ def install(app, store, auth, mutate, rule_check):
             return threads.get(c, v, row["id"])
 
     @app.get("/api/v2/threads/dm")
-    def dm_thread(request: Request, peer: str = Query(..., alias="with")):
+    def dm_thread(request: Request, peer: str = Query(..., alias="with"), create: bool = True):
         """My DM with `with`: the open one with exactly us two, or a new one. Only starting one needs Write on them (the
         reply-back rule applies): 404 when I cannot see them, 403 naming Write when I can see them but may not message
-        them."""
+        them. `create=false` makes nothing: 404 `no_dm` when there is none yet."""
         v = threads.viewer(auth, request.state.identity)
+        if not create:
+            with store.read() as c:
+                return threads.dm(c, v, [peer], make=False)
         with store.transaction() as c:
             return threads.dm(c, v, [peer])
 

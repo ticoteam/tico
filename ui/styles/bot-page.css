@@ -295,7 +295,8 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-settings-panel .tmodal-head{position:static;padding:12px 14px;border-bottom:1px solid var(--line)}
 .bot-settings-panel :is(.owner-picker-body,.access-body){padding:14px}
 
-.bot-settings-panel .access-body{max-height:none;overflow:visible}
+.bot-settings-panel .access-body{overflow:visible}
+.bot-settings-panel .access-foot{padding:0 14px 14px;border-top:0}
 
 /* Settings' pause row: a title, one line of why, the button at the end. The header's Paused badge is the at-a-glance. */
 .bot-pause-row{display:flex;align-items:center;justify-content:space-between;gap:16px}

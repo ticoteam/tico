@@ -16,6 +16,16 @@ def test_a_task_from_a_members_thread_message_is_private_with_a_link_back_and_a_
     post(api, "threads/messages/nope/task", {"title": "Missing", "owner": "coo"}, token="ben-test", expected=404)
 
 
+def test_a_repeated_task_is_refused_with_the_task_it_repeats(api):
+    thread = new_thread(api, title="Pricing", members=("human:ben",), body="Ship the pricing page Friday")
+    message_id = thread["message"]["id"]
+    first = post(api, f"threads/messages/{message_id}/task", {"title": "Ship pricing", "owner": "coo"}, token="ben-test")
+    again = api.post(f"/api/v2/threads/messages/{message_id}/task", json={"title": "Ship pricing", "owner": "coo"},
+                     headers=headers("ben-test"))
+    assert again.status_code == 422, again.text
+    assert again.json()["error"]["code"] == "duplicate" and again.json()["error"]["task_id"] == first["id"]
+
+
 # ----------------------------------------------------------------------------- A task's own thread: unread for its maker
 def thread_me(api, thread_id, token="ana-test"):
     response = api.get(f"/api/v2/threads/{thread_id}", headers=headers(token))

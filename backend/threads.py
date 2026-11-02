@@ -2158,15 +2158,20 @@ def _require_write(c, v, target):
                       403)
 
 
-def dm(c, principal, members, *, title=""):
+def dm(c, principal, members, *, title="", make=True):
     """A personal thread with exactly these teammates: the open one, or a new one. With a first message it is
-    `post(..., start={"dm": members})`: a held first message makes no DM."""
+    `post(..., start={"dm": members})`: a held first message makes no DM. `make=False` only looks: with no DM yet it
+    answers as starting one would, then a 404, so opening a teammate's DM tab leaves nothing behind."""
     actor, v = _actor_of(principal)
     resolved = _dm_members_for(c, actor, members)
     # Write gates starting a DM (`_create_plan`). Opening one you are already in needs nothing more.
     existing = _open_dm(c, actor, resolved)
     if existing and (v is None or denial(c, v, thread_row(c, existing)) is None):
         return view(c, principal, thread_row(c, existing))
+    if not make:
+        for target in resolved:
+            _require_write(c, v, target)
+        raise Problem("no_dm", "No DM yet", 404)
     return create(c, principal, title=title, audience="personal", members=resolved)
 
 

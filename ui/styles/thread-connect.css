@@ -19,6 +19,7 @@
 .tcn{display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line);padding-top:12px}
 .tcn-sec{display:flex;flex-direction:column;gap:6px}
 .tcn-sec[hidden]{display:none}
+.tcn:not(:has(>.tcn-sec:not([hidden]))){display:none}
 .tcn-sec h3{margin:0}
 .tcn .cn-list.tcn-list{padding:0}
 .tcn .cn-row.cn-xrow{padding:4px 0;min-height:34px}
