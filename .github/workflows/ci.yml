@@ -380,8 +380,10 @@ jobs:
           npx playwright install --with-deps chromium webkit
       # The release's own Linux binaries, where a checkout's build would be; hosted_release_check.py run checks on
       # every VM that their build ids match the candidate's sources. Setup above overlaps their build: wait for the
-      # native-linux x86_64 job to finish, and fail this part if that build did not succeed.
+      # native-linux x86_64 job to finish, and fail this part if that build did not succeed. Browser tests use no
+      # native binary, so the browser VMs start at once.
       - name: Wait for the release Linux binaries
+        if: matrix.part != 'browser'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -396,11 +398,13 @@ jobs:
             sleep 10
           done
           echo "::error::The release Linux binaries were not built within 25 minutes."; exit 1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - if: matrix.part != 'browser'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: runner-linux-x86_64
           path: ${{ runner.temp }}/native
       - name: Place the release binaries
+        if: matrix.part != 'browser'
         working-directory: candidate
         run: |
           mkdir -p runner-rs/target/release relay-rs/target/release
@@ -409,6 +413,7 @@ jobs:
           chmod 0755 runner-rs/target/release/tico-runner relay-rs/target/release/tico-screen-relay
       # Tests that build other Rust code still find a toolchain.
       - name: Install Rust
+        if: matrix.part != 'browser'
         run: |
           rustup toolchain install 1.92 --profile minimal
           rustup default 1.92

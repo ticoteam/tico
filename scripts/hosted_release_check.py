@@ -207,9 +207,12 @@ def main():
             return 0
         gate_temp = temp / "tico-release-gate"
         gate_temp.mkdir(mode=0o700, exist_ok=True)
-        receipt["native_binaries"] = native_binaries(root)
-        env = {**os.environ, "TMPDIR": str(gate_temp),
-               "TICO_SCREEN_RELAY_BIN": receipt["native_binaries"]["relay"]["path"]}
+        env = {**os.environ, "TMPDIR": str(gate_temp)}
+        # Browser tests use no native binary (PR checks run them without one), so the browser VMs do not wait for
+        # the native-linux build; every other part checks the release's own binaries and tests with them.
+        if args.part != "browser":
+            receipt["native_binaries"] = native_binaries(root)
+            env["TICO_SCREEN_RELAY_BIN"] = receipt["native_binaries"]["relay"]["path"]
         receipt.update({"command": command, "gate_start_requested": True, "gate_state": "starting"})
         checkpoint()  # Survives timeout/cancellation even when the finalizer cannot run.
         gate_clock = time.monotonic()
