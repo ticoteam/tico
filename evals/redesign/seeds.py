@@ -151,6 +151,13 @@ def toured(world):
     _ok(world.api("post", "/api/v2/system/usage-count/notice", {"state": "dismissed"}, who=DANA), "usage notice")
 
 
+@seed("judge")
+def judge(world):
+    """A decision model for the org rule checks (SteadyJudge): the hub has no Gateway key, so without this no rule check
+    asks anything and every write passes unchecked (backend/org_rule_check.py check_as, outcome "unchecked")."""
+    world.app.state.judge = SteadyJudge()
+
+
 PAGE_HTML = ('<!doctype html><html><head><title>{title}</title></head><body style="margin:0;font:15px system-ui">'
              '<h1 style="margin:16px">{title}</h1><p style="margin:16px">{text}</p>'
              '<svg viewBox="0 0 300 80" width="300" height="80"><rect x="16" y="10" width="{bar}" height="40" fill="#4a7"/>'

@@ -26,6 +26,8 @@ const RISKS = 'Sub question about the risks';
 const HOME_NOTE = 'Standup moves to ten';
 const BOT = 'builder-claude';
 const HELD = 'Q4 price list: 40 percent off';
+// WALK_ONLY=<regex> runs only the journeys whose name matches (the world's setup still runs): e.g. WALK_ONLY='held message'.
+const ONLY = process.env.WALK_ONLY ? new RegExp(process.env.WALK_ONLY) : null;
 
 fs.mkdirSync(SHOTS, {recursive: true});
 const results = [], audit = [], pageErrors = [];
@@ -103,6 +105,7 @@ async function step(page, label, phone, name, fn) {
 
 // A journey at both widths. `who` is the teammate; `body(page, phone, name)` runs the steps.
 async function journey(browser, hub, name, who, body, {phones = [false, true]} = {}) {
+  if (ONLY && !ONLY.test(name)) return;
   for (const phone of phones) {
     let page;
     try {
@@ -148,7 +151,7 @@ async function messageMenu(page, text, item) {
 }
 
 (async () => {
-  const hub = await startHub({seeds: ['org', 'groups', 'connection', 'toured']});
+  const hub = await startHub({seeds: ['org', 'groups', 'connection', 'toured', 'judge']});
   let browser;
   const S = {};
   try {
@@ -390,7 +393,7 @@ async function messageMenu(page, text, item) {
       await step(page, 'set up the rule', phone, name, async () => {
         if (ruleMade) return;
         await api(hub, 'dana', 'POST', '/v2/rules', {kind: 'internal', text: 'Do not post the Q4 price list in company threads',
-          who: {everyone: true}});
+          who: {everyone: true}, if_broken: 'block'});
         ruleMade = true;
       });
       await step(page, 'held message', phone, name, async () => {
@@ -399,6 +402,11 @@ async function messageMenu(page, text, item) {
         await page.locator('.thv-composer .p-send').click();
         await sleep(2500);
         await snap(page, 'held-message', phone);
+        // Through the API: the post is held (listed for this thread as a hold on its text) and nothing reached the timeline.
+        const holds = await api(hub, 'dana', 'GET', `/v2/rule-holds?thread=${S.plan.id}`);
+        assert.ok(JSON.stringify(holds).includes(HELD), 'the person\'s message is held: ' + JSON.stringify(holds).slice(0, 300));
+        const timeline = await api(hub, 'dana', 'GET', `/v2/threads/${S.plan.id}/timeline`);
+        assert.ok(!JSON.stringify(timeline).includes(HELD), 'the held message is not in the thread timeline');
       });
       await step(page, 'held edit', phone, name, async () => {
         await messageMenu(page, 'Price list draft v1', 'Edit');
@@ -406,11 +414,17 @@ async function messageMenu(page, text, item) {
         await page.locator('[data-th-edit-save]').first().click();
         await sleep(2500);
         await snap(page, 'held-edit', phone);
+        // Through the API: the edit is held, so the draft keeps its text and the new text is not in the timeline.
+        const timeline = await api(hub, 'dana', 'GET', `/v2/threads/${S.plan.id}/timeline`);
+        assert.ok(JSON.stringify(timeline).includes('Price list draft v1'), 'the draft keeps its text after a held edit');
+        assert.ok(!JSON.stringify(timeline).includes(HELD), 'the held edit is not in the thread timeline');
+        const holds = await api(hub, 'dana', 'GET', `/v2/rule-holds?thread=${S.plan.id}`);
+        assert.ok(JSON.stringify(holds).includes(HELD), 'the held edit is listed as a hold');
       });
     });
 
     // ------------------------------------------------------------------ calls: start (Dana), join (Omar), end, action items
-    for (const phone of [false, true]) {
+    for (const phone of ONLY && !ONLY.test('calls') ? [] : [false, true]) {
       const name = 'call' + (phone ? ' (phone)' : ' (desktop)');
       let dana, omar;
       try {
