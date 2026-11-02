@@ -266,8 +266,7 @@ def test_a_new_topic_clears_the_session_like_the_manual_clear_and_marks_the_mess
 
     # The next turn starts fresh: a new epoch, and history from the new message only.
     turn = claim(api, machine)
-    assert turn["session_epoch"] == 1, "the chat's own session starts anew"
-    assert turn["bot_session_epoch"] > 0, "a runner without threads_v1 gets its own per-turn bot epoch"
+    assert turn["session_epoch"] == 1 and turn["bot_session_epoch"] == 0, "the chat's own session starts anew"
     assert [m["body"] for m in turn["history"]] == [UNRELATED]
     finish(api, machine, turn)
 

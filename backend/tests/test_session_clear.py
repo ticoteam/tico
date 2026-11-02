@@ -17,7 +17,7 @@ def finish(api, machine, turn):
 def test_a_clear_moves_the_epoch_every_later_turn_carries_and_starts_history_after_it(api):
     machine = runner(api)
     assign(api, machine, "ops")
-    ready(api, machine, ["ops"], capabilities=["threads_v1"])
+    ready(api, machine, ["ops"])
     conversation = post(api, "chat/ops", {"text": "Remember the Acme code word"})["conversation_id"]
     first = claim(api, machine)
     assert first["session_epoch"] == first["bot_session_epoch"] == 0, "a conversation never cleared is at epoch 0"
@@ -50,7 +50,7 @@ def test_a_clear_moves_the_epoch_every_later_turn_carries_and_starts_history_aft
 def test_a_clear_waits_for_the_running_turn_and_touches_only_the_persons_own_chat(api):
     machine = runner(api)
     assign(api, machine, "ops")
-    ready(api, machine, ["ops"], capabilities=["threads_v1"])
+    ready(api, machine, ["ops"])
     ana = post(api, "chat/ops", {"text": "A long job"})["conversation_id"]
     turn = claim(api, machine)
     busy = clear(api)
@@ -76,19 +76,13 @@ def test_a_clear_with_no_chat_yet_is_a_no_op(api):
         assert not c.execute("SELECT 1 FROM session_epochs").fetchone()
 
 
-def test_a_runner_without_threads_gets_a_new_bot_epoch_every_turn_so_its_shared_thread_never_resumes(api):
-    """An older runner keys every chat turn of the bot on one provider thread and resumes it while the epoch is the
-    one it saved. A value unique to each turn starts that thread anew, so a direct message's text never reaches a
-    public thread's turn. The chat's own epoch is unchanged."""
-    machine = runner(api)
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    post(api, "chat/ops", {"text": "First"})
-    first = claim(api, machine)
-    finish(api, machine, first)
-    post(api, "chat/ops", {"text": "Second"})
-    second = claim(api, machine)
-    finish(api, machine, second)
-    assert first["bot_session_epoch"] > 0 and second["bot_session_epoch"] > 0, "never the shared 0 a thread resumes at"
-    assert first["bot_session_epoch"] != second["bot_session_epoch"], "each turn moves it"
-    assert first["session_epoch"] == second["session_epoch"] == 0
+def test_a_runner_without_threads_gets_each_chat_its_own_session_not_the_bots_shared_thread(api):
+    """A runner that lacks threads_v1 keys a `session: bot` turn on the bot's one provider thread, which every chat
+    shares. Its chat turns are sent as `session: task` instead, so each conversation keeps its own session."""
+    old = runner(api)
+    assign(api, old, "ops")
+    ready(api, old, ["ops"])
+    post(api, "chat/ops", {"text": "Old runner question"})
+    turn = claim(api, old)
+    assert turn["config"]["session"] == "task", "an older runner: one session per chat"
+    finish(api, old, turn)
