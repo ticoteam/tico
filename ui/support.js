@@ -68,6 +68,8 @@
   };
   const AVATAR = '<span class="support-av" aria-hidden="true"><span class="nav-icon">headset_mic</span></span>';
   let state = {enabled: null, tickets: [], unread: 0}, pop = null, timer, busyRefresh = null, stateRevision = 0;
+  // `inFlight`: the send on its way, settled either way; `deleting`: Delete chat history running.
+  let inFlight = null, deleting = false;
   let owner = '', toasted = 0, compose = null, editor = null, opener = null, loading = null, sending = null;
   // The one draft: what is in the box and what goes with it. `kind` is only for a message that starts a new ticket.
   const newDraft = () => ({message: '', diag: false, perf: 24, bundle: null, key: uid(), kind: 'support', report: null});
@@ -91,7 +93,7 @@
       headers: body === undefined ? {} : {'Content-Type': 'application/json', 'Idempotency-Key': key || uid()},
       body: body === undefined ? undefined : JSON.stringify(body)});
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach the Tico team. Try again.'), {status: r.status});
+    if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach the Tico team. Try again.'), {status: r.status, code: data.error?.code || ''});
     return data;
   }
   // The ? beside Search: gone where support is off, a dot on it while a reply is unread.
@@ -167,8 +169,12 @@
   // chat is closed and reopened: every render locks what it draws until the send settles.
   const LOCKED = '[data-compose] :is(textarea, button)';
   const lockSending = (on = true) => {
-    if (!pop || (on && !sending)) return;
+    if (!pop || (on && !sending && !deleting)) return;
+    if (!on && deleting) return;
     pop.querySelectorAll(LOCKED).forEach(el => { el.disabled = on; });
+    // Delete chat history waits for a message on its way: what it repopulates would be left behind.
+    const yes = pop.querySelector('[data-confirm-yes]');
+    if (yes && !deleting) yes.disabled = on && !!sending;
     const submit = pop.querySelector('[data-compose] [type=submit]');
     if (on) submit?.setAttribute('aria-busy', 'true'); else submit?.removeAttribute('aria-busy');
   };
@@ -393,7 +399,7 @@
     };
     form.onsubmit = async e => {
       e.preventDefault();
-      if (sending) return;
+      if (sending || deleting) return;
       shown('');
       if (!d.message.trim()) { form.elements.message.focus(); return; }
       // To the open conversation, or a new ticket that starts with this message; nothing about that is asked.
@@ -401,6 +407,7 @@
       // What goes is what was in the box when Send was pressed, with its own attachment.
       const sent = {message: d.message, diag: d.diag, perf: d.perf, report: d.report, bundle: d.bundle, kind: d.kind};
       sending = d; lockSending();
+      let done; inFlight = new Promise(r => { done = r; });
       try {
         let bundle = sent.bundle;
         if (sent.diag && !bundle) {
@@ -408,18 +415,27 @@
           if (d.key === key) d.bundle = bundle;     // kept for a retry only while the draft is still the one sent
         }
         const body = {message: sent.message, diagnostics: sent.diag ? bundle.id : ''};
-        if (!to) Object.assign(body, {email: compose?.email || (typeof S === 'undefined' ? '' : S.me?.email || ''), include_ids: true},
+        const fresh = () => Object.assign({}, body, {email: compose?.email || (typeof S === 'undefined' ? '' : S.me?.email || ''), include_ids: true},
           appVersion() ? {app_version: appVersion()} : {}, sent.kind !== 'support' ? {kind: sent.kind} : {});
-        const next = await call('POST', to ? `/support/tickets/${encodeURIComponent(to)}/messages` : '/support/tickets', body, key);
+        let next;
+        try { next = await call('POST', to ? `/support/tickets/${encodeURIComponent(to)}/messages` : '/support/tickets', to ? body : fresh(), key); }
+        catch (error) {
+          // HQ refuses a follow-up to a ticket that is full (60 messages), closed or gone: the same message starts a new
+          // one, once, and shows as sent like any other.
+          const refused = error.status === 404 || (error.status === 409 && (!error.code || error.code === 'support_closed'));
+          if (!to || !refused) throw error;
+          state.tickets = state.tickets.map(t => t.id === to ? {...t, status: 'closed'} : t);
+          next = await call('POST', '/support/tickets', fresh(), (key + '-new').slice(0, 200));
+        }
         stateRevision++;
         state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
         // A draft that changed while this was on its way holds newer words: it stays.
         if (draft === d && d.key === key) draft = newDraft();
-        settled(); mark();
-        if (isOpen()) { render(true); renderComposer(); focusBox(); }
+        settled(); done(); mark();
+        if (isOpen() && !deleting) { render(true); renderComposer(); focusBox(); }
         schedule();
       } catch (error) {
-        settled();
+        settled(); done();
         // Said where the person is looking: the message did not arrive and is still in the box.
         shown(!error.status || error.status >= 500 ? `Not sent. Could not reach the ${NAME}. Try again in a moment.` : 'Not sent. ' + error.message);
         if (isOpen() && draft === d) pop.querySelector('[data-compose] [name=message]')?.focus();
@@ -590,16 +606,34 @@
     pop.querySelector('[data-delete]').onclick = () => { asking(true); pop.querySelector('[data-confirm-no]').focus(); };
     pop.querySelector('[data-confirm-no]').onclick = () => asking(false);
     pop.querySelector('[data-confirm-yes]').onclick = async e => {
-      const yes = e.currentTarget; yes.disabled = true;
+      const yes = e.currentTarget;
+      if (sending || deleting) return;
+      deleting = true; yes.disabled = true; lockSending();
       try {
-        for (const t of [...state.tickets]) {
-          await call('DELETE', `/support/tickets/${encodeURIComponent(t.id)}`);
-          stateRevision++;
-          state.tickets = state.tickets.filter(x => x.id !== t.id);
+        // The list holds at most 50, newest first: list and delete again until it comes back empty. A send still on
+        // its way is waited for, so the ticket it lands in goes too.
+        let left = state.tickets;
+        for (let round = 0; round < 20; round++) {
+          if (inFlight) await inFlight;
+          for (const t of left) {
+            await call('DELETE', `/support/tickets/${encodeURIComponent(t.id)}`).catch(error => { if (error.status !== 404) throw error; });
+            stateRevision++;
+            state.tickets = state.tickets.filter(x => x.id !== t.id);
+          }
+          if (inFlight) await inFlight;
+          const data = await call('GET', '/support/tickets');
+          left = data.tickets || [];
+          if (!left.length) break;
         }
-        state.unread = 0; mark(); asking(false); render(); renderComposer(); focusBox();
-      } catch (error) { askErr.textContent = error.message; askErr.hidden = false; render(); }
-      finally { yes.disabled = false; }
+        stateRevision++;
+        if (left.length) {
+          state.tickets = left;
+          throw new Error(`Could not delete all of your chat history; ${left.length} conversation${left.length === 1 ? '' : 's'} left. Try again.`);
+        }
+        state.tickets = []; state.unread = 0; toasted = 0;
+        deleting = false; mark(); asking(false); render(); renderComposer(); focusBox();
+      } catch (error) { askErr.textContent = error.message; askErr.hidden = false; mark(); }
+      finally { deleting = false; yes.disabled = !!sending; lockSending(false); }
     };
     // A click that starts and ends on the backdrop (the dialog itself, outside its box) closes it.
     let downOutside = false;

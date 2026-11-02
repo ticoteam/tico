@@ -46,10 +46,11 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       const errors = [], calls = [];
       // `seen`: how many of a request's replies the person has read (POST tickets/<id>/read).
       // `gate`: a promise that holds a follow-up's POST until the test resolves it (a slow HQ).
-      const hq = {tickets: seed, seen: {}, reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, accessGate: null, gate: null, refreshGate: null, refreshStarted: null};
+      const hq = {full: [], tickets: seed, seen: {}, reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, accessGate: null, gate: null, refreshGate: null, refreshStarted: null};
       const unread = t => t.messages.filter(m => m.from === 'staff').length - (hq.seen[t.id] || 0);
       const out = t => ({...t, unread: unread(t)});
-      const view = () => ({enabled, tickets: hq.tickets.map(out), unread: hq.tickets.reduce((n, t) => n + unread(t), 0)});
+      const view = () => ({enabled, tickets: hq.tickets.slice(0, 50).map(out),   // the server lists at most 50
+      unread: hq.tickets.reduce((n, t) => n + unread(t), 0)});
       page.on('pageerror', e => errors.push(e.message));
       page.on('dialog', d => { hq.asked.push(d.message()); return hq.confirm ? d.accept() : d.dismiss(); });
       await page.route('**/*', async route => {
@@ -104,9 +105,12 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
           const id = decodeURIComponent(rest.split('/')[1] || ''), ticket = hq.tickets.find(x => x.id === id);
           if (rest.endsWith('/read')) { hq.seen[id] = ticket.messages.filter(m => m.from === 'staff').length; return json(out(ticket)); }
           if (rest.endsWith('/messages') && hq.gate) await hq.gate;
+          // `full`: tickets HQ refuses follow-ups to (60 messages), as backend/support.py passes HQ's 409 on.
+          if (rest.endsWith('/messages') && hq.full?.includes(id)) return json({error: {code: 'support_closed', detail: 'This request is closed.'}}, 409);
           if (rest.endsWith('/messages') && hq.abort) return route.abort('connectionrefused');
           if (rest.endsWith('/messages') && hq.fail) return json({error: {detail: 'Could not reach Tico support. Try again in a moment.'}}, 502);
           if (rest.endsWith('/messages')) { ticket.messages.push({id: ticket.messages.length + 1, created_at: new Date().toISOString(), from: 'person', body: body.message}); return json(out(ticket)); }
+          if (req.method() === 'DELETE' && hq.deleteGate) await hq.deleteGate;
           if (req.method() === 'DELETE') { hq.tickets = hq.tickets.filter(x => x.id !== id); return json({deleted: true}); }
         }
         if (p === '/api/employees' || p === '/api/issues') return json([]);
@@ -501,6 +505,76 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await ask.waitFor({state: 'hidden'});
     assert.ok(v.calls.includes('POST feedback {"moment":"day_7","answer":"Faster than I expected"}'));
     assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // ---- A full conversation: HQ refuses the follow-up (409), so the same message starts a new one, shown as sent.
+    v = await visit({seed: [{id: 'sup_1', created_at: at(30), status: 'answered', message: 'Long thread', sent: {}, messages: []}]});
+    v.hq.full = ['sup_1'];
+    await openSupport(v.page);
+    {
+      const chat = v.page.locator('#support-pop');
+      await chat.locator('[name=message]').fill('One more thing');
+      await chat.locator('[name=message]').press('Enter');
+      await chat.locator('.support-msg.you', {hasText: 'One more thing'}).waitFor();
+      assert.ok(v.calls.includes('POST tickets/sup_1/messages {"message":"One more thing","diagnostics":""}'));
+      assert.ok(v.calls.includes('POST tickets {"message":"One more thing","diagnostics":"","email":"ana@acme.example","include_ids":true}'), v.calls.join('\n'));
+      assert.equal(await chat.locator('[data-error]').isHidden(), true, 'no error shown');
+      assert.equal(await chat.locator('[name=message]').inputValue(), '');
+      // The next message goes to the new conversation.
+      await chat.locator('[name=message]').fill('And another');
+      await chat.locator('[name=message]').press('Enter');
+      await chat.locator('.support-msg.you', {hasText: 'And another'}).waitFor();
+      assert.ok(v.calls.includes('POST tickets/sup_2/messages {"message":"And another","diagnostics":""}'));
+      assert.deepEqual(v.errors, []);
+    }
+    await v.ctx.close();
+
+    // ---- Delete chat history with 51 conversations: the list holds 50, so it lists and deletes again until empty.
+    v = await visit({seed: Array.from({length: 51}, (_, i) => ({id: 'old_' + i, created_at: at(100 + i), status: 'closed', message: 'Old ' + i, sent: {}, messages: []}))});
+    await openSupport(v.page);
+    {
+      const chat = v.page.locator('#support-pop');
+      await chat.locator('.support-msg.you', {hasText: 'Old 0'}).waitFor();
+      await chat.getByRole('button', {name: 'Delete chat history'}).click();
+      let release; v.hq.deleteGate = new Promise(r => { release = r; });
+      await chat.getByRole('alertdialog').getByRole('button', {name: 'Delete'}).click();
+      await v.page.waitForFunction(() => [...document.querySelectorAll('#support-pop [data-compose] :is(textarea, [type=submit])')].every(el => el.disabled));
+      assert.equal(await chat.getByRole('alertdialog').getByRole('button', {name: 'Delete'}).isDisabled(), true, 'once');
+      release(); v.hq.deleteGate = null;
+      await chat.getByRole('alertdialog').waitFor({state: 'hidden'});
+      assert.equal(v.calls.filter(c => c.startsWith('DELETE')).length, 51, 'all 51 deleted');
+      assert.ok(v.calls.includes('DELETE tickets/old_50'), 'the 51st too');
+      assert.ok(v.calls.filter(c => c === 'GET tickets').length >= 3, 'listed again until empty');
+      assert.equal(v.hq.tickets.length, 0);
+      assert.equal(await chat.locator('.support-msg').count(), 0, 'the chat is empty');
+      assert.deepEqual(v.errors, []);
+    }
+    await v.ctx.close();
+
+    // ---- Delete chat history while a message is on its way: Delete waits for it, then that conversation goes too.
+    v = await visit({seed: [{id: 'sup_1', created_at: at(30), status: 'answered', message: 'First', sent: {}, messages: []}]});
+    await openSupport(v.page);
+    {
+      const chat = v.page.locator('#support-pop');
+      let release; v.hq.gate = new Promise(r => { release = r; });
+      await chat.locator('[name=message]').fill('Slow one');
+      await chat.locator('[name=message]').press('Enter');
+      await v.page.waitForFunction(() => document.querySelector('#support-pop [data-compose] [name=message]').disabled);
+      await chat.getByRole('button', {name: 'Delete chat history'}).click();
+      const yes = chat.getByRole('alertdialog').getByRole('button', {name: 'Delete'});
+      assert.equal(await yes.isDisabled(), true, 'Delete waits while a message is on its way');
+      release(); v.hq.gate = null;
+      await v.page.waitForFunction(() => !document.querySelector('#support-pop [data-confirm-yes]').disabled);
+      await yes.click();
+      await chat.getByRole('alertdialog').waitFor({state: 'hidden'});
+      assert.ok(v.calls.includes('DELETE tickets/sup_1'));
+      assert.equal(v.hq.tickets.length, 0);
+      assert.equal(await chat.locator('.support-msg').count(), 0, 'the sent message does not come back');
+      await v.page.waitForTimeout(300);
+      assert.equal(await chat.locator('.support-msg').count(), 0);
+      assert.equal(await chat.locator('[name=message]').isDisabled(), false, 'the box works again');
+      assert.deepEqual(v.errors, []);
+    }
     await v.ctx.close();
 
     // ---- Support turned off: no ?; a #/support link still opens the chat, which says so, with no box.
