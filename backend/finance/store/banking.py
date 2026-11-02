@@ -407,6 +407,14 @@ def cards_on_budgets(c: sqlite3.Connection, budget_ids: Sequence[str]) -> list[A
                      list(budget_ids)).fetchall()
 
 
+def budgets_with_cards(c: sqlite3.Connection, budget_ids: Sequence[str]) -> set[str]:
+    """The budgets a card that isn't cancelled draws on: enforced by that card's limit (spec §8.2)."""
+    if not budget_ids:
+        return set()
+    return {str(r[0]) for r in c.execute(f"SELECT DISTINCT budget_id FROM fin_cards WHERE budget_id IN "
+                                         f"({_marks(budget_ids)}) AND status<>'cancelled'", list(budget_ids))}
+
+
 def budget_frozen_cards(c: sqlite3.Connection, budget_ids: Sequence[str] | None) -> list[Any]:
     """Cards a budget's cutoff froze and no person has claimed since, on these budgets (every budget when None)."""
     if budget_ids is not None and not budget_ids:
@@ -912,12 +920,23 @@ def document_counts(c: sqlite3.Connection, book_id: str) -> dict[str, int]:
 
 
 def lines_page(c: sqlite3.Connection, book_id: str, *, account_ids: Sequence[str], before: tuple[str, str] | None,
-               most: int, start: str = "", end: str = "", q: str = "", sources: Sequence[str] = ()) -> list[Any]:
-    """Posted lines newest first, keyset-paged on (entry_date, line id), with their entry's memo and source."""
-    if not account_ids:
+               most: int, start: str = "", end: str = "", q: str = "", sources: Sequence[str] = (),
+               balance_only_ids: Sequence[str] = ()) -> list[Any]:
+    """Posted lines newest first, keyset-paged on (entry_date, line id), with their entry's memo and source. Lines on
+    `balance_only_ids` count only when their entry has no income or expense line, on any account."""
+    if not account_ids and not balance_only_ids:
         return []
-    where = ["l.book_id=?", f"l.account_id IN ({_marks(account_ids)})"]
-    args: list[object] = [book_id, *account_ids]
+    picks: list[str] = []
+    args: list[object] = [book_id]
+    if account_ids:
+        picks.append(f"l.account_id IN ({_marks(account_ids)})")
+        args += list(account_ids)
+    if balance_only_ids:
+        picks.append(f"(l.account_id IN ({_marks(balance_only_ids)}) AND NOT EXISTS (SELECT 1 FROM fin_lines x "
+                     "JOIN fin_accounts a ON a.id=x.account_id WHERE x.entry_id=l.entry_id "
+                     "AND a.type IN ('income', 'expense')))")
+        args += list(balance_only_ids)
+    where = ["l.book_id=?", f"({' OR '.join(picks)})"]
     if sources:
         where.append(f"e.source IN ({_marks(sources)})")
         args += list(sources)

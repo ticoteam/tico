@@ -121,6 +121,36 @@ def test_transactions_and_cards_follow_the_lines_each_viewer_sees(books):
         assert [r["amount"] for r in _all(c, OWNER, status="new")] == [-500]
 
 
+def test_an_entry_with_only_balance_sheet_lines_shows_in_transactions(books):
+    with books.transaction() as c:
+        _bank(c)
+        loan = str(act(c, OWNER, "account_create", {"code": "2500", "name": "Loan", "type": "liability"})
+                   .result["account_id"])
+        act(c, OWNER, "journal", {"date": "2026-10-12", "memo": "Loan drawn", "lines": [
+            {"account_id": account(c, "1000"), "amount": 90_000}, {"account_id": loan, "amount": -90_000}]})
+        rows = [r for r in _all(c, OWNER) if r.get("memo") == "Loan drawn"]
+        assert {r["amount"] for r in rows} == {90_000, -90_000}
+        # A viewer with no balance sheet doesn't see it, and asked for by line it shows too.
+        assert not [r for r in _all(c, "human:eve") if r.get("memo") == "Loan drawn"]
+        assert [r["amount"] for r in _all(c, OWNER, account_id=loan)] == [-90_000]
+        # Entries with an income or expense line still show by that line alone.
+        spent = [r for r in _all(c, OWNER) if r["kind"] == "entry" and r["account"] == "Credit cards"]
+        assert not spent
+
+
+def test_a_budget_a_card_draws_on_says_so_until_the_card_is_cancelled(books):
+    with books.transaction() as c:
+        ids = _bank(c)
+        bid = str(act(c, OWNER, "budget_create", {"name": "Tools", "period": "month", "account_id": account(c, "6900"),
+                                                  "amount": 10_000}).result["budget_id"])
+        flag = lambda: next(b["card_limits"] for b in FR.budgets(c, OWNER, at=AT)["budgets"] if b["id"] == bid)
+        assert flag() is False
+        c.execute("UPDATE fin_cards SET budget_id=? WHERE id=?", (bid, ids["eve"]))
+        assert flag() is True
+        c.execute("UPDATE fin_cards SET status='cancelled' WHERE id=?", (ids["eve"],))
+        assert flag() is False
+
+
 def test_the_transactions_cursor_pages_without_gaps_or_repeats(books):
     with books.transaction() as c:
         _bank(c)

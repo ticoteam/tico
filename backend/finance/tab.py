@@ -443,12 +443,16 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         return out
 
     hidden = set(private_cut(ctx, view))
-    line_ids = [a.id for a in ctx.accounts.values() if a.type in PNL_TYPES and view.sees_account(a) and
-                (not wanted or a.id in wanted) and a.id not in hidden]
+    seen_lines = [a for a in ctx.accounts.values() if view.sees_account(a) and (not wanted or a.id in wanted) and
+                  a.id not in hidden]
+    # Every entry shows (§12): by its income and expense lines, or by its balance sheet lines when it has no others.
+    # Asked for by line, a balance sheet line shows all of its own.
+    line_ids = [a.id for a in seen_lines if wanted or a.type in PNL_TYPES]
+    balance_ids = [a.id for a in seen_lines if not wanted and a.type not in PNL_TYPES]
 
     def fetch_lines(mark: tuple[str, str] | None, n: int) -> list[Any]:
         return SK.lines_page(c, ctx.book.id, account_ids=line_ids, before=mark, most=n, start=start_day, end=end_day,
-                             q=text)
+                             q=text, balance_only_ids=balance_ids)
 
     def show_lines(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         tags = SL.line_tags(c, [str(r["line_id"]) for r in batch])

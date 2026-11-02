@@ -1085,13 +1085,14 @@ def budgets(c: sqlite3.Connection, viewer: str, *, include_inactive: bool = Fals
     day = dates.day(on) if on else dates.day(s.ctx.today)
     seen = _visible(s, include_inactive)
     most = max(1, min(int(limit), 500))
+    carded = SK.budgets_with_cards(c, [b.id for b in seen[:most]])
     rows: list[Row] = []
     netted = False
     for b in seen[:most]:
         st = budgeting.state(s.ctx, b.id, day, read=budgeting.Netted(s.view))
         state_row = _state_row(s, b, st)
         netted = netted or bool(state_row["excluded"])
-        rows.append({**_budget_row(b), "state": state_row})
+        rows.append({**_budget_row(b), "state": state_row, "card_limits": b.id in carded})
     return {"budgets": rows, "more": len(seen) > most, "on": day.isoformat(), "view_version": s.view.version,
             "excluded": netted}
 
