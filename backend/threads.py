@@ -64,6 +64,7 @@ SAFE_REF_KEYS = frozenset({"via", "rule", "quiet", "unsolicited", "depth", "wake
                            "replay", "caused_by", "bot_to_bot", "wake_rule", "mentions", "warnings", "thread"})
 MODES = ("steer", "queue", "defer", "digest", "none")
 RETENTION_MAX_DAYS = 36500
+REOPEN_ROOTS = 200        # roots one pass of the loop guard's scheduler looks at
 ANSWER_WINDOW = 100       # messages one solicited check reads back (a person's message further back is not being answered)
 REASONS = ("dm", "mention", "ask", "assign", "addressed", "home", "sub_thread", "routing", "digest", "member",
            "outside")
@@ -1605,11 +1606,14 @@ def _guard_window():
     return H.shift(_now(), hours=-1)
 
 
+def _guard_used(c, root_id):
+    return c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND created_at>=? AND cause='bot' "
+                     "AND recipient LIKE 'bot:%' AND mode IN ('steer','queue') AND state<>'capped'",
+                     (root_id, _guard_window())).fetchone()[0]
+
+
 def _over_guard(c, root_id):
-    n = c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND created_at>=? AND cause='bot' "
-                  "AND recipient LIKE 'bot:%' AND mode IN ('steer','queue') AND state<>'capped'",
-                  (root_id, _guard_window())).fetchone()[0]
-    return n >= LOOP_GUARD_PER_HOUR
+    return _guard_used(c, root_id) >= LOOP_GUARD_PER_HOUR
 
 
 def _guard_primary(c, root, message, bot):
@@ -1662,7 +1666,8 @@ def _involved(c, v, root):
 
 def resume_capped(c, root_id, *, limit=None):
     """Let capped wakes in this root go, oldest first: each starts its run through a carrier. A person posting in the
-    root lets them all go; the scheduler (`reopen_windows`) lets go as many as the reopened window allows."""
+    root lets them all go; the scheduler (`reopen_windows`) lets go as many as the reopened window allows, and each of
+    those counts in the window from now, or the next pass would see room again and the whole backlog would go at once."""
     rows = c.execute("SELECT d.*, m.conversation_id AS cid FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
                      "WHERE d.root_id=? AND d.state='capped' ORDER BY d.created_at, d.id"
                      + (" LIMIT %d" % int(limit) if limit is not None else ""), (root_id,)).fetchall()
@@ -1676,24 +1681,39 @@ def resume_capped(c, root_id, *, limit=None):
         if carrier is None:
             c.execute("UPDATE message_deliveries SET state='moot', updated_at=? WHERE id=?", (_now(), d["id"]))
             continue
-        c.execute("UPDATE message_deliveries SET state='pending', carrier_id=?, updated_at=? WHERE id=?",
-                  (carrier, _now(), d["id"]))
+        now = _now()
+        c.execute("UPDATE message_deliveries SET state='pending', carrier_id=?, updated_at=?, created_at=? WHERE id=?",
+                  (carrier, now, now if limit is not None else d["created_at"], d["id"]))
     if rows:
         _event(c, H.KEEPER, "thread.resumed", root_id, {"deliveries": len(rows)})
     return len(rows)
 
 
-def reopen_windows(c):
-    """The scheduler's pass: in each root with capped wakes, let go as many as its rolling hour has room for."""
-    total = 0
-    for r in c.execute("SELECT DISTINCT root_id FROM message_deliveries WHERE state='capped'").fetchall():
-        used = c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND created_at>=? AND cause='bot' "
-                         "AND recipient LIKE 'bot:%' AND mode IN ('steer','queue') AND state<>'capped'",
-                         (r[0], _guard_window())).fetchone()[0]
-        room = LOOP_GUARD_PER_HOUR - used
+def _reopened(c):
+    """[(root_id, room)]: the roots with capped wakes whose rolling hour has room, those waiting longest first, at most
+    REOPEN_ROOTS. A root with no room has had a full hour's wakes, so it soon gives way to the older ones."""
+    out = []
+    for r in c.execute("SELECT root_id FROM message_deliveries WHERE state='capped' AND root_id IS NOT NULL "
+                       "GROUP BY root_id ORDER BY MIN(created_at) LIMIT ?", (REOPEN_ROOTS,)).fetchall():
+        room = LOOP_GUARD_PER_HOUR - _guard_used(c, r[0])
         if room > 0:
-            total += resume_capped(c, r[0], limit=room)
-    return total
+            out.append((r[0], room))
+    return out
+
+
+def reopen_windows(c):
+    """Let go, in each root with capped wakes, as many as its rolling hour has room for. Returns how many."""
+    return sum(resume_capped(c, root_id, limit=room) for root_id, room in _reopened(c))
+
+
+def reopen_due(store):
+    """The scheduler's pass, on every tick and with no model: with nothing capped it reads one index, and it takes the
+    write lock only when a window has room."""
+    with store.read() as c:
+        if not _reopened(c):
+            return 0
+    with store.transaction() as c:
+        return reopen_windows(c)
 
 
 # ----------------------------------------------------------------------------- the write door
@@ -1916,10 +1936,13 @@ def _duplicate(c, origin, thread):
 
 # Outgoing thread webhooks (backend/thread_webhooks.py): create, every written message (`record`) and a held post each
 # call one. Inside the write transaction, so a rolled-back write queues nothing; they only enqueue and never raise.
-def _emit_thread_created(c, thread):
+def _emit_thread_created(c, thread, actor=None):
+    """Every way of making a thread ends here, so a webhook or a rule hears one event of one shape: a thread from a legacy
+    writer stores no audience (its columns imply it, and its root decides for a sub-thread), and a shared room no owner."""
     from . import thread_webhooks
-    starter = thread.get("owner_actor") or (thread.get("participants") or [None])[0]
-    thread_webhooks.thread_created(c, thread, starter)
+    starter = actor or thread.get("owner_actor") or (thread.get("participants") or [None])[0]
+    facts = {**thread, "audience": audience_of(root_of(c, thread)), "owner_actor": home_owner(thread)}
+    thread_webhooks.thread_created(c, facts, starter)
 
 
 def _emit_message_created(c, thread, message):

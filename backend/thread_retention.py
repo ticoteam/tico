@@ -4,7 +4,9 @@ this worker deletes what is past it, in the root and every sub-thread, in short 
 A message past its time is deleted the way its author would delete it (threads._revise): its text, its revisions and
 what was copied from it go in the same transaction (mentions, reactions, search, runs not started, carriers and notes,
 Slack posts not sent, stored retry answers, a sub-thread's title). The row stays as a tombstone, so a sub-thread under
-it and the thread's sequence numbers still hold; its refs keep only its origin. Files are unlinked from it.
+it and the thread's sequence numbers still hold; its refs keep only its origin. Its files go too, by the file delete path
+(file_library.release_message_files): the rows here, and the bytes from storage within a minute or so (file_library.loop).
+A file another message, a task, a meeting or the Library still holds stays, for that holder.
 
 The purge is local. An outside destination already holds its own copy, so no tombstone goes out, and a copy not sent yet
 never goes. What a bot's run already read lives in that run's transcript, under the transcript's own retention.
@@ -12,6 +14,7 @@ never goes. What a bot's run already read lives in that run's transcript, under 
 Plain code: nothing past its time reads a little and writes nothing. Each batch records one event and one audit row: how
 many messages, never which words.
 """
+from . import file_library
 from . import hubdb as H
 from . import threads
 
@@ -40,7 +43,7 @@ def purge(c, root_id, ids, days):
         threads._revise(c, message, H.KEEPER, deleted=True, purge=True)
         origin = (message.get("refs") or {}).get("origin")
         c.execute("UPDATE messages SET refs_json=? WHERE id=?", (H._dump({"origin": origin} if origin else {}), message_id))
-        c.execute("DELETE FROM message_assets WHERE message_id=?", (message_id,))
+        file_library.release_message_files(c, H.KEEPER, message_id)
         gone += 1
     if gone:
         threads._event(c, H.KEEPER, "thread.purged", root_id, {"messages": gone})

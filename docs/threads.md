@@ -62,7 +62,8 @@ Each reader follows a thread at one level:
 
 Only human messages, and anything addressed to you, count as unread. A bot's post in a thread you follow is activity:
 a dot, not a count. **Needs attention** at the top of the list holds your threads with unread mentions, asks or DM
-messages, and any thread you are in where the loop guard paused the bots' wakes; posting there lets them go. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
+messages, and any thread you are in where the loop guard paused the bots' wakes; posting there lets them all go, and
+without a post they go by themselves, as many as the thread's hour has room for. `hub thread read <thread> --seq N` marks a thread read up to a message; `--all` also marks every
 sub-thread under it.
 
 ## Bots in threads
@@ -92,9 +93,10 @@ not. A delete leaves a marker with no text, and the asks it answered reopen.
 
 A thread keeps its messages for good unless its owner sets a limit: `hub thread update <thread> --keep-days 90`, and
 `--keep-forever` to take it off. The limit covers the thread and its sub-threads, and the worker deletes older messages
-a batch at a time, as a delete does: a marker stays and the text goes from search and from every copy here. Copies
-outside Tico stay: a linked Slack channel keeps what it received, a bot's run keeps what it read in its transcript, and a
-file is only unlinked from the message.
+a batch at a time, as a delete does: a marker stays and the text goes from search and from every copy here. A file
+attached to the message goes with it, its bytes within a minute or so, unless another message, a task, a meeting or the
+Library still holds it. Two kinds of copy stay: a linked Slack channel or another install keeps what it received, and a
+bot's run keeps what it read in its transcript.
 
 ## Commands and tools
 
@@ -141,7 +143,7 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
 
 ## Webhooks
 
-Three events describe threads: `thread.created`, `message.created` (to outgoing webhooks only; agents post a lot of
+Three events describe threads: `thread.created` (from every way of making a thread, older routes included), `message.created` (to outgoing webhooks only; agents post a lot of
 messages, so no automation runs for each one), and `message.held` when the org rules hold a message before it reaches
 its thread. Each event carries ids and facts, never a message's words. An endpoint hears of a thread event only if its
 owner could read the thread. `message.held` names the hold and the thread it was going to; a held first message has no

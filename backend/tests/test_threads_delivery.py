@@ -8,9 +8,9 @@ import json
 
 import pytest
 
-from backend import thread_bot_digest, thread_retention, thread_routing, threads
+from backend import file_library, thread_bot_digest, thread_retention, thread_routing, thread_webhooks, threads
 from backend.store import H
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
+from backend.tests.test_api import api, headers, post  # noqa: F401  (the fixture and its helpers)
 
 
 def new_thread(api, audience="members", members=("human:ben",), title="Budget", token="ana-test"):
@@ -613,3 +613,227 @@ def test_a_home_made_on_first_use_publishes_thread_created_once(api, published):
         home = threads.home(c, "bot:ops", create=True)
         threads.home(c, "bot:ops", create=True)
     assert [e for e in published if e[0] == "thread.created"] == [("thread.created", home["id"])]
+
+
+# ----------------------------------------------------------------------------- loop guard: wakes go by themselves (§4.5)
+def capped_thread(api, monkeypatch, rounds=4, limit=2):
+    """A thread where bots have used up an hour's wakes: `limit` went, the rest are capped."""
+    from backend import rules
+    monkeypatch.setattr(threads, "LOOP_GUARD_PER_HOUR", limit)
+    # Bot-to-bot messages wake (no `bot_to_bot` wait), so each would start a run.
+    monkeypatch.setattr(rules, "bot_to_bot_decision", lambda *a, **k: None)
+    monkeypatch.setattr(rules, "judge", lambda *a, **k: None)
+    thread = new_thread(api, audience="company")
+    posted = [bot_post(api, "bot:coo", thread["id"], f"@ops round {n}") for n in range(rounds)]
+    assert [delivery(api, m["id"], "bot:ops")["state"] for m in posted[limit:]] == ["capped"] * (rounds - limit)
+    return thread, posted
+
+
+def hour_passes(api, thread_id):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE message_deliveries SET created_at='2020-01-01T00:00:00Z' WHERE root_id=? AND state<>'capped'",
+                  (thread_id,))
+
+
+def test_a_capped_wake_goes_by_itself_when_the_hour_reopens_with_no_new_post(api, monkeypatch):
+    store = api.app.state.store
+    thread, posted = capped_thread(api, monkeypatch, rounds=3)
+    assert threads.reopen_due(store) == 0  # the hour is still full
+    assert delivery(api, posted[2]["id"], "bot:ops")["state"] == "capped"
+    said = rows(api, "SELECT COUNT(*) AS n FROM messages WHERE conversation_id=? AND seq IS NOT NULL", thread["id"])
+
+    hour_passes(api, thread["id"])
+    assert threads.reopen_due(store) == 1
+    resumed = delivery(api, posted[2]["id"], "bot:ops")
+    assert resumed["state"] == "pending" and queued_job(api, resumed["carrier_id"]) == "queued"
+    assert rows(api, "SELECT COUNT(*) AS n FROM messages WHERE conversation_id=? AND seq IS NOT NULL", thread["id"]) == said
+    assert rows(api, "SELECT 1 FROM events WHERE action='thread.resumed' AND target=?", thread["id"])
+    assert threads.reopen_due(store) == 0
+
+
+def test_a_backlog_goes_at_the_guards_rate_and_not_all_at_once(api, monkeypatch):
+    store = api.app.state.store
+    thread, posted = capped_thread(api, monkeypatch, rounds=7)
+    state = lambda: [delivery(api, m["id"], "bot:ops")["state"] for m in posted[2:]]  # noqa: E731
+    hour_passes(api, thread["id"])
+    assert threads.reopen_due(store) == 2
+    assert threads.reopen_due(store) == 0  # what just went counts in the hour, however old it was when capped
+    assert state() == ["pending", "pending", "capped", "capped", "capped"]
+    hour_passes(api, thread["id"])
+    assert threads.reopen_due(store) == 2
+    assert state() == ["pending", "pending", "pending", "pending", "capped"]
+
+
+def test_a_person_posting_still_lets_every_capped_wake_go(api, monkeypatch):
+    thread, posted = capped_thread(api, monkeypatch, rounds=5)
+    say(api, thread["id"], "Carry on")
+    assert {delivery(api, m["id"], "bot:ops")["state"] for m in posted} == {"pending"}
+
+
+def test_the_schedulers_own_tick_lets_a_capped_wake_go(api, monkeypatch):
+    from backend.scheduler import Scheduler
+    store = api.app.state.store
+    thread, posted = capped_thread(api, monkeypatch, rounds=3)
+    hour_passes(api, thread["id"])
+    Scheduler(store, api.app.state.execution).tick()
+    assert delivery(api, posted[2]["id"], "bot:ops")["state"] == "pending"
+
+
+def test_with_nothing_capped_the_pass_takes_no_write(api, monkeypatch):
+    store = api.app.state.store
+    monkeypatch.setattr(store, "transaction", lambda *a, **k: pytest.fail("no write with nothing capped"))
+    assert threads.reopen_due(store) == 0
+    monkeypatch.undo()
+
+
+# ----------------------------------------------------------------------------- thread.created, from every route
+@pytest.fixture
+def told(monkeypatch):
+    from backend import webhooks
+    seen = []
+    monkeypatch.setattr(webhooks, "publish", lambda c, type_, subject, data, actor, **kw: seen.append((type_, subject, data)))
+    return lambda subject: [data for type_, id_, data in seen if type_ == "thread.created" and id_ == subject]
+
+
+def rule(api, owner="person:ana", token="ana-test", bot="ops"):
+    step = {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": bot, "text": "{{event.subject}}"}}
+    answer = post(api, "automations", {"name": "New threads", "owner": owner, "steps": [step],
+                                       "trigger": {"type": "event", "name": "thread.created"}}, token=token)
+    return answer["id"]
+
+
+def heard(api, automation_id):
+    return [json.loads(r["state_json"])["payload"]["event"] for r in rows(
+        api, "SELECT state_json FROM automation_runs WHERE automation_id=?", automation_id)]
+
+
+def test_a_rule_hears_one_event_of_one_shape_from_the_new_route_and_the_legacy_one(api, told):
+    aid = rule(api)
+    made = new_thread(api, title="By the new route")
+    answer = api.post("/api/v2/conversations", json={"participants": ["human:ben", "bot:ops", "bot:cpo"], "kind": "chat",
+                                                     "subject": "By the old route"}, headers=headers())
+    assert answer.status_code == 200, answer.text
+    legacy = answer.json()
+
+    new_event, old_event = told(made["id"]), told(legacy["id"])
+    assert len(new_event) == 1 and len(old_event) == 1
+    assert set(new_event[0]) == set(old_event[0])
+    assert new_event[0]["audience"] == "members" and old_event[0]["audience"] == "participants"
+    assert old_event[0]["title"] == "By the old route" and old_event[0]["root_id"] == legacy["id"]
+    assert sorted(e["subject"] for e in heard(api, aid)) == sorted([made["id"], legacy["id"]])
+    assert {e["data"]["audience"] for e in heard(api, aid)} == {"members", "participants"}
+
+
+def test_a_rule_hears_of_a_home_a_dm_a_sub_thread_and_a_task_room_once_each(api, told):
+    store = api.app.state.store
+    aid = rule(api)
+    thread = new_thread(api, audience="company")
+    sub = say(api, thread["id"], "Below", parent=say(api, thread["id"], "Top")["id"])["conversation_id"]
+    with store.transaction() as c:
+        home = threads.home(c, "bot:ops", create=True)
+    task = post(api, "tasks", {"title": "Acme order", "body": "Ship it", "owner": "ops"})
+    room = task.get("conversation_id") or task["task"]["conversation_id"]
+
+    assert told(sub)[0]["audience"] == "company" and told(sub)[0]["parent_id"] == thread["id"]
+    assert told(home["id"])[0]["audience"] == "home" and told(home["id"])[0]["owner_actor"] == "bot:ops"
+    assert [e["audience"] for e in told(room)] == ["task"]  # who reads it is settled before it is announced
+    subjects = [e["subject"] for e in heard(api, aid)]
+    assert sorted(subjects) == sorted([thread["id"], sub, home["id"], room])
+
+
+def test_a_rule_hears_only_of_a_thread_its_owner_reads(api, told):
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='finance'")
+    aid = rule(api, owner="person:cara", token="cara-test", bot="finance")
+    private = new_thread(api, members=("human:ben",), title="Pay review")
+    open_one = new_thread(api, audience="company")
+    assert told(private["id"])  # an endpoint's own check decides for a webhook; this one is the rule's
+    assert [e["subject"] for e in heard(api, aid)] == [open_one["id"]]
+    with store.read() as c:
+        assert not thread_webhooks._owner_reads(c, "group:acme", private["id"], {"audience": "members"})
+        assert thread_webhooks._owner_reads(c, "group:acme", open_one["id"], {"audience": "company"})
+
+
+# ----------------------------------------------------------------------------- retention takes a message's files
+def keep_30_days(api, thread_id):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE conversations SET retention_days=30 WHERE id=?", (thread_id,))
+
+
+def attach(api, thread_id, text="See the budget", body=b"line items"):
+    sent = api.post(f"/api/v2/uploads/threads/{thread_id}/messages", data={"text": text},
+                    files={"files": ("budget.txt", body, "text/plain")}, headers=headers("ana-test"))
+    assert sent.status_code == 200, sent.text
+    return sent.json()["message"]
+
+
+def fetch(api, blob_id):
+    return api.get(f"/api/v2/files/{blob_id}", headers=headers("ana-test")).status_code
+
+
+def purge(api, thread_id):
+    keep_30_days(api, thread_id)
+    age(api, thread_id)
+    return thread_retention.sweep(api.app.state.store)
+
+
+def blob_gone(api, blob_id):
+    return not rows(api, "SELECT 1 FROM blobs WHERE id=?", blob_id)
+
+
+def test_a_purge_removes_a_file_nothing_else_holds_row_and_bytes(api, monkeypatch):
+    from backend import blobs
+    monkeypatch.setattr(blobs, "FRESH_SECONDS", 0)
+    thread = new_thread(api, audience="company")
+    message = attach(api, thread["id"])
+    blob = message["refs"]["attachments"][0]["id"]
+    digest = rows(api, "SELECT digest FROM blobs WHERE id=?", blob)[0]["digest"]
+    assert fetch(api, blob) == 200
+
+    assert purge(api, thread["id"]) == 1
+    assert blob_gone(api, blob) and fetch(api, blob) == 404
+    assert rows(api, "SELECT 1 FROM message_assets WHERE message_id=?", message["id"]) == []
+    assert rows(api, "SELECT 1 FROM blob_purges WHERE digest=?", digest)
+    assert file_library.drain(api.app.state.store, api.app.state.blobs) == 1
+    assert rows(api, "SELECT 1 FROM blob_purges WHERE digest=?", digest) == []
+
+
+def test_a_purge_takes_a_chat_uploads_library_copy_with_it(api):
+    sent = api.post("/api/v2/uploads/chat/ops", data={"text": "Here it is"},
+                    files={"files": ("budget.txt", b"chat items", "text/plain")}, headers=headers("ana-test"))
+    assert sent.status_code == 200, sent.text
+    message = sent.json().get("message") or sent.json()
+    item = message["refs"]["attachments"][0]
+    purge(api, message["conversation_id"])
+    assert blob_gone(api, item["id"])
+    copy = rows(api, "SELECT state, identity FROM bot_files WHERE id=?", item["file_id"])[0]
+    assert copy["state"] == "deleted" and copy["identity"] == "deleted:" + item["file_id"]
+
+
+def test_a_purge_leaves_a_file_another_message_or_a_task_still_holds(api):
+    thread, other = new_thread(api, audience="company"), new_thread(api, audience="company", title="Other")
+    blob = attach(api, thread["id"])["refs"]["attachments"][0]["id"]
+    later = say(api, other["id"], "Same file")
+    task = post(api, "tasks", {"title": "Acme order", "body": "Ship it", "owner": "ops"})
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO message_assets VALUES(?,?)", (later["id"], blob))
+        c.execute("INSERT INTO task_assets VALUES(?,?)", (task.get("id") or task["task"]["id"], blob))
+    purge(api, thread["id"])
+    assert not blob_gone(api, blob)
+    assert rows(api, "SELECT 1 FROM message_assets WHERE message_id=? AND blob_id=?", later["id"], blob)
+
+    purge(api, other["id"])  # the message's hold has gone, the task's stays
+    assert not blob_gone(api, blob) and rows(api, "SELECT 1 FROM task_assets WHERE blob_id=?", blob)
+
+
+def test_a_purge_leaves_a_file_someone_keeps_in_the_library(api):
+    sent = api.post("/api/v2/uploads/chat/ops", data={"text": "Here it is"},
+                    files={"files": ("budget.txt", b"kept items", "text/plain")}, headers=headers("ana-test"))
+    message = sent.json().get("message") or sent.json()
+    item = message["refs"]["attachments"][0]
+    with api.app.state.store.transaction() as c:  # the file is someone's now, no longer this attachment's copy
+        c.execute("UPDATE bot_files SET identity='acme-budget' WHERE id=?", (item["file_id"],))
+    purge(api, message["conversation_id"])
+    assert not blob_gone(api, item["id"])
+    assert rows(api, "SELECT state FROM bot_files WHERE id=?", item["file_id"])[0]["state"] != "deleted"

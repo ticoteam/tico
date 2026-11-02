@@ -62,6 +62,10 @@ TEXT_MAX = 200_000                       # characters kept per version
 CSV_ROWS = 50
 BACKFILL_BATCH = 100
 PURGE_ATTEMPTS = 10
+# What holds a blob apart from a message or a file (`release_message_files`): a task's attachment, one in the trash, a
+# meeting's media, a scanned letter, a piece of market evidence.
+BLOB_HOLDERS = (("message_assets", "blob_id"), ("task_assets", "blob_id"), ("task_trash_assets", "blob_id"),
+                ("media_assets", "blob_id"), ("mail_items", "blob_id"), ("market_evidence", "blob_id"))
 TEXT_TYPES = ("text/markdown", "text/plain", "application/json", "text/yaml")
 TABLE_TYPES = {"text/csv": ",", "text/tab-separated-values": "\t"}
 
@@ -532,13 +536,30 @@ def purge_rows(c, actor, row):
     c.execute("INSERT INTO file_deletions(file_id,actor,versions,created) VALUES(?,?,?,?)",
               (fid, actor, len(versions), now))
     blob_ids = {b for v in versions for b in (v["blob_id"], v["poster_blob_id"], v["thumb_blob_id"]) if b}
+    c.execute("DELETE FROM bot_file_versions WHERE file_id=?", (fid,))
+    c.execute("UPDATE bot_files SET title='Deleted file',state='deleted',archived=1,url=NULL,current_version=0,"
+              "identity=?,last_activity_at=? WHERE id=?", ("deleted:" + fid, now, fid))
+    release_blobs(c, blob_ids, now)
+    unindex(c, fid)
+    c.execute("UPDATE pages SET replaced_by=NULL WHERE replaced_by=?", (fid,))
+    c.execute("DELETE FROM pages WHERE file_id=?", (fid,))
+    if has_pins(c):
+        c.execute("DELETE FROM pins WHERE item=?", ("page:" + fid,))
+    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created,detail_json) VALUES(?,?,?,?,?,?)",
+              (fid, actor, "deleted", row["task_id"], now, json.dumps({"versions": len(versions)})))
+    H.event(c, actor, "file.delete", fid, {"versions": len(versions)})
+    return {"deleted": fid, "versions": len(versions)}
+
+
+def release_blobs(c, blob_ids, now):
+    """The blob rows here, with their previews, that no file, meeting or other blob uses, and their links. Bytes no row
+    needs any more are queued, and `drain` removes them from storage after the write commits."""
+    from . import visuals
+    blob_ids = set(blob_ids)
     for bid in list(blob_ids):
         media = c.execute("SELECT poster_blob_id,thumb_blob_id FROM blob_media WHERE blob_id=?", (bid,)).fetchone()
         if media:
             blob_ids |= {b for b in (media["poster_blob_id"], media["thumb_blob_id"]) if b}
-    c.execute("DELETE FROM bot_file_versions WHERE file_id=?", (fid,))
-    c.execute("UPDATE bot_files SET title='Deleted file',state='deleted',archived=1,url=NULL,current_version=0,"
-              "identity=?,last_activity_at=? WHERE id=?", ("deleted:" + fid, now, fid))
     digests = {}
     for bid in sorted(blob_ids):
         shared = c.execute(
@@ -558,15 +579,35 @@ def purge_rows(c, actor, row):
         if not still_used(c, digest):
             c.execute("INSERT INTO blob_purges(digest,kind,queued) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
                       "attempts=0,error=''", (digest, kind if kind in ("page", "svg") else "", now))
-    unindex(c, fid)
-    c.execute("UPDATE pages SET replaced_by=NULL WHERE replaced_by=?", (fid,))
-    c.execute("DELETE FROM pages WHERE file_id=?", (fid,))
-    if has_pins(c):
-        c.execute("DELETE FROM pins WHERE item=?", ("page:" + fid,))
-    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created,detail_json) VALUES(?,?,?,?,?,?)",
-              (fid, actor, "deleted", row["task_id"], now, json.dumps({"versions": len(versions)})))
-    H.event(c, actor, "file.delete", fid, {"versions": len(versions)})
-    return {"deleted": fid, "versions": len(versions)}
+
+
+def _kept_elsewhere(c, bid):
+    """Whether something besides its messages still holds this blob. A file in a conversation made for this one
+    attachment (`chat-file:`, one version) is its copy, and goes with it; any other file is someone's own."""
+    for table, column in BLOB_HOLDERS:
+        if H._has_table(c, table) and c.execute(f"SELECT 1 FROM {table} WHERE {column}=? LIMIT 1", (bid,)).fetchone():
+            return True
+    return c.execute(
+        "SELECT 1 FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE (v.blob_id=? OR v.poster_blob_id=? "
+        "OR v.thumb_blob_id=?) AND (f.identity<>? OR (SELECT COUNT(*) FROM bot_file_versions o WHERE o.file_id=f.id)>1) "
+        "LIMIT 1", (bid, bid, bid, "chat-file:" + bid)).fetchone() is not None
+
+
+def release_message_files(c, actor, message_id):
+    """A message's files, when it is removed for good: each one nothing else holds goes the way a file's delete takes it
+    (`purge_rows`, or `release_blobs` for an attachment with no file row). Returns how many went."""
+    blob_ids = [r[0] for r in c.execute("SELECT blob_id FROM message_assets WHERE message_id=?", (message_id,))]
+    c.execute("DELETE FROM message_assets WHERE message_id=?", (message_id,))
+    gone = 0
+    for bid in blob_ids:
+        if _kept_elsewhere(c, bid):
+            continue
+        for row in c.execute("SELECT f.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE v.blob_id=?",
+                             (bid,)).fetchall():
+            purge_rows(c, actor, row)
+        release_blobs(c, {bid}, H.now())
+        gone += 1
+    return gone
 
 
 def drain(store, blobs, limit=50):

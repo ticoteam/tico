@@ -622,6 +622,12 @@ class Scheduler:
             thread_routing.kick(self.store)
         except Exception as exc:
             failures.append({"thread_routing": type(exc).__name__})
+        # Bot wakes the loop guard held: they go by themselves as their root's rolling hour reopens. Plain SQL, no model.
+        try:
+            from . import threads
+            threads.reopen_due(self.store)
+        except Exception as exc:
+            failures.append({"thread_loop_guard": type(exc).__name__})
         # Production invariants every 15 minutes (backend/invariants.py): plain SQL, no model.
         if self.invariants_checked is None or at - self.invariants_checked >= timedelta(minutes=15):
             self.invariants_checked = at

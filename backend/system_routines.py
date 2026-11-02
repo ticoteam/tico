@@ -153,6 +153,8 @@ ACTIONS = {
                          ("bot", "digest", "thread", "wake", "batch")),
     "route_message": ("have Decide read a person's message that names nobody and wake the bots it is for, three at most",
                       ("route", "routing", "thread", "bots", "wake", "message")),
+    "resume_capped_wakes": ("let bot wakes the loop guard paused go when a thread's hour has room",
+                            ("loop", "guard", "capped", "paused", "resume", "wake", "thread", "bots")),
     "purge_thread_messages": ("delete messages past the time their thread keeps them, with what was copied from them",
                               ("retention", "purge", "delete", "thread", "messages", "keep")),
     "email_digest": ("email a person once an hour the threads they follow on digest that have new messages: titles, "
@@ -270,6 +272,9 @@ JOBS = [
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
+    Job("thread_loop_guard", "Paused bot replies",
+        "Lets bot replies the loop guard paused in a thread go, as many as its hour has room for, with no one having to post.",
+        HOUSEKEEPING, "Every 10 seconds", 10, records=False, then=("resume_capped_wakes",)),
     Job("thread_retention", "Thread retention",
         "Deletes messages past the time their thread keeps them, with what was copied from them, in short batches. Plain "
         "code: nothing past its time is a quiet run.",

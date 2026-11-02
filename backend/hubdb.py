@@ -2984,8 +2984,9 @@ def sync_registry(conn, employees, people):
 
 # ----------------------------------------------------------------------------- conversations
 def open_conversation(conn, actor, participants, kind="chat", subject="", task_id=None,
-                      scope=None, owner_actor=None, room_key=None, allow_planned=False, allow_held=False):
-    """A thread between any set of bots and humans. Reach (rule 2) is checked per participant."""
+                      scope=None, owner_actor=None, room_key=None, allow_planned=False, allow_held=False, announce=True):
+    """A thread between any set of bots and humans. Reach (rule 2) is checked per participant. `announce=False`: the
+    caller has not finished it (who reads a task's room depends on the task), and announces it when it has."""
     _writer(conn, actor)
     if kind not in CONVERSATION_KINDS:
         refuse(conn, actor, "kind", f"a conversation is {'|'.join(CONVERSATION_KINDS)}, not {kind}")
@@ -3019,7 +3020,11 @@ def open_conversation(conn, actor, participants, kind="chat", subject="", task_i
                  ":room_key, :created, :last_message_at, :closed_at)", row)
     event(conn, actor, "conversation.open", row["id"],
           {"kind": kind, "scope": scope, "participants": people})
-    return conversation(conn, row["id"])
+    made = conversation(conn, row["id"])
+    if announce:
+        from . import threads
+        threads._emit_thread_created(conn, made, actor)
+    return made
 
 
 def _pair_conversation(conn, actor, other, kind, subject="", allow_held=False):
@@ -6175,7 +6180,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         # The person of the chat it came from follows it into its room, where its replies reach them.
         watcher = _room_person(conn, started_in, {"requester": requester, "owner": target}) if started_in and not private else None
         conv = open_conversation(conn, actor, list(dict.fromkeys([actor, requester, target, *([watcher] if is_human(watcher) else [])])),
-                                 kind="task", subject=title, scope="task", allow_planned=allow_planned)
+                                 kind="task", subject=title, scope="task", allow_planned=allow_planned, announce=False)
         dedicated = True
     row = {"id": new_id(), "title": title, "body": body, "requester": requester, "owner": target,
            "status": "open", "due": due, "conversation_id": conv["id"],
@@ -6240,6 +6245,9 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         event(conn, actor, "task.lint", row["id"], {"problems": plain})
     event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
     _building(conn, None)
+    if dedicated:
+        from . import threads
+        threads._emit_thread_created(conn, conversation(conn, conv["id"]), actor)
     hook(conn, "task.created", row["id"], lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id), actor, revision=0)
     from . import task_trigger_rules
     task_trigger_rules.created(conn, row["id"], actor)

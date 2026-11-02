@@ -39,9 +39,26 @@ def _publish(c, type_, subject, data, actor):
         log.warning("webhook event %s was not queued", type_, exc_info=True)
 
 
+def _owner_reads(c, owner, thread_id, facts):
+    """Whether an automation's owner reads this thread. A group stands for no one, so it hears only company-wide ones."""
+    kind, _, ident = str(owner).partition(":")
+    if kind == "group":
+        return facts.get("audience") == "company"
+    who = "human:" + ident if kind == "person" else owner
+    return webhooks.view_for(c, who, "thread.created", thread_id, facts, {}) is not None
+
+
 def thread_created(c, thread, actor):
-    """A thread was started (threads.create, threads.dm, threads.home, threads.sub_thread)."""
-    _publish(c, "thread.created", thread["id"], thread_facts(thread), actor)
+    """A thread was started, by any route (threads.create, dm, home, sub_thread, hubdb.open_conversation): to webhooks
+    and to `event` automations. An automation hears only of a thread its owner may read, as an endpoint's owner does."""
+    facts = thread_facts(thread)
+    _publish(c, "thread.created", thread["id"], facts, actor)
+    try:
+        from . import automations
+        automations.on_event(c, "thread.created", thread["id"], facts, actor,
+                             access=lambda row: _owner_reads(c, row["owner"], thread["id"], facts))
+    except Exception:  # noqa: BLE001 - an automation problem must never fail the write that caused it
+        log.warning("automations did not hear thread.created", exc_info=True)
 
 
 def message_created(c, message, thread, actor):

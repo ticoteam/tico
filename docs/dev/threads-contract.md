@@ -420,7 +420,9 @@ further bot.
 recipient, `steer|queue`) per `root_id` per rolling hour. Past it a wake is written `state='capped'` (never
 dropped) and the root gets one Needs-you item (`threads.capped(c, viewer)`, deduplicated per root). Capped
 deliveries resume in order (`threads.resume_capped(c, root_id)`) when a human posts in the root or the window
-reopens (the scheduler calls `threads.reopen_windows(c)`).
+reopens (the scheduler's tick calls `threads.reopen_due(store)`, plain SQL with no model). Each wake the window lets go
+counts in the window from then (its `created_at` moves), so a backlog goes at the guard's rate, not at once. A person's
+post lets them all go at their original times.
 
 ### 4.6 Readers rekeyed to deliveries
 The inbox (`H.inbox_pages`, `H.inbox`, `H.undelivered`), `H.mark_delivered`/`mark_read`, `_reach` and the
@@ -462,7 +464,10 @@ in short batches every 15 minutes, as an author's delete does: the canonical row
 transaction (revisions, mentions, reactions, search, runs not started, carriers, notes, Slack posts not sent, stored
 retry answers, a sub-thread's title, file links). The row stays as a tombstone so seqs hold. The purge is local: an
 outside destination keeps what it already received and gets no tombstone. A run's transcript keeps what it read, under
-transcript retention; a file's blob is only unlinked. Each batch writes one `thread.purged` event and one audit row.
+transcript retention. A message's file goes by the file delete path (`file_library.release_message_files`): its blob row
+and any `chat-file:` copy in that write, the bytes queued in `blob_purges` and removed by `file_library.loop` (every
+60 s, retried). A blob another message, a task, the trash, a meeting, a letter, market evidence or another file holds
+stays. Each batch writes one `thread.purged` event and one audit row.
 
 ## 6. C5: replication
 - `origin_id` = `'<uuidv7>@<install id>'` (`census.install_id_in`), immutable; replicated messages keep the
@@ -590,7 +595,9 @@ Timeline messages: the existing message view plus `thread_id`, `root_id`, `seq`,
 `/api/v2/conversations/*` stay as aliases for one release. Every list is paged and byte-capped.
 
 ## 11. Outside tracks' hooks
-- Thread webhooks: `threads._emit_thread_created(c, thread)` (create and sub_thread),
+- Thread webhooks and rules: `threads._emit_thread_created(c, thread, actor)` (every route: create, dm, home,
+  sub_thread and `hubdb.open_conversation`, a task's room once its task is written; to webhooks and `event` automations
+  whose owner may read the thread),
   `threads._emit_message_created(c, thread, message)` (post) and `threads._emit_message_held(c, thread, actor,
   verdict)` (a held post) are no-ops on core; integration points them at `backend/thread_webhooks.py`. They run inside
   the write transaction and must only enqueue.
