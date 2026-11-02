@@ -263,7 +263,7 @@ services:
     pull_policy: missing
   updater:
     environment:
-      TICO_HEALTH_SECONDS: "$([ "$FAST" = 1 ] && echo 30 || echo 60)"
+      TICO_HEALTH_SECONDS: "90"   # the cleanup renames (migrations 0013, 0014, 0031) take about 20 s on start
       TICO_UPDATER_POLL: "0.5"
       TICO_RELEASES_URL: http://$RELEASE_SERVER:8000
 EOF
