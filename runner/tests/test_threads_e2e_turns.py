@@ -185,8 +185,9 @@ def test_a_thread_keeps_its_provider_session_and_no_other_thread_shares_it(api, 
     assert fifth[0] == "new" and fifth[1] not in (first[1], third[1], fourth[1]), "the Home never shares the DM's session"
 
 
-@pytest.mark.parametrize("harness", ["claude"])
-def test_the_first_turn_after_an_update_starts_fresh_and_recovers_only_its_roots_history(api, computer):
+def fresh_root_turn(api, computer):
+    """A root's first turn after an update: the bot's old shared thread is seeded, then the root is asked. Returns the
+    turn's (kind, thread) and its prompt, with the other root's id for the privacy check."""
     require_threads_api(api)
     computer.start()
     elsewhere = create_thread(api, title="Pricing", members=["bot:ops"])
@@ -200,17 +201,28 @@ def test_the_first_turn_after_an_update_starts_fresh_and_recovers_only_its_roots
     say(api, "ana-test", room["id"], "@ops summarise this room")
     until(lambda: finished(computer) == 1, "the reply after the update")
     kind, thread = provider_turns(computer)[-1]
+    return kind, thread, computer.prompts()[-1]["prompt"], elsewhere["id"]
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_the_first_turn_after_an_update_starts_fresh_and_recovers_only_its_roots_history(api, computer):
+    kind, thread, prompt, elsewhere = fresh_root_turn(api, computer)
     assert kind == "new" and thread != "old-bot-thread-0001", "the old shared thread is never resumed by a root"
-    prompt = computer.prompts()[-1]["prompt"]
-    # The fresh thread is replayed this root's earlier messages inline, oldest first (runner-rs/src/fallback.rs
-    # first_turn_pack), and nothing from another root.
-    assert "ROOM-B note: launch is Tuesday" in prompt, "the fresh thread is replayed this root's earlier messages"
-    assert elsewhere["id"] not in prompt and "OTHER-ROOM" not in prompt, \
+    assert elsewhere not in prompt and "OTHER-ROOM" not in prompt, \
         "nothing from another root reaches the fresh thread's prompt"
 
 
 @pytest.mark.parametrize("harness", ["claude"])
-def test_a_public_turn_is_replayed_its_threads_public_history_and_no_direct_message_or_legacy_text(api, computer):
+def test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages(api, computer):
+    _kind, _thread, prompt, _elsewhere = fresh_root_turn(api, computer)
+    # The fresh thread is replayed this root's earlier messages inline, oldest first (runner-rs/src/fallback.rs
+    # first_turn_pack). An old runner gives a fresh thread no history; see runner/tests/test_old_runner_skew.py.
+    assert "ROOM-B note: launch is Tuesday" in prompt, "the fresh thread is replayed this root's earlier messages"
+
+
+def public_turn(api, computer):
+    """A DM with a secret, then a public thread whose legacy-audience message is kept out of replays. Returns the
+    public turn's (kind, prompt) and the provider calls it made from its start (`seen`)."""
     require_threads_api(api)
     computer.start()
     dm = ok(call(api, "POST", "threads", "ana-test", {"audience": "personal", "members": ["bot:ops"]}))
@@ -226,11 +238,22 @@ def test_a_public_turn_is_replayed_its_threads_public_history_and_no_direct_mess
     say(api, "ana-test", company["id"], "@ops summarise the launch notes")
     until(lambda: finished(computer) == 2, "the reply in the public thread")
     kind, _thread = provider_turns(computer)[-1]
+    return kind, computer.prompts()[-1]["prompt"], seen
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_a_public_turn_never_carries_a_direct_message_or_legacy_text(api, computer):
+    kind, prompt, seen = public_turn(api, computer)
     assert kind == "new", "a public thread's first turn starts its own session"
-    prompt = computer.prompts()[-1]["prompt"]
-    assert "PUBLIC-ROOM note: launch is Tuesday" in prompt, "a public turn is replayed its thread's public history"
     assert "DM-SECRET" not in prompt, "a direct message never reaches a public turn"
     assert "LEGACY-SECRET" not in prompt, "a legacy-audience message never reaches a public turn"
     # Nothing the provider saw during the public turn, not only its prompt, carries the direct message's text.
     leaked = [call_ for call_ in computer.calls()[seen:] if "DM-SECRET" in json.dumps(call_)]
     assert not leaked, f"the direct message reached the provider in a public turn: {leaked}"
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_a_public_turn_is_replayed_its_threads_public_history(api, computer):
+    _kind, prompt, _seen = public_turn(api, computer)
+    # An old runner gives a fresh thread no history; see runner/tests/test_old_runner_skew.py.
+    assert "PUBLIC-ROOM note: launch is Tuesday" in prompt, "a public turn is replayed its thread's public history"

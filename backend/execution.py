@@ -1,7 +1,6 @@
 """Durable delivery, runner enrollment, and transactionally fenced execution attempts."""
 
 import functools
-import hashlib
 import json
 import re
 import secrets
@@ -123,8 +122,8 @@ PRIVATE_LANES = "private_lanes_v1"
 SOURCE_CONTINUE = "source_continue_v1"
 
 # A runner that advertises this keeps the threads of a bot's chats apart: a public thread's turn never resumes a direct
-# message's provider thread (runner-rs threads). Any other runner keys every chat turn of a bot on one shared provider
-# thread, so the server gives it a value that moves with every turn (old_runner_bot_epoch).
+# message's provider thread (runner-rs session_key). Any other runner keys a `session: bot` chat on the bot's one thread,
+# so the server gives it each chat's own session instead (start_claimed).
 THREADS = "threads_v1"
 
 
@@ -246,15 +245,6 @@ def roots_on(runner):
 
 def threads_on(runner):
     return bool(runner) and THREADS in _capability_set(runner["capabilities_json"])
-
-
-def old_runner_bot_epoch(aid, bot_epoch):
-    """The bot_session_epoch an older runner gets. It keys every bot-wide turn on one provider thread and resumes it
-    unless the epoch moved since that thread was saved, so a value unique to this turn starts the thread anew each
-    time: a direct message's text never reaches a public thread's turn, even one that overlaps it. Turns of a runner
-    that advertises threads_v1 keep the bot's real epoch (their session keys already separate the threads)."""
-    digest = hashlib.sha256(f"{aid}:{bot_epoch}".encode()).hexdigest()
-    return int(digest[:12], 16) or 1
 
 
 def task_goals_on(runner):
@@ -3647,6 +3637,12 @@ class Execution:
         # A stateless bot (Counsel): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
         if H.stateless(followed):
             config = {**config, "stateless": True}
+        # A runner without threads_v1 keys every bot-keyed turn on the bot's one provider thread (`session: bot`), so a
+        # chat's turn would resume another thread's session. Its chats get a session each instead (`session: task` with no
+        # task keys on the conversation, runner-rs session_key); a task keeps its own session as before.
+        if (not threads_on(runner) and task is None and config.get("session") in (None, "", "bot")
+                and not config.get("stateless")):
+            config = {**config, "session": "task"}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The
@@ -3848,8 +3844,7 @@ class Execution:
                             # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
                             "session_epoch": session_epoch["epoch"] if session_epoch else 0,
                             # Moved by any clear or reset of this bot: the runner starts the bot's shared thread anew.
-                            "bot_session_epoch": (bot_epoch[0] if bot_epoch else 0) if threads_on(runner)
-                            else old_runner_bot_epoch(aid, bot_epoch[0] if bot_epoch else 0)}}
+                            "bot_session_epoch": bot_epoch[0] if bot_epoch else 0}}
 
     @staticmethod
     def obsolete_notice(c, who, job_id, now):
