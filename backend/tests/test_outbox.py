@@ -107,3 +107,13 @@ def test_a_sent_row_is_refused_on_a_repeat_claim(c):
     assert not O.claim(c, SENDS, "a", 3.0), "a delivered row is never claimed again"
     assert O.claim_next(c, SENDS, 99.0) is None
     assert row(c, "a")["state"] == "delivered"
+
+
+def test_a_release_hands_the_row_back_unsent_with_no_attempt_counted(c):
+    add(c, "a")
+    assert O.claim(c, SENDS, "a", 5.0)
+    assert O.release(c, SENDS, "a")
+    back = row(c, "a")
+    assert back["state"] == "ready" and back["lease"] is None and back["attempts"] == 0
+    assert O.claim(c, SENDS, "a", 6.0), "a released row is claimed again"
+    assert not O.release(c, SENDS, "b"), "a row that is not held is not released"

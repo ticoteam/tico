@@ -103,6 +103,12 @@ def claim_next(c, table, now, *, accept=None, limit=100):
     return None
 
 
+def release(c, table, row_id):
+    """Give a claimed row back unsent, with no attempt counted: it is due again without waiting. True when it was held."""
+    return c.execute(f"UPDATE {table.name} SET state=?, {table.lease}=NULL WHERE {table.id}=? AND state=?",
+                     (table.due, row_id, table.flight)).rowcount == 1
+
+
 def reclaim_stale(c, table, before, now):
     """Rows still in flight whose lease was stamped before `before` go back to due at `now`. Returns how many."""
     back = c.execute(f"UPDATE {table.name} SET state=?, {table.lease}=NULL, {table.due_at}=? "
