@@ -257,6 +257,43 @@ fn same_attempt_retries_share_key_and_completed_ticket_starts_a_new_generation()
     assert_ne!(a.writes[0].1, a.writes[1].1);
 }
 
+/// Whether a workflow runs the checker. Cache keys, path filters and lint steps name the crate's directory and do not
+/// count: a run is `cargo run` with the crate, or the built binary (or the bare command) started.
+fn runs_checker(workflow: &str) -> bool {
+    // Backslash-continued lines are one command.
+    let mut commands = Vec::new();
+    let mut current = String::new();
+    for line in workflow.lines() {
+        let text = line.trim();
+        current.push_str(text.trim_end_matches('\\'));
+        current.push(' ');
+        if !text.ends_with('\\') {
+            commands.push(std::mem::take(&mut current));
+        }
+    }
+    commands.push(current);
+    commands.iter().any(|command| {
+        let words: Vec<&str> = command.split_whitespace().collect();
+        let cargo_run = words
+            .iter()
+            .position(|w| *w == "cargo")
+            .is_some_and(|at| words[at..].contains(&"run"))
+            && words.iter().any(|w| w.contains("trust-list-check"));
+        // A cargo flag's value names the crate; the command that uses the crate is what runs it.
+        let started = words.iter().enumerate().any(|(at, w)| {
+            let base = w.rsplit('/').next().unwrap_or(*w);
+            let names_checker = base == "tico-trust-list-check" || *w == "trust-list-check";
+            let flag_value = at > 0
+                && matches!(
+                    words[at - 1],
+                    "-p" | "--package" | "--bin" | "--manifest-path"
+                );
+            names_checker && !flag_value
+        });
+        cargo_run || started
+    })
+}
+
 #[test]
 fn a5_stale_scan_succeeds_and_has_no_pr_workflow_caller() {
     let r = scan(
@@ -272,12 +309,34 @@ fn a5_stale_scan_succeeds_and_has_no_pr_workflow_caller() {
     for entry in std::fs::read_dir(workflows).unwrap() {
         let path = entry.unwrap().path();
         if path.is_file() {
-            let workflow = std::fs::read_to_string(path).unwrap();
+            let workflow = std::fs::read_to_string(&path).unwrap();
             assert!(
-                !workflow.contains("trust-list-check"),
-                "Run only via the daily Upgrades routine"
+                !runs_checker(&workflow),
+                "{}: Run only via the daily Upgrades routine",
+                path.display()
             );
         }
+    }
+}
+
+#[test]
+fn workflow_guard_catches_real_runs_and_ignores_cache_and_lint_lines() {
+    for run in [
+        "      - run: cargo run --locked --manifest-path tools/trust-list-check/Cargo.toml -- --repo . --apply",
+        "        run: |\n          cargo run --locked \\\n            --bin tico-trust-list-check -- --repo .",
+        "        run: cargo run --locked -p tico-trust-list-check -- --repo .",
+        "        run: ./target/release/tico-trust-list-check --repo . --apply",
+        "        run: trust-list-check --repo .",
+    ] {
+        assert!(runs_checker(run), "should catch: {run}");
+    }
+    for ok in [
+        "            tools/trust-list-check -> target",
+        "        run: cargo clippy --locked --all-targets -p tico-trust-list-check -- -D warnings",
+        "        run: cargo test --locked --manifest-path tools/trust-list-check/Cargo.toml",
+        "        if [ \"$EVENT\" != pull_request ] || git diff --name-only \"$BASE\"...HEAD | grep -qE '^tools/trust-list-check/'; then",
+    ] {
+        assert!(!runs_checker(ok), "should ignore: {ok}");
     }
 }
 
