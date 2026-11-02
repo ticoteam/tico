@@ -4,7 +4,7 @@ Every human has one private DM with the team's assistant (the `coo` bot; you may
 bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: on a
 computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) at its end; it (or ⌘J / Ctrl+J)
 opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the
-middle of the tab bar opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
+middle of the tab bar opens it as a full page, from the top of the screen down to the tab bar; tapping another tab leaves it, even the one it is already under. The panel names the page it sees, and a message sent from it carries that
 page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
 gave the assistant); its header has the dot, the name, the page it sees and **Loop in Support**. The DM is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's Home, with a
