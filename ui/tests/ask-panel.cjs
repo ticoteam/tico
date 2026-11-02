@@ -325,7 +325,7 @@ const words = text => text.trim().split(/\s+/).length;
     assert.deepEqual(errors, []);
     await page.close();
 
-    // A phone: the dot in the middle of the tab bar opens a sheet over the page, above the tab bar, and closes it.
+    // A phone: the dot in the middle of the tab bar opens a full page above the tab bar, and closes it.
     const ask = (id, who, body) => ({kind: 'ask', id, created_at: now, ask: {id, sender_id: who, recipient_id: 'human:ben', body, created_at: now, refs: {}}});
     state = {messages: [msg('p1', 'human:ben', 'Our key is sk-live1234567890abcdef, board blank', ago(5)), msg('p2', 'bot:coo', 'Try a reload.', ago(4))],
       sent: [], read: [], decided: [], answers: [], tickets: [], card: null,
@@ -358,7 +358,8 @@ const words = text => text.trim().split(/\s+/).length;
     assert.equal(await page.locator('#ask-panel .ask-card[data-ask-q="m8"]').isVisible(), true);
     assert.equal(await peek2.isHidden(), true, 'no peek while the chat is open');
     const sheet = await page.locator('#ask-panel').boundingBox(), bar = await page.locator('#mobile-nav').boundingBox();
-    assert.ok(sheet.x === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - bar.y) < 2, `a sheet above the tab bar (${JSON.stringify([sheet, bar])})`);
+    assert.ok(sheet.x === 0 && sheet.y === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - bar.y) < 2, `a full page above the tab bar (${JSON.stringify([sheet, bar])})`);
+    assert.equal(await page.locator('#ask-panel').evaluate(el => getComputedStyle(el).borderTopLeftRadius), '0px', 'square, like a page');
     // Your requests is in the header with a 44 px tap target, and the words Loop in Support shares sit under the header.
     const mineBox = await page.locator('#ask-panel [data-ask-requests]').boundingBox();
     assert.ok(mineBox && mineBox.height >= 44 && mineBox.y >= sheet.y && mineBox.y + mineBox.height <= sheet.y + sheet.height, `Your requests in the header (${JSON.stringify(mineBox)})`);
@@ -415,6 +416,13 @@ const words = text => text.trim().split(/\s+/).length;
     assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], [null, 'dot']);
     await page.waitForTimeout(300);
     assert.equal(await peek2.isHidden(), true, 'the line spoke for both questions: no second peek');
+    // A page of its own: tapping another tab, even the one already under it, leaves Ask.
+    await tab.click();
+    await page.locator('#ask-panel').waitFor();
+    await page.locator('#mobile-nav [data-nav="tasks"]').click();
+    await page.locator('#ask-panel').waitFor({state: 'hidden'});
+    await page.locator('#mobile-nav [data-nav="tasks"]').click();
+    assert.equal(await page.locator('#ask-panel').isHidden(), true, 'a tab never opens Ask');
     // A "things need you" sheet already open: the chat opens over it, not under it.
     await page.evaluate(() => { const s = document.createElement('section'); s.className = 'needs-you'; s.style.height = '600px'; document.body.appendChild(s); });
     await tab.click();
