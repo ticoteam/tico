@@ -12224,7 +12224,7 @@
     },
     "/api/v2/finance/reports/{kind}": {
       "get": {
-        "summary": "pnl (cash or accrual), pnl_by_account (by=location|project and id: that record's row by account), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or revenue_by_item (posted invoices by the item each line names; receivables view), cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
+        "summary": "pnl (cash or accrual), pnl_by (income, expense, cost_of_goods and gross_margin per location, class or project), pnl_by_account (by=location|project and id: that record's row by account, with its cost_of_goods and gross_margin), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or revenue_by_item (posted invoices by the item each line names; receivables view), cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
         "operationId": "getFinanceReport",
         "parameters": [
           {
@@ -40531,6 +40531,45 @@
               "string",
               "null"
             ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file_id": {
+                  "type": "string"
+                },
+                "added_at": {
+                  "type": "string"
+                },
+                "added_by_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "added_at",
+                "added_by_id",
+                "file_id",
+                "id"
+              ],
+              "additionalProperties": true
+            }
           }
         },
         "required": [
@@ -42522,10 +42561,38 @@
           },
           "view_version": {
             "type": "integer"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file_id": {
+                  "type": "string"
+                },
+                "added_at": {
+                  "type": "string"
+                },
+                "added_by_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "added_at",
+                "added_by_id",
+                "file_id",
+                "id"
+              ],
+              "additionalProperties": true
+            }
           }
         },
         "required": [
           "contact",
+          "files",
           "view_version"
         ],
         "additionalProperties": true
@@ -44345,6 +44412,18 @@
                 },
                 "label": {
                   "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "as_of": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "stale": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -47798,6 +47877,45 @@
               "string",
               "null"
             ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file_id": {
+                  "type": "string"
+                },
+                "added_at": {
+                  "type": "string"
+                },
+                "added_by_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "added_at",
+                "added_by_id",
+                "file_id",
+                "id"
+              ],
+              "additionalProperties": true
+            }
           }
         },
         "required": [
@@ -49409,6 +49527,45 @@
               "string",
               "null"
             ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file_id": {
+                  "type": "string"
+                },
+                "added_at": {
+                  "type": "string"
+                },
+                "added_by_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "added_at",
+                "added_by_id",
+                "file_id",
+                "id"
+              ],
+              "additionalProperties": true
+            }
           }
         },
         "required": [
@@ -51608,6 +51765,18 @@
               "string",
               "null"
             ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stale": {
+            "type": "boolean"
           }
         },
         "required": [

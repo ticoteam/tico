@@ -21,13 +21,23 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = 'remote-run.yml'
 TAIL = 200
+# Waits between tries when GitHub rate-limits gh: five tries over about ten minutes.
+BACKOFF = (60, 120, 180, 240)
+RATE_LIMITS = ('rate limit', 'too quickly', 'http 429', 'abuse detection')
 
 
 def gh(*args, capture=True):
-    result = subprocess.run(['gh', *args], cwd=ROOT, capture_output=capture, text=True)
-    if result.returncode != 0:
-        raise SystemExit(f'remote: gh {" ".join(args[:2])} failed: {(result.stderr or "").strip()}')
-    return result.stdout
+    """Run gh and return its output; a rate-limit error is retried with backoff, any other failure exits 1 at once."""
+    name = ' '.join(args[:2])
+    for wait in (*BACKOFF, None):
+        result = subprocess.run(['gh', *args], cwd=ROOT, capture_output=capture, text=True)
+        if result.returncode == 0:
+            return result.stdout
+        error = (result.stderr or '').strip()
+        if wait is None or not any(limit in error.lower() for limit in RATE_LIMITS):
+            raise SystemExit(f'remote: gh {name} failed: {error}')
+        print(f'remote: gh {name} hit a rate limit; retrying in {wait}s', file=sys.stderr, flush=True)
+        time.sleep(wait)
 
 
 def git(*args):

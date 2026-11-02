@@ -60,6 +60,33 @@ def depts(draft):
 SPEC_COUNTS = {"everything": 72, "software": 50, "services": 37, "local": 40, "store": 38}
 
 
+def plain_text(business_type=None):
+    draft = C.Turn(C.blank()).finish()
+    draft["company"].update(name="Acme Finance", about="We help small firms.")
+    if business_type is not None:
+        draft["company"]["business_type"] = business_type
+    return C.to_yaml(draft)
+
+
+def test_the_company_file_carries_a_business_type_and_a_file_without_one_reads_as_before():
+    """`company.business_type` is read, kept as text of at most 40 characters, and written back. A file without it has no
+    such key anywhere, so its fingerprint and its export are as they were."""
+    plain = plain_text()
+    assert "business_type" not in plain and "business_type" not in C.from_yaml(plain)["company"]
+    typed = plain_text("software")
+    assert '  business_type: "software"\n' in typed
+    draft = C.from_yaml(typed)
+    assert draft["company"]["business_type"] == "software"
+    assert '  business_type: "software"' in C.to_yaml(draft)
+    assert C.from_yaml(C.to_yaml(draft))["company"]["business_type"] == "software"
+    assert C.from_yaml(typed.replace('"software"', "42"))["company"]["business_type"] == "42"
+    assert len(C.from_yaml(plain_text("x" * 60))["company"]["business_type"]) == 40
+    small = C.Turn(C.blank()).finish()                   # a small chart: the packed plan must fit the 7 KB environment limit
+    small["company"].update(name="Acme Finance", about="We help small firms.", business_type="software")
+    small["bots"] = small["bots"][:4]
+    assert starter.unpack(starter.pack(C.to_yaml(small)))["company"]["business_type"] == "software"
+
+
 def test_1_each_model_has_its_spec_seat_count_and_every_seat_names_a_template_or_a_seat_to_build():
     """Org chart models spec test 1, against the data files."""
     real = {role["slug"] for role in C.ROLES}

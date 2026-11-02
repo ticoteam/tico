@@ -26,7 +26,7 @@ TODAY = date(2026, 10, 15)   # AT's day in the company zone
 @pytest.fixture
 def library(monkeypatch: pytest.MonkeyPatch) -> None:
     """The Library in these tests: PHOTO is a file the company's people can read; any other id is not readable."""
-    monkeypatch.setattr(EQ, "FILE_READABLE", lambda c, who, file_id: file_id == PHOTO)
+    monkeypatch.setattr(EQ, "file_readable", lambda c, who, file_id: file_id == PHOTO)
 
 
 def _vendor(c, name="Acme Supplies", kind="vendor") -> str:
@@ -181,7 +181,7 @@ def test_a_photo_is_a_library_file_its_asker_can_read_and_a_missing_one_is_not_f
 
 def test_a_photo_is_refused_until_the_library_check_is_installed(books, monkeypatch):  # noqa: F811
     """X10e (fail closed): with no Library check installed, a photo is refused rather than taken unchecked."""
-    monkeypatch.setattr(EQ, "FILE_READABLE", None)
+    monkeypatch.setattr(EQ, "file_readable", None)
     with books.transaction() as c:
         refused = act(c, OWNER, "equipment_create", {"name": "Plate", "kind": "owned", "photo_file_id": PHOTO})
         assert refused.code == NOT_AVAILABLE

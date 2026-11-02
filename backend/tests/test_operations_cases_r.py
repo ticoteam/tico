@@ -210,8 +210,6 @@ def test_s1_service_and_inventory_items_sold_to_each_studio_add_up_per_studio_in
 
 
 # ------------------------------------------------------------------------------------------------------------- S2
-@pytest.mark.xfail(strict=True, reason="finance.vendor.renewal_due is drained to rules, but no routine or default rule "
-                   "turns it into a task (documents.py:1654, jobs.py:55); plan P3 and S2 expect a task")
 def test_s2_a_vendor_renewal_with_notice_opens_a_task_that_names_the_vendor_before_the_cancel_by_day(books):  # noqa: F811
     """S2: a laser service contract renews on 14 December with 60 days' notice, so its cancel-by day is today. The
     renewal stage is raised, and a task should name the vendor so someone acts before the notice runs out."""

@@ -16,11 +16,14 @@ from backend.store import H, Problem, encode
 from backend.tests.test_sample_company import OWNER_EMAIL, PEOPLE, SEED, environment, machine, rows, settings_for, signed_in
 
 
-def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", "botops", "finance-lead", "accounts-payable")):
+def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", "botops", "finance-lead", "accounts-payable"),
+                 business_type=None):
     draft = C.blank()
     draft["company"]["signals"] = ["sells_services"]
     draft = C.Turn(draft).finish()
     draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
+    if business_type is not None:
+        draft["company"]["business_type"] = business_type
     draft["bots"] = [b for b in draft["bots"] if b["template"] in set(keep)]
     for bot in draft["bots"]:
         bot["start"] = bot["template"] != "accounts-payable"
@@ -275,6 +278,57 @@ def test_import_requires_owner_and_matching_preview_and_refuses_replacing_a_conf
                                       json={"company_yaml": changed["company_yaml"]}, headers=signed_in()).json()["fingerprint"]
     assert api.post("/api/v2/onboarding/company/import", json=changed, headers=signed_in()).status_code == 409
     assert api.get("/api/v2/config", headers=signed_in()).json()["company_name"] == "Acme Finance"
+
+
+def sidebar_config(api):
+    return api.get("/api/v2/config", headers=signed_in()).json()
+
+
+def test_a_company_file_business_type_sets_the_sidebar_before_setup_completes(environment):
+    """tico.dev/setup writes `company.business_type`; the import sets it before setup completes, so the company's defaults
+    apply: a software company hides the Operations tabs its table leaves out."""
+    api = environment()
+    preview = preview_and_import(api, company_text(business_type="software"))
+    assert preview["business_type"] == "software" and "warnings" not in preview
+    assert sidebar_config(api)["business_type"] == "software"
+    assert sidebar_config(api)["hidden_sections"] == ["operations.locations", "operations.equipment"]
+
+
+def test_an_unknown_business_type_is_a_warning_and_the_import_still_imports(environment):
+    api = environment()
+    preview = preview_and_import(api, company_text(business_type="bakery"))
+    assert len(preview["warnings"]) == 1 and '"bakery" is not one Tico knows' in preview["warnings"][0]
+    assert "business_type" not in preview
+    assert sidebar_config(api)["company_name"] == "Acme Finance"  # the import went through
+    assert sidebar_config(api)["business_type"] == "other"      # no answer from the file: setup's own default
+
+
+def test_a_file_without_a_business_type_leaves_the_sidebar_to_setup(environment):
+    api = environment()
+    preview = preview_and_import(api, company_text())
+    assert "business_type" not in preview and "warnings" not in preview
+    assert sidebar_config(api)["business_type"] == "other"
+
+
+def test_a_business_type_a_person_chose_before_the_import_is_not_overridden(environment):
+    api = environment()
+    chosen = api.put("/api/v2/company/sidebar", json={"business_type": "retail"}, headers=signed_in())
+    assert chosen.status_code == 200, chosen.text
+    preview_and_import(api, company_text(business_type="software"))
+    assert sidebar_config(api)["business_type"] == "retail"
+    assert sidebar_config(api)["hidden_sections"] == ["operations"]
+
+
+def test_reimporting_the_file_keeps_a_business_type_chosen_in_settings(environment):
+    api = environment()
+    text = company_text(business_type="software")
+    preview_and_import(api, text)
+    assert api.put("/api/v2/company/sidebar", json={"business_type": "retail"}, headers=signed_in()).status_code == 200
+    again = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
+    done = api.post("/api/v2/onboarding/company/import", json={"company_yaml": text, "fingerprint": again["fingerprint"]},
+                    headers=signed_in())
+    assert done.status_code == 200, done.text
+    assert sidebar_config(api)["business_type"] == "retail"
 
 
 def test_import_never_replaces_an_existing_paused_employee(environment):
