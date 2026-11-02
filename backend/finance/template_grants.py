@@ -1,25 +1,26 @@
 """What a bot made from a catalog template comes with in Finance: the Finance rights and one company-wide view that its
 card declares (`finance:` in card.yaml). settings_admin.create_bot is where every hire lands (a seat, a team build,
-company import, the bot's own add), so the grant is made there and nowhere else.
+company import, the bot's own add), so actions.template_hire makes the grant there; actions.template_ensure makes the
+grants still waiting for Finance, at start and on the scheduler's Finance tick.
 
 Once per bot: each grant is one `bot.finance_granted` event, so a later revoke stays revoked and a restart grants
-nothing. A hire before Finance is set up is recorded as `bot.finance_pending` and granted once Finance is set up
-(`ensure`, at start and on the scheduler's Finance tick). Rights go through finance.rights.grant_defaults, the mechanism
-the Bookkeeper's rights use. Only the Procurement Manager declares a grant today: finance.ap and the expenses view."""
+nothing. A hire before Finance is set up is recorded as `bot.finance_pending` and granted once Finance is set up. Rights
+go through rights.grant_defaults, the mechanism the Bookkeeper's rights use. Only the Procurement Manager declares a
+grant today: finance.ap and the expenses view."""
 import json
 from pathlib import Path
 
 import yaml
 
-from . import hubdb as H
-from .finance import actions as FA
-from .finance import reads as FR
-from .finance.core import rights as R
-from .finance.core import view as VW
-from .finance.core.org import SYSTEM
-from .finance.store import access as SA
-from .finance.store import ledger as SL
-from .finance.store import tico
+from .. import hubdb as H
+from .context import is_set_up
+from .core import rights as R
+from .core import view as VW
+from .core.org import SYSTEM
+from .rights import grant_defaults
+from .store import access as SA
+from .store import ledger as SL
+from .store import tico
 
 GRANTED = "bot.finance_granted"
 PENDING = "bot.finance_pending"
@@ -50,7 +51,7 @@ def hire(c, slug: str, template: str, catalog_dir) -> dict:
     grant = declared(catalog_dir, template)
     if not grant:
         return {}
-    if not FR.is_set_up(c):
+    if not is_set_up(c):
         H.event(c, H.KEEPER, PENDING, slug, grant)
         return {}
     return _grant(c, slug, grant)
@@ -58,7 +59,7 @@ def hire(c, slug: str, template: str, catalog_dir) -> dict:
 
 def ensure(c) -> list[str]:
     """Once Finance is set up: the pending grants of bots not archived, each once. The bots granted now."""
-    if not FR.is_set_up(c):
+    if not is_set_up(c):
         return []
     made = []
     rows = c.execute("SELECT target, detail_json FROM events WHERE action=? ORDER BY ts, id", (PENDING,)).fetchall()
@@ -76,7 +77,7 @@ def _grant(c, slug: str, grant: dict) -> dict:
     if c.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (GRANTED, slug)).fetchone():
         return {}
     actor, at = "bot:" + slug, tico.now()
-    added = FA.grant_defaults(c, actor, grant.get("rights") or [], at=at)
+    added = grant_defaults(c, actor, grant.get("rights") or [], at=at)
     view = grant.get("view") or ""
     if view:
         made = VW.Grant(id=SL.new_id(), subject_kind="teammate", subject=actor, what=view, whose="company",
@@ -85,6 +86,3 @@ def _grant(c, slug: str, grant: dict) -> dict:
         SA.bump_view(c, f"hire {slug}", at)
     H.event(c, H.KEEPER, GRANTED, slug, {"rights": added, "view": view})
     return {"rights": added, "view": view}
-
-
-__all__ = ["declared", "hire", "ensure"]

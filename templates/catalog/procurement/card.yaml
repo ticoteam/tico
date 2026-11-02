@@ -58,8 +58,8 @@ first_routine:
 example_output: knowledge/examples/vendor-comparison.md
 reasoning_effort: medium
 recommend_when: [uses_docs, uses_email, small_team]
-# Given once when the bot is hired (backend/template_finance.py): it drafts purchase orders; sending, approving over the
-# limit and anything that moves money still ask the owner. No payment or booking right.
+# Given once when the bot is hired (backend/finance/template_grants.py): it drafts purchase orders; sending, approving
+# over the limit and anything that moves money still ask the owner. No payment or booking right.
 finance:
   rights: [finance.ap]
   view: expenses

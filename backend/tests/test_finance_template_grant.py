@@ -1,13 +1,12 @@
-"""A template's Finance grant at hire (backend/template_finance.py; `finance:` in a card.yaml): the Procurement Manager
-is given finance.ap and the company's expenses view once, however it is hired (the add-a-bot form, a seat, a team
-build), and its draft purchase order carries its tags. A second start grants nothing, a revoke stays, a hire before
-Finance is set up is granted once it is, and another template's bot gets nothing. Fictional Acme data only."""
+"""A template's Finance grant at hire (backend/finance/template_grants.py; `finance:` in a card.yaml): the Procurement
+Manager is given finance.ap and the company's expenses view once, however it is hired (the add-a-bot form, a seat, a
+team build), and its draft purchase order carries its tags. A second start grants nothing, a revoke stays, a hire
+before Finance is set up is granted once it is, and another template's bot gets nothing. Fictional Acme data only."""
 import itertools
 
 import pytest
 
 from backend import hubdb as H
-from backend import template_finance as TF
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (fixture)
@@ -31,7 +30,7 @@ def finance_on(api):
 def start(api):
     """What app start does for the grant: the bots granted now, once Finance is set up."""
     with db(api).transaction() as c:
-        return TF.ensure(c)
+        return FA.template_ensure(c)
 
 
 def act(api, who, kind, payload):
@@ -170,9 +169,9 @@ def test_another_templates_bot_gets_no_finance_grant(api):
 
 def test_the_card_declares_ap_and_an_expenses_view_and_a_bad_declaration_grants_only_what_is_valid(api, tmp_path):
     catalog = db(api).settings.catalog_dir
-    assert TF.declared(catalog, "procurement") == {"rights": ["finance.ap"], "view": "expenses"}
-    assert TF.declared(catalog, "accounts-payable") == {}
+    assert FA.template_declared(catalog, "procurement") == {"rights": ["finance.ap"], "view": "expenses"}
+    assert FA.template_declared(catalog, "accounts-payable") == {}
     (tmp_path / "odd").mkdir()
     (tmp_path / "odd" / "card.yaml").write_text(
         "template: odd\nfinance:\n  rights: [finance.admin, finance.nope, finance.ap]\n  view: nope\n")
-    assert TF.declared(tmp_path, "odd") == {"rights": ["finance.ap"], "view": ""}
+    assert FA.template_declared(tmp_path, "odd") == {"rights": ["finance.ap"], "view": ""}

@@ -223,7 +223,6 @@ class Scheduler:
         waiting `finance.*` events every tick, run holds past expiry every ten minutes, Gateway usage postings hourly
         (the Gateway worker fetches the meter), bills due, reminders, the cash alert and ready closes hourly, setup
         when missing and next month's period daily."""
-        from . import template_finance
         from .finance import actions as finance, reads as finance_reads
         steps = []
         try:
@@ -242,7 +241,7 @@ class Scheduler:
             if waiting:
                 steps.append(("finance_events", lambda c: finance.drain_events(c, stamp(at))))
             if self.finance_due("template_rights", at, timedelta(minutes=10)):
-                steps.append(("template_rights", lambda c: template_finance.ensure(c)))    # hires made before setup
+                steps.append(("template_rights", lambda c: finance.template_ensure(c)))    # hires made before setup
             if self.finance_due("holds", at, timedelta(minutes=10)):
                 steps.append(("finance_holds", lambda c: finance.expire_holds(c, stamp(at))))
             if self.finance_due("usage", at, timedelta(hours=1)):
