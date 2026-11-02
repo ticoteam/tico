@@ -424,6 +424,8 @@ async function messageMenu(page, text, item) {
       });
       await step(page, 'held message', phone, name, async () => {
         await shell(page, `#/thread/${S.plan.id}`, '.thv-composer')();
+        await sleep(1500);                      // the runner card arrives after the page does, and covers the composer on a phone
+        await dismissRunnerCard(page);
         await page.locator('.thv-composer .p-text').fill(HELD);
         await clickOrExplain(page, '.thv-composer .p-send', 'held send');
         await sleep(2500);
@@ -435,6 +437,7 @@ async function messageMenu(page, text, item) {
       });
       await step(page, 'held edit', phone, name, async () => {
         await messageMenu(page, 'Price list draft v1', 'Edit');
+        await dismissRunnerCard(page);
         await page.locator('[data-message]', {hasText: 'Price list draft v1'}).first().locator('textarea').first().fill(HELD);
         await clickOrExplain(page, '[data-th-edit-save]', 'held edit save');
         await sleep(2500);
