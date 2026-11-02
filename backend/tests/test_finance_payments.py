@@ -184,6 +184,19 @@ def test_the_payment_help_marks_the_payee_and_the_line_required_as_the_code_does
         assert "account_id is required" in refused.reason
 
 
+def test_a_payee_built_from_the_recipient_help_is_accepted(books):
+    """Bots build a payee from the help: its field names are the ones the code reads (bank numbers at the top level)."""
+    fields = {f["name"]: f["required"] for f in FA.help("recipient_add")["fields"]}
+    assert "details" not in fields and fields["account_number"] is False and fields["routing_number"] is False
+    sample = {"name": "Acme Supplies", "method": "ach", "account_number": "000099998888", "routing_number": "000000000"}
+    payload = {name: sample[name] for name in fields if name in sample}
+    assert all(name in payload for name, required in fields.items() if required), fields
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        made = act(c, OWNER, "recipient_add", payload)
+        assert made.status == "committed", made
+
+
 def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_and_amount(books):
     """B: a timed-out request is never re-POSTed. It is found in Mercury's paged list only by its key in the memo with
     the same recipient and amount; missing for 30 minutes it asks a finance admin once, who may then cancel it."""

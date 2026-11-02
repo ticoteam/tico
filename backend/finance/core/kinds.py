@@ -254,9 +254,13 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "card_save": (("card_id", "str", ""), ("vendor", "str", "a vendor contact's id, or the name the vendor goes by")),
     "card_unsave": (("card_id", "str", ""), ("vendor", "str", "the vendor the card was saved on")),
     "recipient_add": (("name", "str", ""), ("method", "ach|wire|check", ""), ("account_type?", "str", ""),
-                      ("address?", "obj", ""), ("email?", "str", ""), ("contact_id?", "str", ""),
+                      ("address?", "obj", "a check's mailing address (a check needs one)"),
+                      ("email?", "str", ""), ("contact_id?", "str", ""),
                       ("replaces?", "str", ""), ("money_account_id?", "str", ""),
-                      ("details", "obj", "bank details; sealed, never stored readable")),
+                      ("account_number?", "str", "ach or wire: the account number, digits; sealed, never stored "
+                       "readable"),
+                      ("routing_number?", "str", "ach or wire: the 9-digit routing number; sealed, never stored "
+                       "readable")),
     "payment_create": (("recipient_id", "str", "the payee (required unless method is internal)"),
                        ("amount", "minor", ""),
                        ("money_account_id?", "str", "the bank to pay from"),
