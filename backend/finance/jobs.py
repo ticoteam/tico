@@ -109,8 +109,8 @@ def open_next_period(c: sqlite3.Connection, at: str | None = None) -> str | None
 
 def amortize(c: sqlite3.Connection, at: str | None = None) -> int:
     """Expense the prepaid bill months that have come due (spec §4.4, backend/finance/prepaids.py), as system work
-    through the one write path. A dry run first: a month that would be refused writes nothing, so it is tried again on
-    the next look. How many months posted."""
+    through the one write path. A dry run first: a month that would be refused writes nothing. A month that does not
+    post is asked for (one Needs-you per line and month) and tried again on the next look. How many months posted."""
     from . import actions, prepaids
     if not is_set_up(c):
         return 0
@@ -121,10 +121,15 @@ def amortize(c: sqlite3.Connection, at: str | None = None) -> int:
     for line_id, month in prepaids.due_months(c, ctx):
         body = {"bill_line_id": line_id, "month": month}
         key = f"prepaid:{line_id}:{month}"
-        if actions.act(c, SYSTEM, prepaids.KIND, body, key, dry_run=True, at=at).status != "committed":
+        check = actions.act(c, SYSTEM, prepaids.KIND, body, key, dry_run=True, at=at)
+        if check.status != "committed":
+            prepaids.ask_not_posted(ctx, line_id, month, check.reason)
             continue
-        if actions.act(c, SYSTEM, prepaids.KIND, body, key, at=at).status == "committed":
+        done = actions.act(c, SYSTEM, prepaids.KIND, body, key, at=at)
+        if done.status == "committed":
             posted += 1
+        else:
+            prepaids.ask_not_posted(ctx, line_id, month, done.reason)
     return posted
 
 

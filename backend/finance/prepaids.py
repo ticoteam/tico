@@ -16,6 +16,7 @@ from .handlers import Plan, Result
 from .store import banking as SK
 from .store import ledger as SL
 from .store import prepaids as SPP
+from .store import tico
 
 KIND = "prepaid_amortize"
 ACCOUNT = ("1150", "Prepaid expenses", "asset", "prepaid_expense")
@@ -117,6 +118,20 @@ def unpost(ctx: Ctx, bill_id: str, who: str, action_id: str, memo: str) -> None:
         row = SL.entry_row(ctx.c, entry_id)
         if row is not None and str(row["status"]) == "posted":
             posting.reverse(ctx, entry_id, day=open_day(ctx, ctx.today), memo=memo, by=who, action_id=action_id)
+
+
+def ask_not_posted(ctx: Ctx, line_id: str, month: str, reason: str) -> None:
+    """A due month that did not post is a Needs-you for the finance admin, one per line and month: the title names both,
+    and tico reuses an open item with the same title, so a month that keeps failing keeps one item. The look tries
+    it again each time (amortize), so the item is current until the month posts."""
+    from .payments import admin_person
+    row = SPP.line(ctx.c, ctx.book.id, line_id)
+    if row is None:
+        return
+    bill = str(row["number"] or row["bill_id"])
+    tico.needs_you(ctx.c, admin_person(ctx), f"Prepaid {month} not expensed: line {line_id}",
+                   f"{month} of the prepaid schedule for bill {bill} did not post: {reason[:300]}. Fix it; the month "
+                   "posts on the next look.")
 
 
 PLANNERS = {KIND: amortize_plan}
