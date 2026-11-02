@@ -1105,6 +1105,7 @@ export type Equipment = {
   file_id: string;
   id: string;
 }>;
+  files_more?: boolean;
   id: string;
   installed_on?: string | null;
   kind: "owned" | "customer";
@@ -1561,6 +1562,7 @@ export type FinanceContact = {
   file_id: string;
   id: string;
 }>;
+  files_more: boolean;
   view_version: number;
 };
 
@@ -2630,6 +2632,7 @@ export type Item = {
   file_id: string;
   id: string;
 }>;
+  files_more?: boolean;
   id: string;
   income_account_id?: string | null;
   kind: "service" | "inventory" | "non_inventory" | "bundle" | "category" | "raw_material" | "assembly";
@@ -2932,6 +2935,7 @@ export type Location = {
   file_id: string;
   id: string;
 }>;
+  files_more?: boolean;
   id: string;
   in_books?: boolean;
   kind: string;
@@ -3496,6 +3500,7 @@ export type PurchaseOrder = (FinanceOrderRow & {
   total: number;
   vendor?: string;
 }>;
+  linked_bills_more?: boolean;
   view_version?: number;
 });
 

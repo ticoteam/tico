@@ -168,9 +168,10 @@ def unlink_file(c: sqlite3.Connection, link_id: str) -> None:
     c.execute("DELETE FROM record_files WHERE id=?", (link_id,))
 
 
-def file_links(c: sqlite3.Connection, record_table: str, record_id: str) -> list[tuple[str, str, str, str]]:
-    """A record's links, oldest first: (link id, file id, added at, added by)."""
+def file_links(c: sqlite3.Connection, record_table: str, record_id: str, *,
+               limit: int) -> list[tuple[str, str, str, str]]:
+    """A record's links, oldest first, at most `limit`: (link id, file id, added at, added by)."""
     rows = c.execute("SELECT id, file_id, created_at, created_by_id FROM record_files "
-                     "WHERE record_table=? AND record_id=? ORDER BY created_at, id",
-                     (record_table, record_id)).fetchall()
+                     "WHERE record_table=? AND record_id=? ORDER BY created_at, id LIMIT ?",
+                     (record_table, record_id, limit)).fetchall()
     return [(str(r[0]), str(r[1]), str(r[2]), str(r[3])) for r in rows]

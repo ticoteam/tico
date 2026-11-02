@@ -1504,16 +1504,18 @@ def _hours_between(now: str, then: str) -> float:
             ).total_seconds() / 3600
 
 
-def _freshness(ctx: Ctx, sync: tuple[str, str | None, str] | None) -> Row:
+def _freshness(ctx: Ctx, sync: tuple[str, str | None, str, str | None] | None) -> Row:
     """Where a record came from and how old its copy is. Tico's own record is as of the read and never stale. A record a
-    provider's books hold is as of that connection's last successful sync, and stale when the connection is failing or
-    that sync is older than STALE_HOURS (the cash reads' threshold). A copy never synced has no as_of and is stale."""
+    provider's books hold is as of that connection's last successful sync, and stale when the connection is failing,
+    when its last sync failed (a timeout leaves last_ok_at where it was, so the copy is still as of that sync), or
+    when that good sync is older than STALE_HOURS (the cash reads' threshold). A copy never synced has no as_of and is
+    stale."""
     if sync is None:
         return {"source": "tico", "as_of": ctx.at, "stale": False}
-    provider, last_ok, status = sync
+    provider, last_ok, status, error = sync
     if last_ok is None:
         return {"source": provider, "as_of": None, "stale": True}
-    stale = status == "error" or _hours_between(ctx.at, last_ok) > STALE_HOURS
+    stale = status == "error" or bool(error) or _hours_between(ctx.at, last_ok) > STALE_HOURS
     return {"source": provider, "as_of": last_ok, "stale": stale}
 
 
@@ -1727,7 +1729,8 @@ def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at:
                       _customer_names(ctx, kind, [row]), due=due, books=_in_books(ctx, kind, [row]),
                       places=_place_names(ctx, kind, [row]), due_status=states)
     if kind in ("location", "item", "equipment"):
-        out["files"] = RFILES.visible(c, viewer, RECORD_TABLE[kind], str(row["id"]))
+        files, more = RFILES.visible(c, viewer, RECORD_TABLE[kind], str(row["id"]))
+        out.update(files=files, files_more=more)
     return {kind: out}
 
 
@@ -2248,8 +2251,9 @@ def contact(c: sqlite3.Connection, viewer: str, contact_id: str, at: str | None 
     the viewer may read."""
     out = tab_ap.contact(c, viewer, contact_id, at)
     sync = SM.record_syncs(c, "fin_contacts", [contact_id]).get(contact_id)
+    files, more = RFILES.visible(c, viewer, "fin_contacts", contact_id)
     return {**out, "contact": {**cast(Row, out["contact"]), **_freshness(load(c, at), sync)},
-            "files": RFILES.visible(c, viewer, "fin_contacts", contact_id)}
+            "files": files, "files_more": more}
 bill = tab_ap.bill
 invoice = tab_ap.invoice
 chart = tab_ap.chart

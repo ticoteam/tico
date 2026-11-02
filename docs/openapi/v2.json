@@ -40570,6 +40570,9 @@
               ],
               "additionalProperties": true
             }
+          },
+          "files_more": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -42600,11 +42603,15 @@
               ],
               "additionalProperties": true
             }
+          },
+          "files_more": {
+            "type": "boolean"
           }
         },
         "required": [
           "contact",
           "files",
+          "files_more",
           "view_version"
         ],
         "additionalProperties": true
@@ -47941,6 +47948,9 @@
               ],
               "additionalProperties": true
             }
+          },
+          "files_more": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -49591,6 +49601,9 @@
               ],
               "additionalProperties": true
             }
+          },
+          "files_more": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -52221,6 +52234,9 @@
                   ],
                   "additionalProperties": true
                 }
+              },
+              "linked_bills_more": {
+                "type": "boolean"
               }
             },
             "required": [

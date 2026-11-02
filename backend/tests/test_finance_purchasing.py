@@ -892,3 +892,53 @@ def test_a_bill_names_its_order_only_to_a_viewer_who_can_read_that_order(books):
         with pytest.raises(FinanceError) as hidden:
             FR.order(c, EVE, po)
         assert hidden.value.code == NOT_FOUND
+
+
+def _link_bills(c, vendor: str, po: str, count: int, *, payroll: str | None = None) -> list[str]:
+    """Bills linked to an order, each with one line: on the payroll account when given (a line a teammate may not
+    see), else on 6100. The dates vary, so the order shown is by date and not by id alone."""
+    ids = []
+    for i in range(count):
+        line = {"account_id": payroll, "amount": 100} if payroll else _line(c, 100)
+        made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": f"2026-10-{1 + i % 28:02d}",
+                                              "purchase_order_id": po, "lines": [line]})
+        assert made.status == "committed", made.reason
+        ids.append(str(made.result["bill_id"]))
+    return ids
+
+
+def test_an_order_shows_fifty_visible_linked_bills_and_says_more_past_them(books):
+    with books.transaction() as c:
+        payroll = _expense(c, "6200")
+        assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == \
+            "committed"
+        vendor, forwarder = _vendor(c), _vendor(c, "Acme Freight")
+        po = _order(c, vendor, [_line(c, 40_000)])
+        _link_bills(c, forwarder, po, 20, payroll=payroll)
+        visible = set(_link_bills(c, forwarder, po, 60))
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "everything", "whose": "company"}).status == \
+            "committed"
+        owner = FR.order(c, OWNER, po)
+        assert len(owner["linked_bills"]) == 50 and owner["linked_bills_more"] is True
+        eve = FR.order(c, EVE, po)
+        shown = {b["id"] for b in eve["linked_bills"]}
+        # The 20 bills on the private account do not count toward the fifty: she sees fifty of the visible 60.
+        assert len(shown) == 50 and shown <= visible and eve["linked_bills_more"] is True
+
+
+def test_hidden_linked_bills_are_left_out_and_a_short_list_says_no_more(books):
+    with books.transaction() as c:
+        payroll = _expense(c, "6200")
+        assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == \
+            "committed"
+        vendor, forwarder = _vendor(c), _vendor(c, "Acme Freight")
+        po = _order(c, vendor, [_line(c, 40_000)])
+        _link_bills(c, forwarder, po, 20, payroll=payroll)
+        visible = set(_link_bills(c, forwarder, po, 30))
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "everything", "whose": "company"}).status == \
+            "committed"
+        eve = FR.order(c, EVE, po)
+        assert {b["id"] for b in eve["linked_bills"]} == visible and eve["linked_bills_more"] is False
+        assert len(FR.order(c, OWNER, po)["linked_bills"]) == 50
