@@ -438,10 +438,9 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     problem = verify(row, appr)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""), rule=str(row["rule_id"] or ""))
     kind, body = str(row["kind"]), json.loads(str(row["payload_json"]))
-    if problem == "payload":
-        return _reask(ctx, row, p, kind, body)
     if problem:
-        return _close(ctx, row, "denied", DENIED, f"the approval does not stand: {problem}")
+        # Any mismatch voids the approval and asks again (§5): only a declined approval closes denied (above).
+        return _reask(ctx, row, p, kind, body, problem)
     mark = _savepoint(c, "fin_decide")
     try:
         ctx.deciding = True
@@ -498,9 +497,11 @@ def _drifted(body: Mapping[str, object], plan: handlers.Plan) -> bool:
     return any(body.get(k) != v for k, v in plan.resolved.items())
 
 
-def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body: Mapping[str, object]) -> ActionResult:
-    """The approved payload is not the one about to run, so that approval is void. The change is planned again and asked
-    again for the payload it would now run, of the person who decides it now. Never the requester."""
+def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body: Mapping[str, object],
+           why: str = "the approved payload did not match") -> ActionResult:
+    """The approved payload is not the one about to run, so that approval is void (or it does not verify for another
+    reason, `why`). The change is planned again and asked again for the payload it would now run, of the person who
+    decides it now. Never the requester."""
     action_id = str(row["id"])
     ctx.deciding = True                       # the recheck runs on the true figures (figure_route)
     try:
@@ -515,7 +516,7 @@ def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body:
     fresh = {**body, **plan.resolved}
     what = f"{plan.summary} (Finance action {action_id})"
     SX.finish(ctx.c, action_id, status="needs_approval", result={"what": what}, code="",
-              reason="the approved payload did not match; asked again", at=ctx.at)
+              reason=f"{why}; asked again", at=ctx.at)
     approval_id = _ask(ctx, action_id, kind, fresh, what, p.who, approver, gate.rule or str(row["rule_id"]))
     _audit(ctx.c, p, action_id, kind, "needs_approval", "reask", {"void": row["approval_id"],
                                                                   "approval_id": approval_id, "to": approver})

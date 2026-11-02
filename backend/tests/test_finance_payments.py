@@ -330,6 +330,29 @@ def test_a_pending_approval_is_void_once_its_recipient_details_change(books):
         assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
 
 
+def test_an_approval_that_fails_verification_for_another_reason_is_asked_again_not_denied(books, monkeypatch):
+    """Item 5 (spec §5): any mismatch voids an approval and asks again. Only a declined approval closes denied. A
+    mismatch that is not about the payload (here: decided by someone other than the person it was sent to) asks again
+    of the person who decides it now, and the payment is not made on the approval that did not verify."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        _rule(c, OWNER, "Payments ask", {"kind": "payment_create"}, {"outcome": "needs_approval", "who": "owner"},
+              [{"input": {"kind": "payment_create"}, "expect": "needs_approval"}])
+        asked = act(c, "human:ben", "payment_create", {"recipient_id": rid, "amount": 20_000, "obligation": "bill-50",
+                                                       "tags": {"team": "eng"}, "account_id": account(c, "6100"),
+                                                       "money_account_id": _checking(c)})
+        assert asked.status == "needs_approval" and asked.approval_id, asked
+        first = str(asked.approval_id)
+        H.approval_decide(c, OWNER, first, "approved")
+        monkeypatch.setattr(FA, "verify", lambda row, appr: "it was decided by someone other than the person it was sent to")
+        again = FA.approval_decided(c, first, AT)
+        assert again.status == "needs_approval" and again.approval_id and again.approval_id != first, again
+        assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
+
+
 def _unknown_and_flagged(books, fake, obligation):
     """A payment whose send got no answer, looked for by its key for an hour: flagged for a finance admin."""
     rid = _payee(books, fake)
