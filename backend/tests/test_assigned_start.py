@@ -9,6 +9,7 @@ from backend.tests.test_api import api, claim, get, post  # noqa: F401
 from backend.tests.test_auto_tasks import deck, finish, set_cap, take
 from backend.tests.test_profiles import put
 from backend.tests.test_task_lanes import new_task, task_bot
+from backend.enqueue import enqueue_stored
 
 
 @pytest.fixture
@@ -660,7 +661,8 @@ def fleet(store, bots, tasks, attempts, *, days=30):
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                       "VALUES(?, 'fleet-conv','human:ana',?,'task','',?,?)",
                       (f'fleet-m-{i}', 'bot:' + slugs[b], json.dumps({'task': task}) if task and i % 3 == 0 else '{}', at))
-            # A message to a bot queues its job under the message's id (store.QUEUE_TRIGGER).
+            enqueue_stored(c, f'fleet-m-{i}')
+            # A message to a bot queues its job under the message's id (backend/enqueue.py).
             c.execute("UPDATE jobs SET state='completed' WHERE id=?", (f'fleet-m-{i}',))
             c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                       "VALUES(?,?,?,'fleet-runner',1,?,'completed',?,?)",

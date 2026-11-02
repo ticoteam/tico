@@ -407,7 +407,7 @@ so a bot's own message coming back never wakes it, however late. Today's bot-to-
 and `wake_rules.judge` still run per delivery and may turn `queue` into `defer`.
 
 ### 4.4 Runs
-The primary bot recipient (`to_actor`) is queued by the existing `queue_bot_message` trigger (job id = message id).
+The primary bot recipient (`recipient_id`) is queued by `backend/enqueue.py`, which every message writer calls in its transaction (job id = message id).
 Each further woken bot gets a **carrier**: a keeper notice to that bot in the same thread, `refs={"carries": <id>,
 "wake": "thread", "reason": ...}`, no `seq`; its job starts the run, and the delivery's `carrier_id` names it.
 `jobs.message_id` stays unique. No carrier is written when the bot may not read the message (audience and the

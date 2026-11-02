@@ -1,6 +1,6 @@
 """Wake rules: one engine decides what a message to a bot does, and names the rule that decided it.
 
-A message to a bot starts a run (store.QUEUE_TRIGGER queues a job) unless it is quiet. `judge` is asked once for every
+A message to a bot starts a run (backend/enqueue.py queues a job) unless it is quiet. `judge` is asked once for every
 message H._write_message is about to write to a bot, and answers with an outcome and the id of the rule behind it:
 
 - `wake`: queue a run now.
@@ -776,7 +776,7 @@ def bot_to_bot_decision(conn, actor, target, kind, refs, body, conv, in_reply_to
 
 
 def stamp(refs, decision):
-    """The message's refs with the rule that decided it. A row's `batch` stamps the hold the jobs trigger reads
+    """The message's refs with the rule that decided it. A row's `batch` stamps the hold the job queue reads
     a rule that lets a Tico notice through takes off a batch mark the writer put on it."""
     out = {**(refs or {}), "rule": decision.rule}
     out.pop(PARKED_NOTICE, None)          # callers cannot supply a notice-only dispatch capability

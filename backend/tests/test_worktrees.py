@@ -9,6 +9,7 @@ from backend import hubdb as H
 from backend import worktrees as W
 from backend.tests.test_github_app import api, gh, auth, connect, runner_token  # noqa: F401
 from backend.tests.test_repositories import catalog, put
+from backend.enqueue import enqueue_stored
 
 
 @pytest.fixture
@@ -33,6 +34,7 @@ def prepared(api, gh):
         c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         until = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m1','human:ana','bot:cmo','say','Work',?)", (H.now(),))
+        enqueue_stored(c, 'm1')
         job = c.execute("SELECT id FROM jobs WHERE message_id='m1'").fetchone()[0]
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) VALUES('a1',?,'cmo','r1',1,'synthetic','running',?,?)", (job, until, H.now()))
     return api, task['id'], other['id']
@@ -1364,6 +1366,7 @@ def test_owner_managers_provision_reports_worktrees_without_granting_repo_access
         with api.app_state.store.transaction() as c:
             c.execute("INSERT OR REPLACE INTO assignments VALUES('cpo','r2',1,?,'ana')", (H.now(),))
             c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('manager-message','human:ana','bot:cpo','say','Manage work',?)", (H.now(),))
+            enqueue_stored(c, 'manager-message')
             job = c.execute("SELECT id FROM jobs WHERE message_id='manager-message'").fetchone()[0]
             c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) VALUES('manager-attempt',?,'cpo','r2',1,'synthetic-manager','running',?,?)",
                       (job, H.shift(H.now(), hours=1), H.now()))

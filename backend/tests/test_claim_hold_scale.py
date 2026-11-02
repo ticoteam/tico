@@ -16,6 +16,7 @@ import pytest
 from backend import auto_tasks, execution, flight, org_turns
 from backend.store import H, encode, _pooled
 from backend.tests.test_api import api, assign, headers, post, runner  # noqa: F401
+from backend.enqueue import enqueue_stored
 
 BOTS, COMPUTERS, ROUTINES, ROUNDS, LAPSES = 102, 12, 291, 30, 3
 
@@ -53,6 +54,7 @@ def seed(api):
                 c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                           "VALUES(?,?,'human:ana',?,'say','Synthetic work',?,'{}')",
                           (f"work-{s}-{k}", room, "bot:" + s, now))
+                enqueue_stored(c, f"work-{s}-{k}")
         # Room for many turns on each computer, and up long enough to be trusted with a lease.
         c.execute("UPDATE runners SET capacity=40,awake_since=?,last_seen_at=?", (H.shift(now, minutes=-10), now))
     return computers, places

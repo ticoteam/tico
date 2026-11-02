@@ -13,6 +13,7 @@ from backend.auth import Identity
 from backend.config import Settings
 from backend.execution import Execution
 from backend.store import H, Problem, Store
+from backend.enqueue import enqueue_stored
 
 OLD = "2020-01-01T00:00:00.000000Z"
 
@@ -29,7 +30,8 @@ def source_db(tmp_path):
         c.execute("INSERT INTO conversations(id) VALUES('cv')")
         for mid, at in (("old", OLD), ("new", now), ("ran", now), ("ran-long-ago", OLD)):
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
-                      "VALUES(?,'cv','human:morgan','bot:sales','ask',?,?)", (mid, "Request " + mid, at))   # the trigger queues a job
+                      "VALUES(?,'cv','human:morgan','bot:sales','ask',?,?)", (mid, "Request " + mid, at))
+            enqueue_stored(c, mid)
         c.execute("UPDATE jobs SET state='completed' WHERE id IN ('ran','ran-long-ago')")
         # A run in progress, a finished run in the window, and a finished run from long ago.
         for aid, job, state, at, finished in (("live", "new", "running", now, None), ("done", "ran", "completed", now, now),
@@ -77,7 +79,7 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
         assert c.execute("SELECT attempt_id FROM attempt_inputs").fetchall() == [("done",)]
         assert c.execute("SELECT token_hash,revoked_at IS NOT NULL FROM runners").fetchall() == [("devcopy-revoked:r1", 1)]
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert c.execute("SELECT count(*) FROM sqlite_master WHERE name='queue_bot_message'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM sqlite_master WHERE name='message_links_insert'").fetchone()[0] == 1
     env = dict(line.split("=", 1) for line in (dest.parent / "server.env").read_text().splitlines()
                if "=" in line and not line.startswith("#"))
     assert (env["TICO_REHEARSAL"], env["TICO_DB"], env["TICO_PUBLIC_URL"]) == ("1", str(dest.resolve()), "http://127.0.0.1:8879")

@@ -1,6 +1,6 @@
 """Which wakes may wait for a bot's next run (token saving 2/9, Dev 140).
 
-A message to a bot starts a run (store.QUEUE_TRIGGER queues a job) unless it is quiet. `gate` is asked once for
+A message to a bot starts a run (backend/enqueue.py queues a job) unless it is quiet. `gate` is asked once for
 every message about to be written to a bot that would start one (H._write_message), and decides with two rules:
 
 - `own_write`: the bot's own write caused it. Its own comments, step moves, status changes, relations and
@@ -232,8 +232,9 @@ MARK = "held_by"
 
 
 def _would_queue(conn, actor, target, refs):
-    """Whether store.QUEUE_TRIGGER would queue a run for this message: to a bot that a runner runs, not from itself,
-    not quiet and not a live transcript, decision or tool line."""
+    """Whether backend/enqueue.py would queue a run for this message: to a bot that a runner runs, not from itself,
+    not quiet and not a live transcript, decision or tool line. Unlike enqueue it counts every external agent's bot
+    out, app-delivered or not, so the rules engine leaves an app-delivered bot's messages alone."""
     from .harnesses import EXTERNAL_HARNESSES
     if not str(target).startswith("bot:") or actor == target or refs.get("quiet"):
         return False

@@ -20,6 +20,7 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import Problem, encode
+from backend.enqueue import enqueue_stored
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 PEM = KEY.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
@@ -588,6 +589,7 @@ def botops_turn(api):
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-botops','keeper','bot:botops','request','hi',?)",
                   (H.now(),))
+        enqueue_stored(c, 'm-botops')
         job = c.execute("SELECT id FROM jobs WHERE bot_id='botops'").fetchone()["id"]
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a2',?,'botops','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
@@ -773,6 +775,7 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     runner_token(api, 'cmo')
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-cmo','keeper','bot:cmo','request','Prepare the repository',?)", (H.now(),))
+        enqueue_stored(c, 'm-cmo')
         job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()['id']
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
@@ -1049,6 +1052,7 @@ def test_only_botops_records_where_a_bot_was_built_and_never_over_another_record
     with api.app_state.store.transaction() as c:
         save_metadata(c, "repository-creation-grants", {"cmo": True})
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-cmo','keeper','bot:cmo','request','hi',?)", (H.now(),))
+        enqueue_stored(c, 'm-cmo')
         job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()["id"]
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'cmo-turn','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
