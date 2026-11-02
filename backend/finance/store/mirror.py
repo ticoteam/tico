@@ -244,6 +244,18 @@ def disconnect(c: sqlite3.Connection, cid: str, at: str) -> None:
     c.execute("UPDATE fin_connections SET status='disconnected', updated_at=? WHERE id=?", (at, cid))
 
 
+def stopped_books_grants(c: sqlite3.Connection) -> list[tuple[str, str]]:
+    """(id, provider) for each disconnected books connection that still holds a token. A stopped book keeps its tokens
+    until the books pass has taken the grant off at HQ (books_sync._revoke_stopped)."""
+    out: list[tuple[str, str]] = []
+    for row in c.execute("SELECT id, provider FROM fin_connections WHERE purpose='books' AND status='disconnected' "
+                         "ORDER BY created_at, id").fetchall():
+        books = as_map(_settings(c, str(row[0])).get("books"))
+        if books.get("access") or books.get("refresh"):
+            out.append((str(row[0]), str(row[1])))
+    return out
+
+
 def books_settings(c: sqlite3.Connection, cid: str) -> dict[str, object]:
     """A books connection's own settings: its company, its realm or tenant, and the credential ids of its tokens (the
     secrets stay in the vault; the token expiry times are kept here)."""

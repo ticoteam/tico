@@ -134,20 +134,25 @@ def delivery(c: Any, connection_id: str | None, body: Mapping[str, object], at: 
     return kept
 
 
-def stripe_delivery(c: Any, body: Mapping[str, object], at: str | None = None) -> bool:
+def stripe_delivery(c: Any, body: Mapping[str, object], at: str | None = None) -> str:
     """A verified Stripe webhook (backend/triggers.py checked its signature), kept once in fin_inbox by event id and the
     worker rung. The worker reads the balance itself, so the event only says when to read. With one live Stripe
-    connection the event is its; with none or several it is not kept."""
+    connection the event is its. Returns "kept", "seen" (a replay of a kept event), or why it is not kept: "no_event_id",
+    "not_set_up", "no_connection" or "several_connections". A refusal is reported as one, never as seen."""
     eid = str(body.get("id") or "")
-    if not eid or not is_set_up(c):
-        return False
+    if not eid:
+        return "no_event_id"
+    if not is_set_up(c):
+        return "not_set_up"
     live = [str(r["id"]) for r in SK.connections(c, "stripe") if str(r["status"]) in ("active", "error")]
-    if len(live) != 1:
-        return False
+    if not live:
+        return "no_connection"
+    if len(live) > 1:
+        return "several_connections"
     kept = SK.inbox_add(c, connection_id=live[0], provider="stripe", event_id=eid, payload=body, at=at or _now())
     if kept:
         tico.after_commit(c, ring)
-    return kept
+    return "kept" if kept else "seen"
 
 
 stripe_probe = stripe_sync.probe_credential

@@ -41,6 +41,7 @@ from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import mirror as SX
 from .store import purchasing as SP
 from .store import tico
 
@@ -90,10 +91,18 @@ def _event(ctx: Ctx, name: str, subject: str, payload: Mapping[str, object], key
 
 
 def control(ctx: Ctx, kind: str) -> L.Account:
-    """Accounts payable (bills) or receivable (invoices): the default chart's line, else any active one of its kind."""
+    """Accounts payable (bills) or receivable (invoices): the one bound to the mirrored provider's account of that kind,
+    else the default chart's line, else the lowest code of its kind. With several, the pick is the same every time."""
     code, subtype, words = CONTROL[kind]
+    cid = ctx.book.mirror_connection_id
+
+    def rank(a: L.Account) -> tuple[bool, bool, str, str]:
+        ref = SX.ref_for_local(ctx.c, cid, "fin_accounts", a.id) if cid else None
+        bound = ref is not None and str(ref["status"]) == "active"
+        return (not bound, a.code != code, a.code, a.id)
+
     found = [a for a in ctx.accounts.values() if a.active and a.subtype == subtype]
-    best = next((a for a in found if a.code == code), found[0] if found else None)
+    best = min(found, key=rank) if found else None
     if best is None:
         raise invalid(f"the books have no {words} line")
     return best
@@ -378,6 +387,26 @@ def _unhold(ctx: Ctx, bill_id: str, count: int) -> None:
 def _holds(ctx: Ctx, bill_id: str, count: int) -> list[str]:
     found = [SB.hold_for_source(ctx.c, "bill", f"{bill_id}:{n}") for n in range(count)]
     return [str(h["id"]) for h in found if h is not None]
+
+
+def hold_queued_bill(ctx: Ctx, hold_key: str, vendor_id: str, lines: Sequence[AP.DocLine], who: str) -> list[str]:
+    """A mirrored bill's holds while it waits for the provider. It has no local id until the provider confirms it, so its
+    holds are keyed by a hold key made with the write; take_queued_bill_holds and release_queued_bill_holds find them."""
+    return _hold(ctx, hold_key, vendor_id, lines, who)
+
+
+def take_queued_bill_holds(ctx: Ctx, hold_key: str, count: int, entry_id: str | None) -> None:
+    """The provider confirmed the bill, booked as entry_id: its holds become actual on that entry, as a native post takes
+    them (posting.post_entry). A hold already settled or released is left as it is."""
+    for n in range(count):
+        row = SB.hold_for_source(ctx.c, "bill", f"{hold_key}:{n}")
+        if row is not None and row["status"] == "held":
+            SB.settle(ctx.c, str(row["id"]), int(row["amount"]), entry_id, ctx.at)
+
+
+def release_queued_bill_holds(ctx: Ctx, hold_key: str, count: int) -> None:
+    """A queued bill the provider refused for good: the holds it placed go back to their budgets."""
+    _unhold(ctx, hold_key, count)
 
 
 def _attach_files(p: V.Payload) -> list[str]:

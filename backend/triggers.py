@@ -40,7 +40,7 @@ import json
 import re
 import secrets
 from dataclasses import dataclass, field
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -122,7 +122,7 @@ class TriggerUpdate(Contract):
     unheard: Optional[str] = Field(default=None, max_length=10)
 
 
-def digest(secret):
+def digest(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
 
 
@@ -317,6 +317,8 @@ def sign(c, who, vault, trigger_id, body):
                       + " (to stop checking, turn signing off)", 422)
     if preset in P.FINANCE:
         _finance_only(c, who, "make a Finance trigger of")     # its calls would go to Finance
+    if preset in P.HQ_CHECKED:
+        raise Problem("trigger", "Intuit and Xero calls are checked by Tico HQ, which holds their keys; this install has none", 422)
     key = body.secret or P.new_secret(preset)
     if (why := P.secret_problem(preset, key)):
         raise Problem("trigger", why, 422)
@@ -334,6 +336,8 @@ def update(c, who, settings, vault, trigger_id, body):
     _may_change(c, who, found, "change")
     if body.preset in P.FINANCE:
         _finance_only(c, who, "make a Finance trigger of")
+    if body.preset in P.HQ_CHECKED:
+        raise Problem("trigger", "Intuit and Xero calls are checked by Tico HQ, which holds their keys; this install has none", 422)
     if builtin(trigger_id) and any(v is not None for k, v in body.model_dump().items() if k != "keep_days"):
         raise Problem("trigger", f"Only how long calls are kept can change on {tico_notices.NAME}", 422)
     sets = {}
@@ -545,12 +549,12 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
         # Stripe's balance events are Finance's alone (backend/finance/stripe_sync.py): kept once by event id, a
         # doorbell only, never shown to rules.
         from .finance import actions as finance
-        kept = finance.stripe_delivery(c, payload if isinstance(payload, dict) else {})
-        return fired, [{"outcome": "finance", "target": "finance", "ok": True, "detail": "kept" if kept else "seen"}]
+        status = finance.stripe_delivery(c, payload if isinstance(payload, dict) else {})
+        return fired, [{"outcome": "finance", "target": "finance", "ok": status in ("kept", "seen"), "detail": status}]
     if effective_preset(found) in ("intuit", "xero"):
         # QuickBooks and Xero events are Finance's too (spec §3.4, §10): kept once by event id for the books worker.
-        from .finance import books_sync
-        status = books_sync.delivery(c, effective_preset(found), payload if isinstance(payload, dict) else {})
+        from .finance import actions as finance
+        status = finance.books_delivery(c, effective_preset(found), payload if isinstance(payload, dict) else {})
         return fired, [{"outcome": "finance", "target": "finance", "ok": status != "refused", "detail": status}]
     if finance_owned(found):
         # Finance's calls (its bank's events, backend/finance/sync.py) are Finance's alone: kept once by event id, never
@@ -590,9 +594,9 @@ def _unheard(c, found, delivery, type_):
              refs={"trigger": found["id"], "delivery": delivery, "unheard": True})
 
 
-def receive(c, trigger_id: str, body: bytes, headers: Mapping[str, str], *, secret: Optional[str], via: str = "direct",
-            delivery_id: Optional[str] = None, received_at: Optional[str] = None, auth=None, vault=None,
-            recovering: bool = False) -> Received:
+def receive(c: Any, trigger_id: str, body: bytes, headers: Mapping[str, str], *, secret: Optional[str],
+            via: str = "direct", delivery_id: Optional[str] = None, received_at: Optional[str] = None,
+            auth: Any = None, vault: Any = None, recovering: bool = False) -> Received:
     """What one call to a trigger does, once its address is known. Runs in the caller's write transaction; a refusal
     worth logging is logged and comes back as a Received for the caller to answer after the commit.
 
@@ -612,7 +616,14 @@ def receive(c, trigger_id: str, body: bytes, headers: Mapping[str, str], *, secr
     at = received_at or H.now()
     preset = effective_preset(found)
     delivery = delivery_id or sender or P.body_id(preset, body) or P.fallback_id(headers, body, at)
-    if preset != "none":
+    if preset in P.HQ_CHECKED:
+        # Tico HQ checked this call with the provider's key (spec §3.4), so the install takes it only over its own relay.
+        # This address never takes one: the install holds no key to check it with, whatever the headers say.
+        if via != "gateway":
+            return _refused(c, found, delivery, body, headers, at, 401, "signature",
+                            "Intuit and Xero calls come through Tico Gateway, not this address", via, secret,
+                            recovering=recovering)
+    elif preset != "none":
         if vault is None:
             return _refused(c, found, delivery, body, headers, at, 503, "vault_unavailable",
                             "This trigger's signing secret cannot be read here", via, secret, recovering=recovering)
@@ -843,8 +854,10 @@ def install(app, settings, store, auth, mutate):
     @app.get("/api/v2/triggers/{trigger_id}")
     def trigger_show(request: Request, trigger_id: str):
         """One trigger: address without the secret, settings, 24-hour counts and its automations."""
-        readers(request)
+        who = readers(request)
         with store.read() as c:
+            if finance_owned(_row(c, trigger_id)):
+                _finance_only(c, who, "read")       # a Finance trigger is shown to finance admins only (spec 3.4)
             return {"trigger": show(c, settings, trigger_id)}
 
     @app.post("/api/v2/triggers/{trigger_id}")

@@ -93,10 +93,12 @@ def test_cash_and_accrual_part_ways_until_the_bill_is_paid(books):  # noqa: F811
 def test_a_restatement_of_a_closed_month_is_flagged_on_its_snapshot(books):  # noqa: F811
     with books.transaction() as c:
         _acme(c)
-        assert CL.restate(c, _book(c), "2026-09", OWNER, AT) == 0          # a month that still matches takes no flag
+        assert CL.restate(c, _book(c), "2026-09") == 0          # a month that still matches moved nothing
         c.execute("UPDATE fin_rollups SET amount = amount + 50 WHERE account_id=? AND day=?",
                   (account(c, "6100"), "2026-09-05"))
-        assert CL.restate(c, _book(c), "2026-09", OWNER, AT) == 1
+        assert CL.restate(c, _book(c), "2026-09") == 1           # reports the account that moved; writes no flag
+        assert FR.pnl(c, OWNER, *SEP, "month", "accrual", AT)["snapshot"] == {"month": "2026-09", "restatements": 0}
+        CL.flag(c, _book(c), "2026-09", OWNER, AT, "added")     # the edit that moved it flags the snapshot, once
         sep = FR.pnl(c, OWNER, *SEP, "month", "accrual", AT)
         assert _by_code(sep["rows"])["6100"]["total"] == 850
         assert sep["snapshot"] == {"month": "2026-09", "restatements": 1}

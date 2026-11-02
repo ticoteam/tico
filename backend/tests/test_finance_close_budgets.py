@@ -8,6 +8,7 @@ import pytest
 from backend.finance import reads as FR
 from backend import usage_limits
 from backend.finance import actions as FA
+from backend.finance import closing as CL
 from backend.finance import mirror as M
 from backend.finance.context import load
 from clients import hubtools
@@ -165,6 +166,20 @@ def test_an_edit_that_lands_in_a_closed_month_is_flagged_on_its_snapshot(books):
         flagged = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", at=AT)
         assert flagged["snapshot"] == {"month": "2026-09", "restatements": 1}
         assert flagged["expense"] == sep["expense"]
+
+
+def test_an_edit_in_a_closed_month_is_one_restatement_even_when_the_totals_check_runs_too(books):
+    """§10: one edit inside a closed month is one restatement on its snapshot. The totals check reports which accounts
+    moved and writes nothing itself, so a run that does both counts the edit once."""
+    with books.transaction() as c:
+        spend(c, "5100", 1_000, day="2026-09-05")
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        M._restate(c, load(c, AT), "2026-09-05", "added", None, None, None, "ext-1", AT)
+        c.execute("UPDATE fin_rollups SET amount = amount + 50 WHERE account_id=? AND day=?",
+                  (account(c, "5100"), "2026-09-05"))
+        assert CL.restate(c, load(c, AT).book.id, "2026-09") == 1
+        sep = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", at=AT)
+        assert sep["snapshot"] == {"month": "2026-09", "restatements": 1}
 
 
 def test_a_team_budget_at_its_cutoff_pauses_that_teams_bot(books):

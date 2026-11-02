@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Finance's tables belong to backend/finance: everything else writes through finance/actions.py and reads through
 finance/reads.py. This fails when Python outside backend/finance writes a fin_* table, reads a fin_* business table
-(reading an action's or a connection's status is allowed), or imports Finance's inner layers.
+(reading an action's or a connection's status is allowed), names a fin_* table in quotes, or imports Finance's inner
+layers.
 
     python3 scripts/finance_lint.py            # exit 1 and one line per problem
 """
@@ -20,6 +21,8 @@ WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|REPLACE\s+INTO|UPDATE|DE
                    r"DROP\s+(?:TABLE|INDEX|TRIGGER)(?:\s+IF\s+EXISTS)?|CREATE\s+(?:TABLE|INDEX|TRIGGER))\s+"
                    r"(?:IF\s+NOT\s+EXISTS\s+)?[\"`]?(fin_\w+)", re.IGNORECASE)
 READ = re.compile(r"\b(?:FROM|JOIN)\s+[\"`]?(fin_\w+)", re.IGNORECASE)
+# A Finance table named in quotes outside Finance is a list that a delete loop could run (devcopy once had one).
+NAMED = re.compile(r"[\"'`](fin_\w+)[\"'`]")
 INNER = re.compile(r"(?:from|import)\s+(?:backend\.|\.+)?finance\.(core|store|handlers|budgeting|posting|context|setup)\b")
 # The migration step creates the tables through the schema module; nothing else reaches past the two doors.
 INNER_OK = {("backend/store.py", "store")}
@@ -41,6 +44,8 @@ def problems(root: Path = ROOT, files: list[Path] | None = None) -> list[str]:
             for m in READ.finditer(line):
                 if m.group(1) not in READ_OK:
                     out.append(f"{rel}:{n}: reads {m.group(1)}; go through backend/finance/reads.py")
+            for m in NAMED.finditer(line):
+                out.append(f"{rel}:{n}: names {m.group(1)}; Finance's tables are named in backend/finance/ only")
             for m in INNER.finditer(line):
                 if (rel, m.group(1)) not in INNER_OK:
                     out.append(f"{rel}:{n}: imports finance.{m.group(1)}; use finance.actions or finance.reads")

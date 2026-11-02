@@ -64,3 +64,9 @@ def _dump(value: object) -> str:
 def drop_waiting(c: sqlite3.Connection) -> int:
     """Delete every action still waiting on its approval (a dev copy's scrub). How many went."""
     return c.execute("DELETE FROM fin_actions WHERE status='needs_approval'").rowcount
+
+
+def empty_tables(c: sqlite3.Connection, tables: Sequence[str]) -> dict[str, int]:
+    """Delete every row of each table, in the order given (a row goes after the rows that point at it). A dev copy's
+    scrub. {table: rows removed}."""
+    return {table: c.execute(f"DELETE FROM {table}").rowcount for table in tables}

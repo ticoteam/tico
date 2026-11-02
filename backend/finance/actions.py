@@ -18,7 +18,7 @@ from . import prepaids, purchasing, topups
 from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
-from . import rights, sync, tax, usage
+from . import books_link, books_sync, rights, sync, tax, usage
 from .context import APPROVER_KEY, Ctx, is_set_up, load
 from .core import kinds as K
 from .core import org as O
@@ -27,6 +27,7 @@ from .core.errors import CONFLICT, DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, Fi
 from .store import actions as SX
 from .store import budgets as SB
 from .store import usage as SU
+from .store import ledger as SL
 from .store import tico
 
 # What part B and the HTTP routes call.
@@ -67,12 +68,7 @@ def books_disconnect(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
         raise FinanceError(NOT_FOUND, "no such books connection")
 
     def apply(aid: str) -> handlers.Result:
-        books = SM.books_settings(ctx.c, cid)
-        for key in ("access", "refresh"):
-            if books.get(key):
-                tico.drop_credential(ctx.c, str(books[key]))
-        SM.set_books_settings(ctx.c, cid, {"access": "", "refresh": "", "expires_at": ""})
-        SM.disconnect(ctx.c, cid, ctx.at)
+        books_link.clear_local(ctx.c, cid, now=ctx.at)
         return {"connection_id": cid, "status": "disconnected"}
     return handlers.Plan(K.ALLOW, "Disconnect the books connection", apply)
 
@@ -259,12 +255,17 @@ def _decider(ctx: Ctx, row: Mapping[str, object], gate: K.Gate, who: str) -> str
     return _approver(ctx, gate, who)
 
 
+def _mirror_refusal(kind: str) -> str:
+    """Why a mirrored book does not take this kind. It names the kind only, never what the request sent."""
+    return f"{kind} is not available while the books are a provider's (mirror mode)"
+
+
 def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
           action_id: str) -> tuple[K.Gate, handlers.Plan]:
     """The right check first (a missing right is a denial, or for budgets a request to the asker's manager), then the
     kind's own checks and default gate, then the gate rules (§6.3), which run again whenever this does: at consume."""
     if ctx.book.mode == "mirror" and kind in mirror.REFUSED:
-        raise FinanceError(NOT_AVAILABLE, f"{kind} is not available while the books are a provider's (mirror mode)")
+        raise FinanceError(NOT_AVAILABLE, _mirror_refusal(kind))
     if ctx.book.mode == "mirror" and prepaids.in_lines(payload):
         # The mirror's planners send bill lines to the provider as they are, which has no prepaid schedule.
         raise FinanceError(NOT_AVAILABLE, "prepaid bill lines are not available while the books are a provider's")
@@ -289,6 +290,11 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
     key = (idempotency_key or "").strip()
     if not key or len(key) > MAX_KEY:
         return ActionResult(status="failed", kind=kind, code=INVALID, reason=f"an idempotency key is 1-{MAX_KEY} chars")
+    book = SL.book(c)
+    if book is not None and book.mode == "mirror" and kind in mirror.REFUSED:
+        # Refused before any check reads the payload, so a sealed-payload or card-number error never answers first. Not
+        # recorded: the request may name bank details, and a refusal that names none needs no stored copy.
+        return ActionResult(status="denied", kind=kind, code=NOT_AVAILABLE, reason=_mirror_refusal(kind))
     try:
         body, sealed = payments.strip_details(c, kind, _canonical(payload))
     except FinanceError as e:
@@ -649,6 +655,8 @@ banking_ring = sync.ring
 banking_step = sync.step
 mercury_probe = sync.probe_credential
 stripe_delivery = sync.stripe_delivery
+books_delivery = books_sync.delivery
+books_relayed = books_link.relayed_call
 stripe_probe = sync.stripe_probe
 
 
@@ -710,10 +718,40 @@ def note_full_read(c: sqlite3.Connection, viewer: str, accounts: Sequence[str]) 
 
 
 # ------------------------------------------------------------------------------------------------ dev copies
+# backend/devcopy.py classifies every Finance table by these two lists. DEV_COPY_KEPT is kept whole: the books, budgets,
+# views, rules and history, and the definitions that act only through an action (scrub_dev_copy trims the pending ones).
+DEV_COPY_KEPT = (
+    "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines", "fin_bill_retained",
+    "fin_bills", "fin_books", "fin_budget_versions", "fin_budgets", "fin_contacts", "fin_dimensions", "fin_entries",
+    "fin_events", "fin_feed_txns", "fin_invoice_lines", "fin_invoices", "fin_line_tags", "fin_lines",
+    "fin_money_accounts", "fin_periods", "fin_private_lines", "fin_projections", "fin_reconciliations",
+    "fin_restatements", "fin_rights", "fin_rollups", "fin_rule_counters", "fin_rule_runs", "fin_rules",
+    "fin_settings", "fin_statements", "fin_usage_snapshots", "fin_settlements", "fin_cash_rollups",
+    "fin_credit_refunds", "fin_vendor_aliases", "fin_vendor_labels", "fin_vendor_legacy", "fin_view_defaults",
+    "fin_view_grants", "fin_view_versions", "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions",
+    "fin_tax_seeds", "fin_purchase_orders", "fin_po_lines", "fin_estimates", "fin_estimate_lines",
+)
+# Emptied: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
+# inbox, cards and their authorizations, payees and payments) and spend holds. In the order they are deleted: a row
+# goes after the rows that point at it.
+DEV_COPY_EMPTIED = (
+    "fin_card_auths", "fin_card_saves", "fin_payments", "fin_transfers", "fin_recipients", "fin_external_refs",
+    "fin_outbox", "fin_inbox", "fin_provider_users", "fin_cards", "fin_holds", "fin_connections",
+)
+
+
 def scrub_dev_copy(c: sqlite3.Connection, at: str) -> dict[str, int]:
-    """Make a dev copy's Finance tables inert (backend/devcopy.py empties the rest): an action waiting on approval
-    would commit when someone approves it in the copy, so it goes; an undrained budget event would reach rules and the
-    owner, so it is marked drained without acting; allocations lose their link to the emptied holds, not themselves.
-    {table: rows changed}."""
-    return {"fin_actions": SX.drop_waiting(c), "fin_events": SU.drain_all(c, at),
-            "fin_allocations": SB.unlink_allocation_holds(c)}
+    """Make a dev copy's Finance tables inert: an action waiting on approval would commit when someone approves it in the
+    copy, so it goes; an undrained budget event would reach rules and the owner, so it is marked drained without acting;
+    allocations lose their link to the holds, which go, not themselves; the DEV_COPY_EMPTIED tables are emptied. A table
+    the copy does not have is skipped, and the others are still made inert. {table: rows removed}."""
+    present = {str(row[0]) for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    removed: dict[str, int] = {}
+    if "fin_allocations" in present:
+        SB.unlink_allocation_holds(c)
+    if "fin_events" in present:
+        SU.drain_all(c, at)
+    if "fin_actions" in present:
+        removed["fin_actions"] = SX.drop_waiting(c)
+    removed.update(SX.empty_tables(c, [table for table in DEV_COPY_EMPTIED if table in present]))
+    return removed

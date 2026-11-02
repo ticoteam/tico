@@ -7,11 +7,16 @@ from dataclasses import dataclass, field
 from collections.abc import Mapping
 from typing import Any
 
-from backend.finance import books_sync, mirror
+import pytest
+
+from backend import hook_relay
+from backend.finance import actions as FA
+from backend.finance import books_link, books_sync, documents, mirror
 from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import mirror as M
 from backend.finance.core import qbo as Q
+from backend.finance.core.ledger import Account
 from backend.finance.core.errors import CONFLICT, NOT_AVAILABLE
 from backend.finance.store import access as SA
 from backend.finance.store import ap as SAP
@@ -19,11 +24,13 @@ from backend.finance.store import banking as SK
 from backend.finance.store import ledger as SL
 from backend.finance.store import mirror as SX
 from backend.finance.store import schema
+from backend.finance.store import tico as T
 from backend.tests.test_finance_ap import _bill as _native_bill
 from backend.tests.test_finance_ap import _ingest, _txn
 from backend.tests.test_finance_ap import _vendor as _native_vendor
+from backend.tests.test_finance_books_link import COMPANY, LINK, HQ, tokens
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, FakeMercury, account, act, books, connect, finance_template, store)
+    AT, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, store)
 from backend.tests.test_finance_payments import _checking
 
 LATER = "2026-10-15T13:00:00.000000Z"
@@ -137,6 +144,30 @@ def test_a_failed_backfill_page_resumes_where_it_stopped_without_duplicates(book
     assert mirror.sync_once(books, fake, cid, AT, size=2) == []                  # nothing left to read
 
 
+def test_a_backfill_page_is_applied_in_chunks_so_a_failure_keeps_the_chunks_already_in(books, monkeypatch):
+    fake = FakeBooks()
+    fake.records["accounts"] = [acct(n, f"92{n:03d}", f"Account {n}") for n in range(1, 251)]
+    cid = _connection(books)
+    real, calls = mirror.apply, []
+
+    def second_chunk_fails(c, connection, records, at):
+        calls.append(len(records))
+        if len(calls) == 2:
+            raise RuntimeError("the store is locked")
+        return real(c, connection, records, at)
+    monkeypatch.setattr(mirror, "apply", second_chunk_fails)
+    with pytest.raises(RuntimeError):
+        mirror.sync_once(books, fake, cid, AT, size=250)                         # one page of 250 accounts
+    assert calls == [100, 100]                                                   # applied 100 at a time, each its own write
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_accounts WHERE code LIKE '92%'").fetchone()[0] == 100
+    monkeypatch.setattr(mirror, "apply", real)
+    assert mirror.sync_once(books, fake, cid, AT, size=250) == []                # the page is read again from 1
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_accounts WHERE code LIKE '92%'").fetchone()[0] == 250
+        assert c.execute("SELECT COUNT(*) FROM fin_external_refs WHERE connection_id=?", (cid,)).fetchone()[0] == 250
+
+
 def test_a_newer_revision_reverses_and_replaces_the_entry_and_keeps_the_books_balanced(books):
     fake = FakeBooks()
     _chart(fake)
@@ -229,11 +260,52 @@ def test_a_bank_row_takes_the_provider_entry_it_matches_instead_of_a_duplicate(b
         assert (refused.status, refused.code) == ("failed", CONFLICT)
 
 
+def test_a_bank_row_written_out_is_not_sent_when_the_provider_entry_came_after_the_last_change_read(books):
+    """Their own bank feed made the entry after the books were last read, and no change read is due: the write out waits
+    for the books to be read up to now, so the row takes that entry and the provider is not sent a second one."""
+    fake = FakeBooks()
+    _chart(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        _bank_row(c, -1500, "2026-10-05")
+        fid = str(c.execute("SELECT id FROM fin_feed_txns").fetchone()[0])
+        done = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100"), "tags": {}})
+        assert done.status == "committed", done
+    fake.changes = [journal(60, 1, "2026-10-05", 1500, debit="Account:2", credit="Account:1")]
+    assert mirror.sync_once(books, fake, cid, AT) == []
+    assert fake.sent == []
+    with books.read() as c:
+        assert c.execute("SELECT status, entry_id FROM fin_feed_txns").fetchone()[:] == (
+            "matched", _entry_of(c, "JournalEntry:60"))
+        assert c.execute("SELECT status FROM fin_outbox").fetchone()[0] == "failed"
+        assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 1
+
+
+def test_a_bank_row_write_out_waits_when_the_provider_books_cannot_be_read_first(books):
+    fake = FakeBooks()
+    _chart(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        _bank_row(c, -1500, "2026-10-05")
+        fid = str(c.execute("SELECT id FROM fin_feed_txns").fetchone()[0])
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100"), "tags": {}}).status == "committed"
+    fake.changed = lambda since: mirror.Read(False, error="the provider is down")
+    assert mirror.sync_once(books, fake, cid, AT) == ["changes: the provider is down"]
+    assert fake.sent == []
+    with books.read() as c:
+        assert c.execute("SELECT status, next_try_at IS NOT NULL FROM fin_outbox").fetchone()[:] == ("pending", 1)
+        assert c.execute("SELECT status FROM fin_feed_txns").fetchone()[0] == "new"
+
+
 def test_switching_previews_first_and_a_mirrored_book_refuses_what_the_provider_holds(books):
     cid = _connection(books)
     with books.transaction() as c:
         preview = act(c, OWNER, "mirror_start", {"connection_id": cid}, dry_run=True)
-        assert preview.status == "committed" and preview.impact["accounts"] > 0
+        assert preview.status == "committed" and "accounts" not in preview.impact   # no count implies new accounts
         assert SL.book(c).mode == "native"                                        # a preview changes nothing
         assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
         assert SL.book(c).mode == "mirror"
@@ -254,6 +326,73 @@ def test_a_spreadsheet_of_raw_totals_is_refused_on_a_mirrored_book_dry_run_and_r
             assert (refused.status, refused.code) == ("denied", NOT_AVAILABLE), refused
             assert "mirror mode" in refused.reason, refused.reason
         assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == before
+
+
+def _their_chart() -> FakeBooks:
+    """Their chart: payables and receivables with no numbers, and a software account with another number."""
+    fake = FakeBooks()
+    fake.records["accounts"] = [
+        M.ChartAccount(M.Ext("Account", "13", "1"), "", "Accounts Payable", "liability", "payable"),
+        M.ChartAccount(M.Ext("Account", "12", "1"), "1210", "Accounts Receivable", "asset", "receivable"),
+        acct(2, "6120", "Software")]
+    return fake
+
+
+def test_a_switch_binds_tico_accounts_to_their_matching_accounts_and_creates_no_twin_beside_them(books):
+    fake = _their_chart()
+    cid = _connection(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_accounts").fetchone()[0] == 13          # the default chart, no twins
+        assert _local(c, "Account:13", "fin_accounts") == account(c, "2000")               # payable by subtype
+        assert _local(c, "Account:12", "fin_accounts") == account(c, "1200")               # receivable by subtype
+        assert _local(c, "Account:2", "fin_accounts") == account(c, "6100")                # software by name and type
+        assert c.execute("SELECT code FROM fin_accounts WHERE id=?", (account(c, "6100"),)).fetchone()[0] == "6100"
+        bank = c.execute("SELECT active FROM fin_accounts WHERE code='1000'").fetchone()[0]
+    created = [body["name"] for op, body, _ in fake.sent if op == "account.create"]
+    assert not set(created) & {"Accounts Payable", "Accounts Receivable", "Software"}     # nothing beside theirs
+    assert "Gateway credit" in created                                                    # Tico posts to it itself
+    assert "Bank" not in created and bank == 0                                            # no history: inactive, not sent
+
+
+def test_no_account_goes_to_the_provider_before_their_chart_is_read(books):
+    fake = _their_chart()
+    fake.fail.add(("accounts", 1))                                                        # the chart's first page fails
+    cid = _connection(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
+    _drain(books, fake, cid, passes=1)
+    assert [op for op, _, _ in fake.sent if op == "account.create"] == []
+    assert _drain(books, fake, cid) == []
+    assert "Gateway credit" in [body["name"] for op, body, _ in fake.sent if op == "account.create"]
+
+
+def test_a_bill_is_payable_on_the_provider_account_bound_to_tico_payable(books):
+    fake = _their_chart()
+    fake.records["accounts"].append(M.ChartAccount(M.Ext("Account", "33", "1"), "", "Accounts Payable - Old",
+                                                   "liability", "payable"))
+    cid = _connection(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        ctx = load(c, AT)
+        assert documents.control(ctx, "bill").id == _local(c, "Account:13", "fin_accounts")
+
+
+def test_a_bill_is_payable_on_the_payable_bound_to_the_provider_before_the_one_with_the_default_code(books):
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        bound = Account(id=SL.new_id(), book_id=SL.book(c).id, code="2010", name="Accounts Payable (QB)",
+                        type="liability", subtype="payable", active=True)
+        SL.insert_account(c, bound, OWNER, AT)
+        SX.ref_insert(c, cid=cid, local_table="fin_accounts", local_id=bound.id, kind="Account", external_id="13",
+                      revision="1", status="active", at=AT, by=OWNER)
+    with books.read() as c:
+        assert documents.control(load(c, AT), "bill").id == bound.id      # not the default chart's 2000, unbound
 
 
 def test_a_mode_switch_keeps_an_unclear_row_from_paying_a_provider_bill(books):
@@ -615,6 +754,68 @@ def _bill_key(books, fake: FakeBooks, cid: str) -> str:
         return str(c.execute("SELECT idempotency_key FROM fin_outbox WHERE op='bill.create'").fetchone()[0])
 
 
+def _queued_bill_on_software(books, fake: FakeBooks) -> str:
+    """A 1500 bill on Software made here, budget set first, and its connection mirrored. Returns the connection id."""
+    _chart(fake)
+    _vendor(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000,
+                                               "effective_from": "2026-10-01"}).status == "committed"
+        made = act(c, OWNER, "bill_create", {
+            "vendor_id": _local(c, "Vendor:9", "fin_contacts"), "number": "B-78", "bill_date": "2026-10-05",
+            "due_date": "2026-11-05", "lines": [{"account_id": account(c, "6100"), "amount": 1500,
+                                                 "description": "seats"}]})
+        assert made.status == "committed", made
+    return cid
+
+
+def _software_held_and_actual(books) -> tuple[int, int]:
+    with books.read() as c:
+        state = FA.budget_state(c, budget(c, "Software"), AT)
+    return state.held, state.actual
+
+
+def test_a_mirrored_bill_holds_its_budget_while_queued_and_becomes_actual_when_the_provider_confirms(books):
+    """§4.4: a bill queued for the provider holds its expense lines on their budget, as a native draft does, so the room
+    is taken while the write is on its way. The hold becomes the bill's actual when the provider confirms it."""
+    fake = FakeBooks()
+    cid = _queued_bill_on_software(books, fake)
+    assert _software_held_and_actual(books) == (1500, 0)
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert _software_held_and_actual(books) == (0, 1500)
+
+
+def test_a_mirrored_bill_the_provider_refuses_for_good_gives_its_budget_back(books):
+    """§4.4: a queued bill that is refused for good releases the hold it placed, and the books never took the bill."""
+    fake = FakeBooks()
+    cid = _queued_bill_on_software(books, fake)
+    assert _software_held_and_actual(books) == (1500, 0)
+    fake.replies.append(mirror.Sent(False, error="Bad request: the vendor is inactive", final=True))
+    assert _drain(books, fake, cid, now=LATER) == ["bill.create: Bad request: the vendor is inactive"]
+    assert _software_held_and_actual(books) == (0, 0)
+
+
+def test_a_mirror_book_refuses_a_recipient_before_anything_reads_its_bank_numbers(books):
+    """§4.1 and §10: a recipient is not made in a mirrored book, and the mirror refusal comes before the sealed-payload
+    checks. A request with bank numbers gets the refusal and no number in its reason; a request that sends the sealed
+    fields itself gets the same refusal rather than a sealed-payload error."""
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        made = act(c, OWNER, "recipient_add", {"name": "Acme", "method": "ach", "account_number": "1234567890",
+                                               "routing_number": "123456789"})
+        assert (made.status, made.code) == ("denied", NOT_AVAILABLE)
+        assert "mirror mode" in made.reason and "1234567890" not in made.reason and "123456789" not in made.reason
+        sealed = act(c, OWNER, "recipient_add", {"name": "Acme", "method": "ach", "details_ref": "vault-1",
+                                                 "details_fp": "fp", "last4": "7890"})
+        assert (sealed.status, sealed.code) == ("denied", NOT_AVAILABLE)
+        assert "mirror mode" in sealed.reason
+        assert c.execute("SELECT COUNT(*) FROM fin_recipients").fetchone()[0] == 0
+
+
 def test_a_create_cut_off_after_the_provider_took_it_is_found_and_not_sent_again(books):
     fake = FakeBooks()
     _chart(fake)
@@ -692,6 +893,95 @@ def test_a_void_of_a_closed_month_bill_at_the_provider_is_flagged_as_a_restateme
             ("deleted", "2026-09-10")]
         assert c.execute("SELECT status FROM fin_bills WHERE number='B-12'").fetchone()[0] == "void"
         assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0
+
+
+def _bank_to(c: sqlite3.Connection, day: str) -> int:
+    """The chart's bank line (1000) as the books hold it through `day`."""
+    return int(c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+                         "WHERE l.account_id=? AND e.entry_date<=?", (account(c, "1000"), day)).fetchone()[0])
+
+
+def test_a_settled_bill_in_a_closed_month_is_revised_in_the_open_period_and_its_payment_stays(books):
+    """§4.1 and §10: a provider edit to a settled bill in a closed month posts in the open period, with the month flagged
+    as restated. The closed month reads as it closed, the bill owes what its payment did not cover, and the payment that
+    settled it stays settled and in the month it was paid."""
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [M.Document(M.Ext("Bill", "12", "1"), party="Vendor:9", number="B-12",
+                                            day="2026-09-10", due="2026-10-10", total=1500,
+                                            lines=(M.EntryLine("Account:2", 1500),))]
+    fake.records["payments"] = [M.Settlement(M.Ext("BillPayment", "30", "1"), day="2026-09-18", memo="Acme payment",
+                                             party="Vendor:9", bank="Account:1", total=1500,
+                                             links=(("Bill:12", 1500),))]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    with books.read() as c:
+        sept = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", "month", "accrual", AT)
+        bank = _bank_to(c, "2026-09-30")
+    fake.changes = [M.Document(M.Ext("Bill", "12", "2"), party="Vendor:9", number="B-12", day="2026-09-10",
+                               due="2026-10-10", total=2000, lines=(M.EntryLine("Account:2", 2000),))]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        bill = _local(c, "Bill:12", "fin_bills")
+        assert tuple(c.execute("SELECT status, amount_paid, total FROM fin_bills WHERE id=?", (bill,)).fetchone()) == (
+            "open", 1500, 2000)
+        assert [tuple(r) for r in c.execute("SELECT from_kind, amount FROM fin_settlements WHERE to_id=? "
+                                            "AND voided_at IS NULL", (bill,)).fetchall()] == [("account", 1500)]
+        # The figures read as they closed; the snapshot alone carries the one restatement flag (spec 10).
+        sept_now = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", "month", "accrual", AT)
+        assert sept_now["snapshot"] == {"month": "2026-09", "restatements": 1}
+        assert {k: v for k, v in sept_now.items() if k != "snapshot"} == {k: v for k, v in sept.items()
+                                                                          if k != "snapshot"}
+        assert _bank_to(c, "2026-09-30") == bank
+        # The change lands in October (the open period): reversal and new entry, so October's expense moves by 500.
+        assert FR.pnl(c, OWNER, "2026-10-01", "2026-10-31", "month", "accrual", AT)["expense"] == [500]
+        assert [tuple(r) for r in c.execute("SELECT change, day FROM fin_restatements").fetchall()] == [
+            ("replaced", "2026-09-10")]
+        assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0
+
+
+def test_a_bill_zeroed_at_the_provider_in_a_closed_month_lands_as_void_and_is_flagged(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [M.Document(M.Ext("Bill", "12", "1"), party="Vendor:9", number="B-12",
+                                            day="2026-09-10", due="2026-10-10", total=1500,
+                                            lines=(M.EntryLine("Account:2", 1500),))]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    # QuickBooks zeroes the voided bill and keeps its line at zero.
+    fake.changes = [M.Document(M.Ext("Bill", "12", "2"), party="Vendor:9", number="B-12", day="2026-09-10",
+                               due="2026-10-10", total=0, lines=(M.EntryLine("Account:2", 0),))]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_bills WHERE number='B-12'").fetchone()[0] == "void"
+        assert [tuple(r) for r in c.execute("SELECT change, day FROM fin_restatements").fetchall()] == [
+            ("deleted", "2026-09-10")]
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?", (account(c, "2000"),)
+                         ).fetchone()[0] == 0
+        assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0
+
+
+def test_a_voided_bill_first_read_with_no_lines_is_taken_in_as_void_and_adds_nothing(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [M.Document(M.Ext("Bill", "13", "1"), party="Vendor:9", number="B-13",
+                                            day="2026-10-05", due="2026-11-05", total=0, lines=())]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT status, total FROM fin_bills WHERE number='B-13'").fetchone()[:] == ("void", 0)
+        assert not c.execute("SELECT entry_id FROM fin_bills WHERE number='B-13'").fetchone()[0]
+        assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 0
 
 
 def test_a_bill_the_provider_took_before_its_answer_was_kept_is_adopted_from_the_change_feed_and_not_sent_again(books):
@@ -1784,3 +2074,45 @@ def test_a_payment_the_provider_could_not_rule_out_keeps_its_amount_held(books):
     with books.read() as c:
         assert tuple(c.execute("SELECT status, unknown FROM fin_outbox WHERE op='payment.invoice'").fetchone()) == (
             "failed", 1)
+
+
+def _granted_then_stopped(books: Any, monkeypatch: Any, disconnect: list[Any]) -> tuple[str, HQ]:
+    """A QuickBooks books connection that holds a grant, mirrored and read through, then switched back to native."""
+    hq = HQ(claim=[tokens("acc-1", "ref-1")], disconnect=disconnect)
+    monkeypatch.setattr(books_link, "_call", hq)
+    cid = books_link.connect_claim(books, T._VAULT[0], LINK, provider="quickbooks", company_id=COMPANY, claim_id="clm-s",
+                                   name="Acme books", by=OWNER, now=AT)
+    with books.transaction() as c:
+        SL.set_book_mode(c, SL.book(c).id, "mirror", cid)  # type: ignore[union-attr]
+        SX.set_mirror_state(c, cid, {"backfill": {entity: {"done": True} for entity in M.BOOK_ENTITIES["quickbooks"]}})
+        c.execute("UPDATE fin_connections SET last_ok_at=? WHERE id=?", (AT, cid))
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_stop", {}).status == "committed"
+    monkeypatch.setattr(hook_relay, "link_of", lambda c, vault, settings: LINK)
+    return cid, hq
+
+
+def test_a_stopped_book_loses_its_trigger_and_the_next_pass_takes_its_grant_off(books, monkeypatch):
+    cid, hq = _granted_then_stopped(books, monkeypatch, disconnect=[{"ok": True}])
+    with books.read() as c:
+        assert c.execute("SELECT deleted_at IS NOT NULL FROM triggers WHERE id=?", (cid,)).fetchone()[0] == 1
+        assert SX.books_settings(c, cid)["refresh"]                     # the grant is still held until the pass
+        assert [row[0] for row in SX.books_connections(c)] == []
+    assert books_sync.pass_once(books, T._VAULT[0], None, now=AT) == []
+    assert hq.calls[-1] == ("oauth/quickbooks/disconnect", {"company_id": COMPANY, "refresh_token": "ref-1"})
+    with books.read() as c:
+        assert not SX.books_settings(c, cid).get("refresh") and not SX.books_settings(c, cid).get("access")
+        assert SX.stopped_books_grants(c) == []
+
+
+def test_a_grant_HQ_does_not_take_off_is_tried_again_on_the_next_pass(books, monkeypatch):
+    cid, hq = _granted_then_stopped(books, monkeypatch,
+                                    disconnect=[books_link.BrokerFailed("revoke_failed"), {"ok": True}])
+    problems = books_sync.pass_once(books, T._VAULT[0], None, now=AT)
+    assert len(problems) == 1 and "revoke_failed" in problems[0]
+    with books.read() as c:
+        assert SX.books_settings(c, cid).get("refresh")                 # kept while HQ has not taken it off
+    assert books_sync.pass_once(books, T._VAULT[0], None, now=AT) == []
+    with books.read() as c:
+        assert not SX.books_settings(c, cid).get("refresh")
+    assert [path for path, _ in hq.calls].count("oauth/quickbooks/disconnect") == 2
