@@ -118,11 +118,18 @@ jobs:
           VERSION: ${{ needs.validated.outputs.version }}
           PUBLISHED: ${{ needs.validated.outputs.published }}
         run: |
+          # The four Mac binaries are on the release and its checksum files list them: macos-assets uploads the
+          # checksum files last, so one it did not finish counts as missing (a Mac checkout downloads only what they list).
           has_mac() {
-            local names name platform
+            local names name platform sums
             names="$(gh release view "$1" -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null)" || return 1
+            sums="$(mktemp -d)"
+            gh release download "$1" -R "$GITHUB_REPOSITORY" -D "$sums" -p tico-runner-SHA256SUMS -p tico-screen-relay-SHA256SUMS 2>/dev/null || return 1
             for platform in macos-arm64 macos-x86_64; do
-              for name in tico-runner tico-screen-relay; do grep -qx "$name-$platform.gz" <<<"$names" || return 1; done
+              for name in tico-runner tico-screen-relay; do
+                grep -qx "$name-$platform.gz" <<<"$names" || return 1
+                grep -Eq "^[0-9a-f]{64} [ *]$name-$platform\.gz$" "$sums/$name-SHA256SUMS" || return 1
+              done
             done
           }
           if [ "$PUBLISHED" = true ]; then
