@@ -35,7 +35,7 @@ AUTH_HEADERS = ["Cookie", "Authorization", "Proxy-Authorization", "Cf-Access-*",
 # it is for, and only these paths reach the server (the paths backend/company_page/reader_app.py answers). Everything
 # else on it is a 404, never the app. The page's own CSP is a meta tag; this header only stops framing, and it keeps
 # the base-uri rule reader_app.py sends too.
-READER_PATHS = ["/", "/data.json", "/feed.xml", "/assets/*", "/auth/*", "/sign-in", "/sign-out", "/reply", "/can-help",
+READER_PATHS = ["/", "/data.json", "/feed.xml", "/assets/*", "/auth/callback", "/sign-in", "/sign-out", "/reply", "/can-help",
                 "/unsubscribe", "/invite/*"]
 READER_STRIP = ["Authorization", "Proxy-Authorization", "Cf-Access-*", "X-Amzn-Oidc-*", "X-Tico-*"]
 READER_CSP = "frame-ancestors 'none'; base-uri 'none'"
