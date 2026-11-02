@@ -301,11 +301,21 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             raise FinanceError(CONFLICT, "a payment for this bill is waiting for approval; it settles the bill when "
                                          "approved")
         gate = budget_gate if gate.outcome == "allow" else gate
+    # A spend past an ask or hold_payment limit asks a finance admin under that budget's rule, and the approval places
+    # it past the limit (apply forces it). A decline limit refuses it here, before anyone is asked.
+    scope = {"account_id": line.id, **tags, "vendor": vendor_of(rec)}
+    over = None if bill else budgeting.would_place(ctx, budget_scope=scope, amount=amount)
+    past = over is not None and not over.allowed
+    if over is not None and not over.allowed:
+        if over.action == "decline":
+            raise denied(f"it does not fit: over the {ctx.budgets()[over.limit_budget].name} budget")
+        if gate.outcome == "allow":
+            gate = K.Gate("needs_approval", "finance_admin", f"budget:{over.limit_budget}")
 
     def apply(aid: str) -> Result:
-        hold = budgeting.place(ctx, budget_scope={"account_id": line.id, **tags, "vendor": vendor_of(rec)},
-                               amount=amount, currency=ctx.book.base_currency, source="payment", source_id=pid,
-                               expires_at=None, by=who) if not bill else None
+        hold = budgeting.place(ctx, budget_scope=scope, amount=amount, currency=ctx.book.base_currency,
+                               source="payment", source_id=pid, expires_at=None, by=who,
+                               force=past) if not bill else None
         if hold is not None and not hold.allowed:
             raise denied(f"it does not fit: {hold.reason}")
         SK.insert(ctx.c, "fin_payments", {
@@ -612,6 +622,18 @@ def approved_for(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str) ->
     return who_needed == "manager" or R.is_admin(ctx.org, by, ctx.rights(by))
 
 
+def _passed_over(ctx: Ctx, action: Any, who: str, chain_ids: Sequence[str]) -> bool:
+    """Whether a payment holds past a budget's ask or hold_payment limit by its own decision: its action was approved
+    for a budget on its chain (the approval that placed it past the limit), or it needed no approval because its payer
+    decides it (the install owner)."""
+    rule = str(action["rule_id"] or "") if action is not None else ""
+    if not rule.startswith("budget:") or rule.removeprefix("budget:") not in chain_ids:
+        return False
+    if decided_by(ctx, action):
+        return approved_for(ctx, action, who, "finance_admin", rule)
+    return who == ctx.org.owner
+
+
 def _asked_again(ctx: Ctx, pay: Any, action: Any, successor: Any) -> str:
     """A queued payment whose recipient was replaced: its approval is void (§5), so it is not cancelled quietly. It ends
     cancelled (its hold and counters released, the bill owed again), and its action waits for a finance admin's approval
@@ -697,7 +719,8 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         from .core import budgets as B
         from .core import dates
         at = dates.day(ctx.today)
-        for b in B.chain(ctx.budgets(), str(hold["budget_id"])):
+        chain = B.chain(ctx.budgets(), str(hold["budget_id"]))
+        for b in chain:
             s = budgeting.state(ctx, b.id, at)       # its own hold is already in `held`: counted once
             if s.amount is None or s.remaining is None or s.remaining >= 0 or b.at_limit == "warn":
                 continue
@@ -705,6 +728,8 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
                 why = f"it no longer fits the {b.name} budget"
                 end(ctx, pay, "cancelled", why)
                 return why
+            if _passed_over(ctx, action, who, [x.id for x in chain]):
+                continue                             # placed past this ask or hold_payment limit by its approval
             return _hold(ctx, pay, f"the {b.name} budget is over")
     elif pay["hold_id"]:
         why = "its budget hold is gone"
