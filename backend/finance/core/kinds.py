@@ -29,7 +29,9 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
        "estimate_accept", "estimate_decline", "estimate_convert",
        # prepaid expenses: one month of a prepaid bill line comes out as expense (backend/finance/prepaids.py)
-       "prepaid_amortize")
+       "prepaid_amortize",
+       # Gateway credit: bank money onto the prepaid asset usage draws down (backend/finance/topups.py)
+       "gateway_topup")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -56,7 +58,7 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         # purchase orders and estimates
         "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
         "estimate_accept", "estimate_decline", "estimate_convert",
-        "prepaid_amortize")
+        "prepaid_amortize", "gateway_topup")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -73,7 +75,7 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
          "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK, "mirror_xero_location": R.BOOK,
-         "prepaid_amortize": R.BOOK,
+         "prepaid_amortize": R.BOOK, "gateway_topup": R.BOOK,
          "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK,
          "item_create": R.BOOK, "item_update": R.BOOK, "location_create": R.BOOK, "location_update": R.BOOK,
          "project_create": R.BOOK, "project_update": R.BOOK,
@@ -302,6 +304,9 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                        ("account_id?", "str", "or another money line; none: a clearing account")),
     "bill_void": (("bill_id", "str", ""), ("reason?", "str", "")),
     "prepaid_amortize": (("bill_line_id", "str", ""), ("month", "str", "YYYY-MM, due and not yet expensed")),
+    "gateway_topup": (("money_account_id", "str", "a bank money account the money comes from"),
+                      ("amount", "minor", "more than zero: the money moved onto Gateway credit"),
+                      ("date?", "day", "default today"), ("memo?", "str", "up to 140 characters")),
     "invoice_create": (("customer_id", "str", "a customer contact"), ("number?", "str", ""),
                        ("invoice_date", "day", ""), ("due_date?", "day", "or terms_days"), ("terms_days?", "int", ""),
                        ("memo?", "str", ""),
@@ -410,6 +415,7 @@ WORDS: dict[str, str] = {
     "bill_mark_paid": "Record that a bill was paid, from a bank or card row, a money account or line.",
     "bill_void": "Void a bill (an entered one is reversed).",
     "prepaid_amortize": "Expense one due month of a prepaid bill line, out of its prepaid asset.",
+    "gateway_topup": "Top up Gateway credit from a bank account: a prepaid asset moves, no expense.",
     "invoice_create": "Draft an invoice.", "invoice_send": "Send an invoice: it posts to receivables.",
     "invoice_record_payment": "Record money received on an invoice (part or all).",
     "invoice_write_off": "Write off what a customer will not pay.", "invoice_void": "Void an invoice.",
