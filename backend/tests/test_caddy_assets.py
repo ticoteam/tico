@@ -16,6 +16,7 @@ import time
 import pytest
 
 from backend import caddy_assets as assets
+from backend.company_page import reader_app
 from backend.config import ROOT
 
 
@@ -338,8 +339,10 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
 # --- the Company page's reader origin (docs/company-page.md) ----------------------------------------------------------
 
 READER = "reader.acme.example"
-READER_PATHS = ["/", "/data.json", "/feed.xml", "/assets/*", "/auth/*", "/sign-in", "/sign-out", "/reply", "/can-help",
-                "/unsubscribe", "/invite/*"]
+# The router lets through exactly what the reader app answers: its route table, with each `{name}` as a wildcard. A path
+# added to one and not the other is a drift this test catches, since a route the router blocks is dead and one it lets
+# through the app never meant to answer.
+READER_PATHS = sorted({re.sub(r"\{[^}]*\}", "*", path) for _, path in reader_app.ROUTES})
 
 
 def reader_routes(config):
@@ -347,11 +350,12 @@ def reader_routes(config):
             if any(READER in match.get("host", []) for match in route.get("match", []))]
 
 
-def test_the_reader_origin_proxies_five_paths_keeps_the_cookie_and_leaves_the_app_as_it_was():
+def test_the_reader_origin_proxies_only_the_reader_app_paths_keeps_the_cookie_and_leaves_the_app_as_it_was():
     base = assets.render(APP, runner_hostname=RUNNER)
     config = assets.render(APP, runner_hostname=RUNNER, reader_origin="https://" + READER, serve_reader=True)
     (route,) = reader_routes(config)
-    assert route["match"] == [{"host": [READER], "path": READER_PATHS,
+    assert set(assets.READER_PATHS) == set(READER_PATHS)
+    assert route["match"] == [{"host": [READER], "path": assets.READER_PATHS,
                                "expression": "{http.request.orig_uri.path} == {http.request.uri.path}"}]
     proxy = route["handle"][0]
     assert proxy["handler"] == "reverse_proxy" and proxy["upstreams"] == [{"dial": "server:8765"}]

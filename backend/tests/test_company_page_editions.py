@@ -734,6 +734,21 @@ def test_a_declined_board_writes_nothing(page):
     assert page.rows("SELECT * FROM stat_board_approvals") == []
 
 
+def test_a_board_approval_names_a_delayed_stat_even_when_nothing_is_shown_and_a_new_delay_asks_again(page):
+    """A delayed stat with nothing eligible yet isn't on the board, so the board reads as nothing shown. The approval still
+    names the stat with its delay, so a yes to that can't approve a delay the approver never saw. A changed delay is a new ask."""
+    with page.store.transaction() as c:
+        D.set_rule(c, "human:ana", "board", "kpi", mode="delayed", lag_days=400)
+    aid = post(page.api, "audiences/board/stats/approval", {})["approval"]
+    text = get(page.api, f"approvals/{aid}")["payload"]["text"]
+    assert "Revenue" in text and "400 day lag" in text
+    with page.store.transaction() as c:
+        D.set_rule(c, "human:ana", "board", "kpi", mode="delayed", lag_days=30)
+    again = post(page.api, "audiences/board/stats/approval", {})["approval"]
+    assert again != aid and get(page.api, f"approvals/{aid}")["decision"] == "withdrawn"
+    assert "30 day lag" in get(page.api, f"approvals/{again}")["payload"]["text"]
+
+
 # ----------------------------------------------------------------------------- schedule
 ZONE = "America/Los_Angeles"
 
@@ -863,6 +878,20 @@ def test_the_stats_refresh_once_a_day_and_never_while_closed(page, monkeypatch):
     monkeypatch.setattr(release, "refresh", lambda store, when: page.refreshes.append(when))
     S.tick(page.store, local(2026, 12, 8))
     assert len(page.refreshes) == 2 and S.start(page.store, local(2026, 12, 8)) is False
+
+
+def test_a_closed_page_costs_the_daily_pass_one_read_and_no_model_call_with_no_reader_address(page, monkeypatch):
+    """Most installs never set a reader address and many keep the page Closed. The daily pass then stops at the switch:
+    no draft is written, no model is called, nothing is rebuilt, and no refresh is claimed for the day."""
+    monkeypatch.delenv("TICO_READER_ORIGIN", raising=False)
+    page.note("ops", "weekly", "2026-11-03", "November.")
+    with page.store.transaction() as c:
+        c.execute("UPDATE company_page_settings SET transparency='closed'")
+    at = local(2026, 12, 8, 9)
+    assert S.tick(page.store, at) == [] and S.start(page.store, at) is False
+    assert page.calls == [] and page.rebuilds == [] and page.refreshes == []
+    with page.store.read() as c:
+        assert c.execute("SELECT count(*) FROM registry_metadata WHERE key=?", (S.REFRESH_KEY,)).fetchone()[0] == 0
 
 
 def test_tick_catches_up_once_with_no_backlog_and_a_repeat_does_nothing(page):

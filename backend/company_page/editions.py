@@ -953,15 +953,39 @@ def _notify(c, edition_id):
 
 
 # ----------------------------------------------------------------------------- stats boards
-def _board_text(c, audience, project):
+def _board_text(c, audience_id, audience, view):
+    """The words an approval of this board is for. Every stat the approval covers is named, with how this audience gets it
+    and what it shows now or why nothing does, so approving "nothing shown" can't approve a delayed stat nobody read about.
+    The stats come from the same list as the approval's hash, so the text and the approval can't drift apart."""
+    from . import stats
+    shown = {s["id"]: s for s in view["stats"]}
+    held = {h["id"]: h["reason"] for h in view["held"]}
+    absent = {a["id"]: a["reason"] for a in view["absent"]}
+    terms = stats.board_terms(c, audience_id)
     lines = [f"Stats shown to {audience['name']}:"]
-    for stat in project.get("stats") or []:
-        lines.append(f"- {stat.get('label')}: {stat.get('display')} ({stat.get('period')}; {stat.get('chart')})")
-    if not project.get("stats"):
+    if not terms:
         lines.append("- none")
-    if project.get("held"):
-        lines.append("Held, not shown:")
-        lines.extend(f"- {h.get('label')}: {h.get('reason')}" for h in project["held"])
+    for t in terms:
+        if t["id"] in held:
+            state = f"held, not shown: {held[t['id']]}"
+        elif t["id"] in shown:
+            s = shown[t["id"]]
+            state = f"{s['display']} ({s['period']}{'; stale' if s['stale'] else ''})"
+        else:
+            state = absent.get(t["id"], "no data")
+        form = [t["mode"]]
+        if t["mode"] == "delayed":
+            form.append(f"{t['lag_days']} day lag")
+        if t["rounding"]:
+            form.append(f"rounded {t['rounding']}")
+        form += [f"from {t['source']} {t['ref']}", f"class {t['class']}", t["chart"]]
+        if t["unit"] is not None:
+            form.append(f"unit {t['unit']}")
+        if t["version"] is not None:
+            form.append(f"definition version {t['version']}")
+        lines.append(f"- {t['label']}: {state}. {'; '.join(str(x) for x in form)}")
+        if t["definition"]:
+            lines.append(f"  Definition: {t['definition']}")
     return "\n".join(lines)
 
 
@@ -1002,8 +1026,8 @@ def request_board_approval(c, who, audience_id):
             if found["payload"].get("url") == url:
                 return {"approval": found["id"], **board_approval(c, audience_id)}
             H.approval_withdraw(c, old, "The stats board changed.")
-    project = stats.project(c, audience_id, H.parse_ts(H.now()))
-    text = _board_text(c, audience, project)
+    view = stats.board(c, audience_id, H.parse_ts(H.now()))
+    text = _board_text(c, audience_id, audience, view)
     payload = {"url": url, "title": f"{audience['name']} stats board", "text": text,
                "content_sha256": hashlib.sha256(text.encode()).hexdigest(), "audience": audience["name"],
                "audience_id": audience_id, "disclosure_revision": _revision(c, audience_id)}
