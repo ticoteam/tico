@@ -46,7 +46,7 @@ def _gone(c, row):
     if not claiming(row['runner_id']):
         return False
     bots, lanes = claimed_busy(row['runner_id'])
-    return row['bot'] not in bots and not any(bot == row['bot'] for bot, _ in lanes)
+    return row['bot_id'] not in bots and not any(bot == row['bot_id'] for bot, _ in lanes)
 
 
 # INDEXED BY: the OR defeats the live-run index, and the plain plan scanned every attempt ever made (45-150 ms on

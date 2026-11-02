@@ -2881,7 +2881,7 @@ class Execution:
                                   claimed=row["created_at"], stop=row["id"])
                 elif state == 'uncertain' and jobs and retry_facts(c, {
                         **dict(next((j for j in jobs if j['id'] == row['job_id']), jobs[0])),
-                        'bot': row['bot_id'], 'attempt_id': row['id'], 'created_at': row['created_at']
+                        'bot_id': row['bot_id'], 'attempt_id': row['id'], 'created_at': row['created_at']
                 }, row['started_at'], H.now())['safe']:
                     settle_status(c, row['bot_id'], 'idle', 'Resuming after a lost lease; waiting for its computer',
                                   claimed=row['created_at'], stop=row['id'])
@@ -3673,7 +3673,7 @@ class Execution:
                 c.execute("UPDATE notes SET carried_by=? WHERE id=?", (aid, item["id"]))
             # A bot's message that waited for this run is read now; a backlog past one run's notes gets a run of its own.
             for item in bot_to_bot.carried(c, waiting, H.now()):
-                notes.append({"id": item["id"], "from": item["sender_id"], "sent": item["created_at"],
+                notes.append({"id": item["id"], "from": item["from_actor"], "sent": item["created_at"],
                               "text": item["body"], **({"message": item["message_id"]} if item.get("message_id") else {})})
             bot_to_bot.continue_backlog(c, row["bot_id"])
             if notes:
@@ -5681,7 +5681,7 @@ class Execution:
                 conv = H.conversation(c, msg['conversation_id']) if msg else None
                 task_id = work_task_id(msg, conv) if msg else None
                 task = H.task(c, task_id) if task_id else None
-                if not privacy.message_readable(c, 'bot:' + row['bot'], msg):
+                if not privacy.message_readable(c, 'bot:' + row['bot_id'], msg):
                     decided.append(self._decide(c, row, row['attempt_id'], 'dismiss',
                                                'Task access was revoked.', H.KEEPER, action='job.auto_reconcile'))
                     continue
@@ -5709,7 +5709,7 @@ class Execution:
                     # Stopped on a usage limit before it did anything (held before Tico read such a turn as the limit's):
                     # never BotOps' to review. All of them go back together, oldest first in the queue: the claim holds
                     # a task's queued work while any run on it is still held (unfenced_sql).
-                    said = limit_said.setdefault(row['bot'], {'resume': 0, 'dismiss': 0})
+                    said = limit_said.setdefault(row['bot_id'], {'resume': 0, 'dismiss': 0})
                     if self._covered(c, row, task_id):
                         note = ("Dismissed automatically: this run stopped on a usage limit, and a later run of this bot "
                                 "on the same task has finished since, so its work is covered.")
@@ -5717,7 +5717,7 @@ class Execution:
                                                     action='job.auto_reconcile'))
                         said['dismiss'] += 1
                         continue
-                    why = limit_lifted(c, self.store.settings, row['bot'], row['attempt_id'], row['finished_at'])
+                    why = limit_lifted(c, self.store.settings, row['bot_id'], row['attempt_id'], row['finished_at'])
                     if why:
                         because = {"model": "the bot has moved to another model",
                                    "fallback": "the fallback it names is ready",
@@ -5740,7 +5740,7 @@ class Execution:
                     if not held:
                         H.event(c, H.KEEPER, 'job.held', row['attempt_id'],
                                 {'job_id': row['id'], 'tools': [], 'reason': 'Repeated lease loss; waiting for the computer.'})
-                    settle_status(c, row['bot'], 'idle', 'Resuming is held after a second lost lease; waiting for the computer')
+                    settle_status(c, row['bot_id'], 'idle', 'Resuming is held after a second lost lease; waiting for the computer')
                     continue
                 if started > 1 and not facts['timeout']:
                     # Stopped twice the same way: not bad luck. Let it go and hand the cause to BotOps.

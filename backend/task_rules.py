@@ -115,7 +115,7 @@ def save(c, settings, auth, who, body, key=None):
 
 
 def config(rule):
-    return {"on": bool(rule["enabled"]), "preset": rule["preset"], "at": rule["at"]}
+    return {"on": bool(rule["enabled"]), "preset": rule["preset"], "daily_at": rule["daily_at"]}
 
 
 def row(c, settings, rule, who=None, auth=None, now=None, last=None):

@@ -116,12 +116,12 @@ def test_chat_by_slug_or_id_reaches_the_bot_and_its_runner_claims_it_by_either(a
     first = post(api, "chat/sales-helper", {"text": "What did we sell?"})
     assert first["recipient_id"] == "bot:" + sales
     attempt = claim(api, machine, "sales-helper")
-    assert attempt["bot_id"] == sales
+    assert attempt["bot"] == sales
     finish(api, machine, attempt)
     second = post(api, "chat/" + sales, {"text": "And this week?"})
     assert second["recipient_id"] == "bot:" + sales
     attempt = claim(api, machine, sales)
-    assert attempt["bot_id"] == sales
+    assert attempt["bot"] == sales
     finish(api, machine, attempt)
     # the jobs the runner claimed are the bot's, by id
     assert set(column(api, "SELECT bot_id FROM jobs")) <= {sales, "coo", "ops", "cpo", "product-design", "finance",

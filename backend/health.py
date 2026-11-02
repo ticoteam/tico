@@ -563,7 +563,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
     split = pipeline_stats.queue_counts(c, [r["id"] for r in c.execute("SELECT id FROM bots")])
     queued = {r["bot_id"]: (r["n"], r["oldest"]) for r in c.execute(
         "SELECT bot_id, count(*) n, min(created_at) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot_id")}
-    asked = {r["bot"]: r["oldest"] for r in c.execute(
+    asked = {r["bot_id"]: r["oldest"] for r in c.execute(
         "SELECT j.bot_id, min(j.created_at) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
         "WHERE j.state='queued' AND m.sender_id LIKE 'human:%' GROUP BY j.bot_id")}
     assigned = {r["bot"]: (r["runner_id"], r["label"], r["readiness"]) for r in c.execute(
@@ -1452,7 +1452,7 @@ def _fallbacks(c):
     for r in c.execute("SELECT bot_id,coalesce(started_at,created_at) AS began,json_extract(result,'$.fallback') AS harness "
                        "FROM attempts WHERE state IN ('completed','failed','interrupted') AND finished_at>? "
                        "ORDER BY bot_id,finished_at DESC", (since,)):
-        row = latest.setdefault(r["bot"], {"bot": r["bot"], "harness": r["harness"], "changed_at": r["began"], "open": bool(r["harness"])})
+        row = latest.setdefault(r["bot_id"], {"bot": r["bot_id"], "harness": r["harness"], "changed_at": r["began"], "open": bool(r["harness"])})
         if row["open"] and r["harness"]:
             row["changed_at"] = r["began"]
         else:
@@ -1642,8 +1642,8 @@ def view(c, who, settings, auth, github, config):
     computers = _computers(c, online, settings, limits)
     waiting, slow, stuck_rows = _waiting(c, online_ids, settings, limits)
     # A bot onboarding for a day is stuck too, unless something else already holds it (backend/setup_stuck.py).
-    listed = {row["bot_id"] for row in stuck_rows}
-    stuck_rows += [row for row in setup_stuck.stuck(c) if row["bot_id"] not in listed]
+    listed = {row["bot"] for row in stuck_rows}
+    stuck_rows += [row for row in setup_stuck.stuck(c) if row["bot"] not in listed]
     if not full and stuck_rows:      # someone who is not an administrator hears only about the bots they may read
         readable = auth.bot_accesses(c, who, [row["bot_id"] for row in stuck_rows])
         stuck_rows = [row for row in stuck_rows if readable.get(row["bot_id"], auth.FULL)["read"]]
@@ -1954,7 +1954,7 @@ def view(c, who, settings, auth, github, config):
             overload = overloads[computer["id"]]
             if overload:
                 checks.append(_check("performance:" + computer["id"], "Load", "warn",
-                                     f"{computer['label']}: {'overloaded now' if not overload['ended'] else 'was overloaded'}"
+                                     f"{computer['label']}: {'overloaded now' if not overload['ended_at'] else 'was overloaded'}"
                                      f" ({describe(overload)}).",
                                      [_fix("Open Performance", "#/computers/" + computer["id"] + "/performance")]))
             container = computer.get("container_exec") or {}
@@ -2054,7 +2054,7 @@ def view(c, who, settings, auth, github, config):
     else:
         checks.append(_check("waiting", "Bots waiting", "ok", "Every active bot has a computer that is up."))
     # An offline computer (or none) is "Bots waiting"; this check is everything else, so one cause is one item.
-    held = {w["bot_id"] for w in waiting}
+    held = {w["bot"] for w in waiting}
     # A bot stuck in onboarding has its own check below ("Onboarding not finished").
     blocking = [s for s in blocked if s["bot_id"] not in held and s["reason"] != "setup"]
     busy = [row for row in slow if row["reason"] == "busy"]

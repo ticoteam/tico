@@ -262,7 +262,7 @@ def test_deferred_comments_older_than_the_history_page_are_written_out_not_dropp
     assert rows(api, item=old["id"])[0]["how"] == "carried"
     # What did not fit waits for the next turn, unsettled, and says so.
     assert "56 more deferred here wait for your next turn" in attempt["deferred"]
-    assert len([r for r in rows(api, bot="ops", kind="comment") if r["settled"] is None]) == 56
+    assert len([r for r in rows(api, bot="ops", kind="comment") if r["settled_at"] is None]) == 56
 
 
 def test_deadlines_in_one_session_share_one_run_and_another_turn_cancels_it(api):

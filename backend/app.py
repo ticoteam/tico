@@ -2117,7 +2117,7 @@ def create_app(settings=None):
         def work(c):
             record = Access.change_owner_email(c, who.actor, views.roster(c), Access.load_owner(c, settings), body.email,
                                                expected_revision=body.expected_revision, now=H.now(), settings=settings)
-            return {"owner_id": record["email"], "revision": record["revision"], "person": H.actor_id(who.actor)}
+            return {"owner": record["email"], "revision": record["revision"], "person": H.actor_id(who.actor)}
         result = mutate(request, body, work)
         with store.read() as c:
             auth.sync_access(c)
@@ -3795,7 +3795,7 @@ def create_app(settings=None):
             return org_rule_check.answer(rule)
         # A note is a deferred message to the bot's next run of any kind; `defer_for` wakes it by then.
         made = H.note_create(c, who.actor, to, org_rule_check.warned_text(rule, body.text))
-        due = delivery.defer(c, made["recipient_id"], "note", made["id"], defer_for=body.defer_for)
+        due = delivery.defer(c, made["to_actor"], "note", made["id"], defer_for=body.defer_for)
         return {"note": {**note_view(made, c), "sent_as": delivery.sent_as("defer", due)}, **org_rule_check.answer(rule)}
 
     @app.post("/api/v2/notes")

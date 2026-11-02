@@ -81,7 +81,7 @@ def scrub_value(c, value, label, attempt_id="", conversation_id=""):
 def keep(c, row, body):
     """A runner hands in its attempt's stream (`row` is the attempt, already checked as that runner's)."""
     sweep(c)
-    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
+    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
     if not wanted(json.loads(found[0] or "{}") if found else {}):
         # Turned off since the turn began, or never on: nothing is kept.
         raise Problem("capture_off", "This bot does not capture its provider stream", 409)

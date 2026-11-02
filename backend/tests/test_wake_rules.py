@@ -200,8 +200,8 @@ def test_t3_a_bots_own_comment_never_wakes_it_and_the_skip_is_logged(api):
         logged = skips(c)
     assert said[0]["woke"] is False
     assert [(s["target"], {k: s["detail"][k] for k in ("bot", "task", "rule", "trigger")}) for s in logged] == [
-        (said[0]["comment"]["id"], {"bot_id": "cpo", "task": task["id"], "rule": "own_write", "trigger": "comment"}),
-        (said[1]["comment"]["id"], {"bot_id": "cpo", "task": mine["id"], "rule": "own_write", "trigger": "comment"})]
+        (said[0]["comment"]["id"], {"bot": "cpo", "task": task["id"], "rule": "own_write", "trigger": "comment"}),
+        (said[1]["comment"]["id"], {"bot": "cpo", "task": mine["id"], "rule": "own_write", "trigger": "comment"})]
 
 
 def test_woke_means_a_bot_job_was_queued_and_delivered_means_a_person_got_it(api):

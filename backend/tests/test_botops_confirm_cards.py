@@ -370,7 +370,7 @@ def test_a_client_that_sends_no_header_gets_the_same_card_or_refusal(api, botops
     put(api, "access/rules", {"botops_direct": False})
     revision = get(api, "providers")["revision"]
     ana = turn(api, botops, person="ana-test", text="Do these for me")
-    cards = (("POST", "access/owner", {"person": "ben", "expected_revision": get(api, "access")["owner_id"]["revision"],
+    cards = (("POST", "access/owner", {"person": "ben", "expected_revision": get(api, "access")["owner"]["revision"],
                                        "confirm": True}),
              ("POST", "enrollments", {"operator": "ana"}),
              ("POST", "system/update", {"version": "9.9.9"}),

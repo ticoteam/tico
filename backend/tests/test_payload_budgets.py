@@ -42,7 +42,7 @@ def test_payloads_stay_under_their_budgets(api):
         clone(c, "tasks", row, 1500, owner_id=lambda i: "bot:ops", title=lambda i: f"Bot work {i}")
         first = dict(c.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
         # 1,000 long replies before it; a person's message would queue a run of its own.
-        clone(c, "messages", {**first, "body": BODY, "from_actor": "bot:ops", "to_actor": "human:ana"}, 1000,
+        clone(c, "messages", {**first, "body": BODY, "sender_id": "bot:ops", "recipient_id": "human:ana"}, 1000,
               created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1))
         # 60 bots at work, each with a status line as a busy team's are (focus, task, last result, counts).
         bot = dict(c.execute("SELECT * FROM bots WHERE slug='ops'").fetchone())
@@ -165,7 +165,7 @@ def prepared_transitions(api, cid, count, text):
     with api.app.state.store.transaction() as c:
         first = dict(c.execute(
             "SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
-        clone(c, "messages", {**first, "from_actor": "bot:ops", "to_actor": "human:ana"}, count,
+        clone(c, "messages", {**first, "sender_id": "bot:ops", "recipient_id": "human:ana"}, count,
               created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1))
         messages = [row[0] for row in c.execute(
             "SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?", (cid, count)).fetchall()]

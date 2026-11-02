@@ -29,7 +29,7 @@ def held(api, machine, asks=True, **busy):
     with store.transaction() as c:
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
         online = {r["id"] for r in health._online_runners(c)}
-        rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot_id"] == "ops"]
+        rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
         found = {f["check_id"] for f in health_monitor.findings(c, store.settings)}
     return rows, found
 

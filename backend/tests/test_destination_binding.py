@@ -137,7 +137,7 @@ def test_keep_sends_the_key_only_to_the_new_gateway_and_leaves_one_event(api, mo
         assert shown["url"] == elsewhere.url and shown["connected"] and shown["state"] == "connected"
         assert elsewhere.calls == [("/v1/gateway/key", KEY)] and fake.calls == []
         [event] = events(api)
-        assert event["actor"] == "human:ana" and event["target"] == "tico" and event["ts"]
+        assert event["actor"] == "human:ana" and event["target"] == "tico" and event["created_at"]
         assert event["detail"]["integration"] == "gateway" and event["detail"]["option"] == "keep"
         assert event["detail"]["kept"] == ["Gateway key"] and event["detail"]["cleared"] == []
         assert event["detail"]["old"]["address"] == f"http://127.0.0.1:{fake.server.server_port}"

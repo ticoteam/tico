@@ -378,7 +378,6 @@ COLUMNS = (
     ('model_logins', 'lines_json', 'lines', '1'),
     ('model_logins', 'updated', 'updated_at', '2'),
     ('model_subscriptions', 'created', 'created_at', '2'),
-    ('model_subscriptions', 'sealed', 'sealed_at', '2s'),
     ('model_subscriptions', 'updated', 'updated_at', '2'),
     ('notes', 'created', 'created_at', '2'),
     ('oauth_clients', 'created', 'created_at', '2'),

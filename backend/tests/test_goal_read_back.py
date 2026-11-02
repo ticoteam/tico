@@ -621,7 +621,7 @@ def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited
     # Combine them: even a refusal must not reveal the newly private values.
     with api.app.state.store.transaction() as c:
         if edited in ("owner", "created_owner"):
-            G.update(c, "human:ana", row["id"], owner_id="bot:inbox")
+            G.update(c, "human:ana", row["id"], owner="bot:inbox")
         else:
             restrict(c, "ops", people=["ana"])
             if edited == "why":

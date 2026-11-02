@@ -858,7 +858,7 @@ def test_a_tico_model_on_a_runner_that_runs_bots_as_itself_says_so_once_and_is_n
         assert ended(api, attempt)[1] == "uncertain" and claim(api, machine, "ops") is None
     # Its owner sees why in Needs you, not a bot that just went quiet.
     issue = next(i for i in api.get("/api/status", headers=headers()).json()["health_issues"]
-                 if i["bot_id"] == "ops" and i["kind"] == "uncertain_work")
+                 if i["bot"] == "ops" and i["kind"] == "uncertain_work")
     assert issue["needs_person"] and "Docker runner" in issue["action"], issue
     assert issue["detail"].startswith(error.removesuffix(" (not_isolated)") + "."), issue
 

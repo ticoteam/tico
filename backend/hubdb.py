@@ -2550,7 +2550,7 @@ def quarantine_review(conn, slug):
 
 def quarantine_resumes(conn, slug):
     """Since when a bot is quarantined, whether it lifts by itself (a refusal count), and when (`resumes_at`)."""
-    since = _one(conn, QUARANTINE_SINCE_SQL, (bot_actor(slug),))["ts"]
+    since = _one(conn, QUARANTINE_SINCE_SQL, (bot_actor(slug),))["created_at"]
     auto = not quarantine_is_escape(conn, slug)
     return {"since": since, "auto": auto,
             "resumes_at": shift(since, seconds=QUARANTINE_COOLDOWN_S) if auto and since else None}

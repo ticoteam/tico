@@ -419,7 +419,7 @@ def card_view(ctx, row):
     return {"id": row.get("id"), "template": template, "title": row.get("title") or "", "settings": settings,
             "name": name, "heading": row.get("title") or name,
             "team_name": (ctx.groups.get(team) or {}).get("name") or team if team else "",
-            "hidden": data is None, "data": data, "made_by": row.get("made_by")}
+            "hidden": data is None, "data": data, "made_by_id": row.get("made_by_id")}
 
 
 # ---- places
@@ -528,14 +528,14 @@ def card_row(c, cid):
 def default_pins(kind, ident):
     return [{"id": None, "place": canonical(kind, ident), "item": None, "position": i, "size": size, "made_by": None,
              "card": {"id": None, "template": t, "settings": json.dumps({"team": ident}), "title": "",
-                      "made_by": None}}
+                      "made_by_id": None}}
             for i, (t, size) in enumerate(DEFAULTS.get(kind, []))]
 
 
 def pin_view(ctx, pin, files_cache):
     """A pin as its reader gets it, or None when it shows them nothing: a page they may not read leaves no trace."""
     from . import files as F
-    out = {k: pin.get(k) for k in ("id", "item", "position", "size", "made_by_id")}
+    out = {k: pin.get(k) for k in ("id", "item", "position", "size", "made_by")}
     if pin.get("card") is not None:
         return {**out, "card": card_view(ctx, pin["card"])}
     kind, _, ident = (pin["item"] or "").partition(":")
@@ -617,7 +617,7 @@ def check_item(ctx, kind, item):
     row = page_row(ctx.c, ident)
     if not row or not F.file_visible(ctx.c, ctx.auth, who, row, ctx.memo("file_cache", dict)):
         raise Problem("not_found", "No such page", 404)
-    if who.role == "bot" and row["bot"] != H.actor_id(who.actor):
+    if who.role == "bot" and row["bot_id"] != H.actor_id(who.actor):
         raise Problem("forbidden", "A bot pins only its own pages; a person pins another bot's", 403)
     if kind in WIDENING and row["task_id"] and H.task_private(ctx.c, H.task(ctx.c, row["task_id"])):
         raise Problem("privacy", "Private task files stay on their task", 403)

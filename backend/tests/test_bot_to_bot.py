@@ -29,7 +29,7 @@ def ops_token(api, r):
     """A run of ops, so ops can write as a bot."""
     post(api, "chat/ops", {"text": "Run your check"})
     attempt = claim(api, r, "ops")
-    assert attempt and attempt["bot_id"] == "ops"
+    assert attempt and attempt["bot"] == "ops"
     return attempt["token"]
 
 

@@ -112,7 +112,7 @@ def test_a_job_whose_checks_raise_is_held_and_the_claim_hands_out_the_next_bots_
     checked = execution.job_refusal
 
     def refusing(c, row, *args, **kwargs):
-        if row["bot"] == "ops":
+        if row["bot_id"] == "ops":
             raised.append(row["id"])
             raise RuntimeError("the export's state cannot be read")
         return checked(c, row, *args, **kwargs)
@@ -226,7 +226,7 @@ def test_a_storage_error_in_a_job_check_stops_the_claim_instead_of_holding_the_j
     two_bots_with_chats(api, machine)
 
     def full_disk(c, row, *args, **kwargs):
-        if row["bot"] == "ops":
+        if row["bot_id"] == "ops":
             error = sqlite3.OperationalError("database or disk is full")
             error.sqlite_errorcode = sqlite3.SQLITE_FULL
             raise error
@@ -741,7 +741,7 @@ def test_a_bot_check_that_raises_does_not_stop_another_bots_open_task_from_start
         c.execute("UPDATE jobs SET state='canceled'")        # no notice queued: only the backfill starts them
     calls = bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
     turn = claim(api, machine)
-    assert (turn["bot_id"], turn["task"]["id"]) == ("cpo", tasks["cpo"]["id"])
+    assert (turn["bot"], turn["task"]["id"]) == ("cpo", tasks["cpo"]["id"])
     assert calls
     # Inside the back-off the next polls do not run ops's check again, and they answer.
     seen = len(calls)

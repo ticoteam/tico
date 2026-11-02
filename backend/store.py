@@ -728,7 +728,7 @@ def _trim_target(store, target, before, batch, budget, page):
     from .credentials import USE_WINDOW
     last, doomed, deleted = {}, [], 0
     streams = [_trim_stream(store, action, target, before, page) for action in TRIM_ACTIONS]
-    for row in heapq.merge(*streams, key=lambda row: (row["ts"], row["id"])):
+    for row in heapq.merge(*streams, key=lambda row: (row["created_at"], row["id"])):
         actor = row["actor"] or ""
         if actor.startswith("human:"):
             continue

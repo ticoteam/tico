@@ -40,7 +40,7 @@ def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes
             read = reads.get((cid, bot)) or {}
             sources.append({"id": "slack:" + cid, "kind": "slack", "name": "#" + (channel["name"] or cid),
                             "purpose": channel["purpose"], "post": channel["post"],
-                            "last_read": read.get("last_run"), "read_count": read.get("digests") or 0})
+                            "last_read": read.get("last_run_at"), "read_count": read.get("digests") or 0})
     return sources
 
 
@@ -127,8 +127,8 @@ def _slack_link(team_url, channel, ts, thread_ts=None):
 def _slack_message(row, team_url=""):
     return {"event_id": row["event_id"], "channel": row["channel"], "thread_ts": row["thread_ts"],
             "ts": row["ts"], "author": row["author_name"] or row["user_id"] or row["author"],
-            "text": row["text"] if not row["deleted"] else "", "deleted": bool(row["deleted"]),
-            "edited": bool(row["edited"]), "state": row["state"], "reason": row["reason"],
+            "text": row["text"] if not row["deleted_at"] else "", "deleted": bool(row["deleted_at"]),
+            "edited": bool(row["edited_at"]), "state": row["state"], "reason": row["reason"],
             "url": _slack_link(team_url, row["channel"], row["ts"], row["thread_ts"])}
 
 

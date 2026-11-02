@@ -170,7 +170,7 @@ def test_an_owner_who_hands_ownership_on_keeps_their_layer_and_the_company_layer
     strategy_bot(api)
     learn(api, "Numbers first", token=ana)
     learn(api, "Launches matter most", "company", ana)
-    owner = get(api, "access", ana)["owner_id"]
+    owner = get(api, "access", ana)["owner"]
     post(api, "access/owner", {"person": "ben", "expected_revision": owner["revision"], "confirm": True}, token=ana)
     # The company layer stays with the owner seat; each person's own layer stays theirs.
     his = get(api, "assistant/learned", ben)

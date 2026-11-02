@@ -191,7 +191,7 @@ def test_retire_returns_the_due_dates_and_leaves_the_history(api):
     due = post(api, f"rules/{r['id']}/due", {"first_due": "2026-01-15", "repeats": "monthly", "owner": "ops"})
     retired = post(api, f"rules/{r['id']}/retire", {"version": 1})
     assert retired["rule"]["status"] == "retired"
-    assert [d["id"] for d in retired["due_at"]] == [due["id"]]
+    assert [d["id"] for d in retired["due"]] == [due["id"]]
     assert any(row["action"] == "org_rule.retired" for row in _events(api))
 
 
@@ -332,7 +332,7 @@ def test_a_due_date_keeps_its_edit_chain_and_is_readable_by_id(api):
     post(api, f"rule-due/{due['id']}/satisfied", {})
     second = post(api, f"rule-due/{due['id']}", {"first_due": "2027-03-01"})["id"]
     listed = get(api, f"rules/{r['id']}")
-    assert listed["due_at"] and all("chain" not in d for d in listed["due_at"])
+    assert listed["due"] and all("chain" not in d for d in listed["due"])
     third = post(api, f"rule-due/{second}", {"first_due": "2027-06-01"})["id"]
     old = get(api, f"rule-due/{due['id']}")
     assert old["replaced_by_id"] == second and old["replaces"] is None

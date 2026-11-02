@@ -202,7 +202,7 @@ def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(ap
         H._write_message(c, 'bot:ops', 'bot:product-design', 'The summary is drafted.', conv, 'say',
                          {'task': task['id'], 'needs_action': True}, None, None)
     other = claim(api, machine)
-    assert other['bot_id'] == 'product-design' and other['task']['id'] == task['id'] and other['chat_goal'] is None
+    assert other['bot'] == 'product-design' and other['task']['id'] == task['id'] and other['chat_goal'] is None
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']
     assert goal['id'] == first['chat_goal']['id'] and goal['status'] == 'active'
     with api.app.state.store.read() as c:

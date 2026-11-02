@@ -87,7 +87,7 @@ def test_health_counts_no_queued_work_from_the_cancelled_job(api):
             c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
             online = {r["id"] for r in health._online_runners(c)}
             waiting, slow, stuck = health._waiting(c, online, store.settings)
-        return [r for r in waiting + slow + stuck if r["bot_id"] == "ops"]
+        return [r for r in waiting + slow + stuck if r["bot"] == "ops"]
 
     assert post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None   # the claim passes it over...
     before = ops_rows()

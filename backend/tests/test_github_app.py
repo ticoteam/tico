@@ -407,7 +407,7 @@ def runner_token(api, bot):
     with api.app_state.store.transaction() as c:
         if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
             cols = [r[1] for r in c.execute("PRAGMA table_info(runners)")]
-            values = {"id": "r1", "operator": "ana", "label": "mac", "token_hash": "x", "created_at": H.now(), "created_by": "ana",
+            values = {"id": "r1", "owner_id": "ana", "label": "mac", "token_hash": "x", "created_at": H.now(), "created_by": "ana",
                       "last_seen_at": H.now(), "hostname": "h", "version": "1", "state": "active"}
             use = {k: v for k, v in values.items() if k in cols}
             c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))

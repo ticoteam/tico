@@ -212,7 +212,7 @@ def view(c, settings):
     if not saved:
         return {"state": "off", "label": LABEL}
     return {"state": saved["state"], "label": LABEL, "address": saved["address"], "location": _location(saved),
-            "keep_until": saved["keep_until"], "checked": saved["checked"], "changed": saved["changed"],
+            "keep_until": saved["keep_until"], "checked_at": saved["checked_at"], "changed_at": saved["changed_at"],
             "error": saved["error"]}
 
 

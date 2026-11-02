@@ -94,7 +94,7 @@ def test_unrelated_work_and_free_turn_ignore_37_login_waiters(api):
         c.execute('UPDATE runners SET capacity=40 WHERE id=?', (rid,))
     post(api, 'chat/finance', {'text': 'Independent work on another login'})
     attempt = claim(api, computer, 'finance')
-    assert attempt is not None and attempt['bot_id'] == 'finance'
+    assert attempt is not None and attempt['bot'] == 'finance'
     with api.app.state.store.read() as c:
         from backend.views import free_turn
         assert free_turn(c, 'ops', {'machine': {'runner_id': rid, 'label': 'Test Mac'}}) == ''
@@ -427,7 +427,7 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
     post(api, 'chat/finance', {'text': 'Close the books'})
     overload(api, computer)
     attempt = claim(api, computer)
-    assert attempt is not None and attempt['bot_id'] == 'finance'
+    assert attempt is not None and attempt['bot'] == 'finance'
     assert post(api, f"attempts/{attempt['id']}/start-place", {}, computer['token'])['reserved']
     assert claim(api, computer) is None
     with api.app.state.store.read() as c:

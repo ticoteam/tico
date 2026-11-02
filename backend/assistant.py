@@ -1041,7 +1041,7 @@ OLD_REPO_SUMMARY = re.compile(r"Set .+'s repository access to (own|all|chosen)\b
 
 def action_view(row, c=None):
     result = json.loads(row["result"]) if row.get("result") else None
-    view = {"id": row["id"], "owner_id": row["owner_id"], "conversation_id": row["conversation_id"],
+    view = {"id": row["id"], "owner": row["owner"], "conversation_id": row["conversation_id"],
             "summary": row["summary"], "method": row["method"], "path": row["path"],
             "body": json.loads(row["body"] or "{}"), "status": row["status"],
             "proposed_via": row["proposed_via"], "proposer": row.get("proposer") or row["proposed_via"],

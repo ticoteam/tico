@@ -242,7 +242,7 @@ def summary(c, settings, t, since=None):
         "SELECT id,name,owner_id FROM automations WHERE trigger_type='webhook' AND deleted_at IS NULL "
         "AND json_extract(flow,'$.trigger.id')=? ORDER BY name,id LIMIT ?", (t["id"], LISTED_AUTOMATIONS)).fetchall()]
     return {"id": t["id"], "name": t["name"], "kind": t["kind"], "event": event_of(t["id"]),
-            "url": "" if builtin(t["id"]) else address(settings, t["id"]), "builtin": builtin(t["id"]), "created_by_id": t["created_by_id"], "created_at": t["created_at"],
+            "url": "" if builtin(t["id"]) else address(settings, t["id"]), "builtin": builtin(t["id"]), "created_by": t["created_by"], "created_at": t["created_at"],
             "last_received": last, "received_24h": day, "refused_24h": refused,
             "signed": bool(t["signing_secret"]), "preset": effective_preset(t), "consumer": t["consumer"],
             "type_from": type_spec(t),

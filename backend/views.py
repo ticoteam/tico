@@ -532,7 +532,7 @@ def operation_issues(c, who, auth):
             # An API key's quota or billing refusal is not a subscription window; the person checks billing.
             from .execution import (LIMIT_COOLDOWN_LONG, LIMIT_STRIKES, billing_limit, last_limit, limit_cooldown,
                                     limit_streak, provider_reset)
-            since = H.parse_ts(status.get("since"))
+            since = H.parse_ts(status.get("changed_at"))
             cooldown = limit_cooldown(c, slug)
             if since and since > H.parse_ts(H.shift(H.now(), seconds=-max(3600, cooldown))):
                 from .agents import CONFIG_SQL
@@ -563,28 +563,28 @@ def operation_issues(c, who, auth):
                     add("bot", bot["display_name"] + " needs attention", f"{runtime}; {resume}",
                         bot=slug, severity="warning", needs_person=False)
                 elif billing:
-                    retry = H.shift(status["since"], seconds=cooldown)
+                    retry = H.shift(status["changed_at"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime}; queued work waits until {retry[:10]} {retry[11:16]} UTC, "
                         "check the API key's plan and billing", bot=slug, needs_person=False,
                         **({} if streak >= LIMIT_STRIKES else {"severity": "warning"}),
                         action="Check the API key's plan and billing, or set a fallback harness in Settings → Bots.")
                 elif cooldown > LIMIT_COOLDOWN_LONG:
-                    retry = H.shift(status["since"], seconds=cooldown)
+                    retry = H.shift(status["changed_at"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime}: subscription quota exhausted; queued work waits until {retry[:10]} "
                         f"{retry[11:16]} UTC", bot=slug, severity="warning", needs_person=False,
                         action="Wait for the subscription reset, or set a fallback harness in Settings → Bots.")
                 # A reported reset says when the limit lifts, so a streak is no reason to check the subscription.
                 elif streak >= LIMIT_STRIKES and not reset:
-                    retry = H.shift(status["since"], seconds=cooldown)
+                    retry = H.shift(status["changed_at"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime}, three times in a row; queued work waits until {retry[11:16]} UTC, "
                         "check the subscription or the API-key fallback on its Mac", bot=slug,
                         needs_person=False,
                         action="Check the subscription or set a fallback harness in Settings → Bots.")
                 else:
-                    retry = H.shift(status["since"], seconds=cooldown)
+                    retry = H.shift(status["changed_at"], seconds=cooldown)
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime}; resumes at {retry[11:16]} UTC", bot=slug,
                         severity="warning", needs_person=False)
@@ -1506,7 +1506,7 @@ def recent_bots(c, auth, who, since, limit, needs):
         out.append({
             "bot": slug, "name": bot.get("display_name") or bot.get("slug") or slug, "last_interaction": last,
             "status": {"state": status.get("state") or bot.get("state"), "focus": status.get("focus") or "",
-                       "since": status.get("since"), "working_on": (current or {}).get("title"),
+                       "changed_at": status.get("changed_at"), "working_on": (current or {}).get("title"),
                        "last_turn_at": status.get("last_turn_at")},
             "conversation_id": conversation,
             "you_said": {"text": _clip(mine["body"]), "at": mine["created_at"]} if mine else None,
@@ -2015,7 +2015,7 @@ def install_views(app, store, auth, mutate, task_view):
         success = turn.get("exit") == "completed"
         if made is None and c is not None:
             made = ran_on(c, [turn["id"]])[turn["id"]]
-        return {"id": turn["id"], "bot": turn["bot_id"], "employee": turn["bot_id"], "issue": None,
+        return {"id": turn["id"], "bot": turn["bot"], "employee": turn["bot"], "issue": None,
                 "state": turn.get("state"), "outcome": turn.get("exit"), "failure_reason": turn.get("failure_reason") or "",
                 **{k: turn.get(k) for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")},
                 "finished_at": turn.get("finished_at") or turn.get("started_at"),

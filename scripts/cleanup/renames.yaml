@@ -377,7 +377,6 @@ columns:
   model_logins.lines_json: lines
   model_logins.updated: updated_at
   model_subscriptions.created: created_at
-  model_subscriptions.sealed: sealed_at
   model_subscriptions.updated: updated_at
   notes.created: created_at
   oauth_clients.created: created_at
@@ -777,7 +776,7 @@ waves:
     scoped: {}
   "2s":
     rule: "M3 per table, common words (queued, checked, deleted...) -> <verb>_at (needs review, not applied: most sites cannot be told apart from counters, statuses and flags)"
-    count: 44
+    count: 43
     global: {}
     scoped:
       archives.imported: imported_at
@@ -802,7 +801,6 @@ waves:
       market_watches.changed: changed_at
       market_watches.checked: checked_at
       memory_tidy_cards.decided: decided_at
-      model_subscriptions.sealed: sealed_at
       perf_overloads.ended: ended_at
       pin_places.saved: saved_at
       rule_due_dates.first_due: first_due_on  # a date, not a time; a due trigger's JSON key stays `first_due`

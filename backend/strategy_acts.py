@@ -222,7 +222,7 @@ def describe(c, change, caller):
     if do == "reorder":
         return f"Move {TASK} to the top of {caller.name((row or {}).get('owner_id', ''))}'s queue"
     if do == "reassign":
-        return f"Give {TASK} to {caller.name(change.get('owner_id', ''))}"
+        return f"Give {TASK} to {caller.name(change.get('owner', ''))}"
     if do == "close":
         return f"Close {TASK}"
     return PERSON_ONLY.get(do, str(do))
@@ -254,7 +254,7 @@ def _check(c, change, caller):
         if not H.is_bot(owner) or not H.bot(c, H.actor_id(owner)) or not caller.sees(owner):
             # A bot the Strategy Bot can't see is answered as one that isn't there, in its own words, and `change` keeps
             # them: nothing it writes back (the receipt, the proposal) tells the two apart.
-            return f"no bot {change.get('owner_id') or '(none named)'} to give the task to", None
+            return f"no bot {change.get('owner') or '(none named)'} to give the task to", None
         change["owner"] = owner
         what = "a new task" if do == "create" else TASK
         if why := caller.give(owner, change.get("task_id") if do == "reassign" else None):
@@ -265,7 +265,7 @@ def _check(c, change, caller):
         if not change["title"]:
             return "a new task needs a title", None
         if not caller.would_read(change["owner"], STRATEGY_BOT):
-            return f"a new task for {_name(c, change['owner_id'])} would be out of the Strategy Bot's sight", None
+            return f"a new task for {_name(c, change['owner'])} would be out of the Strategy Bot's sight", None
         return _keeps_private(c, change["owner"], "a new task") or _offline(c, change["owner"]), None
     if row and H.is_human(row["owner_id"]):
         return f"{TASK} is a person's task, so it stays theirs", "person_task"
@@ -275,7 +275,7 @@ def _check(c, change, caller):
         return f"{TASK} is already {caller.name(row['owner_id'])}'s", None
     if do == "reassign" and not caller.would_read(change["owner"], row["requester_id"], row.get("private") or 0):
         # A new owner drops the guest (task_update), so the task is read as it would be then.
-        return f"giving {TASK} to {_name(c, change['owner_id'])} would put it out of the Strategy Bot's sight", None
+        return f"giving {TASK} to {_name(c, change['owner'])} would put it out of the Strategy Bot's sight", None
     if do == "reassign" and (private := _keeps_private(c, change["owner"], TASK)):
         return private, None
     if do == "close":
@@ -400,7 +400,7 @@ def decide(c, actor, reason, changes, goal_id=None, *, visible, give, sees):
             text = describe(c, change, caller)
             if out["made"]:
                 # Its title is the Strategy Bot's, but the task is the company's now: named as it is when read.
-                text = f"New task for {_name(c, change['owner_id'])}: {TASK}"
+                text = f"New task for {_name(c, change['owner'])}: {TASK}"
             done.append({"change": change, "text": text, **out})
     finally:
         ACTION.reset(token)

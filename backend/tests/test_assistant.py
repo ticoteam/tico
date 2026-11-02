@@ -116,7 +116,7 @@ def test_a_side_effect_runs_only_after_the_person_confirms(api):
     # The bot cannot do it itself, and only proposes.
     post(api, "bots/ops/archive", operation["body"], token=token, expected=403)
     action = post(api, "assistant/actions", operation, token=token)["action"]
-    assert action["status"] == "pending" and action["owner_id"] == "human:ana"
+    assert action["status"] == "pending" and action["owner"] == "human:ana"
     post(api, "assistant/actions", {**operation, "path": "/api/v2/me/tokens"}, token=token, expected=422)
 
     def archived():
@@ -231,7 +231,7 @@ def test_the_assistant_creates_a_task_for_another_person_without_a_card(api):
     token = attempt["token"]
     made = post(api, "tasks", {"owner": "human:cara", "title": "Review the plan", "body": "Please review the plan."},
                 token=token)
-    assert made["owner"] == "human:cara" and made["requester_id"] == "human:ben"
+    assert made["owner_id"] == "human:cara" and made["requester_id"] == "human:ben"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM assistant_actions WHERE status='pending'").fetchone()[0] == 0
         assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY created_at LIMIT 1",
@@ -362,7 +362,7 @@ def test_the_assistants_tools_cite_the_message_for_it(api):
     r, attempt = assistant_turn(api, "ben-test", "Close the launch task and decline the ad spend")
     turn = Turn(attempt["token"])
     declined = hubtools.BY_NAME["hub_approval_decline"]["fn"](turn, {"id": spend, "note": "Not now", "on_behalf_of": "turn"})
-    assert declined["decision"] == "declined" and declined["decided_by"] == "human:ben"
+    assert declined["decision"] == "declined" and declined["decided_by_id"] == "human:ben"
     assert {"hub_approval_decline", "hub_question_answer"} <= {t["name"] for t in hubtools.listing(kind="assistant")}
     with pytest.raises(APIError) as refused:
         hubtools.BY_NAME["hub_task_close"]["fn"](turn, {"id": launch["id"]})

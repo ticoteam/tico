@@ -163,12 +163,12 @@ def _apply(c, body, row, footer):
     """Write what differs between the task and the call, reopening or closing it; whether anything did.
     The title is the create's: a later call leaves it as it is."""
     type_id, step = _type_and_step(c, body, row)
-    current = {"owner_id": row["owner_id"], "body": row["body"], "labels": H.task_labels(row), "due_at": row["due_at"],
+    current = {"owner": row["owner_id"], "body": row["body"], "labels": H.task_labels(row), "due": row["due_at"],
                "type": row["type_id"], "step": row["step_id"]}
-    wanted = {"owner_id": _owner(c, body.owner) if body.owner else None,
+    wanted = {"owner": _owner(c, body.owner) if body.owner else None,
               "body": body.body + footer if body.body is not None else None,
               "labels": H._labels(body.labels) if body.labels is not None else None,
-              "due_at": body.due, "type": type_id, "step": step}
+              "due": body.due, "type": type_id, "step": step}
     fields = {name: value for name, value in wanted.items() if value is not None and value != current[name]}
     if row["status"] == "closed" and "step" not in fields:
         fields["status"] = "open"               # no `close`: the work is open again over there

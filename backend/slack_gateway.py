@@ -1023,7 +1023,7 @@ class Gateway:
         on its `judge.call` for reading."""
         actor = "human:" + person["id"]
         code = J.error_code(exc)        # never the error's text: an upstream error can echo the message back
-        expired = H.shift(event["received"], seconds=ROUTE_GIVE_UP_SECONDS) <= self.clock()
+        expired = H.shift(event["received_at"], seconds=ROUTE_GIVE_UP_SECONDS) <= self.clock()
         if exc.retryable and not expired:
             with self.store.transaction() as c:
                 self.finish(c, event, "received", actor=actor, reason=f"decisions: {code}")
@@ -1571,10 +1571,10 @@ class Gateway:
                 if reader in [d["bot"] for d in routing.get("delivered") or []]:
                     continue
             new.append(r)
-        if cursor["last_run"]:
+        if cursor["last_run_at"]:
             changed = [dict(r) for r in c.execute(
                 "SELECT * FROM slack_events WHERE channel=? AND ts<=? AND updated_at>? AND (edited_at IS NOT NULL OR deleted_at IS NOT NULL) "
-                "ORDER BY ts", (channel, cursor["last_ts"], cursor["last_run"]))]
+                "ORDER BY ts", (channel, cursor["last_ts"], cursor["last_run_at"]))]
         return new, changed, newest
 
     def render_channel(self, c, channel, entry, new, changed, cursor):

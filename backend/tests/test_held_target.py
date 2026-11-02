@@ -95,7 +95,7 @@ def test_a_persons_new_slack_thread_to_a_held_bot_waits_and_runs_once_it_is_back
     assert gateway.receive(S.envelope("please check the invoice run", user="U1", channel=S.DM, kind="message")) == "queued"
     (result,) = gateway.tick()["events"]
     (kept,) = result["decision"]["delivered"]
-    assert kept["bot_id"] == "finance" and kept["opened"] and "is kept" in kept["held"], result
+    assert kept["bot"] == "finance" and kept["opened"] and "is kept" in kept["held"], result
     assert [p["text"] for p in gateway.slack.posts] == [kept["held"]]
     assert claim(api, machine, "finance") is None, "nothing runs while it is held"
 

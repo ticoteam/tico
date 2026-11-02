@@ -155,7 +155,7 @@ def test_first_pass_colours_existing_blank_subgoals_and_records_each_automatic_c
             assert len(events) == 1
             event = events[0]
             assert (event["old"], event["new"], event["status_source"]) == (None, colour, "auto")
-            assert event["actor"] == event["status_by_id"] == G.AUTO_ACTOR
+            assert event["actor"] == event["status_by"] == G.AUTO_ACTOR
             assert event["note"] == row["status_note"]
     assert post(api, "goals/refresh", {})["changed"] == []
     with api.app.state.store.read() as c:

@@ -279,7 +279,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
         ready = readiness_document(runner['readiness']) if runner else {}
         why = 'bot paused' if row['bot_state'] != 'active' else ''
         if not why and runner and classify:
-            refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config'], False, ready,
+            refused, _ = claim_refusal(c, settings, runner, row['bot_id'], row['config'], False, ready,
                                        default=default)
             why = reasons.get(refused, 'pre-start requirements') if refused else ''
         if not why and overloaded[rid]:

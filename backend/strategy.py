@@ -958,7 +958,7 @@ def watch(c, kpi_id=None, market_id=None, today=None):
         if market_id and market_id not in [wrong.get("market_id"), *(item.get("cites") or [])]:
             continue
         with isolated(c, "strategy_watch", item["id"]):
-            evidence = _evidence(c, item, row["published"], today)
+            evidence = _evidence(c, item, row["published_at"], today)
             if not evidence:
                 continue
             body = (f"Bet {number} of strategy v{row['n']} (bet id {item['id']}): {item['statement']}\n"

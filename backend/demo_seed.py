@@ -173,7 +173,7 @@ class Builder:
     def computers(self):
         self.at(days=6.9)
         for label, platform, runtimes in RUNNERS:
-            code = self.call("POST", "enrollments", {"owner_id": "ana"})["code"]
+            code = self.call("POST", "enrollments", {"operator": "ana"})["code"]
             runner = self.call("POST", "runners/enroll", {"code": code, "label": label, "platform": platform})
             if platform == "darwin":
                 self.mac = runner

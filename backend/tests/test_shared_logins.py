@@ -112,7 +112,7 @@ def test_a_turn_that_gave_its_login_up_at_the_cap_goes_back_in_the_queue_unanswe
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (origin["id"],)).fetchone()[0] == "queued"
         assert not c.execute("SELECT 1 FROM messages WHERE in_reply_to=?", (origin["id"],)).fetchone()
     # The bot is idle with the pause line until its continuation starts, not crashed, and Health raises nothing.
-    [status] = [s for s in get(api, "status")["bots"] if s and s["bot_id"] == a["bot_id"]]
+    [status] = [s for s in get(api, "status")["bots"] if s and s["bot"] == a["bot"]]
     assert (status["state"], status["focus"]) == ("idle", line)
     assert not [i for i in get(api, "operations")["issues"] if i.get("bot_id") == a["bot_id"]]
     # It continues on the next claim, as the same work.

@@ -59,7 +59,7 @@ def _public(row):
     return {"bucket": row["bucket"], "prefix": row["prefix"], "region": row["region"],
             "location": _location(row["bucket"], row["prefix"]),
             "access_key_id": "…" + key[-4:], "created_at": row["created_at"], "created_by": row["created_by"],
-            **({"retired": row["retired"]} if row["retired"] else {})}
+            **({"retired_at": row["retired_at"]} if row["retired_at"] else {})}
 
 
 def places(c, vault):

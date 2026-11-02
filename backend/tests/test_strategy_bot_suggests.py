@@ -274,7 +274,7 @@ def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):
         if n == 2:
             assert get(api, "strategy-bot")["level3_offer"]["streak"] == 0
         if n == 11:
-            assert get(api, "strategy-bot", token=strategy_token)["level3_offer"]["due_at"] is False
+            assert get(api, "strategy-bot", token=strategy_token)["level3_offer"]["due"] is False
             post(api, "strategy-bot/level3-offer", {}, token=strategy_token, expected=422)            # not due yet
     offer = get(api, "strategy-bot", token=strategy_token)["level3_offer"]
     assert (offer["streak"], offer["due_at"]) == (10, True)
@@ -289,5 +289,5 @@ def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):
         record = strategy_suggest.strategy_bot._record(c)
         record["level3_offers"] = [H.shift(H.now(), days=-31)]
         strategy_suggest.strategy_bot._save(c, record)
-    assert get(api, "strategy-bot", token=strategy_token)["level3_offer"]["due_at"] is True
+    assert get(api, "strategy-bot", token=strategy_token)["level3_offer"]["due"] is True
     assert get(api, "strategy-bot")["level"] == 2

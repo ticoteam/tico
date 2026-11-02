@@ -325,7 +325,7 @@ def regroup(c, old, new):
             flow["group"] = before["group"]
         elif new:
             flow["group"] = "group:" + new
-        if before["owner_id"] == gone:
+        if before["owner"] == gone:
             flow["owner"] = "group:" + new if new else "person:" + top if top else H.KEEPER
         _save(c, H.KEEPER, row["id"], flow, before, via="group:" + (new or old))
 

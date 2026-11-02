@@ -26,7 +26,7 @@ def test_a_lifted_quarantine_leaves_the_bot_a_note_with_the_refusal_that_stopped
         c.execute("UPDATE events SET created_at=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),))
         assert H.lift_cooled_quarantines(c) == ["cpo"]
     [note] = notes_for(api, "cpo")
-    assert note["sender_id"] == H.KEEPER
+    assert note["from_actor"] == H.KEEPER
     assert "number on a task is changed by a person" in note["body"] and "(identity)" in note["body"]
     assert note["body"].endswith(H.QUARANTINE_LIFTED)
     # A person clearing it leaves the same note; so does an escape, naming what the check stopped.

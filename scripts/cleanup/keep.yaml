@@ -10,6 +10,7 @@ files:
   - backend/tests/test_schema_renames.py
   - backend/tests/test_task_delete.py   # trash snapshots saved before the renames, under the old names
   - backend/tests/test_stored_document_keys.py  # documents as an existing install holds them
+  - backend/tests/test_inflight_cutover.py      # rows a running install holds across the upgrade, under the old names
   - backend/tests/fixtures/*
   - backend/tests/fixtures/**
   - docs/history/*               # how the schema looked then
@@ -70,6 +71,13 @@ keys:
   backend/tests/test_finance_stripe.py: [created]   # the fake Stripe API's balance transactions
   evals/botops_automations/*.py: [created]           # the eval's saved answers: {"created": [automation, ...]}
   backend/tests/test_botops_automations_evals.py: [created]
+  # Wave 3: documents and other systems' fields that say owner, not the owner_id column.
+  backend/integrations.py: [owner]     # a tool's owner
+  backend/company_import.py: [owner]   # an import preview's goals
+  backend/visual_config.py: [owner]   # the setup journal
+  connectors/slack.py: [owner]         # hub-access.yaml
+  backend/repo_waits.py: [owner]       # worktree_waits keeps owner
+  backend/config.py: [owner]           # hub-access.yaml
 # Request models a runner (or another separately updated client) sends: their fields keep the wire names.
 wire_models:
   - WatcherReport      # POST /api/v2/runners/watchers (runner-rs watchers.rs)

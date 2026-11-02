@@ -216,7 +216,7 @@ def _load_from(points, now):
               "running_turns": p["running_turns"], "stale": not fresh}
     loaded = lambda x: (x["cpu_pct"] or 0) > 90 or (_pct(x["mem_used"], x["mem_total"]) or 0) > 90
     overloaded = (fresh and len(points) == 6
-                  and all(points[i]["ts"] - points[i+1]["ts"] == 60 for i in range(5))
+                  and all(points[i]["created_at"] - points[i+1]["created_at"] == 60 for i in range(5))
                   and points[0]["sampled_at"] - points[-1]["sampled_at"] >= 300
                   and all(loaded(x) for x in points))
     return {"latest_sample": latest, "overloaded": bool(overloaded)}
@@ -345,7 +345,7 @@ def ran(c, runner_id, start, end):
     """Who ran during [start, end): each bot and model with its number of turns, most turns first."""
     counts = {}
     for r in _runs(c, runner_id, start, end):
-        key = (r["bot"].removeprefix("bot:"), r["model"] or "")
+        key = (r["bot_id"].removeprefix("bot:"), r["model"] or "")
         counts[key] = counts.get(key, 0) + 1
     return [{"bot": b, "model": m, "runs": n} for (b, m), n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
@@ -390,7 +390,7 @@ def _who_ran(bots, label=lambda b: b):
 def describe(o, label=lambda b: b):
     """One line: when, why and what ran."""
     why = " and ".join(REASON_WORDS.get(r, r) for r in o["reasons"]) or "very loaded"
-    words = f"{why} for {o['minutes']} minutes" + ("" if o["ended"] else ", still going")
+    words = f"{why} for {o['minutes']} minutes" + ("" if o["ended_at"] else ", still going")
     ran = _who_ran(o["bots"], label)
     if ran:
         words += f"; running: {ran}"
@@ -485,7 +485,7 @@ def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
     seen = lambda slug, right="see": access is None or bool((access.get(slug) or {}).get(right))
     runs = []
     for r in _runs(c, runner_id, since, now + 1):
-        slug = r["bot"].removeprefix("bot:")
+        slug = r["bot_id"].removeprefix("bot:")
         shown = seen(slug)
         runs.append({"id": r["id"] if seen(slug, "read") else None, "bot": label(slug) if shown else "",
                      "model": (r["model"] or "") if shown else "", "started_at": r["started_at"], "finished_at": r["finished_at"],

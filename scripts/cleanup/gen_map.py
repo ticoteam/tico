@@ -100,7 +100,6 @@ M3_UNIFORM = {
     "settled": ("settled_at", "scoped", ""),
     "saved": ("saved_at", "scoped", ""),
     "queued": ("queued_at", "scoped", ""),
-    "sealed": ("sealed_at", "scoped", ""),
     "marked": ("marked_at", "scoped", ""),
     "logged": ("logged_at", "scoped", ""),
     "retired": ("retired_at", "scoped", ""),

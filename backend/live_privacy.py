@@ -25,13 +25,13 @@ def member(c, actor, meeting):
     if not meeting:
         return False
     if H.is_human(actor):
-        return (meeting["visibility"] == "team" or actor == meeting["owner_id"] or bool(c.execute(
+        return (meeting["visibility"] == "team" or actor == meeting["owner_actor"] or bool(c.execute(
             "SELECT 1 FROM live_meeting_access WHERE meeting_id=? AND actor=?", (meeting["id"], actor)).fetchone()))
     if H.is_bot(actor):
         # Only the connector can delegate private meeting access to a bot.
         return bool(c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot=? "
                               "AND (?='team' OR joined_by=?)",
-                              (meeting["id"], H.actor_id(actor), meeting["visibility"], meeting["owner_id"])).fetchone())
+                              (meeting["id"], H.actor_id(actor), meeting["visibility"], meeting["owner_actor"])).fetchone())
     return False
 
 

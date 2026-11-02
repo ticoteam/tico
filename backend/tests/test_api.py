@@ -300,7 +300,7 @@ def test_two_runners_claim_only_their_own_bots(api):
     post(api, "chat/cpo", {"text": "Talk to product"})
     assert claim(api, ana) is None
     attempt = claim(api, ben, key="claim-once")
-    assert attempt["bot_id"] == "cpo"
+    assert attempt["bot"] == "cpo"
     assert claim(api, ben, key="claim-once")["id"] == attempt["id"]
     assert claim(api, ben) is None
 

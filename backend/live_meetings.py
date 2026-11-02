@@ -183,7 +183,7 @@ def _connector(c, auth, who, rid, *, states=None):
     human_only(who)
     auth.domain(who)
     row = _require_read(c, auth, who, rid)
-    if who.actor != row["owner_id"]:
+    if who.actor != row["owner_actor"]:
         raise Problem("forbidden", "Only the person who connected this meeting can control its transcript", 403)
     if states and row["state"] not in states:
         raise Problem("meeting_state", f"This operation requires a { ' or '.join(states) } meeting", 409)
@@ -240,7 +240,7 @@ def _view(c, auth, who, rid):
         person = H.human(c, H.actor_id(r["actor"]))
         access.append({"actor": r["actor"], "name": (person or {}).get("name") or H.actor_id(r["actor"])})
     return {
-        "id": row["id"], "title": row["title"], "state": row["state"], "owner_id": row["owner_id"],
+        "id": row["id"], "title": row["title"], "state": row["state"], "owner_actor": row["owner_actor"],
         "visibility": row["visibility"], "access": access, "client": row["client"],
         "seq": row["seq"], "event_id": row["next_event_id"], "window_ms": row["window_ms"],
         "cooldown_ms": row["cooldown_ms"], "reply_cap": row["reply_cap"], "threshold": row["threshold"],

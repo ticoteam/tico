@@ -58,7 +58,7 @@ def finished_up_to_shots(repo):
 
 def test_the_shipped_pipeline_has_the_default_owner_budget_and_movers():
     pipe = cfg()
-    assert pipe["owner_id"] == "" and pipe["budget"] == 10.0
+    assert pipe["owner"] == "" and pipe["budget"] == 10.0
     assert [s["id"] for s in pipe["stages"]] == ["brief", "script", "storyboard", "shots", "cut", "final", "publish"]
     movers = {s["id"]: s["mover"] for s in pipe["stages"]}
     assert movers["shots"] == movers["cut"] == "self"
