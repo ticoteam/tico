@@ -162,7 +162,7 @@
 @media (max-width:640px){
   .fin-bar>button,.fin-bar select,.fin-bar input,.fin-pop-at>button,.fin-search{height:40px}
   .fin-bar input,.fin-form input,.fin-form select,.fin-search input,.fin-in,.fin-cell-in,.fin-cell-sel{font-size:16px}
-  .fin-cell-sel{height:30px}
+  .fin-cell-sel{height:40px}
   /* A phone's fields are 16px (layout.css, so iOS does not zoom); the P&L's Compare shows its choice at the bar's size
      over its select, which stays 16px and takes the taps. */
   .fin-sel{position:relative;display:inline-flex;align-items:center;height:40px;padding:0 26px 0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font-size:var(--t-sm)}
@@ -170,7 +170,13 @@
   .fin-sel-v{display:inline}
   .fin-sel select{position:absolute;inset:0;width:100%;height:100%;opacity:0}
   .fin-form input,.fin-form select{height:40px}
-  .fin-seg button{padding:6px 10px}
+  .fin-seg button{min-height:40px;padding:6px 10px}
+  /* Names and group rows in a table: the row's height stays the text's on a computer, 40px under a thumb. */
+  .fin-t .fin-link,.fin-ln td:first-child a{display:inline-flex;align-items:center;min-height:40px}
+  .fin-acts button,.fin-foot button,.fin-doc-email button{min-height:40px}
+  #main.finance-layout .fin-head .tabs a{display:inline-flex;align-items:center;min-height:40px}
+  a.fin-src{position:relative}
+  a.fin-src::after{content:'';position:absolute;inset:-12px -6px}   /* the pill stays its size in the row; the tap area doesn't */
   .fin-search{max-width:none;flex-basis:100%}
   .fin-main{padding:4px 8px 10px}
   .fin-pl td:first-child,.fin-pl th:first-child{min-width:140px}
