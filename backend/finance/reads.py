@@ -1163,10 +1163,12 @@ def _data_as_of(s: _Seen, money_ids: Sequence[str]) -> tuple[str | None, bool]:
     return oldest, age > timedelta(hours=STALE_HOURS)
 
 
-def _cash(s: _Seen) -> tuple[int, list[Row], list[str]]:
-    """Cash on the books in the money accounts that hold cash (bank, Stripe) the viewer sees, total and per account."""
+def _cash(s: _Seen, money_id: str | None = None) -> tuple[int, list[Row], list[str]]:
+    """Cash on the books in the money accounts that hold cash (bank, Stripe) the viewer sees, total and per account;
+    one money account when `money_id` is given."""
     rows = [r for r in SK.money_accounts(s.ctx.c, s.ctx.book.id)
-            if r["holds_cash"] and r["account_id"] and tab.sees_money_account(s.ctx, s.view, r)]
+            if r["holds_cash"] and r["account_id"] and tab.sees_money_account(s.ctx, s.view, r)
+            and (money_id is None or str(r["id"]) == money_id)]
     sums = SK.balances(s.ctx.c, s.ctx.book.id, s.ctx.today, sorted({str(r["account_id"]) for r in rows}))
     per: list[Row] = [{"money_account_id": str(r["id"]), "name": str(r["name"]), "balance": sums.get(str(r["account_id"]), 0),
             "provider_balance": r["balance"], "balance_as_of": r["balance_as_of"]} for r in rows]
@@ -1195,7 +1197,7 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
            teammate: str | None = None, days: int | None = None, at: str | None = None) -> Row:
     """One number for a card, a goal or a bot (§7.2), cut to the viewer like every read, with `as_of` (when it was
     worked out) and, for numbers resting on bank data, `data_as_of` and `stale`. cash: the books' balance of the cash
-    accounts the viewer sees (per account in `accounts`); burn: cash out minus cash in this month (or the window);
+    accounts the viewer sees (per account in `accounts`, or the one money account `account_id` names); burn: cash out minus cash in this month (or the window);
     runway_months: cash over the average burn of the last 3 full months (null when nothing burns); revenue, spend: the
     window (this month by default); budget_remaining / budget_pct_used: one budget; ap_due: open bills due within
     `days` (default 7, overdue included); ar_overdue: invoices at least `days` (default 1) late;
@@ -1219,7 +1221,10 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
     if name in ("cash", "runway_months"):
         if not (s.view.everything or s.view.balance_sheet or s.view.bs_lines):
             raise denied("cash is on the balance sheet, the owner's unless granted")
-        total, per, money_ids = _cash(s)
+        cut = account_id if name == "cash" else None
+        total, per, money_ids = _cash(s, cut)
+        if cut and not per:
+            raise FinanceError(NOT_FOUND, "no such money account")
         data_as_of, stale = _data_as_of(s, money_ids)
         base.update({"data_as_of": data_as_of, "stale": stale})
         if name == "cash":
