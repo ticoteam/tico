@@ -39,7 +39,7 @@ def test_overlap_wait_is_visible_and_reviewed_within_five_minutes_of_freeing(api
     assert job_state(api, attempt['job_id']) == 'uncertain'
     with api.app.state.store.read() as c:
         held = json.loads(c.execute("SELECT detail FROM events WHERE action='job.held' AND target=?", (attempt['id'],)).fetchone()[0])
-        assert held['owner_id'] == 'bot:botops' and held['reason']
+        assert held['owner'] == 'bot:botops' and held['reason']
         assert c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:botops' AND status='open'").fetchone()
     assert 'BotOps owns recovery' in get(api, 'bots/ops/execution-review')['jobs'][0]['reason']
 

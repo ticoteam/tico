@@ -458,7 +458,7 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
         # primary/fallback deadline stays inside HQ's 24-hour rotation grace (runner-rs/src/gateway_relay.rs).
         c.execute("UPDATE attempts SET gateway_key_id=? WHERE id=?", (key_id(c, settings) or None, attempt_id))
         H.event(c, who.actor, "gateway.key_sent", PROVIDER,
-                {"bot_id": row["bot_id"], "attempt": attempt_id, "runner": who.runner_id})
+                {"bot": row["bot_id"], "attempt": attempt_id, "runner": who.runner_id})
     return items
 
 

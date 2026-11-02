@@ -635,7 +635,7 @@ def flag_cut(c, cause, update=None):
                if (json.loads(detail or '{}') or {}).get('cause') == cause}
     fresh = [row for row in live if row['id'] not in flagged]
     for row in fresh:
-        H.event(c, H.KEEPER, UPDATE_CUT, row['id'], {'bot_id': row['bot_id'], 'job_id': row['job_id'], 'cause': cause,
+        H.event(c, H.KEEPER, UPDATE_CUT, row['id'], {'bot': row['bot_id'], 'job_id': row['job_id'], 'cause': cause,
                                                      **({'update': update} if update else {})})
     return len(fresh)
 
@@ -1478,7 +1478,7 @@ def hold_job_until_reset(c, row, hold, reason):
     c.execute("UPDATE attempts SET result=json_set(result,'$.limit_resets_at',?) WHERE id=?",
               (until, row['id']))
     H.event(c, H.KEEPER, 'job.reset_wait', row['job_id'],
-            {'attempt_id': row['id'], 'owner_id': H.KEEPER, 'until': until, 'reason': reason})
+            {'attempt_id': row['id'], 'owner': H.KEEPER, 'until': until, 'reason': reason})
     return hold
 
 
@@ -2704,7 +2704,7 @@ class Execution:
                 with isolated(c, "grace_leases", row["id"]):
                     c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
                     H.event(c, H.KEEPER, "attempt.lease-grace", row["id"],
-                            {"bot_id": row["bot_id"], "lapsed": row["lease_until"], "lease_until": until})
+                            {"bot": row["bot_id"], "lapsed": row["lease_until"], "lease_until": until})
             return len(rows)
 
     def stalled(self, now):
@@ -4006,7 +4006,7 @@ class Execution:
         H.turn_finish(c, H.KEEPER, row["id"], exit_code=body.outcome, summary=body.text[:2000],
                       usage=self.run_usage(c, row, body), usage_reason=self.no_usage_reason(body))
         H.event(c, H.KEEPER, "attempt.late-result", row["id"],
-                {"bot_id": row["bot_id"], "job_id": row["job_id"], "outcome": body.outcome})
+                {"bot": row["bot_id"], "job_id": row["job_id"], "outcome": body.outcome})
         return {"attempt_id": row["id"], "outcome": body.outcome, "message": None, "filed": True}
 
     @staticmethod
@@ -5657,7 +5657,7 @@ class Execution:
                 freed = bool(prior and prior['action'] == 'job.recovery_wait')
                 if freed:
                     H.event(c, H.KEEPER, 'job.recovery_ready', row['attempt_id'],
-                            {'job_id': row['id'], 'owner_id': H.KEEPER,
+                            {'job_id': row['id'], 'owner': H.KEEPER,
                              'reason': 'Live task or session lane is free; Tico is re-evaluating recovery.'})
                 if row['pending_decision'] and row['reviewer'] == H.KEEPER:
                     # Tico's own saved choice is only a placeholder while the lane was busy: the rules below judge the
@@ -5761,7 +5761,7 @@ class Execution:
                     if not held and row['attempt_id']:
                         H.event(c, H.KEEPER, 'job.held', row['attempt_id'], {'job_id': row['id'], 'tools': acted,
                                    'outside_actions': facts['outside'], 'consumed_approval': bool(facts['consumed']),
-                                   'owner_id': H.bot_actor(H.FLEET_MAINTAINER),
+                                   'owner': H.bot_actor(H.FLEET_MAINTAINER),
                                    'reason': why})
                     elif held:
                         acted = (json.loads(held[0] or '{}') or {}).get('tools') or []

@@ -4408,7 +4408,7 @@ def create_app(settings=None):
         if who is not caller:
             H.event(c, caller.actor, "task.update_delegated", task_id,
                     {"on_behalf_of": who.actor, "message_id": body.on_behalf_of,
-                     "close": body.close, "status": body.status, "owner_id": body.owner})
+                     "close": body.close, "status": body.status, "owner": body.owner})
         if row["version"] != body.version:
             raise Problem("version_conflict", "Task changed; fetch it and retry your update", 409)
         if body.owner:

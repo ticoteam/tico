@@ -1664,7 +1664,7 @@ def view(c, who, settings, auth, github, config):
     for row in overdue:
         why = assigned_start.reason(c, row, settings, shared, suspect)
         text = assigned_start.description(c, row, settings, why)
-        assigned.append({'task': row['id'], 'bot_id': H.actor_id(row['owner_id']), 'name': row['title'],
+        assigned.append({'task': row['id'], 'bot': H.actor_id(row['owner_id']), 'name': row['title'],
                          'reason': why, 'text': text,
                          'fixes': [_fix('Open task', '#/tasks/' + row['id'])]})
     if assigned:

@@ -408,7 +408,7 @@ def read(c, auth, who, files, blobs, body, found):
     if plan:
         _store_link(c, blobs, files, plan, task["id"], text, title)
     H.event(c, who.actor, "rules.read_requested", file_id, {"source": source["id"], "version": number,
-                                                          "task": task["id"], "bot_id": SLUG, "truncated": cut,
+                                                          "task": task["id"], "bot": SLUG, "truncated": cut,
                                                           "screening": verdict["action"]})
     c.execute("INSERT INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, source_id) "
               "VALUES(?,?,?,?,?,?,?)", (task["id"], file_id, number, who.actor, H.now(), int(cut), source["id"]))

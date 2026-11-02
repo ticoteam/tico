@@ -8059,7 +8059,7 @@ def _escalate_stuck(conn, row, count):
                 "record any remaining repair dependency on the original task.", owner,
                 deduplicate=False, lint=False)
     event(conn, KEEPER, "task.stall_escalated", row["id"],
-          {"bot": actor_id(row["owner_id"]), "wakes": count, "recovery_task": repair["id"], "owner_id": owner})
+          {"bot": actor_id(row["owner_id"]), "wakes": count, "recovery_task": repair["id"], "owner": owner})
     return repair
 
 
@@ -8210,7 +8210,7 @@ def _settle_undiagnosed(conn, row, cause):
     still held with no decision (held_review_bot)."""
     if row["requester_id"] == KEEPER and held_review_bot(conn, row):
         event(conn, KEEPER, "task.stall_escalated", row["id"],
-              {"bot": actor_id(row["owner_id"]), "recovery_task": None, "owner_id": None, "cause": cause,
+              {"bot": actor_id(row["owner_id"]), "recovery_task": None, "owner": None, "cause": cause,
                "kept_open": "runs still held"})
         return
     if row["requester_id"] == KEEPER:
@@ -8219,7 +8219,7 @@ def _settle_undiagnosed(conn, row, cause):
         _wake(conn, row, row["requester_id"], f"Stuck: {row['title']}. {cause[0].upper()}{cause[1:]}. "
               "Reassign it, run it, or close it.", {"wake": "stuck_cause"}, trigger="stall_check")
     event(conn, KEEPER, "task.stall_escalated", row["id"],
-          {"bot": actor_id(row["owner_id"]), "recovery_task": None, "owner_id": None, "cause": cause})
+          {"bot": actor_id(row["owner_id"]), "recovery_task": None, "owner": None, "cause": cause})
 
 
 def _stall_stand(conn, row):
