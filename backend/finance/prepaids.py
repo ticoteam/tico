@@ -11,8 +11,10 @@ from .core import ap as AP
 from .core import kinds as K
 from .core import ledger as L
 from .core import validate as V
-from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, invalid
-from .handlers import Plan, Result
+from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, denied, invalid
+from .core.org import SYSTEM
+from .handlers import Plan, Result, may_write
+from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
 from .store import prepaids as SPP
@@ -66,8 +68,10 @@ def due_months(c: Any, ctx: Ctx) -> list[tuple[str, str]]:
 def amortize_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """One month of a prepaid bill line: Dr its expense account / Cr prepaid expenses. Only a month that has come and is
     not expensed yet. The entry is dated the month's first day, or today when that month is closed, and its memo says
-    which month it is for."""
+    which month it is for. The asker must see the bill (its payables view, as the other bill actions check) and may
+    write the line's expense account and tags."""
     from .banking import open_day
+    from .documents import sees_doc
     if ctx.book.mode == "mirror":
         raise FinanceError(NOT_AVAILABLE, "prepaid expenses are not available while the books are a provider's")
     V.only(p, ("bill_line_id", "month"))
@@ -76,6 +80,8 @@ def amortize_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     row = SPP.line(ctx.c, ctx.book.id, line_id)
     if row is None:
         raise FinanceError(NOT_FOUND, "no such prepaid bill line")
+    if who != SYSTEM and not sees_doc(ctx, who, "bill", SAP.get(ctx.c, "fin_bills", str(row["bill_id"]))):
+        raise FinanceError(NOT_FOUND, "no such bill in your view")
     if str(row["status"]) not in ENTERED:
         raise FinanceError(CONFLICT, "that bill is not entered")
     amount = dict(schedule(row)).get(month)
@@ -93,6 +99,8 @@ def amortize_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     memo = f"Prepaid {row['vendor_name'] or 'bill'} {month}" + ("" if day == f"{month}-01" else f" (dated {month}-01)")
     contact = str(row["vendor_id"] or "")
     tags = cast(dict[str, str], SK.loads(row["tags_json"]))
+    if who != SYSTEM and not may_write(ctx, who, expense.id, tags):
+        raise denied("a line's account or tags are outside your view")
     base = ctx.book.base_currency
     e = L.Entry(book_id=ctx.book.id, entry_date=day, memo=memo[:200], source="bill", source_id=f"{line_id}:{month}",
                 basis="accrual",

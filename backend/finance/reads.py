@@ -1788,8 +1788,8 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
         late: list[Row] = ([{"id": "books", "days": days, "label": f"{days} days since the books were reconciled"}]
                            if days is not None and days > STATEMENT_DAYS else [])
         return late[skip:skip + n], len(late) > skip + n
-    if kind == "bill_email":                 # a bill to enter (bill_create needs AP): by the right, not the view
-        if not R.has(ctx.org, s.view.viewer, R.AP, held):
+    if kind == "bill_email":                 # a bill to enter (bill_create needs AP): by the right, and a view of bills
+        if not R.has(ctx.org, s.view.viewer, R.AP, held) or not tab_ap.sees_side(ctx, view, "bill"):
             return None
         from .. import bills_address       # the emailed bills keep their own rows, outside the fin_ tables
         emailed = bills_address.for_bookkeeper(c, skip + n + 1)
