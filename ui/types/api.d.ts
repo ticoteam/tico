@@ -2834,6 +2834,7 @@ export type MemoryTidyCard = {
   expires: string;
   id: string;
   keep_available: boolean;
+  keep_pending?: boolean;
   kind: "memory_tidy";
   memory_commit: string;
   model: string;
