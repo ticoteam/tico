@@ -3158,7 +3158,11 @@ def create_app(settings=None):
                 raise Problem("not_found", "Message not found", 404)
             who = request.state.identity
             privacy.require_message(c, who, row)
-            if who.role == "bot" and (row.get("to_actor") == who.actor or row.get("from_actor") == who.actor):
+            # A native thread's readers decide first: a bot removed from it loses its addressed messages too. A legacy
+            # conversation keeps the sender/addressee shortcut as it was.
+            native = bool((H.conversation(c, row["conversation_id"]) or {}).get("audience"))
+            party = row.get("to_actor") == who.actor or row.get("from_actor") == who.actor
+            if who.role == "bot" and party and not native:
                 return visual_view(c, who, [row])[0]
             auth.conversation(c, who, row["conversation_id"])
             return visual_view(c, who, [row])[0]
@@ -3641,7 +3645,8 @@ def create_app(settings=None):
             raise Problem("not_found", "Message not found", 404)
         conversation = auth.conversation(c, who, msg["conversation_id"], write=True)
         lifecycle.refuse_send(c, who, msg["from_actor"], conversation, what="an answer")
-        if destination:
+        # A private run's answer is read by its question's readers, ordinary or replayed: the same check either way.
+        if destination or privacy.private_execution(c, who):
             privacy.require_destination(c, who, msg["from_actor"], msg["conversation_id"], {}, msg)
         if H.has_pick_options(msg):
             from .task_review import answer_text
