@@ -2,12 +2,15 @@
 letters routed to their owners, Gateway models, a company subscription on a computer, and the connected connectors."""
 
 import hashlib
+import threading
 from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import demo
+from clients import gateway as G
+
+from backend import demo, gateway_tiers, github_app
 from backend.app import create_app
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
@@ -63,6 +66,10 @@ def test_letters_carry_the_mailing_address_and_reach_their_owners(built):
         for item in items.values():
             assert item["status"] == "filed"
             assert item["address"].startswith("1200 Example Way")
+        # Each deadline is counted from the day its letter arrived (5, 3.1 and 1.4 days before NOW, due in 14, 14, 30).
+        assert {name: row["deadline"] for name, row in items.items()} == {
+            "letter-fcc-lab": "2026-10-04", "letter-state-tax": "2026-10-06", "letter-invoice": "2026-10-24"}
+        assert "net 30" in items["letter-invoice"]["summary"]
         owners = {}
         for name, item in items.items():
             owners[name] = api.get(f"/api/v2/tasks/{item['task_id']}").json()["task"]["owner_id"]
@@ -102,3 +109,45 @@ def test_bots_declare_their_mcp_tools_as_ready(built):
         for slug, service in (("issue-triage", "linear"), ("sales-ops", "crm"), ("support", "helpdesk")):
             tools = {tool["service"]: tool for tool in api.get(f"/api/v2/bots/{slug}/tools").json()["tools"]}
             assert tools[service]["status"] == "ready"
+
+
+def test_the_demo_never_asks_the_gateway_its_catalog_or_github(built, monkeypatch):
+    """The Gateway key, its catalog and the models list, and GitHub's status are read from the sample: a check, a
+    catalog fetch or a GitHub JWT here would be a call out of the demo."""
+    asked = []
+
+    def refused(*args, **kwargs):
+        asked.append(args[:1])
+        raise AssertionError("the demo reached out")
+
+    for name in ("check", "enroll", "rotate", "_send"):
+        monkeypatch.setattr(G, name, refused)
+    monkeypatch.setattr(gateway_tiers, "fetch", refused)
+    monkeypatch.setattr(github_app, "_client", refused)
+    monkeypatch.setattr(github_app.jwt, "encode", refused)
+    gateway_tiers.reset()
+    with as_ana(built) as api:
+        for path in ("/api/v2/gateway", "/api/v2/gateway/catalog", "/api/v2/models", "/api/v2/providers/gateway",
+                     "/api/v2/github/app"):
+            assert api.get(path).status_code == 200, path
+        assert api.post("/api/v2/providers/gateway/check").status_code == 200
+    for thread in threading.enumerate():          # a check or catalog fetch would run on one of these threads
+        if thread.name.startswith("gateway-"):
+            thread.join(5)
+    assert asked == []
+
+
+def test_github_app_status_reads_as_connected_in_the_demo(built):
+    with as_ana(built) as api:
+        status = api.get("/api/v2/github/app").json()
+        assert status["connected"] is True and status["org"] == "acme-lights"
+        assert status["installed"] is True and status["administration"] is True
+
+
+def test_a_stored_key_that_will_not_sign_reads_as_the_stored_choice(built, monkeypatch):
+    """Outside the demo, a stored key that will not sign is not a 500: no live answer, and the stored choice stands."""
+    service = create_app(built).state.github_app
+    monkeypatch.setattr(built, "demo", False)
+    service.live.clear()
+    assert service.live_permissions(refresh=True) is None
+    assert service.can_create_repos(refresh=True) is True
