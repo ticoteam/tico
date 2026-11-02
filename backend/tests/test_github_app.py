@@ -978,7 +978,7 @@ def _box(api):
     """A second computer, "box", that never held newbie."""
     with api.app_state.store.transaction() as c:
         cols = [r[1] for r in c.execute("PRAGMA table_info(runners)")]
-        values = {"id": "r2", "operator": "ana", "label": "box", "token_hash": "y", "created_at": H.now(), "created_by": "ana",
+        values = {"id": "r2", "owner_id": "ana", "label": "box", "token_hash": "y", "created_at": H.now(), "created_by": "ana",
                   "last_seen_at": H.now(), "hostname": "box", "version": "1", "state": "active"}
         use = {k: v for k, v in values.items() if k in cols}
         c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))

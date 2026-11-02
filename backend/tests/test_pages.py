@@ -38,8 +38,8 @@ def test_a_published_page_is_cleaned_and_reads_with_its_status_fields_only_for_w
     stored = api.get("/api/v2/files/" + fid, headers=headers("ben-test")).content
     assert b"<script" not in stored and b"cdn.acme.example" not in stored and b"42 deals" in stored
     seen = read(api, fid, "ben-test").json()["page"]
-    assert set(seen) >= {"file_id", "title", "bot", "bot_name", "version", "updated_at", "updated_by", "cadence",
-                         "as_of", "stale_days", "replaced_by", "archived", "task_id", "src"}
+    assert set(seen) >= {"file_id", "title", "bot_id", "bot_name", "version", "updated_at", "updated_by", "cadence",
+                         "as_of", "stale_days", "replaced_by_id", "archived", "task_id", "src"}
     assert (seen["title"], seen["cadence"], seen["as_of"], seen["version"]) == ("Engineering weekly", "weekly",
                                                                                  "2026-10-27", 1)
     assert seen["updated_by"] == "bot:ops" and seen["stale_days"] is None

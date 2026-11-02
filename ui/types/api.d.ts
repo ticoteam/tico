@@ -310,7 +310,7 @@ export type AutomationVersions = {
   next: number | null;
   versions: Array<{
   actor: string;
-  at: string;
+  created_at: string;
   flow: Record<string, unknown>;
   n: number;
   status: "active" | "pending";
@@ -2993,11 +2993,11 @@ export type OrgModels = {
 export type Page = {
   archived: boolean;
   as_of: string | null;
-  bot: string;
+  bot?: string;
   bot_name: string;
   cadence: "none" | "daily" | "weekly" | "monthly";
   file_id: string;
-  replaced_by_id?: string | null;
+  replaced_by_id: string | null;
   replaced_by_title?: string | null;
   src: string | null;
   stale_days: number | null;

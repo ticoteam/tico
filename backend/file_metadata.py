@@ -192,7 +192,7 @@ class Metadata:
         from types import SimpleNamespace
         with self.store.transaction() as c:
             for field, upload in prepared:
-                result[field] = register(c, SimpleNamespace(actor=blob["owner_id"]), **upload)["id"]
+                result[field] = register(c, SimpleNamespace(actor=blob["owner"]), **upload)["id"]
             c.execute("DELETE FROM blob_media_retries WHERE blob_id=?", (blob["id"],))
             values = tuple(result[k] for k in FIELDS)
             c.execute("INSERT OR IGNORE INTO blob_media(blob_id) VALUES(?)", (blob["id"],))

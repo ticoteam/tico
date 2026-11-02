@@ -273,7 +273,7 @@ def _outages(c, out, typ, rows, at):
         found = move_retry.remembered(c, row, H.parse_ts(at))
         if found and found[1].get("outage"):
             held.append(row.get("number") or row["id"])
-            first = found[1].get("changed_at") or found[0]["ts"]
+            first = found[1].get("since") or found[0]["created_at"]
             since = min(since, first) if since else first
     if held:
         out.add("service:github", "outage", f"GitHub cannot be read at a review move; Tico retries {len(held)} "

@@ -277,10 +277,10 @@ def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):
             assert get(api, "strategy-bot", token=strategy_token)["level3_offer"]["due"] is False
             post(api, "strategy-bot/level3-offer", {}, token=strategy_token, expected=422)            # not due yet
     offer = get(api, "strategy-bot", token=strategy_token)["level3_offer"]
-    assert (offer["streak"], offer["due_at"]) == (10, True)
+    assert (offer["streak"], offer["due"]) == (10, True)
     post(api, "strategy-bot/level3-offer", {}, token="ana-test", expected=403)          # the Strategy Bot's note only
     made = post(api, "strategy-bot/level3-offer", {}, token=strategy_token)["level3_offer"]
-    assert made["due_at"] is False and made["last_offered_at"]
+    assert made["due"] is False and made["last_offered_at"]
     # not again this month
     post(api, "strategy-bot/level3-offer", {}, token=strategy_token, expected=422)
     # never raises its own level

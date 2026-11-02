@@ -64,17 +64,17 @@ def test_ten_loaded_minutes_record_an_overload_that_names_what_ran_and_health_sh
     post(api, "runners/performance", {"samples": busy[9:]}, token=r["token"])
     seen = get(api, f"computers/{rid}/performance?hours=1")
     (o,) = seen["overloads"]
-    assert o["reasons"] == ["cpu"] and o["ended_at"] is None and o["bots"][0]["bot_id"] == "ops"
+    assert o["reasons"] == ["cpu"] and o["ended_at"] is None and o["bots"][0]["bot"] == "ops"
     assert o["procs"][0]["name"] == "cargo"
     assert seen["summary"].startswith("Overloaded once") and "cargo" in seen["summary"]
     check = next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)
     assert check["status"] == "warn" and "overloaded now" in check["summary"]
     post(api, "runners/performance", {"samples": [sample(start + 600, cpu=85.0)]}, token=r["token"])   # a calm minute ends it
-    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended"] == start + 600
+    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended_at"] == start + 600
     # ... until the rest of that minute arrives loaded (85% then 97%): the same overload carries on, not a second one.
     post(api, "runners/performance", {"samples": [sample(start + 630, cpu=97.0)]}, token=r["token"])
     (o,) = get(api, f"computers/{rid}/performance?hours=1")["overloads"]
-    assert (o["started_at"], o["ended"], o["last"]) == (start, None, start + 600)
+    assert (o["started_at"], o["ended_at"], o["last_seen_at"]) == (start, None, start + 600)
     post(api, "runners/performance", {"samples": [sample(start + 660)]}, token=r["token"])
     assert [x["ended"] for x in get(api, f"computers/{rid}/performance?hours=1")["overloads"]] == [start + 660]
 
@@ -116,7 +116,7 @@ def test_a_support_attachment_carries_the_window_with_computers_and_bots_relabel
     bundle = redactor.clean(D.allowed({"format": D.FORMAT, "performance": section}))
     (computer,) = bundle["performance"]["computers"]
     assert computer["label"] == "runner-1" and computer["points"] and computer["bots"] == [
-        {"bot_id": "bot-1", "model": "", "runs": 1}]
+        {"bot": "bot-1", "model": "", "runs": 1}]
     assert r["runner_id"] not in D.canonical(bundle) and "ops" not in D.canonical(bundle)
 
 
@@ -177,7 +177,7 @@ def test_turning_it_off_ends_an_open_overload(api):
     post(api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"])
     assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended_at"] is None
     post(api, f"computers/{rid}/performance", {"mode": "off"})
-    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended"] == start + 600
+    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended_at"] == start + 600
     assert not any(x["id"] == "performance:" + rid and "overloaded now" in x["summary"] for x in get(api, "health")["checks"])
 
 

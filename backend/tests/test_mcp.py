@@ -333,7 +333,7 @@ def test_a_question_asked_from_a_run_on_the_bots_own_task_is_filed_under_it(api)
 
 
 # ------------------------------------------------------------------ the computer list
-SUMMARY_FIELDS = {"id", "label", "online", "last_seen_at", "operator", "release", "version", "wanted_release", "update",
+SUMMARY_FIELDS = {"id", "label", "online", "last_seen_at", "owner_id", "release", "version", "wanted_release", "update",
                   "readiness", "warnings", "errors"}
 
 

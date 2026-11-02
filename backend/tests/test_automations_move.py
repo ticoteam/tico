@@ -106,7 +106,7 @@ def test_an_old_install_moves_once_on_its_first_start_with_no_setting(tmp_path):
     [routine] = read(store, "SELECT * FROM redesign_migrated WHERE kind='routine'")
     assert routine["outcome"] == "converted" and routine["automation"]
     [flow] = read(store, "SELECT * FROM automations WHERE id=?", (routine["automation"],))
-    assert flow["next_due"] == "2026-11-02T09:00:00Z"        # the routine's own next run, once, from one system
+    assert flow["next_due_at"] == "2026-11-02T09:00:00Z"        # the routine's own next run, once, from one system
     assert read(store, "SELECT deleted_at FROM schedules WHERE id='sch_notes'")[0]["deleted_at"]
     assert not read(store, "SELECT 1 FROM rules WHERE id='rule_comment'")
     assert read(store, "SELECT per_30m_usd, hourly_usd FROM usage_limits WHERE bot='coo'") == [

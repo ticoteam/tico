@@ -217,7 +217,7 @@ def test_a_report_on_retry_and_a_stacked_manager_keep_the_90_minute_wait(api, mo
 
     def job(slug, state):
         with store.transaction() as c:
-            c.execute("UPDATE jobs SET state=? WHERE message_id=(SELECT message_id FROM update_queue WHERE bot_id=?)",
+            c.execute("UPDATE jobs SET state=? WHERE message_id=(SELECT message_id FROM update_queue WHERE bot=?)",
                       (state, slug))
 
     first = tick()
@@ -286,7 +286,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         post(api, f"tasks/{task['id']}/comments", {"text": "Comment on " + task["title"]})
         post(api, f"tasks/{task['id']}", {"version": get(api, f"tasks/{task['id']}")["task"]["version"], "status": "done"})
     meeting = lambda mid, notes, review="live", **meta: c.execute(
-        "INSERT INTO meetings(id,title,owner_id,metadata,notes,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO meetings(id,title,owner,metadata,notes,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?,?)",
         (mid, mid, "ben@acme.example", json.dumps({"kind": "meeting", **meta}), notes, H.now(), H.now(), review))
     with store.transaction() as c:
         c.execute("UPDATE tasks SET status='done', updated_at=? WHERE id=?", (H.now(), done["id"]))

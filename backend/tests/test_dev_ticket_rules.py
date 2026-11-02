@@ -87,7 +87,7 @@ def test_each_step_entry_reaches_only_the_bot_that_must_act(api):
         ticket = H.task_create(c, "bot:coo", "Improve messages", "Build.", "bot:cpo", type=typ["id"],
                                step="In Progress", lint=False)
         H.task_create(c, "bot:cpo", "QA: messages", "Test.", "bot:finance", parent_id=ticket["id"], lint=False)
-        release_flow.save(c, H.KEEPER, {"bot_id": "ops"})
+        release_flow.save(c, H.KEEPER, {"bot": "ops"})
 
         def moved(mover, step):
             c.execute("DELETE FROM jobs")

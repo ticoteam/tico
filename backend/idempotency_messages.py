@@ -3,7 +3,7 @@ by index instead of reading every stored answer while it holds the write lock.
 
 A retry gets back the answer its first try got. When a comment is edited or deleted, `hubdb._refresh_comment_replies`
 rewrites every stored answer that quotes it, so a retry never replays withdrawn words. A quoted message is any JSON
-object in the answer with an `id` and a `from_actor` key: the objects that function rewrites. Reading every answer for
+object in the answer with an `id` and a `sender_id` key (`from_actor` in an answer stored before that rename): the objects that function rewrites. Reading every answer for
 the comment's id took 35-37 s inside the write transaction on a 665k-row table (Dev 194), and every other writer
 waited behind it. So each answer's quoted message ids are kept here:
 
@@ -20,12 +20,12 @@ READY = "idempotency_messages.ready"
 BATCH = 500     # answers indexed per write transaction: about 0.15 s of lock on 665k synthetic answers
 SPAN = 20000    # rowids the backfill reads per look, outside the write lock
 
-# The ids of the objects with both an `id` (a string) and a `from_actor` key in one answer, in one pass over its JSON.
+# The ids of the objects with both an `id` (a string) and a sender key in one answer, in one pass over its JSON.
 # Object members carry their label in `key`, array elements their index, so `key='id'` is always an object's member.
 # An answer SQLite does not read as JSON (none is written so: answers are served as JSON) is kept under UNREAD, and
 # `quoting` matches those by text, as `_refresh_comment_replies` always did.
 UNREAD = "*"
-_MAY_QUOTE = "(instr({src}, '\"from_actor\"')>0 OR NOT json_valid({src}))"
+_MAY_QUOTE = "(instr({src}, '\"sender_id\"')>0 OR instr({src}, '\"from_actor\"')>0 OR NOT json_valid({src}))"
 
 
 def _quoted(row, where=""):
@@ -34,9 +34,9 @@ def _quoted(row, where=""):
     text, source = f"{row}.response", f"idempotency {row} WHERE {where} AND" if where else "WHERE"
     return (f"SELECT id, actor, operation, key FROM (SELECT {row}.actor AS actor, {row}.operation AS operation, "
             f"{row}.key AS key, max(CASE WHEN t.key='id' AND t.type='text' THEN t.value END) AS id, "
-            f"max(t.key='from_actor') AS sender FROM {f'idempotency {row}, ' if where else ''}"
+            f"max(t.key IN ('sender_id','from_actor')) AS sender FROM {f'idempotency {row}, ' if where else ''}"
             f"json_tree(CASE WHEN json_valid({text}) THEN {text} ELSE 'null' END) t "
-            f"WHERE {f'{where} AND ' if where else ''}t.key IN ('id','from_actor') "
+            f"WHERE {f'{where} AND ' if where else ''}t.key IN ('id','sender_id','from_actor') "
             f"GROUP BY {f'{row}.rowid, ' if where else ''}t.parent) WHERE sender AND id IS NOT NULL "
             f"UNION SELECT '{UNREAD}', {row}.actor, {row}.operation, {row}.key "
             f"{'FROM ' if where else ''}{source} NOT json_valid({text})")

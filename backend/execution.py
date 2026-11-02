@@ -1399,7 +1399,7 @@ def release_limits(c):
         if row["changed_at"] and limit_until(c, row["bot"], row["changed_at"]) > H.now():
             continue
         settle_status(c, row["bot"], "idle", "Usage limit lifted; queued work resumes")
-        H.event(c, H.KEEPER, "limit.released", row["bot"], {"changed_at": row["changed_at"]})
+        H.event(c, H.KEEPER, "limit.released", row["bot"], {"since": row["changed_at"]})
 
 
 def hop_failed(c, attempt_id, result, began, ended):
@@ -2418,7 +2418,7 @@ class Execution:
                                    (row["runner_id"],)).fetchone()
                 if not runner or (runner["label"] != body.label and not cloud_bot):
                     raise Problem("enrollment", "Enrollment code was already used", 409)
-                return {"runner_id": runner["id"], "token": token, "owner_id": row["owner_id"]}
+                return {"runner_id": runner["id"], "token": token, "operator": row["owner_id"]}   # runner wire: its config keeps it
             rid = H.new_id()
             # A new computer takes members' bots, so a team gets going without asking; an admin closes it per
             # computer (Settings > Computers). Its Screen starts at Control when it first offers one
@@ -2435,7 +2435,7 @@ class Execution:
                 cloud_machines.enrolled(c, self, rid, cloud_bot)    # not onboarding's: only its own bots go on it
             elif self.runner_enrolled:
                 self.runner_enrolled(c, rid, row["owner_id"])
-            return {"runner_id": rid, "token": token, "owner_id": row["owner_id"]}
+            return {"runner_id": rid, "token": token, "operator": row["owner_id"]}
 
     def heartbeat(self, c, who, body, *, live_tasks=None):
         row = self.runner(c, who)

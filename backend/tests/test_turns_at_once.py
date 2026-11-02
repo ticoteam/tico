@@ -105,7 +105,7 @@ def test_health_names_a_bot_at_its_limit_by_its_reason_and_says_so(api):
     # Health lists work only once it has waited a while (health.QUEUE_MINUTES), like any held work.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET created_at=? WHERE state='queued'", (H.shift(H.now(), minutes=-30),))
-    stuck = [row for row in get(api, "health")["stuck"] if row.get("bot_id") == "ops"]
+    stuck = [row for row in get(api, "health")["stuck"] if row.get("bot") == "ops"]
     assert [row["reason"] for row in stuck] == ["bot_limit"], stuck
     assert "At its turn limit" in stuck[0]["why"]
 

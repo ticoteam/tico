@@ -912,7 +912,7 @@ def _assign(conn, tid, params, said):
     if H.task_private(conn, task) and not H.task_private_readable(conn, owner, task):
         raise ValueError("the new owner cannot read this private task")
     H.task_update(conn, H.KEEPER, tid, owner=owner, note=said)
-    return {"owner_id": owner}
+    return {"owner": owner}
 
 
 def _retag(add):

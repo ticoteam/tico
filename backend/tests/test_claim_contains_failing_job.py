@@ -195,7 +195,7 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
     # it reaches cpo, whose work the held run never blocked.
     turn = claim(api, machine)
     assert turn is not None and turn["job_id"] != attempt["job_id"]
-    assert (claim(api, machine) or {}).get("bot_id") == "cpo"
+    assert (claim(api, machine) or {}).get("bot") == "cpo"
     [held] = [j for j in jobs_of(api, "ops") if j["id"] == attempt["job_id"]]
     assert (held["held"], held["hold_reason"], held["state"]) == (1, claim_holds.REASON, "queued")
     assert held["attempt_id"] == attempt["id"]

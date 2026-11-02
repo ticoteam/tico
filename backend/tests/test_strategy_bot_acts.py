@@ -244,7 +244,7 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
         assert not c.execute("SELECT 1 FROM strategy_actions").fetchone()
         assert not c.execute("SELECT 1 FROM tasks WHERE title='Fix setup'").fetchone()
         for table in ("events", "refusals"):
-            dump = " ".join(str(tuple(r)) for r in c.execute(f"SELECT * FROM {table} WHERE ts>?", (since,)))
+            dump = " ".join(str(tuple(r)) for r in c.execute(f"SELECT * FROM {table} WHERE created_at>?", (since,)))
             assert "Fire the vendor" not in dump and "Acquire Initech" not in dump, table
 
     # A private task the Strategy Bot can read is still not changed alone: its close note would reach the company-wide
@@ -487,7 +487,7 @@ def test_undo_puts_back_a_decision_logged_before_a_tasks_column_was_renamed(api,
     level(api, 3)
     made = decide(api, strategy_token, [{"do": "reassign", "task_id": first, "owner": "finance"}])
     assert task(api, first)["owner_id"] == "bot:finance"
-    monkeypatch.setattr(renames, "COLUMNS", (*renames.COLUMNS, ("tasks", "owner_before_rename", "owner", "9")))
+    monkeypatch.setattr(renames, "COLUMNS", (*renames.COLUMNS, ("tasks", "owner_before_rename", "owner_id", "9")))
     with api.app.state.store.transaction() as c:
         changes = json.loads(c.execute("SELECT changes FROM strategy_actions WHERE id=?", (made["id"],)).fetchone()[0])
         for side in ("before", "after"):

@@ -369,7 +369,7 @@ def _facts(c, name, subject, data, actor):
             break
     if row:
         who = {a for a in (row.get("owner_id"), actor) if a and H.is_bot(a)}
-        return {"bots": who, "owner": row.get("owner_id"), "type": row.get("type_id")}
+        return {"bots": who, "owner_id": row.get("owner_id"), "type": row.get("type_id")}
     if name.split(".")[0] == "bot":
         return {"bots": {H.bot_actor(subject)}}
     return {}

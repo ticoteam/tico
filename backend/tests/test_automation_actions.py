@@ -8,7 +8,7 @@ from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_market import _librarian
 
 MAIL = {"message": {"source": "mail", "mailbox": "ana@acme.example", "id": "m1", "subject": "Invoice"}}
-SLACK = {"message": {"source": "slack", "inbox": "slack:#general", "channel": "C1", "created_at": "1.1", "text": "Help?"}}
+SLACK = {"message": {"source": "slack", "inbox": "slack:#general", "channel": "C1", "ts": "1.1", "text": "Help?"}}
 
 
 def auto(owner="person:ana"):
@@ -34,7 +34,7 @@ def sql(api, query, args=()):
 def test_create_task_files_it_from_the_owner(api):
     done = act(api, "create_task", {"title": "Follow up", "owner": "coo"})
     row = sql(api, "SELECT owner_id, requester_id FROM tasks WHERE id=?", (done["task"],))[0]
-    assert done["ok"] and row == {"owner": "bot:coo", "requester": "human:ana"}
+    assert done["ok"] and row == {"owner_id": "bot:coo", "requester_id": "human:ana"}
     assert act(api, "create_task", {}) == {"ok": False, "detail": "create_task needs a title"}
 
 

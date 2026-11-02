@@ -5839,12 +5839,12 @@ def _refresh_comment_replies(conn, msg):
         return
     def refresh(value):
         if isinstance(value, dict):
-            if value.get("id") == msg["id"] and "sender_id" in value:
+            if value.get("id") == msg["id"] and ("sender_id" in value or "from_actor" in value):
                 return msg
             return {k: refresh(v) for k, v in value.items()}
         if isinstance(value, list):
             return [refresh(v) for v in value if not (msg.get("deleted_at") and isinstance(v, dict)
-                    and v.get("id") == msg["id"] and "sender_id" in v)]
+                    and v.get("id") == msg["id"] and ("sender_id" in v or "from_actor" in v))]
         return value
     # By index (backend/idempotency_messages.py): reading every stored answer here held the write lock for 35 s.
     rows = idempotency_messages.quoting(conn, msg["id"]) if _has_table(conn, "idempotency_messages") else None

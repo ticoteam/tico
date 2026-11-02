@@ -581,7 +581,7 @@ def _stop_checks(c):
     from . import claim_holds, run_backoff, turn_budgets
     out = []
     for hold in run_backoff.held(c):
-        bot, kind = hold["bot_id"], hold["error_class"] or run_backoff.OTHER
+        bot, kind = hold["bot"], hold["error_class"] or run_backoff.OTHER
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"run_hold:{bot}", "run_hold", SETUP,
@@ -621,7 +621,7 @@ def _stop_checks(c):
                             "wait.",
                             severity=BAD))
     for failure in claim_holds.check_failures(c):
-        bot, error = failure["bot_id"], failure["error"]
+        bot, error = failure["bot"], failure["error"]
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"claim_check:{bot}", "claim_check", SETUP,

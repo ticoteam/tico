@@ -85,7 +85,7 @@ def test_a_reader_of_the_new_task_sees_its_parent_only_as_a_private_task(api):
     for bot in ("finance", "doc-updater"):
         token = bot_token(api, bot)
         shown = get(api, "tasks/" + made["id"], token)["task"]
-        assert shown["relations"]["parent"] == [{"id": None, "title": "a private task", "status": None, "owner": None,
+        assert shown["relations"]["parent"] == [{"id": None, "title": "a private task", "status": None, "owner_id": None,
                                                  "direction": "out", "private": True}]
         assert row["id"] not in json.dumps(shown["relations"])
         listed = get(api, "tasks?owner=bot:finance", token)

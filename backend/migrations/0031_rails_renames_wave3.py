@@ -13,3 +13,7 @@ WAVES = ("2s", "2b", "3")
 
 def up(conn):
     schema_renames.apply(conn, waves=WAVES)
+    # These look for a key in stored answers, which a column rename does not reach; idempotency_messages.ensure makes
+    # them again knowing both names.
+    conn.execute("DROP TRIGGER IF EXISTS idempotency_messages_insert")
+    conn.execute("DROP TRIGGER IF EXISTS idempotency_messages_update")

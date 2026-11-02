@@ -264,7 +264,7 @@ def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api)
                                     (found[("wake_rule", "rule_dept")]["automation"],)).fetchone()[0])
     step = json.loads(made["flow"])["steps"][0]
     assert step["type"] == "llm" and step["prompt"].startswith(LONG.rstrip())
-    assert dept["owner_id"] == "person:ana" and dept["wakes"]["scope_kind"] == "department"
+    assert dept["owner"] == "person:ana" and dept["wakes"]["scope_kind"] == "department"
     paused = [a for a in get(api, "automations")["automations"] if a["name"] == "Weekly ops check"]
     assert paused and paused[0]["enabled"] is True                          # its own switch; the tick waits for the bot
     assert "paused" in found[("routine", "sch_ops")]["why"]                   # moved, with the bot's state told

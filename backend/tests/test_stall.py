@@ -303,7 +303,7 @@ def _later(c, task_id, column, hours):
 
 @pytest.mark.parametrize("wait", ["due", "snooze", "resume", "milestone"])
 def test_a_hold_with_its_own_timed_wait_does_not_stall_its_parent_until_that_time_passes(api, wait):
-    column = {"due": "due", "snooze": "snoozed_until"}.get(wait)
+    column = {"due": "due_at", "snooze": "snoozed_until"}.get(wait)
     with api.app.state.store.transaction() as c:
         window, hold = held_window(c)
         if wait == "resume":

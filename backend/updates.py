@@ -535,7 +535,7 @@ def shared_tasks_sql(hidden, prefix=""):
     rule = f"coalesce({prefix}private,1)=0"
     if hidden:
         from . import bot_access as A
-        rule += " AND {0}owner NOT IN {1} AND {0}requester NOT IN {1}".format(prefix, A.qlist(hidden))
+        rule += " AND {0}owner_id NOT IN {1} AND {0}requester_id NOT IN {1}".format(prefix, A.qlist(hidden))
     return rule
 
 

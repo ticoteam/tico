@@ -737,10 +737,10 @@ def _trim_target(store, target, before, batch, budget, page):
         prev = last.get(key)
         gap = None
         if prev is not None and windowed:
-            at, was = H.parse_ts(row["ts"]), H.parse_ts(prev)
+            at, was = H.parse_ts(row["created_at"]), H.parse_ts(prev)
             gap = (at - was).total_seconds() if at and was else None
         if not windowed or prev is None or gap is None or gap >= USE_WINDOW:
-            last[key] = row["ts"]
+            last[key] = row["created_at"]
             continue
         doomed.append(row["rowid"])
         if len(doomed) >= min(batch, budget - deleted):

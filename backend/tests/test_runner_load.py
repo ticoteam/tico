@@ -132,7 +132,7 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
     assert "counsel" not in str(detail) and counsel_id not in str(detail)
     assert detail["id"] == rid
     assert "repositories" not in detail and "recent_errors" not in detail.get("readiness", {})
-    assert "operator" not in detail
+    assert "owner_id" not in detail
     raw = next(x for x in get(api, "computers", token=tokens["stranger"])["computers"] if x["id"] == rid)
     assert set(raw) == {"id", "label", "online", "platform", "accepts_member_bots", "latest_sample", "overloaded", "turn_counts", "turn_summary"}
     for section in ("repositories", "recent_errors"):

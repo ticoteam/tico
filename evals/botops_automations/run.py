@@ -81,7 +81,7 @@ def made(server, before, token):
     for aid in sorted(ids(server, token) - before):
         code, row = server.request("GET", f"automations/{aid}", token=token)
         if code == 200:
-            found.append({key: row[key] for key in ("name", "owner", "enabled", "trigger", "steps", "batch") if key in row})
+            found.append({"owner": row.get("owner_id"), **{key: row[key] for key in ("name", "enabled", "trigger", "steps", "batch") if key in row}})
     return {"created": found}
 
 

@@ -80,7 +80,7 @@ class Recorder:
 # ---------------------------------------------------------------- Granola
 
 def gr_note(ident="not_1d3tmYTlCICgjy", **changes):
-    row = {"id": ident, "object": "note", "title": "Quarterly review", "owner_id": {"name": "Ana Cruz", "email": OWNER},
+    row = {"id": ident, "object": "note", "title": "Quarterly review", "owner": {"name": "Ana Cruz", "email": OWNER},
            "created_at": (NOW - timedelta(hours=3)).isoformat().replace("+00:00", "Z"),
            "updated_at": (NOW - timedelta(hours=2)).isoformat().replace("+00:00", "Z")}
     row.update(changes)

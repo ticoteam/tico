@@ -83,7 +83,7 @@ def test_a_turns_login_class_puts_release_blockers_first_then_reviews_and_a_pers
     c = H.connect(tmp_path / "hub.db")
     H.sync_registry(c, EMPLOYEES, PEOPLE)
     make = lambda title, **kw: H.task(c, H.task_create(c, ANA, title, "Check it.", CMO, lint=False, **kw)["id"])  # noqa: E731
-    person, bot = {"from_actor": "human:ana"}, {"from_actor": "bot:lead"}
+    person, bot = {"sender_id": "human:ana"}, {"sender_id": "bot:lead"}
     release, critical, plain = make("Release v1", labels=["release-blocker"]), make("PR 7", labels=["critical-path"]), make("Chore")
     assert login_class(c, release, bot, None) == "release"
     assert login_class(c, critical, bot, None) == "review"
@@ -93,7 +93,7 @@ def test_a_turns_login_class_puts_release_blockers_first_then_reviews_and_a_pers
     assert login_class(c, make("QA: v1", parent_id=release["id"]), bot, None) == "release"
     assert login_class(c, make("Review 1: PR 7", parent_id=critical["id"]), bot, None) == "review"
     # A standing watch never jumps the queue, labelled or not.
-    assert login_class(c, release, {"from_actor": "keeper", "refs": {"wake": "next-run"}}, None) == "other"
+    assert login_class(c, release, {"sender_id": "keeper", "refs": {"wake": "next-run"}}, None) == "other"
     assert login_class(c, release, person, {"id": "r1"}) == "other"
 
 

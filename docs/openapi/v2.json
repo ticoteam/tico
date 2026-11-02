@@ -34642,7 +34642,7 @@
                 "actor": {
                   "type": "string"
                 },
-                "at": {
+                "created_at": {
                   "type": "string"
                 },
                 "status": {
@@ -34660,7 +34660,7 @@
               },
               "required": [
                 "actor",
-                "at",
+                "created_at",
                 "flow",
                 "n",
                 "status"
@@ -47808,11 +47808,11 @@
         "required": [
           "archived",
           "as_of",
-          "bot",
+          "bot_id",
           "bot_name",
           "cadence",
           "file_id",
-          "replaced_by",
+          "replaced_by_id",
           "src",
           "stale_days",
           "task_id",

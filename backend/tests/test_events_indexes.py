@@ -52,15 +52,15 @@ READS = [
     # One action in a time window, no target (health_monitor, judge, app digest): a range, not the action's every row.
     ("limited runs today",
      "SELECT detail FROM events WHERE action='attempt.limited' AND created_at>?", ("2026-10-30",),
-     "events_action_ts (action=? AND ts>?)"),
+     "events_action_ts (action=? AND created_at>?)"),
     ("judge month",
      "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events WHERE created_at>=? AND action='judge.spend'",
-     ("2026-10-01",), "events_action_ts (action=? AND ts>?)"),
+     ("2026-10-01",), "events_action_ts (action=? AND created_at>?)"),
     # The rows since the month's running total was last counted (judge.spent_this_month): the rowid range, not the month.
     ("judge month since last count", B.NEW_SPEND_SQL, (0, "2026-10-01", "judge.spend"), "INTEGER PRIMARY KEY (rowid>?)"),
     ("asks expired",
      "SELECT count(*) FROM events WHERE created_at>=? AND action IN ('ask.expired','ask.went_ahead')", ("2026-10-01",),
-     "events_action_ts (action=? AND ts>?)"),
+     "events_action_ts (action=? AND created_at>?)"),
     # Actor-led reads stay where they were: by actor alone, with a parameter action, and the pinned counts.
     ("first action of a person",
      "SELECT min(created_at) FROM events WHERE actor=?", ("human:ana",), "events_task_origin (actor=?)"),

@@ -617,7 +617,7 @@ def worktree_action_readable(c, who, action):
             "SELECT 1 FROM task_links WHERE id=? AND kind='worktree' AND computer_id=?",
             (action.get("link_id"), who.runner_id)).fetchone():
         return True
-    return hosted_owner_reads(c, who, action.get("owner_id"), ids)
+    return hosted_owner_reads(c, who, action.get("owner"), ids)
 
 
 def worktree_link_readable(c, who, link):

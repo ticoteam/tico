@@ -254,7 +254,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (tid,))
     to = get(api, f"tasks/{tid}")["comment_to"]
-    assert (to["bot_id"], to["wakes"], "ops" in to["mention"]) == ("ops", False, True)
+    assert (to["bot"], to["wakes"], "ops" in to["mention"]) == ("ops", False, True)
     assert post(api, f"tasks/{tid}/comments", {"text": "Noted."})["woke"] is False
     assert post(api, f"tasks/{tid}/comments", {"text": "@ops is it billing?"})["woke"] is True
     with api.app.state.store.transaction() as c:

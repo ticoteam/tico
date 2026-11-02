@@ -241,7 +241,7 @@ def test_a_lead_is_woken_by_people_and_hears_the_rest_once_a_day(api):
         mine = H.task_create(c, "bot:boss", "Ask around", "x", "bot:ops")
         c.execute("DELETE FROM jobs")
         # News about its task is held for the digest: the job waits, then a tick plans it for the next 09:00.
-        held = news(c, H.task(c, mine["id"]) | {"owner": "bot:boss"}, "Step moved: Open -> Doing")
+        held = news(c, H.task(c, mine["id"]) | {"owner_id": "bot:boss"}, "Step moved: Open -> Doing")
         assert held["refs"]["rule"] == "profile_lead_digest" and held["refs"]["wake_batch"] == "rule"
         job = c.execute("SELECT id,held,created_at FROM jobs WHERE bot_id='boss'").fetchone()
         assert job["held"] == 1

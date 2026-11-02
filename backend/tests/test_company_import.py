@@ -149,7 +149,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     assert [(p["id"], p["name"], p["title"]) for p in summary["people"]] == [
         ("ana", "Ana", seat["accounts-payable"]), ("ben", "Ben", seat["controller"])]
     assert not {"open_seats", "coworkers"} & set(summary["deferred"])
-    assert {g["title"]: g["owner_id"] for g in summary["goals"]} == {"Close the books by day 5": "company", "Clean ledgers": "company"}
+    assert {g["title"]: g["owner"] for g in summary["goals"]} == {"Close the books by day 5": "company", "Clean ledgers": "company"}
     body["fingerprint"] = summary["fingerprint"]
     done = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
     assert done.status_code == 200, done.text
@@ -523,7 +523,7 @@ def test_imported_goals_show_on_goals_with_their_owner_and_measure(tmp_path, env
         api = environment()
         preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
         assert "goals" not in preview["deferred"]
-        assert [(g["title"], g["owner_id"]) for g in preview["goals"]] == [
+        assert [(g["title"], g["owner"]) for g in preview["goals"]] == [
             ("Reach 40 paying firms", "company"), ("Close every month's books in five days", "company"),
             ("Answer every bookkeeping question", "company"), ("Grow referrals", "company"),
             ("Questions answered", "company")]
@@ -596,7 +596,7 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
                 c.execute("INSERT INTO bot_config(bot,config,owner_id,repo) VALUES(?,?,?,?)",
                           (slug, encode(config), "owner", "bot-" + slug))
         preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
-        assert [(g["title"], g["owner_id"]) for g in preview["goals"]] == owners
+        assert [(g["title"], g["owner"]) for g in preview["goals"]] == owners
         done = api.post("/api/v2/onboarding/company/import", json={"company_yaml": text, "fingerprint": preview["fingerprint"]},
                         headers=signed_in())
         assert done.status_code == 200, done.text
@@ -607,7 +607,7 @@ def renamed_assistant_goals_on_goals_page(api, owners):
     goals = {g["title"]: g for g in api.get("/api/v2/goals/tree", headers=signed_in()).json()["goals"]}
     assert sorted((title, g["owner_id"]) for title, g in goals.items()) == owners
     week, = goals["Run the week"]["kpis"]
-    assert rows(api, "SELECT owner_id FROM kpis WHERE id=?", (week["id"],)) == [{"owner": "company"}]
+    assert rows(api, "SELECT owner_id FROM kpis WHERE id=?", (week["id"],)) == [{"owner_id": "company"}]
     assert goals["Untitled goal"]["kpis"] == []
     assert not rows(api, "SELECT id FROM goals WHERE owner_id IN ('bot:ace','bot:coo')")
 

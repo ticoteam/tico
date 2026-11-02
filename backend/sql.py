@@ -307,7 +307,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         meetings = "0"
     else:
         email = q(who.email.lower())
-        meetings = (f"lower(owner_id)={email} OR (json_extract(metadata,'$.kind')='meeting' AND ("
+        meetings = (f"lower(owner)={email} OR (json_extract(metadata,'$.kind')='meeting' AND ("
                     "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
                     f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
                     "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "

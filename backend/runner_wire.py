@@ -70,10 +70,10 @@ def conversation(c, conv):
 
 
 def assignment(row):
-    """The fields an assignment adds for the runner wire: its bot's stored configuration text as `config_json` and its
-    time columns under their old names."""
-    return {"config_json": row["config"], **{old: row[new] for new, old in TIMES.get("assignments", {}).items()
-                                             if new in row.keys()}}
+    """The fields an assignment adds for the runner wire: its bot's stored configuration text as `config_json`, its
+    operator and its time columns under their old names."""
+    return {"config_json": row["config"], **({"operator": row["owner_id"]} if "owner_id" in row.keys() else {}),
+            **{old: row[new] for new, old in TIMES.get("assignments", {}).items() if new in row.keys()}}
 
 
 def task(t):
