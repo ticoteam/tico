@@ -8,9 +8,16 @@ Nothing reaches the page until a person approves it. The default is **Closed**, 
 **Hidden**. Bots can keep writing updates that feed the page, but they cannot publish an edition, change what is shown,
 or add a reader.
 
+## Where to find it
+
+Owners and admins open **Overview → Company page** (`#/overview/company-page`). The tab shows the page as it would read
+for the audience you pick, approved or not. The share icon has transparency, the address and who can read. **Manage**
+(`#/company-page`) has everything else: editions, disclosure, stats, audiences, accent and logo. ⌘K finds it too.
+Nobody else sees the tab.
+
 ## Transparency
 
-One company switch, in the Company page settings:
+One company switch, under the share icon or in Manage:
 
 - **Closed** (default): no page is served to anyone.
 - **Private**: only the audiences you have turned on, and only to readers who sign in.

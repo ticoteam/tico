@@ -252,14 +252,14 @@ def register(app, store, auth, mutate, settings):
         return write(request, Empty(), work)
 
     @app.get("/api/v2/company-page/preview")
-    def company_page_preview(request: Request, audience: str = ""):
+    def company_page_preview(request: Request, audience: str = "", theme: str = ""):
         gate(request)
         from . import render
         with store.read() as c:
             found = A.get(c, audience)
             if not found:
                 raise Problem("not_found", "No such audience", 404)
-            html = render.page(preview_view(c, settings, found, H.now()), preview=True)
+            html = render.page(preview_view(c, settings, found, H.now()), preview=True, theme=theme)
         return HTMLResponse(html, headers={"Content-Security-Policy": PREVIEW_POLICY, "Cache-Control": "no-store"})
 
     # ------------------------------------------------------------------ audiences

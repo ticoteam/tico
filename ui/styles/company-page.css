@@ -184,3 +184,23 @@ a.cp-preview .nav-icon{font-size:16px;width:16px;height:16px;color:var(--muted)}
 .cp-dlg button.primary.people-danger{background:var(--fail);border-color:var(--fail);color:var(--surface)}
 .cp-dlg button.primary.people-danger:hover:not(:disabled){background:color-mix(in srgb,var(--fail) 88%,var(--ink));border-color:color-mix(in srgb,var(--fail) 88%,var(--ink))}
 [data-cp-email-off]{margin:0 0 var(--s2)}
+
+/* Overview's Company page tab: the page fills what the tabs leave, and the frame is the only thing that scrolls. */
+.cp-tab .overview-tabs{flex-wrap:wrap}
+.cp-tab-acts{margin-left:auto;display:flex;align-items:center;gap:var(--s2);min-width:0}
+.cp-tab-acts[hidden]{display:none}
+.cp-tab-acts select{height:32px}
+.cp-share-btn{display:inline-grid;place-items:center;width:32px;height:32px;padding:0}
+a.cp-manage{display:inline-flex;align-items:center;height:32px;padding:0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);color:var(--ink);font-size:var(--t-sm)}
+a.cp-manage:hover{background:var(--surface2);text-decoration:none}
+.cp-tab-body{flex:1;min-height:0;display:flex;flex-direction:column}
+.cp-tab-body>.skel,.cp-tab-line{margin:var(--s4)}
+.cp-frame{flex:1;min-height:0;width:100%;display:block;border:0;background:var(--bg)}
+.cp-share [data-cp-level]{flex:0 0 100%}
+.cp-share .cp-sec+.cp-sec{margin-top:var(--s4);padding-top:var(--s4);border-top:1px solid var(--line)}
+.cp-share .cp-sec>header{display:flex;margin-bottom:var(--s2)}
+.cp-share .cp-sec>header h2{margin:0;font-size:var(--t-base);font-weight:600}
+@media(max-width:760px){
+  .cp-tab-acts select,a.cp-manage{height:40px}
+  .cp-share-btn{width:40px;height:40px}
+}

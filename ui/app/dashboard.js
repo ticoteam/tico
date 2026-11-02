@@ -5,6 +5,7 @@
 'use strict';
 
 const OVERVIEW_CAMPUS = OVERVIEW + '/campus';
+const OVERVIEW_COMPANY = OVERVIEW + '/company-page';   // ui/app/company-page.js
 const TEAM_PAGE = '#/team/';
 const DASH_SIZES = [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']];
 // {place, view, choices, root, menu}: the place on screen. A write's answer is drawn only while it is still the place.
@@ -12,7 +13,7 @@ let DASH = null;
 
 const dashApi = place => '/v2/places/' + encodeURIComponent(place);
 const dashTabsHTML = on => `<nav class="tabs slim strat-tabs dash-tabs" aria-label="Overview">${
-  [['dashboard', OVERVIEW, 'Dashboard'], ['campus', OVERVIEW_CAMPUS, 'Campus']].map(([id, href, label]) =>
+  [['dashboard', OVERVIEW, 'Dashboard'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Company page']] : [])].map(([id, href, label]) =>
     `<a href="${href}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const dashNum = n => n == null ? '–' : Number(n).toLocaleString(undefined, {maximumFractionDigits: 2});
 const dashMoney = n => n == null ? '–' : '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
