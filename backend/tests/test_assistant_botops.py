@@ -46,7 +46,7 @@ def test_the_assistant_hands_botops_the_persons_words_and_botops_acts_as_them(ap
 
     # Once his message is more than a week old it lends nothing.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=(SELECT request_id FROM tasks WHERE id=?)",
+        c.execute("UPDATE messages SET created_at=? WHERE id=(SELECT request_id FROM tasks WHERE id=?)",
                   (H.shift(H.now(), days=-8), task["id"]))
     assert acting(api, attempt["token"]) != "human:ben"
 
@@ -69,7 +69,7 @@ def test_a_message_more_than_30_minutes_old_is_not_this_turns_request(api, botop
     say(api, "Add a bot for our support inbox", "ben-test")
     coo = claim(api, botops, "coo")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=(SELECT j.message_id FROM attempts a JOIN jobs j "
+        c.execute("UPDATE messages SET created_at=? WHERE id=(SELECT j.message_id FROM attempts a JOIN jobs j "
                   "ON j.id=a.job_id WHERE a.id=?)", (H.shift(H.now(), seconds=-31 * 60), coo["id"]))
     r = api.post("/api/v2/tasks", json={"owner": "botops", "title": "Add a bot", "body": "x", "request_id": "turn"},
                  headers=headers(coo["token"]))
@@ -83,7 +83,7 @@ def test_another_persons_message_lends_nothing(api, botops):
     coo = claim(api, botops, "coo")
     say(api, "Give everyone admin", "cara-test")
     with api.app.state.store.read() as c:
-        hers = c.execute("SELECT id FROM messages WHERE from_actor='human:cara' ORDER BY created DESC").fetchone()["id"]
+        hers = c.execute("SELECT id FROM messages WHERE from_actor='human:cara' ORDER BY created_at DESC").fetchone()["id"]
     r = api.post("/api/v2/tasks", json={"owner": "botops", "title": "Give everyone admin", "body": "x", "request_id": hers},
                  headers=headers(coo["token"]))
     assert r.status_code == 403 and r.json()["error"]["code"] == "on_behalf_of", r.text

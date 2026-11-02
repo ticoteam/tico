@@ -95,15 +95,15 @@ def last_turn(c, settings, bot):
     just cleared)."""
     from .shared_bots import follow
     from . import providers
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     cfg = follow(c, bot, H._json(config[0], {}) or {}) if config else {}
     runtime, model = providers.bot_choice(c, settings, cfg)
     session = c.execute("SELECT thread_id FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
                         (bot, runtime, model)).fetchone()
     if not session or not session[0]:
         return None
-    row = c.execute("SELECT finished,input_tokens,cached_tokens,prompt_tokens FROM turns WHERE bot=? AND thread_id=? "
-                    "AND finished IS NOT NULL ORDER BY finished DESC LIMIT 1", (bot, session[0])).fetchone()
+    row = c.execute("SELECT finished_at,input_tokens,cached_tokens,prompt_tokens FROM turns WHERE bot=? AND thread_id=? "
+                    "AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1", (bot, session[0])).fetchone()
     return {**dict(row), "runtime": runtime} if row else None
 
 
@@ -115,7 +115,7 @@ def warmth(turn, now=None):
     lifetime = CACHE_LIFETIME.get(turn.get("runtime"), WARM_SECONDS)
     context = turn.get("prompt_tokens")
     context = int(context) if context is not None else None
-    finished, at = H.parse_ts(turn.get("finished")), H.parse_ts(now or H.now())
+    finished, at = H.parse_ts(turn.get("finished_at")), H.parse_ts(now or H.now())
     age = (at - finished).total_seconds() if finished and at else None
     # An unknown fresh count (an older row, a runner that sent none) is cold: counting it as 0 would read 100% cached.
     share = cached / (cached + int(fresh)) if cached > 0 and fresh is not None else 0.0
@@ -124,14 +124,14 @@ def warmth(turn, now=None):
 
 def epoch_since(c, conversation_id):
     """When the chat's session was last cleared, or None."""
-    row = c.execute("SELECT updated FROM session_epochs WHERE conversation_id=?", (conversation_id,)).fetchone()
+    row = c.execute("SELECT updated_at FROM session_epochs WHERE conversation_id=?", (conversation_id,)).fetchone()
     return row[0] if row else None
 
 
 def turns_since(c, bot, conversation_id, since):
     """The bot's finished turns on this chat since its last clear."""
     return c.execute("SELECT count(*) FROM turns t JOIN messages m ON m.id=t.message_id WHERE t.bot=? "
-                     "AND m.conversation_id=? AND t.finished IS NOT NULL AND t.started>?",
+                     "AND m.conversation_id=? AND t.finished_at IS NOT NULL AND t.started_at>?",
                      (bot, conversation_id, since or "")).fetchone()[0]
 
 
@@ -155,7 +155,7 @@ def _held(c, conv):
 def snapshot(c, conversation_id):
     """What a decision was made on: the session's epoch and the chat's newest message."""
     epoch = c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?", (conversation_id,)).fetchone()
-    newest = c.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY created DESC, id DESC LIMIT 1",
+    newest = c.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
                        (conversation_id,)).fetchone()
     return {"epoch": epoch[0] if epoch else 0, "newest": newest[0] if newest else None}
 
@@ -181,7 +181,7 @@ def gate(c, settings, bot, conv):
 def _refs(message):
     refs = message.get("refs")
     if refs is None:
-        refs = H._json(message.get("refs_json"), {})
+        refs = H._json(message.get("refs"), {})
     return refs if isinstance(refs, dict) else {}
 
 
@@ -401,7 +401,7 @@ def apply(c, settings, who, bot, outcome):
 def record(c, who, message, outcome):
     """Mark the message that opened the new session (the chat's quiet "Topic changed" line) and write the measures."""
     refs = {**_refs(message), "topic_changed": True}
-    c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+    c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
     H.event(c, who.actor, "chat.topic_changed", message["conversation_id"],
             {"message_id": message["id"], "tokens_before": outcome.get("context_tokens"),
              "delay_ms": outcome.get("delay_ms", 0)})

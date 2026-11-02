@@ -57,8 +57,8 @@ def clarify(conn, actor, ask_id):
     if task:
         # As with a comment meant for the bot: it wakes on the task, whose clock restarts, but what the person
         # owes it does not change: the wait stays theirs until they answer.
-        conn.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
-        conn.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)",
+        conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
+        conn.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
                      (task["id"], asker, actor, msg["id"], H.shift(H.now(), hours=24)))
     H.event(conn, actor, ACTION, ask_id, {"to": actor, "bot": asker, **({"task": task["id"]} if task else {})})
     return {"bot": asker, "task": task["id"] if task else None, "message": msg["id"]}

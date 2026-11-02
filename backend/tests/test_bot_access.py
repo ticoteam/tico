@@ -43,7 +43,7 @@ def world(api):
                   {"id": "ben", "email": "ben@acme.example", "primary_for": ["cpo", "product-design", "ops"]},
                   {"id": "cara", "email": "cara@acme.example", "team": "legal"},
                   {"id": "dee", "email": "dee@acme.example", "team": "sales"}]
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode({"people": people}),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": people}),))
         H.sync_registry(c, {}, {"people": people})
     bot(api, "counsel", reports_to="human:ben")
     bot(api, "stranger")
@@ -52,7 +52,7 @@ def world(api):
     tokens.update({slug: post(api, f"bots/{slug}/agent-credential", {})["token"] for slug in ("stranger", "analyst")})
     task = post(api, "tasks", {"owner": "counsel", "title": "Review the NDA", "body": "Redline it."})
     with store.transaction() as c:
-        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                   ("u1", "counsel", "daily", "2026-09-29", "Two contracts reviewed", "- Two contracts reviewed",
                    H.now(), H.now()))
     made = api.post("/api/v2/files/uploads", json={"name": "memo.md", "text": "# Memo", "scope": "bot"},
@@ -128,7 +128,7 @@ def test_an_update_takes_its_bots_gate_and_a_persons_update_is_for_the_chart(wor
     set_access(api, see={"people": ["cara"]}, read={"people": ["cara"]}, write={"people": ["cara"]})
     assert reply("dee") == 404
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                   ("u2", "human:ben", "daily", "2026-09-29", "Hiring plan", "- Hiring plan", H.now(), H.now()))
     assert outcomes(api, tokens, "get", "updates/u2", callers=("ana", "cara", "dee", "stranger")) == {
         "ana": 200, "cara": 200, "dee": 200, "stranger": 404}
@@ -285,7 +285,7 @@ def test_access_is_edited_by_managers_with_revisions_and_undo(world):
     post(api, f"settings/history/{change['id']}/undo", {"expected_revision": revision}, token="ana-test")
     assert get(api, "bots/counsel/access", "ana-test")["read"]["everyone"] is True
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT access_json FROM bot_config WHERE bot='counsel'").fetchone()[0] is None
+        assert c.execute("SELECT access FROM bot_config WHERE bot='counsel'").fetchone()[0] is None
         assert c.execute("SELECT count(*) FROM events WHERE action='bot.access_changed'").fetchone()[0] == 1
 
 
@@ -313,7 +313,7 @@ def test_the_old_private_and_routing_lists_are_retired_with_one_note_for_the_own
                 H.sync_registry(c, {"inbox": {"name": "inbox", "runtime": "fake", "status": "active"}},
                                 {"people": [{"id": "ana", "email": "ana@acme.example"},
                                             {"id": "ben", "email": "ben@acme.example"}]})
-                c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('inbox','{}','ana')")
+                c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('inbox','{}','ana')")
             # The bot the file called private is Open: Ben sees, reads and writes to it.
             row = next(b for b in get(client, "bots", "ben-test") if b["slug"] == "inbox")
             assert row["access"] == {"see": True, "read": True, "write": True}

@@ -45,7 +45,7 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
         c.execute("UPDATE task_events SET ts=? WHERE task_id=? AND field='step'", (H.shift(H.now(), hours=-30), old["id"]))
         c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), days=3), snoozed["id"]))
         c.execute("UPDATE tasks SET status='closed', step_id=? WHERE id=?", (steps["Done"], done["id"]))
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,created) VALUES(?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,created_at) VALUES(?,?,?,?,?,?,?)",
                   (str(uuid.uuid4()), reviewed["id"], "pr", "https://github.com/acme/app/pull/7", "PR #7", "open",
                    H.shift(H.now(), hours=-5)))
 
@@ -85,7 +85,7 @@ def test_a_queued_job_behind_an_unreviewed_interrupted_run_is_dead_not_queued(ap
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
         # The computer restarted mid-run: the run may have acted, so its task waits for a person's review.
-        c.execute("UPDATE attempts SET state='interrupted', finished=?, result_json=? WHERE id=?",
+        c.execute("UPDATE attempts SET state='interrupted', finished_at=?, result=? WHERE id=?",
                   (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]))
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
     post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
@@ -120,13 +120,13 @@ def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Ship the fix", "body": "Please ship it."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='interrupted', finished=?, result_json=? WHERE id=?",
+        c.execute("UPDATE attempts SET state='interrupted', finished_at=?, result=? WHERE id=?",
                   (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]))
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
     post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
     post(api, "chat/ops", {"text": "Separate question"})     # the one job that can start
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), hours=-2),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), hours=-2),))
     pipe = stats(api, query="bot=ops")["queues"]["ops"]
     assert pipe["queued"] == 1 and pipe["dead"] == 1
 
@@ -147,7 +147,7 @@ def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypat
         post(api, "tasks", {"owner": "ops", "title": f"Fix {name}", "body": "Please fix it.", "private": private})
         attempt = claim(api, r)
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE attempts SET state='failed', finished=? WHERE id=?", (H.shift(H.now(), hours=-age), attempt["id"]))
+            c.execute("UPDATE attempts SET state='failed', finished_at=? WHERE id=?", (H.shift(H.now(), hours=-age), attempt["id"]))
             c.execute("UPDATE jobs SET state='failed' WHERE id=?", (attempt["job_id"],))
         failed[name] = attempt["id"]
     monkeypatch.setattr(pipeline_stats, "ATTEMPT_PAGE", 1)     # the newest page holds only the private run
@@ -159,12 +159,12 @@ def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypat
     capped = stats(api)["failures"]
     assert capped["total"] == 1 and capped["truncated"] is True
     with api.app.state.store.read() as c:
-        assert capped["complete_after"] == c.execute("SELECT finished FROM attempts WHERE id=?", (failed["open"],)).fetchone()[0]
+        assert capped["complete_after"] == c.execute("SELECT finished_at FROM attempts WHERE id=?", (failed["open"],)).fetchone()[0]
 
 
 def test_failure_causes():
     row = lambda state="failed", result="{}", reason=None, stop=None: {  # noqa: E731
-        "state": state, "result_json": result, "end_reason": reason, "stop_requested": stop}
+        "state": state, "result": result, "end_reason": reason, "stop_requested_at": stop}
     assert cause_of(row(result='{"limit_source": {"runtime": "codex", "billing": true}}')) == "quota"
     assert cause_of(row(reason="Model error (429): You exceeded your current quota")) == "quota"
     assert cause_of(row(result='{"limit_source": {"runtime": "claude", "kind": "capacity"}}')) == "capacity"
@@ -218,7 +218,7 @@ def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
 
     # Outside the window it is no longer listed; a reader who cannot read the bot never sees it.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE job_recovery SET created=? WHERE job_id=?", (H.shift(H.now(), days=-2), attempt["job_id"]))
+        c.execute("UPDATE job_recovery SET created_at=? WHERE job_id=?", (H.shift(H.now(), days=-2), attempt["job_id"]))
     assert stats(api)["queues"].get("ops", {}).get("decisions", []) == []
 
 

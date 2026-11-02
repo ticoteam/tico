@@ -9,7 +9,7 @@ When to use: on the Monday map refresh, after the map's own reconcile (`playbook
 Steps:
 1. Work from the full inventory: `hub doc list --limit 500` and every `next_cursor` after it, paged as in `playbooks/refresh-the-map.md` step 1. Group the titles by folder.
 2. Duplicates: two docs whose titles match once case, "copy", "(1)" and "old" are ignored, or that open with the same paragraph. Read both in full before you call them duplicates. Report both paths. Never delete, move or archive either.
-3. Drafts left behind: a doc whose text still says TODO, TBD, draft or placeholder, and whose `updated` date is more than 90 days old. Report it with that date.
+3. Drafts left behind: a doc whose text still says TODO, TBD, draft or placeholder, and whose `updated_at` date is more than 90 days old. Report it with that date.
 4. No owner: a doc that states a price, a policy or a process and names no owner in its text. Report it.
 5. Dead links: an internal doc that points to an archived doc, or to a linked source that `_librarian/missing.md` lists as unreadable. Match the addresses against `hub doc link-list`. Report the link.
 6. Misplaced: a doc whose folder does not match its title and text, such as a holiday schedule at the top level. Report it only when the right folder is plain from the doc itself.

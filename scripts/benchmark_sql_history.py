@@ -32,15 +32,15 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api, provenance)
         # Bulk fixture loading must not queue actual runs or construct message links.
         for trigger in ('message_links_insert', 'queue_bot_message', 'wake_preset_hold', 'message_links_update'):
             c.execute('DROP TRIGGER IF EXISTS ' + trigger)
-        c.executemany('INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) '
+        c.executemany('INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) '
                       "VALUES(?,'Synthetic task','bot:ops','human:ana',0,'done',?,?)",
                       [(public_tasks[i], now, now) for i in range(rooms)])
         # Authorization must also work with a nonempty denied-private set;
         # no message references these unrelated synthetic private rows.
-        c.executemany('INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) '
+        c.executemany('INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) '
                       "VALUES(?,'Hidden synthetic task','bot:finance','human:ben',1,'done',?,?)",
                       [(str(uuid.uuid5(uuid.NAMESPACE_URL, f'synthetic-hidden-task-{i}')), now, now) for i in range(500)])
-        c.executemany('INSERT INTO conversations(id,kind,task_id,participants_json,created) '
+        c.executemany('INSERT INTO conversations(id,kind,task_id,participants,created_at) '
                       "VALUES(?,'task',?,'[]',?)",
                       [(f'fixture-room-{i}', public_tasks[i], now) for i in range(rooms)])
 
@@ -58,7 +58,7 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api, provenance)
         mid = c.execute('SELECT message_id FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0]
         copies('messages', mid, count * 5, lambda i: {
             'conversation_id': f'fixture-room-{i % rooms}',
-            'refs_json': '{}' if provenance == 'plain' else json.dumps({
+            'refs': '{}' if provenance == 'plain' else json.dumps({
                 'task': public_tasks[i % rooms], 'progress': {'sequence': i, 'note': 'Synthetic progress receipt'},
                 **({'turn_id': f'fixture-attempts-{i % count}'} if i % 10 == 0 else {})}),
             'in_reply_to': f'fixture-messages-{i % rooms}' if provenance == 'mixed' and i >= rooms and i % 10 == 1 else None})
@@ -69,11 +69,11 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api, provenance)
         copies('attempts', attempt['id'], count, lambda i: {
             'job_id': f'fixture-jobs-{i}', 'token_hash': f'fixture-token-hash-{i}',
             'state': 'done', 'lane': f'fixture-lane-{i}',
-            'created': now if i < recent else H.shift(now, hours=-72)})
+            'created_at': now if i < recent else H.shift(now, hours=-72)})
         copies('turns', attempt['id'], count, lambda i: {
             'id': f'fixture-attempts-{i}', 'message_id': f'fixture-messages-{i}',
             'task_id': public_tasks[i % rooms],
-            'started': now if i < recent else H.shift(now, hours=-72)})
+            'started_at': now if i < recent else H.shift(now, hours=-72)})
         print('synthetic sizes:', {table: c.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
                                    for table in ('tasks', 'conversations', 'messages', 'jobs', 'attempts', 'turns', 'events')},
               flush=True)
@@ -81,10 +81,10 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api, provenance)
     queries = [
         'SELECT id FROM turns LIMIT 1',
         'SELECT id FROM attempts LIMIT 1',
-        "SELECT count(*) FROM turns WHERE started>=:day AND started<:tomorrow",
-        "SELECT count(*) FROM attempts WHERE created>=:day AND created<:tomorrow",
-        "SELECT count(*) FROM turns WHERE started >= datetime('now','-1 day')",
-        "SELECT count(*) FROM attempts WHERE created >= datetime('now','-1 day')",
+        "SELECT count(*) FROM turns WHERE started_at>=:day AND started_at<:tomorrow",
+        "SELECT count(*) FROM attempts WHERE created_at>=:day AND created_at<:tomorrow",
+        "SELECT count(*) FROM turns WHERE started_at >= datetime('now','-1 day')",
+        "SELECT count(*) FROM attempts WHERE created_at >= datetime('now','-1 day')",
         'SELECT count(*) FROM messages',
     ]
     params = {'day': now[:10], 'tomorrow': H.shift(now, hours=24)[:10]}

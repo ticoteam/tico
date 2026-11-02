@@ -23,9 +23,9 @@ def desk(api, monkeypatch):
         return RESULTS
     monkeypatch.setattr(librarian, "_search", search)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('librarian','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('librarian','{}',NULL,'ana')")
     r = runner(api)
     assign(api, r, "librarian")
     ready(api, r, ["librarian"])

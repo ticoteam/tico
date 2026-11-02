@@ -16,7 +16,7 @@ const {unrouted} = require('./support/routes.cjs');
     const chip = (name, runtime, installed) => ({name, runtime, installed, version: installed ? '1.0.0' : '', managed: true, state: 'idle',
       wanted: installed, pinned: false, update_available: false, detail: ''});
     const computer = {id: 'computer-1', label: 'Build server', operator: 'ana', bots: ['helper'], platform: 'linux',
-      last_seen: new Date().toISOString(), needed_runtimes: ['codex'], bot_runtimes: ['codex', 'gemini'], harness_choices: {},
+      last_seen_at: new Date().toISOString(), needed_runtimes: ['codex'], bot_runtimes: ['codex', 'gemini'], harness_choices: {},
       readiness: {runtimes: {codex: {installed: true, authenticated: 'ready'}},
         harnesses: {codex: chip('Codex', 'codex', true), antigravity: chip('Antigravity', 'gemini', true), grok: chip('Grok Build', 'grok', false)}}};
     const writes = [];

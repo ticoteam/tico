@@ -83,7 +83,7 @@ def ensure(c):
         if not name:
             return None
         now = H.now()
-        c.execute("INSERT INTO task_types (id, name, created, updated) VALUES (?,?,?,?)", (IDEA_TYPE, name, now, now))
+        c.execute("INSERT INTO task_types (id, name, created_at, updated_at) VALUES (?,?,?,?)", (IDEA_TYPE, name, now, now))
     names = {r[0].lower() for r in c.execute("SELECT name FROM task_steps WHERE type_id=?", (IDEA_TYPE,))}
     have = {r[0] for r in c.execute("SELECT id FROM task_steps WHERE type_id=?", (IDEA_TYPE,))}
     for position, (key, name, status) in enumerate(IDEA_STEPS):
@@ -251,7 +251,7 @@ def _visible(auth, c, who):
 
 
 IDEA_SQL = ("SELECT g.*, t.title, t.status AS task_status, t.owner AS assignee, t.requester AS created_by, "
-            "t.created AS task_created FROM growth_ideas g JOIN tasks t ON t.id=g.task_id")
+            "t.created_at AS task_created FROM growth_ideas g JOIN tasks t ON t.id=g.task_id")
 
 
 def _ice(row):
@@ -285,7 +285,7 @@ def idea_views(c, rows, who=None, hidden=()):
     follow, depends = {}, {}
     for r in c.execute(f"SELECT from_task, to_task, kind FROM task_relations WHERE kind IN ('follow_up','blocks') "
                        f"AND ((kind='follow_up' AND from_task IN ({marks})) OR (kind='blocks' AND to_task IN ({marks}))) "
-                       "ORDER BY created", ids + ids):
+                       "ORDER BY created_at", ids + ids):
         if r[2] == "follow_up":
             follow.setdefault(r[0], r[1])
         else:
@@ -348,7 +348,7 @@ def ideas(c, auth, who, status=None, bet_id=None, channel_slug=None, kpi_id=None
         args += [like, like]
     limit = max(1, min(int(limit or IDEAS_PAGE), IDEAS_MAX))
     rows = H._rows(c.execute(IDEA_SQL + " WHERE " + " AND ".join(where)
-                             + " ORDER BY t.created DESC, g.task_id LIMIT ?", args + [limit]))
+                             + " ORDER BY t.created_at DESC, g.task_id LIMIT ?", args + [limit]))
     return idea_views(c, rows, who, _hidden(c, auth, who))
 
 
@@ -370,7 +370,7 @@ def _cohort_view(row, slugs):
             "segment_id": row.get("segment_id"), "month": row["month"],
             **{k: row[k] for k in ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180",
                                    "revenue_month", "margin_pct", "quality")},
-            "sources": json.loads(row["sources_json"] or "{}"), "updated_by": row["updated_by"],
+            "sources": json.loads(row["sources"] or "{}"), "updated_by": row["updated_by"],
             "updated_at": row["updated_at"]}
 
 
@@ -523,14 +523,14 @@ def economics(c, month=None, hidden=(), segment=None):
 
 
 def kpis(c, hidden=(), may_edit=lambda record: False):
-    rows = H._rows(c.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created"))
+    rows = H._rows(c.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created_at"))
     rows = [r for r in rows if r.get("owner") not in hidden]
     from . import kpis as K
     readings = K.effective_many(c, [r["id"] for r in rows])
     out = []
     for r in rows:
         newest = K.latest(readings.get(r["id"], []))
-        link = H._one(c, "SELECT goal_id, target FROM goal_kpis WHERE kpi_id=? ORDER BY target IS NULL, created LIMIT 1",
+        link = H._one(c, "SELECT goal_id, target FROM goal_kpis WHERE kpi_id=? ORDER BY target IS NULL, created_at LIMIT 1",
                       (r["id"],)) or {}
         out.append({"id": r["id"], "name": r["name"], "unit": r.get("unit") or "",
                     "latest": newest["value"] if newest else None,
@@ -563,7 +563,7 @@ def working(c, auth, who, limit=200):
     """Open tasks under an idea, or labelled `channel:<slug>`."""
     visible = auth.task_sql(c, who)
     rows = H._rows(c.execute(
-        "SELECT t.id, t.title, t.owner, t.status, t.updated, rel.to_task AS idea_task_id, it.title AS idea_title, "
+        "SELECT t.id, t.title, t.owner, t.status, t.updated_at, rel.to_task AS idea_task_id, it.title AS idea_title, "
         "(SELECT substr(tg.key, 9) FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id WHERE tt.task_id=t.id "
         " AND tg.key LIKE 'channel:%' LIMIT 1) AS label_channel "
         "FROM tasks t LEFT JOIN task_relations rel ON rel.from_task=t.id AND rel.kind='parent' "
@@ -571,7 +571,7 @@ def working(c, auth, who, limit=200):
         "LEFT JOIN tasks it ON it.id=rel.to_task "
         f"WHERE t.status IN ('open','doing','waiting','review','ready') AND t.id IN (SELECT id FROM tasks WHERE {visible}) "
         "AND (rel.to_task IS NOT NULL OR EXISTS (SELECT 1 FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id "
-        "WHERE tt.task_id=t.id AND tg.key LIKE 'channel:%')) ORDER BY t.updated DESC LIMIT ?", (limit,)))
+        "WHERE tt.task_id=t.id AND tg.key LIKE 'channel:%')) ORDER BY t.updated_at DESC LIMIT ?", (limit,)))
     parents = sorted({r["idea_task_id"] for r in rows if r["idea_task_id"]})
     shown = set()
     if parents:
@@ -590,7 +590,7 @@ def working(c, auth, who, limit=200):
     return {"items": [{"task_id": r["id"], "title": r["title"], "idea_task_id": r["idea_task_id"],
                        "idea_title": r["idea_title"],
                        "channel": r["label_channel"] or first_channel.get(r["idea_task_id"]),
-                       "assignee": r["owner"], "status": r["status"], "updated_at": r["updated"]} for r in rows]}
+                       "assignee": r["owner"], "status": r["status"], "updated_at": r["updated_at"]} for r in rows]}
 
 
 def week(c, auth, who, hidden=()):
@@ -885,7 +885,7 @@ def idea_update(c, auth, who, task_id, body):
         if title is None:
             raise Problem("validation", "An idea keeps its title", 422)
         if title != row["title"]:
-            c.execute("UPDATE tasks SET title=?, updated=? WHERE id=?", (title, H.now(), row["task_id"]))
+            c.execute("UPDATE tasks SET title=?, updated_at=? WHERE id=?", (title, H.now(), row["task_id"]))
             H._task_event(c, row["task_id"], who.actor, "title", row["title"], title, "")
     if "channels" in fields:
         ids = _channel_ids(c, fields.pop("channels") or [])
@@ -1004,14 +1004,14 @@ def cohort_set(c, actor, body):
     fields = {k: getattr(body, k) for k in body.model_fields_set if k not in ("channel", "month", "sources", "segment_id")}
     if "quality" in fields and fields["quality"] is None:
         fields["quality"] = "actual"
-    sources = dict(json.loads(row["sources_json"] or "{}")) if row else {}
+    sources = dict(json.loads(row["sources"] or "{}")) if row else {}
     if body.sources is not None:
         for key, text in body.sources.items():
             if text:
                 sources[key] = text
             else:
                 sources.pop(key, None)
-    fields.update(sources_json=json.dumps(sources, sort_keys=True), updated_by=actor, updated_at=H.now())
+    fields.update(sources=json.dumps(sources, sort_keys=True), updated_by=actor, updated_at=H.now())
     if row:
         c.execute(f"UPDATE growth_cohorts SET {', '.join(k + '=?' for k in fields)} WHERE id=?",
                   list(fields.values()) + [row["id"]])

@@ -104,7 +104,7 @@ def _row(c):
 
 
 def _write(c, record):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(record, sort_keys=True)))
 
 
@@ -170,7 +170,7 @@ def view(c, settings=None, *, manage=False):
     return {**out, "preview": record.get("preview", "") if where == "settings" else "",
             "env": ENV_KEY if where == "environment" else "",
             "revision": int(record.get("revision") or 0),
-            "updated": record.get("updated", ""), "updated_by": record.get("updated_by", ""),
+            "updated_at": record.get("updated_at", ""), "updated_by": record.get("updated_by", ""),
             "state": state, "working": state not in G.REFUSED,
             "message": fresh.get("message") or ("Not checked yet." if where else "No gateway key saved."),
             "used": fresh.get("used"), "spent_usd": fresh.get("spent_usd"), "cap_usd": fresh.get("cap_usd"),

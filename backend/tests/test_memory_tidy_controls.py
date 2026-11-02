@@ -62,7 +62,7 @@ def test_disabled_models_not_offered_or_saved_and_rechecked_at_admission(api):
     enable(api)
     put(api, PATH, {'on': True, 'pilots': [entry()]})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?", ('{"enabled":["anthropic"]}', providers.KEY))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?", ('{"enabled":["anthropic"]}', providers.KEY))
     assert 'codex:gpt-6.1-sol' not in {r['model'] for r in job(api)['pilot_models']}
     put(api, PATH, {'pilots': [entry()]}, expected=422)
     with api.app.state.store.read() as c:
@@ -92,14 +92,14 @@ def test_confirmed_pilot_defaults_use_exact_slugs_low_effort_and_preserve_everyd
     with store.transaction() as c:
         for p in tidy.DEFAULT_PILOTS:
             c.execute("INSERT INTO bots(slug,model,effort) VALUES(?,?,?)", (p['bot'], 'claude-haiku-5-5', 'high'))
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')", (p['bot'], json.dumps(
+            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,'ana')", (p['bot'], json.dumps(
                 {'model': 'claude-haiku-5-5', 'task_model': {'model': 'gpt-6-luna'}})))
-        before = [tuple(r) for r in c.execute("SELECT bot,config_json FROM bot_config ORDER BY bot")]
+        before = [tuple(r) for r in c.execute("SELECT bot,config FROM bot_config ORDER BY bot")]
     assert job(api)['pilots'] == tidy.DEFAULT_PILOTS
     assert all(p['bot'] != 'pr-reviewer-sol' for p in job(api)['pilots'])
     put(api, PATH, {'pilots': tidy.DEFAULT_PILOTS})
     with store.read() as c:
-        assert [tuple(r) for r in c.execute("SELECT bot,config_json FROM bot_config ORDER BY bot")] == before
+        assert [tuple(r) for r in c.execute("SELECT bot,config FROM bot_config ORDER BY bot")] == before
         assert c.execute("SELECT model,effort FROM bots WHERE slug='botops'").fetchone()[:] == ('claude-haiku-5-5', 'high')
     put(api, PATH, {'pilots': []})
     assert job(api)['pilots'] == []

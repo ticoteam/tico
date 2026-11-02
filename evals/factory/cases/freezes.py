@@ -157,7 +157,7 @@ def window_of(text):
 def pool_turns(run, scope):
     """The turns the pool covers: every turn for the company, or the turns of the bots the server counts in the group."""
     from backend import usage_limits
-    turns = [dict(r) for r in run.w.sql("SELECT bot, started, finished, est_cost_usd FROM turns ORDER BY started")]
+    turns = [dict(r) for r in run.w.sql("SELECT bot, started_at, finished_at, est_cost_usd FROM turns ORDER BY started_at")]
     if scope == usage_limits.COMPANY:
         return turns
     with run.w.store.read() as c:
@@ -179,20 +179,20 @@ def spend_under(cap_usd, since, until, scope="company"):
         lo_t, hi_t = clock_text(since), clock_text(until)
         window_lo, window_hi = window_of(hi_t)
         reached = sum(r["est_cost_usd"] or 0 for r in turns
-                      if window_lo <= r["started"][:19] < window_hi and r["finished"]
-                      and r["finished"][:19] < hi_t)
+                      if window_lo <= r["started_at"][:19] < window_hi and r["finished_at"]
+                      and r["finished_at"][:19] < hi_t)
         if reached < limit:
             return False, (f"the half hour spent ${reached:.2f} by {START + until:%H:%M}, short of the ${limit:g} "
                            f"window cap an ${cap_usd:g} hourly cap holds")
         late = []
         for r in turns:
-            if not lo_t <= r["started"][:19] < hi_t:
+            if not lo_t <= r["started_at"][:19] < hi_t:
                 continue
-            lo, hi = window_of(r["started"])
-            spent = sum(x["est_cost_usd"] or 0 for x in turns if x is not r and lo <= x["started"][:19] < hi
-                        and x["finished"] and x["finished"][:19] < r["started"][:19])
+            lo, hi = window_of(r["started_at"])
+            spent = sum(x["est_cost_usd"] or 0 for x in turns if x is not r and lo <= x["started_at"][:19] < hi
+                        and x["finished_at"] and x["finished_at"][:19] < r["started_at"][:19])
             if spent >= limit:
-                late.append(f"{r['started'][11:16]} (${spent:.2f})")
+                late.append(f"{r['started_at'][11:16]} (${spent:.2f})")
         if late:
             return False, f"{len(late)} turns started past the ${limit:g} window cap: " + ", ".join(late[:4])
         return True, f"no turn started past the ${limit:g} window cap (an ${cap_usd:g} hourly cap)"
@@ -203,7 +203,7 @@ def hour_spent(run, when):
     """The company's spend in the clock hour of `when`, from the turns that had finished by then: the figure a cap is
     compared with, as usage_limits counts it."""
     at = (START + when).strftime("%Y-%m-%dT%H:%M:%S")
-    rows = [dict(r) for r in run.w.sql("SELECT est_cost_usd FROM turns WHERE substr(started,1,13)=? AND finished < ?",
+    rows = [dict(r) for r in run.w.sql("SELECT est_cost_usd FROM turns WHERE substr(started_at,1,13)=? AND finished_at < ?",
                                        (at[:13], at))]
     return sum(r["est_cost_usd"] or 0 for r in rows)
 
@@ -220,7 +220,7 @@ def resumed(run, when, minutes):
     ready = next((m for m in after if m["free"] and m["queued"]), None)
     if ready is None:
         return False, f"no free slot with queued work after {t0:%H:%M} ({state})"
-    first = next((m for m in after if m["at"] >= ready["at"] and m["started"]), None)
+    first = next((m for m in after if m["at"] >= ready["at"] and m["started_at"]), None)
     if first is None:
         return False, f"no turn started in the claim rounds after work waited at {ready['at']:%H:%M} ({state})"
     gap = (first["at"] - ready["at"]).total_seconds() / 60
@@ -275,7 +275,7 @@ def inputs_moved(bot, texts):
     def check(run):
         w = run.w
         mids = [r["id"] for text in texts for r in w.sql(
-            "SELECT id FROM messages WHERE body=? AND json_extract(refs_json,'$.task')=?", (text, run.packet))]
+            "SELECT id FROM messages WHERE body=? AND json_extract(refs,'$.task')=?", (text, run.packet))]
         if len(mids) != len(texts):
             return False, f"{len(mids)} of {len(texts)} messages were found on the task"
         limited = [r for r in run.t.bot(bot).turns if r["kind"] == "limited"]

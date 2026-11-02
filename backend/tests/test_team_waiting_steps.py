@@ -77,7 +77,7 @@ def _dev(tmp_path):
     c = sqlite3.connect(tmp_path / 'hub.db', isolation_level=None)
     c.row_factory = sqlite3.Row
     H.migrate(c)
-    c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('dev','Dev tickets','x','x')")
+    c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets','x','x')")
     for position, (ident, name, status) in enumerate([
             ('deck', 'On Deck', 'open'), ('progress', 'In Progress', 'doing'),
             ('staging', 'Pending Push To Staging', 'doing'), ('closed', 'Closed', 'closed')]):

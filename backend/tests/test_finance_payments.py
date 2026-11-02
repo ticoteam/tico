@@ -146,7 +146,7 @@ def _payee(store, fake, *, at=AT):
         assert made.status == "committed", made
     sync_once(store, fake, at)
     with store.read() as c:
-        payload = c.execute("SELECT payload_json FROM fin_outbox WHERE op='recipient_create'").fetchone()[0]
+        payload = c.execute("SELECT payload FROM fin_outbox WHERE op='recipient_create'").fetchone()[0]
         assert "000099998888" not in payload                                     # erased once Mercury has it
     return str(made.result["recipient_id"])
 
@@ -302,7 +302,7 @@ def test_rules_strictest_wins_examples_must_pass_and_a_bots_rule_needs_a_finance
         refused = act(c, OWNER, "card_create", {"holder": "human:gus", "budget_id": b.result["budget_id"],
                                                 "amount": 1_000, "provider_user_id": "u"})
         assert refused.status == "denied" and refused.reason == "gus has no cards"   # deny beats needs_approval
-        runs = c.execute("SELECT json_extract(outcome_json,'$.outcome') FROM fin_rule_runs WHERE rule_id=?",
+        runs = c.execute("SELECT json_extract(outcome,'$.outcome') FROM fin_rule_runs WHERE rule_id=?",
                          (deny.result["rule_id"],)).fetchall()
         assert [r[0] for r in runs] == ["deny"]
         tested = act(c, OWNER, "rule_test", {"rule_id": deny.result["rule_id"]})
@@ -622,14 +622,14 @@ def test_a_limit_reserved_at_send_is_given_back_once_when_the_payment_fails_or_i
     fake.queue["request_send_money"] = [Answer(429, {}), Answer(400, {"errors": {"message": "account closed"}})]
     sync_once(books, fake, HOURS[1])
     with books.transaction() as c:
-        state = {m: (st, cj) for m, st, cj in c.execute("SELECT memo, status, counted_json FROM fin_payments")}
+        state = {m: (st, cj) for m, st, cj in c.execute("SELECT memo, status, counted FROM fin_payments")}
         assert state["refused"] == ("failed", "[]")                         # refused: its reservation came back
         assert state["retried"][0] == "queued" and state["retried"][1] != "[]"
         assert counted(c) == (10_000, 1)                                    # only the retried one's
         pid = str(c.execute("SELECT id FROM fin_payments WHERE memo='retried'").fetchone()[0])
         assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).status == "committed"
         assert counted(c) == (0, 0)
-        assert c.execute("SELECT counted_json FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "[]"
+        assert c.execute("SELECT counted FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "[]"
 
 
 def _lines(c, source="bank"):
@@ -837,7 +837,7 @@ def test_a_reconciled_debit_found_as_a_lost_payment_moves_its_spend_to_the_payme
                            "ON a.id=l.account_id WHERE a.code='6100' AND t.kind='team'").fetchall()
         assert [r[0] for r in tagged] == ["eng"]
         assert c.execute("SELECT count(*) FROM fin_events WHERE name='finance.feed.needs_category' AND "
-                         "payload_json LIKE '%found after it was reconciled%'").fetchone()[0] == 1
+                         "payload LIKE '%found after it was reconciled%'").fetchone()[0] == 1
     with books.transaction() as c:                    # unreconciled and re-categorized: the move goes with the entry
         rec = str(c.execute("SELECT reconciliation_id FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()[0])
         assert act(c, OWNER, "reconcile_undo", {"reconciliation_id": rec}).status == "committed"

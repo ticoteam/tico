@@ -34,7 +34,7 @@ def queued(api, aid, payload=None):
 def run_row(api, rid):
     with api.app.state.store.read() as c:
         row = dict(c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone())
-    return {**row, "state": json.loads(row["state_json"] or "{}")}
+    return {**row, "state": json.loads(row["state"] or "{}")}
 
 
 def sql(api, query, args=()):
@@ -124,7 +124,7 @@ def backdate(api, aid, count, *, seconds_ago):
     with api.app.state.store.transaction() as c:
         version = c.execute("SELECT version FROM automations WHERE id=?", (aid,)).fetchone()[0]
         for _ in range(count):
-            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,status,state_json,chain_json) "
+            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status,state,chain) "
                       "VALUES(?,?,?,?,?,'done','{}','[]')", ("run_" + H.new_id(), aid, version, "", started))
 
 
@@ -159,7 +159,7 @@ def statuses(api, aid):
 
 
 def hold_tasks(api):
-    return sql(api, "SELECT id, status, owner FROM tasks WHERE title='Automation Test on hold' ORDER BY created")
+    return sql(api, "SELECT id, status, owner FROM tasks WHERE title='Automation Test on hold' ORDER BY created_at")
 
 
 def slow_drain(api, aid, minutes=16, per=8, start=datetime(2030, 1, 1, 9, 0, 5, tzinfo=timezone.utc), tag="d"):
@@ -177,8 +177,8 @@ def test_a_slow_drain_is_held_not_lost_and_release_queues_every_run(api):
     assert statuses(api, aid) == {"held": 128}   # every delivery has a run; the queued ones were held at the trip
     shown = get(api, f"automations/{aid}")
     assert shown["enabled"] is True and shown["hold"]["held"] == 128 and shown["hold"]["rule"] == "sustained"
-    trip = sql(api, "SELECT detail_json FROM events WHERE action='automation.run_guard' AND target=?", (aid,))
-    assert len(trip) == 1 and '"rule": "sustained"' in trip[0]["detail_json"]
+    trip = sql(api, "SELECT detail FROM events WHERE action='automation.run_guard' AND target=?", (aid,))
+    assert len(trip) == 1 and '"rule": "sustained"' in trip[0]["detail"]
     assert [t["owner"] for t in hold_tasks(api)] == ["human:ana"]   # one task a hold, not one a run
     assert hub(api).claim() is None                                  # the drain never takes a held run
     out = post(api, f"automations/{aid}/held", {"action": "release"})
@@ -186,8 +186,8 @@ def test_a_slow_drain_is_held_not_lost_and_release_queues_every_run(api):
     assert sum(statuses(api, aid).get(s, 0) for s in ("queued", "running", "ok", "failed")) == 128
     assert [t["status"] for t in hold_tasks(api)] == ["closed"]
     assert sql(api, "SELECT id FROM events WHERE action='automation.hold_released' AND target=?", (aid,))
-    audit = sql(api, "SELECT after_json FROM audit_log WHERE object=? ORDER BY at DESC LIMIT 1", ("automation:" + aid,))
-    assert json.loads(audit[0]["after_json"]) == {"hold": None, "release": 128}
+    audit = sql(api, "SELECT after FROM audit_log WHERE object=? ORDER BY at DESC LIMIT 1", ("automation:" + aid,))
+    assert json.loads(audit[0]["after"]) == {"hold": None, "release": 128}
 
 
 def test_a_second_hold_after_a_release_is_a_new_hold_with_its_own_task(api):
@@ -344,7 +344,7 @@ def test_a_hold_that_starts_during_a_step_stops_the_run_before_its_next_step(api
     monkeypatch.setattr(automations.HubServices, "act", acting)
     hub(api).drain()
     held = run_row(api, rid)
-    assert held["status"] == "held" and held["finished"] is None and done == ["First"]
+    assert held["status"] == "held" and held["finished_at"] is None and done == ["First"]
     assert [s["id"] for s in held["state"]["steps"]] == ["one"]
     assert release(api, aid) == 1
     hub(api).drain()
@@ -376,7 +376,7 @@ def test_a_run_dropped_mid_step_finishes_that_step_and_runs_nothing_after_it(api
     monkeypatch.setattr(automations.HubServices, "act", acting)
     hub(api).drain()
     run = run_row(api, rid)
-    assert run["status"] == "skipped" and run["finished"] and run["claimed_at"] is None
+    assert run["status"] == "skipped" and run["finished_at"] and run["claimed_at"] is None
     assert done == ["First"] and [s["id"] for s in run["state"]["steps"]] == ["one"]   # its step's record is kept
     assert hub(api).claim() is None
 
@@ -446,7 +446,7 @@ def test_a_run_put_on_hold_mid_step_finishes_the_step_and_is_not_queued_again(ap
     monkeypatch.setattr(automations.E, "advance", held_meanwhile)
     hub(api).drain()
     held = run_row(api, rid)
-    assert held["status"] == "held" and held["finished"] is None and held["claimed_at"] is None
+    assert held["status"] == "held" and held["finished_at"] is None and held["claimed_at"] is None
     monkeypatch.setattr(automations.E, "advance", advance)
     assert release(api, aid) == 1
     hub(api).drain()
@@ -562,7 +562,7 @@ def test_items_with_the_same_time_are_all_found_one_page_at_a_time(api):
     aid = make(api, [FIND])
     ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {n}", "body": "x"})["id"] for n in range(3)]
     with api.app.state.store.transaction() as c:
-        c.execute(f"UPDATE tasks SET created=? WHERE id IN ({','.join('?' * len(ids))})", (H.now(), *ids))
+        c.execute(f"UPDATE tasks SET created_at=? WHERE id IN ({','.join('?' * len(ids))})", (H.now(), *ids))
     counts = [post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["count"] for _ in range(4)]
     assert counts == [1, 1, 1, 0]
 
@@ -628,7 +628,7 @@ def test_each_item_of_a_find_starts_its_own_turn(api):
     ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
            for word in ("one", "two")]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created=? WHERE id IN (?,?)", (H.now(), *ids))
+        c.execute("UPDATE tasks SET created_at=? WHERE id IN (?,?)", (H.now(), *ids))
     run = post(api, f"automations/{aid}/run", {})["run"]
     looks = [s for s in run["steps"] if s["id"] == "answer"]
     assert [s["status"] for s in looks] == ["ok", "ok"]   # the second item is not refused as a duplicate of the first
@@ -645,7 +645,7 @@ def test_items_that_share_a_title_each_start_their_own_turn(api):
            for word in ("one", "two")]
     with api.app.state.store.transaction() as c:
         # Both items now carry one title, so only the turns' own identity tells them apart.
-        c.execute("UPDATE tasks SET created=?, title='Acme batch' WHERE id IN (?,?)", (H.now(), *ids))
+        c.execute("UPDATE tasks SET created_at=?, title='Acme batch' WHERE id IN (?,?)", (H.now(), *ids))
     run = post(api, f"automations/{aid}/run", {})["run"]
     looks = [s for s in run["steps"] if s["id"] == "answer"]
     assert [s["status"] for s in looks] == ["ok", "ok"]
@@ -682,7 +682,7 @@ def test_a_hold_counts_until_its_turn_is_priced_and_a_lost_one_is_swept_after_a_
     assert post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["status"] == "spend_cap"
     automations.tick(api.app.state.store, datetime.now(timezone.utc) + timedelta(hours=25))
     assert sql(api, "SELECT ref FROM automation_holds WHERE ref='t_old'") == []
-    swept = sql(api, "SELECT detail_json AS detail FROM events WHERE action='automation.hold_swept' AND target=?", (aid,))
+    swept = sql(api, "SELECT detail AS detail FROM events WHERE action='automation.hold_swept' AND target=?", (aid,))
     assert len(swept) == 1 and json.loads(swept[0]["detail"])["turn"] == "t_old"
 
 
@@ -693,7 +693,7 @@ def test_a_failed_item_is_tried_again_once_then_passed_over_and_counted(api):
     ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
            for word in ("bad", "good")]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created=? WHERE id IN (?,?)", (H.now(), *ids))
+        c.execute("UPDATE tasks SET created_at=? WHERE id IN (?,?)", (H.now(), *ids))
     counts = [post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["count"] for _ in range(3)]
     assert counts == [2, 1, 0]   # the good one once; the bad one twice, then passed over
     assert get(api, f"automations/{aid}/runs")["daily"][0]["dropped"] == 1
@@ -741,12 +741,12 @@ def test_a_turn_has_a_day_to_answer_from_when_its_run_began_waiting(api):
     rid = queued(api, make(api, []))
     old, recent = H.shift(H.now(), days=-3), H.shift(H.now(), hours=-1)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE automation_runs SET status='waiting',wake_at=NULL,started=?,state_json=? WHERE id=?",
+        c.execute("UPDATE automation_runs SET status='waiting',wake_at=NULL,started_at=?,state=? WHERE id=?",
                   (old, json.dumps({"threads": [], "waiting_since": recent}), rid))
     automations.tick(api.app.state.store)
     assert run_row(api, rid)["status"] == "waiting"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE automation_runs SET state_json=? WHERE id=?",
+        c.execute("UPDATE automation_runs SET state=? WHERE id=?",
                   (json.dumps({"threads": [], "waiting_since": old}), rid))
     automations.tick(api.app.state.store)
     assert run_row(api, rid)["status"] == "failed"

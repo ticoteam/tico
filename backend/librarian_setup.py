@@ -59,7 +59,7 @@ class MarketSetup(M.Contract):
 
 
 def _load(c, actor, key):
-    row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?", (actor, key)).fetchone()
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (actor, key)).fetchone()
     try:
         value = json.loads(row[0]) if row else {}
     except ValueError:
@@ -68,8 +68,8 @@ def _load(c, actor, key):
 
 
 def _save(c, actor, key, value):
-    c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+    c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
+              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
               (actor, key, encode(value), H.now()))
 
 
@@ -77,16 +77,16 @@ def _task(c, task_id, requester=None):
     """A setup task's id and status: only ever a task to the Librarian, and the person's own when one is named."""
     if not isinstance(task_id, str) or not task_id:
         return None
-    row = c.execute("SELECT id,status,requester,created FROM tasks WHERE id=? AND owner=?",
+    row = c.execute("SELECT id,status,requester,created_at FROM tasks WHERE id=? AND owner=?",
                     (task_id, "bot:" + L.LIBRARIAN)).fetchone()
     if not row or requester and row["requester"] != requester:
         return None
-    return {"id": row["id"], "status": row["status"], "created": row["created"]}
+    return {"id": row["id"], "status": row["status"], "created_at": row["created_at"]}
 
 
 def _docs_task(c):
     """The newest "Set up Docs" task anyone filed: once there is one, Docs is past its first visit."""
-    row = c.execute("SELECT id FROM tasks WHERE owner=? AND (title=? OR title LIKE ?) ORDER BY created DESC LIMIT 1",
+    row = c.execute("SELECT id FROM tasks WHERE owner=? AND (title=? OR title LIKE ?) ORDER BY created_at DESC LIMIT 1",
                     ("bot:" + L.LIBRARIAN, DOCS_TASK, DOCS_TASK + " (%)")).fetchone()
     return _task(c, row["id"]) if row else None
 

@@ -27,7 +27,7 @@ def held(api, machine, asks=True, **busy):
         assert post(api, "jobs/claim", busy, token=machine["token"])["attempt"] is None
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
         online = {r["id"] for r in health._online_runners(c)}
         rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
         found = {f["check_id"] for f in health_monitor.findings(c, store.settings)}
@@ -177,7 +177,7 @@ def test_work_fenced_behind_an_interrupted_run_on_its_task(api):
     task = new_task(api, "first")
     attempt = claim(api, machine)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='lost',finished=? WHERE id=?", (H.now(), attempt["id"]))
+        c.execute("UPDATE attempts SET state='lost',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=(SELECT job_id FROM attempts WHERE id=?)", (attempt["id"],))
     post(api, "tasks/" + task["id"] + "/comments", {"text": "Is the first part done?"})
     with api.app.state.store.read() as c:
@@ -210,7 +210,7 @@ def test_operations_names_a_limited_bots_runtime_when_config_was_primed_slug_fir
 
 def readiness(api, machine, document):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(document), machine["runner_id"]))
+        c.execute("UPDATE runners SET readiness=? WHERE id=?", (json.dumps(document), machine["runner_id"]))
 
 
 def test_a_computer_that_has_not_said_whether_it_can_run_the_bot(api):
@@ -238,8 +238,8 @@ def test_the_report_names_the_bot_and_computer_by_their_bundle_labels(api):
     with store.transaction() as c:
         item = next(f for f in health_monitor.findings(c, store.settings) if f["check_id"] == "queue_idle")
         now = H.now()
-        row = {**item, "first_seen": now, "last_seen": now, "occurrences": 1}
-        c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen,last_seen) "
+        row = {**item, "first_seen_at": now, "last_seen_at": now, "occurrences": 1}
+        c.execute("INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen_at,last_seen_at) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (item["key"], item["signature"], item["check_id"], item["kind"],
                                                 item["title"], item["detail"], item["fix"], now, now))
         message = health_monitor.report_message(c, row)
@@ -265,9 +265,9 @@ def ops_rows(api):
 
 def queued_at(api, task, minutes):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued' AND message_id IN "
+        c.execute("UPDATE jobs SET created_at=? WHERE bot='ops' AND state='queued' AND message_id IN "
                   "(SELECT id FROM messages WHERE body LIKE ?)", (H.shift(H.now(), minutes=-minutes), f"%{task['title']}%"))
-        return c.execute("SELECT created FROM jobs WHERE bot='ops' AND state='queued' AND message_id IN "
+        return c.execute("SELECT created_at FROM jobs WHERE bot='ops' AND state='queued' AND message_id IN "
                          "(SELECT id FROM messages WHERE body LIKE ?)", (f"%{task['title']}%",)).fetchone()[0]
 
 
@@ -295,7 +295,7 @@ def test_an_old_held_check_beside_a_young_free_job_is_neither_held_nor_slow(api)
     assert rows == [] and "queue_idle" not in found
     with api.app.state.store.transaction() as c:
         asked = H.shift(H.now(), minutes=-3)
-        c.execute("UPDATE jobs SET created=? WHERE message_id=?", (asked, chat["id"]))
+        c.execute("UPDATE jobs SET created_at=? WHERE message_id=?", (asked, chat["id"]))
     assert [(r["reason"], r["oldest"]) for r in ops_rows(api)[0]] == [("slow", asked)]
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs WHERE message_id=?", (chat["id"],))

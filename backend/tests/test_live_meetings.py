@@ -22,9 +22,9 @@ def live(api):
         "finance-live": Identity("bot:finance", "bot", agent="hermes"),
     })
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   ("ops", "hermes", digest("synthetic-ops-agent"), H.now(), "human:ana"))
-        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   ("finance", "hermes", digest("synthetic-finance-agent"), H.now(), "human:ana"))
     yield api
     assert settle(api)
@@ -144,11 +144,11 @@ def test_meeting_only_bot_read_and_parallel_turns_with_transcript_link(live):
         meeting_bots = c.execute("SELECT bot FROM live_meeting_bots WHERE meeting_id=?", (mid,)).fetchall()
         assert {row[0] for row in meeting_bots} == {"ops", "finance"}
         direct_jobs = c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
-                                "WHERE json_extract(m.refs_json,'$.live_meeting.meeting_id')=?",
+                                "WHERE json_extract(m.refs,'$.live_meeting.meeting_id')=?",
                                 (mid,)).fetchone()[0]
         assert direct_jobs == 2
         direct_job_states = c.execute("SELECT DISTINCT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
-                                      "WHERE json_extract(m.refs_json,'$.live_meeting.meeting_id')=?",
+                                      "WHERE json_extract(m.refs,'$.live_meeting.meeting_id')=?",
                                       (mid,)).fetchall()
         assert {row[0] for row in direct_job_states} == {"cancelled"}
 
@@ -198,7 +198,7 @@ def test_live_turns_use_concurrent_runner_jobs_and_hidden_pass(live):
     assert traces == []
     with live.app.state.store.read() as c:
         pass_events = [json.loads(row[0]) for row in c.execute(
-            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.router'", (mid,))]
+            "SELECT payload FROM live_meeting_events WHERE meeting_id=? AND type='meeting.router'", (mid,))]
         assert any(item.get("turn_id") == turns["finance"]["id"] and item["outcome"] == "pass"
                    and item["trace"]["reason"] == "bot_pass" for item in pass_events)
         assert c.execute("SELECT count(*) FROM live_meeting_chat WHERE meeting_id=? AND text='PASS'",
@@ -246,7 +246,7 @@ def test_end_cancels_open_turns_and_records_final_window_pass(live):
     assert ended["router"]["turns"][0]["skip_reason"] == "meeting_ended_before_reply"
     with live.app.state.store.read() as c:
         states = [row[0] for row in c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
-                                               "WHERE json_extract(m.refs_json,'$.live_meeting.meeting_id')=?",
+                                               "WHERE json_extract(m.refs,'$.live_meeting.meeting_id')=?",
                                                (queued["id"],))]
         assert states == ["cancelled"]
 
@@ -295,7 +295,7 @@ def test_named_chat_bypasses_decision_and_repeat_finalize_keeps_external_id(live
     with live.app.state.store.read() as c:
         refs = c.execute("SELECT count(*) FROM recording_source_refs WHERE source='tico-live' AND external_id=?",
                          ("human:ana:" + mid,)).fetchone()[0]
-        finalized_event = c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id=? "
+        finalized_event = c.execute("SELECT payload FROM live_meeting_events WHERE meeting_id=? "
                                     "AND type='meeting.finalized'", (mid,)).fetchone()
         finalized_events = c.execute("SELECT count(*) FROM live_meeting_events WHERE meeting_id=? "
                                      "AND type='meeting.finalized'", (mid,)).fetchone()[0]
@@ -306,7 +306,7 @@ def test_named_chat_bypasses_decision_and_repeat_finalize_keeps_external_id(live
     assert imported["review_state"] == "pending"
     pending = get(live, "meetings?review=pending")
     assert one["meeting_id"] in {row["id"] for row in pending["meetings"]}
-    assert json.loads(finalized_event["payload_json"]) == {
+    assert json.loads(finalized_event["payload"]) == {
         "id": mid, "meeting_id": one["meeting_id"], "source": "tico-live", "external_id": mid,
     }
 
@@ -332,9 +332,9 @@ def test_joined_human_can_remove_bot_and_revoke_queued_turn_access(live):
     assert detail["bots"] == []
     assert next(row for row in detail["router"]["turns"] if row["id"] == turn["id"])["skip_reason"] == "bot_detached"
     with live.app.state.store.read() as c:
-        event = c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id=? "
+        event = c.execute("SELECT payload FROM live_meeting_events WHERE meeting_id=? "
                           "AND type='meeting.bot_left'", (mid,)).fetchone()
-    assert json.loads(event["payload_json"]) == {
+    assert json.loads(event["payload"]) == {
         "bot": "ops", "removed_by": "human:ben", "cancelled_turns": [turn["id"]],
         "reason": "meeting_only_access_revoked"}
     denied = live.get("/api/v2/live-meetings/" + mid, headers=headers("ops-live"))
@@ -364,9 +364,9 @@ def test_chunk_correction_versions_are_idempotent_and_final_transcript_uses_late
     assert gap.json()["error"]["code"] == "revision_gap"
     assert gap.json()["error"]["expected_revision"] == 3
     with live.app.state.store.read() as c:
-        corrected_event = c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id=? "
+        corrected_event = c.execute("SELECT payload FROM live_meeting_events WHERE meeting_id=? "
                                     "AND type='meeting.chunk_corrected'", (mid,)).fetchone()
-    assert json.loads(corrected_event["payload_json"]) == {
+    assert json.loads(corrected_event["payload"]) == {
         "seq": 1, "revision": 2, "speaker": "Ana", "start_ms": 0, "end_ms": 1000,
         "text": "Corrected text", "corrected_by": "human:ana",
     }
@@ -429,9 +429,9 @@ def test_attachment_requires_write_and_keeper_delivery_keeps_human_contact_polic
     with live.app.state.store.transaction() as c:
         restrict(c, "ops", see={"people": ["cara"]}, read={"people": ["cara"]},
                  write={"people": ["ana"], "bots": ["finance"]})
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
         config["bot_contact"] = "tasks"
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode(config),))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
 
     meeting = connect(live, title="Write-authorized contact")
     mid = meeting["id"]
@@ -467,7 +467,7 @@ def test_attachment_requires_write_and_keeper_delivery_keeps_human_contact_polic
     assert claim["status"] == "skipped" and claim["reason"] == "bot_write_access_revoked"
     with live.app.state.store.read() as c:
         job = c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
-                        "WHERE json_extract(m.refs_json,'$.live_meeting.turn_id')=?", (turn_id,)).fetchone()
+                        "WHERE json_extract(m.refs,'$.live_meeting.turn_id')=?", (turn_id,)).fetchone()
     assert job["state"] == "cancelled"
 
 
@@ -662,7 +662,7 @@ def test_a_meeting_reply_runs_on_the_meeting_model_and_other_turns_keep_the_bots
            "task_model": {"model": "some-task-model"}}
     with live.app.state.store.transaction() as c:
         c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "created_at,updated_at,started_at,visibility,client,meeting_model) "
                   "VALUES('m-company','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
                   (H.now(), H.now(), H.now()))
         turn = live_meetings_module.turn_config(c, settings, own, "ops", "m-company", "")
@@ -696,12 +696,12 @@ def test_a_meeting_model_the_runner_cannot_run_falls_back_to_the_bots_model(live
     monkeypatch.setattr(task_models, "why_not", lambda *args, **kwargs: "pi is not installed on this computer")
     with live.app.state.store.transaction() as c:
         c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "created_at,updated_at,started_at,visibility,client,meeting_model) "
                   "VALUES('m-fallback','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
                   (H.now(), H.now(), H.now()))
         assert live_meetings_module.turn_config(c, settings, own, "ops", "m-fallback", "", turn_id="t-1") == {
             **own, "session": "task"}
-        event = c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id='m-fallback' AND type='meeting.model'").fetchone()
+        event = c.execute("SELECT payload FROM live_meeting_events WHERE meeting_id='m-fallback' AND type='meeting.model'").fetchone()
         payload = json.loads(event[0])
         assert payload["fallback"] == "bot_model" and payload["turn_id"] == "t-1"
         assert "not installed" in payload["reason"]
@@ -718,11 +718,11 @@ def test_a_meeting_model_outside_the_catalog_falls_back_and_says_why(live, monke
     own = {"runtime": "hermes", "harness": "hermes", "model": "bots-own"}
     with live.app.state.store.transaction() as c:
         c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "created_at,updated_at,started_at,visibility,client,meeting_model) "
                   "VALUES('m-gone','human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,'retired-model')",
                   (H.now(), H.now(), H.now()))
         assert live_meetings_module.turn_config(c, settings, own, "ops", "m-gone", "") == {**own, "session": "task"}
-        payload = json.loads(c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id='m-gone' "
+        payload = json.loads(c.execute("SELECT payload FROM live_meeting_events WHERE meeting_id='m-gone' "
                                        "AND type='meeting.model'").fetchone()[0])
         assert "not in the model catalog" in payload["reason"]
 
@@ -784,7 +784,7 @@ def test_each_meeting_is_its_own_thread_and_a_meetings_turns_continue_it(live):
     """A private meeting's words never reach another meeting or the bot's chats: each meeting and bot has one
     conversation, and its turns run on that conversation's own thread, whatever the bot's session setting."""
     with live.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.session','bot') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.session','bot') WHERE bot='ops'")
     private = post(live, "live-meetings", {"title": "Private A", "visibility": "private", "cooldown_seconds": 0})
     team = post(live, "live-meetings", {"title": "Team B", "cooldown_seconds": 0})
     for meeting in (private, team):
@@ -806,7 +806,7 @@ def test_each_meeting_is_its_own_thread_and_a_meetings_turns_continue_it(live):
     assert thread_of(first) == thread_of(second) == "conversation:" + first["conversation"]["id"]
     assert thread_of(other) == "conversation:" + other["conversation"]["id"] != thread_of(first)
     with live.app.state.store.read() as c:
-        own = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        own = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
         kept = {row[0] for row in c.execute("SELECT conversation_id FROM live_meeting_bots WHERE bot='ops'")}
     from clients import sessions
     assert sessions.session_key(own, "ops", None, "any-direct-chat") == sessions.BOT_THREAD != thread_of(first)
@@ -830,7 +830,7 @@ def test_a_named_follow_up_while_the_bot_replies_is_steered_into_that_reply(live
     first = next(turn for turn in detail["router"]["turns"] if turn["source_key"] == "chunk:1")
     with live.app.state.store.read() as c:
         deferred = [json.loads(row[0]) for row in c.execute(
-            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_deferred'", (mid,))]
+            "SELECT payload FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_deferred'", (mid,))]
     assert deferred == [{"turn_id": follow["id"], "bot": "ops", "reason": "replying_in_meeting",
                          "behind": first["id"], "source_key": "chunk:2"}]
     # A runtime that steers takes the follow-up into the running turn, as any follow-up in its conversation.
@@ -871,7 +871,7 @@ def test_a_named_follow_up_a_runtime_cannot_steer_runs_right_after_and_busy_bots
     assert any(turn["source_key"] == "chunk:3" and turn["status"] == "pending" for turn in detail["router"]["turns"])
     with live.app.state.store.read() as c:
         reasons = [json.loads(row[0])["reason"] for row in c.execute(
-            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_deferred'", (mid,))]
+            "SELECT payload FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_deferred'", (mid,))]
     assert reasons[-1] == "busy"
 
 
@@ -927,7 +927,7 @@ def test_a_chunk_is_acknowledged_before_its_window_decision_comes_back(live):
     assert [window["outcome"] for window in windows if window["trace"].get("chunk_range")] == ["route"]
     # A lost routing thread (a restart) is picked up by the scheduler's sweep.
     with live.app.state.store.transaction() as c:
-        c.execute("INSERT INTO live_meeting_chunks(meeting_id,seq,revision,speaker,start_ms,end_ms,text,created) "
+        c.execute("INSERT INTO live_meeting_chunks(meeting_id,seq,revision,speaker,start_ms,end_ms,text,created_at) "
                   "VALUES(?,3,1,'Ana',40000,61000,'Late words',?)", (mid, H.now()))
         c.execute("UPDATE live_meetings SET seq=3 WHERE id=?", (mid,))
     live.app.state.live_meeting_routing.sweep()
@@ -968,12 +968,12 @@ def test_a_gateway_meeting_model_a_computer_cannot_run_falls_back_to_mercury_on_
 
     def meeting(rid):
         c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,window_ms,cooldown_ms,reply_cap,threshold,"
-                  "created,updated,started_at,visibility,client,meeting_model) "
+                  "created_at,updated_at,started_at,visibility,client,meeting_model) "
                   "VALUES(?,'human:ana','t','live',30000,60000,3,0.7,?,?,?,'team',NULL,NULL)",
                   (rid, H.now(), H.now(), H.now()))
 
     def said(rid):
-        return json.loads(c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id=? "
+        return json.loads(c.execute("SELECT payload FROM live_meeting_events WHERE meeting_id=? "
                                     "AND type='meeting.model'", (rid,)).fetchone()[0])
 
     with live.app.state.store.transaction() as c:
@@ -1005,7 +1005,7 @@ def handed(api, attempt):
 def retried(api, mid):
     with api.app.state.store.read() as c:
         return [json.loads(row[0]) for row in c.execute(
-            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_retried' "
+            "SELECT payload FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_retried' "
             "ORDER BY event_id", (mid,))]
 
 
@@ -1194,8 +1194,8 @@ def test_a_runner_without_private_lanes_never_takes_a_private_meetings_turn(live
     assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
     with live.app.state.store.read() as c:
         reasons = [why for _, why in queued_reasons(c, live.app.state.store.settings, machine["runner_id"], "ops")]
-        waiting = [json.loads(r["payload_json"]) for r in c.execute(
-            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_waiting'",
+        waiting = [json.loads(r["payload"]) for r in c.execute(
+            "SELECT payload FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_waiting'",
             (private["id"],))]
     assert reasons and set(reasons) == {"private_update"}
     assert [(w["bot"], w["reason"], w["detail"]) for w in waiting] == [
@@ -1251,7 +1251,7 @@ def test_a_private_turn_with_no_copy_of_the_repository_ends_and_the_meeting_says
     assert second["job_id"] != first["job_id"]
     with live.app.state.store.read() as c:
         said = [json.loads(r[0]) for r in c.execute(
-            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_failed'", (mid,))]
+            "SELECT payload FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_failed'", (mid,))]
     assert [(s["bot"], s["reason"], s["detail"]) for s in said] == [(
         "ops", "private_checkout",
         "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository")], "said once"

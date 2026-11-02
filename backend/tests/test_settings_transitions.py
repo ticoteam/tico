@@ -25,7 +25,7 @@ def _company_default(api, bot, model="gpt-6-sol"):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO registry_metadata VALUES('providers',?)", (encode({
             "enabled": ["openai"], "runtime": "codex", "model": model, "revision": 1}),))
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode({"name": bot}), bot))
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode({"name": bot}), bot))
 
 
 def test_move_refuses_a_destination_that_is_not_ready_for_the_bot(api):
@@ -68,7 +68,7 @@ def test_resume_and_restore_check_the_repository_before_activating(api):
     assert post(api, "bots/ops/restore", {})["status"] == "active"
     # Built-in repositories are built by their assigned computer, even on older configs without materialize.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='coo'", (encode({"template": "assistant"}),))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='coo'", (encode({"template": "assistant"}),))
         c.execute("UPDATE bots SET state='paused' WHERE slug='coo'")
     ready(api, r, [])
     pending = post(api, "bots/coo/go-live", {"setup": False})
@@ -177,7 +177,7 @@ def _waiting(api, monkeypatch, github=("present", None)):
 def _record(api):
     import json
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT value_json FROM registry_metadata WHERE key='go-live-pending:cpo'").fetchone()
+        row = c.execute("SELECT value FROM registry_metadata WHERE key='go-live-pending:cpo'").fetchone()
         return json.loads(row[0]) if row else None
 
 
@@ -219,7 +219,7 @@ def test_a_waiting_go_live_shows_in_health_and_expires_with_one_notice(api, monk
     # The computer never reports the repository; eight days later the scheduler ends it.
     record = _record(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='go-live-pending:cpo'",
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='go-live-pending:cpo'",
                   (encode({**record, "requested_at": "2026-01-01T00:00:00.000000Z"}),))
     scheduler = Scheduler(api.app.state.store, api.app.state.execution)
     scheduler.tick(datetime(2026, 1, 9, tzinfo=timezone.utc))
@@ -259,12 +259,12 @@ def test_go_live_for_a_bot_waiting_on_the_repo_create_permission_names_the_owner
 
 def test_compact_at_saves_without_a_fresh_session(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO conversations(id,kind,participants_json) VALUES('c1','chat',?)", (encode(["bot:cpo"]),))
+        c.execute("INSERT INTO conversations(id,kind,participants) VALUES('c1','chat',?)", (encode(["bot:cpo"]),))
     assert get(api, "bots/cpo")["compact_at"] == 250_000
     revision = get(api, "bots/cpo")["revision"]
     post(api, "bots/cpo/compact-at", {"compact_at": 123_000, "expected_revision": revision}, expected=422)
     post(api, "bots/cpo/compact-at", {"compact_at": 400_000, "expected_revision": revision})
     assert get(api, "bots/cpo")["compact_at"] == 400_000
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cpo'").fetchone()[0])["compact_at"] == 400_000
+        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])["compact_at"] == 400_000
         assert not c.execute("SELECT 1 FROM session_epochs").fetchone()

@@ -736,7 +736,7 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
     and a cloud agent's add to a seat both land here, so they land the same way. Returns the setup task's id, if any."""
     from . import message_bots
     if card.get("session") == "task":
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.session','task') WHERE bot=?", (slug,))
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.session','task') WHERE bot=?", (slug,))
     if row["team"]:
         c.execute("UPDATE bot_config SET team=? WHERE bot=?", (row["team"], slug))
     declared = onboarding._declared(c, slug)
@@ -747,10 +747,10 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
     c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (lifecycle.statuses.NEEDS_SETUP, slug))
     message_bots.link(c, who.actor, slug, who.actor)
     now = H.now()
-    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated=?,updated_by=? WHERE id=?",
+    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated_at=?,updated_by=? WHERE id=?",
               (now, who.actor, slug, now, who.actor, row["id"]))
     # Seats that reported to this one move under the bot that fills it, rather than under a closed seat.
-    c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
+    c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
               (slug, now, who.actor, "seat:" + row["id"]))
     end_draft(c, row, "The seat was filled")
     H.event(c, who.actor, "seat.filled", row["id"], {"bot": slug, "template": card["template"], "model": model})

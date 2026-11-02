@@ -81,7 +81,7 @@ def per_owner(rule):
 
 
 def _recent(c, key, at, hours):
-    return bool(c.execute("SELECT 1 FROM events WHERE action=? AND json_extract(detail_json,'$.key')=? AND ts>? LIMIT 1",
+    return bool(c.execute("SELECT 1 FROM events WHERE action=? AND json_extract(detail,'$.key')=? AND ts>? LIMIT 1",
                           (EVENT, key, H.shift(at, seconds=-hours * 3600))).fetchone())
 
 
@@ -93,13 +93,13 @@ def sweep(c, at=None):
     at = at or H.now()
     hidden = {H.bot_actor(slug) for slug in updates.restricted_bots(c)}
     sent = []
-    for step in H._rows(c.execute("SELECT * FROM task_steps WHERE flow_json LIKE '%\"backlog\"%'")):
+    for step in H._rows(c.execute("SELECT * FROM task_steps WHERE flow LIKE '%\"backlog\"%'")):
         rule = step_flow.of(step).get("backlog")
         if not rule:
             continue
         rows = H._rows(c.execute(
             f"SELECT * FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
-            "ORDER BY created, id", (step["id"], *FINISHED)))
+            "ORDER BY created_at, id", (step["id"], *FINISHED)))
         rows = [row for row in rows if not H.task_private(c, row) and not {row["owner"], row["requester"]} & hidden]
         groups = {}
         for row in rows:

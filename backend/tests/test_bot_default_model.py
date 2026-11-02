@@ -21,7 +21,7 @@ def create(api, slug, model=None, expected=200):
 
 def model_of(api, slug):
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
     return json.loads(row[0])["model"]
 
 

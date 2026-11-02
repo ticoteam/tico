@@ -15,7 +15,7 @@ const {open} = require('./tasks-page.cjs');
 const HASH = 'a'.repeat(12) + 'b'.repeat(52), HASH2 = 'c'.repeat(64);
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const approval = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve this send', requester: 'bot:support',
-  requested_by: 'bot:support', created: new Date().toISOString(), conversation_id: 'c-1',
+  requested_by: 'bot:support', created_at: new Date().toISOString(), conversation_id: 'c-1',
   payload: {to: ['ava@creator.example'], cc: [], subject: '<img src=x onerror="window.pwned=1">Contract', mailbox: 'ana@acme.example',
     draft: 'r-882', body_sha256: 'd'.repeat(64), attachments: [
       {name: 'chart.png', size: 219136, sha256: HASH, file_id: 'f-chart-0001'},
@@ -26,7 +26,7 @@ const REPLY = 'You asked how BotOps can restart a stuck runner without losing th
   'Open Settings, then Computers, pick the computer and choose Restart runner; queued_runs_survive_a_restart_because_they_live_in_hub_db_not_in_the_runner.\n\n' +
   '<img src=x onerror="window.pwned=1"> is how the ticket quoted it, and that stays text.\nThanks, Support';
 const publish = {id: 'ap-pub', kind: 'approval', what: 'publish', title: 'Approve this publish', requester: 'bot:support',
-  requested_by: 'bot:support', created: new Date().toISOString(),
+  requested_by: 'bot:support', created_at: new Date().toISOString(),
   payload: {content_sha256: '355cf' + 'e'.repeat(59), text: REPLY, url: 'hq-ticket:TK-TGYWKV5A'},
   ready_since: new Date(Date.now() - (130 * 60 + 5) * 1000).toISOString()};
 const PUBLISH_CLOCK = new Date();
@@ -115,7 +115,7 @@ async function phonePublish(browser) {
 const REPORT = 'hub task update has failed since 0.2.17 with: refused (version); a fresh read gives the same error. ' +
   'Tried: hub task show, then the update with the new version; still refused. <script>window.pwned=1</script> stays text.';
 const report = {id: 'ap-sup', kind: 'approval', what: 'support', title: 'Send this to Tico support?', requester: 'bot:support',
-  requested_by: 'bot:support', created: new Date().toISOString(), support: {to: 'updates.tico.team'},
+  requested_by: 'bot:support', created_at: new Date().toISOString(), support: {to: 'updates.tico.team'},
   payload: {message: REPORT, content_sha256: 'e'.repeat(64)}};
 async function phoneSupport(browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
@@ -151,7 +151,7 @@ async function phoneSupport(browser) {
 async function phoneRedesignKinds(browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
   const at = new Date().toISOString(), ap = (id, what, payload) => ({id, kind: 'approval', what, title: 'Approve this ' + what,
-    requester: 'bot:analyst', requested_by: 'bot:analyst', created: at, payload});
+    requester: 'bot:analyst', requested_by: 'bot:analyst', created_at: at, payload});
   const items = [ap('ap-cap', 'task_cap', {sender: 'bot:engineer', receiver: 'bot:support', per_day: 40}),
     ap('ap-lim', 'spend_limit', {bot: 'bot:engineer', daily_usd: 25, monthly_usd: 400})];
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));

@@ -137,10 +137,10 @@ def recent(c, auth, who, at=None, *, bot=None, attempt_id=""):
              "weekly": H.shift(today + "T12:00:00.000000Z", days=-(WEEKLY_DAYS - 1))[:10]}
     clause, values = U._only(sorted(readable))
     rows = c.execute(
-        f"SELECT u.id, u.bot, u.kind, u.day, u.body, u.created, u.updated, r.read_at FROM updates u "
+        f"SELECT u.id, u.bot, u.kind, u.day, u.body, u.created_at, u.updated_at, r.read_at FROM updates u "
         "LEFT JOIN update_reads r ON r.update_id=u.id AND r.actor=? "
         f"WHERE {clause} AND {U._kept(U.meeting_reader(who))} AND ((u.kind='daily' AND u.day>=?) "
-        "OR (u.kind='weekly' AND u.day>=?)) AND u.day<=? ORDER BY u.created DESC LIMIT ?",
+        "OR (u.kind='weekly' AND u.day>=?)) AND u.day<=? ORDER BY u.created_at DESC LIMIT ?",
         (who.actor, *values, since["daily"], since["weekly"], today, ITEMS_MAX * 3)).fetchall()
     rows = [r for r in rows if opens_all(c, auth, who, r["body"], access)][:ITEMS_MAX]
     if not rows:
@@ -171,7 +171,7 @@ def recent(c, auth, who, at=None, *, bot=None, attempt_id=""):
         own_goals = goals.get(actor, [])[:3]
         waits = actor in waiting or bool(named and named.search(r["body"] or ""))
         items.append({"id": r["id"], "author": people.get(r["bot"]) or names.get(r["bot"], r["bot"]),
-                      "kind": r["kind"], "day": r["day"], "posted": r["updated"] or r["created"],
+                      "kind": r["kind"], "day": r["day"], "posted": r["updated_at"] or r["created_at"],
                       "read": bool(r["read_at"]), "goals": own_goals, "waits_on_you": waits,
                       "text": _clip(r["body"]),
                       "link": f"#/updates?kind={r['kind']}&day={r['day']}&update={r['id']}"})

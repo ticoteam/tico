@@ -13,11 +13,11 @@ const GOOGLE = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=acme';
 
 const now = Date.now(), at = m => new Date(now - m * 60000).toISOString();
 const quote = {id: 't-quote', title: 'Send the Acme renewal quote', owner: 'bot:botops', requester: 'human:ana', status: 'waiting',
-  lane: 'company', version: 4, created: at(90), updated: at(3)};
+  lane: 'company', version: 4, created_at: at(90), updated_at: at(3)};
 const card = (id, over, minutes) => ({id, conversation_id: 'r-quote', from_actor: 'bot:botops', to_actor: over.person, kind: 'say',
-  body: over.line, created: at(minutes), refs: {task: 't-quote', reconnect: {status: 'open', bot: 'botops', ...over}}});
+  body: over.line, created_at: at(minutes), refs: {task: 't-quote', reconnect: {status: 'open', bot: 'botops', ...over}}});
 const comments = [
-  {id: 'q1', conversation_id: 'r-quote', from_actor: 'bot:botops', kind: 'say', body: 'Drafting the quote now.', created: at(20)},
+  {id: 'q1', conversation_id: 'r-quote', from_actor: 'bot:botops', kind: 'say', body: 'Drafting the quote now.', created_at: at(20)},
   card('q2', {key: 'google:ana@acme.example', service: 'google', label: 'Google (ana@acme.example)', person: 'human:ana',
     fix: {kind: 'google', account: 'ana@acme.example'}, line: "BotOps can't reach Google (ana@acme.example)."}, 9),
   card('q3', {key: 'secret:botops:ACME_CRM_TOKEN', service: 'secret', label: 'the Acme CRM token', person: 'human:ben',

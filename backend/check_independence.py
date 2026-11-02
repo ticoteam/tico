@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS check_head_provenance(
   check_id TEXT NOT NULL, ticket_id TEXT NOT NULL, head TEXT NOT NULL, turn_id TEXT NOT NULL,
   builder_families TEXT NOT NULL, configured_families TEXT NOT NULL DEFAULT '[]',
   checker_families TEXT NOT NULL, known INTEGER NOT NULL,
-  created TEXT NOT NULL, PRIMARY KEY(check_id,head,turn_id));
+  created_at TEXT NOT NULL, PRIMARY KEY(check_id,head,turn_id));
 CREATE INDEX IF NOT EXISTS check_head_provenance_head ON check_head_provenance(ticket_id,head);
 """
 
@@ -41,7 +41,7 @@ def configured(c, check_id, owner):
 
 
 def _executed(c, task_id):
-    turns = [r[0] for r in c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started,id", (task_id,))]
+    turns = [r[0] for r in c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at,id", (task_id,))]
     if not turns:
         return set(), False
     families, known = set(), True
@@ -72,7 +72,7 @@ def capture_attempt(c, ticket_id, check_id, head, turn_id):
     check = H.task(c, check_id)
     configured_families = configured(c, check_id, check.get("owner") if check else None)
     c.execute("INSERT OR REPLACE INTO check_head_provenance(check_id,ticket_id,head,turn_id,builder_families,"
-              "configured_families,checker_families,known,created) VALUES(?,?,?,?,?,?,?,?,?)",
+              "configured_families,checker_families,known,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
               (check_id, ticket_id, str(head or "").lower(), turn_id, json.dumps(sorted(builder)),
                json.dumps(configured_families), json.dumps(sorted(checker)), int(known), H.now()))
     return {"eligible": known and bool(builder) and bool(checker) and not builder.intersection(checker),
@@ -93,7 +93,7 @@ def assess(c, ticket, checker, *, head=None, check_id=None, attempt_id=None):
         ensure(c)
         row = c.execute("SELECT builder_families,configured_families,checker_families,known FROM check_head_provenance "
                         "WHERE ticket_id=? AND check_id=? AND head=? "
-                        "AND (? IS NULL OR turn_id=?) ORDER BY created DESC,turn_id DESC LIMIT 1",
+                        "AND (? IS NULL OR turn_id=?) ORDER BY created_at DESC,turn_id DESC LIMIT 1",
                         (ticket["id"], check_id, str(head or "").lower(), attempt_id, attempt_id)).fetchone()
         if row:
             builder = set(H._json(row["builder_families"], []) or [])

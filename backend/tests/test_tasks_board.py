@@ -38,7 +38,7 @@ def api(tmp_path, monkeypatch):
                 {"id": "ben", "email": "ben@acme.example", "team": "product"},
                 {"id": "priya", "email": "priya@acme.example", "team": "sales"}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
                           (slug, encode(config), "product" if slug == "cpo" else "marketing" if slug == "cmo" else None, "ana"))
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)",
                       (encode({"completed": "2026-01-01T00:00:00Z"}),))
@@ -275,10 +275,10 @@ def test_the_author_edits_a_comment_and_nobody_wakes(api):
     after = get(api, "tasks/" + task["id"])
     assert [(m["body"], bool(m["edited_at"])) for m in after["comments"]] == [("Use the August numbers.", True)]
     assert len(after["messages"]) == len(before["messages"]) and jobs_for(api, "ops") == queued, "nothing sent, nobody woken"
-    assert after["task"]["updated"] > before["task"]["updated"]
+    assert after["task"]["updated_at"] > before["task"]["updated_at"]
     assert any(e["field"] == "comment" and e["new"] == said["comment"]["id"] for e in after["events"])
     with api.app.state.store.read() as c:
-        audit = c.execute("SELECT detail_json FROM events WHERE action='message.edited' AND target=?",
+        audit = c.execute("SELECT detail FROM events WHERE action='message.edited' AND target=?",
                           (said["comment"]["id"],)).fetchone()[0]
     assert "Agust" not in audit, "the audit keeps metadata without withdrawn words"
 
@@ -305,13 +305,13 @@ def test_a_deleted_comment_leaves_the_task_and_never_reaches_the_bot(api):
     assert gone["comment"]["deleted_at"] and gone["woke"] is False
     after = get(api, "tasks/" + task["id"])
     assert said["id"] not in {m["id"] for m in gone["comments"] + after["comments"] + after["messages"]}
-    assert after["task"]["updated"] > before["task"]["updated"]
+    assert after["task"]["updated_at"] > before["task"]["updated_at"]
     assert after["task"]["ask"]["id"] == ask["id"], "the question it answered is open again"
     get(api, "messages/" + said["id"], expected=404)
     post(api, f"tasks/{task['id']}/comments/{said['id']}", {"text": "October"}, expected=404)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (said["id"],)).fetchone()[0] == "cancelled"
-        assert c.execute("SELECT expires FROM task_delegations WHERE message_id=?", (said["id"],)).fetchone()[0] <= H.now()
+        assert c.execute("SELECT expires_at FROM task_delegations WHERE message_id=?", (said["id"],)).fetchone()[0] <= H.now()
 
 
 # ----------------------------------------------------------------------------- movers
@@ -381,7 +381,7 @@ def test_tag_migration_backfills_once_and_preserves_legacy_column(api):
                               "type": typ["id"], "step": "Copy review"})
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET labels_json=? WHERE id=?", ('["release","bug","bug"]', task["id"]))
+        c.execute("UPDATE tasks SET labels=? WHERE id=?", ('["release","bug","bug"]', task["id"]))
         c.execute("DROP TABLE task_tags")
         c.execute("DROP TABLE tags")
         c.execute("PRAGMA user_version=13")
@@ -405,7 +405,7 @@ def test_tag_migration_backfills_once_and_preserves_legacy_column(api):
     store.initialize(seed_market=False)
     with store.read() as c:
         assert H.task_labels(H.task(c, task["id"])) == ["bug"]
-        assert c.execute("SELECT labels_json FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == '["release","bug","bug"]'
+        assert c.execute("SELECT labels FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == '["release","bug","bug"]'
 
 
 def test_tag_owner_movers_and_stale_versions(api):
@@ -521,10 +521,10 @@ def test_number_migration_preserves_shipped_schemas_and_existing_step_order(tmp_
         H._apply(c, schema)
     c.execute('PRAGMA user_version=22')
     stamp = H.now()
-    c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('dev','Dev ticket',?,?)", (stamp, stamp))
+    c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev ticket',?,?)", (stamp, stamp))
     c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES('todo','dev','To do',0,'open')")
     for ident in ('first', 'second'):
-        c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,created,updated,type_id,step_id) "
+        c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,created_at,updated_at,type_id,step_id) "
                   "VALUES(?,?,'x','human:ana','bot:ops','open',?,?,'dev','todo')", (ident, ident, stamp, stamp))
     H.migrate(c)
     ranks = [tuple(row) for row in c.execute('SELECT id,step_rank,number FROM tasks ORDER BY step_rank')]
@@ -588,7 +588,7 @@ def test_delegate_cannot_turn_temporary_access_into_ancestor_access(api):
     parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Own the plan', 'body': 'x'})
     unrelated = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review other work', 'body': 'x'})
     with api.app.state.store.transaction() as c:
-        c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)',
+        c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)',
                   (unrelated['id'], 'bot:ops', 'human:ana', c.execute('SELECT id FROM messages LIMIT 1').fetchone()[0], H.shift(H.now(), days=1)))
     get(api, 'tasks/' + unrelated['id'], token=token)
     relate(api, unrelated['id'], parent['id'], 'parent', token=token, expected=403)
@@ -619,14 +619,14 @@ def test_a_list_carries_a_links_set_columns_not_its_record_or_write_time(api):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Trim list links', 'body': 'x'})
     with api.app.state.store.transaction() as c:
         tree = H.task_link(c, 'human:ana', task['id'], 'https://example.com/tree', kind='worktree')
-        c.execute("UPDATE task_links SET repo='acme/app', path='tasks/t1/acme__app', detail_json=? WHERE id=?",
+        c.execute("UPDATE task_links SET repo='acme/app', path='tasks/t1/acme__app', detail=? WHERE id=?",
                   (json.dumps({'size_mb': 40, 'activity_at': '2026-10-24T00:00:00Z'}), tree['id']))
     listed = {l['kind']: l for l in next(t for t in get(api, 'tasks')['tasks'] if t['id'] == task['id'])['links']}
     assert listed['worktree']['repo'] == 'acme/app' and listed['worktree']['path'] == 'tasks/t1/acme__app'
-    assert not {'detail_json', 'updated', 'pr_sha', 'number', 'checks'} & set(listed['worktree'])
+    assert not {'detail', 'updated_at', 'pr_sha', 'number', 'checks'} & set(listed['worktree'])
     # The task's own read keeps the whole record.
     full = {l['kind']: l for l in get(api, 'tasks/' + task['id'])['task']['links']}
-    assert json.loads(full['worktree']['detail_json'])['size_mb'] == 40 and 'updated' in full['worktree']
+    assert json.loads(full['worktree']['detail'])['size_mb'] == 40 and 'updated_at' in full['worktree']
 
 
 def test_people_can_change_visible_task_links_but_bots_need_task_rights(api):
@@ -649,7 +649,7 @@ def test_people_can_change_visible_task_links_but_bots_need_task_rights(api):
     post(api, path, {'url': 'codex resume abc123', 'kind': 'session'}, token=token, expected=403)
     session = post(api, path, {'url': 'codex resume abc123', 'kind': 'session'}, token='priya-test')['links'][-1]
     assert (session['kind'], session['url']) == ('session', 'session:codex resume abc123')
-    assert json.loads(session['detail_json']) == {'primary': False, 'harness': 'codex', 'thread_id': 'abc123'}
+    assert json.loads(session['detail']) == {'primary': False, 'harness': 'codex', 'thread_id': 'abc123'}
     # The owning bot and an ancestor party retain their task rights.
     parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Track linked work', 'body': 'x'})
     child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Build linked work', 'body': 'x', 'relations': [{'task': parent['id'], 'kind': 'parent'}]})

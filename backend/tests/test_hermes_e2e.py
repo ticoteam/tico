@@ -162,7 +162,7 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     # ... and the heartbeat it sent is what the hub shows.
     listed = bot(api)
     assert listed["online"] is True and listed["agent"]["credential"] is True and listed["agent"]["profile"] == "scout"
-    assert listed["agent"]["model"] == "gpt-5.6-luna" and listed["agent"]["last_seen"]
+    assert listed["agent"]["model"] == "gpt-5.6-luna" and listed["agent"]["last_seen_at"]
     assert connector.status()["last_reply"]["waiting"] == {"messages": 0, "tasks": 0}
     # Pairing also scheduled the agent's hourly sync job (a fake `hermes` records it), so doctor finds it.
     assert connector.sync_jobs() == ["tico-sync"]

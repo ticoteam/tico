@@ -49,7 +49,7 @@ OLD_HIDE_PREF = "chart.hide_ceo_bot"
 
 
 def _record(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         value = json.loads(row[0]) if row else {}
     except ValueError:
@@ -82,17 +82,17 @@ def _rename(c, actor, display_name):
     """The name in both places `SettingsAdmin.update_bot` keeps it, with a new revision so a form opened before
     cannot save the old name back over it."""
     c.execute("UPDATE bots SET display_name=? WHERE slug=?", (display_name, SLUG))
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (SLUG,)).fetchone()
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (SLUG,)).fetchone()
     if not row:
         return
     try:
-        declared = json.loads(row["config_json"] or "{}")
+        declared = json.loads(row["config"] or "{}")
     except ValueError:
         declared = None
     if isinstance(declared, dict):
         declared["display_name"] = display_name
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(declared), SLUG))
-    c.execute("UPDATE bot_config SET revision=revision+1,definition_updated=?,definition_updated_by=? WHERE bot=?",
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), SLUG))
+    c.execute("UPDATE bot_config SET revision=revision+1,definition_updated_at=?,definition_updated_by=? WHERE bot=?",
               (H.now(), actor, SLUG))
 
 
@@ -104,7 +104,7 @@ def migrate(c):
     reopened the file and wrote it since, so what it holds wins (each of its fields over the record; the later "Hide
     from my chart"), and a choice the owner made then is kept. Also run where the bot is built in later
     (backend/onboarding.py names it with `name`)."""
-    old, new = (c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
+    old, new = (c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
                 for key in (OLD_KEY, KEY))
     if old and (not new or old[0] != new[0]):
         try:
@@ -114,20 +114,20 @@ def migrate(c):
         if isinstance(since, dict):
             _save(c, {**_record(c), **since})
         else:
-            c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) SELECT ?, value_json "
+            c.execute("INSERT OR IGNORE INTO registry_metadata(key,value) SELECT ?, value "
                       "FROM registry_metadata WHERE key=?", (KEY, OLD_KEY))
     elif new and not old:
         _save(c, _record(c))
-    c.execute("INSERT INTO preferences(actor,key,value_json,updated) SELECT actor, ?, value_json, updated "
+    c.execute("INSERT INTO preferences(actor,key,value,updated_at) SELECT actor, ?, value, updated_at "
               "FROM preferences AS o WHERE key=? AND NOT EXISTS (SELECT 1 FROM preferences AS p "
-              "WHERE p.actor=o.actor AND p.key=? AND p.updated>=o.updated) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+              "WHERE p.actor=o.actor AND p.key=? AND p.updated_at>=o.updated_at) "
+              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
               (HIDE_PREF, OLD_HIDE_PREF, HIDE_PREF))
     # Then each old key reads as its new one, for an older release to read after a rollback.
-    c.execute("INSERT INTO preferences(actor,key,value_json,updated) SELECT actor, ?, value_json, updated "
+    c.execute("INSERT INTO preferences(actor,key,value,updated_at) SELECT actor, ?, value, updated_at "
               "FROM preferences AS n WHERE key=? AND NOT EXISTS (SELECT 1 FROM preferences AS p "
-              "WHERE p.actor=n.actor AND p.key=? AND p.updated>=n.updated) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+              "WHERE p.actor=n.actor AND p.key=? AND p.updated_at>=n.updated_at) "
+              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
               (OLD_HIDE_PREF, HIDE_PREF, OLD_HIDE_PREF))
     from . import strategy_suggest
     # Decided by Tico, as `strategy_suggest.withdraw` records one now, so an older release after a rollback, which
@@ -227,7 +227,7 @@ def _review_touched(c, since):
     """Whether anyone but the server started or paused the Monday note after the server started it."""
     since = since if isinstance(since, str) else ""
     return c.execute("SELECT 1 FROM events WHERE action='routine.updated' AND target=? AND actor!=? AND ts>=? "
-                     "AND detail_json LIKE '%\"enabled\"%' LIMIT 1", (REVIEW, H.KEEPER, since)).fetchone() is not None
+                     "AND detail LIKE '%\"enabled\"%' LIMIT 1", (REVIEW, H.KEEPER, since)).fetchone() is not None
 
 
 def reconcile(c):
@@ -263,7 +263,7 @@ def hidden_for(c, who):
     hidden. Only the chart reads it (`chart_entries`, `chart_groups`, `chart_hidden_row`)."""
     if getattr(who, "role", "") not in ("owner", "human") or getattr(who, "via_token", False):
         return False
-    row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?", (who.actor, HIDE_PREF)).fetchone()
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (who.actor, HIDE_PREF)).fetchone()
     return bool(row) and json.loads(row[0]) is True
 
 
@@ -408,13 +408,13 @@ def set_level(c, actor, value):
 def _save(c, record):
     for key in (KEY, OLD_KEY):
         c.execute("INSERT INTO registry_metadata VALUES(?,?) "
-                  "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (key, encode(record)))
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, encode(record)))
 
 
 def mirror_hide(c, actor, value_json, updated):
     """Write a person's "Hide from my chart" under its old key too (OLD_KEY)."""
-    c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
-              "DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+    c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
+              "DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
               (actor, OLD_HIDE_PREF, value_json, updated))
 
 
@@ -434,19 +434,19 @@ def day_start(at=None):
 def asked_today(c, person, at=None):
     """How many tasks the Strategy Bot filed for this person today (UTC), closed ones included, and merged items."""
     since = day_start(at)
-    return c.execute("SELECT COUNT(*) FROM tasks WHERE requester=? AND owner=? AND created>=?",
+    return c.execute("SELECT COUNT(*) FROM tasks WHERE requester=? AND owner=? AND created_at>=?",
                      ("bot:" + SLUG, person, since)).fetchone()[0] + c.execute(
         "SELECT COUNT(DISTINCT merged_into) FROM "
-        "strategy_merges WHERE person=? AND created>=?", (person, since)).fetchone()[0]
+        "strategy_merges WHERE person=? AND created_at>=?", (person, since)).fetchone()[0]
 
 
 def asked_today_all(c, at=None):
     """{person actor: tasks the Strategy Bot filed for them today}, for the people it filed any for."""
     since, out = day_start(at), {}
     for who, n in c.execute(
-            "SELECT owner, COUNT(*) FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND created>=? GROUP BY owner "
+            "SELECT owner, COUNT(*) FROM tasks WHERE requester=? AND owner LIKE 'human:%' AND created_at>=? GROUP BY owner "
             "UNION ALL SELECT person, COUNT(DISTINCT merged_into) FROM strategy_merges "
-            "WHERE created>=? GROUP BY person",
+            "WHERE created_at>=? GROUP BY person",
             ("bot:" + SLUG, since, since)):
         out[who] = out.get(who, 0) + n
     return out

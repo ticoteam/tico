@@ -11,7 +11,7 @@ A task's own model (backend/task_run_models.py) comes before the bot's task mode
 (backend/check_models.py) before both; the task context length applies to all of them. A task model that cannot
 run here (retired, its provider off, not installed or not signed in on its computer) never holds or fails the turn:
 the next one in that order runs, and the bot's own model runs last, with the task context length and any task effort
-that model takes, and the run and the task say so. Each turn's choice is kept on its attempt (`model_json`) for its
+that model takes, and the run and the task say so. Each turn's choice is kept on its attempt (`model`) for its
 run history (usage_records.ran_on). A config with no model, effort or context length is the same as the bot."""
 import json
 
@@ -142,7 +142,7 @@ def readiness(c, bot, choice, runner_id=None):
     can = can_run(c, bot, choice["runtime"], runner=runner_id, harness=choice["harness"], model=choice["model"])
     computer = can.get("computer") or {}
     where = computer.get("label") or "this bot's computer"
-    row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (computer.get("id") or "",)).fetchone()
+    row = c.execute("SELECT readiness FROM runners WHERE id=?", (computer.get("id") or "",)).fetchone()
     ready = readiness_document(row[0]) if row else {}
     state = (ready.get("runtimes") or {}).get(choice["runtime"])
     if ready.get("schema_version") == 1 and isinstance(state, dict) and state.get("installed") is False:
@@ -388,7 +388,7 @@ def handed(c, attempt_id, task_id, record):
     event, once per reason, so the task says it happened and why without a line for every turn."""
     if not record:
         return
-    c.execute("UPDATE attempts SET model_json=? WHERE id=?", (json.dumps(record), attempt_id))
+    c.execute("UPDATE attempts SET model=? WHERE id=?", (json.dumps(record), attempt_id))
     if (record["source"] != "fallback" and not record.get("below_minimum")) or not task_id:
         return
     last = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='task_model' ORDER BY rowid DESC LIMIT 1",
@@ -399,7 +399,7 @@ def handed(c, attempt_id, task_id, record):
 
 
 def _record(c, attempt_id):
-    row = c.execute("SELECT model_json FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    row = c.execute("SELECT model FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     record = H._json(row[0]) if row and row[0] else None
     return record if isinstance(record, dict) else None
 

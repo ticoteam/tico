@@ -134,9 +134,9 @@ def test_modes_mixed_scopes_alias_and_default(api, gh):
     assert turn_token(api).json()['repositories'] == ['Acme/emp-cpo']
     put(api, 'repositories/settings', {'new_bot_default': 'all'})
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,created) VALUES('new-test','Sam',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator,repo) VALUES('new-test','{}','t','ana','bot-new-test')")
-        assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='new-test'").fetchone()[0])['repo_access_mode'] == 'all'
+        c.execute("INSERT INTO bots(slug,display_name,created_at) VALUES('new-test','Sam',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,operator,repo) VALUES('new-test','{}','t','ana','bot-new-test')")
+        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='new-test'").fetchone()[0])['repo_access_mode'] == 'all'
 
 
 def test_upgrade_migrates_existing_extras_once(api, gh):
@@ -216,7 +216,7 @@ def test_missing_repo_does_not_take_own_or_computer_tokens_down(api, gh):
     assert gh.of('/access_tokens')[-1][2]['repositories'] == ['emp-cpo', 'product']
     assert token_health(api)
     with api.app_state.store.read() as c:
-        detail = json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='github:token'").fetchone()[0])
+        detail = json.loads(c.execute("SELECT detail FROM service_health WHERE service='github:token'").fetchone()[0])
         assert 'Acme/docs is not reachable' in detail['message']
     calls = len(gh.calls)
     assert turn_token(api).status_code == 200
@@ -281,8 +281,8 @@ def test_a_github_token_recovery_clears_the_old_failure_message(api):
     note_github_token(store, 'GitHub would not issue an installation token (HTTP 500)', 'Check the App.')
     note_github_token(store)
     with store.read() as c:
-        row = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service='github:token'").fetchone()
-    assert row['last_success'] and row['last_error'] is None and row['detail_json'] == '{}'
+        row = c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service='github:token'").fetchone()
+    assert row['last_succeeded_at'] and row['last_error'] is None and row['detail'] == '{}'
 
 
 def test_run_workflows_gets_its_own_actions_token_only_once_the_installation_accepts_it(api, gh):
@@ -297,7 +297,7 @@ def test_run_workflows_gets_its_own_actions_token_only_once_the_installation_acc
     data = put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': flagged + [{'full_name': 'Acme/docs', 'access': 'write'}]})
     assert [r for r in data['effective'] if r.get('run_workflows')] == [{'full_name': 'Acme/product', 'access': 'write', 'run_workflows': True}]
     with api.app_state.store.read() as c:
-        audit = json.loads(c.execute("SELECT detail_json FROM events WHERE action='bot.repos_changed' AND target='cpo' "
+        audit = json.loads(c.execute("SELECT detail FROM events WHERE action='bot.repos_changed' AND target='cpo' "
                                      "ORDER BY rowid DESC").fetchone()[0])
     assert audit['after']['chosen'][1] == flagged[0] and audit['before']['chosen'] == []
     # Actions: read only on the installation: one ordinary write token, and the answer and Health say why.

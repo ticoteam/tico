@@ -161,7 +161,7 @@ const CARDS = [
 const TRANSFERS = [{id: 'xf-1', status: 'queued', amount: 500000, currency: 'USD', memo: 'to savings', from: {id: 'm1', name: 'Checking', last4: '0001'},
   to: {id: 'm2', name: 'Savings', last4: '0002'}, created_by: 'human:ana', created_at: '2026-10-29T10:00:00Z', settled_at: null, last_error: null}];
 const SALES_TAX = {year: 2026, currency: 'USD', rows: [{period: '2026-Q3', code: 'CA', jurisdiction: 'California', taxable_sales: 1200000, exempt_sales: 300000,
-  tax_collected: 87000, tax_remitted: 60000, due: 27000, due_on: '2026-10-31'}]};
+  tax_collected: 87000, tax_remitted: 60000, due_at: 27000, due_on: '2026-10-31'}]};
 const F1099 = {year: 2026, currency: 'USD', threshold: 60000, due_on: '2027-01-31', rows: [{vendor_id: 'v-northwind', vendor: 'Northwind Design', tin_on_file: false,
   cash_paid: 610000, card_paid_excluded: 0, threshold: 60000, reportable: true}]};
 const TX = [

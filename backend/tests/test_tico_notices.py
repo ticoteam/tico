@@ -31,9 +31,9 @@ def botops_messages(api):
 @pytest.fixture(autouse=True)
 def botops(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('botops','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('botops','{}',NULL,'ana')")
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ def test_a_relayed_notice_reaches_the_rules_once_and_shows_once_beside_latest(ap
     assert len(judged) == 1
     assert judged[0]["notice_id"] == "n1" and judged[0]["kind"] == "info" and judged[0]["type"] == "info"
     assert judged[0]["trigger"] == "_tico" and judged[0]["via"] == "gateway"
-    assert [m["refs_json"] for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs_json"]]    # the info note
+    assert [m["refs"] for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs"]]    # the info note
 
     from backend import releases
     monkeypatch.setattr(releases.CHECKER, "extras", {"notices": [{"id": "n1", "versions": "0.4", "body": "x", "url": ""}],
@@ -83,9 +83,9 @@ def test_a_security_notice_wakes_botops_and_asks_the_owner(api, hq, judged):
     relay_for(api, hq)
     send(hq, "s1", kind="security", body="Rotate your Acme keys today.")
     service(api).tick()
-    wakes = [m for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs_json"]]
+    wakes = [m for m in botops_messages(api) if '"wake": "tico.notice"' in m["refs"]]
     assert len(wakes) == 1 and "Rotate your Acme keys today." in wakes[0]["body"] and wakes[0]["from_actor"] == H.KEEPER
-    assert json.loads(wakes[0]["refs_json"])["rule_id"] == "tico-notice-security-wake"
+    assert json.loads(wakes[0]["refs"])["rule_id"] == "tico-notice-security-wake"
     with api.app.state.store.read() as c:
         asked = c.execute("SELECT count(*) FROM events WHERE action='rule.event' AND target='tico-notice-security-ask'").fetchone()[0]
     assert asked == 1

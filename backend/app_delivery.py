@@ -59,8 +59,8 @@ def setting(config):
 
 
 def _config(c, bot):
-    row = c.execute("SELECT config_json,operator FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    return (H._json(row["config_json"], {}) or {}, row["operator"]) if row else ({}, None)
+    row = c.execute("SELECT config,operator FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    return (H._json(row["config"], {}) or {}, row["operator"]) if row else ({}, None)
 
 
 def active(c, config):
@@ -83,7 +83,7 @@ def view(c, config):
 
 def app_report(runner, app):
     """The computer's latest readiness for `app` (models.AppDriverApp as stored), or None when it reports none."""
-    driver = readiness_document(runner["readiness_json"]).get("appdriver")
+    driver = readiness_document(runner["readiness"]).get("appdriver")
     apps = driver.get("apps") if isinstance(driver, dict) else None
     report = apps.get(app) if isinstance(apps, dict) else None
     return report if isinstance(report, dict) else None
@@ -129,7 +129,7 @@ def change(c, who, auth, bot, value, declared, operator):
         # The computer's runner takes the bot's jobs from its assignment, as any bot's (Execution.candidate).
         generation = (old["generation"] if old else 0) + 1
         c.execute("INSERT INTO assignments VALUES(?,?,?,?,?) ON CONFLICT(bot) DO UPDATE SET runner_id=excluded.runner_id,"
-                  "generation=excluded.generation,updated=excluded.updated,updated_by=excluded.updated_by",
+                  "generation=excluded.generation,updated_at=excluded.updated_at,updated_by=excluded.updated_by",
                   (bot, runner["id"], generation, H.now(), who.actor))
         H.event(c, who.actor, "bot.assigned", bot, {"runner": runner["id"], "generation": generation})
     H.event(c, who.actor, "bot.app_delivery_on", bot, {"runner": runner["id"], "app": value.app})
@@ -148,11 +148,11 @@ def turn_off(c, actor, bot, declared, reason):
 
 def runner_revoked(c, actor, runner_id):
     """A removed computer delivers nothing: each bot delivered through it goes back to the daily sync."""
-    for row in c.execute("SELECT bot,config_json FROM bot_config WHERE json_extract(config_json,'$.app_delivery.computer')=?",
+    for row in c.execute("SELECT bot,config FROM bot_config WHERE json_extract(config,'$.app_delivery.computer')=?",
                          (runner_id,)).fetchall():
-        declared = H._json(row["config_json"], {}) or {}
+        declared = H._json(row["config"], {}) or {}
         turn_off(c, actor, row["bot"], declared, "computer removed")
-        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), row["bot"]))
+        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), row["bot"]))
     c.execute("DELETE FROM registry_metadata WHERE key=?", (ERRORS + runner_id,))
 
 
@@ -187,7 +187,7 @@ def said_at(value, fallback):
 
 
 # When a message was said: the app's own time for one the app reported, else when Tico wrote it.
-SAID_SQL = "COALESCE(json_extract(refs_json,'$.app.at'),created)"
+SAID_SQL = "COALESCE(json_extract(refs,'$.app.at'),created_at)"
 
 
 def echoes(c, room_id, sender, text, any_source=True, at=None):
@@ -198,7 +198,7 @@ def echoes(c, room_id, sender, text, any_source=True, at=None):
     # A message the app reported has its key; a `needs_human` question has `app` without one, so it is both what Tico
     # holds (the watch reading the same words doesn't post them again) and what the app brought (the turn's reply
     # and the sync don't either).
-    which = "json_extract(refs_json,'$.app.key') IS NULL" if any_source else "json_extract(refs_json,'$.app') IS NOT NULL"
+    which = "json_extract(refs,'$.app.key') IS NULL" if any_source else "json_extract(refs,'$.app') IS NOT NULL"
     sql = (f"SELECT body FROM messages WHERE conversation_id=? AND from_actor=? AND {SAID_SQL} BETWEEN ? AND ? "
            f"AND deleted_at IS NULL AND {which}")
     wanted = _norm(text)
@@ -207,19 +207,19 @@ def echoes(c, room_id, sender, text, any_source=True, at=None):
 
 
 def _seen(c, bot):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (SEEN + bot,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (SEEN + bot,)).fetchone()
     value = H._json(row[0], {}) if row else {}
     value = value if isinstance(value, dict) else {}
     return {"after": value.get("after"), "keys": [k for k in value.get("keys") or [] if isinstance(k, str)]}
 
 
 def _save(c, key, value):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (key, json.dumps(value)))
 
 
 def _errors(c, runner_id):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (ERRORS + runner_id,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (ERRORS + runner_id,)).fetchone()
     value = H._json(row[0], {}) if row else {}
     return value if isinstance(value, dict) else {}
 
@@ -233,12 +233,12 @@ def _ask(c, actor, person, room, text, refs):
         if _norm(row[0]) == _norm(text):
             return False
     reply = next((row for row in c.execute(
-        "SELECT id,body,refs_json FROM messages WHERE conversation_id=? AND from_actor=? AND to_actor=? AND kind='say' "
-        "AND deleted_at IS NULL AND json_extract(refs_json,'$.app') IS NULL AND created>=? ORDER BY created DESC",
+        "SELECT id,body,refs FROM messages WHERE conversation_id=? AND from_actor=? AND to_actor=? AND kind='say' "
+        "AND deleted_at IS NULL AND json_extract(refs,'$.app') IS NULL AND created_at>=? ORDER BY created_at DESC",
         (room["id"], actor, person, H.shift(H.now(), hours=-ECHO_HOURS))) if _norm(row["body"]) == _norm(text)), None)
     if reply:
-        c.execute("UPDATE messages SET kind='ask',refs_json=? WHERE id=?",
-                  (encode({**(H._json(reply["refs_json"], {}) or {}), **refs, "depth": 1}), reply["id"]))
+        c.execute("UPDATE messages SET kind='ask',refs=? WHERE id=?",
+                  (encode({**(H._json(reply["refs"], {}) or {}), **refs, "depth": 1}), reply["id"]))
         H.event(c, actor, "app_delivery.asked", reply["id"], {"to": person, "conversation": room["id"]})
         return False
     H._write_message(c, actor, person, text, room, "ask", {**refs, "depth": 1}, None, None)
@@ -249,10 +249,10 @@ def delivered(c, runner_id):
     """The bots delivered through an app on this computer, for GET /api/v2/runners/me/app-delivery. `error`: this
     computer's Health holds an error for the bot's app, which the next clean read clears."""
     out, errors = [], _errors(c, runner_id)
-    for row in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
-                         "WHERE b.state<>'archived' AND json_extract(bc.config_json,'$.app_delivery.computer')=? "
+    for row in c.execute("SELECT bc.bot,bc.config FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+                         "WHERE b.state<>'archived' AND json_extract(bc.config,'$.app_delivery.computer')=? "
                          "ORDER BY bc.bot", (runner_id,)):
-        config = H._json(row["config_json"], {}) or {}
+        config = H._json(row["config"], {}) or {}
         bot = app_bot(config)
         if bot:
             app = setting(config)["app"]
@@ -279,7 +279,7 @@ def report(c, runner_id, slug, body):
         # The newest SEEN_KEYS keys answer most reports; an older key the computer sends again (a lost cursor) is
         # found on the message it made.
         if msg.key in known or c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND "
-                                         "json_extract(refs_json,'$.app.key')=?", (room["id"], msg.key)).fetchone():
+                                         "json_extract(refs,'$.app.key')=?", (room["id"], msg.key)).fetchone():
             continue
         known.add(msg.key)
         keys.append(msg.key)
@@ -318,9 +318,9 @@ def health_problems(c, who, auth, online_ids):
     its readiness for the app. An administrator sees every computer; anyone else their own."""
     full = who.role == "owner" or auth.bot_admin(who)
     used = {}
-    for row in c.execute("SELECT bot,config_json FROM bot_config WHERE json_extract(config_json,'$.app_delivery.computer') "
+    for row in c.execute("SELECT bot,config FROM bot_config WHERE json_extract(config,'$.app_delivery.computer') "
                          "IS NOT NULL"):
-        found = setting(H._json(row["config_json"], {}) or {})
+        found = setting(H._json(row["config"], {}) or {})
         if found and found["computer"] in online_ids:
             used.setdefault((found["computer"], found["app"]), []).append(row["bot"])
     out = []
@@ -331,7 +331,7 @@ def health_problems(c, who, auth, online_ids):
         state = app_report(runner, app)
         error = _errors(c, runner_id).get(app)
         cleared = (error and error.get("code") in APP_STATE_CODES and (state or {}).get("ready") is True
-                   and (runner["last_seen"] or "") > (error.get("at") or ""))
+                   and (runner["last_seen_at"] or "") > (error.get("at") or ""))
         if error and not cleared:
             why = WORDS.get(error.get("code"), WORDS["error"]) + (f" ({error['detail']})" if error.get("detail") else "")
         else:

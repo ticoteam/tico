@@ -60,7 +60,7 @@ def lines(c: sqlite3.Connection, kind: str, doc_ids: Sequence[str]) -> dict[str,
 def set_line_tags(c: sqlite3.Connection, kind: str, line_id: str, tags: Mapping[str, str]) -> None:
     """A document line's tags, after its posted line was retagged."""
     _, table, _, _, _ = DOCS[kind]
-    c.execute(f"UPDATE {table} SET tags_json=? WHERE id=?", (json.dumps(dict(tags), sort_keys=True), line_id))
+    c.execute(f"UPDATE {table} SET tags=? WHERE id=?", (json.dumps(dict(tags), sort_keys=True), line_id))
 
 
 def replace_lines(c: sqlite3.Connection, kind: str, doc_id: str, rows: Sequence[Mapping[str, object]]) -> list[str]:
@@ -111,8 +111,8 @@ def doc_with_contact(c: sqlite3.Connection, kind: str, doc_id: str) -> Any:
 def doc_actions(c: sqlite3.Connection, kind: str, doc_id: str, most: int) -> list[Any]:
     """The latest actions naming this document (its approvals among them)."""
     named = like(f'"{kind}_id": "{doc_id}"')
-    return c.execute("SELECT * FROM fin_actions WHERE kind LIKE ? ESCAPE '\\' AND (payload_json LIKE ? ESCAPE '\\' "
-                     "OR result_json LIKE ? ESCAPE '\\') ORDER BY created_at DESC LIMIT ?",
+    return c.execute("SELECT * FROM fin_actions WHERE kind LIKE ? ESCAPE '\\' AND (payload LIKE ? ESCAPE '\\' "
+                     "OR result LIKE ? ESCAPE '\\') ORDER BY created_at DESC LIMIT ?",
                      (f"{kind}\\_%", named, named, most)).fetchall()
 
 
@@ -135,7 +135,7 @@ def scheduled_due(c: sqlite3.Connection, book_id: str, day: str, most: int = 200
     """Scheduled bills whose payment day has come and whose payment this schedule has not asked for yet (a request
     is recorded in schedule_json as its action id; a new schedule starts without one)."""
     return c.execute("SELECT * FROM fin_bills WHERE book_id=? AND status='scheduled' AND pay_on<=? AND "
-                     "json_extract(schedule_json, '$.action_id') IS NULL ORDER BY pay_on, id LIMIT ?",
+                     "json_extract(schedule, '$.action_id') IS NULL ORDER BY pay_on, id LIMIT ?",
                      (book_id, day, most)).fetchall()
 
 
@@ -159,7 +159,7 @@ def contacts_page(c: sqlite3.Connection, *, book_id: str, kinds: Sequence[str] =
         sql += " AND active=?"
         args.append(1 if active else 0)
     if q:
-        sql += " AND (name LIKE ? ESCAPE '\\' OR emails_json LIKE ? ESCAPE '\\')"
+        sql += " AND (name LIKE ? ESCAPE '\\' OR emails LIKE ? ESCAPE '\\')"
         args += [like(q)] * 2
     if after:
         sql += " AND (name>? OR (name=? AND id>?))"
@@ -377,7 +377,7 @@ def raised(c: sqlite3.Connection, name: str, subject: str) -> bool:
 def categorized_into(c: sqlite3.Connection, entry_id: str) -> bool:
     """Whether a person's (or bot's) categorize action posted this entry."""
     return c.execute("SELECT 1 FROM fin_actions WHERE kind='categorize' AND status='committed' AND "
-                     "json_extract(result_json, '$.entry_id')=? LIMIT 1", (entry_id,)).fetchone() is not None
+                     "json_extract(result, '$.entry_id')=? LIMIT 1", (entry_id,)).fetchone() is not None
 
 
 def unmatched_files(c: sqlite3.Connection, book_id: str, most: int, by: str = "") -> list[Any]:

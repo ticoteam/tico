@@ -843,7 +843,7 @@ def test_a_logo_is_an_image_in_the_store(store):
         # The page's own upload is named for it; a library picture is an image too but never the logo.
         for blob, name, kind in (("logo-1", S.LOGO_NAME + ".png", "image/png"), ("doc-1", "doc.pdf", "application/pdf"),
                                  ("pic-1", "holiday.png", "image/png")):
-            c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) VALUES (?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
                       (blob, OWNER, blob, 1, name, kind, H.now()))
         assert S.update(c, OWNER, logo_file_id="logo-1")["logo_file_id"] == "logo-1"
         for bad in ("doc-1", "pic-1", "no-such-file", "../etc/passwd"):
@@ -948,7 +948,7 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
     identities["botops-for-cara"] = Identity("human:cara", "human", "cara@acme.example", via="botops", confirmed=True)
     identities["manager-bot"] = Identity("bot:ops", "bot", agent="hermes", via="botops", confirmed=True)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) "
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
                   "VALUES('ops','hermes','x-ops',?,'human:ana')", (H.now(),))
 
     # Seeded and listed, all closed.

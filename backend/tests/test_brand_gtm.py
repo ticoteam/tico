@@ -97,7 +97,7 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
     old = post(api, "goal-proposals", {"kind": "gtm_draft", "reason": "Old", "payload": {
         "sections": {"playbooks": ["Referrals"]}}}, token=ops)["proposal"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE goal_proposals SET payload_json=? WHERE id=?", (json.dumps(
+        c.execute("UPDATE goal_proposals SET payload=? WHERE id=?", (json.dumps(
             {"sections": {"playbooks": ["Referrals"], "wishes": [{"text": "No cold SMS"}]}}), old["id"]))
     post(api, f"goal-proposals/{old['id']}/decide", {"decision": "confirm"}, token="ben-test")
     body = get(api, "gtm")["draft"]["body"]
@@ -174,8 +174,8 @@ def test_a_row_written_with_the_removed_wishes_section_reads_without_it(api):
     legacy = {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners"},
               "wishes": [{"text": "No cold SMS", "level": "block"}]}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE gtm_versions SET body_json=? WHERE n=1", (json.dumps(legacy),))
-        c.execute("UPDATE gtm_drafts SET body_json=?, revision=revision+1 WHERE id=1", (json.dumps(legacy),))
+        c.execute("UPDATE gtm_versions SET body=? WHERE n=1", (json.dumps(legacy),))
+        c.execute("UPDATE gtm_drafts SET body=?, revision=revision+1 WHERE id=1", (json.dumps(legacy),))
     page = get(api, "gtm")
     assert page["published"]["body"] == {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners"}}
     assert page["draft"]["body"] == page["published"]["body"] and page["draft"]["changed"] == []

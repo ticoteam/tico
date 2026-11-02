@@ -24,23 +24,23 @@ def source_db(tmp_path):
     with store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('morgan','Morgan','morgan@acme.example')")
         c.execute("INSERT INTO bots(slug,token_hash,state) VALUES('sales','botsecret','active')")
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','mac','morgan','rh',?)", (now,))
-        c.execute("INSERT INTO enrollments(code_hash,operator,expires) VALUES('ch','morgan',?)", (now,))
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES('r1','mac','morgan','rh',?)", (now,))
+        c.execute("INSERT INTO enrollments(code_hash,operator,expires_at) VALUES('ch','morgan',?)", (now,))
         c.execute("INSERT INTO conversations(id) VALUES('cv')")
         for mid, at in (("old", OLD), ("new", now), ("ran", now), ("ran-long-ago", OLD)):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at) "
                       "VALUES(?,'cv','human:morgan','bot:sales','ask',?,?)", (mid, "Request " + mid, at))   # the trigger queues a job
         c.execute("UPDATE jobs SET state='completed' WHERE id IN ('ran','ran-long-ago')")
         # A run in progress, a finished run in the window, and a finished run from long ago.
         for aid, job, state, at, finished in (("live", "new", "running", now, None), ("done", "ran", "completed", now, now),
                                               ("gone", "ran-long-ago", "completed", OLD, OLD)):
-            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,finished) "
+            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
                       "VALUES(?,?,'sales','r1',1,?,?,?,?,?)", (aid, job, "hash-" + aid, state, now, at, finished))
-            c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,1,'text','{}',?)",
+            c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,1,'text','{}',?)",
                       (aid, at))
             c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, job))
-        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by) VALUES('t1','morgan','cli','th',?,'morgan')", (now,))
-        c.execute("INSERT INTO credentials(id,name,kind,created,updated,updated_by) VALUES('k1','gh','token',?,?,'morgan')",
+        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) VALUES('t1','morgan','cli','th',?,'morgan')", (now,))
+        c.execute("INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by) VALUES('k1','gh','token',?,?,'morgan')",
                   (now, now))
         c.execute("INSERT INTO schedules(id,bot,cron) VALUES('s1','sales','* * * * *')")
     for name in ("credential.key", "slack.key"):
@@ -70,7 +70,7 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
         assert c.execute("SELECT token_hash FROM bots").fetchall() == [(None,)]
         assert c.execute("SELECT id FROM messages ORDER BY id").fetchall() == [("new",), ("ran",)]
         # The finished run stays, with its steps and inputs, and no way back in.
-        assert c.execute("SELECT id,token_hash,lease_until=finished FROM attempts").fetchall() == [
+        assert c.execute("SELECT id,token_hash,lease_until=finished_at FROM attempts").fetchall() == [
             ("done", "devcopy-revoked:done", 1)]
         assert c.execute("SELECT id,state FROM jobs").fetchall() == [("ran", "completed")]
         assert c.execute("SELECT attempt_id FROM attempt_events").fetchall() == [("done",)]
@@ -138,18 +138,18 @@ def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secr
         task = H.task_create(c, "human:morgan", "Faster exports", "Customer asks", "human:morgan")
         roadmaps.add_requester(c, task["id"], {"email": "jane@customer.example", "phone": "555-0100", "source": "public_form"})
         assert delete_tasks(c, [task["id"]], apply=True)["applied"]
-        secret = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
-        assert "jane@customer.example" in c.execute("SELECT rows_json FROM task_trash").fetchone()[0]
+        secret = c.execute("SELECT value FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
+        assert "jane@customer.example" in c.execute("SELECT rows FROM task_trash").fetchone()[0]
     for c in store.pool:
         c.close()
     store.pool.clear()
     dest = tmp_path / "copy" / "hub.sqlite"
     devcopy.build(store.settings.db_path, dest, days=30)
     with closing(sqlite3.connect(dest)) as c:
-        rows = json.loads(c.execute("SELECT rows_json FROM task_trash").fetchone()[0])["rows"]
+        rows = json.loads(c.execute("SELECT rows FROM task_trash").fetchone()[0])["rows"]
         assert "task_requesters" not in rows and rows["tasks"][0]["title"] == "Faster exports"
         assert "jane@customer.example" not in json.dumps(rows) and "555-0100" not in json.dumps(rows)
-        copied = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
+        copied = c.execute("SELECT value FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
         assert copied != secret and len(json.loads(copied)) == 64
 
 
@@ -164,13 +164,13 @@ def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets
                   "VALUES('deploy-failed','Deploy failed','webhook','live-hash','human:morgan',?,?,'live-signing')",
                   (now, now))
         c.execute("INSERT INTO trigger_deliveries(trigger_id,delivery,received_at) VALUES('deploy-failed','d1',?)", (now,))
-        c.execute("INSERT INTO webhooks(id,name,url,host,secret,secret_prev,created_by,created,updated) "
+        c.execute("INSERT INTO webhooks(id,name,url,host,secret,secret_prev,created_by,created_at,updated_at) "
                   "VALUES('wh1','Acme CI','https://ci.acme.example/hook','ci.acme.example','whsec_live','whsec_old',"
                   "'human:morgan',?,?)", (now, now))
-        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow_json,version,created,created_by,"
-                  "updated) VALUES('auto_1','Morning check','person:morgan','schedule',1,'{}',1,?,'human:morgan',?)",
+        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow,version,created_at,created_by,"
+                  "updated_at) VALUES('auto_1','Morning check','person:morgan','schedule',1,'{}',1,?,'human:morgan',?)",
                   (now, now))
-        c.execute("INSERT INTO automation_runs(id,automation_id,version,started,status) VALUES('run1','auto_1',1,?,"
+        c.execute("INSERT INTO automation_runs(id,automation_id,version,started_at,status) VALUES('run1','auto_1',1,?,"
                   "'queued')", (now,))
     dest = tmp_path / "copy" / "hub.sqlite"
     removed, loose = devcopy.build(source, dest, days=30, keep_automations=True)

@@ -38,11 +38,11 @@ def send(queue, sender='ops', text='A fixture message', expected=200, **fields):
 def pending(api):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT * FROM messages WHERE to_actor='bot:finance' "
-                    "AND from_actor LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL ORDER BY created,id")]
+                    "AND from_actor LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL ORDER BY created_at,id")]
 
 
 def retained(rows):
-    return sum(len(r['body'].encode('utf-8')) + len(r['refs_json'].encode('utf-8')) for r in rows)
+    return sum(len(r['body'].encode('utf-8')) + len(r['refs'].encode('utf-8')) for r in rows)
 
 
 def domain(api):
@@ -79,7 +79,7 @@ def test_byte_boundary_uses_final_utf8_body_and_refs(queue, monkeypatch, setting
     body = '界🙂'
     first = send(queue, text=body, kind='notice')
     size = retained(pending(api))
-    assert size > len(body) + len(first['refs_json'])
+    assert size > len(body) + len(first['refs'])
     monkeypatch.setattr(H, setting, size * 2)
     send(queue, text='🙂界', kind='notice')  # same bytes; an identical repeat is a duplicate wake, not queued
     assert retained(pending(api)) == size * 2
@@ -184,7 +184,7 @@ def test_full_queue_keeps_work_and_human_system_and_recovery_controls_work(queue
         assert claim(api, machine, 'finance') is None, 'existing one-active-attempt limit still applies'
         with api.app.state.store.read() as c:
             ran += [r['message_id'] for r in c.execute('SELECT j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id '
-                                                      'WHERE j.attempt_id=? ORDER BY m.created,m.id', (work['id'],))
+                                                      'WHERE j.attempt_id=? ORDER BY m.created_at,m.id', (work['id'],))
                     if r['message_id'] in accepted]
         finish(api, machine, work)
     assert ran == accepted
@@ -204,7 +204,7 @@ def test_permission_denial_precedes_capacity(queue, monkeypatch, state, denial):
             restrict(c, 'finance', see={'bots': ['doc-updater'], 'people': ['ana']},
                      read={'bots': ['doc-updater'], 'people': ['ana']}, write={'people': ['ana']})
         else:
-            c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.bot_contact','replies') WHERE bot='finance'")
+            c.execute("UPDATE bot_config SET config=json_set(config,'$.bot_contact','replies') WHERE bot='finance'")
     result = send(queue, 'doc-updater', expected=403)
     assert result['error']['code'] == ('forbidden' if denial == 'write' else 'bot_contact')
     assert 'queue' not in result['error']['detail'].lower()
@@ -304,7 +304,7 @@ def test_full_queue_withholds_only_the_automatic_answer_and_the_run_completes(ap
         assert (attempt['state'], attempt['final_text']) == ('completed', 'ok')
         assert c.execute("SELECT state FROM jobs WHERE attempt_id=?", (work['id'],)).fetchone()[0] == 'completed'
         assert c.execute('SELECT count(*) FROM messages WHERE in_reply_to=?', (asked['id'],)).fetchone()[0] == 0
-        withheld = c.execute("SELECT detail_json FROM events WHERE action='reply.withheld' AND target=?",
+        withheld = c.execute("SELECT detail FROM events WHERE action='reply.withheld' AND target=?",
                              (work['id'],)).fetchone()
         assert withheld and '"queue_full"' in withheld[0]
         assert not c.execute("SELECT 1 FROM refusals WHERE actor='bot:ops' AND rule='queue_full'").fetchone()
@@ -375,7 +375,7 @@ def test_external_harness_inbox_without_jobs_or_notes_fills_the_cap(queue, monke
     # what it reads on return, so every waking message (a needs_action notice too) is charged.
     api, _, _ = queue
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.harness','hermes') WHERE bot='finance'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.harness','hermes') WHERE bot='finance'")
     hold(api, state)
     monkeypatch.setattr(H, 'HELD_QUEUE_ITEMS', 3)
     send(queue)

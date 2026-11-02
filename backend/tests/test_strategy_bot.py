@@ -73,7 +73,7 @@ def as_bot(api, slug):
     token = slug + "-test"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) "
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
                   "VALUES(?,'hermes',?,?,'human:morgan')", (slug, "x-" + slug, H.now()))
     api.app.state.store.settings.test_identities[token] = Identity("bot:" + slug, "bot", agent="hermes")
     return {"Authorization": "Bearer " + token, "Idempotency-Key": str(uuid.uuid4())}
@@ -120,7 +120,7 @@ def test_the_strategy_bot_gains_no_access(environment):
     access says."""
     api = company(environment)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET access_json=? WHERE bot='eng-lead'",
+        c.execute("UPDATE bot_config SET access=? WHERE bot='eng-lead'",
                   ('{"see":{"everyone":true},"read":{"people":["morgan"]},"write":{"people":["morgan"]}}',))
     after = api.get("/api/v2/org", headers=as_bot(api, "goal-manager")).json()
     access = {b["id"]: b["access"] for b in after["bots"]}
@@ -300,7 +300,7 @@ def test_a_person_hides_the_strategy_bot_from_their_own_chart(environment):
     assert stored(api) == stored_before
     with api.app.state.store.read() as c:
         assert tuple(c.execute("SELECT * FROM bot_config WHERE bot='goal-manager'").fetchone()) == config_before
-        assert [tuple(r) for r in c.execute("SELECT actor,value_json FROM preferences WHERE key=?",
+        assert [tuple(r) for r in c.execute("SELECT actor,value FROM preferences WHERE key=?",
                                             (strategy_bot.HIDE_PREF,))] == [("human:morgan", "true")]
     assert api.get("/api/v2/strategy-bot", headers=signed_in()).json() == strategy_before
     row = rows(api)["goal-manager"]
@@ -320,7 +320,7 @@ def test_hiding_the_strategy_bot_is_a_persons_own_yes_or_no(environment):
     assert refused.status_code == 422, refused.text
     assert hide(api, True, as_bot(api, "botops")).status_code == 403
     with api.app.state.store.transaction() as c:          # even a row a bot left some other way hides nothing for it
-        c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES('bot:botops',?,'true',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('bot:botops',?,'true',?)",
                   (strategy_bot.HIDE_PREF, H.now()))
     assert "goal-manager" in chart(api, as_bot(api, "botops"))
     assert hide(api, True, as_person(api, "riley")).status_code == 200
@@ -340,27 +340,27 @@ def test_the_settings_an_install_from_before_stored_under_old_keys_move_to_the_n
     api = company(environment)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (strategy_bot.KEY,))
-        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value_json) VALUES(?,?)",
+        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value) VALUES(?,?)",
                   (strategy_bot.OLD_KEY, '{"migrated_at":"2026-01-01T00:00:00Z","on":true}'))
         for person in ("human:ana", "human:ben"):
-            c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,'true',?)",
+            c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,'true',?)",
                       (person, strategy_bot.OLD_HIDE_PREF, H.now()))
-        c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES('human:ben',?,'false',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('human:ben',?,'false',?)",
                   (strategy_bot.HIDE_PREF, H.shift(H.now(), minutes=1)))
         # Cara chose under the new key, then an older release ran and she chose again under the old one.
-        c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES('human:cara',?,'true',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('human:cara',?,'true',?)",
                   (strategy_bot.HIDE_PREF, H.shift(H.now(), minutes=-5)))
-        c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES('human:cara',?,'false',?)",
+        c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES('human:cara',?,'false',?)",
                   (strategy_bot.OLD_HIDE_PREF, H.now()))
     with api.app.state.store.transaction() as c:
         assert strategy_bot.migrate(c) is False                      # the moved record says it has run
-        record = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key=?",
+        record = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?",
                                       (strategy_bot.KEY,)).fetchone()[0])
         old_rows = c.execute("SELECT COUNT(*) "
                              "FROM registry_metadata WHERE key=?", (strategy_bot.OLD_KEY,)).fetchone()[0]
-        hidden = {r[0]: r[1] for r in c.execute("SELECT actor, value_json FROM preferences WHERE key=?",
+        hidden = {r[0]: r[1] for r in c.execute("SELECT actor, value FROM preferences WHERE key=?",
                                                 (strategy_bot.HIDE_PREF,))}
-        left = {r[0]: r[1] for r in c.execute("SELECT actor, value_json FROM preferences WHERE key=?",
+        left = {r[0]: r[1] for r in c.execute("SELECT actor, value FROM preferences WHERE key=?",
                                               (strategy_bot.OLD_HIDE_PREF,))}
     assert record["migrated_at"] == "2026-01-01T00:00:00Z" and old_rows == 1
     assert hidden == {"human:ana": "true", "human:ben": "false", "human:cara": "false"} and left == hidden
@@ -373,12 +373,12 @@ def test_a_level_and_checks_chosen_while_an_older_release_ran_win_over_the_recor
     api = company(environment)
     with api.app.state.store.transaction() as c:
         strategy_bot._save(c, {**strategy_bot._record(c), "level": 3, "checks": True, "review_settled": True})
-        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value_json) VALUES(?,?)",
+        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value) VALUES(?,?)",
                   (strategy_bot.OLD_KEY, '{"on":true,"level":1,"checks":false}'))
     with api.app.state.store.transaction() as c:
         strategy_bot.migrate(c)
         record = strategy_bot._record(c)
-        old = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key=?",
+        old = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?",
                                    (strategy_bot.OLD_KEY,)).fetchone()[0])
     assert (record["level"], record["checks"], record.get("review_settled")) == (1, False, True)
     assert old == record
@@ -393,9 +393,9 @@ def test_an_older_release_after_a_rollback_reads_the_owners_settings_and_hide_ch
     r = api.post("/api/v2/preferences/" + strategy_bot.HIDE_PREF, json={"value": True}, headers=signed_in())
     assert r.status_code == 200, r.text
     with api.app.state.store.transaction() as c:
-        old = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key=?",
+        old = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?",
                                    (strategy_bot.OLD_KEY,)).fetchone()[0])
-        hide = c.execute("SELECT value_json FROM preferences WHERE key=?", (strategy_bot.OLD_HIDE_PREF,)).fetchall()
+        hide = c.execute("SELECT value FROM preferences WHERE key=?", (strategy_bot.OLD_HIDE_PREF,)).fetchall()
         assert (old["level"], old["checks"]) == (1, False) and [tuple(h) for h in hide] == [("true",)]
         # A second start with nothing changed under the old keys leaves the record as it is.
         before = strategy_bot._record(c)

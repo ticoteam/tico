@@ -99,7 +99,7 @@ def install(app, store, auth):
             for part in H.chunks(wanted):
                 for tid in part:
                     task_memo[tid] = None
-                for row in c.execute("SELECT id,title,owner,requester,status,created FROM tasks WHERE id IN (%s) AND (%s)"
+                for row in c.execute("SELECT id,title,owner,requester,status,created_at FROM tasks WHERE id IN (%s) AND (%s)"
                                      % (",".join("?" * len(part)), visible_sql), part):
                     task_memo[row["id"]] = dict(row)
             return {tid: task_memo.get(tid) for tid in ids}
@@ -115,16 +115,16 @@ def install(app, store, auth):
 
         # Tasks made in the window, then their status and owner changes.
         created = []
-        for scanned, row in enumerate(c.execute(f"SELECT id,title,owner,requester,status,created FROM tasks WHERE created>=? "
-                                                f"AND created<? AND ({visible_sql}) ORDER BY created", (first, last)), 1):
+        for scanned, row in enumerate(c.execute(f"SELECT id,title,owner,requester,status,created_at FROM tasks WHERE created_at>=? "
+                                                f"AND created_at<? AND ({visible_sql}) ORDER BY created_at", (first, last)), 1):
             if scanned > SCAN_MAX:
-                caps.append(row["created"])
+                caps.append(row["created_at"])
                 break
             task_memo[row["id"]] = dict(row)
             if within(row["owner"], row["requester"]):
                 created.append(dict(row))
             if len(created) > LIMIT:
-                caps.append(created[-1]["created"])
+                caps.append(created[-1]["created_at"])
                 break
         changes, seen = [], 0
         marks = ",".join("?" * len(TASK_FIELDS))
@@ -153,7 +153,7 @@ def install(app, store, auth):
         for event, task in changes:
             if event["field"] == "status":
                 first_status.setdefault(task["id"], event["old"])
-        sources.append([{"at": t["created"], "kind": "task.created", "who": t["requester"], "owner": t["owner"],
+        sources.append([{"at": t["created_at"], "kind": "task.created", "who": t["requester"], "owner": t["owner"],
                          "task": {"id": t["id"], "title": t["title"]},
                          "status": first_status.get(t["id"]) or t["status"] or "open"} for t in created])
         items = []
@@ -171,34 +171,34 @@ def install(app, store, auth):
         # Messages: the rooms with any message since `from`, each read by its (conversation, created) index and
         # merged in time order, so a cap (items or rows read) cuts every room at the same moment.
         rooms = []
-        for conv in H._rows(c.execute("SELECT * FROM conversations WHERE COALESCE(last_message_at, created)>=?", (first,))):
+        for conv in H._rows(c.execute("SELECT * FROM conversations WHERE COALESCE(last_message_at, created_at)>=?", (first,))):
             try:
                 auth.conversation(c, who, conv["id"])
             except Problem:
                 continue
-            conv["participants"] = H._json(conv.get("participants_json"), []) or []
+            conv["participants"] = H._json(conv.get("participants"), []) or []
             rooms.append(conv)
         marks = ",".join("?" * len(MESSAGE_KINDS))
 
         def room_rows(conv):
-            for row in c.execute(f"SELECT * FROM messages WHERE conversation_id=? AND created>=? AND created<? "
-                                 f"AND kind IN ({marks}) AND deleted_at IS NULL ORDER BY created",
+            for row in c.execute(f"SELECT * FROM messages WHERE conversation_id=? AND created_at>=? AND created_at<? "
+                                 f"AND kind IN ({marks}) AND deleted_at IS NULL ORDER BY created_at",
                                  (conv["id"], first, last, *MESSAGE_KINDS)):
-                yield row["created"], conv, row
+                yield row["created_at"], conv, row
 
         items = []
         for scanned, (_, conv, row) in enumerate(heapq.merge(*(room_rows(conv) for conv in rooms), key=lambda r: r[0]), 1):
             if scanned > SCAN_MAX or len(items) > LIMIT:
-                caps.append(row["created"])
+                caps.append(row["created_at"])
                 break
             if not within(row["from_actor"], row["to_actor"]):
                 continue
             if not privacy.message_readable(c, reader, row, current=True):
                 continue
-            message = {**dict(row), "refs": H._json(row["refs_json"], {}) or {}}
+            message = {**dict(row), "refs": H._json(row["refs"], {}) or {}}
             tid = H.message_task_id(message, conv)
             comment = bool(conv.get("task_id")) or H.is_comment(message)
-            item = {"at": row["created"], "kind": "task.comment" if comment and tid else "chat.message",
+            item = {"at": row["created_at"], "kind": "task.comment" if comment and tid else "chat.message",
                     "who": row["from_actor"], "to": row["to_actor"], "room": conv["id"],
                     "text": clip_text(row["body"])}
             ref = task_ref(tid)
@@ -209,10 +209,10 @@ def install(app, store, auth):
 
         # Runs, with the bot turns page's checks: Read on the bot, then its message, its room and its tasks.
         items = []
-        for scanned, turn in enumerate(c.execute("SELECT id,bot,started,finished,exit,summary,message_id,task_id FROM turns "
-                                                 "WHERE started>=? AND started<? ORDER BY started", (first, last)), 1):
+        for scanned, turn in enumerate(c.execute("SELECT id,bot,started_at,finished_at,exit,summary,message_id,task_id FROM turns "
+                                                 "WHERE started_at>=? AND started_at<? ORDER BY started_at", (first, last)), 1):
             if scanned > SCAN_MAX:
-                caps.append(turn["started"])
+                caps.append(turn["started_at"])
                 break
             if not readable_bot(turn["bot"]) or not within("bot:" + turn["bot"]):
                 continue
@@ -226,16 +226,16 @@ def install(app, store, auth):
             except Problem:
                 continue
             ref = task_ref(turn["task_id"] or H.message_task_id(msg, H.conversation(c, msg["conversation_id"])))
-            start = {"at": turn["started"], "kind": "run.started", "who": "bot:" + turn["bot"], "bot": turn["bot"]}
+            start = {"at": turn["started_at"], "kind": "run.started", "who": "bot:" + turn["bot"], "bot": turn["bot"]}
             if ref:
                 start["task"] = ref
             items.append(start)
-            if turn["finished"] and turn["finished"] < last:
-                done = {**start, "at": turn["finished"], "kind": "run.finished", "exit": turn["exit"] or "",
+            if turn["finished_at"] and turn["finished_at"] < last:
+                done = {**start, "at": turn["finished_at"], "kind": "run.finished", "exit": turn["exit"] or "",
                         "text": clip_text(turn["summary"], 600)}
                 items.append(done)
             if len(items) > LIMIT:
-                caps.append(turn["started"])
+                caps.append(turn["started_at"])
                 break
         sources.append(items)
 
@@ -287,14 +287,14 @@ def install(app, store, auth):
 
         # The board as it stood at `from`: tasks open then, each in the status it had.
         candidates = {}
-        for row in c.execute(f"SELECT id,title,owner,requester,status,created FROM tasks WHERE created<? "
+        for row in c.execute(f"SELECT id,title,owner,requester,status,created_at FROM tasks WHERE created_at<? "
                              f"AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND ({visible_sql}) "
-                             f"ORDER BY created DESC LIMIT ?", (first, *H.ACTIVE_STATUSES, SNAPSHOT_MAX)):
+                             f"ORDER BY created_at DESC LIMIT ?", (first, *H.ACTIVE_STATUSES, SNAPSHOT_MAX)):
             candidates[row["id"]] = dict(row)
         lanes = ",".join("?" * len(H.TASK_LANES))
-        for row in c.execute(f"SELECT id,title,owner,requester,status,created FROM tasks WHERE lane IN ({lanes}) "
-                             f"AND status IN ('done','closed') AND COALESCE(closed_at,done_at,updated,created)>=? "
-                             f"AND created<? AND ({visible_sql}) LIMIT ?", (*H.TASK_LANES, first, first, SNAPSHOT_MAX)):
+        for row in c.execute(f"SELECT id,title,owner,requester,status,created_at FROM tasks WHERE lane IN ({lanes}) "
+                             f"AND status IN ('done','closed') AND COALESCE(closed_at,done_at,updated_at,created_at)>=? "
+                             f"AND created_at<? AND ({visible_sql}) LIMIT ?", (*H.TASK_LANES, first, first, SNAPSHOT_MAX)):
             candidates.setdefault(row["id"], dict(row))
         board = []
         for task in candidates.values():

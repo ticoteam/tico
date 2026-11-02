@@ -24,9 +24,9 @@ def held(api):
     botops(api)
     machine, message, attempt = restarted_mid_turn(api, [('Read', None), ('Bash', None)])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary','gh pr merge 42 --squash') "
-                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.tool')='Bash' "
-                  "AND json_extract(payload_json,'$.status')='started'", (attempt['id'],))
+        c.execute("UPDATE attempt_events SET payload=json_set(payload,'$.summary','gh pr merge 42 --squash') "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.tool')='Bash' "
+                  "AND json_extract(payload,'$.status')='started'", (attempt['id'],))
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     return machine, message, attempt
@@ -34,13 +34,13 @@ def held(api):
 
 def reviews(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,status,body,created FROM tasks WHERE title=? ORDER BY rowid",
+        return [dict(r) for r in c.execute("SELECT id,status,body,created_at FROM tasks WHERE title=? ORDER BY rowid",
                                            (TITLE,))]
 
 
 def backdate(api, task_id, minutes):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), minutes=-minutes), task_id))
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), minutes=-minutes), task_id))
 
 
 @pytest.mark.parametrize('how', ['closed', 'done'])
@@ -132,7 +132,7 @@ def test_a_review_closed_while_its_runs_are_held_is_opened_again_naming_each_of_
 
 def capped(c, task):
     """Past the day's stall wakes, as test_stall does it: the next check escalates."""
-    c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), minutes=-120), task['id']))
+    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), minutes=-120), task['id']))
     for _ in range(H.STALL_WAKES_PER_DAY):
         H.event(c, H.KEEPER, 'task.stall_wake', task['id'], {})
     c.execute("UPDATE events SET ts=? WHERE action='task.stall_wake' AND target=?",
@@ -147,7 +147,7 @@ def test_the_stall_check_does_not_close_a_review_while_its_runs_are_still_held(a
         capped(c, H.task(c, review['id']))
         assert review['id'] in H.wake_stalled(c)['escalated']
         assert H.task(c, review['id'])['status'] == 'open'
-        kept = c.execute("SELECT json_extract(detail_json,'$.kept_open') FROM events "
+        kept = c.execute("SELECT json_extract(detail,'$.kept_open') FROM events "
                          "WHERE action='task.stall_escalated' AND target=?", (review['id'],)).fetchall()
         assert [k[0] for k in kept] == ['runs still held']
     # Its positive twin: once the run is decided, the review is finished at save time, and the stall check leaves
@@ -214,7 +214,7 @@ def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_
 
 def stopped_two_hours(api, attempt_id, minutes=121):
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET finished=? WHERE id=?', (H.shift(H.now(), minutes=-minutes), attempt_id))
+        c.execute('UPDATE attempts SET finished_at=? WHERE id=?', (H.shift(H.now(), minutes=-minutes), attempt_id))
 
 
 def uncertain_issue(api, token='ana-test'):
@@ -256,7 +256,7 @@ def test_a_saved_choice_waiting_for_a_live_lane_is_not_counted_as_unreviewed(api
     assert result == {'job_id': attempt['job_id'], 'state': 'uncertain', 'deferred': True}
     assert job_state(api, attempt['job_id']) == 'uncertain'
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET finished=? WHERE id=?',
+        c.execute('UPDATE attempts SET finished_at=? WHERE id=?',
                   (H.shift(H.now(), minutes=-121), attempt['id']))
     issue = uncertain_issue(api)
     assert 'waiting 2 h' not in issue['title'] and issue['needs_person'] is False
@@ -320,8 +320,8 @@ def task_held_many(api, count):
         for i in range(1, count):
             message = H._write_message(c, H.KEEPER, 'bot:ops', f'Subtask result {i}', conversation, 'say',
                                        {'task': task_id}, None, None)
-            c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot,state,created) VALUES(?,?,?,'queued',?)",
-                      (message['id'], message['id'], 'ops', message['created']))
+            c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot,state,created_at) VALUES(?,?,?,'queued',?)",
+                      (message['id'], message['id'], 'ops', message['created_at']))
     return machine, attempt, task_id, other_id
 
 

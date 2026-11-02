@@ -429,7 +429,7 @@ def _record(value):
     stored = stored if isinstance(stored, dict) else {}
     return {"enabled": [p for p in stored.get("enabled") or [] if p in PROVIDER_BY_ID],
             "runtime": str(stored.get("runtime") or ""), "model": str(stored.get("model") or ""),
-            "revision": int(stored.get("revision") or 0), "updated": str(stored.get("updated") or ""),
+            "revision": int(stored.get("revision") or 0), "updated_at": str(stored.get("updated_at") or ""),
             "updated_by": str(stored.get("updated_by") or ""), "source": str(stored.get("source") or ""),
             # On unless the owner turned it off: a bot out of quota runs on another provider (default_fallbacks).
             "auto_fallback": stored.get("auto_fallback") is not False,
@@ -547,7 +547,7 @@ def save(c, actor, body, now, settings=None):
     kept = _record(saved[0])["meeting_model"] if saved else None
     meeting = kept if body.get("meeting_model") is None else meeting_choice({"enabled": enabled}, body.get("meeting_model"))
     after = {"enabled": enabled, "runtime": runtime, "model": model, "revision": before["revision"] + 1,
-             "updated": now, "updated_by": actor, "source": "owner",
+             "updated_at": now, "updated_by": actor, "source": "owner",
              "auto_fallback": before["auto_fallback"] if auto is None else bool(auto),
              "check_models": (before["check_models"] if checks is None
                               else normalize_check_models(checks, {"enabled": enabled, "runtime": runtime,
@@ -557,7 +557,7 @@ def save(c, actor, body, now, settings=None):
              "meeting_model": before["meeting_model"] if body.get("meeting_model") is None else meeting}
     # The Gateway's provider is never stored: it follows the connection (`with_gateway`).
     stored = {**after, "enabled": [name for name in enabled if name not in gateway], "meeting_model": meeting}
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(stored, sort_keys=True)))
     return before, after
 
@@ -567,7 +567,7 @@ def view(record):
     return {"configured": configured(record), "enabled": record["enabled"],
             "default": {"runtime": record["runtime"], "model": record["model"]},
             "revision": record["revision"], "source": record["source"],
-            "updated": record["updated"], "updated_by": record["updated_by"],
+            "updated_at": record["updated_at"], "updated_by": record["updated_by"],
             "auto_fallback": record["auto_fallback"],
             "check_models": record["check_models"], "check_order": check_order(record),
             "preset": record.get("preset", ""), "presets": list(models_preset.PRESETS),
@@ -772,10 +772,10 @@ def runtimes_run_on(c, settings):
     from .shared_bots import follow
     from .task_models import of as task_model_of
     record, found = load(c, settings), {}
-    for row in c.execute("SELECT a.runner_id, a.bot, bc.config_json FROM assignments a "
+    for row in c.execute("SELECT a.runner_id, a.bot, bc.config FROM assignments a "
                          "LEFT JOIN bot_config bc ON bc.bot=a.bot"):
         try:
-            config = follow(c, row["bot"], json.loads(row["config_json"] or "{}"))
+            config = follow(c, row["bot"], json.loads(row["config"] or "{}"))
         except ValueError:
             config = {}
         try:
@@ -795,10 +795,10 @@ def runtimes_needed(c, settings):
     record = load(c, settings)
     wanted = wanted_runtimes(record)
     need = {}
-    for row in c.execute("SELECT a.runner_id, bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+    for row in c.execute("SELECT a.runner_id, bc.config FROM assignments a JOIN bots b ON b.slug=a.bot "
                          "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
         try:
-            config = json.loads(row["config_json"] or "{}")
+            config = json.loads(row["config"] or "{}")
         except ValueError:
             config = {}
         runtime = bot_choice(c, settings, config)[0]

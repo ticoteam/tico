@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS pages(
  file_id TEXT PRIMARY KEY REFERENCES bot_files(id),
  cadence TEXT NOT NULL DEFAULT 'none' CHECK(cadence IN ('none','daily','weekly','monthly')),
  as_of TEXT, replaced_by TEXT, archived INTEGER NOT NULL DEFAULT 0,
- created TEXT NOT NULL, updated TEXT NOT NULL);
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS pages_replaced ON pages(replaced_by) WHERE replaced_by IS NOT NULL;
 """
 
@@ -75,7 +75,7 @@ def check_as_of(value):
 
 
 def stale_days(updated, cadence, now=None):
-    """Whole days since `updated` once 1.5x the cadence has passed, else None."""
+    """Whole days since `updated_at` once 1.5x the cadence has passed, else None."""
     period = CADENCES.get(cadence or "none", 0)
     when = H.parse_ts(updated)
     if not period or when is None:
@@ -100,9 +100,9 @@ class Pages:
 
     def view(self, c, who, row, page, cache, names_=None):
         """The contract's page read: what the status line and a card need."""
-        v = c.execute("SELECT version,actor,created FROM bot_file_versions WHERE file_id=? AND version=?",
+        v = c.execute("SELECT version,actor,created_at FROM bot_file_versions WHERE file_id=? AND version=?",
                       (row["id"], row["current_version"])).fetchone()
-        updated = v["created"] if v else row["last_activity_at"]
+        updated = v["created_at"] if v else row["last_activity_at"]
         replaced, replaced_title = page["replaced_by"], None
         if replaced:
             other = c.execute("SELECT * FROM bot_files WHERE id=?", (replaced,)).fetchone()
@@ -114,7 +114,7 @@ class Pages:
         names_ = names_ if names_ is not None else names.lookup(c, {"bot:" + row["bot"], *([by] if by else [])})
         return {"file_id": row["id"], "title": row["title"], "bot": row["bot"],
                 "bot_name": names_.get("bot:" + row["bot"], row["bot"]), "version": row["current_version"],
-                "updated": updated, "updated_by": by, "updated_by_name": names_.get(by, "") if by else "",
+                "updated_at": updated, "updated_by": by, "updated_by_name": names_.get(by, "") if by else "",
                 "cadence": page["cadence"], "as_of": page["as_of"],
                 "stale_days": stale_days(updated, page["cadence"]),
                 "replaced_by": replaced, "replaced_by_title": replaced_title,
@@ -214,8 +214,8 @@ class Pages:
 
         def extra(c, row, changed):
             now = H.now()
-            c.execute("INSERT INTO pages(file_id,cadence,as_of,created,updated) VALUES(?,?,?,?,?) "
-                      "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated=?,"
+            c.execute("INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at) VALUES(?,?,?,?,?) "
+                      "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
                       "archived=CASE WHEN ? THEN 0 ELSE archived END",
                       (row["id"], cadence or "none", as_of, now, now, cadence, as_of, now, int(bool(changed))))
             if replaces:
@@ -225,7 +225,7 @@ class Pages:
                     raise Problem("not_found", "replaces names a page of this bot's", 404)
                 if old["id"] == row["id"]:
                     raise Problem("validation", "A page cannot replace itself", 422)
-                c.execute("UPDATE pages SET replaced_by=?,updated=? WHERE file_id=?", (row["id"], now, old["id"]))
+                c.execute("UPDATE pages SET replaced_by=?,updated_at=? WHERE file_id=?", (row["id"], now, old["id"]))
                 self.files.activity(c, old["id"], "bot:" + row["bot"], "modified", now=now,
                                     detail={"replaced_by": row["id"]})
             if task and row["task_id"] == task:
@@ -244,7 +244,7 @@ class Pages:
         count = c.execute("SELECT count(*) FROM pins WHERE place=?", (place,)).fetchone()[0]
         if count >= cards.PLACE_MAX or c.execute("SELECT 1 FROM pins WHERE place=? AND item=?", (place, item)).fetchone():
             return
-        c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created) VALUES(?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
                   (H.new_id(), place, item, count, "medium", "bot:" + row["bot"], H.now()))
         cards.file_activity(c, row["id"], "bot:" + row["bot"], "pinned", place)
 
@@ -284,7 +284,7 @@ class Pages:
                 fields["archived"] = int(body.archived)
             if fields:
                 now = H.now()
-                c.execute("UPDATE pages SET " + ",".join(k + "=?" for k in fields) + ",updated=? WHERE file_id=?",
+                c.execute("UPDATE pages SET " + ",".join(k + "=?" for k in fields) + ",updated_at=? WHERE file_id=?",
                           (*fields.values(), now, fid))
                 action = ("archived" if fields.get("archived") == 1 else "modified")
                 self.files.activity(c, fid, who.actor, action, now=now,
