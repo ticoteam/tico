@@ -98,17 +98,27 @@ def install(app, store, auth, mutate):
             raise problem(e) from None
 
     def as_viewer(request, view_as):
-        """The caller, or for the owner the teammate they view Finance as (audited)."""
+        """The caller, or for the owner the teammate they view Finance as (audited). A request by someone other than
+        the owner who reads private lines in full is written to events (spec §7.5), once per request."""
         who = viewer(request)
         if not view_as or view_as == who.actor:
-            return who.actor
+            actor = who.actor
+        else:
+            try:
+                with store.transaction() as c:
+                    actor = finance_reads.view_as(c, who.actor, view_as)
+                    finance.note_view_as(c, who.actor, actor)
+            except finance.FinanceError as e:
+                raise problem(e) from None
         try:
-            with store.transaction() as c:
-                target = finance_reads.view_as(c, who.actor, view_as)
-                finance.note_view_as(c, who.actor, target)
+            with store.read() as c:
+                lines = finance.full_read_lines(c, actor)
+            if lines:
+                with store.transaction() as c:
+                    finance.note_full_read(c, actor, lines)
         except finance.FinanceError as e:
             raise problem(e) from None
-        return target
+        return actor
 
     @app.get("/api/v2/finance/budgets")
     def finance_budgets(request: Request, include_inactive: bool = False, limit: int = Query(200, ge=1, le=500),

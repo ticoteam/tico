@@ -8,7 +8,7 @@ When a decision arrives, `approval_decided` verifies the approval is the one Fin
 and budgets, consumes it, and commits, all in one transaction."""
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
@@ -616,6 +616,22 @@ def watch(c: sqlite3.Connection, rule_id: str, by: str, action: str, params: Map
 def note_view_as(c: sqlite3.Connection, owner: str, target: str) -> None:
     """"View as" is audited (spec §7.5): the owner reads Finance exactly as `target` sees it."""
     tico.audit(c, owner, "finance.view_as", target, {})
+
+
+def full_read_lines(c: sqlite3.Connection, viewer: str, at: str | None = None) -> list[str]:
+    """The private accounts whose detail a viewer other than the owner reads in full (spec §7.5). The owner's own reads
+    are not logged; nothing is logged before Finance is set up."""
+    if not is_set_up(c):
+        return []
+    ctx = load(c, at)
+    if viewer == ctx.org.owner:
+        return []
+    return sorted(ctx.view(viewer).full_detail)
+
+
+def note_full_read(c: sqlite3.Connection, viewer: str, accounts: Sequence[str]) -> None:
+    """A full read of private lines is written to events (spec §7.5)."""
+    tico.audit(c, viewer, "finance.private_read", ",".join(accounts), {"accounts": list(accounts)})
 
 
 # ------------------------------------------------------------------------------------------------ dev copies

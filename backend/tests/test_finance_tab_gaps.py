@@ -208,6 +208,7 @@ def test_a_finance_admin_adds_no_view_of_its_own_so_emails_tax_ids_and_sync_erro
             assert row["tax_id_last4"] == last4, who
         assert [m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]] == ["human:fay"]
 
+
 def test_budgets_read_at_a_date_show_the_version_in_effect_then(books):
     with books.transaction() as c:
         soft = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 1_000})
@@ -481,3 +482,22 @@ def test_a_vendor_named_unattributed_is_its_own_row_apart_from_no_vendor(books):
         assert got["next_by"]["team"] == {"eng": 1_000, FR.NONE: 300}
         alone = FR.line_detail(c, OWNER, line, *OCT, at=AT, vendor="unattributed")
         assert alone["total"] == 1_000                                     # the vendor, not the lines with none
+
+
+def test_a_full_read_of_a_private_line_by_someone_else_is_written_to_events(api):
+    """Spec 7.5: a full read of a private line is written to events. Eve holds full detail of account 6900 (private), so
+    her requests leave a row naming it; the owner's own requests leave none."""
+    from backend.finance import actions as FA
+    from backend.tests.test_finance_fixtures import _seed
+    store = api.app.state.store
+    with store.transaction() as c:
+        _seed(c)
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        private = account(c, "6900")
+        assert act(c, OWNER, "private_lines_set", {"account_id": private, "private": True,
+                                                   "full_detail": ["human:eve"]}).status == "committed"
+    get(api, "finance/pnl", token="eve-test")
+    get(api, "finance/pnl")
+    with store.read() as c:
+        rows = c.execute("SELECT actor, target FROM events WHERE action='finance.private_read'").fetchall()
+    assert [tuple(r) for r in rows] == [("human:eve", private)]
