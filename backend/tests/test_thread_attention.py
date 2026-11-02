@@ -199,3 +199,51 @@ def test_a_bot_post_in_a_group_dm_is_listed_as_unread_for_its_people(api):
     assert row["last_unread_seq"] == row["last_seq"]
     with api.app.state.store.read() as c:
         assert threads.unread(c, ana_viewer(api), tid)["unread"] == 1
+
+
+def test_a_dm_with_only_a_bot_is_counted_on_the_bot_not_listed(api):
+    """A bot is on the Team chart: its DM's unread shows there (sidebar `bot_dms`), and only its question is an item."""
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        dm = threads.dm(c, "human:ana", ["bot:finance"], title="Finance")["id"]
+    say(api, dm, "Numbers are in.", actor="bot:finance")
+    assert needs(api, "thread_dm") == []
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}
+    say(api, dm, "Book the Q3 accrual?", actor="bot:finance", kind="ask", to_actor="human:ana")
+    # Its question is Needs you's own card (answered there, which a plain reply is not), so the DM stays out of Inbox.
+    assert [i["conversation_id"] for i in needs(api, "ask")] == [dm]
+    assert get(api, "threads", token="ana-test")["attention"] == []
+    with api.app.state.store.transaction() as c:
+        threads.mark_all_read(c, ana_viewer(api), dm)
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {}
+
+
+def test_a_dm_with_a_bot_and_a_person_is_listed(api):
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        group = threads.dm(c, "human:cara", ["human:ana", "bot:finance"], title="Offer")["id"]
+    say(api, group, "Draft is ready.", actor="bot:finance")
+    assert [i["conversation_id"] for i in needs(api, "thread_dm")] == [group]
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {}
+
+
+def test_a_dm_with_two_bots_is_still_listed(api):
+    setup_attempt(api, "finance")
+    setup_attempt(api, "ops")
+    with api.app.state.store.transaction() as c:
+        group = threads.dm(c, "human:ana", ["bot:finance", "bot:ops"], title="Close")["id"]
+    say(api, group, "Books are closed.", actor="bot:finance")
+    assert [i["conversation_id"] for i in needs(api, "thread_dm")] == [group]
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {}
+
+
+def test_a_bot_dms_count_takes_its_sub_threads(api):
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        dm = threads.dm(c, "human:ana", ["bot:finance"], title="Finance")["id"]
+    parent = say(api, dm, "Q3 is ready.", actor="bot:finance")
+    with api.app.state.store.transaction() as c:
+        threads.mark_all_read(c, ana_viewer(api), dm)
+        sub = threads.create(c, "bot:finance", parent_message_id=parent["id"])["id"]
+    say(api, sub, "Ana, one more line.", actor="bot:finance", to_actor="human:ana")      # addressed to her: unread
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}

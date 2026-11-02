@@ -3595,6 +3595,32 @@ def _history_only_roots(c, v):
     return sorted({root for root, _ in _legacy_homes(c).values() if legacy_reader_only(c, v, {"id": root})})
 
 
+def bot_dm_unread(c, v):
+    """{bot actor: unread count}: the viewer's DMs with one bot and no one else that have unread for them. These DMs are
+    not Needs attention (thread_attention): the Team chart shows each count on its bot, whose page holds the DM."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    if not v.is_person:
+        return {}
+    ids = [r[0] for r in c.execute(
+        "SELECT cv.id FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id WHERE f.actor=? "
+        "AND f.following=1 AND f.notify<>'muted' AND cv.parent_id IS NULL AND cv.closed_at IS NULL "
+        "AND cv.archived_at IS NULL AND COALESCE(cv.audience,'') IN ('personal','participants','')", (v.actor,))]
+    # Every such DM, read or not: what is unread may be in a sub-thread, which the subtree's summary counts.
+    pairs = {}
+    for thread_id in ids:
+        root = thread_row(c, thread_id)
+        if root is None or audience_of(root) not in ("personal", "participants") or not thread_readable(c, v, thread_id):
+            continue
+        others = [a for a in _dm_members(c, root) if a != v.actor]
+        if len(others) == 1 and others[0].startswith("bot:"):
+            pairs[thread_id] = others[0]
+    out = {}
+    for thread_id, summary in subtree_summaries(c, v, list(pairs)).items():
+        if summary.get("unread"):
+            out[pairs[thread_id]] = out.get(pairs[thread_id], 0) + summary["unread"]
+    return out
+
+
 # A list the cursor has finished; `next_cursor` is the threads' position, "|", the DMs' position.
 _SIDEBAR_DONE = "-"
 
@@ -3662,7 +3688,8 @@ def sidebar(c, v, *, cursor=None, limit=50, sort=None):
     `sort` picks the order after Needs attention: "recent" is newest activity first; "important" is each root's level
     (backend/thread_rank.py) highest first, then newest first, and leaves out noise (level 1 or lower, or a task's thread
     noise by rule); without it, unread first, then the rest. Every row has its `importance`. The page's per-row reads
-    (membership, the viewer's follower row) are read once for all its rows."""
+    (membership, the viewer's follower row) are read once for all its rows. The first page also has `bot_dms`, the
+    unread in each one-bot DM (bot_dm_unread), which is not Needs attention."""
     if sort is not None and sort not in SIDEBAR_SORTS:
         raise Problem("sort", "sort is important or recent", 422)
     v = viewer(None, v) if not isinstance(v, Viewer) else v
@@ -3776,6 +3803,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
                        key=lambda pair: (pair[1]["activity_seq"], pair[1]["id"]), reverse=True)
     return {"attention": [{**needing[r["id"]], **item} for r, item in attention],
             "threads": [item for _, item in threads_found], "dms": [item for _, item in dms_found],
+            "bot_dms": bot_dm_unread(c, v) if not cursor else {},
             "next_cursor": None if threads_next == dms_next == _SIDEBAR_DONE else f"{threads_next}|{dms_next}"}
 
 
