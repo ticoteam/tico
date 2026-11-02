@@ -81,9 +81,9 @@ Tico's own app uses more of the API than the spec lists. The line:
   `/jobs`, `/attempts`, `/agents`), settings, access, credentials, tools, market, routines, `/mcp` and
   `/scim`. They change between releases without notice. A route you need that is not in the spec: open an issue to
   have it added to the stable set.
-- **Inside answers.** Fields ending in `_json` (`refs`, `participants`, `acceptance`) are storage
-  leftovers; read the parsed field beside them (`refs`, `participants`, `acceptance_criteria`). Unlisted fields may
-  come and go; a client ignores what it does not know and never fails on an extra field.
+- **Inside answers.** Fields that hold JSON in storage come back parsed: `refs` is an object, `participants` a list,
+  and a task's acceptance criteria are `acceptance_criteria`, a list. Unlisted fields may come and go; a client ignores
+  what it does not know and never fails on an extra field.
 
 The spec describes answers with the fields a frontend relies on (`required`) and leaves the rest open. A test in this
 repository checks those against live responses, and another checks that `openapi/v2.json` is what the server

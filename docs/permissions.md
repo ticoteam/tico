@@ -138,7 +138,7 @@ routines, access or place, and only the owner may add them. A member cannot regi
 The Strategy Bot's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your Strategy Bot](strategy-bot.md)).
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
-Settings > People (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
+Settings > People (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_setup`
 ([Recruiting a seat](onboarding.md#recruiting-a-seat)) is parked, does nothing on its own and costs nothing, so it does not count; it counts once
 it says it is set up, and that call answers `bot_limit` when the member is already at their limit.
 
@@ -574,7 +574,7 @@ The commands (with MCP tools of the same names):
 | `hub bot access <slug> [--see V] [--read V] [--write V]` | show or set who sees, reads, writes (`everyone`, or `ben,group:legal,bot:analyst`) |
 | `hub bot owners <slug> [--add P ...] [--remove P ...]` | the bot's owners |
 | `hub bot update <slug> ...` | name, description, reports-to, status, repository; a manager bot changes only its direct report's name and description ([Managers and their reports](#managers-and-their-reports)) |
-| `hub bot setup-done [slug]` | a starter bot's own call, once its setup is done: it stops being `needs_onboarding` (its manager may call it for it) |
+| `hub bot setup-done [slug]` | a starter bot's own call, once its setup is done: it stops being `needs_setup` (its manager may call it for it) |
 | `hub human add <email> [--name] [--title] [--reports-to]`, `hub human list` | the roster |
 | `hub group list`, `hub group update [<group>] [--name] [--parent] [--lead] [--add-human] [--add-bot] [--remove-human] [--remove-bot]`, `hub group delete <group>` | the groups; create (no group given), rename, move, lead, fill or delete one, owners and admins only (a lead within its groups) |
 | `hub org reports-to <bot:slug\|human:id> <manager>` | change who a teammate reports to, with the asker's rights |

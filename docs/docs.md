@@ -118,16 +118,16 @@ All of it is in the stable v2 contract ([openapi/v2.json](openapi/v2.json), tag 
 
 | | |
 |---|---|
-| `GET /api/v2/docs?path_prefix=&limit=&cursor=` | `{"docs": [{"id", "path", "title", "updated", "updated_by", "updated_by_name", "locked", "version"}], "next_cursor"}` |
+| `GET /api/v2/docs?path_prefix=&limit=&cursor=` | `{"docs": [{"id", "path", "title", "updated_at", "updated_by", "updated_by_name", "locked", "version"}], "next_cursor"}` |
 | `POST /api/v2/docs` `{"path"?, "title", "body", "note"?}` | `{"doc"}`; `409 path_taken` for a path in use. `body` is stored exactly as sent, leading and trailing whitespace included (here and on `PATCH`); the other fields trim |
 | `GET /api/v2/docs/{id}` | `{"doc": {..., "body", "created_by", "created_by_name", "archived"}}` |
 | `PATCH /api/v2/docs/{id}` `{"version", "title"?, "body"?, "path"?, "locked"?, "archived"?, "note"?}` | `{"doc"}`; `409 version_conflict` (with the current `version`, `updated_by_name`), `403 locked`, `403 forbidden` for `locked` by anyone but an owner or bot administrator |
-| `GET /api/v2/docs/{id}/versions` | `{"versions": [{"version", "current", "title", "path", "actor", "actor_name", "created", "note", "size"}]}` |
+| `GET /api/v2/docs/{id}/versions` | `{"versions": [{"version", "current", "title", "path", "actor", "actor_name", "created_at", "note", "size"}]}` |
 | `GET /api/v2/docs/{id}/versions/{n}` | `{"version": {..., "body"}}` |
 | `POST /api/v2/docs/{id}/restore` `{"version"}` | `{"doc"}`: the old version saved as a new one |
 | `POST /api/v2/docs/import` (multipart `file`, `title`?, `path`?) | `{"doc"}` |
 | `GET /api/v2/docs/search?q=&limit=` | `{"results": [{"type": "internal", "id", "path", "title", "excerpt", "score"} \| {"type": "linked", "id", "title", "url", "kind", "description", "score"}]}` |
-| `GET /api/v2/linked-docs` | `{"linked": [{"id", "title", "url", "kind", "host", "description", "added_by", "added_by_name", "created", "updated"}]}` |
+| `GET /api/v2/linked-docs` | `{"linked": [{"id", "title", "url", "kind", "host", "description", "added_by", "added_by_name", "created_at", "updated_at"}]}` |
 | `POST /api/v2/linked-docs` `{"url", "title"?, "description"?}` | `{"linked"}`; `409 already_linked` |
 | `PATCH /api/v2/linked-docs/{id}` `{"title"?, "description"?, "url"?, "archived"?}` | `{"linked"}` |
 

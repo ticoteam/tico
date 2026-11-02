@@ -441,7 +441,7 @@ or `revoking` past its time limit is reset by a sweep.
 
 Enforcement: CHECK. NOT NULL, no default.
 
-The column `google_connects.state` was renamed to `oauth_state` on this branch (the only column rename here). `ensure_schema`
+The column `google_connects.state` was renamed to `oauth_state` on this branch (the only rename among the columns on this page). `ensure_schema`
 renames it on an existing database and recreates its index as `google_connects_oauth_state`.
 
 ### fin_payments.status (check)
@@ -531,7 +531,7 @@ Spellings still outside the stable set:
 
 ## Tables named in the plan without a status column on this base
 
-- `principals`: no such table.
+- `principals`: no status column. Its `kind` (human, bot, agent, service, system) is a type, enforced by a CHECK.
 - `pages`, `humans`, `runners`, `cards`, `docs`, `task_types`, `automations`: no status or state column (`automations`
   keeps its state in `automation_versions.status` and `automation_runs.status`).
 - `conversations.kind` (chat, ask, task, notice) and `messages.kind` (say, ask, answer, notice, steer): types, not statuses.

@@ -90,7 +90,7 @@ The connect and detail routes return a meeting view with these top-level fields:
 model; `""` is the bot's own; not specific to a computer, see `meeting.model` for a fallback), `created_at`,
 `started_at`, `ended_at`, `imported_meeting_id`, `humans`, `bots`, `chunks`, `chat`, `notices`, and `router`.
 `notices` lists the meeting's `meeting.bot_turn_failed`, `_waiting`, `_deferred` and `_retried` events, oldest
-first, each as `{event_id,kind:"failed"|"waiting"|"deferred"|"retried",created,...payload}` (payloads below), so a
+first, each as `{event_id,kind:"failed"|"waiting"|"deferred"|"retried",created_at,...payload}` (payloads below), so a
 client can say in the chat why a bot has not answered yet without replaying the event stream.
 The `router` object contains `windows`, `chat_routes`, `turns`, and `bypasses`. Each `chat_routes` item
 has `chat_id`, `status`, `outcome`, `started_at`, `finished_at`, and `trace`. Use the route-specific acknowledgments
@@ -184,7 +184,7 @@ empty; text is clipped to 800 characters per entry):
   "transcript": [{"seq": 2, "speaker": "<speaker>", "start_ms": 1000, "end_ms": 2000, "text": "<text>"}],
   "recent_chat": [{"id": "<chat-id>", "actor": "human:ana", "role": "human", "text": "<text>", "at_ms": null, "transcript_seq": null}],
   "answered_questions": [{"question": "<human question>", "question_id": "<chat-id>", "answer": "<bot reply>", "answered_by": "bot:ops"}],
-  "bots": [{"slug": "ops", "name": "Operations", "description": "<description>", "last_messages": [{"id": "<chat-id>", "text": "<reply>", "created": "<timestamp>"}]}]
+  "bots": [{"slug": "ops", "name": "Operations", "description": "<description>", "last_messages": [{"id": "<chat-id>", "text": "<reply>", "created_at": "<timestamp>"}]}]
 }
 ```
 
