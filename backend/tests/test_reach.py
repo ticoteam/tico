@@ -141,7 +141,10 @@ def test_a_lines_rule_is_an_internal_org_rule_made_edited_and_retired_with_it(ap
     assert rule_row(api, again)["status"] == "retired"
     assert reach(api)["lines"] == []
     rows = audit(api, "reach_line:" + line["id"])
-    assert rows[0]["before"] is None and rows[-1]["after"] is None and len(rows) == 4
+    assert rows[0]["before"] is None and rows[-1]["after"] is None and len(rows) == 5
+    assert json.loads(rows[1]["before"])["rule"]["text"] == "Send Support only refunds over $500."
+    assert json.loads(rows[1]["after"])["rule"]["text"] == "Send Support only refunds over $900."
+    assert json.loads(rows[-1]["before"])["rule"]["text"] == "Copy Cara on refunds."     # what was removed, rule and all
     assert api.delete(f"/api/v2/reach/lines/{line['id']}", headers=headers("ana-test", "again")).status_code == 404
 
 
@@ -221,3 +224,103 @@ def test_an_edit_may_flip_a_line_and_its_rule_follows_but_never_onto_a_pair_that
     edit_line(api, mine["id"], {"sender": "human:eve"}, token="cara-test", expected=403)
     assert edit_line(api, flipped["id"], {"rule": ""})["line"]["rule"] is None             # "" retires it too
     assert rule_row(api, flipped["rule"]["id"])["status"] == "retired"
+
+
+def events(api, target):
+    with api.app.state.store.read() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM events WHERE target=? ORDER BY created_at, id", (target,))]
+
+
+def hide_fay_from_all_but_cara(api):
+    r = api.put("/api/v2/humans/fay/access", headers=headers(), json={
+        "see": {"people": ["cara"]}, "read": {"people": ["cara"]}, "write": {"people": ["cara"]}, "revision": 0})
+    assert r.status_code == 200, r.text
+
+
+def test_a_lines_rule_is_left_out_of_every_rule_read_for_whoever_may_not_see_the_line(api):
+    org(api)
+    hidden = add_line(api, {"sender": "bot:finance", "receiver": "human:fay", "rule": "Copy Fay on refunds."})["line"]
+    shown = add_line(api, {"sender": "bot:finance", "receiver": "human:eve", "rule": "Copy Eve on payroll."})["line"]
+    before = get(api, "rules/counts", "eve-test")
+    hide_fay_from_all_but_cara(api)
+    rid, other = hidden["rule"]["id"], shown["rule"]["id"]
+
+    def ids(rules):
+        return {r["id"] for r in rules}
+    listed = get(api, "rules?kind=internal", "eve-test")["rules"]
+    assert other in ids(listed) and rid not in ids(listed)
+    assert rid not in ids(get(api, "rules?status=any", "eve-test")["rules"])
+    assert rid not in ids(get(api, "rules?bot=finance", "eve-test")["rules"])
+    get(api, "rules/" + rid, "eve-test", expected=404)
+    tab = get(api, "bots/finance/rules", "eve-test")["internal"]["rules"]
+    assert other in ids(tab) and rid not in ids(tab)
+    by = get(api, "rules/by-teammate", "eve-test")
+    assert rid not in ids(by["rules"]) and all(rid not in b["who"] + b["with"] for b in by["bots"] + by["people"])
+    assert get(api, "rules/counts", "eve-test")["internal"] == before["internal"] - 1
+    # Nor is it changed by someone who may not read it: it is not there.
+    r = api.post("/api/v2/rules/" + rid, json={"version": 1, "text": "Copy Eve instead."}, headers=headers("eve-test"))
+    assert r.status_code == 404, r.text
+    # Whoever sees the line reads its rule.
+    assert rid in ids(get(api, "rules?kind=internal", "cara-test")["rules"])
+    assert get(api, "rules/" + rid, "cara-test")["text"] == "Copy Fay on refunds."
+    assert get(api, "rules/counts", "cara-test")["internal"] == before["internal"]
+
+
+def test_a_lines_rule_takes_its_who_and_with_from_the_line_only(api):
+    org(api)
+    line = add_line(api, {"sender": "bot:finance", "receiver": "human:eve", "rule": "Be brief."})["line"]
+    rid = line["rule"]["id"]
+    for change in ({"who": {"everyone": True}}, {"with": {"people": ["fay"]}}):
+        r = api.post("/api/v2/rules/" + rid, json={"version": 1, **change}, headers=headers("ben-test"))
+        assert r.status_code == 422 and "change the line" in r.text, r.text
+    row = rule_row(api, rid)
+    assert json.loads(row["who"])["bots"] == ["finance"] and json.loads(row["with_scope"])["people"] == ["eve"]
+    # Its sentence may still change through the rules API, and the line reads it.
+    r = api.post("/api/v2/rules/" + rid, json={"version": 1, "text": "Be very brief."}, headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    assert next(x for x in reach(api)["lines"] if x["id"] == line["id"])["rule"]["text"] == "Be very brief."
+    # Moving the line still moves its rule.
+    edit_line(api, line["id"], {"receiver": "human:cara"})
+    assert json.loads(rule_row(api, rid)["with_scope"])["people"] == ["cara"]
+
+
+def test_a_bots_manager_is_found_by_the_bots_id_not_its_slug(api):
+    org(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('0190-scout', 'scout', 'Scout', 'active')")
+        c.execute("INSERT INTO bot_config(bot, config, team, owner_id) VALUES('0190-scout', '{}', '', 'eve')")
+    put_setting(api, "bot:scout", {"mode": "closed"}, token="eve-test")              # Eve owns Scout
+    assert "bot:0190-scout" in reach(api, "eve-test")["may_edit"]
+    put_setting(api, "bot:scout", {"mode": "open"}, token="fay-test", expected=403)
+
+
+def test_who_changed_a_setting_is_null_to_a_reader_who_may_not_see_them(api):
+    org(api)
+    put_setting(api, "bot:finance", {"tasks_per_day": 3}, token="cara-test")
+    put_setting(api, "human:fay", {"chats_per_day": 30}, token="cara-test")
+    r = api.put("/api/v2/humans/cara/access", headers=headers(), json={
+        "see": {"people": ["fay"]}, "read": {"people": ["fay"]}, "write": {"people": ["fay"]}, "revision": 0})
+    assert r.status_code == 200, r.text
+    eve = {s["party"]: s for s in reach(api, "eve-test")["settings"]}
+    assert eve["bot:finance"]["tasks_per_day"] == 3 and eve["bot:finance"]["updated_by"] is None
+    ana = {s["party"]: s for s in reach(api)["settings"]}
+    assert ana["bot:finance"]["updated_by"] == "human:cara"
+
+
+def test_a_rule_sentence_changed_alone_is_a_change_to_the_line(api):
+    org(api)
+    line = add_line(api, {"sender": "bot:finance", "receiver": "human:eve", "per_day": 2, "rule": "Be brief."})["line"]
+    with api.app.state.store.read() as c:
+        made = dict(c.execute("SELECT * FROM reach_lines WHERE id=?", (line["id"],)).fetchone())
+    edited = edit_line(api, line["id"], {"rule": "Be very brief."}, token="cara-test")["line"]
+    assert edited["rule"] == {"id": line["rule"]["id"], "text": "Be very brief."}
+    with api.app.state.store.read() as c:
+        stored = dict(c.execute("SELECT * FROM reach_lines WHERE id=?", (line["id"],)).fetchone())
+    assert stored["updated_by_id"] == "human:cara" and stored["updated_at"] >= made["updated_at"]
+    assert stored["updated_at"] == edited["updated_at"]
+    rows = audit(api, "reach_line:" + line["id"])
+    assert len(rows) == 2 and json.loads(rows[1]["after"])["rule"]["text"] == "Be very brief."
+    assert [e["action"] for e in events(api, "reach_line:" + line["id"])] == ["reach.line_added", "reach.line_changed"]
+    # The same sentence again changes nothing.
+    edit_line(api, line["id"], {"rule": "Be very brief.", "per_day": 2}, token="cara-test")
+    assert len(audit(api, "reach_line:" + line["id"])) == 2

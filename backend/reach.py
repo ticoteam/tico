@@ -179,8 +179,7 @@ def may_edit(c, auth, who, party, ctx):
         return True
     if kind in ("human", "bot") and _team(ctx, party) in led and _team(ctx, party):
         return True
-    return kind == "bot" and who.role == "human" and \
-        auth.bot_manager(c, who, (H.bot(c, ident) or {}).get("slug") or ident)
+    return kind == "bot" and who.role == "human" and auth.bot_manager(c, who, ident)     # bot_config's key: the id
 
 
 def _require_edit(c, auth, who, party, ctx):
@@ -194,9 +193,12 @@ def _require_edit(c, auth, who, party, ctx):
 
 
 # ----------------------------------------------------------------------------------------------- views
-def _setting_view(row):
+def _setting_view(row, shown=None):
+    """A stored setting; `updated_by` is null when `shown` says the reader may not See who changed it."""
+    by = row["updated_by_id"]
     return {"party": row["party_id"], "mode": row["mode"], "chats_per_day": row["chats_per_day"],
-            "tasks_per_day": row["tasks_per_day"], "updated_at": row["updated_at"], "updated_by": row["updated_by_id"]}
+            "tasks_per_day": row["tasks_per_day"], "updated_at": row["updated_at"],
+            "updated_by": by if shown is None or shown(by) else None}
 
 
 def _line_row(c, line_id):
@@ -206,16 +208,35 @@ def _line_row(c, line_id):
     return dict(row)
 
 
-def _line_core(row):
-    return {"id": row["id"], "sender": row["sender_id"], "receiver": row["receiver_id"], "per_day": row["per_day"],
-            "rule_id": row["org_rule_id"]}
-
-
 def _rule_of(c, row):
     if not row["org_rule_id"]:
         return None
     found = c.execute("SELECT id, text, status FROM org_rules WHERE id=?", (row["org_rule_id"],)).fetchone()
     return {"id": found["id"], "text": found["text"]} if found and found["status"] != "retired" else None
+
+
+def _line_core(c, row):
+    """What a line's audit row keeps: its pair, its count and its rule (id and sentence, or null)."""
+    return {"id": row["id"], "sender": row["sender_id"], "receiver": row["receiver_id"], "per_day": row["per_day"],
+            "rule": _rule_of(c, row)}
+
+
+def line_of_rule(c, rule_id):
+    """The line that keeps this org rule, or None."""
+    found = c.execute("SELECT * FROM reach_lines WHERE org_rule_id=?", (rule_id,)).fetchone()
+    return dict(found) if found else None
+
+
+def unseen_rules(c, auth, who):
+    """The ids of the org rules kept by lines naming a teammate `who` may not See. GET /api/v2/reach leaves such a line
+    out, and every rule read (backend/org_rules.py) leaves its rule out the same way."""
+    linked = c.execute("SELECT sender_id, receiver_id, org_rule_id FROM reach_lines "
+                       "WHERE org_rule_id IS NOT NULL").fetchall()
+    if not linked:
+        return set()
+    from . import teammate_access as TA
+    hidden = TA.hidden(c, who, "see", auth=auth)
+    return {r["org_rule_id"] for r in linked if r["sender_id"] in hidden or r["receiver_id"] in hidden}
 
 
 def line_view(c, auth, who, row, ctx):
@@ -244,7 +265,7 @@ def listing(c, auth, who):
     return {
         "defaults": dict(DEFAULTS),
         "owner": ctx["owner"],
-        "settings": [_setting_view(r) for p, r in sorted(ctx["settings"].items()) if shown(p)],
+        "settings": [_setting_view(r, shown) for p, r in sorted(ctx["settings"].items()) if shown(p)],
         "effective": effective_view,
         "lines": [line_view(c, auth, who, r, ctx) for r in ctx["lines"]
                   if shown(r["sender_id"]) and shown(r["receiver_id"])],
@@ -331,7 +352,7 @@ def _rule_write(c, auth, who, row, text, moved=False):
         if moved:
             change.update({"who": _scope(row["sender_id"]), "with": _with(row["receiver_id"])})
         if change:
-            O.edit_rule(c, auth, acting, live["id"], {**change, "version": live["version"]})
+            O.edit_rule(c, auth, acting, live["id"], {**change, "version": live["version"]}, line=True)
         return live["id"]
     made = O.add_rule(c, auth, acting, {"kind": "internal", "text": text, "who": _scope(row["sender_id"]),
                                          "with": _with(row["receiver_id"]), "if_broken": "warn"})
@@ -361,7 +382,7 @@ def add_line(c, auth, who, body, via=None):
               "created_by_id, updated_by_id) VALUES(?,?,?,?,?,?,?,?,?)",
               (row["id"], sender, receiver, per_day, rule_id, now, now, who.actor, who.actor))
     stored = _line_row(c, row["id"])
-    audit_log.write(c, who.actor, "reach_line:" + row["id"], None, _line_core(stored), via or _via(who))
+    audit_log.write(c, who.actor, "reach_line:" + row["id"], None, _line_core(c, stored), via or _via(who))
     _line_event(c, who, "added", stored, {"per_day": per_day})
     return stored
 
@@ -372,7 +393,7 @@ def edit_line(c, auth, who, line_id, changes, via=None):
     row = _line_row(c, line_id)
     ctx = context(c)
     _require_edit(c, auth, who, row["sender_id"], ctx)
-    before = _line_core(row)
+    before = _line_core(c, row)
     sets = {}
     sender = party_of(c, changes["sender"], ctx) if changes.get("sender") is not None else row["sender_id"]
     receiver = party_of(c, changes["receiver"], ctx) if changes.get("receiver") is not None else row["receiver_id"]
@@ -396,12 +417,14 @@ def edit_line(c, auth, who, line_id, changes, via=None):
                             (row["org_rule_id"],)).fetchone()
         if current:
             _rule_write(c, auth, who, moved_row, current["text"], moved)
-    if not sets or all(row[k] == v for k, v in sets.items()):
+    # A changed rule sentence alone keeps the line's columns (the rule keeps its id) and is still a change to the line.
+    after = _line_core(c, {**row, **sets})
+    if after == before:
         return row
-    c.execute(f"UPDATE reach_lines SET {', '.join(k + '=?' for k in sets)}, updated_at=?, updated_by_id=? WHERE id=?",
-              (*sets.values(), H.now(), who.actor, line_id))
+    sets.update({"updated_at": H.now(), "updated_by_id": who.actor})
+    c.execute(f"UPDATE reach_lines SET {', '.join(k + '=?' for k in sets)} WHERE id=?", (*sets.values(), line_id))
     stored = _line_row(c, line_id)
-    audit_log.write(c, who.actor, "reach_line:" + line_id, before, _line_core(stored), via or _via(who))
+    audit_log.write(c, who.actor, "reach_line:" + line_id, before, _line_core(c, stored), via or _via(who))
     _line_event(c, who, "changed", stored, {"fields": sorted(changes)})
     return stored
 
@@ -410,10 +433,11 @@ def remove_line(c, auth, who, line_id, via=None, checked=True):
     row = _line_row(c, line_id)
     if checked:
         _require_edit(c, auth, who, row["sender_id"], context(c))
+    before = _line_core(c, row)
     if row["org_rule_id"]:
         _rule_write(c, auth, who, row, None)
     c.execute("DELETE FROM reach_lines WHERE id=?", (line_id,))
-    audit_log.write(c, who.actor, "reach_line:" + line_id, _line_core(row), None, via or _via(who))
+    audit_log.write(c, who.actor, "reach_line:" + line_id, before, None, via or _via(who))
     _line_event(c, who, "removed", row)
     return {"id": line_id, "removed": True}
 

@@ -10,9 +10,12 @@ requires of us). A rule says who follows it and, for an internal rule, with whom
   group in Who, and whoever manages a bot in Who (its operator, its owners, or a person above it on the chart, as
   `Auth.bot_manager` says), manage the rules that name them. Everyone rules are the owner's and admins' alone. A party
   named in With reads a rule and cannot edit it.
-- Visibility: every teammate reads every sentence and From. A quote shows only where its file is readable
-  (backend/files.py `file_visible`), checked on every response, a replayed one included; otherwise the cite is
-  {hidden: true}. A write's stored response carries no quote; the route reads the rule again after the write.
+- Visibility: every teammate reads every sentence and From, except a rule a Reach line keeps whose line names a teammate
+  they may not See (backend/reach.py `unseen_rules`): like the line, it is left out of every read and is not found. A
+  quote shows only where its file is readable (backend/files.py `file_visible`), checked on every response, a replayed
+  one included; otherwise the cite is {hidden: true}. A write's stored response carries no quote; the route reads the
+  rule again after the write.
+- A Reach line's rule takes its Who and With from the line (sender, receiver): they change through the line only.
 - Every write: one permission check, an audit_log row (`org_rule:<id>`, actor, via) and an event.
 - A bot's settings (write audience, mail, spend, turns, task caps, the fixed limits) are read-only sentences on its
   Rules tab and in `--mine`. They are read from the modules that hold them and never stored as rules.
@@ -185,6 +188,20 @@ def _get(c, rule_id):
     if not r:
         raise Problem("not_found", f"There is no rule {rule_id}", 404)
     return _row(r)
+
+
+def _unseen(c, auth, who):
+    """The rules `who` may not read: those kept by a Reach line naming a teammate they may not See."""
+    from . import reach
+    return reach.unseen_rules(c, auth, who)
+
+
+def _seen(c, auth, who, rule_id):
+    """The rule, as `_get`, for a reader who may read it; to anyone else it is not there."""
+    row = _get(c, rule_id)
+    if rule_id in _unseen(c, auth, who):
+        raise Problem("not_found", f"There is no rule {rule_id}", 404)
+    return row
 
 
 def _core(row):
@@ -762,12 +779,18 @@ def add_rule(c, auth, who, body):
     return view(c, auth, who, stored, ctx, quote=False)
 
 
-def edit_rule(c, auth, who, rule_id, body):
-    row = _get(c, rule_id)
+def edit_rule(c, auth, who, rule_id, body, line=False):
+    """`line`: backend/reach.py moving its own line's rule. Anyone else changes a line's rule's Who and With through the
+    line (its sender and receiver), never here."""
+    row = _seen(c, auth, who, rule_id)
     if row["status"] == "retired":
         raise Problem("conflict", "A retired rule is not edited", 409)
     if who.role == "bot":
         raise Problem("forbidden", "A bot suggests a change to a rule; a person edits it", 403)
+    if not line and (body.get("who") is not None or body.get("with") is not None):
+        from . import reach
+        if reach.line_of_rule(c, rule_id):
+            raise Problem("validation", "This rule belongs to a Reach line: change the line instead", 422)
     ctx = _ctx(c)
     _check_manage(c, auth, who, row["who"], ctx)
     changes = {}
@@ -806,7 +829,7 @@ def edit_rule(c, auth, who, rule_id, body):
 
 def decide_rule(c, auth, who, rule_id, body, action):
     """accept | skip | retire. Accept and skip act on a suggestion; retire on a rule in force."""
-    row = _get(c, rule_id)
+    row = _seen(c, auth, who, rule_id)
     if who.role == "bot":
         raise Problem("forbidden", "A bot suggests a rule; a person accepts, skips or retires it", 403)
     if action == "accept" and body.get("who") is None and not _has(row["who"]):
@@ -879,7 +902,7 @@ def _check_due_owner(c, auth, who, rule, owner):
 
 
 def add_due(c, auth, who, rule_id, body):
-    row = _get(c, rule_id)
+    row = _seen(c, auth, who, rule_id)
     if row["status"] == "retired":
         raise Problem("conflict", "A retired rule takes no due date", 409)
     if who.role == "bot":
@@ -905,7 +928,7 @@ def edit_due(c, auth, who, due_text, body):
     row = due_row(c, due_text)
     if row["retired_at"] or row["ended_on"]:
         raise Problem("not_found", f"There is no due date {due_text}", 404)
-    rule = _get(c, row["rule_id"])
+    rule = _seen(c, auth, who, row["rule_id"])
     if who.role == "bot":
         raise Problem("forbidden", "A bot suggests a due date change; a person makes it", 403)
     _check_manage(c, auth, who, rule["who"])
@@ -947,7 +970,7 @@ def remove_due(c, auth, who, due_text):
     row = due_row(c, due_text)
     if row["retired_at"]:
         raise Problem("not_found", f"There is no due date {due_text}", 404)
-    rule = _get(c, row["rule_id"])
+    rule = _seen(c, auth, who, row["rule_id"])
     if who.role == "bot":
         raise Problem("forbidden", "A bot suggests a removal; a person removes a due date", 403)
     _check_manage(c, auth, who, rule["who"])
@@ -1058,7 +1081,8 @@ def _list_rules(c, auth, who, args):
     if args.get("source"):
         sql += " AND source_id=?"
         params.append(_source_named(c, args["source"]))
-    rows = [_row(r) for r in c.execute(sql + " ORDER BY created_at DESC, id DESC", params)]
+    unseen = _unseen(c, auth, who)
+    rows = [_row(r) for r in c.execute(sql + " ORDER BY created_at DESC, id DESC", params) if r["id"] not in unseen]
     if args.get("who"):
         key, ident = _party(ctx, args["who"])
         rows = [r for r in rows if ident in r["who"].get(key, ())]
@@ -1099,7 +1123,8 @@ def bot_rules(c, auth, who, bot, cursors=None, limit=BOT_LIST_MAX):
     auth.domain(who)
     auth.require_see(c, who, bot)
     ctx = _ctx(c)
-    rows = applies_to(c, bot, _active(c), ctx)
+    unseen = _unseen(c, auth, who)
+    rows = applies_to(c, bot, [r for r in _active(c) if r["id"] not in unseen], ctx)
     cursors = cursors or {}
     out = {"bot": bot, "settings": settings_for(c, bot, ctx)}
     for kind in KINDS:
@@ -1134,7 +1159,8 @@ def teammate_rules(c, auth, who):
     context: a group, a group nested in it, everyone and all bots (all bots reaches bots, never a person)."""
     auth.domain(who)
     ctx = _ctx(c)
-    rules = _active(c)
+    unseen = _unseen(c, auth, who)
+    rules = [r for r in _active(c) if r["id"] not in unseen]
     # Visibility as GET /api/v2/org applies it: a bot is keyed by its id (bot_config's key; the slug is only its label),
     # and a person left off the chart or unseen by the caller is out.
     access = auth.bot_accesses(c, who)
@@ -1163,7 +1189,8 @@ def due_list(c, auth, who, args):
     if want and want not in D.STATUSES:
         raise Problem("validation", "Status is " + ", ".join(D.STATUSES), 422)
     ctx = _ctx(c)
-    active = {r["id"]: r for r in _active(c)}
+    unseen = _unseen(c, auth, who)
+    active = {r["id"]: r for r in _active(c) if r["id"] not in unseen}
     rows = []
     for found in D.views(c, [r for r in D.live_rows(c) if r["rule_id"] in active]):
         if want and found["status"] != want:
@@ -1192,7 +1219,7 @@ def due_show(c, auth, who, due_id):
     row = D.one(c, due_id)
     if not row:
         raise Problem("not_found", f"There is no due date {due_id}", 404)
-    rule = _get(c, row["rule_id"])
+    rule = _seen(c, auth, who, row["rule_id"])
     # The same check as the Due list's rows; a row that ended (edited or removed) or a retired rule is read only.
     live = rule["status"] == "active" and not row["retired_at"] and not row["ended_on"]
     manage = live and may_manage(c, auth, who, rule["who"])
@@ -1203,13 +1230,15 @@ def due_show(c, auth, who, due_id):
 
 def counts(c, auth, who):
     auth.domain(who)
-    rows = _active(c)
+    unseen = _unseen(c, auth, who)
+    rows = [r for r in _active(c) if r["id"] not in unseen]
     active = {r["id"] for r in rows}
     dues = [r for r in D.live_rows(c) if r["rule_id"] in active]
+    suggested = [r["id"] for r in c.execute("SELECT id FROM org_rules WHERE status='suggested'")]
     return {"internal": sum(1 for r in rows if r["kind"] == "internal"),
             "external": sum(1 for r in rows if r["kind"] == "external"),
             "due": len(dues),
-            "suggested": c.execute("SELECT count(*) FROM org_rules WHERE status='suggested'").fetchone()[0]}
+            "suggested": sum(1 for rid in suggested if rid not in unseen)}
 
 
 # ----------------------------------------------------------------------------- HTTP
@@ -1296,7 +1325,7 @@ def install(app, store, auth, mutate):
         """The rule as the caller reads it now: its cite is checked against the file's access on this request, even when the
         write's response was replayed from the idempotency cache."""
         with store.read() as c:
-            return view(c, auth, who, _get(c, rule_id), _ctx(c))
+            return view(c, auth, who, _seen(c, auth, who, rule_id), _ctx(c))
 
     def with_scopes(body, *keys):
         data = body.model_dump(by_alias=True)
@@ -1380,7 +1409,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         with store.read() as c:
             auth.domain(who)
-            return view(c, auth, who, _get(c, rule_id), _ctx(c))
+            return view(c, auth, who, _seen(c, auth, who, rule_id), _ctx(c))
 
     @app.post("/api/v2/rules/{rule_id}")
     def rules_edit(request: Request, rule_id: str, body: RuleEdit):

@@ -202,8 +202,34 @@ async function until(fn, what) {
       assert.match((await panel(page).locator('.rr-line').allInnerTexts()).at(-1), /^From\s+Web\s+5 a day\s+Ask before changing/);
       assert.equal(await page.locator('.rr-lines line').count(), 4);
 
-      // Edit a line: change its count and clear its rule.
+      // A party with a line one way is still offered for the other way, and only that way is open in the editor.
+      await panel(page).locator('[data-rr-add-line]').click();
+      await panel(page).locator('.rr-xq').fill('sdr');
+      await panel(page).locator('[data-rr-pick="bot:sdr"]').click();
+      assert.equal(await ed.locator('[data-rr-dir="from"]').isDisabled(), true, 'SDR → Builder has a line');
+      assert.equal(await ed.locator('[data-rr-dir="to"]').isDisabled(), false);
+      assert.equal(await ed.locator('[data-rr-dir="to"]').getAttribute('aria-pressed'), 'true');
+      await ed.locator('[data-rr-cancel]').click();
+      await panel(page).locator('[data-rr-add-line]').click();
+      await panel(page).locator('.rr-xq').fill('reviewer');
+      await panel(page).locator('[data-rr-pick="bot:reviewer"]').click();
+      assert.equal(await ed.locator('[data-rr-dir="to"]').isDisabled(), true, 'Builder → Reviewer has a line');
+      assert.equal(await ed.locator('[data-rr-dir="from"]').getAttribute('aria-pressed'), 'true');
+      await ed.locator('[data-rr-save]').click();
+      await until(async () => lastWrite(writes, 'POST')?.body?.sender === 'bot:reviewer', 'the other way added');
+      assert.deepEqual(lastWrite(writes, 'POST'), {method: 'POST', path: '/api/v2/reach/lines',
+        body: {sender: 'bot:reviewer', receiver: 'bot:builder', per_day: 0, rule: null}});
+      await until(async () => (await panel(page).locator('.ru-status').innerText()) === 'Saved', 'other way read back');
+      // A line each way: Reviewer is no longer offered.
+      await panel(page).locator('[data-rr-add-line]').click();
+      await panel(page).locator('.rr-xq').fill('reviewer');
+      assert.equal(await panel(page).locator('[data-rr-pick="bot:reviewer"]').count(), 0);
+      await panel(page).locator('[data-rr-cancel]').click();
+
+      // Edit a line: change its count and clear its rule. It cannot be flipped onto the way the other line runs.
       await panel(page).locator('[data-rr-line="l-2"]').click();
+      assert.equal(await ed.locator('[data-rr-dir="from"]').isDisabled(), true, 'Reviewer → Builder has its own line');
+      assert.equal(await ed.locator('[data-rr-dir="to"]').getAttribute('aria-pressed'), 'true');
       assert.equal(await ed.locator('input[name=per_day]').inputValue(), '20');
       assert.equal(await ed.locator('[data-rr-save]').innerText(), 'Save');
       await ed.locator('input[name=per_day]').fill('');
