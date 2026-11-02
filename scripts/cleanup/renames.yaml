@@ -2,7 +2,7 @@
 # in cleanup-spec.md. Do not edit by hand: change the tables in gen_map.py and regenerate.
 # `# CHECK` marks a name the integration owner should confirm before the map is frozen.
 base: 29fcaaf6e
-applied_waves: [1, 2, 2s, 2b, 3, 4]
+applied_waves: [1, 2, 2s, 2b, 3]
 tables: {}
 columns:
   agent_pairings.created: created_at
@@ -197,6 +197,7 @@ columns:
   fin_close_snapshots.restated_json: restated
   fin_connections.settings_json: settings
   fin_contacts.emails_json: emails
+  fin_estimate_lines.tags_json: tags
   fin_events.payload_json: payload
   fin_feed_txns.raw_json: raw
   fin_inbox.payload_json: payload
@@ -206,6 +207,7 @@ columns:
   fin_payments.counted_json: counted
   fin_payments.purpose_json: purpose
   fin_payments.tags_json: tags
+  fin_po_lines.tags_json: tags
   fin_private_lines.full_detail_json: full_detail
   fin_reconciliations.cleared_json: cleared
   fin_rule_runs.inputs_json: inputs
@@ -363,6 +365,7 @@ columns:
   memory_tidy_cards.edits_json: edits
   memory_tidy_cards.expires: expires_at
   memory_tidy_cards.started: started_at
+  memory_tidy_keeps.created: created_at
   messages.answered_by: answered_by_id
   messages.created: created_at
   messages.from_actor: sender_id
@@ -618,7 +621,7 @@ golden_added:
 waves:
   "1":
     rule: "M2: every *_json column drops the suffix (stored encoding unchanged)"
-    count: 183
+    count: 185
     global:
       acceptance_json: acceptance  # 1 table
       access_json: access  # 1 table
@@ -724,7 +727,7 @@ waves:
       start_json: at_start  # 1 table
       state_json: state  # 1 table
       tabs_json: tabs  # 1 table
-      tags_json: tags  # 3 tables
+      tags_json: tags  # 5 tables
       target_json: target  # 1 table
       teams_json: teams  # 1 table
       to_json: to_addresses  # 1 table
@@ -743,10 +746,10 @@ waves:
     scoped: {}
   "2":
     rule: "M1 created/updated -> created_at/updated_at; M3 uniform bare time columns -> <verb>_at"
-    count: 270
+    count: 271
     global:
       code_expires: code_expires_at  # 1 table
-      created: created_at  # 138 tables
+      created: created_at  # 139 tables
       definition_updated: definition_updated_at  # 1 table
       expires: expires_at  # 5 tables
       finished: finished_at  # 13 tables
