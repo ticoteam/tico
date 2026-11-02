@@ -360,7 +360,8 @@ class Calls:
             raise Problem("call_ended", "This call has ended", 409)
         stamp = H.now()
         c.execute("INSERT INTO call_participants(call_id,actor,joined_at) VALUES(?,?,?) "
-                  "ON CONFLICT(call_id,actor) DO UPDATE SET joined_at=excluded.joined_at,left_at=NULL,removed_at=NULL",
+                  "ON CONFLICT(call_id,actor) DO UPDATE SET joined_at=excluded.joined_at,left_at=NULL,removed_at=NULL,"
+                  "media_removed_at=NULL",
                   (call_id, who.actor, stamp))
         c.execute("INSERT OR IGNORE INTO live_meeting_humans VALUES(?,?,?)", (row["live_meeting_id"], who.actor, stamp))
         self._record(c, who.actor, call_id, row["thread_id"], "call.joined", {"actor": who.actor})

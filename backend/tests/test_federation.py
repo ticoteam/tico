@@ -1174,15 +1174,15 @@ def test_an_install_that_joins_later_gets_no_earlier_message_and_no_stall(make_s
     assert texts(b, local_thread(b, tid, a)) == ["before gamma", "after gamma"]
 
 
-def test_a_restricted_message_is_never_sent_to_a_peer(make_side, hq):
+def test_a_message_of_a_private_task_is_never_sent_to_a_peer(make_side, hq):
     a, b = make_side("alpha"), make_side("beta")
     connect(a, b, hq)
     tid = make_thread(a, "Launch")
     share(a, tid, b)
     drive(a, b)
-    secret = say(a, tid, "task provenance")
     with a.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET restricted=1 WHERE id=?", (secret,))
+        secret_task = H.task_create(c, "human:ana", "Acme acquisition terms", "", "human:ana", lint=False, private=True)["id"]
+        CORE.post(c, "human:ana", tid, "task provenance", refs={"task": secret_task})
     say(a, tid, "plain")
     drive(a, b)
     assert texts(b, local_thread(b, tid, a)) == ["plain"]
@@ -1873,3 +1873,59 @@ def test_unsharing_clears_what_was_not_sent(make_side, hq, monkeypatch):
     assert needs_kinds(a).count("thread_unsent") == 1
     assert a.client.delete(f"/api/v2/federation/threads/{tid}/installs/{b.id}", headers=OWNER).status_code == 200
     assert "thread_unsent" not in needs_kinds(a)
+
+
+def answer(side, tid, question, text, refs):
+    """A runner's final reply: it carries its turn and answers a message, which makes it restricted by flag alone."""
+    with side.app.state.store.transaction() as c:
+        return CORE.post(c, "bot:ops", tid, text, kind="answer", refs=refs, in_reply_to=question)["id"]
+
+
+def test_a_runner_reply_with_no_private_content_reaches_the_other_install(make_side, hq):
+    """`restricted` marks a reply to be checked, not a secret: an ordinary runner answer must still go to the peer."""
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    question = say(a, tid, "When is the launch?")
+    answer(a, tid, question, "The launch is on Friday.", {"turn_id": "turn_1"})
+    drive(a, b)
+    assert texts(b, local_thread(b, tid, a)) == ["When is the launch?", "The launch is on Friday."]
+
+
+def test_a_reply_that_carries_private_task_content_never_reaches_the_other_install(make_side, hq):
+    """A private task's words stay home: a reply that names it, and a reply to a message that does, are both withheld."""
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    with a.app.state.store.transaction() as c:
+        secret = H.task_create(c, "human:ana", "Acme acquisition terms", "", "human:ana", lint=False, private=True)["id"]
+        question = CORE.post(c, "human:ana", tid, "What are the terms?", refs={"task": secret})["id"]
+    named = answer(a, tid, question, "Terms are in the private task.", {"turn_id": "turn_2", "task": secret})
+    replied = answer(a, tid, question, "Follow-up.", {"turn_id": "turn_3"})
+    drive(a, b)
+    assert texts(b, local_thread(b, tid, a)) == []
+    with a.app.state.store.read() as c:
+        states = dict(c.execute("SELECT message_id, state FROM message_deliveries WHERE message_id IN (?,?) "
+                                "AND recipient LIKE 'peer:%'", (named, replied)).fetchall())
+    assert states == {named: "moot", replied: "moot"}
+
+
+def test_a_runner_reply_on_a_replica_reaches_the_home_and_a_private_one_does_not(make_side, hq):
+    """The other direction: a replica's own posts go back to the home, and the same rule applies there."""
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    question = say(b, there, "Who owns the plan?", who="human:ben")
+    answer(b, there, question, "Ana owns it.", {"turn_id": "turn_7"})
+    with b.app.state.store.transaction() as c:
+        secret = H.task_create(c, "human:ben", "Beta private plan", "", "human:ben", lint=False, private=True)["id"]
+    answer(b, there, question, "Private detail.", {"turn_id": "turn_8", "task": secret})
+    drive(a, b)
+    assert texts(a, tid) == ["Who owns the plan?", "Ana owns it."]

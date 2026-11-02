@@ -1459,6 +1459,17 @@ class Gateway:
                 "icon_emoji": str(config.get("slack_icon") or "") or None,
                 "icon_url": str(config.get("slack_icon_url") or "") or None}
 
+    def recipient_reads(self, c, message):
+        """Whether the person a copy is addressed to can still read its message in its thread. Membership can end after
+        the copy was queued, and each send (and each rate-limit retry) checks it again. A copy addressed to no person
+        is not checked here."""
+        from . import threads
+        to = str((message or {}).get("to_actor") or "")
+        if not to.startswith("human:"):
+            return True
+        viewer = threads.actor_viewer(c, to)
+        return viewer is not None and threads.readable(c, viewer, message)
+
     def deliver(self):
         """Post what is ready, one attempt each. A crash between send and record is uncertain."""
         now = self.clock()
@@ -1471,9 +1482,15 @@ class Gateway:
             if not post["bot"] and not self.settings.slack_gateway_enabled:
                 continue
             with self.store.transaction() as c:
-                if not privacy.public_message(c, H.message(c, post["message_id"])):
+                message = H.message(c, post["message_id"])
+                if not privacy.public_message(c, message):
                     c.execute("UPDATE slack_posts SET state='cancelled',text='',error='Task privacy prevents delivery',updated=? "
                               "WHERE message_id=? AND state IN ('ready','rate_limited')", (self.clock(), post["message_id"]))
+                    continue
+                if not self.recipient_reads(c, message):
+                    c.execute("UPDATE slack_posts SET state='cancelled',text='',error='Recipient no longer reads this thread',"
+                              "updated=? WHERE message_id=? AND state IN ('ready','rate_limited')",
+                              (self.clock(), post["message_id"]))
                     continue
                 from . import automation_actions
                 if automation_actions.slack_held(c, post):    # its inbox's send switch went off since it was queued
