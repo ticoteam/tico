@@ -22,6 +22,12 @@ _RESET = datetime.now(timezone.utc) + timedelta(hours=2)
 CLAUDE_LIMIT = f"You've hit your limit · resets {_RESET.hour % 12 or 12}:{_RESET.minute:02d}{'am' if _RESET.hour < 12 else 'pm'} (UTC)"
 
 
+def limit_notice_soon():
+    # Relative to the clock: a date-less reset more than 20 hours away is not believed (login_holds.reset_from_text).
+    soon = datetime.now(timezone.utc) + timedelta(hours=2)
+    return f"You've hit your limit · resets {soon:%-I:%M}{soon:%p} (UTC)".replace("AM", "am").replace("PM", "pm")
+
+
 def codex_file(account="acct-1", refresh="r-1", email="ana@acme.example"):
     claims = base64.urlsafe_b64encode(json.dumps({"email": email}).encode()).decode().rstrip("=")
     return json.dumps({"tokens": {"id_token": f"h.{claims}.s", "access_token": "a-" + refresh,
@@ -595,7 +601,7 @@ def limited_on(api, m, sid, bot="ops"):
     turn = claim(api, m)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "limit"}, m["token"])
     post(api, f"attempts/{turn['id']}/events", {"events": [
-        {"seq": 1, "kind": "error", "payload": {"error": CLAUDE_LIMIT, "limit": True}}]}, m["token"])
+        {"seq": 1, "kind": "error", "payload": {"error": limit_notice_soon(), "limit": True}}]}, m["token"])
     post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
          m["token"])
     return turn
