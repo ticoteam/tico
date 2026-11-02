@@ -110,10 +110,11 @@ async function restrictPerson(hub) {
     await omar.getByText('Not found').waitFor({timeout: t(15000)});
     assert.ok(!(await omar.content()).includes(SECRET), 'the members-only text is not on Omar\'s page');
     await omar.goto(hub.url + '/#/bot/' + BOT + '/dm');
-    await omar.locator('#btabs').waitFor({timeout: t(15000)});
+    await omar.locator('#bot-work').waitFor({timeout: t(15000)});
     await omar.waitForLoadState('networkidle');
-    assert.equal(await omar.locator('.bot-talk-switch [data-talk="home"]').count(), 0,
-      'a peer with See only on the bot gets no Home tab');
+    // Home and DM switch only when there are two (bot-page.js talkTabs); a peer who may not read the Home has DM alone.
+    assert.equal(await omar.locator('.bot-talk-switch').count(), 0, 'a peer with See only on the bot has no Home/DM switch');
+    assert.equal(await omar.locator('#btabs [data-bt="home"]').count(), 0, 'a peer with See only on the bot gets no Home tab');
     await omar.context().close();
 
     // Priya's Home. Omar sees Priya but is not her manager (Priya reports to Dana), so her Home is hidden from him. Dana then
