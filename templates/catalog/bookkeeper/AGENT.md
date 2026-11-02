@@ -31,7 +31,7 @@ is final for that run; do not retry it with a different shape to get round a rul
 
 ## Each Books check
 Work the items in this order, then mark the task done with one line: what you did, what waits on a person.
-1. **sync_failed**: note it on the task for BotOps; you never touch a connection.
+1. **sync_failed**: the owner was told when the sync first failed. Say on the task what failed and that it waits on the owner; you never touch a connection.
 2. **bill_to_enter**: read the draft and its attachment, check vendor, lines, dates and terms, `bill_update` what is
    wrong, then `bill_approve` it. Unsure of the vendor, amount or account: leave it as a draft and ask one person.
 3. **unmatched_receipt** and **bill_email**: a file emailed to the bills address, or a receipt with nothing to

@@ -201,7 +201,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         return "idle"
     provider = _provider(store, vault, str(row["credential_ref"] or ""), make)
     if provider is None:
-        _failed(store, cid, "the Mercury token is missing; store it again in Settings", now)
+        _failed(store, cid, "the Mercury token is missing; store it again in Settings", now, str(row["status"]))
         return "no_token"
     problems: list[str] = []
     if due:
@@ -222,8 +222,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
             fields["next_sync_at"] = _after(now, POLL_MINUTES * 60)
         if problems:
             fields.update({"status": "error", "last_error": problems[0][:300]})
-            ctx = load(c, now)
-            banking.event(ctx, "finance.sync.failed", cid, {"connection_id": cid}, now[:13])
+            banking.sync_failed(load(c, now), cid, str(row["status"]), problems[0])
         else:
             fields.update({"status": "active", "last_error": None, "last_ok_at": now})
         SK.update(c, "fin_connections", cid, fields)
@@ -277,10 +276,11 @@ def uncertain_cards(store: Any, provider: Provider, cid: str, now: str) -> list[
     return problems
 
 
-def _failed(store: Any, cid: str, why: str, now: str) -> None:
+def _failed(store: Any, cid: str, why: str, now: str, prior: str) -> None:
     with store.transaction() as c:
         SK.update(c, "fin_connections", cid, {"status": "error", "last_error": why, "updated_at": now,
                                               "next_sync_at": _after(now, POLL_MINUTES * 60)})
+        banking.sync_failed(load(c, now), cid, prior, why)
 
 
 def balances(store: Any, provider: Provider, cid: str, now: str) -> list[str]:

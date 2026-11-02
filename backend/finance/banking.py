@@ -35,6 +35,7 @@ from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import tico
 
 NEW_EVENT, CATEGORY_EVENT, DECLINED_EVENT = "finance.feed.new", "finance.feed.needs_category", "finance.card.declined"
 OTHER, BANK, CARDS, OPENING = "6900", "1000", "2100", "3900"
@@ -46,6 +47,29 @@ AUTH_DAYS = 30                     # an authorization's hold lasts this long wit
 def event(ctx: Ctx, name: str, subject: str, payload: Mapping[str, object], key: str = "") -> None:
     """A finance.* event for Tico's rules, ids only, written with the change (once per name, subject and key)."""
     SB.event(ctx.c, name, subject, key, payload, SYSTEM, ctx.at)
+
+
+def sync_failed(ctx: Ctx, cid: str, prior: str, why: str) -> None:
+    """A bank sync that failed tells the owner what failed (spec 11: no BotOps in the way). `prior` is the connection's
+    status before this run: only the first failure of a run is told (one finance.sync.failed event and one keeper
+    notice, as budget warnings send theirs). A retry that still fails says nothing more; a run after a clean sync is
+    a new run."""
+    if prior == "error":
+        return
+    row = ctx.c.execute("SELECT name, provider FROM fin_connections WHERE id=?", (cid,)).fetchone()
+    label = (str(row[0]) if row and row[0] else f"the {row[1] if row else 'bank'} connection")
+    event(ctx, "finance.sync.failed", cid, {"connection_id": cid}, ctx.at)
+    owner = ctx.org.owner
+    if not owner:
+        return
+    ctx.c.execute("SAVEPOINT fin_sync_notice")
+    try:
+        tico.notice(ctx.c, owner, f"Finance could not sync {label}: {why[:300]}. Tico keeps retrying on its own; "
+                                  "this is the one notice for this failure.")
+        ctx.c.execute("RELEASE fin_sync_notice")
+    except tico.Refused:
+        ctx.c.execute("ROLLBACK TO fin_sync_notice")
+        ctx.c.execute("RELEASE fin_sync_notice")
 
 
 def by_code(ctx: Ctx, code: str) -> L.Account | None:

@@ -12,6 +12,7 @@ from backend import bookkeeper as BK
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.core import kinds as K
+from backend.store import H
 from backend.tests.test_bookkeeper import DEFAULT_RIGHTS, built, check, checks, ensure
 from backend.tests.test_mcp import call, rpc
 from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
@@ -223,13 +224,27 @@ def test_c4_close_period_is_asked_with_the_fields_it_takes(environment):
 
 
 # ----------------------------------------------------------------------------- check 6: failures are visible
-@pytest.mark.xfail(strict=True, reason="GAP: finance.sync.failed has no Bookkeeper routine; the failure only queues "
-                   "a sync_failed item that owners see with view.everything (reads.py), and AGENT.md says note it for "
-                   "BotOps")
 def test_c6_a_failed_sync_reaches_the_owner_without_botops(environment):
+    """A bank connection whose sync fails tells its owner what failed, once for the failure run: one finance.sync.failed
+    event and one keeper notice to the owner. A retry that still fails says nothing more. No BotOps task is involved."""
+    from backend.finance import sync
     api = built(environment)
     ensure(api)
-    assert "finance.sync.failed" in _triggers(api), sorted(_triggers(api))
+    store = api.app.state.store
+    with store.transaction() as c:
+        owner = "human:" + api.app.state.auth.owner_id(c)
+        c.execute("INSERT INTO fin_connections(id, provider, purpose, created_at, created_by, name) VALUES(?,?,?,?,?,?)",
+                  ("conn-rehearsal", "mercury", "bank", H.now(), owner, "Acme checking"))
+    first = H.now()
+    # no token stored: the run fails at once (the same failure path as a Mercury outage), and the retry two hours on
+    assert sync.connection(store, None, "conn-rehearsal", at=first) == "no_token"
+    assert sync.connection(store, None, "conn-rehearsal", at=H.shift(first, hours=2)) == "no_token"
+    with store.read() as c:
+        events = c.execute("SELECT count(*) FROM fin_events WHERE name='finance.sync.failed'").fetchone()[0]
+        notes = c.execute("SELECT to_actor, body FROM messages WHERE kind='notice' AND body LIKE 'Finance could not sync%'"
+                          ).fetchall()
+    assert events == 1 and [n["to_actor"] for n in notes] == [owner], (events, [dict(n) for n in notes])
+    assert "Acme checking" in notes[0]["body"], notes[0]["body"]
 
 
 def test_c6_sync_failed_items_are_read_only_for_viewers_with_everything(environment):

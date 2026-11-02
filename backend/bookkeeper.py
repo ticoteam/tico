@@ -52,7 +52,7 @@ ORDER = ("sync_failed", "bill_to_enter", "bill_email", "unmatched_receipt", "unc
          "unreconciled", "budget_near_limit")
 ON_EVENT = ("bill_due", "invoice_overdue", "period_ready")   # its bot.yaml routines answer these, one task per event
 HINTS = {
-    "sync_failed": "a bank or card sync failed: note it for BotOps",
+    "sync_failed": "a bank or card sync failed; the owner was told when it first failed: say on the task what failed and that it waits on the owner",
     "bill_to_enter": "a draft bill: check vendor, lines and terms, then bill_update and bill_approve",
     "bill_email": "an emailed bill Finance did not take: attach its file, or enter the bill from it with bill_create",
     "uncategorized": "posting rules first; categorize the rest; propose a rule when a pattern repeats",
