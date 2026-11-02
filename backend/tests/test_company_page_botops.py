@@ -5,6 +5,7 @@ import pytest
 
 from backend.botops_act import classify, default_delegable, person_only
 from backend.tests.test_api import api, headers  # noqa: F401  (fixture)
+from backend.tests.test_botops_confirm_cards import card_in_chat, confirm
 from backend.tests.test_member_bots import botops, turn  # noqa: F401  (fixture)
 
 
@@ -39,6 +40,34 @@ def test_what_the_page_shows_or_grants_asks_the_person_and_taking_access_away_is
     assert classify("DELETE", "/api/v2/audiences/aud-1") == "confirm"
     assert classify("DELETE", "/api/v2/readers/rdr-1") == "do"
     assert classify("DELETE", "/api/v2/audiences/aud-1/invites/inv-1") == "do"
+
+
+def test_turning_an_audience_on_is_the_owners_card_and_turning_it_off_is_direct():
+    # Turning one on serves what its approved content says, so it is the person's own tap; a way out stays direct.
+    assert classify("PATCH", "/api/v2/audiences/aud-1", {"enabled": True}) == "confirm"
+    assert classify("PATCH", "/api/v2/audiences/aud-1", {"enabled": False}) == "do"
+    assert classify("PATCH", "/api/v2/audiences/aud-1", {"name": "Board"}) == "do"
+
+
+def test_botops_cannot_reopen_an_audience_without_the_owners_tap(api, botops):  # noqa: F811
+    ana = turn(api, botops, person="ana-test", text="Set up the board audience")
+    made = act(api, ana, "POST", "audiences", {"name": "Board"})
+    assert made.status_code == 200, made.text
+    audience = made.json()["id"]
+    on = act(api, ana, "PATCH", f"audiences/{audience}", {"enabled": True})
+    assert on.status_code == 200 and on.json()["needs_confirm"], on.text
+    card_in_chat(api, on.json(), "ana")
+    assert _enabled(api, audience) is False
+    assert confirm(api, on.json(), "ana-test")["action"]["status"] == "done"
+    assert _enabled(api, audience) is True
+    off = act(api, ana, "PATCH", f"audiences/{audience}", {"enabled": False})
+    assert off.status_code == 200 and "needs_confirm" not in off.json(), off.text
+    assert _enabled(api, audience) is False
+
+
+def _enabled(api, audience):
+    listed = api.get("/api/v2/audiences", headers=headers("ana-test")).json()["audiences"]
+    return next(a["enabled"] for a in listed if a["id"] == audience)
 
 
 def test_a_reader_invite_link_is_handed_to_the_person_and_never_to_botops():

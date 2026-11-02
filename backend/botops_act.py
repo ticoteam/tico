@@ -282,7 +282,7 @@ DO = _routes(
     # The Company page's drafts, sources, stats and logo: the route checks the person is an owner or an admin. An
     # edition is only drafted here; publishing, approving, overriding, retracting and correcting are not listed, so they
     # are refused for BotOps (editions.require_person, require_own_click). Removing an audience's reader or invite is
-    # a way out, so it is direct.
+    # a way out, so it is direct. Turning an audience on is a card (`enables_audience`), checked before this list.
     ("POST", r"audiences"), ("PATCH", rf"audiences/{_S}"),
     ("POST", rf"audiences/{_S}/sources"), ("DELETE", rf"audiences/{_S}/sources/{_S}"),
     ("POST", r"company-page/stats"), ("PATCH", rf"company-page/stats/{_S}"), ("DELETE", rf"company-page/stats/{_S}"),
@@ -388,7 +388,7 @@ def classify(method, path, body=None, rules=None, to_bot=None):
         return None
     if method == "GET":
         return None if NO_READ.fullmatch(path) else "do"
-    if any(m == method and p.fullmatch(path) for m, p in CONFIRM):
+    if any(m == method and p.fullmatch(path) for m, p in CONFIRM) or enables_audience(method, path, body):
         return "confirm"
     if method == "POST" and MESSAGES.fullmatch(path):
         return "do" if to_bot and isinstance(body, dict) and to_bot(body.get("to")) else "confirm"
@@ -397,6 +397,17 @@ def classify(method, path, body=None, rules=None, to_bot=None):
     if any(m == method and p.fullmatch(path) for m, p in DO):
         return "do"
     return None
+
+
+AUDIENCE = re.compile(API + rf"audiences/{_S}")
+
+
+def enables_audience(method, path, body=None):
+    """Turning an audience on (Public, or a reader's audience) serves what its approved content says, so it is the
+    owner's own tap. Turning one off is a way out and stays direct."""
+    path, method = normalize(path) or "", str(method or "").upper()
+    return (method == "PATCH" and bool(AUDIENCE.fullmatch(path)) and isinstance(body, dict) and "enabled" in body
+            and bool(body["enabled"]))
 
 
 def person_only(method, path):
@@ -439,7 +450,7 @@ def card_for_person(method, path, body=None, rules=None, lowers=None, *, force_c
     if force_confirm:
         return True
     match = lambda routes: any(m == method and p.fullmatch(path) for m, p in routes)
-    if match(ALWAYS) or match(CONFIRM):
+    if match(ALWAYS) or match(CONFIRM) or enables_audience(method, path, body):
         return True
     if method == "PUT" and RULES.fullmatch(path) and own_powers(body):
         return True
@@ -461,6 +472,7 @@ SUMMARIES = [
     ("DELETE", re.compile(API + r"providers/gateway"), "Turn off the Tico AI Gateway (its saved key is forgotten)"),
     ("POST", re.compile(API + r"providers/gateway/automatic"), "Connect the Tico AI Gateway automatically again"),
     ("PUT", re.compile(API + rf"usage/(limits(/{_S})?|pools/.+)"), "Change a spending limit"),
+    ("PATCH", AUDIENCE, "Turn on a Company page audience"),
     ("DELETE", re.compile(API + rf"automations/{_S}"), "Delete an automation"),
     ("POST", re.compile(API + rf"automations/{_S}/delete"), "Delete an automation"),
 ]
