@@ -2007,6 +2007,7 @@ def _confirm_document(c: sqlite3.Connection, cid: str, sent: Sent, local: Mappin
     if row is not None and str(row["status"]) == "active":
         if DOC_TABLES[ext.kind] == "fin_bills":
             _link_order_lines(c, load(c, now), str(row["local_id"]), local["lines"], ids)
+            _keep_order_link(c, str(row["local_id"]), local)
         return
     rows = [(str(x["account_id"]), int(x["amount"]), str(x["description"])) for x in local["lines"]]
     # Only the head is read here: the lines come in as rows, and the party as its local id.
@@ -2015,8 +2016,17 @@ def _confirm_document(c: sqlite3.Connection, cid: str, sent: Sent, local: Mappin
     tags = [dict(x.get("tags") or {}) for x in local["lines"]]
     items = [str(x.get("item_id") or "") for x in local["lines"]]
     po_lines = [str(x.get("po_line_id") or "") for x in local["lines"]]
-    _write_document(c, load(c, now), cid, head, M.CREATE, row, str(local["party"]), rows, now, tags, keys=ids,
-                    items=items, po_lines=po_lines)
+    bill = _write_document(c, load(c, now), cid, head, M.CREATE, row, str(local["party"]), rows, now, tags, keys=ids,
+                           items=items, po_lines=po_lines)
+    if DOC_TABLES[ext.kind] == "fin_bills":
+        _keep_order_link(c, bill, local)
+
+
+def _keep_order_link(c: sqlite3.Connection, bill_id: str, local: Mapping[str, Any]) -> None:
+    """The purchase order a bill was sent with stays linked here; the provider never holds the link."""
+    po = str(local.get("purchase_order_id") or "")
+    if po:
+        SAP.update(c, "fin_bills", bill_id, {"purchase_order_id": po})
 
 
 def _link_order_lines(c: sqlite3.Connection, ctx: Ctx, doc_id: str, lines: Sequence[Mapping[str, Any]],
@@ -2548,6 +2558,8 @@ def _create_planner(kind: str) -> handlers.Planner:
     allowed = (party_field, "number", day_field, "due_date", "terms_days", "memo", "lines", "origin", "attachments")
     if kind == "invoice":
         allowed += ("payment_link",)
+    else:
+        allowed += ("purchase_order_id",)
 
     def planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
         V.only(p, allowed)
@@ -2566,8 +2578,11 @@ def _create_planner(kind: str) -> handlers.Planner:
             terms = int(contact["payment_terms_days"])
         due = AP.due_date(day, typed_due, terms)
         raw = AP.doc_lines(p.get("lines"))
+        po_link = ""
         if kind == "bill":
             raw, _ = PU.link_bill_lines(ctx, who, str(contact["id"]), raw)
+            # The link is Tico's: the provider is sent the bill without it, and the link is kept when it confirms.
+            po_link = PU.link_bill_order(ctx, who, V.opt_text(p, "purchase_order_id", 80) or "")
         if kind == "invoice" and _provider(ctx) == "quickbooks":
             _quickbooks_item_accounts(ctx, raw)
         lines, _ = documents.resolve_lines(ctx, who, kind, contact, raw)
@@ -2583,7 +2598,7 @@ def _create_planner(kind: str) -> handlers.Planner:
                 "memo": V.opt_text(p, "memo", 500) or "",
                 "lines": [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
                            "item_id": x.item_id, "tags": dict(x.tags), "po_line_id": x.po_line_id or None}
-                          for x in lines]}
+                          for x in lines], **({"purchase_order_id": po_link} if po_link else {})}
 
         def apply(aid: str) -> handlers.Result:
             oid = _queue(ctx.c, cid, f"{kind}.create", body, by=who, action_id=aid, at=ctx.at)

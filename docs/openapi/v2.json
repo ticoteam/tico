@@ -42880,6 +42880,12 @@
                   "null"
                 ]
               },
+              "purchase_order_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "schedule": {
                 "type": [
                   "object",
@@ -52133,6 +52139,35 @@
                   "required": [
                     "id",
                     "on_order",
+                    "total"
+                  ],
+                  "additionalProperties": true
+                }
+              },
+              "linked_bills": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "vendor": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
                     "total"
                   ],
                   "additionalProperties": true

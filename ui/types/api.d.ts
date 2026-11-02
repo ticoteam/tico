@@ -1607,6 +1607,7 @@ export type FinanceDocument = (FinanceDocumentRow & {
   tags: Record<string, unknown>;
   taxable?: boolean;
 }>;
+  purchase_order_id?: string | null;
   schedule?: Record<string, unknown> | null;
   settlement_count?: number;
   settlements: Array<{
@@ -3478,6 +3479,13 @@ export type PurchaseOrder = (FinanceOrderRow & {
   lines: Array<{
   id: string;
   line_no: number;
+}>;
+  linked_bills?: Array<{
+  id: string;
+  number?: string;
+  status: string;
+  total: number;
+  vendor?: string;
 }>;
   view_version?: number;
 });
