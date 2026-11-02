@@ -107,7 +107,6 @@ def test_unread_threads_reads_cores_sidebar_and_only_what_is_unread(api, monkeyp
     bot's post is activity, not unread."""
     from backend import threads
     seen = []
-    monkeypatch.setattr(threads, "viewer", lambda auth, who: who)
     def sidebar(c, viewer, cursor=None, limit=50):
         seen.append(viewer.actor)
         me = lambda unread, activity=False: {"unread": unread, "activity": activity}   # noqa: E731
