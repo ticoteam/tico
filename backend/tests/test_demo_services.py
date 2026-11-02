@@ -31,6 +31,7 @@ def test_company_inboxes_and_phone_line_hold_their_messages(built):
         phone = inboxes["inbox-phone"]
         assert (phone["kind"], phone["state"]) == ("sms", "active")
         assert phone["period_end"] > NOW.timestamp()
+        assert "support" in phone["used_for"]
         sms = api.get("/api/v2/inbound/messages", params={"kind": "sms"}).json()["messages"]
         assert len(sms) == 4 and {row["inbox_id"] for row in sms} == {"inbox-phone"}
         email = api.get("/api/v2/inbound/messages", params={"kind": "email"}).json()["messages"]

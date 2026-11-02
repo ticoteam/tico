@@ -136,8 +136,9 @@ def _inboxes(b):
             save_inbox(c, {"inbox_id": item["id"], "kind": item["kind"], "name": item["name"],
                            "address": item["address"], "state": "active", "created_by": CONTENT["owner"]["id"],
                            "period_end": period_end, "cancel_pending": 0})
-            c.execute("UPDATE inbound_inboxes SET used_for=? WHERE inbox_id=?", (item["used_for"], item["id"]))
         b.write(work)
+        # The same name keeps the edit local: a rename is the only edit that asks HQ.
+        b.call("PATCH", f"inbound/inboxes/{item['id']}", {"name": item["name"], "used_for": item["used_for"]})
 
     # Messages come through HQ's relay in production. `ingest` is the path that stores them, without the network.
     deliveries = []
