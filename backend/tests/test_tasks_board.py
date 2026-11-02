@@ -13,6 +13,8 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.config import Settings
 from backend.store import encode
+from backend.tests.live import live  # noqa: F401
+from clients import hubcli
 
 
 @pytest.fixture
@@ -427,7 +429,8 @@ def test_tag_owner_movers_and_stale_versions(api):
 # ----------------------------------------------------------------------------- task pipelines
 
 def pipeline(api, token='ana-test'):
-    return post(api, 'task-types', {'name': 'Marketing', 'steps': [
+    # Not Marketing: a fresh file's idea type is named Marketing (backend/marketing_tasks.py).
+    return post(api, 'task-types', {'name': 'Campaign', 'steps': [
         {'name': 'Draft', 'status': 'open'},
         {'name': 'Legal review', 'status': 'review'},
         {'name': 'Copy review', 'status': 'review'},
@@ -443,7 +446,7 @@ def edit_pipeline_task(api, task, **fields):
 def test_steps_keep_status_contract_stay_first_match_and_clear(api):
     typ = pipeline(api)
     task = post(api, 'tasks', {'owner': 'cmo', 'title': 'Draft the campaign', 'body': 'Please.', 'type': typ['id']})
-    assert task['type'] == {'id': typ['id'], 'name': 'Marketing'}
+    assert task['type'] == {'id': typ['id'], 'name': 'Campaign'}
     assert task['step']['name'] == 'Draft' and task['status'] == 'open'
     task = edit_pipeline_task(api, task, step='Copy review')
     copy_id = task['step_id']
@@ -476,7 +479,7 @@ def test_type_and_step_management_permissions_and_references(api):
     post(api, 'task-types', {'name': 'Sales'}, token='priya-test', expected=403)
     typ = pipeline(api, token='ben-test')
     task = post(api, 'tasks', {'owner': 'cmo', 'title': 'Write the ad', 'body': 'Please.',
-        'type': 'Marketing', 'step': 'Copy review'})
+        'type': 'Campaign', 'step': 'Copy review'})
     assert task['status'] == 'review'
     clean = lambda steps: [{k: s[k] for k in ('id', 'name', 'position', 'status')} for s in steps]
     post(api, 'task-types/' + typ['id'], {'steps': clean(typ['steps'][:2])}, expected=422)
@@ -764,3 +767,120 @@ def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
     # Off, the type keeps the bare status changes.
     post(api, 'task-types/' + typ['id'], {'steps_only': False})
     assert post(api, path, {'version': version(), 'close': True})['status'] == 'closed'
+
+
+def marketing_idea(c, owner="bot:cmo", requester="human:ana"):
+    return H.task_create(c, requester, "Try referral ads", "Spend $200 for two weeks.", owner, type="idea")["id"]
+
+
+def test_the_owner_bot_finishes_its_marketing_idea_on_an_outcome_step_and_the_requester_is_told(api, monkeypatch):
+    told = []
+    wake = H._wake
+
+    def spy(conn, row, target, *args, **kwargs):
+        told.append(target)
+        return wake(conn, row, target, *args, **kwargs)
+    monkeypatch.setattr(H, "_wake", spy)
+    with api.app.state.store.transaction() as c:
+        tid = marketing_idea(c)
+        H.task_update(c, "bot:cmo", tid, step="Testing", note="Started.")
+        H.task_update(c, "bot:cmo", tid, step="Won", note="Result: CPA 31")
+        task = H.task(c, tid)
+        last = c.execute("SELECT field, old, new FROM task_events WHERE task_id=? AND field='step' "
+                         "ORDER BY rowid DESC LIMIT 1", (tid,)).fetchone()
+        second = marketing_idea(c)
+        H.task_close(c, "bot:cmo", second, note="Lost on cost.", step="Lost")
+        closed_by_close = H.task(c, second)
+    assert (task["status"], task["step_id"], task["closed_by"]) == ("closed", "idea-won", "bot:cmo")
+    assert task["note"] == "Result: CPA 31"
+    assert tuple(last) == ("step", "idea-doing", "idea-won")
+    assert (closed_by_close["status"], closed_by_close["step_id"]) == ("closed", "idea-lost")
+    assert "human:ana" in told
+
+
+def test_an_owner_bot_cannot_close_a_marketing_idea_on_its_closed_step_or_on_another_types(api):
+    with api.app.state.store.transaction() as c:
+        tid = marketing_idea(c)
+        sales = H.type_create(c, H.KEEPER, "Sales", [{"name": "Draft", "status": "open"},
+                                                       {"name": "Lost", "status": "closed"}])
+        call = H.task_create(c, "human:ana", "Call the lead", "Ring them.", "bot:cmo", type=sales["id"])["id"]
+        with pytest.raises(H.Refused, match="only they or their managers close it"):
+            H.task_update(c, "bot:cmo", tid, step="Closed", note="Done.")
+        with pytest.raises(H.Refused, match="only they or their managers close it"):
+            H.task_update(c, "bot:cmo", call, step="Lost", note="Lost.")
+        assert (H.task(c, tid)["status"], H.task(c, call)["status"]) == ("open", "open")
+
+
+def test_a_marketing_idea_moved_to_done_or_ready_is_not_closed(api):
+    with api.app.state.store.transaction() as c:
+        tid = marketing_idea(c)
+        assert H.task_update(c, "bot:cmo", tid, step="Done", note="Checked.")["status"] == "done"
+        assert H.task(c, tid)["closed_at"] is None
+
+
+def test_a_bot_that_does_not_own_a_marketing_idea_cannot_finish_it(api):
+    with api.app.state.store.transaction() as c:
+        tid = marketing_idea(c)
+        with pytest.raises(H.Refused):
+            H.task_update(c, "bot:cpo", tid, step="Won", note="Won.")
+        with pytest.raises(H.Refused, match="only they or their managers close it"):
+            H.task_close(c, "bot:cpo", tid, note="Won.", step="Won")
+        assert H.task(c, tid)["status"] == "open"
+
+
+def test_an_owner_bot_cannot_close_a_marketing_idea_onto_another_board_that_has_the_same_step_name(api):
+    with api.app.state.store.transaction() as c:
+        tid = marketing_idea(c)
+        sales = H.type_create(c, H.KEEPER, "Sales", [{"name": "Draft", "status": "open"},
+                                                       {"name": "Lost", "status": "closed"}])
+        with pytest.raises(H.Refused, match="only they or their managers close it"):
+            H.task_update(c, "bot:cmo", tid, type=sales["id"], step="Lost", note="Lost on cost.")
+        with pytest.raises(H.Refused, match="only they or their managers close it"):
+            H.task_close(c, "bot:cmo", tid, note="Lost on cost.", type=sales["id"], step="Lost")
+        assert H.task(c, tid)["status"] == "open"
+
+
+def test_the_verdict_alias_on_a_live_server_pauses_an_idea_with_its_result_as_the_note(api, live, monkeypatch):
+    with api.app.state.store.transaction() as c:
+        tid = marketing_idea(c)
+    monkeypatch.setenv("HUB_API_URL", live)
+    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
+    assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "paused", "--result", "CPA 31 so far"]) == 0
+    with api.app.state.store.transaction() as c:
+        task = H.task(c, tid)
+    assert (task["status"], task["step_id"], task["note"]) == ("waiting", "idea-paused", "Result: CPA 31 so far")
+
+
+def test_the_verdict_alias_on_a_live_server_pauses_an_idea_with_no_result_and_a_note_says_so(api, live, monkeypatch):
+    with api.app.state.store.transaction() as c:
+        tid = marketing_idea(c)
+    monkeypatch.setenv("HUB_API_URL", live)
+    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
+    assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "paused"]) == 0
+    with api.app.state.store.transaction() as c:
+        task = H.task(c, tid)
+    assert (task["status"], task["step_id"], task["note"]) == ("waiting", "idea-paused", "Test paused")
+
+
+def test_the_verdict_alias_on_a_live_server_finishes_an_idea_the_owner_bot_won(api, live, monkeypatch):
+    with api.app.state.store.transaction() as c:
+        tid = marketing_idea(c)
+    monkeypatch.setenv("HUB_API_URL", live)
+    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
+    assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "won", "--result", "CPA 31",
+                        "--learning", "Video works"]) == 0
+    with api.app.state.store.transaction() as c:
+        task = H.task(c, tid)
+    assert (task["status"], task["closed_by"], task["note"]) == (
+        "closed", "bot:cmo", "Result: CPA 31\nLearning: Video works")
+
+
+def test_the_alias_files_and_lists_ideas_under_the_marketing_type_id_on_a_live_server(api, live, monkeypatch, capsys):
+    monkeypatch.setenv("HUB_API_URL", live)
+    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
+    assert hubcli.main(["growth", "idea", "create", "--title", "Referral card", "--channel", "referral"]) == 0
+    with api.app.state.store.transaction() as c:
+        row = c.execute("SELECT type_id FROM tasks WHERE title='Referral card'").fetchone()
+    assert row[0] == "idea"
+    assert hubcli.main(["growth", "idea", "list"]) == 0
+    assert "Referral card" in capsys.readouterr().out

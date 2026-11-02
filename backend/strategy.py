@@ -3,7 +3,7 @@ watched against the numbers and the market.
 
 - The page is one row at a time in `strategy_versions`: a summary (400 characters, what every bot reads on every run),
   the vision (400 characters, kept but not shown on the Strategy page; the Goals page reads it from here and falls
-  back to the summary), four fixed sections (`serve`, `sell`, `know`, `not`)
+  back to the summary), five fixed sections (`serve`, `sell`, `know`, `how` (How we sell), `not`)
   plus any extra ones the owner adds (`extra: {key: {title, body}}`), and a snapshot of the bets. Exactly one row is
   the `draft` (`n` NULL); publishing stamps it `n` (1, 2, 3...), snapshots every bet that is not retired, and opens a
   fresh draft copied from it. The draft carries a `revision`: a write against an older one answers 409, so two
@@ -41,7 +41,6 @@ import yaml
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
-from . import growth as G
 from . import hubdb as H
 from . import models as M
 from .store import Problem
@@ -63,11 +62,10 @@ GOALS_SHOWN = 20           # goals listed under one bet
 VERSIONS_PAGE = 100
 DEFAULT_GUIDE = "default"
 BET_STATUSES = ("proposed", "active", "retired")
-IDEAS_MAX = 20             # growth ideas one bet may list in a proposal
 WRONG_KINDS = ("kpi", "thesis", "text")
 DIRECTIONS = ("above", "below")
 FIXED = (("serve", "Who we serve"), ("sell", "What we sell, and for how much"),
-         ("know", "What we know that others don't"), ("not", "What we won't do"))
+         ("know", "What we know that others don't"), ("how", "How we sell"), ("not", "What we won't do"))
 FIXED_KEYS = tuple(k for k, _ in FIXED)
 TITLES = dict(FIXED)
 EXTRA_KEY = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
@@ -403,7 +401,7 @@ def _merge_sections(c, actor, stored, sent):
     """`sent` merged onto `stored`: a fixed key sent is set and "" clears it; an extra section sent as {title, body}
     is set, sent as "" (or with an empty body) is removed; anything not sent is kept, whatever the guide."""
     if not isinstance(sent, dict):
-        H.refuse(c, actor, "kind", "sections is an object: {serve, sell, know, not, extra: {key: {title, body}}}")
+        H.refuse(c, actor, "kind", "sections is an object: {serve, sell, know, how, not, extra: {key: {title, body}}}")
     out = _sections(stored)
     for key, value in sent.items():
         if key == "extra":
@@ -635,11 +633,10 @@ def update_bet(c, actor, bet_id, statement=None, why=None, rules_out=None, wrong
 # ----------------------------------------------------------------------------- the Strategy Bot's proposal
 def proposal_error(c, payload):
     """What is wrong with a `strategy_draft` goal proposal (backend/goals.py), in a sentence, or None. The payload is
-    partial: {summary?, vision?, sections?, bets?: [{id?, statement, why?, rules_out?, wrong_if?, cites?, status?,
-    ideas?}], source?, lens?}. A bet with an id is a partial change to it, so a retire is {id, status: retired}; a bet
-    without one is new and needs its statement. `ideas` lists growth idea task ids that serve the bet; confirming links
-    them to it. `source` says what prompted it (bet_tripped: a wrong-if tripped; lens: a lens run,
-    named by `lens`; briefing: the week's market briefing touched the bet)."""
+    partial: {summary?, vision?, sections?, bets?: [{id?, statement, why?, rules_out?, wrong_if?, cites?, status?}],
+    source?, lens?}. A bet with an id is a partial change to it, so a retire is {id, status: retired}; a bet without
+    one is new and needs its statement. `source` says what prompted it (bet_tripped: a wrong-if tripped; lens: a lens
+    run, named by `lens`; briefing: the week's market briefing touched the bet)."""
     if not isinstance(payload, dict) or not any(payload.get(k) not in (None, "", [], {}) for k in
                                                 ("summary", "vision", "sections", "bets")):
         return "propose a summary, a vision, sections or bets"
@@ -658,7 +655,7 @@ def proposal_error(c, payload):
     sections = payload.get("sections")
     if sections is not None:
         if not isinstance(sections, dict):
-            return "sections is an object: {serve, sell, know, not, extra: {key: {title, body}}}"
+            return "sections is an object: {serve, sell, know, how, not, extra: {key: {title, body}}}"
         for key, value in sections.items():
             if key == "extra":
                 if not isinstance(value, dict):
@@ -682,13 +679,6 @@ def proposal_error(c, payload):
         if item.get("wrong_if") and (not isinstance(item["wrong_if"], dict)
                                      or item["wrong_if"].get("kind") not in WRONG_KINDS):
             return f"a wrong-if is kind {'|'.join(WRONG_KINDS)}"
-        ideas = item.get("ideas")
-        if ideas is not None and (not isinstance(ideas, list) or len(ideas) > IDEAS_MAX
-                                  or not all(isinstance(i, str) for i in ideas)):
-            return f"ideas is a list of at most {IDEAS_MAX} growth idea task ids"
-        for task_id in ideas or []:
-            if not H._one(c, "SELECT task_id FROM growth_ideas WHERE task_id=?", (task_id,)):
-                return f"no growth idea {task_id}"
     return None
 
 
@@ -696,7 +686,7 @@ def apply_proposal(c, actor, payload):
     """A confirmed `strategy_draft` proposal, written as the owner who confirmed it: the draft (merged onto it as it
     is now), then each bet, new or changed. Nothing is published."""
     update_draft(c, actor, None, None, payload.get("summary"), payload.get("vision"), payload.get("sections"))
-    ids, linked = [], []
+    ids = []
     for item in payload.get("bets") or []:
         fields = {k: item.get(k) for k in ("statement", "why", "rules_out", "wrong_if", "cites", "status")}
         if item.get("id"):
@@ -705,12 +695,7 @@ def apply_proposal(c, actor, payload):
             row, _ = add_bet(c, actor, fields["statement"], fields["why"] or "", fields["rules_out"] or "",
                              fields["wrong_if"], fields["cites"], fields["status"] or "proposed")
         ids.append(row["id"])
-        for task_id in item.get("ideas") or []:
-            if not H._one(c, "SELECT task_id FROM growth_ideas WHERE task_id=?", (task_id,)):
-                continue                 # deleted since the proposal was filed: nothing to link
-            G._set_idea(c, actor, task_id, {"bet_id": row["id"]}, "growth.idea.update")
-            linked.append(task_id)
-    return {"draft": True, "bets": ids, "ideas": linked, "revision": draft(c)["revision"]}
+    return {"draft": True, "bets": ids, "revision": draft(c)["revision"]}
 
 
 # ----------------------------------------------------------------------------- publishing

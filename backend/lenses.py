@@ -352,7 +352,7 @@ INSTRUCTIONS = (
     "- assumptions: every answer you had to fill in yourself, because the team skipped the step: say what you assumed "
     "and from what. Never present an assumption as something the team said.\n"
     "- changes: at most eight changes the team could make to its strategy draft. A payload is a partial draft: "
-    "{\"summary\"?, \"vision\"?, \"sections\"?: {\"serve\"|\"sell\"|\"know\"|\"not\": markdown}, \"bets\"?: [{\"id\"? "
+    "{\"summary\"?, \"vision\"?, \"sections\"?: {\"serve\"|\"sell\"|\"know\"|\"how\"|\"not\": markdown}, \"bets\"?: [{\"id\"? "
     "(a bet id to change it; no id adds a bet), \"statement\", \"why\", \"rules_out\", \"wrong_if\": {\"kind\": "
     "\"text\", \"text\": \"what would show it wrong\", \"check_by\": \"YYYY-MM-DD\"}}]}. A wrong-if in words always "
     "has a check_by date. Send only fields that change; the summary stays under 400 characters, the vision under 400. "

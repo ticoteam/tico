@@ -8001,10 +8001,12 @@ def create_app(settings=None):
     install_strategy_market(app, store, auth, mutate)
     from .strategy import install as install_strategy
     install_strategy(app, store, auth, mutate)
-    from .brand_gtm import install as install_brand_gtm
-    install_brand_gtm(app, store, auth, mutate)          # the brand and go-to-market pages
+    from .brand import install as install_brand
+    install_brand(app, store, auth, mutate)
     from .growth import install as install_growth
-    install_growth(app, store, auth, mutate, task_create)   # channels, sources, ideas, cohorts, unit economics
+    install_growth(app, store, auth, mutate)   # channels, sources, cohorts, unit economics, KPIs
+    from .growth_numbers import install as install_growth_numbers
+    install_growth_numbers(app, store, auth)   # the Growth page's numbers (read-only)
     from .strategy_setup import install as install_strategy_setup
     install_strategy_setup(app, store, auth, mutate)
     from .lenses import install as install_lenses

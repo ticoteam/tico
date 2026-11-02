@@ -193,9 +193,8 @@ def _change(p, kpi_name):
         if payload.get("bets"):
             parts.append(f"{len(payload['bets'])} bet{'s' if len(payload['bets']) != 1 else ''}")
         return "change the strategy draft: " + ", ".join(parts)
-    if p["kind"] in ("brand_draft", "gtm_draft"):
-        page = "brand" if p["kind"] == "brand_draft" else "go-to-market"
-        return f"change the {page} draft: " + ", ".join(sorted((payload.get("sections") or {})))
+    if p["kind"] == "brand_draft":
+        return "change the brand draft: " + ", ".join(sorted((payload.get("sections") or {})))
     return p["kind"]
 
 
@@ -250,8 +249,7 @@ def _ask(conn, item, manager=strategy_bot.NAME):
     if p["kind"] in GOAL_KINDS:
         return _goal_ask(conn, item, manager)
     title = {"strategy_draft": "Decide a suggested change to your strategy",
-             "brand_draft": "Decide a suggested change to your brand",
-             "gtm_draft": "Decide a suggested change to your go-to-market"}.get(p["kind"], "Confirm or reject a goal proposal")
+             "brand_draft": "Decide a suggested change to your brand"}.get(p["kind"], "Confirm or reject a goal proposal")
     if p["kind"] == S.REALIGN:
         payload = p.get("payload") or {}
         said = {"retired": "retired", "rewritten": "reworded"}

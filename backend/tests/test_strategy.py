@@ -43,7 +43,7 @@ def ready(api, **bet):
 
 def test_draft_merges_only_what_is_sent_and_a_stale_revision_gets_409(api):
     first = draft(api)
-    assert first["guide"] == "default" and set(first["sections"]) == {"serve", "sell", "know", "not", "extra"}
+    assert first["guide"] == "default" and set(first["sections"]) == {"serve", "sell", "know", "how", "not", "extra"}
     saved = write(api, sections={"serve": "Landlords with 1-20 units.",
                                  "extra": {"brand": {"title": "Brand and voice", "body": "Plain."}}})["draft"]
     assert saved["revision"] == first["revision"] + 1
@@ -117,18 +117,14 @@ def test_two_pending_strategy_proposals_apply_in_the_order_confirmed(api):
     assert draft(api)["summary"] == "First."
 
 
-def test_a_new_bet_in_a_proposal_links_the_growth_ideas_that_serve_it_when_confirmed(api):
-    idea = post(api, "growth/ideas", {"title": "Weekend discount"})["idea"]["task_id"]
-    strategy_token = with_strategy_bot(api)
-    bet = {"statement": "Landlords pay for bots", "ideas": [idea]}
-    post(api, "goal-proposals", {"kind": "strategy_draft", "reason": "r", "payload": {"bets": [
-        {"statement": "Landlords pay", "ideas": ["no-such-idea"]}]}}, token=strategy_token, expected=422)
-    proposal = post(api, "goal-proposals", {"kind": "strategy_draft", "reason": "r", "payload": {"bets": [bet]}},
-                    token=strategy_token)["proposal"]
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"})
-    new_bet = next(b for b in get(api, "strategy")["bets"] if b["statement"] == "Landlords pay for bots")
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT bet_id FROM growth_ideas WHERE task_id=?", (idea,)).fetchone()["bet_id"] == new_bet["id"]
+def test_how_we_sell_is_a_section_that_publishes_with_the_rest_and_stays_out_of_the_run_summary(api):
+    ready(api)
+    write(api, sections={"how": "Referrals from landlords first, then a door-to-door pilot."})
+    assert draft(api)["sections"]["how"].startswith("Referrals from landlords")
+    publish(api)
+    assert get(api, "strategy")["current"]["sections"]["how"] == "Referrals from landlords first, then a door-to-door pilot."
+    run_text = api.get("/api/v2/strategy/summary", headers={"Authorization": "Bearer cara-test"}).text
+    assert "Referrals" not in run_text and "How we sell" not in run_text
 
 
 def test_live_by_bet_counts_every_live_goal_past_the_sample_of_20(api):

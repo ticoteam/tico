@@ -200,7 +200,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                 [--definition-version N] [--supersedes READING-ID]
                                            a reading: a fact with its period; to correct one, supersede it
     hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why|recovery|strategy_draft|
-                               brand_draft|gtm_draft
+                               brand_draft
                         [--goal ID] [--kpi ID]
                         (--payload '{json}'|--payload-file f.json) [--reason "..."]
                                            a change you may not make yourself, for the owner to confirm
@@ -246,26 +246,15 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            proposal create --kind strategy_draft
     hub brand show [--section S] [--version N] | summary | check <file|->
                                            the brand; check: avoided words, wrong names, never-made claims in a draft
-    hub gtm show [--section S] [--version N] | summary | sources
-                                           the go-to-market: motion, buyer, playbooks; sources of truth
-    hub brand|gtm draft --section S --body JSON [--revision N] | publish [--note "..."]
-                                           owner or admin; a bot proposes with --kind brand_draft|gtm_draft
-    hub growth segment list | create --name ...|--segment-id ID [--status S --motion M --who-buys ... --deal-size ...
-                             --why ... --owner ...] | update ID   who we sell to; serving/next are Us/Next on Strategy
-    hub growth channel list [--retired] | show SLUG | add SLUG --name ... [--segment ID] | update SLUG | retire SLUG
-    hub growth source list | add --truth-for ... --system ... --reach-kind ... | update ID | retire ID
-    hub growth idea create --title ... [--hypothesis --prediction --bet --kpi --channel ... --segment ... --i --c --e
-                           --source-kind --source-ref --follow-up-of --assignee]
-    hub growth idea list [--status S] [--bet ID] [--channel SLUG] [--segment ID] [--kpi ID] [--q ...] | show ID
-                         | update ID
-    hub growth idea score ID --i N --c N --e N
-    hub growth idea start ID --to D --change ... --stop-if ... [--from D] [--judged-kpi ID] [--min-events N]
-    hub growth idea verdict ID --status won|lost|inconclusive|dropped|paused [--result --learning
-                            --bet-effect --confidence]   a stop-rule hit or missed baseline is lost, before min events
-    hub growth cohort list [--channel SLUG] [--month M] [--segment ID] | set --channel SLUG|unknown --month YYYY-MM
-                           [--segment ID --spend N --bot-cost N --new N --d30 PCT --d90 PCT --d180 PCT --revenue N
+    hub brand draft --section S --body JSON [--revision N] | publish [--note "..."]
+                                           owner or admin; a bot proposes with --kind brand_draft
+    hub growth channel list [--retired] | show SLUG | add SLUG --name ... | update SLUG | retire SLUG
+                                           a channel's open marketing tasks are labelled channel:<slug>
+    hub growth source list [--retired] | add --truth-for ... --system ... --reach-kind ... | update ID | retire ID
+    hub growth cohort list [--channel SLUG] [--month M] [--limit N] | set --channel SLUG|unknown --month YYYY-MM
+                           [--spend N --bot-cost N --new N --d30 PCT --d90 PCT --d180 PCT --revenue N
                            --margin PCT --quality actual|estimate --source FIELD=TEXT]
-    hub growth economics [--month M] [--segment ID] | week | evidence | working | kpis | settings [--set KEY=VALUE]
+    hub growth economics [--month M] | numbers [--months N] | kpis | settings [--set KEY=VALUE]
     hub lens list [--market]               the lenses: thought exercises run against the strategy or the market
     hub lens run <id> [--answers-file f.json] [--draft] [--no-wait]
                                            run one (the owner, the Strategy Bot; a market lens also the Librarian);
@@ -1749,7 +1738,7 @@ def parser():
     proposal = sub.add_parser("proposal", help="a change you may not make yourself, for the owner to confirm").add_subparsers(dest="sub")
     s = proposal.add_parser("create")
     s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why",
-                                                     "recovery", "strategy_draft", "brand_draft", "gtm_draft"])
+                                                     "recovery", "strategy_draft", "brand_draft"])
     s.add_argument("--goal", dest="goal_id")
     s.add_argument("--kpi", dest="kpi_id")
     s.add_argument("--payload", help="the proposed change, as JSON")
@@ -1893,8 +1882,11 @@ def parser():
     s.add_argument("id", help="the hold's id, from the held answer")
     s.add_argument("why", nargs="?", default="", help="why you think the rule does not apply")
     s.set_defaults(fn="rules appeal")
-    strategy = sub.add_parser("strategy", help="the team's strategy: its bets, the four sections, the versions").add_subparsers(dest="sub")
+    strategy = sub.add_parser("strategy", help="the team's strategy: its bets, its sections, the versions").add_subparsers(dest="sub")
     s = strategy.add_parser("show", help="the published strategy, its bets and their goals; the owner also gets the draft")
+    s.add_argument("--section", choices=["serve", "sell", "know", "how", "not"],
+                   help="only this section of the published strategy, as text (how: How we sell)")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
     s.set_defaults(fn="strategy show")
     s = strategy.add_parser("summary", help="the text every run's context carries")
     s.set_defaults(fn="strategy summary")
@@ -1902,7 +1894,7 @@ def parser():
     s.add_argument("--summary")
     s.add_argument("--vision")
     s.add_argument("--section", action="append", default=[], metavar="KEY=TEXT",
-                   help="serve, sell, know, not, or an extra section's key; KEY= clears it; repeatable")
+                   help="serve, sell, know, how, not, or an extra section's key; KEY= clears it; repeatable")
     s.add_argument("--revision", type=int, help="the draft's revision you read; default the current one")
     s.set_defaults(fn="strategy draft")
     s = strategy.add_parser("publish", help="owner only: the draft becomes the next version")
@@ -1951,59 +1943,28 @@ def parser():
         return s
 
     brand_sections = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
-    gtm_sections = ("motion", "buyer", "playbooks")
-    for kind, title, sections in (("brand", "the brand: voice, words, names, claims", brand_sections),
-                                  ("gtm", "the go-to-market: motion, buyer, playbooks", gtm_sections)):
-        page = sub.add_parser(kind, help=title).add_subparsers(dest="sub")
-        s = json_flag(page.add_parser("show", help="the published page; owner and admins also get the draft"))
-        s.add_argument("--section", choices=sections, help="only this section")
-        s.add_argument("--version", type=int, metavar="N", help="a published version; default the latest")
-        s.set_defaults(fn=f"{kind} show")
-        s = json_flag(page.add_parser("summary", help="the text a growth-facing bot's turn carries"))
-        s.set_defaults(fn=f"{kind} summary")
-        if kind == "brand":
-            s = json_flag(page.add_parser("check", help="check a draft against the published brand; - reads stdin"))
-            s.add_argument("file", help="a file holding the draft, or - for stdin")
-            s.set_defaults(fn="brand check")
-        else:
-            s = json_flag(page.add_parser("sources", help="the source of truth for each number, and conflicts"))
-            s.add_argument("--retired", dest="include_retired", action="store_true", default=None)
-            s.set_defaults(fn="gtm sources")
-        s = json_flag(page.add_parser("draft", help=f"owner or admin: change one section of the draft; a bot proposes "
-                                                    f"instead (proposal create --kind {kind}_draft)"))
-        s.add_argument("--section", required=True, choices=sections)
-        s.add_argument("--body", required=True, help="the section's value as JSON; null removes it")
-        s.add_argument("--revision", type=int, help="the draft's revision you read; stale is refused")
-        s.set_defaults(fn=f"{kind} draft")
-        s = json_flag(page.add_parser("publish", help="owner or admin: the draft becomes the next version"))
-        s.add_argument("--note", default="")
-        s.set_defaults(fn=f"{kind} publish")
+    page = sub.add_parser("brand", help="the brand: voice, words, names, claims").add_subparsers(dest="sub")
+    s = json_flag(page.add_parser("show", help="the published page; owner and admins also get the draft"))
+    s.add_argument("--section", choices=brand_sections, help="only this section")
+    s.add_argument("--version", type=int, metavar="N", help="a published version; default the latest")
+    s.set_defaults(fn="brand show")
+    s = json_flag(page.add_parser("summary", help="the text a growth-facing bot's turn carries"))
+    s.set_defaults(fn="brand summary")
+    s = json_flag(page.add_parser("check", help="check a draft against the published brand; - reads stdin"))
+    s.add_argument("file", help="a file holding the draft, or - for stdin")
+    s.set_defaults(fn="brand check")
+    s = json_flag(page.add_parser("draft", help="owner or admin: change one section of the draft; a bot proposes instead "
+                                                "(proposal create --kind brand_draft)"))
+    s.add_argument("--section", required=True, choices=brand_sections)
+    s.add_argument("--body", required=True, help="the section's value as JSON; null removes it")
+    s.add_argument("--revision", type=int, help="the draft's revision you read; stale is refused")
+    s.set_defaults(fn="brand draft")
+    s = json_flag(page.add_parser("publish", help="owner or admin: the draft becomes the next version"))
+    s.add_argument("--note", default="")
+    s.set_defaults(fn="brand publish")
 
-    growth = sub.add_parser("growth", help="growth: segments, channels, sources, ideas and tests, cohorts, unit economics").add_subparsers(dest="sub")
-    segment = growth.add_parser("segment", help="who the company sells to").add_subparsers(dest="subsub")
-
-    def segment_flags(s):
-        s.add_argument("--status", choices=["serving", "testing", "next", "dropped"],
-                       help="serving and next are Us and Next on the Strategy page; a bot adds testing ones")
-        s.add_argument("--motion", choices=["self_serve", "sales_led", "partner", "marketplace", "local", "community",
-                                            "ecommerce"])
-        s.add_argument("--who-buys", dest="who_buys")
-        s.add_argument("--deal-size", dest="deal_size", help="$40/month")
-        s.add_argument("--why")
-        s.add_argument("--owner", help='me, a bot slug or a person id; "" clears')
-        s.add_argument("--sort", type=int)
-    json_flag(segment.add_parser("list")).set_defaults(fn="growth segment list")
-    s = json_flag(segment.add_parser("create", help="by name (found or made in the market graph) or market segment id"))
-    s.add_argument("--name")
-    s.add_argument("--segment-id", dest="segment_id", metavar="ID", help="a market segment: segment/...")
-    segment_flags(s)
-    s.set_defaults(fn="growth segment create")
-    s = json_flag(segment.add_parser("update", help="owner or admin; a bot may change why, who buys and deal size"))
-    s.add_argument("id", help="the segment's id or its market segment id")
-    s.add_argument("--name")
-    segment_flags(s)
-    s.set_defaults(fn="growth segment update")
-
+    growth = sub.add_parser("growth", help="growth: channels, sources, monthly cohorts, unit economics, the numbers") \
+        .add_subparsers(dest="sub")
     channel = growth.add_parser("channel", help="the channels customers come from").add_subparsers(dest="subsub")
 
     def channel_flags(s):
@@ -2016,8 +1977,6 @@ def parser():
         s.add_argument("--guardrail-kpi", dest="guardrail_kpi_id", metavar="ID")
         s.add_argument("--guardrail-max", dest="guardrail_max", type=float, metavar="N")
         s.add_argument("--sort", type=int)
-        s.add_argument("--segment", dest="segments", action="append", metavar="ID",
-                       help='a segment it reaches; repeatable; "" clears')
     s = json_flag(channel.add_parser("list"))
     s.add_argument("--retired", dest="include_retired", action="store_true", default=None, help="also retired ones")
     s.set_defaults(fn="growth channel list")
@@ -2061,91 +2020,15 @@ def parser():
     s.add_argument("id")
     s.set_defaults(fn="growth source retire")
 
-    idea = growth.add_parser("idea", help="growth ideas and their tests").add_subparsers(dest="subsub")
-    idea_sources = ["strategy", "competitor", "listening", "peec", "lost_test", "person", "other"]
-
-    def idea_flags(s):
-        s.add_argument("--hypothesis", help="we believe X because Y")
-        s.add_argument("--prediction", help="what will move, by how much, by when")
-        s.add_argument("--bet", dest="bet_id", metavar="ID", help="the strategy bet it tests")
-        s.add_argument("--kpi", dest="kpi_id", metavar="ID", help="the KPI it should move")
-        s.add_argument("--channel", dest="channels", action="append", metavar="SLUG", help="repeatable")
-        s.add_argument("--segment", dest="segments", action="append", metavar="ID",
-                       help='a segment it targets; repeatable; "" clears')
-        s.add_argument("--source-kind", dest="source_kind", choices=idea_sources)
-        s.add_argument("--source-ref", dest="source_ref", help="a link or id for that source")
-    s = json_flag(idea.add_parser("create", help="file an idea; anyone may"))
-    s.add_argument("--title", required=True)
-    idea_flags(s)
-    s.add_argument("--i", dest="ice_i", type=int, metavar="1-10", help="impact")
-    s.add_argument("--c", dest="ice_c", type=int, metavar="1-10", help="confidence")
-    s.add_argument("--e", dest="ice_e", type=int, metavar="1-10", help="ease")
-    s.add_argument("--follow-up-of", dest="follow_up_of", metavar="ID", help="the finished idea this follows")
-    s.add_argument("--assignee", help="me, a bot slug or a person id; default you")
-    s.add_argument("--body", help="more detail for the task")
-    s.set_defaults(fn="growth idea create")
-    s = json_flag(idea.add_parser("list", help="best ICE first"))
-    s.add_argument("--status", choices=["idea", "testing", "won", "lost", "inconclusive", "dropped", "paused"])
-    s.add_argument("--bet", dest="bet_id", metavar="ID")
-    s.add_argument("--channel", metavar="SLUG")
-    s.add_argument("--segment", metavar="ID")
-    s.add_argument("--kpi", dest="kpi_id", metavar="ID")
-    s.add_argument("--q", help="words in the title or hypothesis")
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="growth idea list")
-    s = json_flag(idea.add_parser("show"))
-    s.add_argument("id")
-    s.set_defaults(fn="growth idea show")
-    s = json_flag(idea.add_parser("update", help="its assignee, creator or an admin"))
-    s.add_argument("id")
-    s.add_argument("--title")
-    idea_flags(s)
-    s.add_argument("--judged-kpi", dest="judged_kpi_id", metavar="ID")
-    s.add_argument("--from", dest="test_from", metavar="YYYY-MM-DD")
-    s.add_argument("--to", dest="test_to", metavar="YYYY-MM-DD")
-    s.add_argument("--change")
-    s.add_argument("--stop-if", dest="stop_if")
-    s.add_argument("--min-events", dest="min_events", type=int)
-    s.add_argument("--audience")
-    s.add_argument("--external-ref", dest="external_ref")
-    s.set_defaults(fn="growth idea update")
-    s = json_flag(idea.add_parser("score", help="impact, confidence, ease: 1-10 each"))
-    s.add_argument("id")
-    s.add_argument("--i", type=int, required=True, metavar="1-10")
-    s.add_argument("--c", type=int, required=True, metavar="1-10")
-    s.add_argument("--e", type=int, required=True, metavar="1-10")
-    s.set_defaults(fn="growth idea score")
-    s = json_flag(idea.add_parser("start", help="start its test; its assignee or an admin"))
-    s.add_argument("id")
-    s.add_argument("--from", dest="test_from", metavar="YYYY-MM-DD", help="default today")
-    s.add_argument("--to", dest="test_to", required=True, metavar="YYYY-MM-DD")
-    s.add_argument("--change", required=True, help="what the test changes")
-    s.add_argument("--stop-if", dest="stop_if", required=True, help="stop early if this happens")
-    s.add_argument("--judged-kpi", dest="judged_kpi_id", metavar="ID", help="default the idea's KPI")
-    s.add_argument("--min-events", dest="min_events", type=int, help="events needed before a won verdict")
-    s.add_argument("--audience")
-    s.set_defaults(fn="growth idea start")
-    s = json_flag(idea.add_parser("verdict", help="a stop-rule hit or missed baseline is lost, before min events; "
-                                                  "its assignee or an admin"))
-    s.add_argument("id")
-    s.add_argument("--status", required=True, choices=["won", "lost", "inconclusive", "dropped", "paused"])
-    s.add_argument("--result", help="what happened, with the numbers")
-    s.add_argument("--learning", help="what we now know")
-    s.add_argument("--bet-effect", dest="bet_effect", choices=["supports", "weakens", "none"])
-    s.add_argument("--confidence", choices=["low", "medium", "high"])
-    s.set_defaults(fn="growth idea verdict")
-
     cohort = growth.add_parser("cohort", help="monthly numbers by channel").add_subparsers(dest="subsub")
     s = json_flag(cohort.add_parser("list"))
     s.add_argument("--channel", metavar="SLUG", help="a channel slug, or unknown")
     s.add_argument("--month", metavar="YYYY-MM")
-    s.add_argument("--segment", metavar="ID")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="growth cohort list")
     s = json_flag(cohort.add_parser("set", help="one channel's month, only the fields given; any bot or an admin"))
     s.add_argument("--channel", required=True, metavar="SLUG", help="a channel slug, or unknown")
     s.add_argument("--month", required=True, metavar="YYYY-MM")
-    s.add_argument("--segment", dest="segment_id", metavar="ID", help="one segment's share of the month")
     s.add_argument("--spend", type=float)
     s.add_argument("--bot-cost", dest="bot_cost", type=float)
     s.add_argument("--new", dest="new_customers", type=int, metavar="N", help="new customers")
@@ -2159,14 +2042,13 @@ def parser():
     s.set_defaults(fn="growth cohort set")
     s = json_flag(growth.add_parser("economics", help="CAC, months kept, LTV and LTV:CAC by channel"))
     s.add_argument("--month", metavar="YYYY-MM")
-    s.add_argument("--segment", metavar="ID", help="only that segment's cohorts")
     s.set_defaults(fn="growth economics")
-    for word, text in (("week", "tests running and due, verdicts, guardrails, the North Star"),
-                       ("evidence", "each bet with the verdicts for and against it"),
-                       ("working", "open work under ideas and on channel-labelled tasks"),
-                       ("kpis", "the KPI tree: North Star, inputs, guardrails")):
-        json_flag(growth.add_parser(word, help=text)).set_defaults(fn="growth " + word)
-    s = json_flag(growth.add_parser("settings", help="unit, revenue, margin, win threshold; --set: owner or admin"))
+    s = json_flag(growth.add_parser("numbers", help="the monthly series, each channel's economics, the KPI tree, markers"))
+    s.add_argument("--months", type=int, metavar="N", help="1 to 24; default 12")
+    s.set_defaults(fn="growth numbers")
+    s = json_flag(growth.add_parser("kpis", help="the KPI tree: North Star, inputs, guardrails"))
+    s.set_defaults(fn="growth kpis")
+    s = json_flag(growth.add_parser("settings", help="unit, revenue, margin; --set: owner or admin"))
     s.add_argument("--set", action="append", metavar="KEY=VALUE", help="repeatable")
     s.set_defaults(fn="growth settings")
 
@@ -3518,6 +3400,11 @@ def _context_search(rest):              # --source all|docs|market  ->  --market
     return out + (["--market"] if market else [])
 
 
+def _gtm_how(rest):
+    """`hub gtm show|summary` is the How we sell section now: the old page's flags are gone, `--json` stays."""
+    return [a for a in rest if a == "--json"]
+
+
 # (old words, new words, words added at the end, rewrite of what follows). The old spellings are not in the parser, so
 # they are not in `hub --help`; `rename_argv` maps a command line onto the new one and says so on stderr. They are removed
 # one release after the rename. The longest old spelling that matches wins.
@@ -3577,9 +3464,67 @@ RENAMED = [
     (("calendar", "upcoming"), ("calendar", "list"), (), None),
     (("decisions",), ("decision", "ask"), (), None),
     (("judge",), ("decision", "ask"), (), None),
+    (("gtm", "show"), ("strategy", "show", "--section", "how"), (), _gtm_how),
+    (("gtm", "summary"), ("strategy", "show", "--section", "how"), (), _gtm_how),
+    (("gtm", "sources"), ("growth", "source", "list"), (), None),
 ]
 RENAMED.sort(key=lambda rule: -len(rule[0]))
 NOTICE_COMMANDS = ("list",)                             # the subcommands `hub notice` has now
+
+
+MARKETING_TYPE = "idea"     # the marketing task type's id (backend/marketing_tasks.py TYPE_ID); its name is a team's to set
+LEGACY_IDEA_FLAGS = ("--title", "--hypothesis", "--prediction", "--bet", "--kpi", "--segment", "--source-kind",
+                     "--source-ref", "--i", "--c", "--e", "--follow-up-of", "--assignee", "--body", "--status", "--q",
+                     "--limit", "--result", "--learning", "--bet-effect", "--confidence")
+
+
+def legacy_idea(argv):
+    """The old `hub growth idea create|list|verdict` lines as the task commands they are now, run in order, with the
+    notice to print; None for any other line. Ideas are tasks of the idea type (id, not name: a team's own Marketing type
+    does not change where they go): a channel is its label, a verdict moves the task to its step with what it found as
+    the note. The ICE scores, segments and the idea's source have no task field and are read and dropped; the bet and
+    the KPI stay as lines in the body."""
+    if argv[:2] != ["growth", "idea"] or argv[2:3] not in (["create"], ["list"], ["verdict"]):
+        return None
+    p = argparse.ArgumentParser(prog="hub growth idea", allow_abbrev=False)
+    p.add_argument("verb")
+    p.add_argument("id", nargs="?")
+    p.add_argument("--channel", action="append")
+    for flag in LEGACY_IDEA_FLAGS:
+        p.add_argument(flag)
+    old, _ = p.parse_known_args(argv[2:])
+    json_out = ["--json"] if "--json" in argv else []
+    if old.verb == "create":
+        # A task needs a body, so an idea given only a title uses the title as its body.
+        body = "\n".join(line for line in (
+            f"Hypothesis: {old.hypothesis}" if old.hypothesis else "",
+            f"Prediction: {old.prediction}" if old.prediction else "",
+            f"Bet: {old.bet}" if old.bet else "",
+            f"KPI: {old.kpi}" if old.kpi else "",
+            old.body or "") if line) or old.title or ""
+        line = ["task", "create", "--type", MARKETING_TYPE, "--owner", old.assignee or "me", "--title", old.title or "",
+                "--body", body]
+        for channel in old.channel or []:
+            line += ["--label", f"channel:{channel}"]
+        return f'"hub growth idea create" is now "hub task create --type {MARKETING_TYPE}"', [line + json_out]
+    if old.verb == "list":
+        line = ["task", "list", "--type", MARKETING_TYPE]
+        if old.status:
+            line += ["--step", old.status.capitalize()]
+        if old.channel:
+            line += ["--label", f"channel:{old.channel[0]}"]
+        return f'"hub growth idea list" is now "hub task list --type {MARKETING_TYPE}"', [line + json_out]
+    if not old.status:
+        p.error("verdict needs --status won|lost|inconclusive|dropped|paused")
+    if not old.id:
+        p.error("verdict needs the idea's task id")
+    update = ["task", "update", old.id, "--step", old.status.capitalize()]
+    found = "\n".join(f"{label}: {value}" for label, value in (("Result", old.result), ("Learning", old.learning)) if value)
+    if not found and old.status == "paused":
+        found = "Test paused"           # a pause needs a note; with no result or learning, the note says only that
+    if found:
+        update += ["--note", found]     # the verdict's words are the note of every outcome
+    return ('"hub growth idea verdict" is now "hub task update --step --note"', [update + json_out])
 
 
 def parse(p, argv):
@@ -3638,9 +3583,23 @@ def split_human(argv):
 
 def main(argv):
     argv, who = split_human(argv)
+    old = legacy_idea(argv)
+    if old:
+        notice, lines = old
+        print(f"hub: {notice}; the old name stops working in the next release", file=sys.stderr)
+        for line in lines:
+            code = run(line, who)
+            if code:
+                return code
+        return 0
     argv, renamed = rename_argv(argv)
     if renamed:
         print(f"hub: {renamed}; the old name stops working in the next release", file=sys.stderr)
+    return run(argv, who)
+
+
+def run(argv, who):
+    """One command line in its current spelling: parsed here, then answered here or sent to the hub."""
     p = parser()
     try:
         args = parse(p, argv)

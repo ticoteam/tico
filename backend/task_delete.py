@@ -40,8 +40,7 @@ TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
 # Rows that only describe the task: kept with it in the trash.
 TASK_ROWS = ("task_events", "task_links", "task_tags", "task_delegations", "task_reminders",
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
-             "task_check_models", "task_run_models", "growth_ideas", "growth_idea_channels",
-             "growth_idea_segments")
+             "task_check_models", "task_run_models")
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")
@@ -346,8 +345,11 @@ def _insert(c, table, row, skip=()):
 
 
 def _try_insert(c, table, row, skipped):
-    """Bookkeeping that something newer has taken (a service key's mapping, a Slack thread, a deleted
-    label) is left out rather than failing the restore; the report counts it."""
+    """Bookkeeping that something newer has taken (a service key's mapping, a Slack thread, a deleted label) is left
+    out rather than failing the restore, and so is a row of a table a migration has dropped; the report counts both."""
+    if not _columns(c, table):
+        skipped[table] = skipped.get(table, 0) + 1
+        return
     c.execute("SAVEPOINT trash_row")
     try:
         _insert(c, table, row)

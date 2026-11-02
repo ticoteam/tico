@@ -31,7 +31,6 @@ from . import market_watch as MW
 from . import models as M
 from . import onboarding as O
 from . import strategy as S
-from . import strategy_market as SM
 from . import strategy_setup as SS
 from .company_file import draft as D
 from .company_file import starter
@@ -211,7 +210,7 @@ def strategy_preview(strategy):
     """What the strategy block will add, for the preview."""
     market, listening = strategy["market"], strategy["listening"]
     return {"summary": bool(strategy["summary"]), "vision": bool(strategy["vision"]),
-            "sections": [k for k in S.FIXED_KEYS if strategy["sections"][k]] + (["watching"] if listening["requests"]
+            "sections": [k for k in S.FIXED_KEYS if strategy["sections"].get(k)] + (["watching"] if listening["requests"]
                                                                                  else []),
             "bets": [{"id": b["id"], "statement": b["statement"]} for b in strategy["bets"] if b["statement"]],
             "market": {"root": market["definition"]["root"], "segments": len(market["segments"]),
@@ -257,11 +256,11 @@ def _best_effort(c, name, work, skipped):
 
 
 def _strategy_draft(c, actor, strategy):
-    """Summary, vision and the four sections where the draft's are empty, and the listening requests as the Watching
-    section. Never published."""
+    """Summary, vision and the company file's sections where the draft's are empty (How we sell is not in the file, so
+    it stays as the draft has it), and the listening requests as the Watching section. Never published."""
     row = S.draft(c)
-    sections = {k: SS.unconfirmed(strategy["sections"][k], SOURCE) for k in S.FIXED_KEYS
-                if strategy["sections"][k] and not row["sections"][k].strip()}
+    sections = {k: SS.unconfirmed(strategy["sections"].get(k), SOURCE) for k in S.FIXED_KEYS
+                if strategy["sections"].get(k) and not row["sections"][k].strip()}
     requests = strategy["listening"]["requests"]
     if requests and WATCHING not in row["sections"]["extra"]:
         sections["extra"] = {WATCHING: {"title": WATCHING_TITLE, "body": "\n".join("- " + r for r in requests)}}
@@ -345,8 +344,6 @@ def _market(c, actor, market, company, skipped):
             if segment["ours"]:
                 MK.create_edge(c, actor, src=_own_company(c, actor, company, evidence), rel="operates_in",
                                dst=seg["id"], evidence_ids=[evidence])
-            if segment["ours"] or segment["next"]:     # its Growth segment, as Where we play now shows it
-                SM.set_status(c, actor, seg["id"], "serving" if segment["ours"] else "next", company)
             return seg["id"]
         found = _best_effort(c, "company_file_segment", made, skipped)
         if found:

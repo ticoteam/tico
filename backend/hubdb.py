@@ -881,8 +881,9 @@ CREATE TABLE IF NOT EXISTS browser_exit_marks (boot TEXT PRIMARY KEY, seq INTEGE
 """
 
 
-# Growth (backend/growth.py) and the brand and go-to-market pages (backend/brand_gtm.py). Brand and GTM each keep
-# one draft row (id 1, with a revision so two editors never overwrite each other) and numbered published versions.
+# Growth (backend/growth.py) and the brand page (backend/brand.py). The brand keeps one draft row (id 1, with a revision
+# so two editors never overwrite each other) and numbered published versions. The idea and go-to-market tables made
+# here are dropped by backend/migrations/0035_growth_rethink.py.
 # A cohort with no channel is the Unknown row: SQLite treats NULLs as distinct in UNIQUE, so the one-row-per-month
 # rule is an expression index over coalesce(channel_id, '').
 GROWTH_SCHEMA = """
@@ -6517,7 +6518,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         # The hold keeps the ticket where it asked to go, but not in the working step it named.
         self_wait.append('Task remains Blocked: ' + (row.get('blocked_reason') or 'a hold is still outstanding'))
     if closing_step:
-        _task_close_allowed(conn, actor, row, note, mover)
+        _task_close_allowed(conn, actor, row, note, mover, step, type)
     if waiting_on is not None:
         waiting_on = _waiting_person(conn, actor, row, waiting_on, status, owner, private)
     # A close is the requester's or a person's decision; a bot's update that started before it (a late
@@ -7225,7 +7226,23 @@ def _task_close_party(conn, actor, row):
     return False
 
 
-def _task_close_allowed(conn, actor, row, note, mover=None):
+def _marketing_outcome(conn, actor, row, step, type=None):
+    """Whether the bot that owns a marketing idea finishes it on an outcome step (Won, Lost, Inconclusive, Dropped;
+    backend/marketing_tasks.py). Only the owner: its managers inherit no close from it (_task_close_party), and no
+    other bot closes it. The board it lands on is the marketing type too: a move to another board (`type`) is not an
+    outcome, whatever its step is called. The requester is told of the close as it is for any close."""
+    from . import marketing_tasks as MT
+    if not step or not is_bot(actor) or actor != row["owner"]:
+        return False
+    board = type_get(conn, type if type is not None else row.get("type_id") or GENERAL_TYPE)
+    if not board or board["id"] != MT.TYPE_ID:
+        return False
+    named = {r[0] for r in conn.execute("SELECT id FROM task_steps WHERE type_id=? AND (id=? OR name=?)",
+                                        (MT.TYPE_ID, step, step))}
+    return bool(named & set(MT.finished_step_ids()))
+
+
+def _task_close_allowed(conn, actor, row, note, mover=None, step=None, type=None):
     _task_private_writer(conn, actor, row)
     # A person closes a task they can edit, as task_update decides: on it (_task_close_party), or a mover. The person
     # it waits on may close it too: it asked them to decide, and "not now" is a decision. Reading it is not enough:
@@ -7239,9 +7256,11 @@ def _task_close_allowed(conn, actor, row, note, mover=None):
     # A board's shipped column is ready; a bot that works the board (a deploy bot) closes what shipped.
     shipped = row["status"] == "ready" and type_bot_works(conn, actor, row)
     shipped = shipped or task_manager_acts(conn, actor, row)       # it closes with a note: the one rule below, not a mover
+    outcome = _marketing_outcome(conn, actor, row, step, type)
     if actor == TASK_MANAGER and actor != row["requester_id"] and not (note or "").strip():
         refuse(conn, actor, "close", "The Task Manager closes a task only with a note saying why it is finished")
-    if not task_represents(conn, actor, row["requester_id"]) and not is_human(actor) and actor != KEEPER and not shipped:
+    if not task_represents(conn, actor, row["requester_id"]) and not is_human(actor) and actor != KEEPER and not (
+            shipped or outcome):
         refuse(conn, actor, "close", f"{actor_name(conn, row['requester_id'])} asked for this; only they or their managers close it")
     # A person closes without giving a reason; the requesting bot is still told it was closed (task_close wakes it).
 
@@ -7254,7 +7273,7 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
-    _task_close_allowed(conn, actor, row, note, mover)
+    _task_close_allowed(conn, actor, row, note, mover, step, type)
     if row["status"] == "closed":
         if type is not None or step is not None:
             _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "")

@@ -803,7 +803,7 @@ Repo chip, a fold that hides some rows) sends the ids it shows instead, up to 10
 changed one update each, as before. Close can be undone for ten seconds either way.
 
 ```sh
-hub task bulk step "Legal review" --where-type Marketing --where-step Draft --where-label launch --dry-run
+hub task bulk step "Legal review" --where-type idea --where-step Draft --where-label launch --dry-run
 hub task bulk close --where-owner me --where-status waiting --note "Not needed this quarter"
 hub task bulk tags --add q4 --remove backlog --where-label backlog
 hub task bulk status open --where-label q4 --where-status closed
@@ -928,7 +928,7 @@ in that order.
 
 ```sh
 hub task types
-hub task create --owner content --title "Draft the campaign" --body "Use the brief." --type Marketing
+hub task create --owner content --title "Draft the campaign" --body "Use the brief." --type idea
 hub task update <task-id> --step "Legal review"
 hub task update <task-id> --title "(B/F) Account page: improve the copy"
 hub task update <task-id> --status review
