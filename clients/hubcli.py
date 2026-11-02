@@ -3395,7 +3395,7 @@ def parser():
     s = fin.add_parser("metric", help="one number you may see, with when it was worked out")
     s.add_argument("name", choices=["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining",
                                     "budget_pct_used", "ap_due", "ar_overdue", "uncategorized_count",
-                                    "unreconciled_days"])
+                                    "unreconciled_days", "duplicate_charges", "price_increases"])
     for flag in ("--budget-id", "--start", "--end", "--account-id", "--team", "--teammate"):
         s.add_argument(flag)
     s.add_argument("--days", type=int)
