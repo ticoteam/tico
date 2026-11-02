@@ -159,6 +159,12 @@ def _holds(c, source="payment"):
     return [tuple(r) for r in c.execute("SELECT amount, status FROM fin_holds WHERE source=?", (source,))]
 
 
+def _hold_of(c, payment_id):
+    """The payment's own hold (holds list in no fixed order: fin_holds_source sorts by the payment id)."""
+    return tuple(c.execute("SELECT amount, status FROM fin_holds WHERE source='payment' AND source_id=?",
+                           (payment_id,)).fetchone())
+
+
 def _asks(c, title):
     return c.execute("SELECT count(*) FROM tasks WHERE title LIKE ?", (f"{title}%",)).fetchone()[0]
 
@@ -215,8 +221,68 @@ def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_a
         assert act(c, "human:ben", "payment_cancel", {"payment_id": again.result["payment_id"]}).status != "committed"
         done = act(c, OWNER, "payment_cancel", {"payment_id": again.result["payment_id"]})
         assert done.status == "committed", done                                  # a finance admin, once asked
-        assert _holds(c)[-1] == (50_000, "released")
+        assert _hold_of(c, again.result["payment_id"]) == (50_000, "held")      # ...and Mercury's lookup decides
+    sync_once(books, fake, HOURS[10])
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?",
+                         (again.result["payment_id"],)).fetchone()[0] == "cancelled"
+        assert _hold_of(c, again.result["payment_id"]) == (50_000, "released")
     assert len(fake.sent("request_send_money")) == 2
+
+
+def _unknown_and_flagged(books, fake, obligation):
+    """A payment whose send got no answer, looked for by its key for an hour: flagged for a finance admin."""
+    rid = _payee(books, fake)
+    body = {"recipient_id": rid, "amount": 50_000, "obligation": obligation, "tags": {"team": "eng"}}
+    with books.transaction() as c:
+        body["account_id"], body["money_account_id"] = account(c, "6100"), _checking(c)
+        made = act(c, OWNER, "payment_create", body)
+        assert made.status == "committed", made
+        pid = str(made.result["payment_id"])
+    fake.queue["request_send_money"] = [Answer(None, {})]
+    sync_once(books, fake, HOURS[1])
+    sync_once(books, fake, HOURS[2])
+    with books.read() as c:
+        key, flagged = c.execute("SELECT idempotency_key, flagged_at FROM fin_payments WHERE id=?", (pid,)).fetchone()
+    assert flagged, "the admin is asked once the key is not found for 30 minutes"
+    return pid, key
+
+
+def test_an_admin_cancel_of_an_unknown_payment_is_not_a_cancel_until_a_fresh_key_lookup_finds_nothing(books):
+    """Item 1 (spec §9): an unknown payment is resolved by polling by its idempotency key, never retried under a fresh
+    key. A finance admin's cancel of a flagged one asks the worker to look Mercury up by the key now; by itself it does
+    not cancel. A request carrying the key that turns up instead keeps the payment going, and it is not sent again."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, key = _unknown_and_flagged(books, fake, "bill-8")
+    lookups = len(fake.sent("send_requests"))
+    with books.transaction() as c:
+        asked = act(c, OWNER, "payment_cancel", {"payment_id": pid})
+        assert asked.status == "committed", asked
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "unknown"
+        assert _holds(c) == [(50_000, "held")]
+    assert len(fake.sent("send_requests")) == lookups                            # no lookup happened in the click
+    fake.land({"recipientId": "rcp-1", "amount": 500.0, "note": f"tico:{key}", "externalMemo": f"tico:{key} Acme"},
+              "req-late")
+    sync_once(books, fake, HOURS[3])                                             # the lookup finds it after all
+    with books.read() as c:
+        assert c.execute("SELECT status, provider_request_id FROM fin_payments WHERE id=?",
+                         (pid,)).fetchone()[:] == ("awaiting_bank_approval", "req-late")
+    assert len(fake.sent("request_send_money")) == 1                             # never sent again under a fresh key
+
+
+def test_an_admin_cancel_of_an_unknown_payment_ends_it_when_the_fresh_lookup_finds_no_request_with_its_key(books):
+    """Item 1: the cancel goes through once a complete lookup by the key, made after the cancel, finds nothing."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, _ = _unknown_and_flagged(books, fake, "bill-9")
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).status == "committed"
+    sync_once(books, fake, HOURS[3])
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _holds(c) == [(50_000, "released")]
+    assert len(fake.sent("request_send_money")) == 1
 
 
 def test_a_409_with_the_request_is_accepted_and_a_cut_off_send_is_unknown(books):

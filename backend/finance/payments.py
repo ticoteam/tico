@@ -361,6 +361,24 @@ def ring() -> None:
     sync.ring()
 
 
+def _ask_mercury(ctx: Ctx, who: str, pay: Any) -> Plan:
+    """A finance admin's cancel of an unknown payment (flagged: its key was not found for UNKNOWN_ASK_MINUTES). Nothing is
+    cancelled here, since the planner cannot call Mercury: the worker looks Mercury up by the key (sync.pay), and the
+    payment ends cancelled only when a complete lookup begun after this ask finds no request with the key (not_found). A
+    request with the key that turns up instead keeps it going, and it is never sent again under a fresh key (§9)."""
+    if pay["cancel_asked_at"]:
+        raise FinanceError(CONFLICT, "Finance is already looking for it in Mercury")
+
+    def apply(aid: str) -> Result:
+        if SK.update(ctx.c, "fin_payments", str(pay["id"]), {"cancel_asked_at": ctx.at, "cancel_asked_by": who,
+                                                             "next_try_at": ctx.at, "updated_at": ctx.at},
+                     "status=? AND cancel_asked_at IS NULL", ("unknown",)) != 1:
+            raise FinanceError(CONFLICT, "the payment moved on; check its status")
+        return {"payment_id": str(pay["id"]), "status": "unknown", "cancel": "asked"}
+    return Plan(K.default_gate(ctx.org, who, "payment_cancel"),
+                f"Ask Mercury about the {int(pay['amount']) / 100:.2f} payment before cancelling it", apply)
+
+
 def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Cancel a payment Finance has not sent yet. Once it is in Mercury's queue there is no API to cancel it: a person
     rejects it in Mercury, which ends the payment here when the worker sees it."""
@@ -384,6 +402,8 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(CONFLICT, "it is being sent to Mercury now; reject it in Mercury if it gets there")
     if status != "queued" and not lost:
         raise FinanceError(CONFLICT, f"that payment is {status}")
+    if lost:
+        return _ask_mercury(ctx, who, pay)
 
     def apply(aid: str) -> Result:
         if SK.update(ctx.c, "fin_payments", str(pay["id"]), {"status": "cancelled", "updated_at": ctx.at},
@@ -747,6 +767,7 @@ def found(ctx: Ctx, pay: Any, requests: Sequence[Mapping[str, object]]) -> bool:
         return False
     SK.update(ctx.c, "fin_payments", str(pay["id"]), {"status": "awaiting_bank_approval", "updated_at": ctx.at,
                                                       "unknown_since": None, "last_error": None,
+                                                      "cancel_asked_at": None, "cancel_asked_by": "",
                                                       "provider_request_id": str(mine.get("requestId") or mine.get("id")
                                                                                  or "")})
     polled(ctx, SK.get(ctx.c, "fin_payments", str(pay["id"])), Answer(200, dict(mine)))
@@ -758,6 +779,13 @@ def not_found(ctx: Ctx, pay: Any) -> None:
     UNKNOWN_ASK_MINUTES, one Needs-you goes to a finance admin to check Mercury (and cancel it here if it is not
     there)."""
     fields: dict[str, object] = {"next_try_at": _later(ctx, 2), "updated_at": ctx.at}
+    asked = str(pay["cancel_asked_at"] or "")
+    if asked and asked <= ctx.at:
+        # A finance admin asked to cancel it before this sweep's complete lookup by its key began, and it found nothing.
+        end(ctx, pay, "cancelled", f"not in Mercury when its key was looked for ({pay['cancel_asked_by']} cancelled it)")
+        return
+    if asked:
+        fields["next_try_at"] = ctx.at          # asked during this sweep: the next one looks again, soon
     since = str(pay["unknown_since"] or ctx.at)
     age = age_minutes(ctx, since) or 0
     if age >= UNKNOWN_ASK_MINUTES and not pay["flagged_at"]:

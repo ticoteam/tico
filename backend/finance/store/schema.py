@@ -513,6 +513,8 @@ ADDED = (
     ("fin_inbox", "attempts", "INTEGER NOT NULL DEFAULT 0"), ("fin_inbox", "next_try_at", "TEXT"),
     ("fin_inbox", "tried_json", "TEXT NOT NULL DEFAULT '[]'"),
     ("fin_payments", "counted_json", "TEXT NOT NULL DEFAULT '[]'"),
+    # a finance admin's cancel of an unknown payment, waiting for Mercury's lookup by its key (migration 78)
+    ("fin_payments", "cancel_asked_at", "TEXT"), ("fin_payments", "cancel_asked_by", "TEXT NOT NULL DEFAULT ''"),
     # phase 2: bills, invoices, contacts, posting rules and the cash view (migration 66)
     ("fin_entries", "basis", "TEXT NOT NULL DEFAULT 'both' CHECK (basis IN ('both','accrual'))"),
     ("fin_bills", "terms_days", "INTEGER"), ("fin_bills", "memo", "TEXT NOT NULL DEFAULT ''"),
@@ -768,6 +770,12 @@ def purchasing(c: sqlite3.Connection) -> None:
     """Cloud migration 77: purchase orders and estimates, and the bill line an order line is billed on. Idempotent:
     `create` makes whatever is missing."""
     create(c)
+
+
+def payment_cancel_asks(c: sqlite3.Connection) -> None:
+    """Cloud migration 78: the cancel a finance admin asks of an unknown payment (fin_payments.cancel_asked_at), which the
+    worker resolves by a lookup by its key. Idempotent: `_add_columns` adds only what is missing."""
+    _add_columns(c)
 
 
 def catalog(c: sqlite3.Connection, at: str) -> None:
