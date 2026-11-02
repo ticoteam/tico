@@ -121,6 +121,23 @@ def test_a_month_with_transactions_takes_no_raw_totals(books):
         assert act(c, OWNER, "import_raw_totals", _body()).status == "committed"
 
 
+def test_a_sheet_past_the_64_bit_range_is_refused_by_the_dry_run(books):
+    # Twelve 18-digit rows net past the ledger's 64-bit range, and twenty rows that net to zero still sum past it: each
+    # is refused at the dry run, and the commit refuses it too with nothing posted.
+    netting = [(f"Plus {k:02d}", "999999999999999999") for k in range(10)]
+    netting += [(f"Minus {k:02d}", "-999999999999999999") for k in range(10)]
+    for pairs in ([(f"Big {k:02d}", "999999999999999999") for k in range(12)], netting):
+        text = "month,line,amount\n" + "".join(f"2026-01,{name},{amount}\n" for name, amount in pairs)
+        mapping = {name: "6100" for name, _ in pairs}
+        with books.transaction() as c:
+            before = _count(c, "fin_entries")
+            dry = act(c, OWNER, "import_raw_totals", _body(mapping, csv=text), dry_run=True)
+            assert dry.status == "failed" and dry.code == INVALID and "out of range" in dry.reason
+            real = act(c, OWNER, "import_raw_totals", _body(mapping, csv=text))
+            assert real.status == "failed" and real.code == INVALID
+            assert _count(c, "fin_entries") == before and _count(c, "fin_raw_imports") == 0
+
+
 def test_a_bad_sheet_is_refused_and_the_same_rows_hash_the_same():
     bad = {"an unknown column": "month,line,amount,note\n2026-01,Rent,100,x\n",
            "a bad month": "month,line,amount\n2026-1,Rent,100\n",

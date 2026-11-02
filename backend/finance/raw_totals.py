@@ -8,6 +8,7 @@ from typing import Any
 from .context import Ctx
 from .core import kinds as K
 from .core import ledger as L
+from .core import money as M
 from .core import raw_totals as RT
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, denied, invalid
@@ -125,7 +126,9 @@ def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         _check_month(ctx, who, month)
     source = V.opt_text(p, "source_name", 120) or ""
     memo = f"Imported raw totals, {sheet.basis} basis" + (f": {source}" if source else "")
-    gross = sum(abs(r.amount) for r in sheet.rows)
+    # The gross is stored in a 64-bit column, and each month's net (never more than the gross) posts as one line. A sheet
+    # past that range is refused here, so the dry run says what the commit would.
+    gross = M.minor(sum(abs(r.amount) for r in sheet.rows), "the sum of the sheet's amounts")
     totals: dict[str, int] = {}
     names: dict[str, str] = {}
     for r in sheet.rows:
