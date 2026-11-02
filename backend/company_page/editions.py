@@ -159,12 +159,15 @@ def _load_sections(row):
     return found.get("sections") or [] if isinstance(found, dict) else []
 
 
-def edition_text(title, sections):
-    """The whole edition as one plain text: what the judge reads, the leak check scans and the approver approves."""
+def edition_text(title, sections, note=""):
+    """The whole edition as one plain text: what the judge reads, the leak check scans and the approver approves. A
+    correction's note is part of it, since the page shows it beside the text."""
     parts = [title or ""]
     for section in sections:
         if section["items"]:
             parts.append(SECTION_LABELS[section["key"]] + "\n" + "\n".join("- " + i["body"] for i in section["items"]))
+    if note:
+        parts.append("Correction: " + note)
     return "\n\n".join(parts)
 
 
@@ -230,7 +233,8 @@ def _is_date(text, start, raw):
     return bool(words) and words[-1].lower() in MONTHS and raw.isdigit() and 1 <= int(raw) <= 31
 
 
-ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+NOT_FIGURES = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                         r"[0-9a-f]{4}-[0-9a-f]{12}\b|\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b", re.I)
 
 
 def leak_findings(title, sections, facts, period_start, period_end, names=()):
@@ -239,8 +243,9 @@ def leak_findings(title, sections, facts, period_start, period_end, names=()):
     strings = []
     _gather(facts, strings)
     strings.extend(n for n in names if n)
-    # A date in the facts is not a figure: "2026-10-01" would otherwise make "1" an allowed number.
-    corpus = ISO_DATE.sub(" ", " ".join(strings))
+    # Dates, times and ids in the facts are not figures: "2026-10-01" or "00:01:30" would otherwise make "1" an allowed
+    # number, and which one is there depends on when the check runs.
+    corpus = NOT_FIGURES.sub(" ", " ".join(strings))
     numbers = {_number(n) for n in NUMBER.findall(corpus)} | _period_years(period_start, period_end)
     words = {w.lower().removesuffix("'s").removesuffix("’s") for w in WORD.findall(corpus)}
     links = {m.lower() for m in LINK.findall(corpus)}
@@ -305,7 +310,8 @@ def _rules_digest(c):
 def fingerprint(c, row, rules=None):
     """What a check result or override holds for: one version of one text, under one disclosure revision and rule set."""
     raw = json.dumps([row["id"], row["version"], row["audience_id"], _revision(c, row["audience_id"]),
-                      rules if rules is not None else _rules_digest(c), row["title"], _load_sections(row)],
+                      rules if rules is not None else _rules_digest(c), row["title"], _load_sections(row),
+                      row["correction_note"] or ""],
                      sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -392,7 +398,7 @@ def approval_payload(c, row, audience=None):
     revision and rules. `text` is the whole edition, so a card or the approval's page shows all of it; the chat notice
     hubdb.approval_request writes is a clip of this and only says one is waiting."""
     audience = audience or _audience(c, row["audience_id"])
-    text = edition_text(row["title"], _load_sections(row))
+    text = edition_text(row["title"], _load_sections(row), row["correction_note"] or "")
     return {"url": f"{EDITION_URL}{row['id']}/{row['version']}", "title": row["title"], "text": text,
             "content_sha256": hashlib.sha256(text.encode()).hexdigest(), "version": row["version"],
             "audience": audience["name"], "audience_id": row["audience_id"],
@@ -654,7 +660,8 @@ def check(store, edition_id, primary=None):
         rules = _rules_digest(c)
         fp = fingerprint(c, row, rules)
         audience = _audience(c, row["audience_id"])
-        text = edition_text(row["title"], sections)
+        note = row["correction_note"] or ""
+        text = edition_text(row["title"], sections, note)
         failed = None
         leaks = {}
         if not sections:
@@ -663,7 +670,9 @@ def check(store, edition_id, primary=None):
             try:
                 names = (audience["name"], author_view(c, row["author"], store.settings.company_name)["name"],
                          store.settings.company_name)
-                leaks = leak_findings(row["title"], sections, _facts(c, row), row["period_start"], row["period_end"], names)
+                # The correction note is published with the text, so the leak check reads it too.
+                checked = sections + ([{"key": "correction_note", "items": [{"body": note}]}] if note else [])
+                leaks = leak_findings(row["title"], checked, _facts(c, row), row["period_start"], row["period_end"], names)
             except Exception as exc:  # noqa: BLE001 - facts that can't be read can't clear anything
                 LOG.warning("Edition leak check failed: %s", type(exc).__name__)
                 failed = "facts"
