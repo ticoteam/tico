@@ -47,8 +47,8 @@ STATEMENT_DAYS = 35         # a money account reconciled longer ago than a state
 PER_KIND = 25               # lines one kind contributes to the body; the rest are counted
 BODY_BYTES = 12000          # the body is cut here
 INBOX_PAGES = 10            # pages of 200 read per kind of the Finance queue per check (its own query, past the 200)
-ORDER = ("sync_failed", "bill_to_enter", "bill_email", "unmatched_receipt", "uncategorized", "missing_receipt",
-         "unreconciled", "budget_near_limit")
+ORDER = ("sync_failed", "bill_to_enter", "bill_email", "invoice_email", "unmatched_receipt", "uncategorized",
+         "missing_receipt", "unreconciled", "budget_near_limit")
 ON_EVENT = ("bill_due", "invoice_overdue", "period_ready")   # its bot.yaml routines answer these, one task per event
 HINTS = {
     "sync_failed": "a bank or card sync failed: note it for BotOps",
@@ -60,6 +60,8 @@ HINTS = {
     "missing_receipt": "a card charge with no receipt: find it, or ask the card holder once",
     "unreconciled": "a money account not reconciled for over a month: match rows and reconcile its statement",
     "budget_near_limit": "a budget near its limit: tell its owner once",
+    "invoice_email": ("an invoice email waits to send: read its exact text from the invoice search, mail draft it "
+                      "exactly, then mail send --approval-issue with its send approval, and report invoice_delivery"),
 }
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bookkeeper_seen(
@@ -179,6 +181,10 @@ def collect(c):
         items.append({"kind": "bill_email", "id": row["id"], "label": label + (f" (file {row['file_id']})"
                                                                               if row["file_id"] else ""),
                       "stamp": row["state"] + (row["code"] or "")})
+    from .finance import delivery as FD
+    waiting = FD.queue_items(c)                 # invoice emails with no delivery report yet (their text is in Finance)
+    counts["invoice_email"] = len(waiting)
+    items.extend(waiting)
     for item in items:
         item["key"] = f"{item['kind']}:{item['id']}"
     items.sort(key=lambda item: ORDER.index(item["kind"]) if item["kind"] in ORDER else len(ORDER))

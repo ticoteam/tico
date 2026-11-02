@@ -7,7 +7,8 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: medium
 max_run_minutes: 60
 
-# It sends nothing outside the team itself; an invoice reminder goes through Finance's own send.
+# It sends no mail on its own: an invoice email goes only under the send approval Finance issues for its exact text
+# (playbooks/invoice-overdue.md), so this stays off.
 outbound_send: false
 
 # Its work comes two ways. Events that want an answer on the day are routines below, one task per event. Everything

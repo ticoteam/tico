@@ -144,12 +144,13 @@ def watch(c: sqlite3.Connection, at: str | None = None) -> int:
     froze lift once their budgets have room again. How many it raised, paid or lifted."""
     if not is_set_up(c):
         return 0
-    from . import documents, reads
+    from . import delivery, documents, reads
     from .banking import event
     from .payments import CASH_BELOW_KEY
     n = documents.pay_due(load(c, at))
     ctx = load(c, at)
     n += documents.watch(ctx)
+    n += delivery.watch(ctx)
     floor = SL.setting(c, CASH_BELOW_KEY)
     cash = reads.company_cash(c, at) if isinstance(floor, int) and floor > 0 else None
     was = cast(dict[str, object], SL.setting(c, CASH_STATE) or {})

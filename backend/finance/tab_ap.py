@@ -9,6 +9,7 @@ from collections.abc import Iterable, Sequence
 from datetime import date
 from typing import Any, cast
 
+from . import delivery
 from .context import Ctx, load
 from .core import ap as AP
 from .core import dates
@@ -227,6 +228,8 @@ def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | No
             if aging is not None and row["aging"] != aging or late and row["aging"] in (None, "current"):
                 continue
             row.update(doc_lines(ctx, found[str(r["id"])]))
+            if kind == "invoice":                       # the emails still waiting on a delivery report, with their text
+                row["emails"] = delivery.pending(c, str(r["id"]))
             if row["status"] == "paid":
                 row.update(paid_of_doc(c, kind, str(r["id"])))
             out.append(row)

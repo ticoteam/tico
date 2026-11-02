@@ -29,7 +29,8 @@ PEOPLE = [{"id": "ana", "email": "ana@acme.example"},
 GROUPS = {"eng": {"name": "Engineering", "lead": "person:ben"},
           "web": {"name": "Web", "parent": "eng", "lead": "person:cara"},
           "sales": {"name": "Sales", "lead": "person:dan"}}
-BOTS = {"coder": ("web", "human:cara"), "seller": ("sales", "human:dan")}
+BOTS = {"coder": ("web", "human:cara"), "seller": ("sales", "human:dan"),
+        "bookkeeper": ("eng", "human:ben")}
 
 
 def _seed(c: sqlite3.Connection) -> None:

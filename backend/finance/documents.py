@@ -22,7 +22,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 from ..records import reads as RR
-from . import budgeting, posting, shared
+from . import budgeting, delivery, posting, shared
 from .context import Ctx
 from .core import ap as AP
 from .core import budgets as B
@@ -32,7 +32,7 @@ from .core import kinds as K
 from .core import ledger as L
 from .core import rights as R
 from .core import validate as V
-from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
+from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, denied, invalid
 from .core.tax import SALES_TAX, taxable_default
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
@@ -682,9 +682,29 @@ def document(ctx: Ctx, kind: str, doc: Any) -> Result:
             "lines": [{"description": str(r["description"]), "amount": int(r["amount"])} for r in lines]}
 
 
+def _decider(ctx: Ctx, who: str) -> str:
+    """The person an invoice email's approval is decided for: whoever acts, when a person acts; else the person whose
+    yes the action waited on (ctx.decider)."""
+    return who if tico.is_person(who) else ctx.decider
+
+
+def _invoice_email(ctx: Ctx, inv: Any) -> str:
+    """The invoice email's exact text: its number, total, dates, each line, and the payment link when there is one."""
+    sid = str(inv["id"])
+    cur = ctx.book.base_currency
+    out = [f"Invoice {inv['number']} for {_money(int(inv['total']))} {cur}, dated {inv['invoice_date']}, due "
+           f"{inv['due_date']}."]
+    out += [f"- {r['description']}: {_money(int(r['amount']))} {cur}" for r in SAP.lines(ctx.c, "invoice", [sid]).get(sid, [])]
+    if inv["payment_link"]:
+        out.append(f"Pay here: {inv['payment_link']}")
+    return "\n".join(out)
+
+
 def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    """Send a draft invoice: Dr AR / Cr its income lines, marked sent. Finance has no outbound mail in the action's
-    transaction, so the result carries the document for the bot or person to deliver."""
+    """Send a draft invoice: Dr AR / Cr its income lines, marked sent. When the customer has an email and the Bookkeeper
+    has a mailbox that can send, the invoice email is approved on commit (delivery.issue) for this exact text and
+    document, and the Bookkeeper sends it and reports back (`invoice_delivery`). Otherwise the result carries the document
+    for whoever delivers it (`delivery: "caller"`)."""
     V.only(p, ("invoice_id",))
     inv = _doc(ctx, "invoice", V.text(p, "invoice_id", 80))
     _need_status("invoice", inv, ("draft",), "only a draft is sent")
@@ -695,14 +715,27 @@ def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if not may_write(ctx, who, x.account_id, x.tags):
             raise denied("a line's account or tags are outside your view")
     customer = contact_for(ctx, str(inv["customer_id"]), "invoice")
+    emails = SK.loads_list(customer["emails_json"])
+    box = delivery.mailbox(ctx.c) if emails else ""
+    text = _invoice_email(ctx, inv) if box else ""
 
     def apply(aid: str) -> Result:
         entry = _post_doc(ctx, "invoice", inv, lines, str(inv["invoice_date"]), who)
-        if SAP.update(ctx.c, "fin_invoices", str(inv["id"]), {"status": "sent", "entry_id": entry, "sent_at": ctx.at,
-                                                              "updated_at": ctx.at}, "status='draft'") != 1:
+        sid = str(inv["id"])
+        if SAP.update(ctx.c, "fin_invoices", sid, {"status": "sent", "entry_id": entry, "sent_at": ctx.at,
+                                                    "updated_at": ctx.at}, "status='draft'") != 1:
             raise FinanceError(CONFLICT, "that invoice moved on")
-        return {"invoice_id": str(inv["id"]), "status": "sent", "entry_id": entry, "delivery": "caller",
-                "document": document(ctx, "invoice", inv)}
+        out: Result = {"invoice_id": sid, "status": "sent", "entry_id": entry, "delivery": "caller",
+                       "document": document(ctx, "invoice", inv)}
+        if box:
+            subject = delivery.subject_of(None, str(inv["number"]))
+            approval = delivery.issue(ctx.c, _decider(ctx, who), who, to=emails, subject=subject, text=text, box=box,
+                                      document=cast(Mapping[str, Any], out["document"]), ref=f"invoice:{sid}")
+            SAP.update(ctx.c, "fin_invoices", sid, {"send_approval_id": approval, "send_to": SK.dump(emails),
+                                                    "send_text": text})
+            out.update({"delivery": "send_approval", "send_approval_id": approval, "text": text, "subject": subject,
+                        "to": delivery.recipients(emails), "mailbox": box})
+        return out
     return Plan(K.default_gate(ctx.org, who, "invoice_send"),
                 f"Send invoice {inv['number']} for {_money(int(inv['total']))} to {customer['name']}", apply,
                 facts=doc_facts("invoice", customer, lines, ctx))
@@ -714,9 +747,9 @@ REMIND_STAGES = (1, 7, 30, 60, 90)      # days late, as Finance raises finance.i
 def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Remind the customer that a sent invoice is unpaid, once for each stage (1, 7, 30, 60 or 90 days late). The text
     is fixed: the number, what is left, the due date and the payment link when there is one; no free text. The reminder
-    is recorded in this transaction and the email goes out after it commits, by whoever delivers it (`delivery:
-    "caller"`, as invoice_send). A paid or draft invoice, a stage already reminded and a customer with no email are
-    refused with the reason."""
+    is recorded on commit under a Tico send approval (delivery.issue) for that text and the customer's addresses; the
+    Bookkeeper sends it and reports back (`invoice_delivery`). A paid or draft invoice, a stage already reminded, a
+    customer with no email and no Bookkeeper mailbox are refused with the reason, before any stage is used."""
     V.only(p, ("invoice_id", "stage"))
     inv = _doc(ctx, "invoice", V.text(p, "invoice_id", 80))
     stage = V.integer(p, "stage", 1, 90)
@@ -733,22 +766,60 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     emails = SK.loads_list(customer["emails_json"])
     if not emails:
         raise FinanceError(CONFLICT, f"{customer['name']} has no email on file, so the reminder cannot be sent")
+    box = delivery.mailbox(ctx.c)
+    if not box:
+        raise FinanceError(NOT_AVAILABLE, "the Bookkeeper has no mailbox that can send, so a reminder cannot be sent")
     link = f" Pay here: {inv['payment_link']}" if inv["payment_link"] else ""
     text = (f"Invoice {inv['number']} for {_money(left)} {ctx.book.base_currency} was due {inv['due_date']} and is "
             f"still unpaid.{link}")
+    subject = delivery.subject_of(stage, str(inv["number"]))
 
     def apply(aid: str) -> Result:
         if _reminded(ctx, sid, stage):                  # again when an approved reminder commits
             raise FinanceError(CONFLICT, f"the {stage}-day reminder for invoice {inv['number']} was already made")
+        now = document(ctx, "invoice", inv)
+        approval = delivery.issue(ctx.c, _decider(ctx, who), who, to=emails, subject=subject, text=text, box=box,
+                                  document=cast(Mapping[str, Any], now), ref=f"invoice:{sid}:{stage}")
         SAP.insert(ctx.c, "fin_invoice_reminders", {
             "id": SL.new_id(), "invoice_id": sid, "stage": stage, "text": text, "sent_to": SK.dump(emails),
-            "action_id": aid, "created_at": ctx.at, "created_by": who})
-        return {"invoice_id": sid, "stage": stage, "status": "reminded", "delivery": "caller", "text": text,
-                "subject": f"Invoice {inv['number']} is unpaid", "to": emails, "document": document(ctx, "invoice", inv)}
+            "action_id": aid, "created_at": ctx.at, "created_by": who, "send_approval_id": approval})
+        return {"invoice_id": sid, "stage": stage, "status": "reminded", "delivery": "send_approval",
+                "send_approval_id": approval, "text": text, "subject": subject, "to": delivery.recipients(emails),
+                "mailbox": box, "document": now}
     lines = doc_lines_of(ctx, "invoice", sid)
     return Plan(K.default_gate(ctx.org, who, "invoice_remind"),
                 f"Remind {customer['name']} that invoice {inv['number']} is {stage} days late", apply,
                 facts=doc_facts("invoice", customer, lines, ctx))
+
+
+def invoice_delivery(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """How a sent invoice email went, reported by the Bookkeeper after `mail send`: delivered, or failed with the reason.
+    `stage` names a reminder; left out, the invoice's own email. A failure raises one Needs-you for the finance admin and
+    the email stays waiting, so its retry sends the same text under the same approval."""
+    V.only(p, ("invoice_id", "stage", "delivered", "reason"))
+    inv = _doc(ctx, "invoice", V.text(p, "invoice_id", 80))
+    stage = None if p.get("stage") is None else V.integer(p, "stage", 1, 90)
+    if stage is not None and stage not in REMIND_STAGES:
+        raise invalid("a reminder is for 1, 7, 30, 60 or 90 days late")
+    if not isinstance(p.get("delivered"), bool):
+        raise invalid("delivered is true or false")
+    delivered = bool(p["delivered"])
+    reason = (V.opt_text(p, "reason", 300) or "").strip()
+    if not delivered and not reason:
+        raise invalid("a failed send says why")
+    if delivered and reason:
+        raise invalid("a delivered email has no reason")
+    from .payments import admin_person
+    sid = str(inv["id"])
+    person = admin_person(ctx)
+    which = f" ({stage}-day reminder)" if stage is not None else ""
+
+    def apply(aid: str) -> Result:
+        delivery.report(ctx.c, ctx.at, sid, stage, delivered, reason, person)
+        return {"invoice_id": sid, "stage": stage, "delivered": delivered}
+    outcome = "delivered" if delivered else f"not sent: {reason[:200]}"
+    return Plan(K.default_gate(ctx.org, who, "invoice_delivery"),
+                f"Invoice {inv['number']}{which} email {outcome}", apply)
 
 
 def _reminded(ctx: Ctx, invoice_id: str, stage: int) -> bool:
@@ -1792,7 +1863,7 @@ next_number, money_of = _next_number, _money
 PLANNERS = {"contact_create": contact_create, "contact_update": contact_update, "bill_create": bill_create,
             "bill_update": bill_update, "bill_approve": bill_approve, "bill_schedule": bill_schedule,
             "bill_mark_paid": bill_mark_paid, "bill_void": bill_void, "invoice_create": invoice_create,
-            "invoice_send": invoice_send, "invoice_remind": invoice_remind,
+            "invoice_send": invoice_send, "invoice_remind": invoice_remind, "invoice_delivery": invoice_delivery,
             "invoice_record_payment": invoice_record_payment,
             "invoice_write_off": invoice_write_off, "invoice_void": invoice_void, "attach": attach,
             "feed_match": feed_match}

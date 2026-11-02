@@ -1,11 +1,22 @@
 """Invoice reminders (backend/finance/documents.py invoice_remind): an unpaid sent invoice is reminded once per stage (1, 7,
-30, 60 or 90 days late), with fixed text to the customer's email. Recorded in the action; delivery is the caller's, after
-the commit. Paid, draft, emailless and out-of-list cases are refused with the reason."""
+30, 60 or 90 days late), with fixed text to the customer's email. Recorded on commit under a send approval for that text
+(backend/finance/delivery.py); the Bookkeeper sends it. Paid, draft, emailless, out-of-list and no-mailbox cases are
+refused with the reason."""
+import json
+
 from backend.finance.core.errors import CONFLICT
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, OWNER, account, act, books, finance_template, store)
 
 EMAIL = "ap@acme-retail.example"
+BOX = "books@acme.example"
+
+
+def _mailbox(c) -> None:
+    """The Bookkeeper's stored gmail tool that can send (what a real install is given)."""
+    tools = [{"service": "gmail", "identity": BOX, "can": ["read", "send"]}]
+    c.execute("UPDATE bot_config SET config_json=? WHERE bot='bookkeeper'",
+              (json.dumps({"team": "eng", "tools": tools}),))
 
 
 def _invoice(c, *, emails=(EMAIL,), due="2026-10-31", link="") -> tuple[str, str]:
@@ -24,9 +35,12 @@ def _invoice(c, *, emails=(EMAIL,), due="2026-10-31", link="") -> tuple[str, str
 def test_a_stage_reminder_is_recorded_once_with_the_fixed_text_and_the_payment_link(books):
     with books.transaction() as c:
         iid, _ = _invoice(c, link="https://pay.example/inv-1")
+        _mailbox(c)
         made = act(c, OWNER, "invoice_remind", {"invoice_id": iid, "stage": 7})
         assert made.status == "committed", made
-        assert made.result["status"] == "reminded" and made.result["delivery"] == "caller"
+        assert made.result["status"] == "reminded" and made.result["delivery"] == "send_approval"
+        assert made.result["send_approval_id"] and made.result["mailbox"] == BOX
+        assert made.result["subject"] == f"Invoice {made.result['document']['number']} is unpaid"
         assert made.result["to"] == [EMAIL]
         text = made.result["text"]
         assert "2026-10-31" in text and "still unpaid" in text and "Pay here: https://pay.example/inv-1" in text

@@ -38,6 +38,9 @@ Work the items in this order, then mark the task done with one line: what you di
    attach to. Read the file (`hub file get <file id>`). A bill: find or `contact_create` the vendor, then
    `bill_create` with `origin: "email"` and the file in `attachments`, and approve it as in 2. A receipt: `attach`
    it to its row.
+3a. **invoice_email**: an invoice email waiting to send, named by the item. Follow step 4 of
+   playbooks/invoice-overdue.md for the `emails` entry it names. A failed one is retried the same way: same text,
+   same approval.
 4. **uncategorized**: posting rules run first. For the rest, `categorize` each row. When the same counterparty
    lands in the same account three times, propose a posting rule in words with `rule_create` (a person approves it).
 5. **missing_receipt**: a card charge with no receipt after a week: ask the card holder once.
@@ -47,8 +50,8 @@ Work the items in this order, then mark the task done with one line: what you di
 ## Event tasks
 - **Bill due soon** (playbooks/bill-due.md): `bill_schedule` it per its terms, or `payment_create` with
   `obligation: "bill:<id>"`. Approvals follow the company's rules.
-- **Invoice overdue** (playbooks/invoice-overdue.md): one reminder per stage through Finance; record a payment you
-  find in the feed with `invoice_record_payment` instead.
+- **Invoice overdue** (playbooks/invoice-overdue.md): one reminder per stage through Finance, then its email under the
+  send approval Finance issues with it; record a payment you find in the feed with `invoice_record_payment` instead.
 - **Month ready to close** (playbooks/close-month.md): read the close checklist, finish what it lists, write the
   budget vs actual note, then ask for `close_period`. The owner approves the close.
 - **Sales tax return due** (one per jurisdiction, each quarter) or **1099-NEC due** (January 31): these are outside
