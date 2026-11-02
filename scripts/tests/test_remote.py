@@ -45,3 +45,26 @@ def test_a_path_through_a_symlinked_checkout_goes_relative_too(tmp_path):
 ])
 def test_setup_covers_what_the_command_runs(command, setup):
     assert remote.setup_for(command) == setup
+
+
+def test_a_patient_call_waits_out_the_rate_limit_and_any_other_failure_stops_at_once(monkeypatch):
+    import subprocess
+    replies = [(1, 'HTTP 403: API rate limit exceeded for user ID 1.'), (0, '')]
+    calls, sleeps = [], []
+
+    def run(args, **_):
+        calls.append(args)
+        code, err = replies.pop(0)
+        return subprocess.CompletedProcess(args, code, stdout='{"status":"completed"}' if code == 0 else '', stderr=err)
+
+    monkeypatch.setattr(remote.subprocess, 'run', run)
+    monkeypatch.setattr(remote.time, 'sleep', sleeps.append)
+    assert remote.gh('run', 'view', '1', patient=True) == '{"status":"completed"}'
+    assert len(calls) == 2 and sleeps == [60]
+    replies[:] = [(1, 'HTTP 403: API rate limit exceeded for user ID 1.')]
+    with pytest.raises(SystemExit, match='rate limit'):
+        remote.gh('run', 'view', '1')                       # not patient: one try
+    replies[:] = [(1, 'HTTP 404: Not Found')]
+    with pytest.raises(SystemExit, match='Not Found'):
+        remote.gh('run', 'view', '1', patient=True)         # not a rate limit: no retry
+    assert sleeps == [60]
