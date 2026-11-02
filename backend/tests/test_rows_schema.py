@@ -20,6 +20,7 @@ TABLES = {
     rows.PrincipalRow: "principals",
     rows.MemoryTidyPassRow: "memory_tidy_passes",
     rows.MemoryTidyPacketRow: "memory_tidy_packets",
+    rows.ThreadRankingRow: "thread_rankings",
 }
 
 

@@ -112,7 +112,7 @@
   <header class="side-head">
     <button class="side-close" type="button" aria-label="Close navigation">×</button>
   </header>
-  <!-- The rail is Overview, Updates, Tasks, Docs, Strategy (with Market) and Meetings, then the team and the message
+  <!-- The rail is Overview, Updates, Tasks, Docs, Strategy (with Market) and Meetings, then Inbox, the team and the message
        bots; the Assistant is Ask, and its helpers have no row. Tools, Runs, Replay, Usage, Changelog and Settings sit in the account menu below.
        The phone drawer (More) shows the same, opened. -->
   <nav class="side-scroll" aria-label="Pages and bots">
@@ -124,25 +124,18 @@
     <a class="nav-link" href="#/docs" data-nav="docs"><span class="nav-icon" aria-hidden="true">docs</span>Docs</a>
     <a class="nav-link" href="#/strategy" data-nav="strategy"><span class="nav-icon" aria-hidden="true">strategy</span>Strategy</a>
     <a class="nav-link" href="#/meetings" data-nav="meetings"><span class="nav-icon" aria-hidden="true">forum</span>Meetings<span class="nav-badge meet-pending-badge" data-meet-pending hidden></span></a>
-    <section class="side-pins" id="nav-pins" aria-labelledby="nav-pins-h" hidden><h2 class="side-pins-h" id="nav-pins-h">Pipelines</h2><ul class="pin-list" id="pin-list"></ul></section>
-    <section class="side-section" id="nav-threads-section" hidden>
+    <!-- Inbox: the chats that wait on you (a question, a mention, a person's DM, a held message), burned down by
+         answering; Threads is the whole list. A DM with one bot is not here: its bot's row in Team counts its unread. -->
+    <section class="side-section" id="nav-inbox-section" hidden>
       <div class="nav-row org-head">
-        <button class="section-toggle" type="button" data-section-toggle="threads" aria-expanded="true" aria-controls="nav-threads">
-          <span>Threads</span><span class="section-chev" aria-hidden="true">›</span>
+        <button class="section-toggle" type="button" data-section-toggle="inbox" aria-expanded="true" aria-controls="nav-inbox">
+          <span>Inbox</span><span class="nav-badge th-count" id="inbox-count" hidden></span><span class="section-chev" aria-hidden="true">›</span>
         </button>
         <button class="org-history" id="th-new" type="button" title="New thread" aria-label="New thread"><span class="org-plus" aria-hidden="true">+</span></button>
       </div>
-      <div class="section-body" id="nav-threads" data-section-body="threads"><ul class="th-list" id="th-list"></ul></div>
+      <div class="section-body" id="nav-inbox" data-section-body="inbox"><ul class="th-list" id="th-list"></ul></div>
     </section>
-    <section class="side-section" id="nav-dms-section" hidden>
-      <div class="nav-row org-head">
-        <button class="section-toggle" type="button" data-section-toggle="dms" aria-expanded="true" aria-controls="nav-dms">
-          <span>DMs</span><span class="section-chev" aria-hidden="true">›</span>
-        </button>
-        <button class="org-history" id="dm-new" type="button" title="New DM" aria-label="New DM"><span class="org-plus" aria-hidden="true">+</span></button>
-      </div>
-      <div class="section-body" id="nav-dms" data-section-body="dms"><ul class="th-list" id="dm-list"></ul></div>
-    </section>
+    <section class="side-pins" id="nav-pins" aria-labelledby="nav-pins-h" hidden><h2 class="side-pins-h" id="nav-pins-h">Pipelines</h2><ul class="pin-list" id="pin-list"></ul></section>
     <section class="side-section">
       <div class="nav-row org-head">
         <button class="section-toggle" type="button" data-section-toggle="organisation" aria-expanded="true" aria-controls="nav-organisation">
@@ -218,7 +211,7 @@
 </section>
 <nav id="mobile-nav" aria-label="Mobile navigation">
   <button class="mobile-nav-item" id="mobile-org" type="button" data-nav="org" aria-label="Switch bot" aria-haspopup="menu" aria-expanded="false" aria-controls="org-fan"><span class="mobile-nav-icon" aria-hidden="true">account_tree</span><span class="mobile-nav-label">Team</span></button>
-  <a class="mobile-nav-item" id="mobile-threads" href="#/threads" data-nav="threads" hidden><span class="mobile-nav-icon" aria-hidden="true">forum</span><span class="mobile-nav-label">Threads</span><span class="nav-badge" hidden></span></a>
+  <a class="mobile-nav-item" id="mobile-threads" href="#/threads?view=inbox" data-nav="threads" hidden><span class="mobile-nav-icon" aria-hidden="true">inbox</span><span class="mobile-nav-label">Inbox</span><span class="nav-badge" hidden></span></a>
   <button class="mobile-nav-item" id="mobile-search" type="button" data-nav="search" aria-label="Search" aria-haspopup="dialog"><span class="mobile-nav-icon" aria-hidden="true">search</span><span class="mobile-nav-label">Search</span></button>
   <button class="mobile-nav-item mobile-ask" id="mobile-ask" type="button" aria-controls="ask-panel" aria-expanded="false"><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="26" style="width:26px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="mobile-nav-icon ask-x" aria-hidden="true">close</span></span><span class="mobile-nav-label ask-label">Ask Tico</span></button>
   <a class="mobile-nav-item" href="#/tasks" data-nav="tasks"><span class="mobile-nav-icon" aria-hidden="true">task_alt</span><span class="mobile-nav-label">Tasks</span></a>

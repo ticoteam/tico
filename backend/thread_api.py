@@ -212,14 +212,15 @@ def install(app, store, auth, mutate, rule_check):
 
     @app.get("/api/v2/threads")
     def sidebar(request: Request, cursor: str | None = None, limit: int | None = None,
-                with_actor: str | None = Query(None, alias="with")):
-        """Needs attention, the threads (recent first) and the DMs the viewer may read, one page. With `with=<actor>`,
-        only the threads that teammate is a member of, in the same shape."""
+                with_actor: str | None = Query(None, alias="with"), sort: str | None = None):
+        """Needs attention, the threads and the DMs the viewer may read, one page. `sort=recent` lists newest first,
+        `sort=important` by each thread's 1-10 level, then newest, without noise; neither, unread first. With
+        `with=<actor>`, only the threads that teammate is a member of, in the same shape."""
         v = threads.viewer(auth, request.state.identity)
         with store.read() as c:
             if with_actor:
                 return _shared(c, v, with_actor, cursor=cursor, limit=limit)
-            return threads.sidebar(c, v, cursor=cursor, limit=limit)
+            return threads.sidebar(c, v, cursor=cursor, limit=limit, sort=sort)
 
     @app.get("/api/v2/threads/search")
     def search(request: Request, q: str = "", before: str | None = None, limit: int | None = None):

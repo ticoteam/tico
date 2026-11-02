@@ -251,8 +251,9 @@ async function messageMenu(page, text, item) {
           await shell(page, '#/threads')();
           await page.getByText('Launch plan').first().waitFor({timeout: WAIT});
         } else {
+          // Inbox: what waits on the viewer, then the way to every thread.
           await shell(page, '#/tasks', '#th-list')();
-          await page.locator('#th-list .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: WAIT});
+          await page.locator('#th-list .th-all', {hasText: 'Threads'}).waitFor({timeout: WAIT});
         }
         await snap(page, 'sidebar-threads', phone);
       });

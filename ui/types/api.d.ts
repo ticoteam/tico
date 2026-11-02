@@ -8465,6 +8465,7 @@ export type ListThreadMembersResponse = ThreadMembers;
 export type ListThreadsParams = {
   cursor?: string | null;
   limit?: number | null;
+  sort?: string | null;
   with?: string | null;
 };
 export type ListThreadsBody = never;

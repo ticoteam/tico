@@ -3595,12 +3595,38 @@ def _history_only_roots(c, v):
     return sorted({root for root, _ in _legacy_homes(c).values() if legacy_reader_only(c, v, {"id": root})})
 
 
+def bot_dm_unread(c, v):
+    """{bot actor: unread count}: the viewer's DMs with one bot and no one else that have unread for them. These DMs are
+    not Needs attention (thread_attention): the Team chart shows each count on its bot, whose page holds the DM."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    if not v.is_person:
+        return {}
+    ids = [r[0] for r in c.execute(
+        "SELECT cv.id FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id WHERE f.actor=? "
+        "AND f.following=1 AND f.notify<>'muted' AND cv.parent_id IS NULL AND cv.closed_at IS NULL "
+        "AND cv.archived_at IS NULL AND COALESCE(cv.audience,'') IN ('personal','participants','')", (v.actor,))]
+    # Every such DM, read or not: what is unread may be in a sub-thread, which the subtree's summary counts.
+    pairs = {}
+    for thread_id in ids:
+        root = thread_row(c, thread_id)
+        if root is None or audience_of(root) not in ("personal", "participants") or not thread_readable(c, v, thread_id):
+            continue
+        others = [a for a in _dm_members(c, root) if a != v.actor]
+        if len(others) == 1 and others[0].startswith("bot:"):
+            pairs[thread_id] = others[0]
+    out = {}
+    for thread_id, summary in subtree_summaries(c, v, list(pairs)).items():
+        if summary.get("unread"):
+            out[pairs[thread_id]] = out.get(pairs[thread_id], 0) + summary["unread"]
+    return out
+
+
 # A list the cursor has finished; `next_cursor` is the threads' position, "|", the DMs' position.
 _SIDEBAR_DONE = "-"
 
 
 def _sidebar_positions(cursor):
-    """(threads, DMs), each None to start, _SIDEBAR_DONE when finished or (place, seq, id). A cursor from before the lists
+    """(threads, DMs), each None to start, _SIDEBAR_DONE when finished or (rank, seq, id). A cursor from before the lists
     were paged apart holds one position, and both lists rank by the same order, so it stands for each."""
     if not cursor:
         return None, None
@@ -3620,6 +3646,9 @@ def _sidebar_positions(cursor):
         except ValueError:
             raise Problem("cursor", "Unknown cursor", 422) from None
     return tuple(out)
+
+
+SIDEBAR_SORTS = ("important", "recent")
 
 
 def _prefetch_members(c, v, ids):
@@ -3646,7 +3675,7 @@ def _followers_of(c, v, ids):
     return out
 
 
-def sidebar(c, v, *, cursor=None, limit=50):
+def sidebar(c, v, *, cursor=None, limit=50, sort=None):
     """The roots the viewer follows or belongs to, and the public ones, ranked before they are paged (spec §1): what
     needs their attention first, then what is unread for them, then the rest, each newest activity first. Following a
     sub-thread lists its root. A root row speaks for its whole subtree, for this viewer (`subtree_summaries`), and a
@@ -3654,16 +3683,24 @@ def sidebar(c, v, *, cursor=None, limit=50):
     someone with many threads still gets their DMs: one query each, whatever the page holds. A task's thread is listed
     only while it has unread for the viewer (its parties and posters are no reason), so task threads never crowd out
     the rest. `attention` is the page's rows with an open Needs attention item. `cursor` is the `next_cursor` of the
-    page before. The page's per-row reads (membership, the viewer's follower row) are read once for all its rows."""
+    page before, read with the same `sort`.
+
+    `sort` picks the order after Needs attention: "recent" is newest activity first; "important" is each root's level
+    (backend/thread_rank.py) highest first, then newest first, and leaves out noise (level 1 or lower, or a task's thread
+    noise by rule); without it, unread first, then the rest. Every row has its `importance`. The page's per-row reads
+    (membership, the viewer's follower row) are read once for all its rows. The first page also has `bot_dms`, the
+    unread in each one-bot DM (bot_dm_unread), which is not Needs attention."""
+    if sort is not None and sort not in SIDEBAR_SORTS:
+        raise Problem("sort", "sort is important or recent", 422)
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     v._members = {}
     try:
-        return _sidebar_page(c, v, cursor, limit)
+        return _sidebar_page(c, v, cursor, limit, sort)
     finally:
         v._members = None
 
 
-def _sidebar_page(c, v, cursor, limit):
+def _sidebar_page(c, v, cursor, limit, sort):
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     readable = readable_sql(c, v, "r")
     names = v.member_names(c)
@@ -3689,6 +3726,12 @@ def _sidebar_page(c, v, cursor, limit):
                  "AND f.actor=d.recipient WHERE d.recipient=:me AND d.state IN ('pending','delivered','capped','held') "
                  f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.sender_id<>:me AND m.deleted_at IS NULL)")
     place = f"CASE WHEN {is_needing} THEN 0 WHEN NOT {is_history} AND ({by_person} OR {to_viewer}) THEN 1 ELSE 2 END"
+    from . import thread_rank
+    # Someone who reads only a migrated Home's old history gets the middle level for it: its level comes from all of it.
+    importance = f"(CASE WHEN {is_history} THEN {thread_rank.DEFAULT} ELSE {thread_rank.importance_sql('r')} END)"
+    # The order a page is ranked and paged by, ascending: Needs attention (0) first, then by `sort`.
+    rank = {None: "place", "recent": f"CASE WHEN {is_needing} THEN 0 ELSE 1 END",
+            "important": f"CASE WHEN {is_needing} THEN 0 ELSE {thread_rank.LEVELS + 1}-importance END"}[sort]
     # A task's thread lists only while it has unread for the viewer: its parties (maker, requester, owner) and anyone who
     # posted in it are no reason on their own. The full Threads page, the Tasks page and search still show it.
     is_task = f"COALESCE(r.audience,{_derived_audience('r')})='task'"
@@ -3699,6 +3742,8 @@ def _sidebar_page(c, v, cursor, limit):
              f"thread_followers f JOIN conversations s ON s.id=f.thread_id WHERE f.actor=:me AND f.following=1 "
              f"AND {_SUBTREE_OPEN} AND s.root_id IS NOT NULL) OR EXISTS (SELECT 1 FROM "
              f"{_PARTICIPANTS.format(r='r')} WHERE value=:me))", readable]
+    if sort == "important":
+        where.append(f"({is_needing} OR {importance}>{thread_rank.NOISE})")
     positions = _sidebar_positions(cursor)
     is_dm = f"COALESCE(r.audience,{_derived_audience('r')}) IN ('personal','participants')"
 
@@ -3710,10 +3755,11 @@ def _sidebar_page(c, v, cursor, limit):
         if position:
             at_place, at_seq, at_id = position
             at = {"at_place": at_place, "at_seq": at_seq, "at_id": at_id}
-            after = ("WHERE place>:at_place OR (place=:at_place AND (activity<:at_seq OR "
+            after = ("WHERE rank>:at_place OR (rank=:at_place AND (activity<:at_seq OR "
                      "(activity=:at_seq AND id<:at_id))) ")
-        sql = (f"SELECT * FROM (SELECT r.*, {activity} AS activity, {place} AS place FROM conversations r WHERE "
-               + " AND ".join([*where, test]) + f") {after}ORDER BY place, activity DESC, id DESC LIMIT :fetch")
+        sql = (f"SELECT * FROM (SELECT r.*, {rank} AS rank FROM (SELECT r.*, {activity} AS activity, {place} AS place, "
+               f"{importance} AS importance FROM conversations r WHERE " + " AND ".join([*where, test])
+               + f") r) {after}ORDER BY rank, activity DESC, id DESC LIMIT :fetch")
         found = [dict(r) for r in c.execute(sql, {**args, **at})]
         v._members.update(_prefetch_members(c, v, [r["id"] for r in found]))
         rows = []
@@ -3739,6 +3785,7 @@ def _sidebar_page(c, v, cursor, limit):
             summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
             item = view(c, v, r, summary=summary, dm=dms.get(r["id"]), follower=followers.get(r["id"], {}))
             item["activity_seq"] = r["activity"]
+            item["importance"] = r["importance"]
             if needing.get(r["id"], {}).get("new_at"):
                 item["new_at"] = needing[r["id"]]["new_at"]
             if r["id"] not in history and summary.get("last_message_at"):
@@ -3749,13 +3796,14 @@ def _sidebar_page(c, v, cursor, limit):
                 break
             found.append((r, item))
         tail = found[-1] if found else None
-        return found, f"{tail[0]['place']}:{tail[1]['activity_seq']}:{tail[1]['id']}" if more and tail else _SIDEBAR_DONE
+        return found, f"{tail[0]['rank']}:{tail[1]['activity_seq']}:{tail[1]['id']}" if more and tail else _SIDEBAR_DONE
 
     (threads_found, threads_next), (dms_found, dms_next) = items_of(*listed[0]), items_of(*listed[1])
     attention = sorted(((r, item) for r, item in threads_found + dms_found if r["place"] == 0),
                        key=lambda pair: (pair[1]["activity_seq"], pair[1]["id"]), reverse=True)
     return {"attention": [{**needing[r["id"]], **item} for r, item in attention],
             "threads": [item for _, item in threads_found], "dms": [item for _, item in dms_found],
+            "bot_dms": bot_dm_unread(c, v) if not cursor else {},
             "next_cursor": None if threads_next == dms_next == _SIDEBAR_DONE else f"{threads_next}|{dms_next}"}
 
 

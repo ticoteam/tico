@@ -251,6 +251,7 @@ class Scheduler:
         self.billing_checked = None
         self.cloud_checked = None
         self.stale_checked = None
+        self.threads_ranked = None
         self.hosted_checked = None
         self.invariants_checked = None
         self.finance_checked = {}   # Finance job -> its last start in this process
@@ -737,6 +738,15 @@ class Scheduler:
                 stale_review.tick(self.store, stamp(at))
             except Exception as exc:
                 failures.append({"stale_review": type(exc).__name__})
+        if self.threads_ranked is None or at - self.threads_ranked >= timedelta(seconds=300):
+            # Thread ranking (backend/thread_rank.py): the Important view's 1-10 levels, for roots with new messages;
+            # the Decide calls run on the pass's own thread, never under this lock.
+            self.threads_ranked = at
+            try:
+                from . import thread_rank
+                thread_rank.tick(self.store, stamp(at))
+            except Exception as exc:
+                failures.append({"thread_rank": type(exc).__name__})
         if self.go_lives_checked is None or at - self.go_lives_checked >= timedelta(minutes=10):
             # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
             self.go_lives_checked = at
