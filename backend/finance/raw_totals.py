@@ -11,7 +11,7 @@ from .core import ledger as L
 from .core import money as M
 from .core import raw_totals as RT
 from .core import validate as V
-from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, denied, invalid
+from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, PERIOD_CLOSED, FinanceError, denied, invalid
 from .handlers import Plan, Result, may_write
 from .posting import post
 from .store import ledger as SL
@@ -111,6 +111,9 @@ def _again(row: Any) -> Plan:
 
 
 def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    if ctx.book.mode == "mirror":    # a mirrored book's history is the provider's: nothing posts from a sheet, dry run too
+        raise FinanceError(NOT_AVAILABLE, "import_raw_totals is not available while the books are a provider's "
+                                          "(mirror mode)")
     V.only(p, ("csv", "basis", "mapping", "source_name"))
     sheet = RT.parse(V.text(p, "csv", RT.MAX_BYTES), V.choice(p, "basis", RT.BASES))
     by_key = _mapping(ctx, p.get("mapping"))

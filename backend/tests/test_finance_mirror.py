@@ -241,6 +241,21 @@ def test_switching_previews_first_and_a_mirrored_book_refuses_what_the_provider_
         assert (refused.status, refused.code) == ("denied", NOT_AVAILABLE)
 
 
+def test_a_spreadsheet_of_raw_totals_is_refused_on_a_mirrored_book_dry_run_and_real(books):
+    cid = _connection(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
+    body = {"csv": "month,line,amount,team\n2026-03,Software subscriptions,1000,web\n", "basis": "cash",
+            "mapping": {"Software subscriptions": "6100"}}
+    with books.transaction() as c:
+        before = c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0]
+        for dry in (True, False):
+            refused = act(c, OWNER, "import_raw_totals", body, dry_run=dry)
+            assert (refused.status, refused.code) == ("denied", NOT_AVAILABLE), refused
+            assert "mirror mode" in refused.reason, refused.reason
+        assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == before
+
+
 def test_a_mode_switch_keeps_an_unclear_row_from_paying_a_provider_bill(books):
     bank = FakeMercury()
     connect(books, bank)
