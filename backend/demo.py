@@ -200,8 +200,9 @@ def install(app, auth, settings):
     from . import market
     market.complete = lambda question, excerpts: ""
 
-    # The seeded Granola account holds no token and nothing leaves this computer: a sync answers "recent".
-    async def granola_recent(who, interval=0):
+    # The seeded Granola account holds no token and nothing leaves this computer: a sync answers "recent" (Sync now
+    # takes the same answer, as the route passes `now` too).
+    async def granola_recent(who, interval=0, now=False):
         return {"state": "recent", "last_synced_at": app.state.granola.status(who)["last_synced_at"]}
     app.state.granola.trigger = granola_recent
 
