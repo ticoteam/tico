@@ -97,9 +97,15 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
             return json(view());
           }
           if (rest === 'tickets' && req.method() === 'POST') {
-            const ticket = {id: 'sup_' + (hq.tickets.length + 1), created_at: new Date().toISOString(), status: 'open', message: body.message, email: body.email,
+            // An Idempotency-Key seen before gets the same ticket back, as HQ does; `loseCreate` drops one reply after saving.
+            const key = req.headers()['idempotency-key'];
+            (hq.createKeys ||= []).push(key);
+            const again = hq.tickets.find(x => x.key === key);
+            if (again) return json(out(again));
+            const ticket = {key, id: 'sup_' + (hq.tickets.length + 1), created_at: new Date().toISOString(), status: 'open', message: body.message, email: body.email,
                             sent: body.include_ids ? {version: '0.2.17', install_id: INSTALL} : {}, messages: []};
             hq.tickets.unshift(ticket);
+            if (hq.loseCreate) { hq.loseCreate = false; return json({error: {detail: 'Could not reach Tico support. Try again in a moment.'}}, 502); }
             return json(out(ticket));
           }
           const id = decodeURIComponent(rest.split('/')[1] || ''), ticket = hq.tickets.find(x => x.id === id);
@@ -526,6 +532,24 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       await chat.locator('.support-msg.you', {hasText: 'And another'}).waitFor();
       assert.ok(v.calls.includes('POST tickets/sup_2/messages {"message":"And another","diagnostics":""}'));
       assert.deepEqual(v.errors, []);
+    }
+    await v.ctx.close();
+
+    // ---- The new conversation is saved but its reply is lost: Send again repeats that creation (same key), no second one.
+    v = await visit({seed: [{id: 'sup_1', created_at: at(30), status: 'answered', message: 'Long thread', sent: {}, messages: []}]});
+    Object.assign(v.hq, {full: ['sup_1'], loseCreate: true});
+    await openSupport(v.page);
+    {
+      const chat = v.page.locator('#support-pop');
+      await chat.locator('[name=message]').fill('One more thing');
+      await chat.locator('[name=message]').press('Enter');
+      await chat.locator('[data-error]').waitFor();
+      await chat.locator('[name=message]').press('Enter');
+      await chat.locator('.support-msg.you', {hasText: 'One more thing'}).waitFor();
+      assert.equal(v.hq.createKeys.length, 2);
+      assert.equal(v.hq.createKeys[0], v.hq.createKeys[1], 'the retry carries the first creation\'s key');
+      assert.equal(v.hq.tickets.filter(t => t.message === 'One more thing').length, 1, 'one new conversation');
+      assert.equal(await chat.locator('[name=message]').inputValue(), '');
     }
     await v.ctx.close();
 

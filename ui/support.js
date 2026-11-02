@@ -417,7 +417,7 @@
         const body = {message: sent.message, diagnostics: sent.diag ? bundle.id : ''};
         const fresh = () => Object.assign({}, body, {email: compose?.email || (typeof S === 'undefined' ? '' : S.me?.email || ''), include_ids: true},
           appVersion() ? {app_version: appVersion()} : {}, sent.kind !== 'support' ? {kind: sent.kind} : {});
-        let next;
+        let next, rolled = '';
         try { next = await call('POST', to ? `/support/tickets/${encodeURIComponent(to)}/messages` : '/support/tickets', to ? body : fresh(), key); }
         catch (error) {
           // HQ refuses a follow-up to a ticket that is full (60 messages), closed or gone: the same message starts a new
@@ -425,12 +425,15 @@
           const refused = error.status === 404 || (error.status === 409 && (!error.code || error.code === 'support_closed'));
           if (!to || !refused) throw error;
           state.tickets = state.tickets.map(t => t.id === to ? {...t, status: 'closed'} : t);
-          next = await call('POST', '/support/tickets', fresh(), (key + '-new').slice(0, 200));
+          // The draft keeps the new ticket's key: a retry after a lost reply repeats this creation, not a second one.
+          rolled = (key + '-new').slice(0, 200);
+          if (d.key === key) d.key = rolled;
+          next = await call('POST', '/support/tickets', fresh(), rolled);
         }
         stateRevision++;
         state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
         // A draft that changed while this was on its way holds newer words: it stays.
-        if (draft === d && d.key === key) draft = newDraft();
+        if (draft === d && (d.key === key || (rolled && d.key === rolled))) draft = newDraft();
         settled(); done(); mark();
         if (isOpen() && !deleting) { render(true); renderComposer(); focusBox(); }
         schedule();
