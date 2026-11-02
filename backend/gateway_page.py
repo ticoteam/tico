@@ -9,9 +9,10 @@ from . import gateway_connection, gateway_tiers, providers
 
 
 def catalog(c, settings=None):
-    """The catalog in use, asking HQ for a fresh one in the background while the Gateway is connected."""
-    rehearsal = getattr(settings, "rehearsal", False)      # a copy of real data asks HQ for nothing
-    base = gateway_connection.url(c, settings) if gateway_connection.connected(c, settings) and not rehearsal else None
+    """The catalog in use, asking HQ for a fresh one in the background while the Gateway is connected. A rehearsal (a
+    copy of real data) and a demo never ask HQ: they show the catalog already in use, or this release's copy."""
+    quiet = getattr(settings, "rehearsal", False) or getattr(settings, "demo", False)
+    base = gateway_connection.url(c, settings) if gateway_connection.connected(c, settings) and not quiet else None
     return gateway_tiers.refresh_soon(base)
 
 

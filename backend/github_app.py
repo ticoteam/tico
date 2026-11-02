@@ -383,7 +383,10 @@ class GitHubApp:
 
     def live_permissions(self, refresh=False):
         """The installation's permissions as GitHub reports them now, cached briefly; None when they
-        cannot be learned (not installed, GitHub unreachable or silent), so callers keep what is stored."""
+        cannot be learned (not installed, GitHub unreachable or silent, a stored key that will not sign, or a demo,
+        which never asks GitHub), so callers keep what is stored."""
+        if self.settings.demo:
+            return None
         with self.lock:
             hit = self.live.get("permissions")
             if hit and hit[0] > time.time() and not refresh:
@@ -395,7 +398,7 @@ class GitHubApp:
                 return None
             r = self._call("GET", f"/app/installations/{installation}", headers={"Authorization": "Bearer " + token})
             permissions = r.json().get("permissions") if r.status_code < 300 else None
-        except (Problem, ValueError):
+        except (Problem, ValueError, jwt.PyJWTError):
             return None
         if not isinstance(permissions, dict):
             return None
