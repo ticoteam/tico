@@ -13,7 +13,7 @@ teammate who works it, and one occurrence per day it falls due, each completed o
 import sqlite3
 import uuid
 from collections.abc import Iterable, Iterator, Mapping
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -299,19 +299,11 @@ def subject_ids(c: sqlite3.Connection, subject_type: str, subject_id: str) -> tu
     return tuple(sorted(ids))
 
 
-def next_due_for(c: sqlite3.Connection, subject_type: str, subject_ids_asked: Iterable[str], zone: str
-                 ) -> dict[str, str]:
-    """The earliest open day of each record's live due dates, as ISO days, keyed by the ids asked for (a merged location's
-    old id answers with its record's). A record with no open due date has no key. Archived due dates count for nothing.
-    An equipment or location row calls this for its next_due_on. `zone` is the install's: its day is today."""
-    both = next_due_and_status(c, subject_type, subject_ids_asked, local_day(datetime.now(timezone.utc), zone))
-    return {given: day.isoformat() for given, (day, _) in both.items()}
-
-
 def next_due_and_status(c: sqlite3.Connection, subject_type: str, subject_ids_asked: Iterable[str], today: date
                         ) -> dict[str, tuple[date, str]]:
     """Each record's earliest open day and its most pressing status (see status): overdue, due or upcoming, by the rule the
-    due filter and each due date's own pill use. Keyed as next_due_for is."""
+    due filter and each due date's own pill use. Keyed by the ids asked for: a merged location's old id answers with its
+    record's."""
     canon_of: dict[str, str] = {}
     for given in subject_ids_asked:
         canon_of[given] = RS.resolve(c, "locations", given) if subject_type == "location" else given

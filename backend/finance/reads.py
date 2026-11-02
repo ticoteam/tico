@@ -1651,7 +1651,7 @@ def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, fresh: Mapping[str, 
     """A record as the records API shows it, to a teammate: an item's sale price and description whatever the viewer's
     Finance view; an item's accounts show to the viewers who see them. A location's, equipment's or project's customer
     shows by id and name, a location's parent and equipment's location too (`places`). A location's or equipment's next
-    due day comes from `due` (records/due_dates.next_due_for), null when none is open, and its status from `due_status`. On a mirrored book a location says whether it is `in_books` (see _in_books). An item carries
+    due day comes from `due` (records/due_dates.next_due_and_status), null when none is open, and its status from `due_status`. On a mirrored book a location says whether it is `in_books` (see _in_books). An item carries
     its last synced quantity, null on books that keep none. Only teammates reach this (see _teammate_or_refuse)."""
     out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"], **fresh}
     if kind == "location":

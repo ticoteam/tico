@@ -619,7 +619,8 @@ def test_a_merged_location_answers_under_its_record_and_next_due_is_read_for_it(
         assert [r["name"] for r in listed] == ["Merged store check"]  # type: ignore[index]
         assert listed[0]["subject_name"] == "Acme Kept Store"  # type: ignore[index]
         assert FD.listing(c, OWNER, subject_type="equipment")["due_dates"] == []  # type: ignore[index]
-        assert RD.next_due_for(c, "location", [kept, merged], "America/Los_Angeles") == {kept: DAY, merged: DAY}
+        days = RD.next_due_and_status(c, "location", [kept, merged], date.fromisoformat(DAY))
+        assert {given: day.isoformat() for given, (day, _) in days.items()} == {kept: DAY, merged: DAY}
         with pytest.raises(FinanceError):
             FD.listing(c, OWNER, subject_id=kept)
 
