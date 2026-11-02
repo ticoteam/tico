@@ -68,14 +68,27 @@ jobs:
         with:
           ref: ${{ needs.candidate.outputs.sha }}
           persist-credentials: false
+      - name: Install Rust and musl
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q musl-tools
+          rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
+      # Every gate part waits for this build (about 3 min uncached). Cache compiled dependencies as on macOS: keyed on
+      # Cargo.lock, toolchain and target; only Release validation runs on main write it.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            runner-rs -> target
+            relay-rs -> target
+          key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build tico-runner and tico-screen-relay
         env:
           TARGET: ${{ matrix.target }}
           NAME: ${{ matrix.name }}
           TICO_VERSION: ${{ needs.candidate.outputs.version }}
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q musl-tools
-          rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
           export CC_x86_64_unknown_linux_musl=musl-gcc CC_aarch64_unknown_linux_musl=musl-gcc
           # Two crates with their own target directories, built side by side; both must succeed.
           (cd runner-rs && cargo build --release --locked --target "$TARGET") & runner=$!
