@@ -813,7 +813,8 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     return {"teams": teams, "teammates": teammates, "private_lines": private,
             "defaults": {"manager": defaults.manager, "member": defaults.member,
                          "manager_payroll": defaults.manager_payroll},
-            "can_view_as": owner, "can_edit_defaults": owner, "view_version": ctx.view(viewer).version}
+            "can_view_as": owner, "can_edit_defaults": owner, "view_version": ctx.view(viewer).version,
+            "finance_approver": (ctx.approver_setting() or None) if owner else None}
 
 
 def _may_grant(ctx: Ctx, viewer: str, subject: str, defaults: VW.Defaults) -> bool:

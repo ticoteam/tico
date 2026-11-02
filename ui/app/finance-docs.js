@@ -125,7 +125,8 @@ function finDocsReload() {
 }
 
 // ----------------------------------------------------------------- the bills address
-// The owner or an admin sets it (PUT /finance/bills-address), and outside view-as; everyone else copies it.
+// The owner or an admin sets it (PUT /finance/bills-address), and outside view-as, if they hold finance.admin (the
+// server's check, so the dialog says so); everyone else copies it.
 const finEmailSetter = () => !finCaps()?.viewing && (S.me?.role === 'owner' || !!S.me?.bot_admin);
 function finDocEmailDraw() {
   const box = $('#fin-doc-email'), email = FIN?.doc?.email || '';
@@ -139,7 +140,9 @@ function finDocEmailSet() {
   const state = FIN.doc;
   finDialog('Bills address', `<label>Address<input type="email" name="address" maxlength="254" autocomplete="off" value="${esc(state.email || '')}"></label>`, 'Save', async form => {
     const address = form.elements.address.value.trim();
-    const r = await put('/v2/finance/bills-address', {address: address || null});
+    const r = await put('/v2/finance/bills-address', {address: address || null}).catch(e => {
+      throw e.status === 403 ? new Error('Only a finance admin sets the bills address') : e;
+    });
     if (FIN?.doc === state) { state.email = r?.bills_email || ''; finDocEmailDraw(); }
     if (r?.bills_email && !r.inbox_id) throw new Error('Not an inbox address');
   });

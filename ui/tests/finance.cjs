@@ -1,7 +1,7 @@
 // The Finance tab (ui/app/finance*.js) against a fake hub: Acme (acme.example) with an owner (Ana), a manager (Cara,
 // who leads Engineering) and a few bots. The owner sees every tab; the manager only P&L (expenses), Cards, Transactions
 // and Access, and Balance sheet / Sources stay hidden even by address. A budget cell edits on a double-click in a
-// future month (or, to raise it, this one), dry run first, and sends budget_update with effective_from; the card rail's Freeze sends card_freeze. Payables and
+// future month (or this one, where it has a budget), dry run first, and sends budget_update with effective_from; the card rail's Freeze sends card_freeze. Payables and
 // Receivables list bills and invoices with no totals row; their decisions run a dry run first and send the right action,
 // and both tabs hide from a viewer without payables or receivables (a payables grant shows only Payables, read only).
 // The Balance sheet's "+ Add" enters a journal entry and offers Loan, Asset and Import history. Cards: Unfreeze only
@@ -46,7 +46,7 @@ const MATES = [
 function access(viewer, apGrant = false, apRights = []) {
   const base = {teams, private_lines: [{account_id: 'a-6200', name: 'Payroll', others_see: 'totals', full_detail: ['bot:bookkeeper']}],
     defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1'};
-  if (viewer === 'ana') return {...base, teammates: MATES.map(m => ({...m, may_grant: m.teammate !== 'human:ana'})), can_view_as: true, can_edit_defaults: true};
+  if (viewer === 'ana') return {...base, teammates: MATES.map(m => ({...m, may_grant: m.teammate !== 'human:ana'})), can_view_as: true, can_edit_defaults: true, finance_approver: null};
   const mine = ['human:cara', 'bot:eng-lead', 'bot:builder'];
   const payables = {id: 'g4', subject_kind: 'teammate', subject: 'human:cara', what: 'payables', whose: 'company', whose_team: null, account_ids: [],
     new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true};
@@ -94,6 +94,7 @@ function pnl(url, me, noRevenue = false, noCogsProjection = false) {
     : ({account_id, code, name: base0, type, section: section(code), parent_id, private: false,
     actual: cols.map((c, i) => c.state === 'future' ? null : c.state === 'current' ? Math.round(wave(base, i) * 0.9) : wave(base, i)),
     total: 0, budget: budget == null ? null : cols.map(() => budget),
+    budget_to_date: budget == null ? null : cols.map(c => c.state === 'current' ? Math.round(budget / 2) : null),
     projection: cols.map((c, i) => c.state === 'future' && !(noCogsProjection && code.startsWith('5')) ? wave(base, i + 1) : null), projection_method: 'trend'}));
   const sum = type => cols.map((c, i) => rows.filter(r => r.type === type).reduce((a, r) => a + (r.actual?.[i] || 0), 0));
   const income = sum('income'), expense = sum('expense');
@@ -307,6 +308,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
         currency: 'USD', view_version: 'v1'}) : denied();
     // The bills address: only an Email & Phone inbox's address has an inbox; any other is kept with inbox_id null.
     if (p === '/api/v2/finance/bills-address' && method === 'PUT') {
+      if (body.address === 'nope@acme.example') return denied();
       billsEmail = body.address;
       return json({bills_email: billsEmail, inbox_id: billsEmail === 'bills@acme.example' ? 'ib-1' : null});
     }
@@ -391,7 +393,12 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       for (const want of ['Gross profit', 'Gross margin', 'Total operating expenses', 'Net income']) assert.ok(firsts.includes(want), `${tag}: the statement has ${want}`);
       assert.equal(await page.locator('.fin-pl thead th.fin-p').count() > 0, true, tag + ': projected columns are shaded');
       assert.equal(await page.locator('.fin-pl thead .fin-tag').first().textContent(), 'Imported', tag + ': an imported month says so');
-      // The budget column is the current month's: a line with a budget takes a raise, a line without one nothing.
+      // The current month's budget to date sits next to the full month's.
+      const softwareRow = page.locator('tr.fin-ln').filter({has: page.locator('td[data-fin-budget="a-6100"]')});
+      const headCells = await page.locator('.fin-pl thead tr').first().locator('th').allInnerTexts();
+      assert.equal(headCells.at(-2).toLowerCase(), 'to date', tag + ': a To date column before vs budget');
+      assert.equal((await softwareRow.locator('td').nth(headCells.length - 2).innerText()).trim() !== '', true, tag + ': the line shows its budget to date');
+      // The budget column is the current month's: a line with a budget takes an edit, a line without one nothing.
       assert.equal(await page.locator('td[data-fin-budget="a-5200"]').count(), 0, tag + ': this month has no new budgets');
       const softwareBudget = page.locator('td[data-fin-budget="a-6100"]');
       const nowCols = await page.evaluate(() => FIN.pnl.data.columns), now = nowCols.find(c => c.state === 'current');
@@ -400,8 +407,10 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('.fin-cell-in').fill('1');
       await page.locator('.fin-cell-in').press('Enter');
       await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
-      assert.equal(actions(writes).length, wrote, tag + ': this month only goes up');
+      assert.equal(actions(writes).at(-1).dry_run === undefined && actions(writes).length > wrote, true, tag + ': lowering this month goes by the server');
+      assert.equal(actions(writes).at(-1).payload.amount, 100, tag + ': the lowering is sent');
       // A raise the rules send for approval says so first, and Cancel sends nothing.
+      const sentBefore = sent(writes).length;
       hub.ask = 'human:ana';
       await softwareBudget.dblclick();
       await page.locator('.fin-cell-in').fill('9000');
@@ -409,10 +418,10 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('dialog.fin-dlg .fin-ask').waitFor();
       assert.match(await page.locator('dialog.fin-dlg .fin-ask').innerText(), /^Approval from /, tag + ': names the approver');
       assert.match(await page.locator('dialog.fin-dlg .fin-kv').first().innerText(), /\$9,000/, tag + ': shows the change');
-      assert.equal(sent(writes).length, 0, tag + ': nothing sent yet');
+      assert.equal(sent(writes).length, sentBefore, tag + ': nothing sent yet');
       assert.equal(actions(writes).at(-1).dry_run, true, tag + ': the dry run came first');
       await page.locator('dialog.fin-dlg .fin-foot [data-close]').click();
-      assert.equal(sent(writes).length, 0, tag + ': Cancel sends nothing');
+      assert.equal(sent(writes).length, sentBefore, tag + ': Cancel sends nothing');
       await softwareBudget.dblclick();
       await page.locator('.fin-cell-in').fill('9000');
       await page.locator('.fin-cell-in').press('Enter');
@@ -486,7 +495,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await projSum(), 3100, tag + ': by teammate too');
       await page.locator('[data-fin-by]').selectOption('vendor');
       await page.locator('[data-fin-key="GitHub"]').waitFor();
-      assert.equal(await page.locator('input[data-fin-vb="GitHub"]').count(), 1, tag + ': this month\'s vendor budget takes a raise');
+      assert.equal(await page.locator('input[data-fin-vb="GitHub"]').count(), 1, tag + ': this month\'s vendor budget takes an edit');
       assert.equal(await page.locator('input[data-fin-vb="Notion"]').count(), 0, tag + ': this month takes no new vendor budget');
       const next = cols[future].start.slice(0, 7);
       await page.locator('[data-fin-month]').fill(next);
@@ -858,6 +867,11 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.ok(reads.filter(r => r === '/api/v2/finance/balance-sheet').length >= 2, tag + ': Access reads the balance sheet lines itself');
       await page.locator('#fin-rail select[name="what"]').selectOption('expenses');
       await shot(page, 'access-desktop');
+      // The owner names the finance approver.
+      await page.locator('[data-fin-approver]').selectOption('human:cara');
+      await page.waitForFunction(() => !document.querySelector('[data-fin-approver]').disabled);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'finance_approver_set', payload: {approver: 'human:cara'}}, tag + ': names one person');
+      assert.equal(await page.locator('[data-fin-approver] option[value="bot:bookkeeper"]').count(), 0, tag + ': never a bot');
       await page.locator('[data-fin-defaults]').click();
       await page.locator('dialog.fin-dlg[open]').waitFor();
       await shot(page, 'access-defaults-desktop');
@@ -897,6 +911,10 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
         await page.locator('dialog.fin-dlg[open] input[name="address"]').fill(value);
         await page.locator('dialog.fin-dlg[open] [type=submit]').click();
       };
+      await setEmail('nope@acme.example');
+      await page.locator('dialog.fin-dlg[open] [data-error]:not([hidden])').waitFor();
+      assert.equal(await page.locator('dialog.fin-dlg [data-error]').innerText(), 'Only a finance admin sets the bills address', tag + ': the denied copy');
+      await page.locator('dialog.fin-dlg[open] .fin-foot [data-close]').click();
       await setEmail('ap@acme.example');
       await page.locator('dialog.fin-dlg[open] [data-error]:not([hidden])').waitFor();
       assert.equal(await page.locator('dialog.fin-dlg [data-error]').innerText(), 'Not an inbox address', tag + ': an address no inbox has is named');
@@ -1058,6 +1076,17 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
+    // finance.admin adds no view: Access opens, with no private lines and nothing of the owner's.
+    {
+      const tag = 'finance admin';
+      const {page, errors} = await open(browser, {viewer: 'cara', apGrant: true, apRights: ['finance.admin'], hash: '#/finance/access'});
+      await page.locator('[data-fin-mate="human:cara"]').waitFor();
+      assert.equal(await page.locator('[data-fin-tab="access"]').count(), 1, tag + ': the Access tab');
+      assert.equal(await page.locator('#fin-private .fin-chip').count(), 0, tag + ': no private lines');
+      assert.equal(await page.locator('[data-fin-approver], [data-fin-defaults], [data-fin-viewas]').count(), 0, tag + ': nothing of the owner\'s');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
     // finance.ap without finance.pay: bills are approved, paid and voided, never scheduled; no bank list is read.
     {
       const tag = 'ap right';
@@ -1196,7 +1225,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await priv.locator('a').count(), 0, tag + ': a private line does not drill down');
       assert.deepEqual((await priv.locator('td[data-fin-cell]').allInnerTexts()).filter(t => t !== '—'), [], tag + ': a private line shows no figures');
       const firsts = await page.locator('.fin-pl tbody td:first-child').allInnerTexts();
-      assert.ok(firsts.includes('Total expenses excl. payroll'), tag + ': totals without payroll say so');
+      assert.ok(firsts.includes('Total expenses excl. payroll · Your view'), tag + ': totals without payroll say so');
       for (const hidden of ['balance', 'sources', 'payables', 'receivables']) {
         await page.evaluate(h => { location.hash = h; }, '#/finance/' + hidden);
         await page.waitForFunction(() => location.hash.startsWith('#/finance/pnl'));
@@ -1212,7 +1241,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('#fin-rail .fin-rail-title').waitFor();
       assert.equal(await page.locator('#fin-rail [data-fin-cat], #fin-rail [data-fin-tag]').count(), 0, tag + ': no line picker without finance.book');
       await go(page, '#/finance/access', READY.access);
-      assert.equal(await page.locator('[data-fin-defaults], [data-fin-viewas]').count(), 0, tag + ': no defaults or View as');
+      assert.equal(await page.locator('[data-fin-defaults], [data-fin-viewas], [data-fin-approver]').count(), 0, tag + ': no defaults, View as or approver');
       await page.locator('[data-fin-mate="bot:eng-lead"]').click();
       await page.waitForFunction(() => FIN_ACC.sel === 'bot:eng-lead' && document.querySelector('#fin-rail h2'));
       assert.equal(await page.locator('#fin-rail [data-fin-grant]').count(), 0, tag + ': no Grant more where the server would refuse');

@@ -7,6 +7,7 @@ import pytest
 
 from backend.finance import actions as FA
 from backend.finance import reads as FR
+from backend.finance import tab as FT
 from backend.finance.actions import FinanceError
 from backend.finance.store import banking as SK
 from backend.tests.test_api import api, get, headers  # noqa: F401
@@ -208,6 +209,14 @@ def test_a_finance_admin_adds_no_view_of_its_own_so_emails_tax_ids_and_sync_erro
             assert row["tax_id_last4"] == last4, who
         assert [m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]] == ["human:fay"]
 
+
+
+def test_only_the_owner_reads_who_the_finance_approver_is(books):
+    with books.transaction() as c:
+        assert FT.access(c, OWNER)["finance_approver"] is None
+        assert act(c, OWNER, "finance_approver_set", {"approver": "human:dan"}).status == "committed"
+        assert FT.access(c, OWNER)["finance_approver"] == "human:dan"
+        assert FT.access(c, "human:dan")["finance_approver"] is None
 
 
 def test_the_bills_address_and_a_books_disconnect_are_actions_only_a_finance_admin_may_ask_for(books):
