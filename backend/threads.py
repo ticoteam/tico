@@ -1648,17 +1648,23 @@ def note_wake(message):
 def replace_note_wake(c, message, bot):
     """A wake refused at its claim was one run for all its thread's notes, anchored to one of them. The anchor gone or
     unreadable leaves the others with no run, so this writes another, anchored to one the bot still reads: the claim asks
-    what `_carrier` just asked, so it cannot be refused the same way, and each refusal takes back the note it was for."""
+    what `_carrier` just asked, so it cannot be refused the same way, and each refusal takes back the note it was for.
+    A batch with nothing readable is cancelled whole, so the next read moves past it and this ends with the notes."""
     if not note_wake(message):
         return None
     thread = thread_row(c, message.get("conversation_id"))
     root = root_of(c, thread) if thread is not None else None
     if not root:
         return None
-    rows = c.execute(f"SELECT n.* FROM notes n JOIN messages m ON m.id=n.message_id JOIN conversations t ON t.id=m.conversation_id "
-                     f"WHERE n.to_actor=? AND coalesce(t.root_id,t.id)=? AND {H.NOTE_WAITING_SQL} ORDER BY n.created,n.rowid LIMIT ?",
-                     (bot, root["id"], NOTES_READ)).fetchall()
-    return wake_note_threads(c, bot, revalidate_notes(c, bot, [dict(r) for r in rows]))
+    while True:
+        rows = c.execute(f"SELECT n.* FROM notes n JOIN messages m ON m.id=n.message_id JOIN conversations t ON t.id=m.conversation_id "
+                         f"WHERE n.to_actor=? AND coalesce(t.root_id,t.id)=? AND {H.NOTE_WAITING_SQL} ORDER BY n.created,n.rowid LIMIT ?",
+                         (bot, root["id"], NOTES_READ)).fetchall()
+        if not rows:
+            return []
+        kept = revalidate_notes(c, bot, [dict(r) for r in rows])
+        if kept:
+            return wake_note_threads(c, bot, kept)
 
 
 def _notes_wait_in(c, message, bot):

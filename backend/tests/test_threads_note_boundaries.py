@@ -417,6 +417,41 @@ def test_the_wakes_anchor_turning_unreadable_starts_a_new_wake_for_the_other_not
     assert waiting(api) == [] and claim(api, r, "cpo") is None
 
 
+def test_a_whole_read_of_unreadable_notes_does_not_strand_the_readable_one_behind_it(api, monkeypatch):
+    monkeypatch.setattr(threads, "NOTES_READ", 2)
+    r = bot_runner(api)
+    tid = task_about(api, requester="human:ana")
+    private, public = new_thread(api), new_thread(api, audience="company", title="Handbook")
+    for word in ("Zebrawire", "Larkspindle", "Copperfen"):
+        bot_says(api, private, f"@cpo {word}", refs={"task": tid})
+    bot_says(api, private, "@cpo Quillframe")
+    say(api, public, "@cpo work here")
+    finish(api, r, claim(api, r, "cpo"))
+    assert wakes(api) == 1
+    turn_task_private(api, tid)                     # every note a read of two can see is taken back, and one more after them
+    assert claim(api, r, "cpo") is None
+    assert len(sweep(api)) == 1 and wakes(api) == 2
+    runs = drain(api, r)
+    assert [run["notes"] for run in runs] == [["@cpo Quillframe"]] and runs[0]["root"] == private
+    assert waiting(api) == [] and claim(api, r, "cpo") is None
+
+
+def test_a_wake_whose_notes_are_all_unreadable_writes_no_other(api, monkeypatch):
+    monkeypatch.setattr(threads, "NOTES_READ", 2)
+    r = bot_runner(api)
+    tid = task_about(api, requester="human:ana")
+    private, public = new_thread(api), new_thread(api, audience="company", title="Handbook")
+    for word in ("Zebrawire", "Larkspindle", "Copperfen"):
+        bot_says(api, private, f"@cpo {word}", refs={"task": tid})
+    say(api, public, "@cpo work here")
+    finish(api, r, claim(api, r, "cpo"))
+    assert wakes(api) == 1
+    turn_task_private(api, tid)
+    assert claim(api, r, "cpo") is None
+    sweep(api)
+    assert wakes(api) == 1 and waiting(api) == [] and claim(api, r, "cpo") is None
+
+
 def test_a_notice_whose_message_was_deleted_stays_out_of_the_threads_next_run(api):
     r = bot_runner(api)
     assign(api, r, "ops")
