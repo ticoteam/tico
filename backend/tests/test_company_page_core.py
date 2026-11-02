@@ -272,6 +272,20 @@ def test_a_rounded_or_delayed_value_the_audience_does_not_see_exactly_is_unseen_
     assert {148.0, 37.0} <= values
 
 
+def test_a_quarterly_stat_leaves_the_months_inside_its_quarter_unseen_too(store):
+    """Customers were 148 in August and 162 in September. A quarterly stat shows the quarter's last reading, rounded, so
+    the August figure is never shown exactly, and it has to count as unseen as well as September's."""
+    setup(store, shown("kpi"), ("customers", "", {"mode": "rounded", "rounding": "nearest:10 quarterly"}))
+    with store.transaction() as c:
+        paying = make_kpi(c, "Paying customers")
+        read(c, paying, 148, "2026-08-31")
+        read(c, paying, 162, "2026-09-30")
+        on_board(c, paying, cls="customers", label="Paying customers")
+        values = ST.unseen_values(c, "investors", "2026-10-15")
+        assert 160.0 in {s["value"] for s in ST.project(c, "investors", "2026-10-15")["stats"][0]["series"]}
+    assert {148.0, 162.0} <= values
+
+
 def test_a_plural_unit_reads_singular_at_exactly_one_and_a_word_ending_in_ss_does_not(store):
     assert ST._text(1, "posts") == "1 post" and ST._text(-1, "posts") == "-1 post"
     assert ST._text(2, "posts") == "2 posts" and ST._text(1, "class") == "1 class"

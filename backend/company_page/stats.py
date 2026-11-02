@@ -723,9 +723,11 @@ def unseen_values(c, audience_id, at=None):
         rule = _rule(rules, row)
         if row["source_kind"] == "kpi":
             row = {**row, "_unit": (K.kpi(c, row["ref_id"]) or {}).get("unit")}
-        found = _read(c, books, row, D.parse_rounding(rule["rounding"]).quarterly)
-        if found:
-            values.update(float(p.value) for p in found[0][-RECENT_PERIODS:])
+        # A quarterly stat shows each quarter's last reading or total, so the months inside it are unseen too.
+        for quarterly in ((False, True) if D.parse_rounding(rule["rounding"]).quarterly else (False,)):
+            found = _read(c, books, row, quarterly)
+            if found:
+                values.update(float(p.value) for p in found[0][-RECENT_PERIODS:])
     return values - seen
 
 
