@@ -6,6 +6,7 @@ import itertools
 
 import pytest
 
+from backend import hubdb as H
 from backend import template_finance as TF
 from backend.finance import actions as FA
 from backend.finance import reads as FR
@@ -88,18 +89,31 @@ HIRES = {"form": lambda api: add_bot(api, "procurement"),
          "team": lambda api: team_hire(api, "procurement")}
 
 
-def draft_tagged_po(api, bot):
-    """The owner sets up a shop, a job, a vendor and a condenser; the bot drafts a PO line tagged with shop and job."""
+def vendor_and_job(api):
+    """The owner's set-up for a purchase: a vendor, a shop and a job."""
     shop = str(act(api, OWNER, "location_create", {"name": "Acme North shop", "kind": "store"}).result["location_id"])
     job = str(act(api, OWNER, "project_create", {"name": "Install"}).result["project_id"])
     vendor = str(act(api, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor"}).result["contact_id"])
+    return vendor, shop, job
+
+
+def draft_tagged_po(api, bot):
+    """The bot drafts a PO line tagged with the shop and job; its send and an approval over the limit ask the owner."""
+    vendor, shop, job = vendor_and_job(api)
     line = {"account_id": account(api, "6100"), "amount": 150_000, "description": "condenser",
             "tags": {"location": shop, "project": job}}
     made = act(api, "bot:" + bot, "po_create", {"vendor_id": vendor, "po_date": DAY, "lines": [line]})
     assert made.status == "committed", made.reason
+    po = str(made.result["po_id"])
     with db(api).read() as c:
-        order = FR.order(c, OWNER, str(made.result["po_id"]))
-    assert order["lines"][0]["tags"] == {"location": shop, "project": job}
+        assert FR.order(c, OWNER, po)["lines"][0]["tags"] == {"location": shop, "project": job}
+    sent = act(api, "bot:" + bot, "po_send", {"po_id": po})
+    assert (sent.status, sent.approver) == ("needs_approval", OWNER), sent
+    with db(api).transaction() as c:
+        H.approval_decide(c, OWNER, str(sent.approval_id), "approved")
+        assert FA.approval_decided(c, str(sent.approval_id), AT).status == "committed"
+    asked = act(api, "bot:" + bot, "po_approve", {"po_id": po})
+    assert (asked.status, asked.approver) == ("needs_approval", OWNER), asked
 
 
 @pytest.mark.parametrize("path", ["form", "seat", "team"])
@@ -110,6 +124,17 @@ def test_the_procurement_manager_gets_finance_ap_and_the_company_expenses_view_h
     assert rights == {"finance.ap"}
     assert [(v["what"], v["whose"], v["status"]) for v in views] == [("expenses", "company", "active")]
     draft_tagged_po(api, slug)
+
+
+def test_a_private_expense_line_stays_out_of_the_bots_view(api):
+    finance_on(api)
+    slug = add_bot(api, "procurement")
+    vendor, shop, job = vendor_and_job(api)
+    assert act(api, OWNER, "private_lines_set", {"account_id": account(api, "6100")}).status == "committed"
+    line = {"account_id": account(api, "6100"), "amount": 150_000, "description": "condenser",
+            "tags": {"location": shop, "project": job}}
+    refused = act(api, "bot:" + slug, "po_create", {"vendor_id": vendor, "po_date": DAY, "lines": [line]})
+    assert refused.status != "committed" and "in your view" in str(refused.reason), refused
 
 
 def test_a_second_start_grants_nothing_and_a_revoke_stays_revoked(api):
