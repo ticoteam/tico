@@ -49,11 +49,15 @@ h1{font-size:clamp(32px,5.4vw,52px);line-height:1.08;font-weight:600;letter-spac
 .below{display:flex;flex-direction:column;border-top:1px solid var(--line);margin-top:-6px}
 .below .bar{border-radius:0 0 4px 4px}
 
-.line{display:block;width:100%}
+.line{display:block;width:100%;overflow:visible}
 .line .area{fill:var(--bar-muted);opacity:.45}
 .line polyline{fill:none;stroke:var(--accent-ink);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
-.vals{margin:0;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px;font-size:13px;border-top:1px solid var(--line);padding-top:6px}
+.line .dot{stroke-width:8}
+/* The chart's points run edge to edge, so the first value sits at the left edge and the last at the right. */
+.vals{margin:0;display:flex;justify-content:space-between;gap:8px;font-size:13px;border-top:1px solid var(--line);padding-top:6px}
 .vals div{min-width:0;text-align:center}
+.vals div:first-child{text-align:left}
+.vals div:last-child{text-align:right}
 .vals dt{color:var(--muted)}
 .vals dd{margin:0;color:var(--muted)}
 .vals div:last-child dd{color:var(--ink);font-weight:600}
@@ -74,10 +78,10 @@ h1{font-size:clamp(32px,5.4vw,52px);line-height:1.08;font-weight:600;letter-spac
 .pnl{display:flex;flex-direction:column;gap:12px;min-width:0}
 .pnl-head{font-size:14px;font-weight:500}
 .pnl-scroll{overflow-x:auto}
-.pnl table{width:100%;min-width:340px;table-layout:fixed;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:15px}
-.pnl th,.pnl td{padding:8px 0;text-align:right;font-weight:400;width:72px;border-top:1px solid transparent}
-.pnl thead td{width:auto;border-top:1px solid var(--line)}
-.pnl tbody th{text-align:left;padding-right:12px}
+.pnl table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:15px}
+.pnl th,.pnl td{padding:8px 0 8px 32px;text-align:right;font-weight:400;white-space:nowrap;border-top:1px solid transparent}
+.pnl thead td{width:100%;padding-left:0;border-top:1px solid var(--line)}
+.pnl tbody th{width:100%;padding-left:0;text-align:left;white-space:normal}
 .pnl thead th{border-top:1px solid var(--line);color:var(--muted);font-size:13px;padding-block:9px}
 .pnl tr.strong th,.pnl tr.strong td{font-weight:600;border-top-color:var(--line)}
 
@@ -136,8 +140,9 @@ footer i{width:11px;height:11px;background:var(--dot);border-radius:48% 52% 55% 
 /* Twelve months of bars do not fit a phone with their labels, so a phone shows the latest six. */
 @media (max-width:560px){
   .bars>.col:nth-last-child(n+7){display:none}
-  .vals{grid-auto-flow:row;grid-template-columns:repeat(auto-fill,minmax(72px,1fr))}
-  .vals div{text-align:left}
+  .vals:has(>div:nth-child(5)){display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr))}
+  .vals:has(>div:nth-child(5)) div{text-align:left}
+  .pnl th,.pnl td{padding-left:16px}
 }
 
 @media print{

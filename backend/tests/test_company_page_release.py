@@ -312,6 +312,29 @@ def stat(display="$118k", **extra):
             "display": display, "stale": False, "series": [{"period": "2026-10", "value": 118, "display": display}], **extra}
 
 
+def test_a_stat_says_as_of_only_when_the_header_does_not_already_say_it():
+    def shows(**extra):
+        return 'class="as-of"' in render.page(view_model(stats=[stat(**extra)]))
+    assert not shows(period="2026-10", as_of="2026-10-31")
+    assert not shows(period="Oct 2026", as_of="2026-10-31")
+    assert not shows(period="Nov 1, 2026", as_of="2026-11-01")
+    assert not shows(period="Q3 2026", as_of="2026-09-30")
+    assert not shows(chart="line", period="Nov 1, 2026", as_of="2026-11-01")
+    # Something new: a different day, or a stat that has gone out of date.
+    assert shows(period="Oct 2026", as_of="2026-11-01")
+    assert shows(period="Nov 1, 2026", as_of="2026-10-31")
+    assert shows(period="Oct 2026", as_of="2026-10-31", stale=True)
+    assert shows(chart="line", period="Nov 1, 2026", as_of="2026-11-01", stale=True)
+
+
+def test_a_hero_line_runs_edge_to_edge_and_ends_on_the_last_value():
+    series = [{"period": p, "value": v, "display": str(v)} for p, v in (("Sep", 1), ("Oct", 2), ("Nov", 3))]
+    doc = Doc(render.page(view_model(stats=[stat(chart="line", series=series)])))
+    drawn = [v.split() for t, k, v in doc.attrs if t == "polyline" and k == "points"]
+    assert drawn[0][0].split(",")[0] == "0" and drawn[0][-1].split(",")[0] == "600"
+    assert drawn[1] == [drawn[0][-1], drawn[0][-1]]
+
+
 def served(state):
     return release.current_dir(state.settings)
 
