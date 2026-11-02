@@ -446,15 +446,21 @@ async function messageMenu(page, text, item) {
         assert.ok(!JSON.stringify(timeline).includes(HELD), 'the held message is not in the thread timeline');
       });
       await step(page, 'held edit', phone, name, async () => {
-        await messageMenu(page, 'Price list draft v1', 'Edit');
+        // A message of its own for this pass: a held edit leaves its message with a pending edit, and a message with one
+        // shows no Edit (thread-view.js thvMsgMenu: "one edit at a time"), so the other pass needs a fresh one.
+        const draftText = `Price list draft ${phone ? 'phone' : 'desktop'}`;
+        await api(hub, 'dana', 'POST', `/v2/threads/${S.plan.id}/messages`, {text: draftText, kind: 'say'});
+        await shell(page, `#/thread/${S.plan.id}`, '.thv-composer')();
+        await sleep(1500);
         await dismissRunnerCard(page);
-        await page.locator('[data-message]', {hasText: 'Price list draft v1'}).first().locator('textarea').first().fill(HELD);
+        await messageMenu(page, draftText, 'Edit');
+        await page.locator('[data-message]', {hasText: draftText}).first().locator('textarea').first().fill(HELD);
         await clickOrExplain(page, '[data-th-edit-save]', 'held edit save');
         await sleep(2500);
         await snap(page, 'held-edit', phone);
         // Through the API: the edit is held, so the draft keeps its text and the new text is not in the timeline.
         const timeline = await api(hub, 'dana', 'GET', `/v2/threads/${S.plan.id}/timeline`);
-        assert.ok(JSON.stringify(timeline).includes('Price list draft v1'), 'the draft keeps its text after a held edit');
+        assert.ok(JSON.stringify(timeline).includes(draftText), 'the draft keeps its text after a held edit');
         assert.ok(!JSON.stringify(timeline).includes(HELD), 'the held edit is not in the thread timeline');
         assert.ok(await heldWithText(hub, S.plan.id, HELD), 'the held edit is listed as a hold');
       });
