@@ -16,8 +16,8 @@ async function run(browser, viewport) {
   page.on('pageerror', e => errors.push(e.message));
   const at = n => new Date(Date.UTC(2026, 9, 18, 12, n)).toISOString();
   const earlier = [
-    {id: 'a1', from_actor: 'human:ana', to_actor: 'bot:coo', kind: 'say', body: 'Fix the login redirect bug', created: at(0)},
-    {id: 'a2', from_actor: 'bot:coo', to_actor: 'human:ana', kind: 'say', in_reply_to: 'a1', body: 'Done.', created: at(1)},
+    {id: 'a1', sender_id: 'human:ana', recipient_id: 'bot:coo', kind: 'say', body: 'Fix the login redirect bug', created_at: at(0)},
+    {id: 'a2', sender_id: 'bot:coo', recipient_id: 'human:ana', kind: 'say', in_reply_to: 'a1', body: 'Done.', created_at: at(1)},
   ];
   let server = earlier.slice();
   await page.route('**/*', async route => {
@@ -36,7 +36,7 @@ async function run(browser, viewport) {
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     if (p === '/api/v2/assistant/messages') {
       const text = route.request().postDataJSON().text;
-      const message = {id: 'm1', from_actor: 'human:ana', to_actor: 'bot:coo', kind: 'say', body: text, created: at(9),
+      const message = {id: 'm1', sender_id: 'human:ana', recipient_id: 'bot:coo', kind: 'say', body: text, created_at: at(9),
                        conversation_id: 'c1', refs: {topic_changed: true}};
       server = [...server, message];
       return json({message, fast: true});

@@ -124,7 +124,7 @@ def test_kpis_group_by_growth_role_and_carry_their_last_24_readings_for_whoever_
     post(api, "kpis", {"name": "Inbox depth"})
     with api.app.state.store.transaction() as c:
         # The fixture restricts the inbox bot to Ana.
-        c.execute("UPDATE kpis SET owner='bot:inbox' WHERE id=?", (triage["id"],))
+        c.execute("UPDATE kpis SET owner_id='bot:inbox' WHERE id=?", (triage["id"],))
     for day in range(1, 27):
         post(api, f"kpis/{booked['id']}/readings", {"value": day, "period_end": f"2026-10-{day:02d}T00:00:00Z"})
     kpis = get(api, "growth/numbers")["kpis"]
@@ -161,7 +161,7 @@ def test_a_kpi_series_is_the_sparkline_rule_one_value_per_period_without_partial
 
 
 def test_a_test_gives_a_started_and_a_finished_marker_newest_first(api):
-    tid = post(api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner": "ops",
+    tid = post(api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner_id": "ops",
                               "type": "idea"})["id"]
     move(api, tid, "idea-doing")
     move(api, tid, "idea-won")
@@ -172,8 +172,8 @@ def test_a_test_gives_a_started_and_a_finished_marker_newest_first(api):
 
 
 def test_a_task_moved_twice_gives_two_markers_with_its_channel_and_goal(api):
-    goal = post(api, "goals", {"title": "Raise activation", "owner": "ana"})["goal"]["id"]
-    tid = post(api, "tasks", {"title": "Door hangers in Elm Park", "body": "Print and place them.", "owner": "ops",
+    goal = post(api, "goals", {"title": "Raise activation", "owner_id": "ana"})["goal"]["id"]
+    tid = post(api, "tasks", {"title": "Door hangers in Elm Park", "body": "Print and place them.", "owner_id": "ops",
                               "type": "idea", "labels": ["channel:seo"], "goal_id": goal})["id"]
     move(api, tid, "idea-doing")
     move(api, tid, "idea-paused")
@@ -185,7 +185,7 @@ def test_a_task_moved_twice_gives_two_markers_with_its_channel_and_goal(api):
 
 def test_a_private_marketing_task_is_marked_only_for_a_reader_who_may_see_it(api):
     add_fay(api)
-    tid = post(api, "tasks", {"title": "Cold email to dentists", "body": "Test a cold email.", "owner": "cara",
+    tid = post(api, "tasks", {"title": "Cold email to dentists", "body": "Test a cold email.", "owner_id": "cara",
                               "type": "idea", "private": True, "labels": ["channel:email"]})["id"]
     move(api, tid, "idea-doing", token="cara-test")
     assert tid in marked(api, "cara-test")
@@ -197,7 +197,7 @@ def test_a_private_marketing_task_is_marked_only_for_a_reader_who_may_see_it(api
 
 
 def test_a_deleted_task_leaves_the_markers(api):
-    tid = post(api, "tasks", {"title": "Flyers at the farmers market", "body": "Try it.", "owner": "ops",
+    tid = post(api, "tasks", {"title": "Flyers at the farmers market", "body": "Try it.", "owner_id": "ops",
                               "type": "idea"})["id"]
     move(api, tid, "idea-doing")
     assert tid in marked(api)
@@ -220,7 +220,7 @@ def test_the_live_answer_matches_the_declared_contract(api):
     north = post(api, "kpis", {"name": "Active customers"})["kpi"]
     post(api, f"kpis/{north['id']}", {"growth_role": "north_star"})
     post(api, f"kpis/{north['id']}/readings", {"value": 412, "period_end": "2026-10-31T00:00:00Z"})
-    tid = post(api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner": "ops",
+    tid = post(api, "tasks", {"title": "Weekend discount", "body": "10% off Saturdays.", "owner_id": "ops",
                               "type": "idea"})["id"]
     move(api, tid, "idea-doing")
     document = api.get("/api/v2/openapi.json", headers=headers()).json()

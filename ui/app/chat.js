@@ -271,7 +271,7 @@ function v2RunHTML(m, state = V2C) {
     if (!given.has(id)) rows.push(v2RunRow('task ·', esc(t.title), {task: id}));
   for (const d of run.did || []) {
     if (d.kind === 'task') {
-      const verb = d.owner === m.from_actor ? 'made itself a task' : `gave ${youAware(d.owner)} a task`;
+      const verb = d.owner === m.from_actor ? 'made itself a task' : `gave ${youAware(d.owner_id)} a task`;
       rows.push(v2RunRow(esc(verb) + ' ·', esc(d.title), {task: d.task_id})); said.push(verb);
     } else if (d.kind === 'link') {
       const ref = shortRef(d.url);
@@ -361,7 +361,7 @@ function chatTaskRowHTML(m) {
   const t = chatTaskMark(m);
   return `<button type="button" class="chat-task-row" data-task-conversation="${esc(t.id)}" data-message="${esc(m.id || '')}" title="${esc(plainActors(m.body || ''))}">
     <span class="ct-dot ${esc(t.state)}" aria-hidden="true"></span><span class="ct-title">${esc(chatLine(t.title, 90))}</span><span class="ct-state">· ${esc(t.state)}</span>${
-    m.created ? `<time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>` : ''}</button>`;
+    m.created_at ? `<time class="chat-time" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : ''}</button>`;
 }
 // Task rows in a row, from one sender: more than three show the oldest, a count of the rest, and the newest.
 function chatTaskRunHTML(run) {
@@ -379,7 +379,7 @@ function v2MessageHTML(m) {
   // A met or stopped goal's notice from the server is the compact goal line (ui/app/chat-goal.js), not a Task line.
   if (m.refs?.chat_goal) return chatGoalNoticeHTML(m);
   if (chatTaskMark(m)) return chatTaskRowHTML(m);
-  const when = `<time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>`;
+  const when = `<time class="chat-time" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>`;
   // A task's note is its work log: chat names the task and keeps the note one click away.
   if (m.refs?.note) {
     const title = Object.values(m.ref_tasks || {})[0]?.title || chatLine(plainActors(m.body), 80);
@@ -389,20 +389,20 @@ function v2MessageHTML(m) {
   if (m.refs?.org_rule && m.kind === 'notice') return ruleHeldNoteHTML(m);
   if (m.kind === 'notice') return `<div class="chat-system" data-message="${esc(m.id || '')}"><b>Task</b> ${esc(plainActors(m.body))}<div class="chat-meta">${when}</div></div>`;
   // One bot's message to another, landed in a person's room: shown as an aside, not a reply.
-  if (String(m.from_actor || '').startsWith('bot:') && String(m.to_actor || '').startsWith('bot:') && m.to_actor !== m.from_actor)
-    return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>${esc(actorLabel(m.from_actor))} → ${esc(actorLabel(m.to_actor))}</b> · ${esc(chatLine(plainActors(m.body), 80))} ${when}</summary><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></details>`;
-  const pid = actorPerson(m.from_actor);
+  if (String(m.sender_id || '').startsWith('bot:') && String(m.recipient_id || '').startsWith('bot:') && m.recipient_id !== m.sender_id)
+    return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>${esc(actorLabel(m.sender_id))} → ${esc(actorLabel(m.recipient_id))}</b> · ${esc(chatLine(plainActors(m.body), 80))} ${when}</summary><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></details>`;
+  const pid = actorPerson(m.sender_id);
   const mine = !!pid;                       // any person's message sits on the right, under their name
-  const who = mine ? esc(personHandle(pid)) : esc(actorLabel(m.from_actor));
-  const me = m.from_actor === myActor();    // your own lines need no name on a bot's page
+  const who = mine ? esc(personHandle(pid)) : esc(actorLabel(m.sender_id));
+  const me = m.sender_id === myActor();    // your own lines need no name on a bot's page
   // The message a new topic started a fresh session for (backend/topic_change.py): one quiet line above it.
   const fresh = mine && m.refs?.topic_changed ? '<div class="conv-break chat-topic-break" role="separator">Topic changed</div>' : '';
   return `${fresh}<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
-    <time class="chat-stamp" datetime="${esc(m.created || '')}" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>
-    <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : actorChip(m.from_actor)}
+    <time class="chat-stamp" datetime="${esc(m.created_at || '')}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>
+    <div class="conv-run-head">${mine ? `<span class="mono muted">${who}</span>` : actorChip(m.sender_id)}
       ${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}
       <span class="spacer" style="flex:1"></span>
-      <span class="tnum" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</span></div>
+      <span class="tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</span></div>
     <div class="bubble ${mine ? 'you' : 'bot reply'}"><span class="who">${who}</span>${
       mine ? esc(m.body || '')
         // The Assistant's read-back of what it will approve is shown exactly as written, never formatted: a requesting
@@ -422,8 +422,8 @@ function v2DeliveryHTML(m) {
   if (!d) return '';
   if (d.mode === 'steer') return `<div class="chat-delivery">Steering this turn</div>`;
   if (d.mode === 'redirect') return '<div class="chat-delivery">Stopping this turn; this message starts the next one</div>';
-  const slug = String(m.to_actor || '').replace(/^bot:/, '');
-  const can = m.from_actor === myActor() && settingsCanManageBot(S.emps.find(e => e.name === slug));
+  const slug = String(m.recipient_id || '').replace(/^bot:/, '');
+  const can = m.sender_id === myActor() && settingsCanManageBot(S.emps.find(e => e.name === slug));
   return `<div class="chat-delivery">Queued for the next turn${can ? ` <button type="button" class="btn sm" data-redirect="${esc(m.id)}" data-redirect-bot="${esc(slug)}" data-redirect-attempt="${esc(d.attempt_id)}">Stop and redirect</button>` : ''}</div>`;
 }
 document.addEventListener('click', async ev => {
@@ -442,9 +442,9 @@ document.addEventListener('click', async ev => {
 // task's notes. Side traffic folds into one line per run (v2MessagesHTML); nothing is dropped. Read from the message's
 // fields, never its words: a reply that quotes another bot is still a reply.
 const chatNeedsYou = m => !!(m.refs?.action || m.refs?.credential_request)
-  || !!actorPerson(m.to_actor) && (m.kind === 'ask' || !!m.refs?.approval || !!m.refs?.questions);
+  || !!actorPerson(m.recipient_id) && (m.kind === 'ask' || !!m.refs?.approval || !!m.refs?.questions);
 function chatSideKind(m, slug) {
-  const from = String(m.from_actor || ''), refs = m.refs || {};
+  const from = String(m.sender_id || ''), refs = m.refs || {};
   if (m.elsewhere) return 'bots';                       // a conversation between bots, shown in this chat's timeline
   // A task's start or milestone: its own row in time order (not folded with side traffic), never the conversation's last line.
   if (chatTaskMark(m)) return 'task';
@@ -452,25 +452,25 @@ function chatSideKind(m, slug) {
   if (chatNeedsYou(m) || refs.chat_goal) return '';
   if (refs.note) return 'note';
   // A reply addressed to a person (the bot's answer, or why it could not start) is the conversation.
-  if (m.in_reply_to && actorPerson(m.to_actor)) return '';
+  if (m.in_reply_to && actorPerson(m.recipient_id)) return '';
   const self = slug && (from === `bot:${slug}` || from === `bot:${botBranchChatTarget(slug)}`);
-  if (self && !actorSlug(m.to_actor) && m.to_actor !== 'keeper')
+  if (self && !actorSlug(m.recipient_id) && m.recipient_id !== 'keeper')
     // A loose message sent while a run another bot started was working: that bot's news, passed on (backend/turns.py).
     return m.prompted_by === 'bot' && !refs.turn_id ? 'relay' : '';
   return from === 'keeper' || m.kind === 'notice' ? 'notice' : 'bots';
 }
 // Who a side item is from, as the folded line names it: the other bot in a bot-to-bot message, else the sender.
 function chatSideName(m, slug) {
-  if (m.from_actor === 'keeper') return m.refs?.task ? 'tasks' : actorLabel('keeper');
+  if (m.sender_id === 'keeper') return m.refs?.task ? 'tasks' : actorLabel('keeper');
   const self = [`bot:${slug}`, `bot:${botBranchChatTarget(slug)}`];
-  if (self.includes(m.from_actor) && actorSlug(m.to_actor) && !self.includes(m.to_actor)) return actorLabel(m.to_actor);
-  return actorLabel(m.from_actor);
+  if (self.includes(m.sender_id) && actorSlug(m.recipient_id) && !self.includes(m.recipient_id)) return actorLabel(m.recipient_id);
+  return actorLabel(m.sender_id);
 }
 function chatSideHead(m) {
   if (m.refs?.note) return 'Note' + ((t => t ? ' · ' + t : '')(Object.values(m.ref_tasks || {})[0]?.title || ''));
-  if (m.from_actor === 'keeper') return m.refs?.task ? 'Task' : actorLabel('keeper');
-  const to = m.to_actor && m.to_actor !== m.from_actor ? ' → ' + actorLabel(m.to_actor) : '';
-  return actorLabel(m.from_actor) + to + (m.elsewhere?.subject ? ' · ' + m.elsewhere.subject : '');
+  if (m.sender_id === 'keeper') return m.refs?.task ? 'Task' : actorLabel('keeper');
+  const to = m.recipient_id && m.recipient_id !== m.sender_id ? ' → ' + actorLabel(m.recipient_id) : '';
+  return actorLabel(m.sender_id) + to + (m.elsewhere?.subject ? ' · ' + m.elsewhere.subject : '');
 }
 // About two lines at phone width: longer text, or more than one line of it, gets "Show more".
 const CHAT_SIDE_SHORT = 110;
@@ -478,7 +478,7 @@ const CHAT_SIDE_SHORT = 110;
 function chatSideItemHTML(m) {
   const text = plainActors(m.body || ''), long = text.length > CHAT_SIDE_SHORT || /\n/.test(text.trim());
   const open = long && V2C?.openSide?.has(m.id);
-  const when = m.created ? `<time class="chat-time" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>` : '';
+  const when = m.created_at ? `<time class="chat-time" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : '';
   return `<div class="cs-item${open ? ' open' : ''}" data-message="${esc(m.id || '')}">
     <div class="cs-head"><b>${esc(chatSideHead(m))}</b>${when}</div>
     <div class="cs-text md${open ? '' : ' clamp'}">${safeMd(text, {shortLinks: true})}</div>${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
@@ -488,7 +488,7 @@ function chatSideItemHTML(m) {
 // A run of side items is one muted line: one item reads as itself, more as "12 updates · Dots, BotOps, tasks · 2h".
 function chatSideHTML(messages, slug) {
   const first = messages[0], last = messages.at(-1), key = `side:${first.id || ''}`;
-  const when = last?.created ? `<time class="chat-time" title="${esc(fmt(last.created))}">${esc(ago(last.created))}</time>` : '';
+  const when = last?.created_at ? `<time class="chat-time" title="${esc(fmt(last.created_at))}">${esc(ago(last.created_at))}</time>` : '';
   const names = [...new Set(messages.map(m => chatSideName(m, slug)).filter(Boolean))];
   const who = names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3}` : '');
   const label = messages.length === 1
@@ -513,8 +513,8 @@ function v2MessagesHTML(messages, goalLine, slug = V2C?.slug) {
   const rows = [];
   for (let i = 0; i < feed.length;) {
     if (feed[i].task) {
-      const run = [], from = feed[i].message.from_actor;
-      while (i < feed.length && feed[i].task && feed[i].message.from_actor === from) run.push(feed[i++].message);
+      const run = [], from = feed[i].message.sender_id;
+      while (i < feed.length && feed[i].task && feed[i].message.sender_id === from) run.push(feed[i++].message);
       rows.push(chatTaskRunHTML(run));
       continue;
     }
@@ -567,7 +567,7 @@ function pendingHintHTML(x) {
 function v2PendingHTML(state) {
   const x = state.execution, key = x?.message_id || 'sent';
   if (state.dismissed === key) return '';
-  const sent = Date.parse(state.messages.find(m => m.id === x?.message_id)?.created || '') || state.sentAt || 0;
+  const sent = Date.parse(state.messages.find(m => m.id === x?.message_id)?.created_at || '') || state.sentAt || 0;
   clearTimeout(state.waitTimer);
   const late = S.me?.cloud && sent && Date.now() - sent >= REPLY_WAIT_MS;
   if (S.me?.cloud && sent && !late) state.waitTimer = setTimeout(() => v2ChatRender(state), sent + REPLY_WAIT_MS - Date.now() + 50);
@@ -582,11 +582,11 @@ function v2PendingHTML(state) {
 // than the loaded page wait until older messages are loaded, so they never pile up above the history; a conversation
 // the person opened shows all it has loaded, so its "Earlier messages" stays in reach.
 function v2WithBotTalk(state, messages) {
-  const own = new Set(messages.map(m => m.id)), from = state.nextBefore ? Date.parse(messages[0]?.created || '') || 0 : 0;
-  const talk = (state.botTalk || []).filter(m => !own.has(m.id) && (m.elsewhere?.open || (Date.parse(m.created || '') || 0) >= from));
+  const own = new Set(messages.map(m => m.id)), from = state.nextBefore ? Date.parse(messages[0]?.created_at || '') || 0 : 0;
+  const talk = (state.botTalk || []).filter(m => !own.has(m.id) && (m.elsewhere?.open || (Date.parse(m.created_at || '') || 0) >= from));
   if (!talk.length) return messages;
   // Merged in, never re-sorted: the chat's own order stays exactly as the server gave it.
-  const time = m => Date.parse(m.created || '') || 0, out = [];
+  const time = m => Date.parse(m.created_at || '') || 0, out = [];
   talk.sort((a, b) => time(a) - time(b));
   let t = 0;
   for (const m of messages) {
@@ -603,7 +603,7 @@ function v2Jump(state) {
   if (!state.stick) return '';
   const last = v2Latest(state), fresh = !!last && last !== state.seenLast;
   if (state.stick.atBottom) state.seenLast = last;
-  return fresh && (actorPerson(state.lastMain.from_actor) && !state.live?.text ? 'Latest' : 'New reply');
+  return fresh && (actorPerson(state.lastMain.sender_id) && !state.live?.text ? 'Latest' : 'New reply');
 }
 function v2ChatRender(state) {
   const thread = $('#conv-thread');
@@ -917,8 +917,8 @@ function v2ChatApply(state, d) {
   state.latestIds = new Set((d.messages || []).map(m => m.id));
   // A snapshot the server built just before a message of mine landed does not list it yet. What I sent stays on
   // the page, and the run the send started stays live; the next snapshot lists it and this copy drops away.
-  const newest = String((d.messages || []).at(-1)?.created || '');
-  const late = state.mine.filter(m => !state.latestIds.has(m.id) && String(m.created || '') >= newest);
+  const newest = String((d.messages || []).at(-1)?.created_at || '');
+  const late = state.mine.filter(m => !state.latestIds.has(m.id) && String(m.created_at || '') >= newest);
   state.messages = [...(state.older || []).filter(m => !state.latestIds.has(m.id)), ...(d.messages || []), ...late];
   if (!state.older?.length) state.nextBefore = d.next_before;
   const wasRunning = !!state.live;

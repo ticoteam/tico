@@ -133,7 +133,7 @@ def test_the_total_weighs_profit_per_cohort_and_a_hidden_kpis_guardrail_stays_hi
     add_channel(api, guardrail_kpi_id=kpi["id"], guardrail_max=5)
     with api.app.state.store.transaction() as c:
         assert [g["kpi_id"] for g in G.guardrails(c)] == [kpi["id"]]
-        c.execute("UPDATE kpis SET owner='bot:acme-helper' WHERE id=?", (kpi["id"],))
+        c.execute("UPDATE kpis SET owner_id='bot:acme-helper' WHERE id=?", (kpi["id"],))
         assert G.guardrails(c, {"bot:acme-helper"}) == []
 
 
@@ -158,7 +158,7 @@ def test_a_kpi_says_whether_the_caller_may_edit_it_and_an_unreadable_one_has_no_
     kpi = post(api, "kpis", {"name": "Refund rate"})["kpi"]
     hidden = post(api, "kpis", {"name": "Inbox depth"})["kpi"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE kpis SET owner='bot:inbox' WHERE id=?", (hidden["id"],))   # the fixture restricts inbox to Ana
+        c.execute("UPDATE kpis SET owner_id='bot:inbox' WHERE id=?", (hidden["id"],))   # the fixture restricts inbox to Ana
     may = lambda token: {k["id"]: k["may_edit"] for k in get(api, "growth/kpis", token)["kpis"]}   # noqa: E731
     assert may("ana-test") == {kpi["id"]: True, hidden["id"]: True}
     assert may("cara-test") == {kpi["id"]: False} and may(bot(api, "ops"))[kpi["id"]] is False
@@ -169,13 +169,13 @@ def test_a_member_cannot_move_the_north_star_off_a_kpi_they_may_not_edit_nor_rea
     post(api, f"kpis/{company['id']}", {"growth_role": "north_star"})
     own = post(api, "kpis", {"name": "Cara's signups"})["kpi"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE kpis SET owner='human:cara' WHERE id=?", (own["id"],))
+        c.execute("UPDATE kpis SET owner_id='human:cara' WHERE id=?", (own["id"],))
     refused = post(api, f"kpis/{own['id']}", {"growth_role": "north_star"}, token="cara-test", expected=403)
     assert "Active customers" not in str(refused)
     roles = {k["id"]: k["growth_role"] for k in get(api, "growth/kpis")["kpis"]}
     assert roles[company["id"]] == "north_star" and roles[own["id"]] is None
     # A bot's North Star is named only to those who may read that bot (the fixture restricts inbox to Ana).
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE kpis SET owner='bot:inbox' WHERE id=?", (company["id"],))
+        c.execute("UPDATE kpis SET owner_id='bot:inbox' WHERE id=?", (company["id"],))
     named = {k["id"]: k.get("name") for k in get(api, "growth/kpis", "cara-test")["kpis"]}
     assert named.get(company["id"]) is None

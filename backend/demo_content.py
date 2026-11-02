@@ -300,9 +300,9 @@ MEETINGS = [
          ("Ben", "Yes, I will send the list tomorrow."),
      ],
      "items": [
-         ("task", "Decide the refund limit Support can approve alone", {"owner": "human:ana", "priority": "p1"},
+         ("task", "Decide the refund limit Support can approve alone", {"owner_id": "human:ana", "priority": "p1"},
           "I think two hundred is right. Below that Support just refunds, above it asks me.", 105000),
-         ("task", "List which support questions become help articles", {"owner": "human:ben", "priority": "p2"},
+         ("task", "List which support questions become help articles", {"owner_id": "human:ben", "priority": "p2"},
           "Ben, can you list which questions become help articles?", 235000),
          ("doc", "Add the refund limit to the refund policy", {"document": "Refund policy", "change": "Add the limit and who decides above it.", "why": "The limit was agreed in the ops sync."},
           "Below that Support just refunds, above it asks me.", 110000),
@@ -328,7 +328,7 @@ MEETINGS = [
          ("Ana", "It will. I will send the renewal on Thursday."),
      ],
      "items": [
-         ("task", "Send Brightline the renewal for one year at the current price", {"owner": "human:ana", "priority": "p1"},
+         ("task", "Send Brightline the renewal for one year at the current price", {"owner_id": "human:ana", "priority": "p1"},
           "It will. I will send the renewal on Thursday.", 420000),
          ("feature", "Offer a mobile app to studios", {"side": "B/F", "area": "Mobile", "bug": False,
                                                             "current": "There is no mobile app.", "expected": "A simple client-facing app."},

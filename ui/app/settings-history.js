@@ -16,7 +16,7 @@ function settingsValue(field, value) {
   if (field === 'manages_reports') return value ? 'On' : 'Off';
   if (field === 'lifecycle') return value?.state ? `${value.state[0].toUpperCase()}${value.state.slice(1)}` : 'Not made';
   if (field === 'compact_at') return SETTINGS_COMPACT_AT.find(([size]) => size === value)?.[1] || String(value);
-  if (field === 'placement') return value?.label ? `${value.label} · ${settingsPersonName(value.operator)}` : 'not assigned';
+  if (field === 'placement') return value?.label ? `${value.label} · ${settingsPersonName(value.owner_id)}` : 'not assigned';
   if (field === 'definition') return [value?.display_name, value?.status,
     value?.reports_to ? `reports to ${settingsBotName(value.reports_to)}` : 'top level'].filter(Boolean).join(' · ');
   return JSON.stringify(value);
@@ -71,7 +71,7 @@ function settingsRunsHTML(list) {
           ? `<span class="pill waiting" title="Ran on the fallback after the primary was unavailable">${esc(r.fallback)}</span>` : ''}${r.resumed ? '<span class="run-tag" title="Picked up where it left off">resumed</span>' : ''}</span>
         <span class="run-took tnum">${settingsRunTook(r.duration_s)}</span>
         <span class="run-cost tnum">${cost}</span>
-        <span class="run-when tnum" title="${esc(fmt(r.finished))}">${esc(ago(r.finished))}</span>
+        <span class="run-when tnum" title="${esc(fmt(r.finished_at))}">${esc(ago(r.finished_at))}</span>
         <a class="run-log" href="${API}/runs/${encodeURIComponent(r.run)}/log" target="_blank" rel="noopener">Log</a></div>`;
     }).join('')}</div>`;
 }
@@ -107,7 +107,7 @@ function renderSettingsHistory(el = $('#set-history'), history = SETTINGS_DATA.h
     // A manager bot's change says so: it acted for the bot, as its manager (backend/report_managers.py).
     const by = change.via === 'report_manager' ? `${actorLabel(change.actor)}, as its manager` : actorLabel(change.actor);
     return `<div class="settings-history-row"><span>${avatar(change.bot, 24, stateOf(change.bot))}</span><div><strong>${esc(settingsBotName(change.bot))} · ${esc(field)}</strong>
-      <p>${esc(what)}</p><p>${esc(by)} · ${esc(fmt(change.created))}${change.undone_at ? ` · undone ${esc(ago(change.undone_at))}` : ''}</p></div>
+      <p>${esc(what)}</p><p>${esc(by)} · ${esc(fmt(change.created_at))}${change.undone_at ? ` · undone ${esc(ago(change.undone_at))}` : ''}</p></div>
       <div class="history-action">${change.can_undo && e ? `<button class="ghost" type="button" data-settings-undo="${esc(change.id)}" data-bot="${esc(change.bot)}" data-revision="${e.revision}">Undo</button>` : ''}</div>
       ${settingsCheckpointDetails(transition)}</div>`;
   }).join('');

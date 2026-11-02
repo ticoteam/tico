@@ -16,26 +16,26 @@ SWEEP_LIMIT = 20
 
 def candidates(c, auth, bot):
     """The computers that may host `bot`, best first: online before offline, then the fewest bots, then the oldest."""
-    config = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (bot,)).fetchone()
     if not config:
         return []
-    operator, owner, member = config["operator"], auth.owner_id(c), auth.member_bot(c, bot)
+    operator, owner, member = config["owner_id"], auth.owner_id(c), auth.member_bot(c, bot)
     online = {r["id"] for r in _online_runners(c)}
     load = {r["runner_id"]: r["n"] for r in c.execute(
         "SELECT a.runner_id, count(*) n FROM assignments a JOIN bots b ON b.slug=a.bot WHERE b.state='active' "
         "GROUP BY a.runner_id")}
     def takes(r):
         # A member's bot: its member's computer, or one opened to members' bots. Any other: its operator's or the owner's.
-        return (r["operator"] == operator or bool(r["accepts_member_bots"])) if member else r["operator"] in (operator, owner)
+        return (r["owner_id"] == operator or bool(r["accepts_member_bots"])) if member else r["owner_id"] in (operator, owner)
     from .cloud_machines import cloud_runners
     others = cloud_runners(c, but=bot)          # a cloud machine (another bot's own, or the shared one) never is
     rows = [r for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL") if takes(r) and r["id"] not in others]
     # A bot BotOps builds has its repository on BotOps's computer, so it goes there when that computer takes it; a starter
     # the runner sets up itself goes anywhere.
-    declared = H._json((c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone() or {"config_json": "{}"})["config_json"], {}) or {}
+    declared = H._json((c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone() or {"config": "{}"})["config"], {}) or {}
     home = c.execute("SELECT runner_id FROM assignments WHERE bot='botops'").fetchone()
     home = home["runner_id"] if home and not declared.get("materialize") and bot != "botops" else None
-    return sorted(rows, key=lambda r: (r["id"] not in online, r["id"] != home, load.get(r["id"], 0), r["created"], r["id"]))
+    return sorted(rows, key=lambda r: (r["id"] not in online, r["id"] != home, load.get(r["id"], 0), r["created_at"], r["id"]))
 
 
 def auto_place(c, execution, bot, by=""):

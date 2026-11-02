@@ -52,7 +52,7 @@ def _new_lines_seen(ctx: Ctx, who: str, lines: Sequence[AP.DocLine]) -> None:
 
 def _lines_of(ctx: Ctx, kind: str, parent_id: str) -> list[AP.DocLine]:
     return [AP.DocLine(str(r["account_id"]), int(r["amount"]), str(r["description"]),
-                       cast(dict[str, str], SK.loads(r["tags_json"])),
+                       cast(dict[str, str], SK.loads(r["tags"])),
                        None if kind != "estimate" or r["taxable"] is None else bool(r["taxable"]),
                        str(r["item_id"] or ""))
             for r in SP.lines(ctx.c, kind, parent_id)]
@@ -69,7 +69,7 @@ def _plain_lines(raw: object, *, invoice: bool = False) -> list[AP.DocLine]:
 
 def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str, *, invoice: bool = False) -> list[dict[str, object]]:
     return [{"account_id": x.account_id, "item_id": x.item_id or None, "amount": x.amount,
-             "description": x.description, "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who,
+             "description": x.description, "tags": SK.dump(dict(x.tags)), "created_at": at, "created_by": who,
              **({"taxable": None if x.taxable is None else int(x.taxable)} if invoice else {})} for x in lines]
 
 
@@ -101,7 +101,7 @@ def _place_holds(ctx: Ctx, who: str, po: Any, owed: Sequence[tuple[Any, int]],
         if left <= 0 or account is None or account.type != "expense":
             budgeting.release_for(ctx, "purchase_order", source_id)
             continue
-        tags = cast(dict[str, str], SK.loads(line["tags_json"]))
+        tags = cast(dict[str, str], SK.loads(line["tags"]))
         decisions.append(budgeting.place(ctx, budget_scope={"account_id": account.id, **DOC.scope_tags(tags),
                                                             "vendor": str(po["vendor_id"])},
                                          amount=left, currency=ctx.book.base_currency, source="purchase_order",
@@ -117,7 +117,7 @@ def _settle(ctx: Ctx, who: str, po_id: str, force: bool = False) -> list[str]:
     it. Returns why a hold was not placed (no budget covers the line, or the budget is past its limit)."""
     po = SP.get(ctx.c, "fin_purchase_orders", po_id)
     lines = SP.lines(ctx.c, "po", po_id)
-    status, closed_by = str(po["status"]), str(po["closed_by"])
+    status, closed_by = str(po["status"]), str(po["closed_by_id"])
     if status in ("draft", "sent", "void") or (status == "closed" and closed_by == "hand"):
         _release(ctx, po_id, lines)
         return []
@@ -125,7 +125,7 @@ def _settle(ctx: Ctx, who: str, po_id: str, force: bool = False) -> list[str]:
     new, by = ("closed", "bills") if all(left <= 0 for _, left in owed) else ("approved", "")
     if (new, by) != (status, closed_by):
         SP.update(ctx.c, "fin_purchase_orders", po_id,
-                  {"status": new, "closed_by": by, "closed_at": ctx.at if new == "closed" else None,
+                  {"status": new, "closed_by_id": by, "closed_at": ctx.at if new == "closed" else None,
                    "updated_at": ctx.at})
     if new == "closed":
         _release(ctx, po_id, lines)
@@ -150,7 +150,7 @@ def _restore(ctx: Ctx, who: str, line: Any, amount: int) -> None:
     account = ctx.accounts.get(str(line["account_id"] or ""))
     if account is None or account.type != "expense":
         return
-    tags = cast(dict[str, str], SK.loads(line["tags_json"]))
+    tags = cast(dict[str, str], SK.loads(line["tags"]))
     budgeting.transfer(ctx, budget_scope={"account_id": account.id, **DOC.scope_tags(tags),
                                           "vendor": str(line["vendor_id"])},
                        amount=amount, currency=ctx.book.base_currency, source="purchase_order",
@@ -170,7 +170,7 @@ def give_back(ctx: Ctx, who: str, bill_id: str, *, posted: bool) -> None:
         held = budgeting.held_amount(ctx, "bill", f"{bill_id}:{n}")
         if held:
             # The line keeps the teammate its hold was made for, which the bill's own tags may not name.
-            tags = cast(dict[str, str], SK.loads(line["tags_json"]))
+            tags = cast(dict[str, str], SK.loads(line["tags"]))
             budgeting.transfer(ctx, amount=held, currency=ctx.book.base_currency, source="purchase_order",
                                source_id=f"{line['po_id']}:{int(line['line_no'])}", expires_at=None, by=who,
                                moved_from=("bill", f"{bill_id}:{n}"),
@@ -203,7 +203,7 @@ def link_bill_lines(ctx: Ctx, who: str, vendor_id: str,
         if row is None or str(row["book_id"]) != ctx.book.id:
             raise FinanceError(NOT_FOUND, "no such purchase order line")
         account = str(row["account_id"] or "")
-        tags = cast(dict[str, str], SK.loads(row["tags_json"]))
+        tags = cast(dict[str, str], SK.loads(row["tags"]))
         if private_hidden(ctx, who, account):
             raise FinanceError(NOT_FOUND, "no such purchase order line")
         if not may_write(ctx, who, account, tags):
@@ -341,7 +341,7 @@ def po_close(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         if SP.update(ctx.c, "fin_purchase_orders", po_id,
-                     {"status": "closed", "closed_by": "hand", "closed_at": ctx.at, "updated_at": ctx.at},
+                     {"status": "closed", "closed_by_id": "hand", "closed_at": ctx.at, "updated_at": ctx.at},
                      "status='approved'") != 1:
             raise FinanceError(CONFLICT, "that order moved on")
         _settle(ctx, who, po_id)

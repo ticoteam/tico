@@ -125,7 +125,7 @@ def derived(live):
     attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
     with live.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET team='engineering' WHERE bot='ops'")
-        c.execute("INSERT INTO attempt_captures(attempt_id,bot,provider,frames,truncated,dropped_bytes,bytes,created) "
+        c.execute("INSERT INTO attempt_captures(attempt_id,bot,provider,frames,truncated,dropped_bytes,bytes,created_at) "
                   "VALUES(?,?,?,?,0,0,2,?)", (attempt["id"], "ops", "synthetic", "[]", H.now()))
     return mid, attempt
 
@@ -223,7 +223,7 @@ def test_message_references_cannot_grant_membership_of_an_unrelated_room(live):
     with live.app.state.store.transaction() as c:
         conv = H.open_conversation(c, "human:ana", ["bot:ops"], kind="chat", subject="Synthetic personal chat")
         message = H.say(c, "human:ana", "bot:ops", "Synthetic personal chat", conversation_id=conv["id"])
-        c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode({"live_meeting": {"meeting_id": mid}}), message["id"]))
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (encode({"live_meeting": {"meeting_id": mid}}), message["id"]))
     cid = message["conversation_id"]
     assert get(live, f"conversations/{cid}/messages", token="cara-test", expected=404)
     assert query(live, "SELECT id FROM conversations WHERE id=?", token="cara-test", params=[cid])["rows"] == []
@@ -235,7 +235,7 @@ def test_room_provenance_is_reused_only_within_its_read_snapshot(live, derived):
     with live.app.state.store.transaction() as c:
         c.execute("UPDATE conversations SET room_key=NULL WHERE id=?", (cid,))
         for n in range(30):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                       "VALUES(?,?,'bot:ops','keeper','say','Synthetic retained response','{}',?)",
                       (f"synthetic-room-response-{n}", cid, H.now()))
     statements = []
@@ -253,12 +253,12 @@ def test_room_provenance_is_reused_only_within_its_read_snapshot(live, derived):
 
 
 def publication_responses(api, token):
-    team_task = post(api, "tasks", {"owner": "ops", "title": "Review synthetic team plan",
+    team_task = post(api, "tasks", {"owner_id": "ops", "title": "Review synthetic team plan",
                                    "body": "Check the synthetic plan.", "private": False})
     writes = {
         "human": ("messages", {"to": "ana", "kind": "ask", "text": "Synthetic meeting summary?"}),
         "bot": ("messages", {"to": "finance", "text": "Review this synthetic meeting summary."}),
-        "task": ("tasks", {"owner": "finance", "title": "Review synthetic meeting plan",
+        "task": ("tasks", {"owner_id": "finance", "title": "Review synthetic meeting plan",
                            "body": "Review this synthetic summary.", "private": False}),
         "comment": (f"tasks/{team_task['id']}/comments", {"text": "Synthetic meeting summary."}),
         "status": ("bots/ops/status", {"focus": "Synthetic meeting summary."}),
@@ -268,7 +268,7 @@ def publication_responses(api, token):
 
 
 def file_metadata_responses(api, token):
-    task = post(api, "tasks", {"owner": "ops", "title": "Review synthetic shared file",
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Review synthetic shared file",
                               "body": "Check this synthetic reference.", "private": False})
     existing = post(api, "files/uploads", {"name": "synthetic-public.md", "text": "Synthetic public file",
                                            "title": "Public synthetic reference", "task": task["id"]}, token="ops-live")["file"]
@@ -333,7 +333,7 @@ def test_private_meeting_execution_cannot_publish_to_nonmembers_and_can_reply(li
 def test_private_meeting_execution_is_told_why_a_shared_write_is_refused_and_still_reads(live, derived):
     mid, attempt = derived
     writes = {"docs": {"title": "Embargo", "body": "The press embargo lifts Nov 17."}, "pages": {},
-              "tasks": {"owner": "ops", "title": "Embargo"}, "messages": {"to": "finance", "text": "Embargo Nov 17"}}
+              "tasks": {"owner_id": "ops", "title": "Embargo"}, "messages": {"to": "finance", "text": "Embargo Nov 17"}}
     for path, body in writes.items():
         r = live.post("/api/v2/" + path, json=body, headers=headers(attempt["token"]))
         assert r.status_code == 403 and r.json()["error"]["detail"] == task_privacy.PRIVATE_MEETING_REFUSAL, (path, r.text)
@@ -367,7 +367,7 @@ def test_meeting_context_read_does_not_allow_unscoped_room_writes(live, visibili
     attach(live, mid, "ops")
     chunk(live, mid, 1, 0, 1000, "Ops, review this synthetic plan")
     with live.app.state.store.read() as c:
-        source = c.execute("SELECT * FROM messages WHERE json_extract(refs_json,'$.live_meeting.meeting_id')=?",
+        source = c.execute("SELECT * FROM messages WHERE json_extract(refs,'$.live_meeting.meeting_id')=?",
                            (mid,)).fetchone()
         cid, source_id = source["conversation_id"], source["id"]
         before = c.execute("SELECT count(*) FROM messages").fetchone()[0]
@@ -394,7 +394,7 @@ def test_meeting_visibility_is_rechecked_under_the_write_lock(live, monkeypatch,
     assign(live, machine, "ops")
     ready(live, machine, ["ops"])
     attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
-    task = post(live, "tasks", {"owner": "ops", "title": "Review synthetic team plan",
+    task = post(live, "tasks", {"owner_id": "ops", "title": "Review synthetic team plan",
                               "body": "Check the synthetic plan.", "private": False})
     store = live.app.state.store
     write = store.mutate
@@ -508,10 +508,10 @@ def test_shared_message_provenance_stays_bounded_and_permissions_stay_current(li
     mid, attempt = derived
     cid = attempt["message"]["conversation_id"]
     with live.app.state.store.transaction() as c:
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                   "VALUES('shared-common',?,'bot:ops','keeper','say','Synthetic shared parent','{}',?)", (cid, H.now()))
         for n in range(100):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created,in_reply_to) "
+            c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at,in_reply_to) "
                       "VALUES(?,?,'bot:ops','keeper','say','Synthetic shared chain',?,?,?)",
                       (f"shared-chain-{n}", cid, encode({"answers": ["shared-common"]}),
                        H.now(), f"shared-chain-{n-1}" if n else None))
@@ -549,13 +549,13 @@ def test_shared_message_provenance_stays_bounded_and_permissions_stay_current(li
         c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot='ops'", (mid,))
         assert not index.readable("bot:ops", ids)
         # A changed source within the same write transaction discards neutral provenance.
-        c.execute("UPDATE messages SET refs_json=? WHERE id='shared-chain-0'",
+        c.execute("UPDATE messages SET refs=? WHERE id='shared-chain-0'",
                   (encode({"live_meetings": ["missing-meeting"]}),))
         fresh = live_privacy.sources(c)
         assert fresh.message(H.message(c, "shared-chain-98"), include_run=False) == {mid, "missing-meeting"}
         assert not fresh.readable("human:ben", {"missing-meeting"})
         # A diamond and a cycle through a reusable closure keep the same reachable sources.
-        c.execute("UPDATE messages SET refs_json=? WHERE id='shared-chain-2'",
+        c.execute("UPDATE messages SET refs=? WHERE id='shared-chain-2'",
                   (encode({"answers": ["shared-common", "shared-chain-0"]}),))
         c.execute("UPDATE messages SET in_reply_to='shared-chain-3' WHERE id='shared-chain-0'")
         cyclic = live_privacy.sources(c)
@@ -590,7 +590,7 @@ def test_shared_attempt_provenance_rechecks_membership_and_source_commits(live, 
     # A rolled-back source must never enter the Store-wide neutral cache.
     with pytest.raises(RuntimeError, match="synthetic rollback"):
         with store.transaction() as c:
-            c.execute("UPDATE messages SET refs_json=? WHERE id=?",
+            c.execute("UPDATE messages SET refs=? WHERE id=?",
                       (encode({"live_meetings": ["missing-meeting"]}), attempt["message"]["id"]))
             assert "missing-meeting" in live_privacy.sources(c).attempt(aid)
             raise RuntimeError("synthetic rollback")
@@ -611,7 +611,7 @@ def test_existing_provenance_clock_upgrades_meeting_sources(live, derived):
     store, cid = live.app.state.store, attempt["message"]["conversation_id"]
     with store.transaction() as c:
         # Simulate the installed pre-meeting UPDATE definitions before startup upgrades them.
-        for table, cols in (("messages", "id,conversation_id,refs_json,in_reply_to"),
+        for table, cols in (("messages", "id,conversation_id,refs,in_reply_to"),
                             ("conversations", "id,task_id")):
             c.execute(f"DROP TRIGGER provenance_{table}_update_v2")
             c.execute(f"CREATE TRIGGER provenance_{table}_update AFTER UPDATE OF {cols} ON {table} "
@@ -623,10 +623,10 @@ def test_existing_provenance_clock_upgrades_meeting_sources(live, derived):
             return live_privacy.sources(c).conversation(cid)
     assert source() == {mid}
     with store.transaction() as c:
-        c.execute("UPDATE messages SET from_actor='human:ana' WHERE id=?", (attempt["message"]["id"],))
+        c.execute("UPDATE messages SET sender_id='human:ana' WHERE id=?", (attempt["message"]["id"],))
     assert source() == set()
     with store.transaction() as c:
-        c.execute("UPDATE messages SET from_actor=?,to_actor='bot:finance' WHERE id=?",
+        c.execute("UPDATE messages SET sender_id=?,recipient_id='bot:finance' WHERE id=?",
                   (H.KEEPER, attempt["message"]["id"]))
     assert source() == set()
     with store.transaction() as c:
@@ -638,7 +638,7 @@ def test_existing_provenance_clock_upgrades_meeting_sources(live, derived):
 
 
 def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatch):
-    task = post(api, "tasks", {"owner": "ops", "title": "Inspect synthetic ordinary work",
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Inspect synthetic ordinary work",
                                "body": "Review synthetic notes.", "private": False})
     cid = task["conversation_id"]
     with api.app.state.store.transaction() as c:
@@ -669,7 +669,7 @@ def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatc
         return result
     before = measure()
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+        c.executemany("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                       "VALUES(?,?,'keeper','bot:finance','say','Synthetic unrelated notice','{}',?)",
                       ((f"synthetic-history-{n}", unrelated, H.now()) for n in range(2000)))
     after = measure()
@@ -686,7 +686,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
     mid, attempt = derived
     store, auth, aid = live.app.state.store, live.app.state.auth, attempt["id"]
     # Bots read history in task rooms.
-    root_room = {"id": post(live, "tasks", {"owner": "ops", "title": "Synthetic public request", "body": "Synthetic"})["conversation_id"]}
+    root_room = {"id": post(live, "tasks", {"owner_id": "ops", "title": "Synthetic public request", "body": "Synthetic"})["conversation_id"]}
     with store.transaction() as c:
         root = H.say(c, "human:ana", "human:ben", "Synthetic public request", conversation_id=root_room["id"])
         c.execute("UPDATE jobs SET message_id=? WHERE id=?", (root["id"], attempt["job_id"]))
@@ -698,7 +698,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
                 {"message_id": moved["id"], "to_attempt": "synthetic-later-run", "tasks": [], "live_meetings": []})
         cites = H.say(c, "bot:ops", "human:ana", "Synthetic run reply", conversation_id=root_room["id"],
                       refs={"turn_id": aid})
-        c.execute("INSERT OR REPLACE INTO turns(id,bot,started,finished,trigger,message_id) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO turns(id,bot,started_at,finished_at,trigger,message_id) VALUES(?,?,?,?,?,?)",
                   (aid, "ops", H.now(), H.now(), "message", root["id"]))
         # Finance may read Ops' runs, so only the meeting decides what it reads below.
         c.execute("UPDATE bot_config SET team='engineering' WHERE bot='finance'")
@@ -721,7 +721,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
             index = ReadIndex(c, who, rooms=True)
             row = H.message(c, cites["id"])
             run = bool(index.attempt(aid))
-            return (run, run, bool(index.message(row["id"], row["conversation_id"], row["refs_json"],
+            return (run, run, bool(index.message(row["id"], row["conversation_id"], row["refs"],
                                                   row["in_reply_to"])))
 
     with store.read() as c:
@@ -749,7 +749,7 @@ def test_meeting_turn_writes_unsettle_only_the_rooms_naming_the_turn(live, deriv
 
     mid, attempt = derived
     store, auth = live.app.state.store, live.app.state.auth
-    root_room = post(live, "tasks", {"owner": "ops", "title": "Synthetic public request", "body": "Synthetic"})["conversation_id"]
+    root_room = post(live, "tasks", {"owner_id": "ops", "title": "Synthetic public request", "body": "Synthetic"})["conversation_id"]
     with store.transaction() as c:
         # The run's keeper input stays in a room with no stored meeting binding: only the turn row makes it one.
         c.execute("UPDATE conversations SET room_key=NULL WHERE id=?", (attempt["message"]["conversation_id"],))
@@ -774,7 +774,7 @@ def test_meeting_turn_writes_unsettle_only_the_rooms_naming_the_turn(live, deriv
         with store.read() as c:
             index = ReadIndex(c, who, rooms=True)
             row = H.message(c, cites["id"])
-            return bool(index.message(row["id"], row["conversation_id"], row["refs_json"], row["in_reply_to"]))
+            return bool(index.message(row["id"], row["conversation_id"], row["refs"], row["in_reply_to"]))
 
     def settled():
         with store.read() as c:

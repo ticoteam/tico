@@ -23,14 +23,14 @@ const MEETINGS = [
 ];
 // An older server may still send the retired importer in its configuration and sources.
 const IMPORTERS = ['granola', 'fireflies', 'zoom', 'google-meet'].map(source => ({source, name: {granola: 'Granola', fireflies: 'Fireflies',
-  zoom: 'Zoom', 'google-meet': 'Google Meet'}[source], enabled: false, runner_id: '', status: 'off', last_success: null, last_import: null,
+  zoom: 'Zoom', 'google-meet': 'Google Meet'}[source], enabled: false, runner_id: '', status: 'off', last_succeeded_at: null, last_import: null,
   imported_total: 0, error: '', setup: {file: `secrets/${source}.env`, keys: ['API_KEY'], doc: 'docs/meetings.md'}}));
 const NONE = [{id: 'import', name: 'Import', status: 'available'}, {id: 'close', name: 'Close', status: 'needs_setup'}];
 const SOME = [{id: 'import', name: 'Import', status: 'available'},
-  {id: 'close', name: 'Close', status: 'syncing', last_success: ago(0.1), last_import: ago(3)},
-  {id: 'granola', name: 'Granola', status: 'syncing', last_success: ago(0.2), last_import: ago(26)},
+  {id: 'close', name: 'Close', status: 'syncing', last_succeeded_at: ago(0.1), last_import: ago(3)},
+  {id: 'granola', name: 'Granola', status: 'syncing', last_succeeded_at: ago(0.2), last_import: ago(26)},
   {id: 'fireflies', name: 'Fireflies', status: 'needs_setup'},
-  {id: 'zoom', name: 'Zoom', status: 'error', last_success: ago(9)}];
+  {id: 'zoom', name: 'Zoom', status: 'error', last_succeeded_at: ago(9)}];
 
 async function open(browser, viewport, world, options = {}) {
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760, ...options});
@@ -55,7 +55,7 @@ async function open(browser, viewport, world, options = {}) {
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/setup/getting-started') return json({items: [], done: 0, total: 0, complete: true, dismissed: true, tour_seen: true, cards_dismissed: [],
-      can_build: true, owner: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
+      can_build: true, owner_id: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
     if (p === '/api/meetings/sources') return json({sources: world.sources});
     if (p === '/api/v2/meetings') return json({meetings: world.meetings, pending_count: 0});
     if (p === '/api/v2/meeting-importers' && method === 'GET') return json({computers: [{id: 'mac', label: 'Test Mac', platform: 'macos', online: true}], importers: world.importers});

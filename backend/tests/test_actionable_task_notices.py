@@ -17,7 +17,7 @@ def task_notice(api, task, refs, *, quiet=False, body="Check the runtime notice.
 
 
 def quiet_task(api, title='Check the weekly runtime report'):
-    return post(api, 'tasks', {'owner': 'ops', 'title': title,
+    return post(api, 'tasks', {'owner_id': 'ops', 'title': title,
                                'body': 'Check the weekly runtime report.', 'next_run': True})
 
 
@@ -35,7 +35,7 @@ def finish_carrier(api, machine, task, run):
     post(api, f"attempts/{run['id']}/complete", {'outcome': 'completed', 'last_seq': 0}, machine['token'])
     with api.app.state.store.transaction() as c:
         # The later notice is new work, after this completed delivery.
-        c.execute('UPDATE attempts SET created=?,finished=? WHERE id=?',
+        c.execute('UPDATE attempts SET created_at=?,finished_at=? WHERE id=?',
                   (H.shift(H.now(), days=-8), H.shift(H.now(), days=-7), run['id']))
         assert H.task(c, task['id'])['carried_by'] == run['id']
 
@@ -107,8 +107,8 @@ def test_actionable_notice_preserves_real_gates(api, gate):
                                                    'body_sha256': 'a' * 64, 'mailbox': 'ops@acme.example'},
                                task_id=task['id'])
         elif gate in ('off', 'cap'):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
                       (json.dumps({**config, 'keep_tasks_going': 0 if gate == 'off' else 1}),))
             if gate == 'cap':
                 other = H.task_create(c, 'human:ana', 'Check existing report', '', 'bot:ops', lint=False, next_run=True)
@@ -142,16 +142,16 @@ def test_health_groups_only_jobs_with_the_same_actual_reason(api, ready):
         task_notice(api, task, {'wake': 'due'})
     with api.app.state.store.transaction() as c:
         if not ready:
-            c.execute('UPDATE tasks SET resume_json=? WHERE id=?',
+            c.execute('UPDATE tasks SET resume=? WHERE id=?',
                       (json.dumps({'kind': 'time', 'until': H.shift(H.now(), days=1)}), tasks[0]['id']))
         for task in tasks[1:]:
             c.execute("UPDATE tasks SET next_run=0,waiting_on='human:ben' WHERE id=?", (task['id'],))
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), hours=-3),))
-        rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2] if r['bot'] == 'ops']
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), hours=-3),))
+        rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2] if r['bot_id'] == 'ops']
         assert len(rows) == 1
         expected = {'slow' if ready else 'task_next_run': 1, 'task_wait': 2}
         assert {item['reason']: item['queued'] for item in rows[0]['queue_reasons']} == expected
-    row = next(r for r in get(api, 'health')['stuck'] if r['bot'] == 'ops')
+    row = next(r for r in get(api, 'health')['stuck'] if r['bot_id'] == 'ops')
     assert {item['reason']: item['queued'] for item in row['queue_reasons']} == expected
     assert '2 jobs: waiting' in row['why']
     assert ('1 job: ready to start' if ready else '1 job: deferred') in row['why']

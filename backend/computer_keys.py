@@ -56,11 +56,11 @@ def store(c, vault, who, runner, runtime, value, login_id, env=""):
     cid, now = H.new_id(), H.now()
     ciphertext, nonce = vault.cipher.encrypt(c, cid, value)
     preview = value[:3] + "…" + value[-3:] if len(value) >= 12 else "••••••"
-    c.execute("INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created,updated,updated_by,"
+    c.execute("INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by,"
               "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
               (cid, f"{env} for {runner['label']}", "api_key", env, preview, ciphertext, nonce,
                "computer:" + runner["id"], now, now, who.actor, who.actor))
-    c.execute("INSERT INTO computer_keys(credential_id,runner_id,runtime,state,login_id,created,created_by) "
+    c.execute("INSERT INTO computer_keys(credential_id,runner_id,runtime,state,login_id,created_at,created_by) "
               "VALUES(?,?,?,?,?,?,?)", (cid, runner["id"], runtime, STAGED, login_id, now, who.actor))
     H.event(c, who.actor, "computer_key.stored", runner["id"], {"runtime": runtime, "env": env, "credential": cid})
     return {"id": cid, "env": env, "preview": preview}
@@ -130,7 +130,7 @@ def active(c, runner_id, runtime):
     """This computer's own key in use for `runtime`: its credential row, or None."""
     return c.execute("SELECT cr.* FROM computer_keys k JOIN credentials cr ON cr.id=k.credential_id "
                      "WHERE k.runner_id=? AND k.runtime=? AND k.state=? AND cr.ciphertext IS NOT NULL "
-                     "ORDER BY k.created DESC", (runner_id, runtime, ACTIVE)).fetchone()
+                     "ORDER BY k.created_at DESC", (runner_id, runtime, ACTIVE)).fetchone()
 
 
 def _sealed_credentials(c):
@@ -201,21 +201,21 @@ def keys_for(c, vault, runner_id, runtime, login_id=""):
 def listing(c, runner_id):
     """{runtime: {env, preview, since}} of this computer's own keys in use: what its rows show, never a value."""
     out = {}
-    for row in c.execute("SELECT k.runtime, k.created, cr.env, cr.preview FROM computer_keys k "
+    for row in c.execute("SELECT k.runtime, k.created_at, cr.env, cr.preview FROM computer_keys k "
                          "JOIN credentials cr ON cr.id=k.credential_id WHERE k.runner_id=? AND k.state=? "
-                         "ORDER BY k.created", (runner_id, ACTIVE)):
-        out[row["runtime"]] = {"env": row["env"], "preview": row["preview"], "since": row["created"]}
+                         "ORDER BY k.created_at", (runner_id, ACTIVE)):
+        out[row["runtime"]] = {"env": row["env"], "preview": row["preview"], "since": row["created_at"]}
     return out
 
 
 def listing_by_runner(c):
     """{runner_id: listing(...)} for every computer in one pass (Operations listing)."""
     out = {}
-    for row in c.execute("SELECT k.runner_id, k.runtime, k.created, cr.env, cr.preview FROM computer_keys k "
+    for row in c.execute("SELECT k.runner_id, k.runtime, k.created_at, cr.env, cr.preview FROM computer_keys k "
                          "JOIN credentials cr ON cr.id=k.credential_id WHERE k.state=? "
-                         "ORDER BY k.created", (ACTIVE,)):
+                         "ORDER BY k.created_at", (ACTIVE,)):
         out.setdefault(row["runner_id"], {})[row["runtime"]] = {
-            "env": row["env"], "preview": row["preview"], "since": row["created"]}
+            "env": row["env"], "preview": row["preview"], "since": row["created_at"]}
     return out
 
 
@@ -223,7 +223,7 @@ def _readiness(runner, runtime):
     """What `runner` last reported for `runtime`: its readiness row, or {}."""
     import json
     try:
-        row = (json.loads(runner["readiness_json"] or "{}").get("runtimes") or {}).get(runtime)
+        row = (json.loads(runner["readiness"] or "{}").get("runtimes") or {}).get(runtime)
     except (ValueError, AttributeError):
         return {}
     return row if isinstance(row, dict) else {}

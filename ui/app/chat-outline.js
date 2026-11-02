@@ -14,7 +14,7 @@ function chatOutlineSync(state) {
   const conv = $('#conv');
   if (!conv || V2C !== state) return;
   let btn = $('#conv-outline-btn');
-  const prompts = state.messages.filter(m => actorPerson(m.from_actor) && !m.refs?.goal_action).length;
+  const prompts = state.messages.filter(m => actorPerson(m.sender_id) && !m.refs?.goal_action).length;
   const show = !!state.conv && (prompts >= OUTLINE_MIN || !!state.nextBefore);
   if (!show) { if (btn) btn.hidden = true; return; }
   if (!btn) {
@@ -53,7 +53,7 @@ async function chatOutlineOpen(state, btn) {
   if (!d.open || V2C !== state) return;
   const box = d.querySelector('.co-list');
   box.innerHTML = list.map(p => `<button type="button" class="co-row" data-id="${esc(p.id)}">
-      <span class="co-text">${esc(p.text || 'Attached files.')}</span><time title="${esc(fmt(p.created))}">${esc(ago(p.created))}</time>
+      <span class="co-text">${esc(p.text || 'Attached files.')}</span><time title="${esc(fmt(p.created_at))}">${esc(ago(p.created_at))}</time>
       ${p.task ? `<span class="co-task">${esc(p.task.title)}</span>` : ''}
     </button>`).join('') || '<div class="co-empty">No prompts yet.</div>';
   box.onclick = ev => {

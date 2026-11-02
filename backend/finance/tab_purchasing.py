@@ -35,7 +35,7 @@ def _sees(ctx: Ctx, viewer: str, lines: list[sqlite3.Row], cut: set[str]) -> boo
     for x in lines:
         if str(x["account_id"] or "") in cut:
             return False
-        tags = cast(dict[str, str], SK.loads(x["tags_json"]))
+        tags = cast(dict[str, str], SK.loads(x["tags"]))
         if not sees_scope(ctx, viewer, str(x["account_id"] or ""), tags.get("team", ""), tags.get("teammate", "")):
             return False
     return True
@@ -50,7 +50,7 @@ def _head(kind: str, r: sqlite3.Row) -> Row:
                 "date": str(r["po_date" if kind == "po" else "estimate_date"]), "status": status,
                 "currency": str(r["currency"]), "total": int(r["total"]), "memo": str(r["memo"] or "")}
     if kind == "po":
-        out |= {"closed_by": str(r["closed_by"]), "approved_by": r["approved_by"] or None}
+        out |= {"closed_by": str(r["closed_by_id"]), "approved_by": r["approved_by"] or None}
     else:
         out["invoice_id"] = r["invoice_id"] or None
     return out
@@ -60,7 +60,7 @@ def _line(ctx: Ctx, kind: str, x: sqlite3.Row) -> Row:
     out: Row = {"id": str(x["id"]), "line_no": int(x["line_no"]),
                 "account": tab_ap.account_ref(ctx, x["account_id"]), "item_id": x["item_id"] or None,
                 "amount": int(x["amount"]), "description": str(x["description"]),
-                "tags": SK.loads(x["tags_json"])}
+                "tags": SK.loads(x["tags"])}
     if kind == "po":
         out["billed"] = SP.billed(ctx.c, str(x["id"]))
     else:

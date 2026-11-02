@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS editions (
   id TEXT PRIMARY KEY, audience_id TEXT NOT NULL REFERENCES audiences(id), author TEXT NOT NULL,
   period_start TEXT NOT NULL, period_end TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, supersedes_id TEXT,
   status TEXT NOT NULL CHECK (status IN ('drafting','held','ready','awaiting_approval','published','superseded','retracted')),
-  title TEXT NOT NULL DEFAULT '', body_json TEXT NOT NULL DEFAULT '{}', payload_hash TEXT, approval_id TEXT,
+  title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '{}', payload_hash TEXT, approval_id TEXT,
   disclosure_revision_id TEXT, approved_by TEXT, published_at TEXT, retracted_at TEXT, retracted_by TEXT,
   retraction_note TEXT, correction_note TEXT, override_note TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS editions_stream ON editions(audience_id, status, published_at);
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS edition_sources (
 CREATE INDEX IF NOT EXISTS edition_sources_edition ON edition_sources(edition_id);
 CREATE TABLE IF NOT EXISTS edition_checks (
   id TEXT PRIMARY KEY, edition_id TEXT NOT NULL REFERENCES editions(id) ON DELETE CASCADE, version INTEGER NOT NULL,
-  kind TEXT NOT NULL, outcome TEXT NOT NULL, detail_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+  kind TEXT NOT NULL, outcome TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS edition_checks_edition ON edition_checks(edition_id, created_at);
 CREATE TABLE IF NOT EXISTS readers (
   id TEXT PRIMARY KEY, email TEXT NOT NULL, idp_issuer TEXT, idp_sub TEXT, name TEXT, added_by TEXT NOT NULL,

@@ -90,8 +90,8 @@ def _message(values):
 def _queue_mail(c, auto, run_id, action, message, args, result=None):
     """`result` starts the action's result: a send the switch turned into a draft keeps `send_off` once reported."""
     aid = H.new_id()
-    c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args_json,state,created,"
-              "result_json) VALUES(?,?,?,?,?,?,?,'queued',?,?)",
+    c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,created_at,"
+              "result) VALUES(?,?,?,?,?,?,?,'queued',?,?)",
               (aid, auto["id"], run_id, str(message.get("mailbox") or "").strip().lower(), str(message.get("id") or ""),
                action, json.dumps(args, default=str), H.now(), json.dumps(result) if result else None))
     return {"ok": True, "detail": f"{action} queued", "mail_action": aid, "queued": True}
@@ -135,14 +135,14 @@ def _slack(c, auto, run_id, do, args, message):
         if not bot:
             return _fail("send_reply in Slack needs a bot to post as")
         conv = R._bot_room(c, bot)
-        msg = H._write_message(c, H.bot_actor(bot), conv.get("owner_actor") or H.KEEPER, text, conv, "say",
+        msg = H._write_message(c, H.bot_actor(bot), conv.get("owner_id") or H.KEEPER, text, conv, "say",
                                {"automation": auto["id"], "automation_run": run_id,
                                 "automation_inbox": _inbox(message), **_chain_refs(auto)}, None, None)
         now = H.now()
-        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated,recipient_actor) "
+        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
                   "VALUES(?,?,?,?,?,'ready',?,?,?)",
                   (msg["id"], message.get("channel"), message.get("thread_ts") or message.get("ts"), bot, text, now, now,
-                   msg.get("to_actor")))
+                   msg.get("recipient_id")))
         return {"ok": True, "detail": "posted", "message": msg["id"]}
     if do in ("send_reply", "draft_reply"):
         if do == "send_reply":
@@ -160,11 +160,11 @@ def slack_held(c, post):
     inbox = refs.get("automation_inbox")
     if not inbox or send_on(c, inbox):
         return False
-    c.execute("UPDATE slack_posts SET state='cancelled',error='send_off',updated=? WHERE message_id=?",
+    c.execute("UPDATE slack_posts SET state='cancelled',error='send_off',updated_at=? WHERE message_id=?",
               (H.now(), post["message_id"]))
-    row = c.execute("SELECT id, flow_json FROM automations WHERE id=?", (refs.get("automation"),)).fetchone()
+    row = c.execute("SELECT id, flow FROM automations WHERE id=?", (refs.get("automation"),)).fetchone()
     if row:
-        auto, run_id = {"id": row["id"], "flow": json.loads(row["flow_json"])}, refs.get("automation_run")
+        auto, run_id = {"id": row["id"], "flow": json.loads(row["flow"])}, refs.get("automation_run")
         H.event(c, actor_of(auto["flow"]["owner"]), "automation.send_off", auto["id"], {"run": run_id})
         made = _create_task(c, auto, run_id, {"title": f"Draft reply: {post['text'][:80]}", "body": post["text"]}, {})
         from . import automations
@@ -221,7 +221,7 @@ def _occurrence(c, auto, args, values):
 
     The rule due date the task stands for (`rule_due_id`) is never the run's input, a manual run's sample included: it
     is the automation's own trigger's, and only while the automation is that due date's routine (rule_due.links)."""
-    occurrence = values.get("due") if isinstance(values.get("due"), dict) else {}
+    occurrence = values.get("due_at") if isinstance(values.get("due_at"), dict) else {}
     if not occurrence.get("due_on"):
         return str(args.get("due") or "") or None, None, {"automation": auto["id"]}
     from . import automation_due as D
@@ -439,7 +439,7 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
     name = str(auto["flow"].get("name") or auto["id"])
     title = f"{name} · {label}"[:300] if label else name[:300]
     # A due-date run's turn is that occurrence's task, due and marked the same way as a create_task's (`_occurrence`).
-    due, marker, occ_refs = _occurrence(c, auto, {}, {"due": occurrence} if occurrence else {})
+    due, marker, occ_refs = _occurrence(c, auto, {}, {"due_at": occurrence} if occurrence else {})
     task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), due=due, lint=False, deduplicate=False,
                          routine=True, trigger="other", trigger_source="automation:" + auto["id"], occurrence=marker,
                          occurrence_step=str(step_id) if marker else None, rule_due_id=occ_refs.get("rule_due_id"),
@@ -459,25 +459,25 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
 # and how many LIKEs the query takes.
 FIND = {
     "mail": ("SELECT mailbox, msg_id AS id, thread_id AS thread, from_addr AS 'from', subject, snippet, date, "
-             "updated AS at FROM mail_messages WHERE deleted_at IS NULL AND {after} AND lower(mailbox) IN ({mine}) "
-             "AND (subject LIKE ? OR from_addr LIKE ? OR snippet LIKE ?)", "updated", "msg_id", 3),
-    "tasks": ("SELECT id, title, status, owner, requester, created AS at FROM tasks WHERE {after} "
-              "AND coalesce(private,0)=0 AND title LIKE ?", "created", "id", 1),
-    "prs": ("SELECT id, task_id AS task, url, title, state, repo, number, created AS at FROM task_links "
-            "WHERE kind='pr' AND {after} AND (coalesce(title,'') LIKE ? OR url LIKE ?)", "created", "id", 2),
+             "updated_at AS at FROM mail_messages WHERE deleted_at IS NULL AND {after} AND lower(mailbox) IN ({mine}) "
+             "AND (subject LIKE ? OR from_addr LIKE ? OR snippet LIKE ?)", "updated_at", "msg_id", 3),
+    "tasks": ("SELECT id, title, status, owner_id, requester_id, created_at AS at FROM tasks WHERE {after} "
+              "AND coalesce(private,0)=0 AND title LIKE ?", "created_at", "id", 1),
+    "prs": ("SELECT id, task_id AS task, url, title, state, repo, number, created_at AS at FROM task_links "
+            "WHERE kind='pr' AND {after} AND (coalesce(title,'') LIKE ? OR url LIKE ?)", "created_at", "id", 2),
     "listening": ("SELECT i.id, i.destination, l.url, l.author, l.content, i.created_at AS at FROM intake_items i "
                   "JOIN listen_items l ON l.id=i.item_id WHERE {after} AND l.content LIKE ?", "i.created_at", "i.id", 1),
-    "docs": ("SELECT id, path, title, updated AS at FROM docs WHERE archived=0 AND {after} "
-             "AND (title LIKE ? OR path LIKE ?)", "updated", "id", 2),
+    "docs": ("SELECT id, path, title, updated_at AS at FROM docs WHERE archived=0 AND {after} "
+             "AND (title LIKE ? OR path LIKE ?)", "updated_at", "id", 2),
 }
 
 
 # The stale-PR find: an open or draft PR whose last activity (else its creation) is at or before the idle line. The
 # cursor reads that activity, so a PR is found again only once new activity makes it idle again.
-PR_IDLE = ("SELECT id, task_id AS task, url, title, state, repo, number, coalesce(activity_at, created) AS at "
+PR_IDLE = ("SELECT id, task_id AS task, url, title, state, repo, number, coalesce(activity_at, created_at) AS at "
            "FROM task_links WHERE kind='pr' AND coalesce(state,'') IN ('open','draft') AND {after} "
-           "AND coalesce(activity_at, created)<=? AND (coalesce(title,'') LIKE ? OR url LIKE ?)",
-           "coalesce(activity_at, created)", "id", 2)
+           "AND coalesce(activity_at, created_at)<=? AND (coalesce(title,'') LIKE ? OR url LIKE ?)",
+           "coalesce(activity_at, created_at)", "id", 2)
 
 
 def find(c, auto, source, query, limit, cursor, *, mailboxes=(), skip=(), idle_hours=None):

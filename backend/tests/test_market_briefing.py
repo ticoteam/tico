@@ -72,11 +72,11 @@ def test_a_week_that_is_not_an_iso_week_is_refused_and_nothing_is_written(seeded
 def test_a_week_has_one_row_a_replacement_keeps_created_and_rewrites_the_page(seeded, events):
     first = brief(seeded, body="First draft.")["briefing"]
     again = brief(seeded, title="Week 44, final", body="Final text.")["briefing"]
-    assert again["id"] == first["id"] and again["created"] == first["created"] and again["title"] == "Week 44, final"
+    assert again["id"] == first["id"] and again["created_at"] == first["created_at"] and again["title"] == "Week 44, final"
     assert len(get(seeded, "market/briefings")["briefings"]) == 1
     with seeded.app.state.store.read() as c:
-        rows = c.execute("SELECT payload_json FROM documents WHERE id=?", ("market/briefings/" + WEEK,)).fetchall()
-    assert len(rows) == 1 and json.loads(rows[0]["payload_json"])["content"] == "Final text."
+        rows = c.execute("SELECT payload FROM documents WHERE id=?", ("market/briefings/" + WEEK,)).fetchall()
+    assert len(rows) == 1 and json.loads(rows[0]["payload"])["content"] == "Final text."
     assert get(seeded, "market/briefings/2026-W01", expected=404)["error"]["code"] == "not_found"
 
 
@@ -145,7 +145,7 @@ def test_market_labels_a_briefing_by_how_often_it_is_posted(seeded):
     from backend import market_briefing as MB
     from backend.tests.test_automation_api import NOTE_STEP
     assert brief(seeded)["briefing"]["cadence"] == "weekly"
-    made = {cron: post(seeded, "automations", {"name": "Briefing " + cron, "owner": "person:ana", "steps": [NOTE_STEP],
+    made = {cron: post(seeded, "automations", {"name": "Briefing " + cron, "owner_id": "person:ana", "steps": [NOTE_STEP],
                                                "trigger": {"type": "schedule", "cron": cron, "tz": "UTC"}})["id"]
             for cron in ("0 7 * * *", "0 7 * * 1-5", "0 7 * * 1", "0 7 * * MON")}
     want = {"0 7 * * *": "daily", "0 7 * * 1-5": "daily", "0 7 * * 1": "weekly", "0 7 * * MON": "weekly"}

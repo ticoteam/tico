@@ -16,7 +16,7 @@ def ticket(api, receipt=None, **fields):
             {'name': 'In Progress', 'status': 'doing'}, {'name': 'Review 1', 'status': 'review'},
             {'name': 'Review 1 Fixes', 'status': 'doing'}, {'name': 'Review 2', 'status': 'review'},
             {'name': 'Done', 'status': 'done'}])
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve messages', 'body': 'Build messages.',
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Improve messages', 'body': 'Build messages.',
                               'type': typ['id'], 'step': 'In Progress', 'links': [PR], **fields})
     hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
     if receipt:
@@ -32,24 +32,24 @@ def move(api, task, step='Review 1'):
 
 def test_qa_pending_marker_is_scoped_to_each_links_task(api):
     task = ticket(api)
-    plain = post(api, 'tasks', {'owner': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
+    plain = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail_json=? WHERE task_id=? AND kind='pr'",
+        c.execute("UPDATE task_links SET detail=? WHERE task_id=? AND kind='pr'",
                   (json.dumps({'qa_default_pending': True, 'kept': 'metadata'}), plain['id']))
     hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
     hook(api, 'pull_request', pr_event('synchronize', head={'sha': OLD}))
     with api.app.state.store.read() as c:
         engineering = H.task_links(c, task['id'])[0]
         general = H.task_links(c, plain['id'])[0]
-        assert json.loads(engineering['detail_json'])['qa_default_pending'] is True
-        detail = json.loads(general['detail_json'])
+        assert json.loads(engineering['detail'])['qa_default_pending'] is True
+        detail = json.loads(general['detail'])
         assert not detail.get('qa_default_pending')
         assert detail['kept'] == 'metadata'
 
 
 def notices(api, task):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.review_gate') IS NOT NULL", (task['conversation_id'],))]
+        return [dict(r) for r in c.execute("SELECT * FROM messages WHERE conversation_id=? AND json_extract(refs,'$.review_gate') IS NOT NULL", (task['conversation_id'],))]
 
 
 @pytest.mark.parametrize('step', ['Review 1', 'Review 2'])
@@ -63,7 +63,7 @@ def test_receipt_at_current_head_allows_review_child_and_other_receipts_do_not_w
         'body': f'Check PR #412 base {BASE} head {HEAD}', 'relations': [{'task': task['id'], 'kind': 'parent'}]})
     assert child.status_code == (200 if allowed else 422), child.text
     with api.app.state.store.read() as c:
-        assert bool(c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()) is allowed
+        assert bool(c.execute("SELECT 1 FROM jobs WHERE bot_id='cmo'").fetchone()) is allowed
     if not allowed:
         current = get(api, 'tasks/' + task['id'])['task']
         assert current['step']['name'] == 'In Progress' and current['version'] > task['version']
@@ -77,7 +77,7 @@ def test_receipt_at_current_head_allows_review_child_and_other_receipts_do_not_w
 def test_ci_is_first_names_failures_and_allows_pending(api, checks, allowed, names):
     task = ticket(api, f'Tests: head {HEAD}: 9 passed, 0 failed' if allowed else None)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.checks',json(?)) WHERE task_id=? AND kind='pr'", (json.dumps(checks), task['id']))
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.checks',json(?)) WHERE task_id=? AND kind='pr'", (json.dumps(checks), task['id']))
     r = move(api, task)
     assert r.status_code == (200 if allowed else 422), r.text
     if not allowed:
@@ -92,9 +92,9 @@ def test_owner_refusal_does_not_post_a_comment(api):
     task = ticket(api)
     with api.app.state.store.transaction() as c:
         try:
-            review_gate.check(c, task['owner'], H.task(c, task['id']))
+            review_gate.check(c, task['owner_id'], H.task(c, task['id']))
         except H.Refused as e:
-            review_gate.notify(c, task['owner'], e.review_gate)
+            review_gate.notify(c, task['owner_id'], e.review_gate)
         else:
             pytest.fail('missing receipt accepted')
     assert notices(api, task) == []
@@ -116,11 +116,11 @@ def test_mixed_note_keeps_current_result_separate_from_history_and_unrun_checks(
             'and installed behavior not run.')
     task = ticket(api, text)
     assert move(api, task).status_code == 200
-    child = api.post('/api/v2/tasks', headers=headers(), json={'owner': 'cmo', 'title': 'Review 1: PR #412',
+    child = api.post('/api/v2/tasks', headers=headers(), json={'owner_id': 'cmo', 'title': 'Review 1: PR #412',
         'body': 'Review the change.', 'relations': [{'task': task['id'], 'kind': 'parent'}]})
     assert child.status_code == 200, child.text
     with api.app.state.store.transaction() as c:
-        assert c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()
+        assert c.execute("SELECT 1 FROM jobs WHERE bot_id='cmo'").fetchone()
         c.execute('UPDATE tasks SET note=? WHERE id=?',
                   (text.replace('185 passed, 0 failed', '183 passed, 2 failing/errored'), task['id']))
     failed = move(api, get(api, 'tasks/' + task['id'])['task'], 'Review 2')
@@ -160,7 +160,7 @@ def test_destination_board_review_preflight_uses_fresh_github_and_refuses_atomic
     assert current['blocked_since'] and 'CI failing' in current['blocked_reason']
     assert current['version'] > task['version']
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id='cmo'").fetchone()
     assert any('/commits/' + OLD + '/check-runs' in p for p in calls)
     body['version'] = current['version']
     fresh.update(head=HEAD, conclusion='success')
@@ -207,12 +207,12 @@ def test_task_and_pr_creation_qa_default_and_author_override_are_once(api):
         apply_creation_qa(c, pr, ['ui/page.js'])
         apply_creation_qa(c, pr, ['docs/help.md'])
         assert 'qa' in H.task_labels(H.task(c, task['id']))
-    task2 = post(api, 'tasks', {'owner': 'cpo', 'title': 'Author override', 'body': 'x', 'type': task['type_id'],
+    task2 = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Author override', 'body': 'x', 'type': task['type_id'],
         'qa': False, 'change_paths': ['ui/page.js'], 'links': ['https://github.com/ticoteam/tico/pull/413']})
     with api.app.state.store.transaction() as c:
         apply_creation_qa(c, {'html_url': 'https://github.com/ticoteam/tico/pull/413'}, ['ui/page.js'])
         assert 'qa' not in H.task_labels(H.task(c, task2['id']))
-    task3 = post(api, 'tasks', {'owner': 'cpo', 'title': 'UI creation', 'body': 'x', 'type': task['type_id'],
+    task3 = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'UI creation', 'body': 'x', 'type': task['type_id'],
         'change_paths': ['ui/page.js']})
     assert 'qa' in task3['labels'] and 'not checkable live' in task3['note']
 
@@ -224,7 +224,7 @@ def test_nonowner_notices_are_per_head_and_owner_refusals_are_silent(api):
     assert move(api, task).status_code == 422
     assert len(notices(api, task)) == 2
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='human:ana' WHERE id=?", (task['id'],))
+        c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (task['id'],))
     assert move(api, task).status_code == 422
     assert len(notices(api, task)) == 2
 
@@ -237,7 +237,7 @@ def test_review_child_without_a_pr_cannot_queue_the_reviewer(api):
         'body': 'Review the change.', 'relations': [{'task': task['id'], 'kind': 'parent'}]})
     assert r.status_code == 422 and 'no linked PR' in r.text
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id='cmo'").fetchone()
 
 
 @pytest.mark.parametrize('where', ['note', 'owner', 'keeper', 'child'])
@@ -251,11 +251,11 @@ def test_gate_consumes_each_agreed_receipt_source(api, where):
             # Existing child from a previous review; its Builder-authored receipt belongs to this ticket.
             child = H.task_create(c, 'human:ana', 'Evidence', 'x', 'cmo', parent_id=task['id'])
             c.execute("UPDATE tasks SET title='Review 1: previous' WHERE id=?", (child['id'],))
-            H.task_comment(c, task['owner'], child['id'], text, wake=False)
+            H.task_comment(c, task['owner_id'], child['id'], text, wake=False)
         else:
             conv = H.conversation(c, task['conversation_id'])
-            actor = 'keeper' if where == 'keeper' else task['owner']
-            H._write_message(c, actor, task['owner'], 'Ready for review. ' + text, conv, 'say',
+            actor = 'keeper' if where == 'keeper' else task['owner_id']
+            H._write_message(c, actor, task['owner_id'], 'Ready for review. ' + text, conv, 'say',
                              {'task': task['id'], 'quiet': True}, None, None)
     assert move(api, task).status_code == 200
 
@@ -315,10 +315,10 @@ def test_removed_unrelated_and_wrong_actor_evidence_cannot_open_review(api):
     with api.app.state.store.transaction() as c:
         conv = H.conversation(c, task['conversation_id'])
         text = f'Tests: head {HEAD}: 9 passed, 0 failed'
-        for actor, refs, removal in [(task['owner'], {'task': task['id']}, 'deleted_at'),
-                (task['owner'], {'task': task['id']}, 'hidden_at'),
-                ('bot:cmo', {'task': task['id']}, None), (task['owner'], {'task': 'unrelated'}, None)]:
-            msg = H._write_message(c, actor, task['owner'], text, conv, 'say', {**refs, 'quiet': True}, None, None)
+        for actor, refs, removal in [(task['owner_id'], {'task': task['id']}, 'deleted_at'),
+                (task['owner_id'], {'task': task['id']}, 'hidden_at'),
+                ('bot:cmo', {'task': task['id']}, None), (task['owner_id'], {'task': 'unrelated'}, None)]:
+            msg = H._write_message(c, actor, task['owner_id'], text, conv, 'say', {**refs, 'quiet': True}, None, None)
             if removal:
                 c.execute(f'UPDATE messages SET {removal}=? WHERE id=?', (H.now(), msg['id']))
     assert move(api, task).status_code == 422
@@ -332,15 +332,15 @@ def test_private_child_receipt_must_be_readable_by_both_mover_and_builder(api, r
         unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         child = H.task_create(c, 'human:ana', 'Evidence', 'x', 'cmo', parent_id=task['id'], next_run=True)
-        c.execute("UPDATE tasks SET title='Review 1: previous', private=1, requester=?, note=? WHERE id=?",
+        c.execute("UPDATE tasks SET title='Review 1: previous', private=1, requester_id=?, note=? WHERE id=?",
                   (reader, f'Tests: head {HEAD}: 9 passed, 0 failed', child['id']))
         assert H.task_private_readable(c, reader, H.task(c, child['id']))
-        other = task['owner'] if reader == 'human:ana' else 'human:ana'
+        other = task['owner_id'] if reader == 'human:ana' else 'human:ana'
         assert not H.task_private_readable(c, other, H.task(c, child['id']))
     refused = move(api, task)
     assert refused.status_code == 422 and 'missing test receipt' in refused.text
     with api.app.state.store.transaction() as c:
-        assert not c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id='cmo'").fetchone()
         c.execute('UPDATE tasks SET private=0 WHERE id=?', (child['id'],))
     assert move(api, task).status_code == 200
 
@@ -391,6 +391,6 @@ def test_incomplete_pr_paths_are_retried_without_losing_pending_default(api, mon
     with pytest.raises(ValueError, match='incomplete'):
         G.creation_paths(service, {'html_url': PR, 'changed_files': 2}, {})
     with api.app.state.store.read() as c:
-        detail = json.loads(c.execute("SELECT detail_json FROM task_links WHERE task_id=? AND kind='pr'", (task['id'],)).fetchone()[0])
+        detail = json.loads(c.execute("SELECT detail FROM task_links WHERE task_id=? AND kind='pr'", (task['id'],)).fetchone()[0])
         assert detail['qa_default_pending'] is True
         assert 'qa' not in H.task_labels(H.task(c, task['id']))

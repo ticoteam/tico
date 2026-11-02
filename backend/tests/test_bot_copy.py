@@ -36,7 +36,7 @@ def copy(api, body=None, token="cara-test", bot="scribe", expected=200):
 def config_of(api, slug):
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        return dict(row), json.loads(row["config_json"])
+        return dict(row), json.loads(row["config"])
 
 
 # ------------------------------------------------------------------ the copy
@@ -45,18 +45,18 @@ def test_a_copy_is_an_independent_bot_owned_by_whoever_asked(api, scribe):
     assert made["slug"] == "cara-scribe" and made["status"] == "planned" and made["bot_owners"] == ["cara"]
     assert made["repo"] == "bot-cara-scribe" and made["copied_from"] == {"bot": "scribe", "sha": SHA}
     row, config = config_of(api, "cara-scribe")
-    assert (row["created_by"], row["operator"], row["reports_to"]) == ("human:cara", "cara", "human:cara")
+    assert (row["created_by"], row["owner_id"], row["reports_to"]) == ("human:cara", "cara", "human:cara")
     assert row["description"] == "Takes meeting notes" and config["copied_from"] == {"bot": "scribe", "sha": SHA}
     assert (config["model"], config["reasoning_effort"]) == ("gpt-6.1-sol", "high")         # the original's model settings
     # Nothing is linked: the original is as it was, and the copy is a bot of its own (its owner may change it, Ana's original she may not).
-    assert config_of(api, "scribe")[0]["operator"] == "ana" and "copied_from" not in config_of(api, "scribe")[1]
+    assert config_of(api, "scribe")[0]["owner_id"] == "ana" and "copied_from" not in config_of(api, "scribe")[1]
     current = get(api, "bots", "cara-test")
     revision = next(b for b in current if b["slug"] == "cara-scribe")["revision"]
     assert post(api, "bots/cara-scribe/definition", {"display_name": "Renamed", "expected_revision": revision}, "cara-test")
     post(api, "bots/scribe/definition", {"display_name": "Mine", "expected_revision": 1}, "cara-test", expected=403)
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='bot.copied'").fetchone()
-        assert event["actor"] == "human:cara" and json.loads(event["detail_json"])["from"] == "scribe"
+        event = c.execute("SELECT actor,detail FROM events WHERE action='bot.copied'").fetchone()
+        assert event["actor"] == "human:cara" and json.loads(event["detail"])["from"] == "scribe"
     # Left out, the slug and the name follow the original; asking again makes another.
     again = copy(api)
     assert again["slug"] == "scribe-copy" and again["display_name"] == "Copy of Scribe" and copy(api)["slug"] == "scribe-copy-2"

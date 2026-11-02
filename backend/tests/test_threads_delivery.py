@@ -226,14 +226,14 @@ def test_a_digest_bot_gets_one_run_for_all_its_deliveries_with_no_words_in_the_n
     sent = [say(api, first["id"], "Secret number 41"), say(api, first["id"], "Secret number 42"),
             say(api, second["id"], "Secret number 43")]
     assert all(delivery(api, m["id"], "bot:ops")["mode"] == "digest" for m in sent)
-    jobs_before = rows(api, "SELECT id FROM jobs WHERE bot='ops'")
+    jobs_before = rows(api, "SELECT id FROM jobs WHERE bot_id='ops'")
 
     assert thread_bot_digest.sweep(store) == 1
     settled = [delivery(api, m["id"], "bot:ops") for m in sent]
     assert {d["state"] for d in settled} == {"delivered"} and len({d["carrier_id"] for d in settled}) == 1
     notice = rows(api, "SELECT * FROM messages WHERE id=?", settled[0]["carrier_id"])[0]
     assert "Secret" not in notice["body"] and first["id"] in notice["body"] and second["id"] in notice["body"]
-    jobs = rows(api, "SELECT id FROM jobs WHERE bot='ops'")
+    jobs = rows(api, "SELECT id FROM jobs WHERE bot_id='ops'")
     assert len(jobs) == len(jobs_before) + 1
 
     # Nothing further pending, and a later message waits while this batch has not started: still one run.
@@ -282,8 +282,8 @@ def test_the_run_a_digest_notice_starts_reads_only_the_threads_the_bot_is_still_
         on_digest(api, "bot:ops", thread["id"])
         say(api, thread["id"], "Numbers are in")
     assert thread_bot_digest.sweep(store) == 1
-    notice = rows(api, "SELECT * FROM messages WHERE from_actor=? AND to_actor='bot:ops' "
-                  "AND json_extract(refs_json,'$.wake')=?", H.KEEPER, thread_bot_digest.WAKE)[0]
+    notice = rows(api, "SELECT * FROM messages WHERE sender_id=? AND recipient_id='bot:ops' "
+                  "AND json_extract(refs,'$.wake')=?", H.KEEPER, thread_bot_digest.WAKE)[0]
     with store.transaction() as c:
         c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor='bot:ops'", (lost["id"],))
         c.execute("PRAGMA defer_foreign_keys=ON")
@@ -302,7 +302,7 @@ def test_an_import_a_replay_or_a_bots_own_message_never_starts_its_run_even_addr
         message = H.say(c, "human:ana", "bot:ops", "Coming back", conversation_id=direct["id"], refs=refs)
     assert rows(api, "SELECT 1 FROM jobs WHERE message_id=?", message["id"]) == []
     assert delivery(api, message["id"], "bot:ops")["mode"] == "none"
-    assert rows(api, "SELECT 1 FROM messages WHERE from_actor=? AND json_extract(refs_json,'$.carries')=?",
+    assert rows(api, "SELECT 1 FROM messages WHERE sender_id=? AND json_extract(refs,'$.carries')=?",
                 H.KEEPER, message["id"]) == []
 
 
@@ -475,7 +475,7 @@ def patch(api, thread_id, body, token="ana-test"):
 
 def age(api, thread_id, created="2020-01-01T00:00:00Z"):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE conversation_id=? AND seq IS NOT NULL", (created, thread_id))
+        c.execute("UPDATE messages SET created_at=? WHERE conversation_id=? AND seq IS NOT NULL", (created, thread_id))
 
 
 def test_only_a_threads_manager_sets_how_long_a_root_keeps_its_messages(api):
@@ -703,14 +703,14 @@ def told(monkeypatch):
 
 def rule(api, owner="person:ana", token="ana-test", bot="ops"):
     step = {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": bot, "text": "{{event.subject}}"}}
-    answer = post(api, "automations", {"name": "New threads", "owner": owner, "steps": [step],
+    answer = post(api, "automations", {"name": "New threads", "owner_id": owner, "steps": [step],
                                        "trigger": {"type": "event", "name": "thread.created"}}, token=token)
     return answer["id"]
 
 
 def heard(api, automation_id):
-    return [json.loads(r["state_json"])["payload"]["event"] for r in rows(
-        api, "SELECT state_json FROM automation_runs WHERE automation_id=?", automation_id)]
+    return [json.loads(r["saved_state"])["payload"]["event"] for r in rows(
+        api, "SELECT saved_state FROM automation_runs WHERE automation_id=?", automation_id)]
 
 
 def test_a_rule_hears_one_event_of_one_shape_from_the_new_route_and_the_legacy_one(api, told):
@@ -737,11 +737,11 @@ def test_a_rule_hears_of_a_home_a_dm_a_sub_thread_and_a_task_room_once_each(api,
     sub = say(api, thread["id"], "Below", parent=say(api, thread["id"], "Top")["id"])["conversation_id"]
     with store.transaction() as c:
         home = threads.home(c, "bot:ops", create=True)
-    task = post(api, "tasks", {"title": "Acme order", "body": "Ship it", "owner": "ops"})
+    task = post(api, "tasks", {"title": "Acme order", "body": "Ship it", "owner_id": "ops"})
     room = task.get("conversation_id") or task["task"]["conversation_id"]
 
     assert told(sub)[0]["audience"] == "company" and told(sub)[0]["parent_id"] == thread["id"]
-    assert told(home["id"])[0]["audience"] == "home" and told(home["id"])[0]["owner_actor"] == "bot:ops"
+    assert told(home["id"])[0]["audience"] == "home" and told(home["id"])[0]["owner_id"] == "bot:ops"
     assert [e["audience"] for e in told(room)] == ["task"]  # who reads it is settled before it is announced
     subjects = [e["subject"] for e in heard(api, aid)]
     assert sorted(subjects) == sorted([thread["id"], sub, home["id"], room])
@@ -750,7 +750,7 @@ def test_a_rule_hears_of_a_home_a_dm_a_sub_thread_and_a_task_room_once_each(api,
 def test_a_rule_hears_only_of_a_thread_its_owner_reads(api, told):
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='finance'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='finance'")
     aid = rule(api, owner="person:cara", token="cara-test", bot="finance")
     private = new_thread(api, members=("human:ben",), title="Pay review")
     open_one = new_thread(api, audience="company")
@@ -821,7 +821,7 @@ def test_a_purge_leaves_a_file_another_message_or_a_task_still_holds(api):
     thread, other = new_thread(api, audience="company"), new_thread(api, audience="company", title="Other")
     blob = attach(api, thread["id"])["refs"]["attachments"][0]["id"]
     later = say(api, other["id"], "Same file")
-    task = post(api, "tasks", {"title": "Acme order", "body": "Ship it", "owner": "ops"})
+    task = post(api, "tasks", {"title": "Acme order", "body": "Ship it", "owner_id": "ops"})
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO message_assets VALUES(?,?)", (later["id"], blob))
         c.execute("INSERT INTO task_assets VALUES(?,?)", (task.get("id") or task["task"]["id"], blob))

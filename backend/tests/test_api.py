@@ -51,7 +51,7 @@ def api(tmp_path, api_database):
                 {"id": "cara", "email": "cara@acme.example"}]}),))
             for slug, config in bots.items():
                 product = slug in ("cpo", "product-design")
-                c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
                           (slug, encode(config), "product" if product else None, "ben" if product else "ana"))
             # The company's mail bot is Ana's alone: nobody else sees it, reads it or writes to it.
             restrict(c, "inbox", people=["ana"])
@@ -66,12 +66,12 @@ def api(tmp_path, api_database):
 def unrelated_task_managers(c, *slugs):
     """Keep privacy negatives outside the parties' org chains, without changing bot access grants."""
     import json
-    roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+    roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
     if not any(p['id'] == 'privacy-lead' for p in roster['people']):
         roster['people'].append({'id': 'privacy-lead', 'email': 'privacy-lead@acme.example'})
     c.execute("INSERT OR IGNORE INTO humans(id,name,email) VALUES(?,?,?)",
               ('privacy-lead', 'Privacy Lead', 'privacy-lead@acme.example'))
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
+    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
     targets = slugs or tuple(row[0] for row in c.execute('SELECT bot FROM bot_config'))
     for slug in targets:
         c.execute("UPDATE bot_config SET reports_to='human:privacy-lead' WHERE bot=?", (slug,))
@@ -83,7 +83,7 @@ def restrict(c, bot, **audience):
     from backend import bot_access as BA
     levels = {level: audience.pop(level) for level in BA.LEVELS if level in audience}
     every = {level: levels.get(level, audience) for level in BA.LEVELS}
-    c.execute("UPDATE bot_config SET access_json=? WHERE bot=?",
+    c.execute("UPDATE bot_config SET access=? WHERE bot=?",
               (BA.stored(BA.document({level: BA.audience(value) for level, value in every.items()})), bot))
 
 
@@ -168,7 +168,7 @@ def put(api, path, body, token="ana-test", expected=200):
 
 
 def runner(api, operator="ana", label="Test Mac"):
-    code = post(api, "enrollments", {"operator": operator})["code"]
+    code = post(api, "enrollments", {"owner_id": operator})["code"]
     return post(api, "runners/enroll", {"code": code, "label": label, "platform": "test"})
 
 
@@ -203,7 +203,7 @@ def setup_attempt(api, bot="ops", operator="ana"):
     ready(api, r, [bot])
     if bot == "coo":
         # Nobody chats with the assistant; a person hands it a task.
-        msg = post(api, "tasks", {"owner": bot, "title": "Summarize", "body": "Please summarize the current work."})
+        msg = post(api, "tasks", {"owner_id": bot, "title": "Summarize", "body": "Please summarize the current work."})
     else:
         msg = post(api, "chat/" + bot, {"text": "Please summarize the current work."})
     return r, msg, claim(api, r)
@@ -226,19 +226,19 @@ def test_no_local_owner_or_header_spoofing(api):
 
 
 def test_schema_rejects_forged_actor_and_missing_fields(api):
-    post(api, "tasks", {"owner": "coo", "title": "Create something", "body": "Do it", "requester": "human:ben"}, expected=422)
-    post(api, "tasks", {"owner": "coo", "title": "Missing body"}, expected=422)
-    r = api.post("/api/v2/tasks", json={"owner": "coo", "title": "Create report", "body": "A report"},
+    post(api, "tasks", {"owner_id": "coo", "title": "Create something", "body": "Do it", "requester_id": "human:ben"}, expected=422)
+    post(api, "tasks", {"owner_id": "coo", "title": "Missing body"}, expected=422)
+    r = api.post("/api/v2/tasks", json={"owner_id": "coo", "title": "Create report", "body": "A report"},
                  headers={"Authorization": "Bearer ana-test"})
     assert r.status_code == 422
 
 
 def test_task_and_queue_commit_once_with_concurrent_retries(api):
-    body = {"owner": "coo", "title": "Review the proposal", "body": "Give a recommendation."}
+    body = {"owner_id": "coo", "title": "Review the proposal", "body": "Give a recommendation."}
     with ThreadPoolExecutor(max_workers=4) as pool:
         replies = list(pool.map(lambda _: post(api, "tasks", body, key="same-operation"), range(4)))
     assert len({r["id"] for r in replies}) == 1
-    assert replies[0]["requester"] == "human:ana"
+    assert replies[0]["requester_id"] == "human:ana"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
@@ -246,7 +246,7 @@ def test_task_and_queue_commit_once_with_concurrent_retries(api):
 
 
 def test_task_version_conflict_preserves_first_write(api):
-    task = post(api, "tasks", {"owner": "coo", "title": "Review design", "body": "Recommend improvements."})
+    task = post(api, "tasks", {"owner_id": "coo", "title": "Review design", "body": "Recommend improvements."})
     updated = post(api, "tasks/" + task["id"], {"version": 1, "note": "First revision"})
     assert updated["version"] == 2
     post(api, "tasks/" + task["id"], {"version": 1, "note": "Stale revision"}, expected=409)
@@ -259,8 +259,8 @@ def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(
     still lands in that person's own room."""
     post(api, "chat/coo", {"text": "Hello"}, expected=403)
     post(api, "messages", {"to": "coo", "text": "Hello"}, token="ben-test", expected=403)
-    ana = post(api, "tasks", {"owner": "coo", "title": "Ana's review", "body": "Private context."})
-    ben = post(api, "tasks", {"owner": "coo", "title": "Ben's review", "body": "Private context."},
+    ana = post(api, "tasks", {"owner_id": "coo", "title": "Ana's review", "body": "Private context."})
+    ben = post(api, "tasks", {"owner_id": "coo", "title": "Ben's review", "body": "Private context."},
                   token="ben-test")
     assert ana["conversation_id"] != ben["conversation_id"]
     get(api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=404)   # unreadable looks missing
@@ -278,7 +278,7 @@ def test_shared_room_membership_updates_and_revokes_history_access(api):
 
 
 def test_private_task_reference_is_denied(api):
-    task = post(api, "tasks", {"owner": "inbox", "title": "Review inbox", "body": "Review private messages."})
+    task = post(api, "tasks", {"owner_id": "inbox", "title": "Review inbox", "body": "Review private messages."})
     get(api, "tasks/" + task["id"], "cara-test", expected=404)
     post(api, "chat/cpo", {"text": "Read this", "refs": {"task": task["id"]}}, token="cara-test", expected=404)
 
@@ -316,7 +316,7 @@ def test_turn_output_and_completion_are_durable_and_idempotent(api):
 def slept(api, r, seconds=3600, awake_since=None):
     """Age a machine's last contact the way an hour of sleep does."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?,awake_since=? WHERE id=?",
+        c.execute("UPDATE runners SET last_seen_at=?,awake_since=? WHERE id=?",
                   (H.shift(H.now(), seconds=-seconds), awake_since, r["runner_id"]))
 
 
@@ -350,7 +350,7 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
     """Name, size and type without the bytes, for the viewer's thumbnails."""
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) VALUES(?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
                   ("blob-meta-0001", "human:ana", "d" * 64, 2048, "storyboard.png", "image/png", H.now()))
     assert get(api, "files/blob-meta-0001/meta") == {"id": "blob-meta-0001", "name": "storyboard.png", "size": 2048,
                                                      "content_type": "image/png"}
@@ -361,7 +361,7 @@ def test_a_files_metadata_follows_the_same_access_as_the_file(api):
 def test_run_windows_include_failed_attempts_without_turns_and_hide_private_rooms(api):
     machine, message, attempt = setup_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (H.now(), attempt["id"]))
+        c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
         c.execute("DELETE FROM turns WHERE id=?", (attempt["id"],))
         H.status_set(c, "bot:ops", "ops", "running")
         H.status_set(c, "bot:ops", "ops", "idle")
@@ -424,7 +424,7 @@ def test_a_second_start_over_a_store_still_owing_the_redesign_cutover_finishes(t
 
     def record_of(path):
         with closing(sqlite3.connect(path)) as c:
-            raw = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (redesign_migration.CUTOVER,)).fetchone()
+            raw = c.execute("SELECT value FROM registry_metadata WHERE key=?", (redesign_migration.CUTOVER,)).fetchone()
         return json.loads(raw[0])
 
     settings = api_settings(tmp_path)
@@ -434,7 +434,7 @@ def test_a_second_start_over_a_store_still_owing_the_redesign_cutover_finishes(t
     with closing(sqlite3.connect(settings.db_path)) as c:
         record = record_of(settings.db_path)
         record["state"] = "running"
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?",
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?",
                   (json.dumps(record, sort_keys=True), redesign_migration.CUTOVER))
         c.commit()
 

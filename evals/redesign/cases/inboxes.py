@@ -243,7 +243,7 @@ def s18_steps(org, f):
          otherwise={"steps": []})])
     # Paths never rejoin: a step after a fork is refused on save (CONTRACT §2 Rules), so no run can reach one.
     org.step(f, "rejoin", org.api, "post", "/api/v2/automations", {
-        "name": "Rejoin · dana", "owner": DANA_REF, "enabled": True, "trigger": inbox_trigger(), "steps": [
+        "name": "Rejoin · dana", "owner_id": DANA_REF, "enabled": True, "trigger": inbox_trigger(), "steps": [
             node("fork", "paths", paths=[{"name": "one", "when": [], "steps": [node("p1", "action", do="note",
                                                                                         args={"text": "one"})]}],
                  otherwise={"steps": []}),
@@ -373,7 +373,7 @@ def s21_steps(org, f):
     judge = ReplayJudge([bucket_answer("reply", 0.8), bucket_answer("reply", 0.8)])
     org.step(f, "judge", attach_judge, org, judge)
     org.step(f, "auto", org.api, "post", "/api/v2/automations", {
-        "name": "Batch · dana", "owner": DANA_REF, "enabled": True, "builtin": False,
+        "name": "Batch · dana", "owner_id": DANA_REF, "enabled": True, "builtin": False,
         "batch": {"times": TIMES}, "trigger": inbox_trigger(),
         "steps": [node("gate", "filter", rules=[]),
                   node("rank", "decide", questions=BUCKET, level="medium", out="d1")]}, wave=W3)

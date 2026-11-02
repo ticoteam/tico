@@ -47,9 +47,9 @@ def add_fay(api):
     """Fay is on the roster and on no team: she is neither the author, an editor nor an admin of the rule."""
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR IGNORE INTO humans(id, name, email) VALUES('fay', 'Fay', 'fay@acme.example')")
-        raw = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         raw["people"].append({"id": "fay", "email": "fay@acme.example", "name": "Fay"})
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(raw),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(raw),))
 
 
 def test_a_persons_message_is_held_by_a_block_rule_and_its_author_reads_it_with_the_reason(ruled):
@@ -77,7 +77,7 @@ def test_a_persons_chat_message_held_in_their_direct_chat_is_listed_by_that_thre
     hold_id = chat(api, "Our favorite color is gold.", to="finance", token="cara-test")["held"]["id"]
     with api.app.state.store.read() as c:
         thread = views.direct_chat(c, "human:cara", "finance")["id"]
-    place = json.loads(hold_row(api, hold_id)["payload_json"])["provenance"]["place"]
+    place = json.loads(hold_row(api, hold_id)["payload"])["provenance"]["place"]
     assert place["thread"] == thread                                    # the place names the chat
     listed = get(api, f"rule-holds?thread={thread}", token="cara-test")
     assert [h["id"] for h in listed["holds"]] == [hold_id]
@@ -86,8 +86,8 @@ def test_a_persons_chat_message_held_in_their_direct_chat_is_listed_by_that_thre
 
 def test_a_where_thread_rule_holds_a_task_comment_in_that_task_and_not_in_another(ruled):
     api, _ = ruled
-    task = post(api, "tasks", {"owner": "ops", "title": "Write the launch note", "body": "Draft it."})
-    other = post(api, "tasks", {"owner": "ops", "title": "Write the other note", "body": "Draft it."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Write the launch note", "body": "Draft it."})
+    other = post(api, "tasks", {"owner_id": "ops", "title": "Write the other note", "body": "Draft it."})
     thread = sql(api, "SELECT conversation_id FROM tasks WHERE id=?", (task["id"],))[0]["conversation_id"]
     rule(api, {"kind": "internal", "text": COLOR, "who": EVERYONE, "where": [f"thread:{thread}"]})
     held = post(api, f"tasks/{task['id']}/comments", {"text": "Our favorite color is red."}, token="ops-test")
@@ -162,8 +162,8 @@ def test_send_anyway_writes_the_message_as_its_person_not_as_a_bot(ruled):
     hold_id = write(api, "cara-test", "Our favorite color is gold.")["held"]["id"]
     view = get(api, f"rule-holds/{hold_id}", token="ana-test")
     post(api, f"rule-holds/{hold_id}/send", {"nonce": view["nonce"]}, token="ana-test")
-    [row] = sql(api, "SELECT from_actor FROM messages WHERE body LIKE ?", ("%favorite color is gold%",))
-    assert row["from_actor"] == "human:cara"
+    [row] = sql(api, "SELECT sender_id FROM messages WHERE body LIKE ?", ("%favorite color is gold%",))
+    assert row["sender_id"] == "human:cara"
 
 
 def test_edit_and_resend_takes_the_hold_back_and_the_resend_is_checked_again(ruled):
@@ -199,7 +199,7 @@ def test_an_assistant_message_is_checked_and_held_as_the_person_it_is_written_fo
     assert got["held"]["outcome"] == "blocked" and len(judge.calls) == 1
     hold = hold_row(api, got["held"]["id"])
     assert hold["author"] == "human:ana"
-    provenance = json.loads(hold["payload_json"])["provenance"]
+    provenance = json.loads(hold["payload"])["provenance"]
     assert provenance["via"] == "assistant" and provenance["authenticated"] == "bot:" + bot
     assert get(api, f"rule-holds/{hold['id']}", token="ana-test")["text"] == "Our favorite color is gold."
     add_fay(api)
@@ -224,7 +224,7 @@ def test_a_persons_message_goes_through_unchecked_when_the_check_fails(ruled, mo
         judge.hold.set()
     assert "held" not in got and len(bodies(api, "favorite color is gold")) == 1
     [event] = events(api, "rules.unchecked")
-    assert event["actor"] == "human:cara" and json.loads(event["detail_json"])["reason"] == how
+    assert event["actor"] == "human:cara" and json.loads(event["detail"])["reason"] == how
 
 
 def test_a_persons_message_with_no_rule_for_it_makes_no_call(ruled):
@@ -319,7 +319,7 @@ def test_an_inbound_message_is_held_with_its_source_and_origin(ruled):
     assert verdict["origin"] == {"source": "slack", "origin": "C024BE91"}
     with store.transaction() as c:
         gate = K.apply(c, verdict, text, {"body": {}})
-    provenance = json.loads(hold_row(api, gate["held"]["id"])["payload_json"])["provenance"]
+    provenance = json.loads(hold_row(api, gate["held"]["id"])["payload"])["provenance"]
     assert provenance["origin"] == {"source": "slack", "origin": "C024BE91"} and provenance["via"] == "slack"
 
 
@@ -345,7 +345,7 @@ def test_send_anyway_posts_a_held_thread_message_once_as_the_person(ruled):
                           place=place)
     assert verdict["outcome"] == "broken" and K.holds(verdict)
     replay = {"thread_id": thread["id"], "body": text, "kind": "say", "refs": None, "parent_message_id": None,
-              "to_actor": None, "via": None, "origin": None, "attachments": None}
+              "recipient_id": None, "via": None, "origin": None, "attachments": None}
     with store.transaction() as c:
         held = K.apply(c, verdict, text, replay)["held"]
     assert bodies(api, "favorite color is gold") == []                    # held: nothing is written yet
@@ -356,7 +356,7 @@ def test_send_anyway_posts_a_held_thread_message_once_as_the_person(ruled):
     assert sent["hold"]["state"] == "sent"
     assert len(bodies(api, "favorite color is gold")) == 1 and len(judge.calls) == calls   # no second check
     with store.read() as c:
-        row = c.execute("SELECT from_actor, conversation_id FROM messages WHERE body=?", (text,)).fetchone()
+        row = c.execute("SELECT sender_id, conversation_id FROM messages WHERE body=?", (text,)).fetchone()
     assert (row[0], row[1]) == ("human:cara", thread["id"])               # as the person, into the thread
     post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, expected=409)
 
@@ -381,7 +381,7 @@ def test_a_held_first_message_makes_no_dm_until_its_send_anyway_posts_it(ruled):
     assert sent["hold"]["state"] == "sent"
     with store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] == conversations + 1
-        row = c.execute("SELECT from_actor, conversation_id FROM messages WHERE body=?", (text,)).fetchone()
+        row = c.execute("SELECT sender_id, conversation_id FROM messages WHERE body=?", (text,)).fetchone()
     assert (row[0], row[1] is not None) == ("human:cara", True)           # one message, as the person, in the new DM
     assert len(bodies(api, "Kickoff:")) == 1
 
@@ -427,9 +427,9 @@ def test_a_held_chat_upload_keeps_its_file_and_is_written_with_it_once_when_sent
     assert hold_row(api, held["id"])["operation"] == "chat_upload"
     view = get(api, f"rule-holds/{held['id']}", token="ana-test")
     assert post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, token="ana-test")["hold"]["state"] == "sent"
-    rows = sql(api, "SELECT from_actor, refs_json FROM messages WHERE body=?", (text,))
-    assert len(rows) == 1 and rows[0]["from_actor"] == "human:cara"
-    assert [a["name"] for a in json.loads(rows[0]["refs_json"])["attachments"]] == ["notes.txt"]
+    rows = sql(api, "SELECT sender_id, refs FROM messages WHERE body=?", (text,))
+    assert len(rows) == 1 and rows[0]["sender_id"] == "human:cara"
+    assert [a["name"] for a in json.loads(rows[0]["refs"])["attachments"]] == ["notes.txt"]
     assert len(judge.calls) == 1                                # no second check
 
 
@@ -448,8 +448,8 @@ def test_a_message_to_the_assistant_is_held_as_its_person_and_posted_only_when_s
     assert hold["author"] == "human:cara" and hold["operation"] == "assistant_message"
     view = get(api, f"rule-holds/{held['id']}", token="ana-test")
     assert post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, token="ana-test")["hold"]["state"] == "sent"
-    [row] = sql(api, "SELECT from_actor, to_actor FROM messages WHERE body=?", (text,))
-    assert (row["from_actor"], row["to_actor"]) == ("human:cara", "bot:" + settings.assistant_bot)
+    [row] = sql(api, "SELECT sender_id, recipient_id FROM messages WHERE body=?", (text,))
+    assert (row["sender_id"], row["recipient_id"]) == ("human:cara", "bot:" + settings.assistant_bot)
 
 
 def test_a_held_answer_is_the_hold_its_sender_can_act_on_and_the_rule_author_can_send_her_own(ruled):

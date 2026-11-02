@@ -31,7 +31,7 @@ def _qa_ticket(api, reviews=(("approve", waivers.HEAD), ("approve", waivers.HEAD
     """A ticket at the renamed QA step, its reviews titled for the renamed review steps."""
     with api.app.state.store.read() as c:
         typ = H.type_get(c, "Dev tickets")
-    r = waivers.call(api, "POST", "tasks", body={"owner": "cpo", "title": title, "body": "Fix it.",
+    r = waivers.call(api, "POST", "tasks", body={"owner_id": "cpo", "title": title, "body": "Fix it.",
                                                  "type": typ["id"], "step": "Acceptance", "links": [waivers.PR]})
     assert r.status_code == 200, r.text
     row = r.json()["task"]
@@ -72,7 +72,7 @@ def test_a_step_named_like_a_check_without_a_check_kind_is_no_check(api):
     with api.app.state.store.transaction() as c:
         parent = H.task_create(c, "bot:cmo", "Build it", "x", "bot:cpo")
         for ident, name, flow in (("plain", "Review 1", None), ("renamed", "Second opinion", '{"check": "review"}')):
-            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow_json) VALUES(?,'general',?,99,'review',?)",
+            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow) VALUES(?,'general',?,99,'review',?)",
                       (ident, name, flow))
         child = H.task_create(c, "bot:cpo", "Look it over", "x", "bot:cmo", parent_id=parent["id"])
         found = {}

@@ -29,7 +29,7 @@ def waiters(api, n=37, running=3):
 
 def sent_by(api, message_id, actor):
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE messages SET from_actor=? WHERE id=?', (actor, message_id))
+        c.execute('UPDATE messages SET sender_id=? WHERE id=?', (actor, message_id))
 
 
 def overload(api, computer, cpu=95, mem=.5):
@@ -129,7 +129,7 @@ def test_start_reservation_expires_despite_renewals_and_leaves_task_untouched(ap
     aid = attempt['id']
     now = H.now()
     with store.read() as c:
-        before = [tuple(r) for r in c.execute('SELECT id,status,version,note,updated FROM tasks ORDER BY id')]
+        before = [tuple(r) for r in c.execute('SELECT id,status,version,note,updated_at FROM tasks ORDER BY id')]
     for elapsed in (60, 120):
         monkeypatch.setattr(H, 'now', lambda elapsed=elapsed: H.shift(now, seconds=elapsed))
         post(api, f'attempts/{aid}/renew', {}, computer['token'])
@@ -144,7 +144,7 @@ def test_start_reservation_expires_despite_renewals_and_leaves_task_untouched(ap
     with store.read() as c:
         assert c.execute('SELECT state FROM attempts WHERE id=?', (aid,)).fetchone()[0] == 'expired'
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
-        assert [tuple(r) for r in c.execute('SELECT id,status,version,note,updated FROM tasks ORDER BY id')] == before
+        assert [tuple(r) for r in c.execute('SELECT id,status,version,note,updated_at FROM tasks ORDER BY id')] == before
     denied = api.post(f'/api/v2/attempts/{aid}/started', json={'thread_id': 'too-late'}, headers=headers(computer['token']))
     assert denied.status_code == 409
 
@@ -162,7 +162,7 @@ def test_overload_holds_only_new_starts_and_calm_load_resumes_them(api, cpu, mem
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
     assert any(w['reason'] == 'computer busy' for w in machine['turn_counts']['waits'])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state,stop_requested FROM attempts WHERE id='attempt-0'").fetchone()[:] == ('running', None)
+        assert c.execute("SELECT state,stop_requested_at FROM attempts WHERE id='attempt-0'").fetchone()[:] == ('running', None)
     post(api, 'runners/performance', {'samples': [point(int(time.time()) // 60 * 60 + 1, cpu=20)]}, computer['token'])
     assert claim(api, computer, 'finance') is not None
 
@@ -188,9 +188,9 @@ def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api, mo
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM start_places")
         old = H.shift(H.now(), seconds=-7200)
-        c.execute("UPDATE attempts SET created=?", (old,))
+        c.execute("UPDATE attempts SET created_at=?", (old,))
         # One legacy worker cleared its wait and really is preparing; the other still waits.
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) "
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) "
                   "VALUES('attempt-1',2,'status',?,?)", ('{"waiting":""}', H.now()))
         start_places.restore_waits(c)
         assert start_places.overdue(c) == []  # An older worker never agreed to a hard preparation deadline.
@@ -222,7 +222,7 @@ def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypa
     with store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'failed'
     replies = get(api, f"conversations/{message['conversation_id']}/messages")
-    assert [m['body'] for m in replies if m['from_actor'] == 'bot:ops'] == [
+    assert [m['body'] for m in replies if m['sender_id'] == 'bot:ops'] == [
         "Your ops couldn't start on Test Mac; check that Computer"]
 
 
@@ -306,7 +306,7 @@ def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
     post(api, f'attempts/{aid}/started', {'thread_id': 'must-not-start'}, computer['token'], expected=409)
     post(api, f'attempts/{aid}/complete', {'outcome': 'interrupted', 'text': '', 'last_seq': 0}, computer['token'])
     with api.app.state.store.read() as c:
-        assert c.execute('SELECT state,started FROM attempts WHERE id=?', (aid,)).fetchone()[:] == ('interrupted', None)
+        assert c.execute('SELECT state,started_at FROM attempts WHERE id=?', (aid,)).fetchone()[:] == ('interrupted', None)
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'cancelled'
         assert c.execute('SELECT status FROM tasks WHERE id=?', (task['id'],)).fetchone()[0] == 'done'
 
@@ -427,12 +427,12 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
     post(api, 'chat/finance', {'text': 'Close the books'})
     overload(api, computer)
     attempt = claim(api, computer)
-    assert attempt is not None and attempt['bot'] == 'finance'
+    assert attempt is not None and attempt['bot_id'] == 'finance'
     assert post(api, f"attempts/{attempt['id']}/start-place", {}, computer['token'])['reserved']
     assert claim(api, computer) is None
     with api.app.state.store.read() as c:
         assert c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE m.from_actor='bot:ops'").fetchone()[0] == 'queued'
+                         "WHERE m.sender_id='bot:ops'").fetchone()[0] == 'queued'
 
 
 def test_operations_and_computers_share_one_company_default_across_runners(api, monkeypatch):
@@ -526,7 +526,7 @@ def test_hold_words_name_the_memory_percent_and_the_stale_sample(api):
     with api.app.state.store.read() as c:
         assert computer_hold(c, computer['runner_id']) == ('computer busy: memory', 'computer busy: memory 86%')
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runner_load_samples SET ts=ts-300,sampled_at=sampled_at-300 WHERE runner_id=?',
+        c.execute('UPDATE runner_load_samples SET created_at=created_at-300,sampled_at=sampled_at-300 WHERE runner_id=?',
                   (computer['runner_id'],))
     with api.app.state.store.read() as c:
         assert computer_hold(c, computer['runner_id']) == ('computer not reporting', 'computer not reporting')
@@ -541,7 +541,7 @@ def test_a_computer_whose_sample_is_stale_refuses_bot_starts_and_admits_a_person
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
     assert any(w['reason'] == 'computer not reporting' for w in machine['turn_counts']['waits'])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET from_actor='human:chris' WHERE from_actor='bot:ops'")
+        c.execute("UPDATE messages SET sender_id='human:chris' WHERE sender_id='bot:ops'")
     assert claim(api, computer, 'finance') is not None
 
 

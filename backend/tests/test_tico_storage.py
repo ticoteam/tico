@@ -306,7 +306,7 @@ def test_a_private_tasks_file_in_tico_storage_is_refused_to_a_person_without_acc
     picture, tid = png(), task(api)
     early = attach(api, tid, 'early.png', picture + b'early')
     sync(on())
-    task_id = post(api, "tasks", {"owner": "ops", "title": "Private chart", "body": "x", "private": True}, "ben-test")["id"]
+    task_id = post(api, "tasks", {"owner_id": "ops", "title": "Private chart", "body": "x", "private": True}, "ben-test")["id"]
     made_file = api.post(f"/api/v2/tasks/{task_id}/files", files={'file': ('chart.png', picture)},
                          headers=headers("ben-test"))
     assert made_file.status_code == 200, made_file.text
@@ -389,7 +389,7 @@ def test_move_existing_files_copies_every_file_and_version_and_matches_the_estim
     # Another start that gets in after the running check is refused the same way, not with a server error.
     listed = tico_storage.pending
     def raced(c, *args):
-        c.execute("INSERT INTO storage_moves(id,target,state,started,started_by,estimate_files,estimate_bytes) "
+        c.execute("INSERT INTO storage_moves(id,target,state,started_at,started_by,estimate_files,estimate_bytes) "
                   "VALUES('other','x','running','2026-10-23T00:00:00Z','owner',0,0)")
         return listed(c, *args)
     tico_storage.pending = raced
@@ -552,7 +552,7 @@ def test_stopping_offers_the_export_and_new_files_go_back_to_own_storage(api, ti
 def test_the_owners_export_leaves_out_files_private_to_someone_else(api, tico):
     made, hq, sync = tico
     sync(on())
-    secret_task = post(api, "tasks", {"owner": "cara", "title": "Cara's", "body": "x", "private": True}, "cara-test")["id"]
+    secret_task = post(api, "tasks", {"owner_id": "cara", "title": "Cara's", "body": "x", "private": True}, "cara-test")["id"]
     r = api.post(f"/api/v2/tasks/{secret_task}/files", json={"name": "mine.txt", "text": "cara only"},
                  headers=headers("cara-test"))
     assert r.status_code == 200, r.text
@@ -579,7 +579,7 @@ def test_credits_out_existing_files_open_and_uploads_follow_the_rule(api, tico):
     # With the company's own bucket refusing writes, the upload is refused with a plain reason.
     from backend import company_storage
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO company_storage(id,bucket,prefix,region,access_key_id,secret,active,created,created_by) "
+        c.execute("INSERT INTO company_storage(id,bucket,prefix,region,access_key_id,secret,active,created_at,created_by) "
                   "VALUES('own','acme-files','','us-west-2','AKIAEXAMPLENOWR0001',?,1,'2026-10-23T00:00:00Z','human:ben')",
                   (api.app.state.vault.cipher.seal(c, 'company_storage:own', 'example-secret'),))
     company_storage.apply(api.app.state.store, api.app.state.vault, api.app.state.blobs, copy=False, checked=True)

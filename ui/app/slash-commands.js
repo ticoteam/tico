@@ -17,7 +17,7 @@ function slashBranchAllowed(slug) {
   const bot = (S.emps || []).find(e => e.name === slug);
   const original = bot?.shared_from || slug;
   return !!(S.emps || []).find(e => e.name === original)?.shared
-    && !(S.emps || []).some(e => e.shared_from === original && e.operator === S.me?.id);
+    && !(S.emps || []).some(e => e.shared_from === original && e.owner_id === S.me?.id);
 }
 function slashCommands(slug) {
   const state = V2C?.slug === slug ? V2C : null;

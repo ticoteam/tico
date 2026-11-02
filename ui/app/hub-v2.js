@@ -51,12 +51,12 @@ const taskSourceLine = t => {
   if (src.kind === 'bot') return 'Added by ' + src.label + ' (bot)';
   return 'Added by ' + src.label;
 };
-const taskRequester = t => t.requester === 'keeper' ? t.origin_actor || t.requester : t.requester;
+const taskRequester = t => t.requester_id === 'keeper' ? t.origin_actor || t.requester_id : t.requester_id;
 // Hide the generated attachment trailer and rename the schedule footer; authored text stays intact.
 const taskBody = t => {
   const raw = String(t.body || '');
   const body = (t.attachments || []).length ? raw.replace(/\n\nAttachments \(untrusted source material; authenticated downloads\):\n[^]*$/, '') : raw;
-  if (t.requester !== 'keeper' || !actorSlug(t.owner) || !body.startsWith(`Run playbook ${t.title}.`)) return body;
+  if (t.requester_id !== 'keeper' || !actorSlug(t.owner_id) || !body.startsWith(`Run playbook ${t.title}.`)) return body;
   return body.replace(/\n\n_Created by the keeper from schedule `([^`\n]+)`\._$/, '\n\n_Created by ' + assistantName() + ' from schedule `$1`._');
 };
 const actorChip = a => {
@@ -265,7 +265,7 @@ function agentNotice(slug) {
   const a = e.agent, name = agentKind(a);
   // A Grok Bot or Dots is synced in by the agent itself (docs/external-agent-sync.md): its history is copied
   // here, and what its person writes here goes to it with the next sync.
-  if (a.synced) return `${empName(slug)} syncs from ${a.label || 'its platform'}${a.last_seen ? ` · last synced ${ago(a.last_seen)}` : ''} — your messages reach it at the next sync`;
+  if (a.synced) return `${empName(slug)} syncs from ${a.label || 'its platform'}${a.last_seen_at ? ` · last synced ${ago(a.last_seen_at)}` : ''} — your messages reach it at the next sync`;
   const issue = (S.status?.health_issues || []).find(i => i.kind === 'agent' && i.bot === slug);
   if (issue ? /no agent credential/.test(issue.title) : !a.credential)
     return `${empName(slug)} is a ${name} with no credential yet — messages wait until one is created in Settings and installed on its computer`;

@@ -73,8 +73,8 @@ function threadSearchWire(main) {
   let n = 0, timer = 0, next = null;
   const draw = (list, more, add) => {
     const html = list.map(h => `<li><a class="thp-hit" href="${threadHref(h.thread_id)}?m=${encodeURIComponent(h.message_id)}">
-        <span class="thp-hit-head"><strong>${esc(h.title || 'Thread')}</strong><span class="muted">${esc(actorName(h.from_actor))}</span>
-        <time class="muted">${esc(ago(h.created))}</time></span><span class="thp-hit-x">${esc(h.excerpt || '')}</span></a></li>`).join('');
+        <span class="thp-hit-head"><strong>${esc(h.title || 'Thread')}</strong><span class="muted">${esc(actorName(h.sender_id))}</span>
+        <time class="muted">${esc(ago(h.created_at))}</time></span><span class="thp-hit-x">${esc(h.excerpt || '')}</span></a></li>`).join('');
     if (add) hits.querySelector('.thp-hits').insertAdjacentHTML('beforeend', html);
     else hits.innerHTML = list.length ? `<ul class="thp-hits">${html}</ul>` : '<p class="empty">No matches</p>';
     hits.querySelector('[data-thp-more]')?.remove();

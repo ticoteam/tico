@@ -15,11 +15,11 @@ CARA = Identity("human:cara", "human", "cara@acme.example")
 
 def home_cards(c, actor):
     home = threads.home(c, actor, create=True)
-    rows = c.execute("SELECT id, body, refs_json FROM messages WHERE conversation_id=? AND kind='notice' "
+    rows = c.execute("SELECT id, body, refs FROM messages WHERE conversation_id=? AND kind='notice' "
                      "ORDER BY seq", (home["id"],)).fetchall()
     cards = []
     for row in rows:
-        refs = H._json(row["refs_json"], {}) or {}
+        refs = H._json(row["refs"], {}) or {}
         if refs.get("card") == "update":
             cards.append({"id": row["id"], "body": row["body"], "update": refs["update"]})
     return cards

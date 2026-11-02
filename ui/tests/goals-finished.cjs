@@ -12,17 +12,17 @@ const bot = (name, display_name, org_parent) => ({name, display_name, org_parent
 const bots = [bot('sales', 'Sales', 'p:ana'), bot('seo', 'SEO', 'p:ana')];
 const people = [{id: 'ana', name: 'Ana Silva', org_parent: ''}, {id: 'ben', name: 'Ben Park', org_parent: 'p:ana'}];
 const at = day => `2026-10-${day}T09:00:00Z`;
-const finished = (id, title, owner, status, day, by) => ({id, title, owner, parent_id: null, status, status_source: 'person', status_by: by,
+const finished = (id, title, owner, status, day, by) => ({id, title, owner_id: owner, parent_id: null, status, status_source: 'person', status_by_id: by,
   status_note: '', status_at: at(day), rank: null, kpis: []});
 const goals = [
-  {id: 'g-company', title: 'Grow revenue', owner: 'company', parent_id: null, status: 'green', status_source: 'person', status_by: 'human:ana', status_at: at(1), rank: 0, kpis: []},
-  {id: 'g-ben', title: 'Ship the stats page', owner: 'human:ben', parent_id: null, status: 'yellow', status_source: 'person', status_by: 'human:ben',
+  {id: 'g-company', title: 'Grow revenue', owner_id: 'company', parent_id: null, status: 'green', status_source: 'person', status_by_id: 'human:ana', status_at: at(1), rank: 0, kpis: []},
+  {id: 'g-ben', title: 'Ship the stats page', owner_id: 'human:ben', parent_id: null, status: 'yellow', status_source: 'person', status_by_id: 'human:ben',
    status_note: 'Backend is late', status_at: at(10), rank: 0, kpis: []},
   {...finished('g-proposed', 'Propose the stats page', 'human:ben', 'dropped', 26, 'human:ben'), parent_id: 'g-company', status_source: null},
   finished('g-b1', 'Hire a designer', 'human:ben', 'done', 20, 'human:ben'),
   finished('g-b2', 'Launch the beta', 'human:ben', 'dropped', 24, 'human:ana'),
   finished('g-b3', 'Write the handbook', 'human:ben', 'done', 22, 'human:ben'),
-  {id: 'g-sales', title: 'Close ten deals', owner: 'bot:sales', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
+  {id: 'g-sales', title: 'Close ten deals', owner_id: 'bot:sales', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
   finished('g-s1', 'Old pipeline', 'bot:sales', 'dropped', 15, 'human:ana'),
   ...Array.from({length: 22}, (_, i) => finished('g-seo' + i, 'Keyword ' + i, 'bot:seo', 'done', 10 + (i % 15), 'human:ana')),
 ];
@@ -59,7 +59,7 @@ const goals = [
       if (g && post && one[2] === '/reopen' && body.undo) { Object.assign(g, g.before, {rank: 9}); return json({goal: g}); }
       if (g && post && one[2] === '/reopen') {
         Object.assign(g, {status: body.status === 'auto' ? 'gray' : body.status, status_source: body.status === 'auto' ? 'auto' : 'person',
-          status_note: body.status === 'auto' ? '' : body.note, status_by: 'human:ben', rank: 9});
+          status_note: body.status === 'auto' ? '' : body.note, status_by_id: 'human:ben', rank: 9});
         return json({goal: g});
       }
       return json(unrouted(p));

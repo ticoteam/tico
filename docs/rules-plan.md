@@ -195,7 +195,7 @@ ahead of time so it doesn't try.
     `privacy.require_destination`. `complete` runs inside the write lock, so the Decide call must not.
   - **Live text:** while a run whose bot has matching rules is going, `conversation_execution` shows "Working" and
     tool steps, not the reply text, until the verdict says deliver. On Block or Escalate the text lives only on the
-    `org_rule_holds` row; `final_text`, `result_json`, the run log and the bot session show the one-line note. The
+    `org_rule_holds` row; `final_text`, `result`, the run log and the bot session show the one-line note. The
     privacy withhold keeps text on the attempt; this doesn't.
   - thread writes ([Threads](threads.md)): a post into a thread (`POST /api/v2/threads/{id}/messages`, a sub-thread reply
     included), a thread started with a first message (`POST /api/v2/threads`), and an edit (`PATCH /api/v2/messages/{id}`)

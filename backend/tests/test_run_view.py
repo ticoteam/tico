@@ -9,7 +9,7 @@ from backend.tests.test_execution_review import aged, sweep
 
 
 def task_attempt(api, machine, title="Count the words"):
-    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Count them."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Count them."})
     attempt = claim(api, machine)
     assert attempt["task"]["id"] == task["id"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": title}, machine["token"])
@@ -72,7 +72,7 @@ def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api
     assert len(kept) == NODE_LIMIT and kept[0]["id"] == 0 and kept[-1]["id"] == NODE_LIMIT + 9
 
     # A run that also carried a private task is left out for whoever cannot read that task.
-    hidden = post(api, "tasks", {"owner": "ops", "title": "Private", "body": "Only Ana.", "private": True})
+    hidden = post(api, "tasks", {"owner_id": "ops", "title": "Private", "body": "Only Ana.", "private": True})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, hidden["id"]))
     assert get(api, f"tasks/{tid}/run-view", token="cara-test")["attempts"] == []
@@ -100,7 +100,7 @@ def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     later, earlier = get(api, f"tasks/{tid}/run-view")["attempts"]
     with api.app.state.store.read() as c:
         from backend.run_view import RECOVERY_SQL
-        plan = " ".join(r[-1] for r in c.execute(f"EXPLAIN QUERY PLAN SELECT ts FROM events WHERE {RECOVERY_SQL} "
+        plan = " ".join(r[-1] for r in c.execute(f"EXPLAIN QUERY PLAN SELECT created_at FROM events WHERE {RECOVERY_SQL} "
                                                  "AND target IN (?,?)", ("j", "a")))
     assert "events_action_target" in plan, plan
     assert (earlier["run"], earlier["try"], earlier["tries"], earlier["state"]) == (first["id"], 1, 2, "expired")
@@ -163,7 +163,7 @@ def test_a_run_from_a_conversation_the_reader_cannot_open_stays_out(api, monkeyp
                                  "revision": access["revision"]})
     # The task moved to a person: Cara still reads it, and still none of the bot's runs on it.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='human:ana', requester='human:ana' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET owner_id='human:ana', requester_id='human:ana' WHERE id=?", (tid,))
     assert get(api, f"tasks/{tid}/run-view", token="cara-test")["attempts"] == []
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET checkpoint_blocked=1 WHERE id=?", (tid,))
@@ -187,7 +187,7 @@ def test_the_task_page_follows_its_session_live_and_each_reply_keeps_its_steps(a
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Counted: 42 words.", "last_seq": 3},
          machine["token"])
     page = get(api, f"tasks/{tid}")
-    reply = next(m for m in page["comments"] if m["from_actor"] == "bot:ops" and "42 words" in m["body"])
+    reply = next(m for m in page["comments"] if m["sender_id"] == "bot:ops" and "42 words" in m["body"])
     assert reply["refs"]["turn_id"] == aid and reply["run"]["steps"] >= 1
     assert page["execution"]["state"] == "completed"
     assert get(api, f"turns/{aid}/steps")["steps"], "the reply's steps open from the page"
@@ -226,23 +226,23 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
          machine["token"])
     with api.app.state.store.transaction() as c:
         cid = H.task(c, tid)["conversation_id"]
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                   "VALUES('msg-coo',?,'bot:ops','bot:coo','chat','Over to you','{}',?)", (cid, H.now()))
-        assert c.execute("SELECT bot FROM jobs WHERE message_id='msg-coo'").fetchone()["bot"] == "coo"
+        assert c.execute("SELECT bot_id FROM jobs WHERE message_id='msg-coo'").fetchone()["bot_id"] == "coo"
     assert get(api, f"tasks/{tid}")["execution"]["attempt_id"] == attempt["id"], "a bot's message to a bot is not it"
     # A person owns the task and the bot that asked it answers them. A plain comment there is deferred a day
     # (backend/delivery.py); one that names the bot wakes it.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='human:ana', requester='bot:ops' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET owner_id='human:ana', requester_id='bot:ops' WHERE id=?", (tid,))
     said = post(api, f"tasks/{tid}/comments", {"text": "@ops which app is still open?"})
-    assert said["woke"] and said["comment"]["to_actor"] == "bot:ops"
+    assert said["woke"] and said["comment"]["recipient_id"] == "bot:ops"
     queued = get(api, f"tasks/{tid}")["execution"] or {}
-    assert (queued["message_id"], queued["bot"], queued["state"], queued["from_person"]) == (
+    assert (queued["message_id"], queued["bot_id"], queued["state"], queued["from_person"]) == (
         said["comment"]["id"], "ops", "queued", True)
     turn = claim(api, machine)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "answer"}, machine["token"])
     working = get(api, f"tasks/{tid}")["execution"]
-    assert (working["attempt_id"], working["state"], working["bot"]) == (turn["id"], "running", "ops")
+    assert (working["attempt_id"], working["state"], working["bot_id"]) == (turn["id"], "running", "ops")
     # The next plain comment waits for the bot; the box offers @ops to wake it.
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": "ops", "wakes": False, "mention": ["ops"]}
     # Someone who neither owns, asked nor may move it is saved for the bot's next run, and no @mention changes that:
@@ -252,13 +252,13 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     # A mover who does not own it is saved too, unless they @mention the bot that asked: the composer offers it and
     # it wakes the bot.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner='human:ben' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (tid,))
     to = get(api, f"tasks/{tid}")["comment_to"]
-    assert (to["bot"], to["wakes"], "ops" in to["mention"]) == ("ops", False, True)
+    assert (to["bot_id"], to["wakes"], "ops" in to["mention"]) == ("ops", False, True)
     assert post(api, f"tasks/{tid}/comments", {"text": "Noted."})["woke"] is False
     assert post(api, f"tasks/{tid}/comments", {"text": "@ops is it billing?"})["woke"] is True
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET requester='human:ben' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (tid,))
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}, "no bot gets it"
 
 
@@ -295,7 +295,7 @@ def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queu
     [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["attempts"]
     assert run["waiting"] == "Waiting for this computer's ChatGPT login (held by another bot since 19:06Z; position 2)"
     with api.app.state.store.read() as c:
-        kept = " ".join(r[0] for r in c.execute("SELECT payload_json FROM attempt_events WHERE attempt_id=?", (aid,)))
+        kept = " ".join(r[0] for r in c.execute("SELECT payload FROM attempt_events WHERE attempt_id=?", (aid,)))
     assert "Close the books" not in kept and "held by" not in kept
     # Held by another turn of the same bot: a reader who may see that run still learns its task.
     events(api, machine, aid, [("status", {**place, "holder": "ops"})], first=3)
@@ -305,11 +305,11 @@ def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queu
     with api.app.state.store.read() as c:
         assert not login_waits.unknown_holder(c, aid)
     # The bot's status says it waits and on whom; Health counts it as busy, not stuck.
-    [status] = [s for s in get(api, "status")["bots"] if s and s["bot"] == "ops"]
+    [status] = [s for s in get(api, "status")["bots"] if s and s["bot_id"] == "ops"]
     assert status["focus"] == status["waiting"] == worded
-    assert not [r for r in get(api, "health")["stuck"] if r["bot"] == "ops"]
+    assert not [r for r in get(api, "health")["stuck"] if r["bot_id"] == "ops"]
     events(api, machine, aid, [("status", {**place, "holder_attempt": "gone"})], first=5)
-    [row] = [r for r in get(api, "health")["stuck"] if r["bot"] == "ops"]
+    [row] = [r for r in get(api, "health")["stuck"] if r["bot_id"] == "ops"]
     assert row["reason"] == "login_holder_unknown"
     # Once the login is its own the wait is over; a turn that ran on its fallback instead says where and why.
     events(api, machine, aid, [("status", {"waiting": ""}),
@@ -361,10 +361,10 @@ def test_codex_ignores_old_login_wait_events_in_tasks_chat_status_and_health(api
     conversation = attempt["conversation"]["id"]
     execution = get(api, f"conversations/{conversation}/snapshot")["execution"]
     assert "waiting" not in execution and "Waiting for" not in execution["label"]
-    [status] = [s for s in get(api, "status")["bots"] if s and s["bot"] == "ops"]
+    [status] = [s for s in get(api, "status")["bots"] if s and s["bot_id"] == "ops"]
     assert not status.get("waiting") and "Waiting for" not in status["focus"]
     assert not [row for row in get(api, "health")["stuck"]
-                if row["bot"] == "ops" and row.get("reason") == "login_holder_unknown"]
+                if row["bot_id"] == "ops" and row.get("reason") == "login_holder_unknown"]
 
 
 DEV_563_NOTE = ("Run finished its work before the 60-min limit: PR 1596 pushed at 8cf2a8e, hosted checks passed, "
@@ -380,7 +380,7 @@ def botops_decides(api, job_id, attempt_id, decision, note, at):
             c.execute("INSERT INTO bots(slug, display_name, state) VALUES(?, 'BotOps', 'active')", (H.FLEET_MAINTAINER,))
         api.app.state.execution.reconcile_job(c, Identity("bot:" + H.FLEET_MAINTAINER, "bot"), job_id, SimpleNamespace(
             attempt_id=attempt_id, decision=decision, note=note, acknowledge_uncertain_effects=True))
-        c.execute("UPDATE job_recovery SET created=? WHERE job_id=?", (at, job_id))
+        c.execute("UPDATE job_recovery SET created_at=? WHERE job_id=?", (at, job_id))
 
 
 def held_run(api, title):
@@ -412,7 +412,7 @@ def test_a_held_runs_decision_shows_beside_its_state_with_who_when_and_the_note(
 
     # The label is read from the decision record each time, never copied onto the job: a later decision shows.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE job_recovery SET decision='resume', actor='human:ana', note=?, created=? WHERE job_id=?",
+        c.execute("UPDATE job_recovery SET decision='resume', actor='human:ana', note=?, created_at=? WHERE job_id=?",
                   ("Ana wants it run again after all.", "2026-10-26T10:02:00Z", attempt["job_id"]))
     [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
     assert (run["decision"]["decision"], run["decision"]["by"], run["decision"]["by_kind"], run["decision"]["note"]) == (
@@ -461,10 +461,10 @@ def test_a_deferred_choice_keeps_the_time_it_was_made(api):
     with api.app.state.store.transaction() as c:
         row = c.execute("SELECT * FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()
         execution._decide(c, row, attempt["id"], "resume", "Run it once the lane is free.", "human:ana", deferred=True)
-        c.execute("UPDATE job_recovery SET created='2026-10-26T09:00:00Z' WHERE job_id=?", (attempt["job_id"],))
+        c.execute("UPDATE job_recovery SET created_at='2026-10-26T09:00:00Z' WHERE job_id=?", (attempt["job_id"],))
         execution._decide(c, row, attempt["id"], "resume", "Run it once the lane is free.", "human:ana")
-        assert c.execute("SELECT created FROM job_recovery WHERE job_id=?", (attempt["job_id"],)).fetchone()[0] == (
+        assert c.execute("SELECT created_at FROM job_recovery WHERE job_id=?", (attempt["job_id"],)).fetchone()[0] == (
             "2026-10-26T09:00:00Z")
         execution._decide(c, row, attempt["id"], "dismiss", "Done by hand after all, nothing to run.", "human:ana")
-        assert c.execute("SELECT created FROM job_recovery WHERE job_id=?", (attempt["job_id"],)).fetchone()[0] != (
+        assert c.execute("SELECT created_at FROM job_recovery WHERE job_id=?", (attempt["job_id"],)).fetchone()[0] != (
             "2026-10-26T09:00:00Z")

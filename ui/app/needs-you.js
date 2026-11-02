@@ -77,7 +77,7 @@ const THREAD_NEED_KINDS = {thread_ask: 'Question', thread_mention: 'Mention', th
                            thread_held: 'Held', thread_capped: 'Paused', thread_unsent: 'Not sent'};
 function needRowHTML(it, ctx = {}) {
   const key = decideItemKey(it), stale = it.kind === 'stale', thread = THREAD_NEED_KINDS[it.kind];
-  const from = stale ? '' : taskRequester(it) || it.requester || '';
+  const from = stale ? '' : taskRequester(it) || it.requester_id || '';
   const name = stale ? 'Tico' : actorLabel(from) || 'Tico';
   const title = stale ? it.title || 'Stale tickets' : approvalTitle(it) || it.first_line || it.title || v2Firstline(it.body) || V2_KIND[it.kind] || 'Item';
   const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : it.kind === 'memory_tidy' ? 'Nightly memory tidy' : thread || 'Question';
@@ -94,7 +94,7 @@ function needRowHTML(it, ctx = {}) {
     <span class="tl-chips"><span class="pill needs">${esc(kind)}</span>${stale && (it.rows || []).length ? `<span class="tl-folded tnum">${(it.rows || []).length}</span>` : ''}</span>
     ${ctx.by === 'status' ? '' : '<span class="tl-status-pad"></span>'}
     <span class="tl-people"><span class="tl-face" title="${esc(name)}">${face}</span></span>
-    <time class="tl-age tnum" datetime="${esc(it.ready_since || it.created || '')}" title="${esc(fmt(it.ready_since || it.created))}">${esc(ageShort(it.ready_since || it.created))}</time>
+    <time class="tl-age tnum" datetime="${esc(it.ready_since || it.created_at || '')}" title="${esc(fmt(it.ready_since || it.created_at))}">${esc(ageShort(it.ready_since || it.created_at))}</time>
   </div>`);
 }
 // The items Needs you lists outside any task, without the ones just answered on a card (decide.js decideGone).
@@ -387,7 +387,7 @@ function askFilteredRow(it) {
     : `<button type="button" class="ghost" data-let-through="${esc(it.id)}">Let it through</button>`;
   return `<div class="tl-filtered-row" role="listitem">
     <span class="tl-filtered-text"><span class="req-from">${esc(it.asker_name || actorLabel(it.asker) || 'A bot')}:</span> ${title}
-      <span class="muted">${esc(rehearsal ? '' : what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created))}</span></span>
+      <span class="muted">${esc(rehearsal ? '' : what + ' · ')}${esc(ASK_FILTER_WHY[it.reason] || '')} · ${esc(ago(it.created_at))}</span></span>
     <span class="tl-filtered-act">${act}</span></div>`;
 }
 function askFilteredHTML(state) {
@@ -418,8 +418,8 @@ document.addEventListener('click', async ev => {
 // window's comment box, or the card's reply box) goes with Done as the outcome; otherwise nothing extra is sent.
 // Closing never takes one.
 function taskOutcomeNote(task, action, typed) {
-  if (!task || action.close || !String(task.owner || '').startsWith('human:') ||
-      !String(task.requester || '').startsWith('bot:')) return '';
+  if (!task || action.close || !String(task.owner_id || '').startsWith('human:') ||
+      !String(task.requester_id || '').startsWith('bot:')) return '';
   return String(typed || '').trim();
 }
 // The task window's typed outcome went with Done: it is not left behind to be sent again as a comment.

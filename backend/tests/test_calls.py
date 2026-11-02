@@ -454,7 +454,7 @@ def _chunks(api, meeting_id):
 def _restricted(api, prefix):
     with api.app.state.store.read() as c:
         return [row["restricted"] for row in c.execute(
-            "SELECT restricted FROM messages WHERE body LIKE ? ORDER BY created", (prefix + "%",))]
+            "SELECT restricted FROM messages WHERE body LIKE ? ORDER BY created_at", (prefix + "%",))]
 
 
 def _threads_events(api, actor):
@@ -637,8 +637,8 @@ def test_the_transcript_names_its_meeting_so_the_meetings_rules_decide_who_reads
     meet.app.state.calls.ingest(call["id"], "human:ben", PCM_EIGHT_SECONDS, 0)
     post(meet, f"calls/{call['id']}/end", {}, token="ana-test")
     with meet.app.state.store.read() as c:
-        row = c.execute("SELECT id,refs_json FROM messages WHERE body LIKE 'Call transcript%'").fetchone()
-        refs = json.loads(row["refs_json"])
+        row = c.execute("SELECT id,refs FROM messages WHERE body LIKE 'Call transcript%'").fetchone()
+        refs = json.loads(row["refs"])
         assert live_privacy.sources(c).references(refs) == {call["meeting_id"]}
         unattached_bot = threads.viewer(meet.app.state.calls.auth, Identity("bot:ops", "bot"))
         assert not threads.message_readable(c, unattached_bot, H.message(c, row["id"]))

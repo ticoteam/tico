@@ -36,7 +36,7 @@ FTS = ("CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(body, messa
 
 def _searchable(row):
     """SQL: a `messages` row (alias `row`) that has text, is not deleted and is not a carrier."""
-    carries = f"(CASE WHEN json_valid({row}.refs_json) THEN json_extract({row}.refs_json,'$.carries') END)"
+    carries = f"(CASE WHEN json_valid({row}.refs) THEN json_extract({row}.refs,'$.carries') END)"
     return f"{row}.body IS NOT NULL AND {row}.body<>'' AND {row}.deleted_at IS NULL AND {carries} IS NULL"
 
 
@@ -52,7 +52,7 @@ _UNINDEX = ("DELETE FROM message_search WHERE rowid=(SELECT id FROM message_sear
 # (trigger name, event on messages, body). A trigger whose SQL changes is replaced at the next ensure().
 TRIGGERS = [
     ("message_search_insert", "AFTER INSERT ON messages", _reindex("NEW")),
-    ("message_search_update", "AFTER UPDATE OF body, deleted_at, refs_json ON messages",
+    ("message_search_update", "AFTER UPDATE OF body, deleted_at, refs ON messages",
      [_UNINDEX.format(id="OLD.id")] + _reindex("NEW")),
     ("message_search_delete", "AFTER DELETE ON messages",
      [_UNINDEX.format(id="OLD.id"), "DELETE FROM message_search_keys WHERE message_id=OLD.id"]),
@@ -127,8 +127,8 @@ def search(c, query, *, thread_sql, message_sql, readable, args=(), limit=20, be
                 break
             last_key = row["search_key"]
             page.append({"message_id": message["id"], "thread_id": message["conversation_id"],
-                         "title": message["search_title"], "from_actor": message["from_actor"],
-                         "created": message["created"], "excerpt": message["excerpt"]})
+                         "title": message["search_title"], "sender_id": message["sender_id"],
+                         "created_at": message["created_at"], "excerpt": message["excerpt"]})
         if len(rows) < SCAN_BATCH:
             break
     else:

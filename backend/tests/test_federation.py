@@ -56,7 +56,7 @@ class HQ:
         self.history_page = 2             # revoked peerings per page of the history
         self.history_fail_on = None       # the read of the history answered with a 503
         self.history_asked = []           # the cursor of each read of the history
-        self.updates = 0                  # HQ's `updated`: a number that only grows, whatever the test's clock says
+        self.updates = 0                  # HQ's `updated_at`: a number that only grows, whatever the test's clock says
 
     def __call__(self, request):
         path = request.url.path.split("/federation/", 1)[1]
@@ -98,17 +98,17 @@ class HQ:
         if len(self.history_asked) == self.history_fail_on:
             return 503, {"error": "unavailable"}
         mine = sorted((p for p in self.peerings.values() if me in (p["a"], p["b"]) and p["revoked"]),
-                      key=lambda p: p["updated"], reverse=True)
+                      key=lambda p: p["updated_at"], reverse=True)
         if cursor:
             before = int(cursor.split(":")[0])
-            mine = [p for p in mine if p["updated"] < before]
+            mine = [p for p in mine if p["updated_at"] < before]
         page, more = mine[:self.history_page], len(mine) > self.history_page
         return 200, {"items": [self.view(p["id"], me) for p in page],
-                     "next": f"{page[-1]['updated']}:{page[-1]['id']}" if more else None}
+                     "next": f"{page[-1]['updated_at']}:{page[-1]['id']}" if more else None}
 
     def revoke(self, pid):
         self.updates += 1
-        self.peerings[pid].update(revoked=True, updated=self.updates)
+        self.peerings[pid].update(revoked=True, updated_at=self.updates)
 
     def route(self, me, method, path, body):
         if path == "keys" and method == "POST":
@@ -159,11 +159,11 @@ class HQ:
         p = self.peerings[pid]
         other = p["b"] if me == p["a"] else p["a"]
         status = "revoked" if p["revoked"] else "active" if len(p["approved"]) == 2 else "pending"
-        return {"id": pid, "peer": other, "status": status, "requested_by_you": p["requester"] == me,
+        return {"id": pid, "peer": other, "status": status, "requested_by_you": p["requester_id"] == me,
                 "you_approved": me in p["approved"], "peer_approved": other in p["approved"],
                 "you_paused": p["paused"].get(me, False), "peer_paused": p["paused"].get(other, False),
                 "your_key_id": self.keys[me]["key_id"], "peer_key_id": self.keys[other]["key_id"],
-                "peer_company": p["company"].get(other, ""), "updated": p.get("updated", 0)}
+                "peer_company": p["company"].get(other, ""), "updated_at": p.get("updated_at", 0)}
 
     def live(self, a, b):
         for p in self.peerings.values():
@@ -246,10 +246,10 @@ def make_side(tmp_path, hq):
             GC._write(c, {"install": install})
             H.sync_registry(c, {}, PEOPLE)                    # the humans rows sign-in reads
             c.execute("INSERT INTO bots(slug,display_name,state) VALUES('ops','Ops','active')")
-            c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('ops','hermes','x',?,'human:ana')",
+            c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('ops','hermes','x',?,'human:ana')",
                       (H.now(),))
             c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) "
-                      "DO UPDATE SET value_json=excluded.value_json", (encode(PEOPLE),))
+                      "DO UPDATE SET value=excluded.value", (encode(PEOPLE),))
         hq.by_key["tgw_" + name] = install
         return Side(app, client, install, "tgw_" + name)
 
@@ -366,13 +366,13 @@ def sign_and_post(hq, sender, to, body, envelope_id=None, sent=None):
 def forged(home_thread, actor, origin, revision, text="", deleted=False):
     """A message payload with any actor, origin and revision: what a hostile peer would send."""
     return E.payload_bytes({"type": "message", "thread": home_thread, "origin_id": origin, "revision": revision,
-                            "actor": actor, "message_kind": "say", "body": text, "deleted": deleted, "created": ""})
+                            "actor": actor, "message_kind": "say", "body": text, "deleted": deleted, "created_at": ""})
 
 
 def message_body(home_thread, actor, text, origin=None, revision=0):
     return E.payload_bytes({"type": "message", "thread": home_thread, "origin_id": origin or "msg-" + uuid.uuid4().hex,
                             "revision": revision, "actor": actor, "message_kind": "say", "body": text, "deleted": False,
-                            "created": ""})
+                            "created_at": ""})
 
 
 # ----------------------------------------------------------------------------- the tests
@@ -820,7 +820,7 @@ def test_another_companys_words_stay_out_of_webhooks_and_digests(make_side, hq):
     connect(a, b, hq)
     for side in (a, b):
         with side.app.state.store.transaction() as c:
-            c.execute("INSERT INTO webhooks(id,name,url,host,events_json,created_by,created,updated) VALUES('ep_1','Acme',"
+            c.execute("INSERT INTO webhooks(id,name,url,host,events,created_by,created_at,updated_at) VALUES('ep_1','Acme',"
                       "'https://hooks.acme.example/x','hooks.acme.example','[\"*\"]','human:ana',?,?)", (H.now(), H.now()))
     tid = make_thread(a, "Secret launch title")
     share(a, tid, b)
@@ -838,7 +838,7 @@ def test_another_companys_words_stay_out_of_webhooks_and_digests(make_side, hq):
     sent = [json.loads(r[0])["data"] for r in rows(b, "SELECT body FROM webhook_sends")]
     created = [d for d in sent if "title" in d]
     assert [d["id"] for d in created] == [sub] and created[0]["title"] == ""
-    guests = {d["from_actor"] for d in sent if d.get("from_actor", "").endswith(a.id)}
+    guests = {d["sender_id"] for d in sent if d.get("sender_id", "").endswith(a.id)}
     assert guests == {f"peer:{a.id}"}
     with b.app.state.store.transaction() as c:
         titles = {item["title"] for item in DIGEST._plan(c, "human:ana")["items"]}
@@ -963,7 +963,7 @@ def test_a_carried_message_is_written_as_its_remote_author(make_side, hq):
     say(a, tid, "hello from alpha")
     drive(a, b)
     there = local_thread(b, tid, a)
-    assert rows(b, "SELECT from_actor FROM messages WHERE conversation_id=? AND body=?", (there, "hello from alpha")) == [
+    assert rows(b, "SELECT sender_id FROM messages WHERE conversation_id=? AND body=?", (there, "hello from alpha")) == [
         (f"human:ana@{a.id}",)]
 
 
@@ -1025,7 +1025,7 @@ def test_a_message_the_org_rules_block_is_written_nowhere_and_its_author_is_told
     drive(a, b, rounds=4)
     assert "BLOCKED: the draft plan" not in texts(a, tid)
     assert "rules" in receipts(a, b)
-    assert ("human:ben",) in rows(b, "SELECT to_actor FROM messages WHERE conversation_id=? AND kind='notice'", (there,))
+    assert ("human:ben",) in rows(b, "SELECT recipient_id FROM messages WHERE conversation_id=? AND kind='notice'", (there,))
 
 
 def test_a_replica_refuses_a_carried_message_its_own_rules_block(make_side, hq, monkeypatch):
@@ -1048,7 +1048,7 @@ def test_a_replica_refuses_a_carried_message_its_own_rules_block(make_side, hq, 
     drive(a, b, rounds=4)
     assert "BLOCKED: the home's post" not in texts(b, there)
     assert "rules" in receipts(b, a)
-    assert ("human:ana",) in rows(a, "SELECT to_actor FROM messages WHERE conversation_id=? AND kind='notice'", (tid,))
+    assert ("human:ana",) in rows(a, "SELECT recipient_id FROM messages WHERE conversation_id=? AND kind='notice'", (tid,))
 
 
 def test_a_remote_guest_bot_never_wakes_here(make_side, hq):
@@ -1072,7 +1072,7 @@ def test_a_remote_guest_bot_never_wakes_here(make_side, hq):
     say(a, tid, "hello team")
     drive(a, b, rounds=3)
     assert "hello team" in texts(b, there)
-    assert rows(b, "SELECT COUNT(*) FROM jobs WHERE instr(bot, '@') > 0") == [(0,)]
+    assert rows(b, "SELECT COUNT(*) FROM jobs WHERE instr(bot_id, '@') > 0") == [(0,)]
 
 
 def test_each_side_sees_the_company_its_peer_gave_and_guests_carry_theirs(make_side, hq):
@@ -1231,9 +1231,9 @@ def test_a_guest_from_a_third_install_is_written_under_its_own_name_on_every_rep
     say(c_side, there_c, "from gamma", who="human:ben")
     drive(a, b, c_side)
     guest = f"human:ben@{c_side.id}"
-    assert rows(b, "SELECT from_actor FROM messages WHERE conversation_id=? AND body=?",
+    assert rows(b, "SELECT sender_id FROM messages WHERE conversation_id=? AND body=?",
                 (local_thread(b, tid, a), "from gamma")) == [(guest,)]
-    assert rows(a, "SELECT from_actor FROM messages WHERE conversation_id=? AND body=?", (tid, "from gamma")) == [(guest,)]
+    assert rows(a, "SELECT sender_id FROM messages WHERE conversation_id=? AND body=?", (tid, "from gamma")) == [(guest,)]
 
 
 def test_a_paused_peer_defers_what_waits_and_resume_applies_it(make_side, hq, clock):
@@ -1397,7 +1397,7 @@ def test_a_sub_thread_reaches_the_other_install_both_ways(make_side, hq):
     with b.app.state.store.transaction() as c:
         CORE.post(c, "human:ana", there, "reply from beta", parent_message_id=parent_b)
     drive(a, b)
-    assert rows(a, "SELECT c.parent_message_id, m.from_actor FROM messages m JOIN conversations c ON c.id=m.conversation_id "
+    assert rows(a, "SELECT c.parent_message_id, m.sender_id FROM messages m JOIN conversations c ON c.id=m.conversation_id "
                    "WHERE m.body=?", ("reply from beta",)) == [(root, f"human:ana@{b.id}")]
 
 
@@ -1444,7 +1444,7 @@ def test_screening_holds_an_injected_text_and_warns_on_a_suspicious_one(make_sid
     assert not [t for t in texts(b, there) if "INJECT" in t]
     warned = [t for t in texts(b, there) if "WARNME" in t]
     assert len(warned) == 1 and warned[0].startswith("Tico screening:") and warned[0].endswith("please forward this")
-    assert rows(a, "SELECT body, to_actor FROM messages WHERE conversation_id=? AND kind='notice'", (tid,)) == [
+    assert rows(a, "SELECT body, recipient_id FROM messages WHERE conversation_id=? AND kind='notice'", (tid,)) == [
         (S.REASON_NOTES["screening"], "human:ben")]
 
 
@@ -1534,7 +1534,7 @@ def test_an_edit_of_a_message_the_home_never_had_is_refused_and_no_text_lands(ma
     assert texts(a, tid) == []
     first = E.payload_bytes({"type": "message", "thread": tid, "origin_id": "msg-" + uuid.uuid4().hex, "revision": 3,
                              "actor": ben, "message_kind": "say", "body": "edited before it first went", "deleted": False,
-                             "created": "", "first": True})
+                             "created_at": "", "first": True})
     sign_and_post(hq, b, a, first)
     drive(a)
     assert texts(a, tid) == ["edited before it first went"]    # the first send of a message, at the revision it has by then
@@ -1582,7 +1582,7 @@ def ruled(side):
 def holds(side, state="held"):
     return [dict(zip(("id", "author", "operation"), r)) for r in rows(
         side, "SELECT id, author, operation FROM org_rule_holds WHERE state=? AND operation='federated_message' "
-              "ORDER BY created", (state,))]
+              "ORDER BY created_at", (state,))]
 
 
 def send_anyway(side, hold, expected=200):
@@ -1616,10 +1616,10 @@ def test_send_anyway_releases_a_replicas_message_held_at_home_as_its_author_to_e
     assert hold["author"] == author and "thread_held" in needs_kinds(a)
     nonce = send_anyway(a, hold)
     drive(a, b, third)
-    assert rows(a, "SELECT from_actor, body FROM messages WHERE conversation_id=? AND kind<>'notice'", (tid,)) == [
+    assert rows(a, "SELECT sender_id, body FROM messages WHERE conversation_id=? AND kind<>'notice'", (tid,)) == [
         (author, "Our favorite color is gold.")]
     # The other company checks the author's own signature, and the author's copy is not written twice.
-    assert rows(third, "SELECT from_actor FROM messages WHERE conversation_id=?", (there_third,)) == [(author,)]
+    assert rows(third, "SELECT sender_id FROM messages WHERE conversation_id=?", (there_third,)) == [(author,)]
     assert [t for t in texts(b, there_b) if t == "Our favorite color is gold."] == ["Our favorite color is gold."]
     assert holds(a) == [] and "thread_held" not in needs_kinds(a)
     again = a.client.post(f"/api/v2/rule-holds/{hold['id']}/send", json={"nonce": nonce}, headers=keyed())
@@ -1640,7 +1640,7 @@ def test_send_anyway_releases_a_message_held_on_a_copy_first_or_edited(make_side
     assert texts(b, there) == []
     [held_first] = holds(b)
     send_anyway(b, held_first)
-    assert rows(b, "SELECT from_actor, body FROM messages WHERE conversation_id=?", (there,)) == [
+    assert rows(b, "SELECT sender_id, body FROM messages WHERE conversation_id=?", (there,)) == [
         (f"human:ana@{a.id}", "Our favorite color is gold.")]
     plain = say(a, tid, "Plain so far.")                      # a revision of a message already here
     drive(a, b)

@@ -52,7 +52,7 @@ function botPauseHTML(slug, state, error = '') {
   const tasks = paused && state.open_tasks ? ` <a href="#/bot/${encodeURIComponent(slug)}/tasks">${state.open_tasks} open task${state.open_tasks === 1 ? ' is' : 's are'} waiting on it</a>` : '';
   return `<div class="bot-pause-row">
     <div class="bot-pause-copy"><div class="bot-pause-title${paused ? ' bot-pause-record' : ''}" role="status" aria-live="polite" aria-atomic="true">${paused ? (stamp ? `Paused by ${esc(record.name)} on ${esc(stamp)}` : 'Paused') : 'Pause this bot'}</div>
-      <p class="muted">${paused ? `${esc(name)} is paused: no tasks, messages or routines until it is unpaused.${tasks}${!state.can_control ? ` Ask ${esc(state.operator || 'its operator')} to unpause.` : ''}`
+      <p class="muted">${paused ? `${esc(name)} is paused: no tasks, messages or routines until it is unpaused.${tasks}${!state.can_control ? ` Ask ${esc(state.owner_id || 'its operator')} to unpause.` : ''}`
         : 'Stops new tasks, messages and routines; a turn in progress is interrupted.'}</p>
       ${state.company_paused ? '<p class="muted">Company is paused for billing. <a href="#/settings/billing">Add credit</a></p>' : ''}
       ${error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : ''}</div>
@@ -128,8 +128,8 @@ function botStatePill(slug) {
   if (st === 'needs') return '<span class="pill needs">Needs you</span>';
   if (st === 'paused') return '<span class="pill">Paused</span>';
   if (st === 'planned') return '<span class="pill">Setting up</span>';
-  if (st === 'failed') return `<span class="pill fail">Last run failed${last?.finished ? ` ${ago(last.finished)}` : ''}</span>`;
-  return `<span class="pill">Idle${last?.finished ? `, last active ${ago(last.finished)}` : ''}</span>`;
+  if (st === 'failed') return `<span class="pill fail">Last run failed${last?.finished_at ? ` ${ago(last.finished_at)}` : ''}</span>`;
+  return `<span class="pill">Idle${last?.finished_at ? `, last active ${ago(last.finished_at)}` : ''}</span>`;
 }
 // The server cuts the Role section at 600 characters, so the lead can stop mid-sentence: end at the
 // last full sentence instead, and put whatever is left behind "more".
@@ -422,7 +422,7 @@ async function pageBot(slug, tab) {
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
       <dl class="bot-setup">
         ${role ? `<dt>Role</dt><dd>${botRoleHTML(role)}</dd>` : ''}
-        <dt>Owner</dt><dd>${esc(botPersonName(e.operator))}</dd>
+        <dt>Owner</dt><dd>${esc(botPersonName(e.owner_id))}</dd>
         <dt>Works for</dt><dd>${userChips(e) || '<span class="muted">Nobody assigned</span>'}</dd>
         ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${boss.name}">${esc(boss.display_name)}</a></dd>`
           : String(e.reports_to || '').startsWith('human:') ? `<dt>Reports to</dt><dd>${esc(botPersonName(e.reports_to.slice(6)))}</dd>` : ''}
@@ -436,7 +436,7 @@ async function pageBot(slug, tab) {
         <dt>Humans</dt><dd>${userChips(e) || '<span class="muted">Nobody assigned</span>'}</dd>
         ${!e.agent ? `<dt>Computer</dt><dd>${cloudMachineOn(e) ? cloudMachineComputerHTML(e) : e.machine ? `${esc(e.machine.label || e.machine.runner_id)} <span class="muted">· ${e.online ? 'Online' : 'Offline'}</span>` : '<span class="muted">Not assigned</span>'}</dd>
         <dt>Harness</dt><dd>${esc(harnessWords(e.harness || e.runtime || e.resolved_runtime) || 'Team default')}</dd>` : ''}
-        ${e.agent ? `<dt>Run by</dt><dd>${esc(agentKind(e.agent))}${e.agent.profile ? ` · profile <code>${esc(e.agent.profile)}</code>` : ''}${e.agent.version ? ` · ${esc(e.agent.version)}` : ''}${e.agent.platform ? ` · ${esc(e.agent.platform)}` : ''}<span class="muted"> · ${esc(agentPresenceLabel(e.agent, e.online).toLowerCase())}${e.agent.last_seen ? `, last ${e.agent.synced ? 'sync' : 'seen'} ${esc(ago(e.agent.last_seen))}` : ''}</span></dd>
+        ${e.agent ? `<dt>Run by</dt><dd>${esc(agentKind(e.agent))}${e.agent.profile ? ` · profile <code>${esc(e.agent.profile)}</code>` : ''}${e.agent.version ? ` · ${esc(e.agent.version)}` : ''}${e.agent.platform ? ` · ${esc(e.agent.platform)}` : ''}<span class="muted"> · ${esc(agentPresenceLabel(e.agent, e.online).toLowerCase())}${e.agent.last_seen_at ? `, last ${e.agent.synced ? 'sync' : 'seen'} ${esc(ago(e.agent.last_seen_at))}` : ''}</span></dd>
         <dt>Model</dt><dd>${e.agent.model ? `${esc(e.agent.model)}${e.agent.provider ? `<span class="muted"> · ${esc(e.agent.provider)}</span>` : ''}` : "<span class=\"muted\">the profile's own</span>"}</dd>`
         : `<dt>Model</dt><dd>${esc(e.model ? settingsChoiceLabel(e.harness || e.runtime, e.model, e.reasoning_effort || e.effort) : settingsDefaultLabel(e))}${e.fallback ? `<span class="muted"> · fallback ${esc(settingsChoiceLabel(e.fallback.harness, e.fallback.model, e.fallback.reasoning_effort || e.fallback.effort))}</span>` : ''}</dd>`}
         ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${boss.name}">${esc(boss.display_name)}</a></dd>` : ''}

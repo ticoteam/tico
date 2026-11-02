@@ -25,7 +25,7 @@ const attention = [plan];
 const dm = {id: 't-dm', title: '', audience: 'personal', last_seq: 5, last_unread_seq: 5, last_message_at: at(3), me: me(1),
   members: [{actor: 'human:ana'}, {actor: 'human:bea'}]};
 
-const msg = (id, seq, from, body, extra = {}) => ({id, seq, thread_id: 't-plan', from_actor: from, body, created: at(60 - seq), depth: 0, ...extra});
+const msg = (id, seq, from, body, extra = {}) => ({id, seq, thread_id: 't-plan', sender_id: from, body, created_at: at(60 - seq), depth: 0, ...extra});
 const sub = {id: 't-sub', title: 'Pricing', audience: 'team', audience_group_id: 'ops', parent_id: 't-plan', parent_message_id: 'm2',
   last_seq: 4, me: me(), members: []};
 const timeline = {
@@ -175,7 +175,7 @@ async function open(browser, who, {phone = false} = {}) {
     if (task) { seen.tasks.push({message: task[1], ...JSON.parse(req.postData() || '{}')}); return json({id: 'task1', private: true}); }
     if (p === '/api/v2/tasks' && method === 'POST') { seen.tasks.push({copied: true}); return json({id: 'task-copy'}); }
     if (p === '/api/v2/threads/search') return json({hits: url.searchParams.get('q') === 'price' ? [{message_id: 'm2', thread_id: 't-plan', title: 'Launch plan',
-      from_actor: 'human:ana', created: at(58), excerpt: 'What price do we open with?'}] : [], next_cursor: null});
+      sender_id: 'human:ana', created_at: at(58), excerpt: 'What price do we open with?'}] : [], next_cursor: null});
     const call = p.match(/^\/api\/v2\/calls\/([^/]+)\/(join|leave|end|token)$/);
     if (call) {
       seen.calls.push(call[2] + ':' + call[1]);
@@ -284,7 +284,7 @@ async function shot(page, name) {
 
     // A late page from the server keeps a newer message the stream already showed.
     await page.evaluate(() => threadViewsLive('messages', {id: 'live1', thread_id: 't-plan', root_id: 't-plan',
-      message: {id: 'live1', seq: 60, revision: 1, thread_id: 't-plan', from_actor: 'human:bea', body: 'Arrived live.', created: new Date().toISOString()}}));
+      message: {id: 'live1', seq: 60, revision: 1, thread_id: 't-plan', sender_id: 'human:bea', body: 'Arrived live.', created_at: new Date().toISOString()}}));
     await page.getByText('Arrived live.').waitFor();
     await page.evaluate(() => thvRefresh([...THV_VIEWS].find(v => v.id === 't-plan')));
     assert.equal(await page.locator('.th-msg[data-mid="live1"]').count(), 1, 'the refresh did not wipe the live message');
@@ -313,7 +313,7 @@ async function shot(page, name) {
     // A reply in an old sub-thread lands under its parent, new, and Unread goes there.
     await page.evaluate(() => { const b = document.querySelector('.thv-scroll'); b.scrollTop = b.scrollHeight; });
     await page.evaluate(() => threadViewsLive('messages', {id: 'lv', thread_id: 't-rb', root_id: 't-tree',
-      message: {id: 'lv', seq: 70, revision: 0, thread_id: 't-rb', from_actor: 'human:bea', body: 'Late reply.', created: new Date().toISOString()}}));
+      message: {id: 'lv', seq: 70, revision: 0, thread_id: 't-rb', sender_id: 'human:bea', body: 'Late reply.', created_at: new Date().toISOString()}}));
     assert.deepEqual((await mids()).slice(0, 3), ['p1', 'r1', 'lv']);
     assert.equal(await page.locator('.th-msg[data-mid="lv"].th-new').count(), 1);
     assert.match(await page.locator('.th-msg[data-mid="p1"] + .th-subhead').textContent(), /2 replies/);

@@ -34,7 +34,7 @@ def catch_up(api, thread_id, scope="subtree", token="ben-test", expected=200):
 
 def assistant_bodies(api):
     with api.app.state.store.read() as c:
-        return [r["body"] for r in c.execute("SELECT body FROM messages WHERE refs_json LIKE '%catch_up%'").fetchall()]
+        return [r["body"] for r in c.execute("SELECT body FROM messages WHERE refs LIKE '%catch_up%'").fetchall()]
 
 
 def no_model(monkeypatch):
@@ -186,7 +186,7 @@ def test_what_the_migration_carried_and_imported_history_are_not_new(api, monkey
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE messages SET legacy_audience=NULL WHERE id=?", (opened["id"],))
         carried = c.execute("SELECT value FROM sequences WHERE name='messages'").fetchone()[0]
-        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value_json) VALUES(?,?)",
+        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value) VALUES(?,?)",
                   (threads.MIGRATION_KEY, json.dumps({"at": "2026-10-01T00:00:00Z", "seq": carried})))
         threads.post(c, "human:cara", tid, "Imported from Slack", refs={"import": True})
     say(api, tid, "Written after it")

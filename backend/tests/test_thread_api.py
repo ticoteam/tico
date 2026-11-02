@@ -146,7 +146,7 @@ def dm_as(api, peer, token="ana-test"):
 def test_a_teammates_home_is_made_once_and_its_owner_may_read_it(api):
     first = home_as(api, "human:ben")
     assert first.status_code == 200, first.text
-    assert first.json()["audience"] == "home" and first.json()["owner_actor"] == "human:ben"
+    assert first.json()["audience"] == "home" and first.json()["owner_id"] == "human:ben"
     assert home_as(api, "human:ben").json()["id"] == first.json()["id"]          # the same Home, not a second one
     assert home_as(api, "human:ben", "ben-test").json()["id"] == first.json()["id"]
 
@@ -159,7 +159,7 @@ def test_a_home_the_viewer_may_not_read_is_the_same_404_as_a_missing_teammate_an
     assert hidden.json() == missing.json()
     assert "ops" not in hidden.text and "nobody" not in missing.text
     with api.app.state.store.read() as c:       # a refused viewer leaves no Home behind
-        assert c.execute("SELECT COUNT(*) FROM conversations WHERE audience='home' AND owner_actor='bot:ops'"
+        assert c.execute("SELECT COUNT(*) FROM conversations WHERE audience='home' AND owner_id='bot:ops'"
                          ).fetchone()[0] == 0
     assert home_as(api, "bot:ops", "ben-test").status_code == 200                # someone who may read it
 
@@ -219,7 +219,7 @@ def test_a_post_to_an_outside_destination_is_checked_like_any_other(ruled):
     # One that breaks nothing goes on to it.
     fine = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": "The launch is on", "to": "slack:C123"},
                     headers=headers("cara-test"))
-    assert fine.status_code == 200 and fine.json()["to_actor"] == "slack:C123", fine.text
+    assert fine.status_code == 200 and fine.json()["recipient_id"] == "slack:C123", fine.text
 
 
 def company_thread(api):
@@ -277,7 +277,7 @@ def test_a_held_thread_post_is_sent_by_its_rule_author_as_its_person(ruled):
     assert sent["hold"]["state"] == "sent"
     assert len(judge.calls) == calls                                  # sent, not checked again
     posted = [m for m in message_in(api, thread["id"]) if "favorite color is gold" in str(m.get("body"))]
-    assert len(posted) == 1 and posted[0]["from_actor"] == "human:cara"
+    assert len(posted) == 1 and posted[0]["sender_id"] == "human:cara"
 
 
 def test_a_warn_delivers_a_persons_thread_post_with_the_warning_on_it(ruled):
@@ -468,7 +468,7 @@ def test_a_root_row_speaks_for_its_sub_threads_for_each_viewer(api):
     reply = say(api, sub["id"], "A reply below the root", token="cara-test")
     ben = row_of(sidebar(api), root["id"])
     assert ben["me"]["unread"] == 1 and ben["activity_seq"] == reply["seq"] and ben["activity_seq"] > ben["last_seq"]
-    assert ben["last_message_at"] == reply["created"]
+    assert ben["last_message_at"] == reply["created_at"]
     assert [t["id"] for t in sidebar(api)["threads"]][0] == root["id"]            # newer than Other, by the sub-thread
     assert row_of(sidebar(api, "cara-test"), root["id"])["me"]["unread"] == 0      # her own reply is not unread for her
     post_as(api, sub["id"], "bot:ops", "A bot below the root")
@@ -499,7 +499,7 @@ def test_releasing_a_held_upload_keeps_its_files_for_the_people_in_the_thread(ru
     view = get(api, f"rule-holds/{held['id']}")
     assert post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, token="ana-test")["hold"]["state"] == "sent"
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT id, refs_json FROM messages WHERE body=?", (GOLD,)).fetchone()
+        row = c.execute("SELECT id, refs FROM messages WHERE body=?", (GOLD,)).fetchone()
         linked = [r[0] for r in c.execute("SELECT blob_id FROM message_assets WHERE message_id=?", (row["id"],))]
     [attached] = [m for m in message_in(api, thread["id"], token="ben-test") if m.get("id") == row["id"]]
     [file] = attached["refs"]["attachments"]

@@ -27,7 +27,7 @@ def close_computer(api, machine):
 def botops(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     machine = runner(api)
     assign(api, machine, "botops")
@@ -58,12 +58,12 @@ def test_a_member_registers_a_bot_through_botops_and_owns_it(api, botops):
     bot = made.json()
     assert bot["created"] is True and bot["status"] == "planned" and bot["bot_owners"] == ["cara"]
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT created_by,operator,reports_to FROM bot_config WHERE bot='jira-manager'").fetchone()
-        assert (row["created_by"], row["operator"], row["reports_to"]) == ("human:cara", "cara", "human:cara")
+        row = c.execute("SELECT created_by,owner_id,reports_to FROM bot_config WHERE bot='jira-manager'").fetchone()
+        assert (row["created_by"], row["owner_id"], row["reports_to"]) == ("human:cara", "cara", "human:cara")
         # Recorded as hers, via BotOps.
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='bot.definition_created' "
+        event = c.execute("SELECT actor,detail FROM events WHERE action='bot.definition_created' "
                           "AND target='jira-manager'").fetchone()
-        assert event["actor"] == "human:cara" and '"via": "botops"' in event["detail_json"]
+        assert event["actor"] == "human:cara" and '"via": "botops"' in event["detail"]
     # Idempotent for its own owner; the same slug held by someone else is a conflict.
     assert register(api, attempt, "jira-manager").json()["created"] is False
     assert register(api, attempt, "ops").status_code == 409
@@ -167,7 +167,7 @@ def test_botops_keeps_bot_rights_and_refuses_assistant_messages_and_task_comment
     old = call(api, "post", "bots/register", person_started["token"], {"slug": "later", "on_behalf_of": person_started["message"]["id"]})
     assert old.status_code == 200
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-8), person_started["message"]["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-8), person_started["message"]["id"]))
     assert call(api, "post", "bots/register", person_started["token"],
                 {"slug": "much-later", "on_behalf_of": person_started["message"]["id"]}).status_code == 403
 
@@ -191,7 +191,7 @@ def test_a_members_bot_goes_only_on_a_computer_that_accepts_members_bots(api, bo
     assert call(api, "post", f"runners/{closed['runner_id']}/member-bots", "ben-test", {"accepts": True}).status_code == 200
     assert call(api, "post", "bots/jira-manager/assignment", "cara-test", body).status_code == 200
     # A new computer takes members' bots, including one a member enrols, until an admin closes it.
-    code = post(api, "enrollments", {"operator": "cara"}, token="cara-test")["code"]
+    code = post(api, "enrollments", {"owner_id": "cara"}, token="cara-test")["code"]
     enroll = api.post("/api/v2/runners/enroll", json={"code": code, "label": "Cara Mac", "platform": "test"},
                       headers={"Idempotency-Key": "k-cara-mac"})
     assert enroll.status_code == 200

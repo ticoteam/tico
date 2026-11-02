@@ -16,7 +16,7 @@ def card_in_chat(api, card, person):
         msg = H.message(c, card["message_id"])
         room = H.conversation(c, msg["conversation_id"])
         row = c.execute("SELECT owner,status FROM assistant_actions WHERE id=?", (card["action"]["id"],)).fetchone()
-    assert msg["from_actor"] == "bot:botops" and msg["to_actor"] == "human:" + person
+    assert msg["sender_id"] == "bot:botops" and msg["recipient_id"] == "human:" + person
     assert set(room["participants"]) == {"human:" + person, "bot:botops"}
     assert (row["owner"], row["status"]) == ("human:" + person, "pending")
 
@@ -84,7 +84,7 @@ def test_routes_that_hand_back_a_secret_refuse_botops_acting_for_an_admin(api, b
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM human_tokens").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM events WHERE action IN ('person.account_created','credential.revealed') "
-                         "AND json_extract(detail_json,'$.via')='botops'").fetchone()[0] == 0
+                         "AND json_extract(detail,'$.via')='botops'").fetchone()[0] == 0
 
 
 def test_a_secret_in_a_gateway_key_or_slack_tokens_is_refused(api, botops):
@@ -262,8 +262,8 @@ def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, bot
             assert c.execute("SELECT count(*) FROM assistant_actions WHERE owner='human:ben'").fetchone()[0] == 0
         assert proposed.calls == [("/v1/gateway/key", KEY)]
         with api.app.state.store.read() as c:
-            visible = json.dumps([dict(r) for r in c.execute("SELECT body_json,result_json FROM assistant_actions")]
-                                 + [dict(r) for r in c.execute("SELECT body,refs_json FROM messages")])
+            visible = json.dumps([dict(r) for r in c.execute("SELECT body,result FROM assistant_actions")]
+                                 + [dict(r) for r in c.execute("SELECT body,refs FROM messages")])
         assert KEY not in visible
 
 
@@ -285,7 +285,7 @@ def test_gateway_address_change_with_an_environment_key_is_refused_at_once(api, 
 
 def test_a_computers_code_is_only_on_the_persons_card(api, botops):
     ana = turn(api, botops, person="ana-test", text="Add a computer for me")
-    answer = act(api, ana, "POST", "enrollments", {"operator": "ana"})
+    answer = act(api, ana, "POST", "enrollments", {"owner_id": "ana"})
     assert answer.status_code == 200 and answer.json()["needs_confirm"] and "code" not in answer.json(), answer.text
     card = answer.json()
     card_in_chat(api, card, "ana")
@@ -297,7 +297,7 @@ def test_a_computers_code_is_only_on_the_persons_card(api, botops):
     # Nowhere BotOps reads: not the stored card, its result, or the chat.
     with api.app.state.store.read() as c:
         stored = json.dumps([dict(r) for r in c.execute("SELECT * FROM assistant_actions")])
-        said = json.dumps([dict(r) for r in c.execute("SELECT body,refs_json FROM messages")])
+        said = json.dumps([dict(r) for r in c.execute("SELECT body,refs FROM messages")])
     assert code not in stored and code not in said
     again = act(api, ana, "GET", f"assistant/actions/{card['action']['id']}")
     assert code not in again.text
@@ -370,9 +370,9 @@ def test_a_client_that_sends_no_header_gets_the_same_card_or_refusal(api, botops
     put(api, "access/rules", {"botops_direct": False})
     revision = get(api, "providers")["revision"]
     ana = turn(api, botops, person="ana-test", text="Do these for me")
-    cards = (("POST", "access/owner", {"person": "ben", "expected_revision": get(api, "access")["owner"]["revision"],
+    cards = (("POST", "access/owner", {"person": "ben", "expected_revision": get(api, "access")["owner_id"]["revision"],
                                        "confirm": True}),
-             ("POST", "enrollments", {"operator": "ana"}),
+             ("POST", "enrollments", {"owner_id": "ana"}),
              ("POST", "system/update", {"version": "9.9.9"}),
              ("PUT", "access/rules", {"botops_manages_bots": False}),
              ("POST", f"seats/{seat['id']}/hire", {"template": "support"}),

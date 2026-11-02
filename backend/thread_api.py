@@ -126,7 +126,7 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
     where = ["r.parent_id IS NULL", "r.archived_at IS NULL", "r.closed_at IS NULL",
              f"(EXISTS (SELECT 1 FROM thread_members m WHERE m.thread_id=r.id AND m.actor IN ({','.join('?' * len(names))})) "
              f"OR EXISTS (SELECT 1 FROM {threads._PARTICIPANTS.format(r='r')} WHERE value=?) "
-             "OR EXISTS (SELECT 1 FROM tasks t WHERE t.id=r.task_id AND (t.owner=? OR t.requester=?)))"]
+             "OR EXISTS (SELECT 1 FROM tasks t WHERE t.id=r.task_id AND (t.owner_id=? OR t.requester_id=?)))"]
     args = [*names, actor, actor, actor]
     if cursor:
         try:
@@ -454,7 +454,7 @@ def install(app, store, auth, mutate, rule_check):
         def work(c):
             v = threads.viewer(auth, who)
             row = threads.get(c, v, thread_id)
-            owner = str(row.get("owner_actor") or "")
+            owner = str(row.get("owner_id") or "")
             if row.get("audience") != "home" or not owner.startswith("bot:"):
                 raise Problem("home", "Only a bot's Home has earlier messages to open", 422)
             return threads.open_earlier_messages(c, v, owner[4:])

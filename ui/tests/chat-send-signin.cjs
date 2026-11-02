@@ -73,7 +73,7 @@ async function scenario(browser, mode, edit, editedBefore = false) {
           return identity();
         }
         if (hold) await hold;
-        const message = {id: 'm' + posts.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()};
+        const message = {id: 'm' + posts.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()};
         delivered.push(message);
         return json({message, fast: true});
       }

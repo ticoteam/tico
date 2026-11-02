@@ -318,7 +318,7 @@ def _dm_question(api, **refs):
 
 def _lose_the_task(api, row):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET requester='human:ana' WHERE id=?", (row["id"],))
+        c.execute("UPDATE tasks SET requester_id='human:ana' WHERE id=?", (row["id"],))
 
 
 def test_a_private_runs_answer_in_a_dm_keeps_its_task_after_the_asker_loses_it(api):

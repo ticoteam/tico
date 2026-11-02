@@ -848,7 +848,7 @@ class MarketEntityCreate(Contract):
     tier: Literal["core", "lookalike", "phrase-stealer", "secondary"] | None = None
     summary: str = Field(default="", max_length=20_000)
     properties: dict = Field(default_factory=dict)
-    last_verified: str | None = None
+    last_verified_at: str | None = None
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     force: bool = False
     insight_id: str | None = Field(default=None, max_length=80)
@@ -862,7 +862,7 @@ class MarketEntityWrite(Contract):
     clear_tier: bool = False
     summary: str | None = Field(default=None, max_length=20_000)
     properties: dict | None = None
-    last_verified: str | None = None
+    last_verified_at: str | None = None
     status: Literal["active", "retired", "merged"] | None = None
     evidence_ids: list[str] | None = None
     insight_id: str | None = Field(default=None, max_length=80)
@@ -916,7 +916,7 @@ class MarketApply(Contract):
     properties: dict | None = None
     tier: Literal["core", "lookalike", "phrase-stealer", "secondary"] | None = None
     aliases: list[str] | None = None
-    last_verified: str | None = None
+    last_verified_at: str | None = None
 
 
 class MarketImport(Contract):
@@ -1399,7 +1399,7 @@ class WorktreeStatus(Contract):
     last_commit: str | None = Field(default=None, max_length=100)
     size_mb: float = Field(default=0, ge=0)
     error: str | None = Field(default=None, max_length=300)
-    # The record's `updated` stamp this report was built from; a report older than the record is stale.
+    # The record's `updated_at` stamp this report was built from; a report older than the record is stale.
     record_updated: str | None = Field(default=None, max_length=40)
 
 

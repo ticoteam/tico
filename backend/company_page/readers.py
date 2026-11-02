@@ -762,8 +762,8 @@ def notices_of(c, edition_id):
     for row in c.execute("SELECT status,count(*) n FROM reader_notices WHERE edition_id=? GROUP BY status", (edition_id,)):
         states[row["status"]] = row["n"]
     reported = {"delivered": 0, "failed": 0, "limited": 0}
-    for row in c.execute("SELECT detail_json FROM events WHERE action='reader.notices' AND target=?", (edition_id,)):
-        detail = json.loads(row["detail_json"] or "{}")
+    for row in c.execute("SELECT detail FROM events WHERE action='reader.notices' AND target=?", (edition_id,)):
+        detail = json.loads(row["detail"] or "{}")
         reported["delivered"] += detail.get("sent", 0)
         reported["failed"] += detail.get("failed", 0)
         reported["limited"] += detail.get("limited", 0)

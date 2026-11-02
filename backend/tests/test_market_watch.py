@@ -151,7 +151,7 @@ def test_the_same_page_twice_and_the_cap_on_active_watches_are_409(seeded):
     store = seeded.app.state.store
     with store.transaction() as c:
         for n in range(W.MAX_ACTIVE - 1):
-            c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created) VALUES (?,?,?,?,1,?)",
+            c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created_at) VALUES (?,?,?,?,1,?)",
                       (f"w{n}", "company/northwind", f"https://northwind.example/p{n}", "other", H.now()))
     assert watch(seeded, url="https://northwind.example/over", expected=409)["error"]["code"] == "limit"
 
@@ -168,7 +168,7 @@ def test_a_page_change_trips_a_cited_bet_only_once_the_insight_is_applied(seeded
 
     def bet_tasks():
         with seeded.app.state.store.read() as c:
-            return [(t["title"], t["owner"]) for t in H._rows(c.execute("SELECT title, owner FROM tasks WHERE title LIKE 'Bet %'"))]
+            return [(t["title"], t["owner_id"]) for t in H._rows(c.execute("SELECT title, owner_id FROM tasks WHERE title LIKE 'Bet %'"))]
     assert bet_tasks() == []                       # a raw diff may be layout or wording: no fit check yet
     with seeded.app.state.store.read() as c:
         insight_id = c.execute("SELECT id FROM market_insights WHERE source_ref LIKE 'watch:%'").fetchone()[0]

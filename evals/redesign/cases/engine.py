@@ -33,7 +33,7 @@ def cond(field, op, value, **extra):
 
 def task_input(title):
     """A task_received trigger's output: the task builder-claude sent Dana (CONTRACT §2 Feeding input)."""
-    return {"task": {"title": title, "body": "Scenario task.", "owner": DANA_REF, "requester": CLAUDE_REF}}
+    return {"task": {"title": title, "body": "Scenario task.", "owner_id": DANA_REF, "requester_id": CLAUDE_REF}}
 
 
 def message_input(msg_id, sender, subject):
@@ -126,7 +126,7 @@ def ran_ok(run, sid):
 def started(run):
     """The run's start as an aware time (a naive one is read as UTC), or None when it has none."""
     try:
-        when = dt.datetime.fromisoformat(str(run.get("started") or "").replace("Z", "+00:00"))
+        when = dt.datetime.fromisoformat(str(run.get("started_at") or "").replace("Z", "+00:00"))
     except ValueError:
         return None
     return when if when.tzinfo else when.replace(tzinfo=UTC)
@@ -480,7 +480,7 @@ def counts_kept(f):
     two messages came, with its run and its drop, after the 31-day prune."""
     got(f, "day31")
     _, run = hit_run_at(f, "runs31")
-    day = str(run.get("started") or "")[:10]
+    day = str(run.get("started_at") or "")[:10]
     daily = (unwrap(body(f, "runs31")) or {}).get("daily") or []
     row = next((d for d in daily if d.get("day") == day), None)
     ok = bool(row) and row.get("runs") == 1 and row.get("dropped") == 1
@@ -521,7 +521,7 @@ def pick_builtin(f):
     if not found:
         raise Unmet(W3, "the listing has no built-in automation (builtin true)")
     order = {CLAUDE_REF: 0, OPENAI_REF: 0, LEAD_REF: 1}
-    return min(found, key=lambda row: order.get(row.get("owner"), 2))
+    return min(found, key=lambda row: order.get(row.get("owner_id"), 2))
 
 
 def on_builtin(org, f, method, who, payload=None):
@@ -532,7 +532,7 @@ def on_builtin(org, f, method, who, payload=None):
 def s29_steps(org, f):
     org.step(f, "listing", listing, org)
     org.step(f, "post", org.api, "post", "/api/v2/automations", {
-        "name": "Fake built-in · dana", "owner": DANA_REF, "enabled": True, "builtin": True, "trigger": SCHEDULE,
+        "name": "Fake built-in · dana", "owner_id": DANA_REF, "enabled": True, "builtin": True, "trigger": SCHEDULE,
         "steps": [{"id": "gate", "type": "filter", "enabled": True, "rules": []}]}, wave=W3)
     org.step(f, "lead_pause", on_builtin, org, f, "patch", LEAD, {"enabled": False})
     org.step(f, "dana_pause", on_builtin, org, f, "patch", DANA, {"enabled": False})
@@ -553,7 +553,7 @@ def post_refused(f):
 
 def lead_refused(f):
     ok, text = replied(f, "lead_pause", 403, needs=("listing",))
-    return ok, f"{text} (built-in owned by {pick_builtin(f).get('owner')})"
+    return ok, f"{text} (built-in owned by {pick_builtin(f).get('owner_id')})"
 
 
 def dana_pause_warns(f):

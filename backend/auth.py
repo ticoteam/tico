@@ -58,7 +58,7 @@ def _edit_distance(a, b, limit):
     return previous[-1] if previous[-1] <= limit else None
 
 
-OPERATOR_SQL = "SELECT operator FROM bot_config WHERE bot=?"
+OPERATOR_SQL = "SELECT owner_id FROM bot_config WHERE bot=?"
 
 
 @dataclass(frozen=True)
@@ -174,7 +174,7 @@ def validate_identity(c, who):
         raise Problem("revoked", "Runner credential is revoked or unknown", 401)
     if who.role == "bot":
         row = c.execute("SELECT a.*, x.runner_id AS assigned_runner, x.generation AS assigned_generation "
-                        "FROM attempts a JOIN assignments x ON x.bot=a.bot WHERE a.id=?",
+                        "FROM attempts a JOIN assignments x ON x.bot=a.bot_id WHERE a.id=?",
                         (who.attempt_id,)).fetchone()
         if (not row or row["state"] not in ("leased", "running") or row["lease_until"] <= H.now()
                 or row["assigned_runner"] != who.runner_id
@@ -365,7 +365,7 @@ class Auth:
         A revoked or expired token is refused exactly like an unknown one. The lookup answers
         with the same identity the browser sign-in builds for that person, marked `via_token`.
         """
-        row = c.execute("SELECT t.id,t.label,t.last_used,t.expires_at,t.revoked_at,h.id AS human,h.email "
+        row = c.execute("SELECT t.id,t.label,t.last_used_at,t.expires_at,t.revoked_at,h.id AS human,h.email "
                         "FROM human_tokens t JOIN humans h ON h.id=t.human WHERE t.token_hash=?",
                         (digest(token),)).fetchone()
         if not row or row["revoked_at"] or (row["expires_at"] and row["expires_at"] <= H.now()):
@@ -373,8 +373,8 @@ class Auth:
         now = H.now()
         # last_used is a hint for the token list, not part of the decision: a script in a loop
         # should not write a row per request, and a locked database must not refuse a read.
-        if not row["last_used"] or row["last_used"] < H.shift(now, seconds=-60):
-            touch(c, "UPDATE human_tokens SET last_used=? WHERE id=?", (now, row["id"]))
+        if not row["last_used_at"] or row["last_used_at"] < H.shift(now, seconds=-60):
+            touch(c, "UPDATE human_tokens SET last_used_at=? WHERE id=?", (now, row["id"]))
         email = str(row["email"] or "").lower()
         role = "owner" if email and email == self.owner_email else "human"
         return Identity("human:" + row["human"], role, email=email, via_token=True,
@@ -385,15 +385,15 @@ class Auth:
 
         It is no person and no bot: anywhere else it is refused here, before any route could take
         its unfamiliar role for one with more reach. A revoked key is refused like an unknown one."""
-        row = c.execute("SELECT id,label,last_used,revoked_at,scope,made_with_token FROM service_keys WHERE key_hash=?",
+        row = c.execute("SELECT id,label,last_used_at,revoked_at,scope,made_with_token FROM service_keys WHERE key_hash=?",
                         (digest(token),)).fetchone()
         if not row or row["revoked_at"] or service_keys.token_ended(c, row["made_with_token"]):
             raise Problem("identity", "Invalid credential", 401)
         if not service_keys.allowed(row["scope"], method, path):
             raise Problem("forbidden", service_keys.refusal(row["scope"]), 403)
         now = H.now()
-        if not row["last_used"] or row["last_used"] < H.shift(now, seconds=-60):
-            touch(c, "UPDATE service_keys SET last_used=? WHERE id=?", (now, row["id"]))
+        if not row["last_used_at"] or row["last_used_at"] < H.shift(now, seconds=-60):
+            touch(c, "UPDATE service_keys SET last_used_at=? WHERE id=?", (now, row["id"]))
         return Identity("service:" + row["id"], "service", token_label=str(row["label"]), scope=row["scope"] or "tasks")
 
     def assistant_principal(self, c, attempt):
@@ -408,18 +408,18 @@ class Auth:
         in the owner's earlier Strategy Bot chat (`rooms.STRATEGY_ROOM`), is the bot's own and never the owner's."""
         # Only a live lease: a token kept from a finished turn means nothing (validate_identity says the
         # same for the plain bot identity; this repeats it where the token turns into a person).
-        room_key = rooms.ASSISTANT_ROOM if attempt["bot"] == self.settings.assistant_bot else None
+        room_key = rooms.ASSISTANT_ROOM if attempt["bot_id"] == self.settings.assistant_bot else None
         if (not room_key or attempt["state"] not in ("leased", "running")
                 or str(attempt["lease_until"] or "") <= H.now()):
             return None
         row = c.execute(
-            "SELECT v.owner_actor FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "SELECT v.owner_id FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations v ON v.id=m.conversation_id WHERE j.id=? AND v.scope='personal' "
-            "AND v.room_key=? AND m.from_actor=v.owner_actor AND json_extract(m.refs_json,'$.assistant')=1",
+            "AND v.room_key=? AND m.sender_id=v.owner_id AND json_extract(m.refs,'$.assistant')=1",
             (attempt["job_id"], room_key)).fetchone()
         if not row:
             return None
-        return self.chat_person(c, row["owner_actor"], attempt["bot"], attempt["id"], attempt["runner_id"])
+        return self.chat_person(c, row["owner_id"], attempt["bot_id"], attempt["id"], attempt["runner_id"])
 
     def chat_person(self, c, owner_actor, bot, attempt_id="", runner_id=""):
         """The person a turn of their chat bot (`bot`: the Assistant) acts as, with their rights and nobody more, or
@@ -520,7 +520,7 @@ class Auth:
                 # two minutes of the click.
                 aid, _, secret = action.partition(".")
                 from .assistant import covers
-                row = c.execute("SELECT method,path,body_json,confirm_hash,running_since,proposer FROM assistant_actions "
+                row = c.execute("SELECT method,path,body,confirm_hash,running_since,proposer FROM assistant_actions "
                                 "WHERE id=? AND owner=? AND status='running'", (aid, who.actor)).fetchone()
                 if (who.role not in ("owner", "human") or who.via or who.via_token or not secret or not row
                         or not row["confirm_hash"] or not hmac.compare_digest(row["confirm_hash"], digest(secret))
@@ -577,9 +577,9 @@ class Auth:
             return False
         if self.bot_admin(who):
             return True
-        row = c.execute("SELECT operator,bot_owners_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute("SELECT owner_id,bot_owners FROM bot_config WHERE bot=?", (slug,)).fetchone()
         pid = H.actor_id(who.actor)
-        if row and (row["operator"] == pid or pid in A.owner_ids(row["bot_owners_json"])):
+        if row and (row["owner_id"] == pid or pid in A.owner_ids(row["bot_owners"])):
             return True
         return self.manages(c, who, "bot", slug)
 
@@ -620,10 +620,10 @@ class Auth:
                 or not str(who.actor).startswith("bot:") or self.system_bot(slug)):
             return False
         me = H.actor_id(who.actor)
-        row = c.execute("SELECT reports_to,config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if not row or me == slug:
             return False
-        declared = json.loads(row["config_json"]) if row["config_json"] else {}
+        declared = json.loads(row["config"]) if row["config"] else {}
         parent = row["reports_to"] or (declared or {}).get("reports_to") or ""
         return parent == me and report_managers.manages(c, me)
 
@@ -641,10 +641,10 @@ class Auth:
             if H.actor_id(parent) != me:
                 return False
         else:
-            row = c.execute("SELECT reports_to,config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+            row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
             if not row:
                 return False
-            declared = json.loads(row["config_json"]) if row["config_json"] else {}
+            declared = json.loads(row["config"]) if row["config"] else {}
             if H.actor_id(row["reports_to"] or declared.get("reports_to") or "") != me:
                 return False
         return report_managers.manages(c, me)
@@ -773,7 +773,7 @@ class Auth:
     def operator(self, c, who, bot):
         row = read_cache.one(c, OPERATOR_SQL, (bot,))
         return bool(row and (who.role == "owner" or
-                            who.role == "human" and not self.system_bot(bot) and who.actor == "human:" + row["operator"]))
+                            who.role == "human" and not self.system_bot(bot) and who.actor == "human:" + row["owner_id"]))
 
     def manages(self, c, who, kind, ident):
         """The owner, or a person above this person or bot on the org chart (backend/people.py
@@ -834,7 +834,7 @@ class Auth:
         all (`hubdb.answer` checks only that the ask was addressed to you), so refusing contact
         cannot strand a bot that is blocking on a reply.
         """
-        row = c.execute("SELECT config_json,reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute("SELECT config,reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if who.role != "bot":
             return True
         sender = who.actor
@@ -842,7 +842,7 @@ class Auth:
             return True
         if not row:
             return True
-        declared = json.loads(row["config_json"]) if row["config_json"] else {}
+        declared = json.loads(row["config"]) if row["config"] else {}
         mode = declared.get("bot_contact", "open")
         manager = H.bot_actor(row["reports_to"] or declared.get("reports_to") or "")
         # Task comments/questions inherit a party's authority through the whole chart;
@@ -860,14 +860,14 @@ class Auth:
             return True
         asked = "bot:" + slug
         if task_id:
-            task = c.execute("SELECT requester,owner FROM tasks WHERE id=?", (task_id,)).fetchone()
-            if task and task["requester"] == asked and task["owner"] == sender:
+            task = c.execute("SELECT requester_id,owner_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if task and task["requester_id"] == asked and task["owner_id"] == sender:
                 return True
-        if c.execute("SELECT 1 FROM tasks WHERE requester=? AND owner=? AND status NOT IN "
+        if c.execute("SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status NOT IN "
                      "('done','closed','declined') LIMIT 1", (asked, sender)).fetchone():
             return True
         if conversation_id and c.execute(
-                "SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND to_actor=? LIMIT 1",
+                "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND recipient_id=? LIMIT 1",
                 (conversation_id, asked, sender)).fetchone():
             return True
         return False
@@ -880,8 +880,8 @@ class Auth:
         slug = H.actor_id(actor)
         if self.bot_contact(c, who, slug, conversation_id, task_id, kind):
             return
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        declared = json.loads(row["config_json"]) if row and row["config_json"] else {}
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        declared = json.loads(row["config"]) if row and row["config"] else {}
         if declared.get("bot_contact") == "tasks":
             raise Problem("bot_contact", f"{slug} takes work as a task and nothing else (notes only from its manager "
                                          "and BotOps). File one "
@@ -917,7 +917,7 @@ class Auth:
                 {r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)}, H.actor_id(who.actor), bot):
             from . import task_privacy
             try:
-                if (not str(message.get("from_actor") or "").startswith("human:")
+                if (not str(message.get("sender_id") or "").startswith("human:")
                         or task_privacy.message_tasks(c, message, include_run=False)):
                     return
             except Problem:
@@ -948,12 +948,12 @@ class Auth:
         if who.role != "bot" or who.actor != "bot:" + self.settings.assistant_bot:
             raise Problem("forbidden", "This endpoint is available only to people and " + name, 403)
         row = c.execute(
-            "SELECT v.scope,v.owner_actor,m.from_actor FROM attempts a "
+            "SELECT v.scope,v.owner_id,m.sender_id FROM attempts a "
             "JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
             "JOIN conversations v ON v.id=m.conversation_id WHERE a.id=?", (who.attempt_id,)).fetchone()
         if not row or row["scope"] != rooms.PERSONAL:
             raise Problem("forbidden", "Fleet access requires a private " + name + " conversation", 403)
-        actor = row["owner_actor"]
+        actor = row["owner_id"]
         if not actor or not str(actor).startswith("human:"):
             raise Problem("forbidden", "This " + name + " turn is not acting for a signed-in person", 403)
         human = H.human(c, H.actor_id(actor))
@@ -974,7 +974,7 @@ class Auth:
             raise Problem("not_found", "Task not found", 404)
         if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
             raise Problem("not_found", "Task not found", 404)
-        participants = (row["owner"], row["requester"])
+        participants = (row["owner_id"], row["requester_id"])
         if not H.task_participant(c, who.actor, row) and not (H.task_private(c, row) and H.task_private_readable(c, who.actor, row)):
             # A party to a task, or a private task's guest, always sees it; anyone else needs Read on every bot it
             # involves.
@@ -1018,7 +1018,7 @@ class Auth:
 
         number = re.fullmatch(r"#(\d{1,18})", ident)
         if number:
-            rows = readable(H._rows(c.execute("SELECT id,title,owner,requester FROM tasks WHERE number=? AND ("
+            rows = readable(H._rows(c.execute("SELECT id,title,owner_id,requester_id FROM tasks WHERE number=? AND ("
                                               + visible + ")", (int(number.group(1)),))))
             if rows:
                 return rows[0]["id"]
@@ -1026,8 +1026,8 @@ class Auth:
 
         if TASK_PREFIX_MIN <= len(ident) < 36:
             rows = readable(H._rows(c.execute(
-                "SELECT id,title,owner,requester FROM tasks WHERE substr(id,1,?)=? AND (" + visible + ") "
-                "ORDER BY created LIMIT 50", (len(ident), ident.lower()))))
+                "SELECT id,title,owner_id,requester_id FROM tasks WHERE substr(id,1,?)=? AND (" + visible + ") "
+                "ORDER BY created_at LIMIT 50", (len(ident), ident.lower()))))
             if len(rows) == 1:
                 return rows[0]["id"]
             if rows:
@@ -1036,7 +1036,7 @@ class Auth:
                                                              for r in rows[:10])), 409)
         if len(ident) >= 34:
             near = []
-            for row in H._rows(c.execute("SELECT id,title,owner,requester FROM tasks WHERE length(id) BETWEEN ? AND ? "
+            for row in H._rows(c.execute("SELECT id,title,owner_id,requester_id FROM tasks WHERE length(id) BETWEEN ? AND ? "
                                          "AND (" + visible + ")", (len(ident) - 2, len(ident) + 2))):
                 distance = _edit_distance(ident.lower(), row["id"], 2)
                 if distance is not None:
@@ -1061,9 +1061,9 @@ class Auth:
             raise Problem("not_found", "Approval not found", 404)
         msg = H.message(c, row["message_id"])
         if decide:
-            allowed = who.role in ("owner", "human") and msg["to_actor"] == who.actor
+            allowed = who.role in ("owner", "human") and msg["recipient_id"] == who.actor
         else:
-            allowed = who.role == "owner" or who.actor in (row["requested_by"], msg["to_actor"])
+            allowed = who.role == "owner" or who.actor in (row["requested_by"], msg["recipient_id"])
         if not allowed:
             raise Problem("forbidden", "This approval is not yours", 403)
         return row

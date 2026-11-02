@@ -58,13 +58,13 @@ async function integrationDetail(service, load, {base = RD_TOOLS, head = '', fac
       <pre>${esc(queryText(q))}</pre>
       ${q.params.length ? `<div class="params mono">${q.params.map(p => esc(p.name) + (p.required ? ' *' : '')).join(' · ')}</div>` : ''}
       <div class="row" style="gap:8px"><button class="ghost" type="button" data-copy-sql>Copy</button></div></details>`;
-  const learningHtml = n => `<div class="int-learning" data-learning="${esc(n.id)}"><span class="who" title="${esc(n.created)}">${esc(n.created.slice(0, 10))} · ${esc(n.actor)}</span><span class="text">${esc(n.text)}</span>${S.me?.role === 'owner' ? '<button class="linkish danger" type="button" data-delete-learning>Delete</button>' : ''}</div>`;
+  const learningHtml = n => `<div class="int-learning" data-learning="${esc(n.id)}"><span class="who" title="${esc(n.created_at)}">${esc(n.created_at.slice(0, 10))} · ${esc(n.actor)}</span><span class="text">${esc(n.text)}</span>${S.me?.role === 'owner' ? '<button class="linkish danger" type="button" data-delete-learning>Delete</button>' : ''}</div>`;
   // A fact with nothing to say is left out.
   const metaRow = (dt, dd) => dd ? `<dt>${dt}</dt><dd>${dd}</dd>` : '';
   $('#int-detail').innerHTML = `<div class="meeting-head">${head}<div><h1>${esc(page.title)}</h1></div></div>
     <div id="tool-facts">${facts ? facts(page) : ''}</div>
     <section class="card"><dl class="int-meta">${metaRow('Via', esc(page.access))}
-      <dt>Writes</dt><dd>${toolWritePill(page.writes)} · owner ${esc(page.owner)}${page.aliases?.length ? ' · also <span class="mono">' + page.aliases.map(esc).join(', ') + '</span>' : ''}</dd>
+      <dt>Writes</dt><dd>${toolWritePill(page.writes)} · owner ${esc(page.owner_id)}${page.aliases?.length ? ' · also <span class="mono">' + page.aliases.map(esc).join(', ') + '</span>' : ''}</dd>
       ${metaRow('Declared as', page.declared_as.trim() && `<pre class="mono">${esc(page.declared_as.trim())}</pre>`)}</dl></section>
     ${page.body?.trim() ? `<section class="card"><div class="md docs-content" id="int-body">${safeMd(page.body)}</div></section>` : ''}
     ${page.queries.length ? `<section class="card" id="int-queries"><header><h2>Queries</h2></header>

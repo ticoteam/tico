@@ -31,26 +31,26 @@ def migrate(c):
     H.add_column(c, 'task_types', 'default_visibility', "TEXT NOT NULL DEFAULT 'private'")
     H.add_column(c, 'messages', 'public', 'INTEGER NOT NULL DEFAULT 0')
     H.add_column(c, 'messages', 'hidden_at', 'TEXT')
-    c.execute("CREATE INDEX IF NOT EXISTS messages_public_task ON messages(conversation_id,json_extract(refs_json,'$.task'),created,id) "
-              "WHERE public=1 AND hidden_at IS NULL AND deleted_at IS NULL AND json_extract(refs_json,'$.comment')=1")
+    c.execute("CREATE INDEX IF NOT EXISTS messages_public_task ON messages(conversation_id,json_extract(refs,'$.task'),created_at,id) "
+              "WHERE public=1 AND hidden_at IS NULL AND deleted_at IS NULL AND json_extract(refs,'$.comment')=1")
     # Once per database: an install that ran the first version of roadmaps had its Product roadmap type public by
     # default and every task's internal title and body copied into its public text. The type becomes private, and
     # those copies go from tasks that are not public, so publishing one later needs public text written for it.
-    c.execute('CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)')
-    if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmaps_explicit_public_text','true')").rowcount:
+    c.execute('CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_explicit_public_text','true')").rowcount:
         c.execute("UPDATE task_types SET default_visibility='private' WHERE role='product-roadmap'")
         c.execute("UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
                   "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)")
     # Marked on every database, so a fresh one does not take its own second start for a first-version one. The marker
     # is new with the per-field decision: 'roadmaps_copies_cleared' marked databases that ran the per-task one.
-    if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmaps_copies_cleared_by_field','true')").rowcount \
+    if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_copies_cleared_by_field','true')").rowcount \
             and ran_before and H._has_table(c, 'task_events'):
         clear_copies(c)
     c.execute('CREATE TABLE IF NOT EXISTS task_requesters('
               'id TEXT PRIMARY KEY,task_id TEXT NOT NULL REFERENCES tasks(id),actor TEXT,'
               "name TEXT NOT NULL DEFAULT '',email TEXT NOT NULL DEFAULT '',phone TEXT NOT NULL DEFAULT '',"
               "other TEXT NOT NULL DEFAULT '',organization TEXT NOT NULL DEFAULT '',note TEXT NOT NULL DEFAULT '',"
-              "source TEXT NOT NULL,important INTEGER NOT NULL DEFAULT 0,token_hash TEXT NOT NULL UNIQUE,created TEXT NOT NULL)")
+              "source TEXT NOT NULL,important INTEGER NOT NULL DEFAULT 0,token_hash TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL)")
     c.execute('CREATE INDEX IF NOT EXISTS task_requesters_task ON task_requesters(task_id)')
     c.execute('CREATE UNIQUE INDEX IF NOT EXISTS task_requesters_actor ON task_requesters(task_id,actor) '
               'WHERE actor IS NOT NULL')
@@ -89,7 +89,7 @@ def clear_copies(c):
 
 
 def settings(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmaps'").fetchone() if H._has_table(c, 'registry_metadata') else None
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='roadmaps'").fetchone() if H._has_table(c, 'registry_metadata') else None
     return {'labels': [], 'cors_origins': [], 'action_limit': 10, 'suggestion_limit': SUGGESTIONS_WAITING_MAX,
             'bot_public_approval': True, 'suggestions_bot': None,
             **(json.loads(row[0]) if row else {})}
@@ -109,7 +109,7 @@ def suggestions_receiver(c):
         source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
     for template, states in (('product-manager', ('active', 'planned')), ('product-lead', ('active',))):
         row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
-                        "WHERE json_extract(bc.config_json,'$.template')=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
+                        "WHERE json_extract(bc.config,'$.template')=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
                         "ORDER BY bc.bot LIMIT 1", (template, *states)).fetchone()
         if row:
             return row[0], source
@@ -179,7 +179,7 @@ def publication(c, actor, row, visibility=None, public_title=None, public_summar
     if changed and (any(k.startswith('public_') for k in changed) or changed.get('visibility') == 'public'):
         approve(c, actor, row['id'], 'text', changed, approval_id)
     for key, value in changed.items():
-        c.execute(f'UPDATE tasks SET {key}=?,updated=? WHERE id=?', (value, H.now(), row['id']))
+        c.execute(f'UPDATE tasks SET {key}=?,updated_at=? WHERE id=?', (value, H.now(), row['id']))
         H._task_event(c, row['id'], actor, key, row[key], value, '')
 
 
@@ -215,11 +215,11 @@ def add_requester(c, task_id, values, actor=None):
         raise Problem('duplicate', 'Already requested by this teammate', 409)
     ident, token = H.new_id(), secrets.token_urlsafe(32)
     fields = ('name', 'email', 'phone', 'other', 'organization', 'note', 'source', 'important')
-    c.execute('INSERT INTO task_requesters(id,task_id,actor,' + ','.join(fields) + ',token_hash,created) '
+    c.execute('INSERT INTO task_requesters(id,task_id,actor,' + ','.join(fields) + ',token_hash,created_at) '
               'VALUES(' + ','.join('?' * 13) + ')',
               (ident, task_id, actor, *(values.get(k, '') for k in fields),
                hashlib.sha256(token.encode()).hexdigest(), H.now()))
-    c.execute('UPDATE tasks SET updated=? WHERE id=?', (H.now(), task_id))
+    c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), task_id))
     H.event(c, actor or H.KEEPER, 'task.requester.add', task_id, {'requester_id': ident})
     return {'id': ident, 'requester_token': token}
 
@@ -232,7 +232,7 @@ def remove_requester(c, task_id, *, token=None, ident=None, actor=None):
         removed = c.execute('DELETE FROM task_requesters WHERE task_id=? AND id=?', (task_id, ident)).rowcount
     if not removed:
         raise Problem('not_found', 'Requester not found', 404)
-    c.execute('UPDATE tasks SET updated=? WHERE id=?', (H.now(), task_id))
+    c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), task_id))
     H.event(c, actor or H.KEEPER, 'task.requester.remove', task_id, {})
     return {'removed': True}
 
@@ -243,7 +243,7 @@ def withdraw(c, task_id, token):
     digest = hashlib.sha256(token.encode()).hexdigest()
     if c.execute('SELECT 1 FROM task_requesters WHERE task_id=? AND token_hash=?', (task_id, digest)).fetchone():
         return remove_requester(c, task_id, token=token)
-    trash = c.execute('SELECT rows_json FROM task_trash WHERE task_id=? AND purged_at IS NULL',
+    trash = c.execute('SELECT rows FROM task_trash WHERE task_id=? AND purged_at IS NULL',
                       (task_id,)).fetchone() if H._has_table(c, 'task_trash') else None
     snapshot = json.loads(trash[0]) if trash else {}
     rows = snapshot.get('rows', {}).get('task_requesters') or []
@@ -251,7 +251,7 @@ def withdraw(c, task_id, token):
     if len(kept) == len(rows):
         raise Problem('not_found', 'Requester not found', 404)
     snapshot['rows']['task_requesters'] = kept
-    c.execute('UPDATE task_trash SET rows_json=? WHERE task_id=?', (json.dumps(snapshot, default=str), task_id))
+    c.execute('UPDATE task_trash SET rows=? WHERE task_id=?', (json.dumps(snapshot, default=str), task_id))
     H.event(c, H.KEEPER, 'task.requester.remove', task_id, {'trashed': True})
     return {'removed': True}
 
@@ -313,9 +313,9 @@ def install_internal(app, store, auth, mutate, mover):
         with store.read() as c:
             row = task(c, request.state.identity, tid)
             limit, offset = max(1, min(limit, 100)), max(0, offset)
-            columns = 'id,actor,name,email,phone,other,organization,note,source,important,created'
+            columns = 'id,actor,name,email,phone,other,organization,note,source,important,created_at'
             rows = (dict(r) for r in c.execute('SELECT ' + columns + ' FROM task_requesters WHERE task_id=? '
-                                              'ORDER BY created,id LIMIT ? OFFSET ?', (row['id'], limit + 1, offset)))
+                                              'ORDER BY created_at,id LIMIT ? OFFSET ?', (row['id'], limit + 1, offset)))
             items, after = page(rows, limit, offset)
             for item in items:
                 item['kind'] = 'teammate' if item['actor'] else 'external'
@@ -363,7 +363,7 @@ def install_internal(app, store, auth, mutate, mover):
                                 ' WHERE task_id=? AND id=?', (*values.values(), row['id'], rid)).rowcount
             if not changed:
                 raise Problem('not_found', 'Requester not found', 404)
-            c.execute('UPDATE tasks SET updated=? WHERE id=?', (H.now(), row['id']))
+            c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), row['id']))
             H.event(c, who.actor, 'task.requester.update', row['id'], {'requester_id': rid})
             return {'updated': True}
         return mutate(request, body, work)
@@ -395,7 +395,7 @@ def install_internal(app, store, auth, mutate, mover):
                 H._refresh_comment_replies(c, H.message(c, mid, include_deleted=True))
             else:
                 c.execute('UPDATE messages SET hidden_at=? WHERE id=?', (H.now() if body.action == 'hide' else None, mid))
-            c.execute('UPDATE tasks SET updated=? WHERE id=?', (H.now(), row['id']))
+            c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), row['id']))
             H.event(c, who.actor, 'task.comment.moderate', row['id'], {'comment': mid, 'action': body.action})
             return {'moderated': True}
         return mutate(request, body, work)

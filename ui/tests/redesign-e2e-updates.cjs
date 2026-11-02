@@ -13,7 +13,7 @@ run('redesign-e2e-updates', ['org', 'toured'], async ({hub, browser, phone, tag}
   for (const [slug, name] of [['botops', 'BotOps'], ['goal-manager', 'Strategy Bot'], ['librarian', 'Librarian'], ['task-manager', 'Task Manager']])
     await ok(page, 'POST', 'bots', {slug, display_name: name, description: 'A built-in.', reports_to: 'human:dana', status: 'active',
       repo: 'emp-' + slug, thread_mode: 'personal', model: 'hermes-profile', effort: 'as-configured', harness: 'hermes',
-      operator: 'dana', owners: ['dana'], runner_id: null});
+      owner_id: 'dana', owners: ['dana'], runner_id: null});
   const bots = (await ok(page, 'GET', '../employees')).map(e => e.name);
   assert.ok(HELPERS.every(slug => bots.includes(slug)), `${tag}: the hub has its helpers: ${bots}`);
   await page.reload();

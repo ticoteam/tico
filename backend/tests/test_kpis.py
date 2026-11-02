@@ -18,7 +18,7 @@ def stamp(days_ago):
 
 def reading(value, days_ago, quality="measured"):
     return {"id": f"r{days_ago}", "value": value, "period_end": stamp(days_ago), "period_start": stamp(days_ago + 7),
-            "collected_at": stamp(days_ago), "created": stamp(days_ago), "quality": quality}
+            "collected_at": stamp(days_ago), "created_at": stamp(days_ago), "quality": quality}
 
 
 ACTIVATION = {"name": "Activation", "unit": "%", "direction": "up", "cadence": "weekly"}
@@ -27,10 +27,10 @@ CLIMB = {"kind": "improve", "baseline": 40.0, "baseline_at": stamp(60), "target"
 
 def test_automatic_cost_uses_measured_api_cost_and_ignores_retired_cost(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id, bot, started, cost, billing) VALUES('legacy', 'ops', ?, 900, 'api')",
+        c.execute("INSERT INTO turns(id, bot, started_at, cost, billing) VALUES('legacy', 'ops', ?, 900, 'api')",
                   (stamp(1),))
         assert botkpis.value(c, "ops", "cost_7d", NOW) is None
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, cost, billing) VALUES(?, 'ops', ?, ?, ?, ?)", [
+        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, cost, billing) VALUES(?, 'ops', ?, ?, ?, ?)", [
             ("measured", stamp(1), 2.5, 1000, "api"), ("subscription", stamp(1), 5, 500, "subscription")])
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 2.5
         c.execute("UPDATE turns SET est_cost_usd=0 WHERE billing='api' AND est_cost_usd IS NOT NULL")
@@ -39,18 +39,18 @@ def test_automatic_cost_uses_measured_api_cost_and_ignores_retired_cost(api):
 
 def test_automatic_cost_distinguishes_missing_usage_from_measured_zero(api):
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing, usage_reason) "
+        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, billing, usage_reason) "
                       "VALUES(?, 'ops', ?, 0, ?, ?)", [
             (f"{reason}-{billing}", stamp(1), billing, reason)
             for reason in ("usage_unreported", "usage_limited", "no_result")
             for billing in ("api", None)
         ])
         # A measured subscription and an API reading outside the window cannot supply a reading.
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
             ("subscription", stamp(1), 50, "subscription"), ("old", stamp(8), 100, "api")])
         assert botkpis.value(c, "ops", "cost_7d", NOW) is None
         assert all(r["period_end"] != stamp(0) for r in botkpis.readings(c, "auto:ops:cost_7d", NOW))
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
             ("measured", stamp(1), 2.5, "api"), ("legacy-billing", stamp(1), 1.25, None)])
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 3.75
         c.execute("UPDATE turns SET est_cost_usd=0 WHERE id IN ('measured', 'legacy-billing')")
@@ -100,7 +100,7 @@ def test_the_colour_of_a_kpi_is_pace_or_range_and_no_fresh_data_is_gray():
 
 # ------------------------------------------------------------------ the API
 def goal_with_kpi(api, target=None, token="ana-test", owner="ana", cadence="daily"):
-    goal = post(api, "goals", {"title": "Raise activation", "owner": owner}, token=token)["goal"]
+    goal = post(api, "goals", {"title": "Raise activation", "owner_id": owner}, token=token)["goal"]
     body = {"name": "Activation", "unit": "%", "cadence": cadence, "definition": "Signed-up accounts that finish setup",
             "goal_id": goal["id"], **(target or {"kind": "improve", "baseline": 40, "target": 70, "deadline": "2099-12-31"})}
     return goal, post(api, "kpis", body, token=token)["kpi"]
@@ -147,7 +147,7 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
     logged = log(api, kpi["id"], 52, evidence="https://bi.example/activation", note="September", period_end=H.now())
     with api.app.state.store.transaction() as c:
         strategy_bot.set_level(c, "human:ana", 2)                  # above Passive, a stale KPI waits in Needs you
-    stale = post(api, "kpis", {"name": "Unreported measure", "owner": "me"})["kpi"]
+    stale = post(api, "kpis", {"name": "Unreported measure", "owner_id": "me"})["kpi"]
     assert any(item.get("kpi_id") == stale["id"] for item in get(api, "goals/needs-you")["items"])
     post(api, f"kpis/{stale['id']}/archive", {})
     assert all(item.get("kpi_id") != stale["id"] for item in get(api, "goals/needs-you")["items"])
@@ -155,7 +155,7 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
     post(api, f"kpis/{stale['id']}/restore", {})
     original = get(api, f"kpis/{kpi['id']}")
     archived = post(api, f"kpis/{kpi['id']}/archive", {})["kpi"]
-    assert archived["archived_at"] and archived["archived_by"] == "human:ana"
+    assert archived["archived_at"] and archived["archived_by_id"] == "human:ana"
     assert all(row["id"] != kpi["id"] for row in get(api, "kpis")["kpis"])
     historical = get(api, "kpis?include_archived=true")["kpis"]
     assert next(row for row in historical if row["id"] == kpi["id"])["archived_at"]
@@ -176,24 +176,24 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
         assert K.goal_views(c, [goal["id"]])[goal["id"]] == []
     with api.app.state.store.read() as c:
         actions = [r["action"] for r in c.execute(
-            "SELECT action FROM events WHERE target=? AND action LIKE 'kpi.%' ORDER BY ts", (kpi["id"],))]
+            "SELECT action FROM events WHERE target=? AND action LIKE 'kpi.%' ORDER BY created_at", (kpi["id"],))]
     assert actions[-1:] == ["kpi.archive"]
 
     restored = post(api, f"kpis/{kpi['id']}/restore", {})["kpi"]
-    assert restored["archived_at"] is None and restored["archived_by"] is None
+    assert restored["archived_at"] is None and restored["archived_by_id"] is None
     assert any(row["id"] == kpi["id"] for row in get(api, "kpis")["kpis"])
     assert any(row["id"] == kpi["id"] for row in goal_of(api, goal["id"])["kpis"])
     with api.app.state.store.read() as c:
         actions = [r["action"] for r in c.execute(
-            "SELECT action FROM events WHERE target=? AND action LIKE 'kpi.%' ORDER BY ts", (kpi["id"],))]
+            "SELECT action FROM events WHERE target=? AND action LIKE 'kpi.%' ORDER BY created_at", (kpi["id"],))]
     assert actions[-2:] == ["kpi.archive", "kpi.restore"]
 
 
 def add_strategy_bot(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager','{}',NULL,'ana')")
 
 
 def owners_chat(api):
@@ -293,12 +293,12 @@ def test_the_kpis_of_the_old_tables_become_links_with_an_improvement_target():
     for i, script in enumerate(hubdb.MIGRATIONS[:hubdb.MIGRATIONS.index(hubdb.KPIS_SCHEMA)]):
         hubdb._apply(conn, script)
         conn.execute(f"PRAGMA user_version={i + 1}")
-    conn.execute("INSERT INTO goals (id, title, owner, status, status_note, status_by, created, created_by, updated) "
+    conn.execute("INSERT INTO goals (id, title, owner_id, status, status_note, status_by_id, created_at, created_by_id, updated_at) "
                  "VALUES ('g1','Grow','company','green','On track','human:ana','2026-01-01T00:00:00Z','human:ana','2026-01-01T00:00:00Z')")
-    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created, created_by) VALUES "
+    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created_at, created_by_id) VALUES "
                  "('k1','g1','Signups','signups',500,'2026-01-02T00:00:00Z','human:ana'), "
                  "('k2','g1','NPS','',NULL,'2026-01-02T00:00:00Z','human:ana')")
-    conn.execute("INSERT INTO kpi_readings (id, kpi_id, ts, value, actor, source, note, created) VALUES "
+    conn.execute("INSERT INTO kpi_readings (id, kpi_id, measured_at, value, actor_id, source, note, created_at) VALUES "
                  "('r1','k1','2026-03-01T00:00:00Z',120,'human:ana','measured','from the dashboard','2026-03-02T00:00:00Z'), "
                  "('r2','k1','2026-04-01T00:00:00Z',200,'human:ana','estimate','','2026-04-01T00:00:00Z')")
     hubdb.migrate(conn)
@@ -307,7 +307,7 @@ def test_the_kpis_of_the_old_tables_become_links_with_an_improvement_target():
     assert (links["k1"]["kind"], links["k1"]["target"], links["k1"]["goal_id"]) == ("improve", 500, "g1")
     assert (links["k2"]["kind"], links["k2"]["target"]) == ("none", None)
     kpi = dict(conn.execute("SELECT * FROM kpis WHERE id='k1'").fetchone())
-    assert (kpi["owner"], kpi["cadence"], kpi["direction"], kpi["definition_version"]) == ("company", "monthly", "up", 1)
+    assert (kpi["owner_id"], kpi["cadence"], kpi["direction"], kpi["definition_version"]) == ("company", "monthly", "up", 1)
     old = [dict(r) for r in conn.execute("SELECT * FROM kpi_readings ORDER BY id")]
     assert [(r["value"], r["period_end"], r["collected_at"], r["quality"], r["note"]) for r in old] == [
         (120, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", "measured", "from the dashboard"),
@@ -321,7 +321,7 @@ def test_the_kpis_of_the_old_tables_become_links_with_an_improvement_target():
 
 def test_archive_restore_recomputes_every_linked_goal_with_its_own_target(api):
     goal, kpi = goal_with_kpi(api, {"kind": "maintain", "min": 40, "max": 60})
-    other = post(api, "goals", {"title": "Second goal", "owner": "ana"})["goal"]
+    other = post(api, "goals", {"title": "Second goal", "owner_id": "ana"})["goal"]
     post(api, f"goals/{other['id']}/kpis", {"kpi_id": kpi["id"], "kind": "maintain", "min": 70})
     log(api, kpi["id"], 50, period_end=H.now())
     assert [goal_of(api, g["id"])["status"] for g in (goal, other)] == ["green", "red"]

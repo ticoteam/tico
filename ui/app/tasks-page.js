@@ -78,7 +78,7 @@ function pageTasks(forced, openId = '') {
   // Go through: the Needs you cards from the first, one at a time (decide.js).
   for (const b of document.querySelectorAll('#tasks-pane [data-go-through]')) b.onclick = () => decideGoThrough();
   $('#task-stats')?.addEventListener('click', () => taskStatsOpen(state));
-  $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner, {labels: p.labels}); };
+  $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); };
   const search = $('#task-q');
   search.oninput = () => {
     state.q = search.value;
@@ -304,7 +304,7 @@ function openTaskCreate(owner = '', opts = {}) {
   goalOptions().then(goals => {
     const sel = $('#task-create-form select[name=goal]'); if (!sel || !goals.length) return;
     sel.innerHTML = '<option value="">No goal</option>' + goals.map(g =>
-      `<option value="${esc(g.id)}">${esc(g.title)} · ${esc(goalOwnerInfo(g.owner).name)}</option>`).join('');
+      `<option value="${esc(g.id)}">${esc(g.title)} · ${esc(goalOwnerInfo(g.owner_id).name)}</option>`).join('');
   });
   taskFormFiles(creation);
   void taskPipelineCreate($('#task-create-form'), opts.type || TASKS_ST?.type);
@@ -515,8 +515,8 @@ async function tasksLoadAllDone(state) {
 function companyNeedActor(task, need) {
   const me = myActor();
   // A task waiting on me waits with the bot that owns it, whoever asked for it.
-  const candidates = taskWaitingOn(task) === me || taskWaitingOn(need) === me ? [task.owner]
-    : [need?.ask?.from_actor, task?.ask?.from_actor, taskRequester(task), task?.owner];
+  const candidates = taskWaitingOn(task) === me || taskWaitingOn(need) === me ? [task.owner_id]
+    : [need?.ask?.sender_id, task?.ask?.sender_id, taskRequester(task), task?.owner_id];
   return candidates.find(actor => actorSlug(actor) && actor !== me)
     || candidates.find(actor => actor && actor !== me)
     || me;
@@ -528,15 +528,15 @@ function companyNeedGroups(items) {
   for (const it of items) {
     if (!it.task || it.col === 'done' || !taskNeedsViewer(it.task)) continue;
     const need = needById.get(String(it.id)), actor = companyNeedActor(it.task, need);
-    if (!groups.has(actor)) groups.set(actor, {actor, items: [], firstNeed: Infinity, firstRank: Infinity, updated: ''});
+    if (!groups.has(actor)) groups.set(actor, {actor, items: [], firstNeed: Infinity, firstRank: Infinity, updated_at: ''});
     const group = groups.get(actor);
     group.items.push(it);
     group.firstNeed = Math.min(group.firstNeed, needOrder.get(String(it.id)) ?? Infinity);
     group.firstRank = Math.min(group.firstRank, it.rank == null ? Infinity : Number(it.rank));
-    if (String(it.updated || '') > group.updated) group.updated = String(it.updated || '');
+    if (String(it.updated_at || '') > group.updated_at) group.updated_at = String(it.updated_at || '');
   }
   return [...groups.values()].sort((a, b) => a.firstNeed - b.firstNeed || a.firstRank - b.firstRank
-    || String(b.updated).localeCompare(String(a.updated)) || actorLabel(a.actor).localeCompare(actorLabel(b.actor)));
+    || String(b.updated_at).localeCompare(String(a.updated_at)) || actorLabel(a.actor).localeCompare(actorLabel(b.actor)));
 }
 function tasksTabsPaint(state) { tasksPaint($('#task-view'), tasksTabsHTML(state)); }
 // The body redraws on every load (the 30-second poll reloads the list): only rows that changed are replaced, so the

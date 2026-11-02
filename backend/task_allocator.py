@@ -52,13 +52,13 @@ def in_hand(c, slug, type_id, assign_step):
     """The bot's tickets on the type past the assigning step and before its merged step."""
     after, before = held_between(c, type_id, assign_step)
     return c.execute(
-        "SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.owner=? AND t.type_id=? "
+        "SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.owner_id=? AND t.type_id=? "
         f"AND t.status NOT IN ({','.join('?' * len(FINISHED))}) AND s.position>? AND s.position<?",
         ("bot:" + slug, type_id, *FINISHED, after, before)).fetchone()[0]
 
 
 def _open(c, slug):
-    return c.execute(f"SELECT count(*) FROM tasks WHERE owner=? AND status NOT IN ({','.join('?' * len(FINISHED))})",
+    return c.execute(f"SELECT count(*) FROM tasks WHERE owner_id=? AND status NOT IN ({','.join('?' * len(FINISHED))})",
                      ("bot:" + slug, *FINISHED)).fetchone()[0]
 
 
@@ -68,7 +68,7 @@ def allocate(c, at=None):
     if not F._ready(c):
         return []
     given = []
-    steps = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow_json LIKE '%\"assign\"%'")]
+    steps = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow LIKE '%\"assign\"%'")]
     for step in steps:
         rule = F.of(step).get("assign")
         if not rule:
@@ -76,8 +76,8 @@ def allocate(c, at=None):
         pool = [s for s in rule["pool"] if _available(c, s)]
         owners = {"bot:" + s for s in rule["pool"]}
         waiting = c.execute(
-            f"SELECT id, owner FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
-            "ORDER BY created, id", (step["id"], *FINISHED)).fetchall()
+            f"SELECT id, owner_id FROM tasks WHERE step_id=? AND status NOT IN ({','.join('?' * len(FINISHED))}) "
+            "ORDER BY created_at, id", (step["id"], *FINISHED)).fetchall()
         for ticket_id, owner in waiting:
             if owner in owners:
                 continue

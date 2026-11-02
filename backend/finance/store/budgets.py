@@ -11,7 +11,7 @@ from .ledger import new_id
 def _budget(r: Any) -> Budget:
     return Budget(id=r["id"], book_id=r["book_id"], name=r["name"], period=r["period"], account_id=r["account_id"] or "",
                   catch_all=bool(r["catch_all"]), team=r["team"], teammate=r["teammate"], vendor=r["vendor_key"],
-                  parent_id=r["parent_id"] or "", owner=r["owner"], warn_pct=int(r["warn_pct"]), at_limit=r["at_limit"],
+                  parent_id=r["parent_id"] or "", owner=r["owner_id"], warn_pct=int(r["warn_pct"]), at_limit=r["at_limit"],
                   rollover=r["rollover"], active=bool(r["active"]), created_at=r["created_at"])
 
 
@@ -73,7 +73,7 @@ def seeded_version(c: sqlite3.Connection, budget_id: str) -> bool:
     if len(rows) != 1 or not rows[0][0]:
         return False
     return c.execute("SELECT 1 FROM fin_actions WHERE kind='budget_create' "
-                     "AND json_extract(result_json, '$.budget_id')=? LIMIT 1", (budget_id,)).fetchone() is None
+                     "AND json_extract(result, '$.budget_id')=? LIMIT 1", (budget_id,)).fetchone() is None
 
 
 def drop_versions(c: sqlite3.Connection, budget_id: str) -> None:
@@ -315,7 +315,7 @@ def projections(c: sqlite3.Connection, book_id: str, first: str, last: str) -> l
 def event(c: sqlite3.Connection, name: str, subject: str, period_key: str, payload: Mapping[str, object], by: str,
           at: str) -> bool:
     """A `finance.*` event for Tico's triggers, once per (name, subject, period). Whether it was new."""
-    return c.execute("INSERT INTO fin_events(id, name, subject, period_key, payload_json, created_at, created_by) "
+    return c.execute("INSERT INTO fin_events(id, name, subject, period_key, payload, created_at, created_by) "
                      "VALUES(?,?,?,?,?,?,?) ON CONFLICT(name, subject, period_key) DO NOTHING",
                      (new_id(), name, subject, period_key, json.dumps(dict(payload), sort_keys=True, default=str),
                       at, by)).rowcount > 0

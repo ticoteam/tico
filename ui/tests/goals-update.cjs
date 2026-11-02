@@ -18,7 +18,7 @@ const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('lib
 const people = [{id: 'ana', name: 'Ana Silva', org_parent: ''}, {id: 'ben', name: 'Ben Park', org_parent: 'p:ana'},
   {id: 'cara', name: 'Cara Diaz', org_parent: 'p:ana'}];
 const SIGNAL_COLOUR = {on_track: 'green', at_risk: 'yellow', off_track: 'red'};
-const measure = {id: 'k-demos', name: 'Demos booked', unit: '', direction: 'up', cadence: 'weekly', owner: 'human:ben', freshness: 'fresh',
+const measure = {id: 'k-demos', name: 'Demos booked', unit: '', direction: 'up', cadence: 'weekly', owner_id: 'human:ben', freshness: 'fresh',
   status: 'green', reason: 'On pace', spark: [3, 4, 5], latest: {value: 5, period_end: new Date().toISOString(), quality: 'measured'},
   target_label: '→ 20 by Dec 31', link: {goal_id: 'g-demos', kind: 'improve', target: 20, deadline: '2027-12-31'}};
 // A targeted measure with no recent reading judges nothing: the server colours that goal from its latest check-in.
@@ -33,15 +33,15 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
     const errors = [], posted = [];
     page.on('pageerror', e => errors.push(e.message));
     const goals = [
-      {id: 'g-ana', title: 'Raise the seed round', owner: 'human:ana', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
-      {id: 'g-ben', title: 'Sign three pilot landlords', owner: 'human:ben', parent_id: null, status: null, status_source: 'auto', rank: 0, kpis: []},
-      {id: 'g-demos', title: 'Book twenty demos', owner: 'human:ben', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: [measure]},
-      {id: 'g-hand', title: 'Hire a designer', owner: 'human:ben', parent_id: null, status: 'red', status_source: 'person', status_by: 'human:ana', rank: 3,
+      {id: 'g-ana', title: 'Raise the seed round', owner_id: 'human:ana', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
+      {id: 'g-ben', title: 'Sign three pilot landlords', owner_id: 'human:ben', parent_id: null, status: null, status_source: 'auto', rank: 0, kpis: []},
+      {id: 'g-demos', title: 'Book twenty demos', owner_id: 'human:ben', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: [measure]},
+      {id: 'g-hand', title: 'Hire a designer', owner_id: 'human:ben', parent_id: null, status: 'red', status_source: 'person', status_by_id: 'human:ana', rank: 3,
         kpis: [{...measure, id: 'k-interviews', name: 'Interviews', link: {...measure.link, goal_id: 'g-hand'}}]},
-      {id: 'g-stale', title: 'Call every landlord', owner: 'human:ben', parent_id: null, status: null, status_source: 'auto', rank: 4, kpis: [stale]},
-      {id: 'g-ben-old', title: 'Finished pilot', owner: 'human:ben', parent_id: null, status: 'done', status_source: 'person', rank: 2, kpis: []},
-      {id: 'g-cara', title: 'Ship the listing page', owner: 'human:cara', parent_id: null, status: null, status_source: 'auto', rank: 0, kpis: []},
-      {id: 'g-cara-pilot', title: 'Write the pilot contract', owner: 'human:cara', parent_id: 'g-ben', status: null, status_source: 'auto', rank: 1, kpis: []},
+      {id: 'g-stale', title: 'Call every landlord', owner_id: 'human:ben', parent_id: null, status: null, status_source: 'auto', rank: 4, kpis: [stale]},
+      {id: 'g-ben-old', title: 'Finished pilot', owner_id: 'human:ben', parent_id: null, status: 'done', status_source: 'person', rank: 2, kpis: []},
+      {id: 'g-cara', title: 'Ship the listing page', owner_id: 'human:cara', parent_id: null, status: null, status_source: 'auto', rank: 0, kpis: []},
+      {id: 'g-cara-pilot', title: 'Write the pilot contract', owner_id: 'human:cara', parent_id: 'g-ben', status: null, status_source: 'auto', rank: 1, kpis: []},
     ];
     let refuse = '';   // '' answers; 'forbidden' refuses; 'drop' drops the line
     let hold = null;   // a promise the next reply waits for: a slow server

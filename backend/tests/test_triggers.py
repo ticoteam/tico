@@ -13,7 +13,7 @@ def hook(api, url, body=b'{"order": 42}', headers=None):
 
 def listener(api, trigger_id, bot="ops", text="Ship it.", name="New order"):
     """An automation on the webhook whose Bot turn hands `bot` the call, the way a routine on `webhook.<id>` did."""
-    return post(api, "automations", {"name": name, "owner": "person:ana", "trigger": {"type": "webhook", "id": trigger_id},
+    return post(api, "automations", {"name": name, "owner_id": "person:ana", "trigger": {"type": "webhook", "id": trigger_id},
                                      "steps": [{"id": "work", "type": "bot_turn", "bot": bot,
                                                 "prompt": text + " {{webhook.content}}"}]})["id"]
 
@@ -24,9 +24,9 @@ def rule_row(api, params, event="webhook.received", by="human:ana", scope_kind="
         position = (c.execute("SELECT max(position) FROM rules WHERE scope_kind=? AND scope_id=? AND position<?",
                               (scope_kind, scope_id, tico_notices.RULE_POSITION)).fetchone()[0] or 0) + 1
         row = {"id": "rule-" + H.new_id(), "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
-               "when_json": json.dumps(when or {}, sort_keys=True), "then_outcome": then,
-               "params_json": json.dumps(params, sort_keys=True), "enabled": 1, "position": position, "note": "",
-               "created_by": by, "action_by": by, "created": H.now(), "updated": H.now(), "revision": 1}
+               "condition": json.dumps(when or {}, sort_keys=True), "then_outcome": then,
+               "params": json.dumps(params, sort_keys=True), "enabled": 1, "position": position, "note": "",
+               "created_by": by, "action_by": by, "created_at": H.now(), "updated_at": H.now(), "revision": 1}
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return row
 
@@ -34,7 +34,7 @@ def rule_row(api, params, event="webhook.received", by="human:ana", scope_kind="
 def turns(api, name="New order"):
     """The tasks an automation's Bot turns opened: each is titled with its automation's name."""
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE title=? ORDER BY created, id", (name,))]
+        return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE title=? ORDER BY created_at, id", (name,))]
 
 
 def test_a_delivery_runs_each_listening_automation_once_and_only_with_the_secret(api):
@@ -50,7 +50,7 @@ def test_a_delivery_runs_each_listening_automation_once_and_only_with_the_secret
     assert again.status_code == 200 and again.json()["duplicate"] is True
     assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1
     tasks = turns(api)
-    assert len(tasks) == 1 and tasks[0]["owner"] == "bot:ops"
+    assert len(tasks) == 1 and tasks[0]["owner_id"] == "bot:ops"
     body = tasks[0]["body"]
     assert body.startswith("Ship it.") and '"order": 42' in body and "<data n=" in body
 
@@ -87,7 +87,7 @@ def test_a_signed_trigger_takes_a_github_delivery_and_refuses_and_logs_a_bad_sig
     assert replay["signed"] is True and replay["replayed"] is True and "signing_secret" not in replay
     with api.app.state.store.read() as c:                                    # sealed, and in no receipt
         assert key not in c.execute("SELECT signing_secret FROM triggers WHERE id='repo'").fetchone()[0]
-        receipts = " ".join(r[0] + r[1] for r in c.execute("SELECT request_hash,response_json FROM idempotency"))
+        receipts = " ".join(r[0] + r[1] for r in c.execute("SELECT request_hash,response FROM idempotency"))
         assert key not in receipts and made["url"].rsplit("/", 1)[1] not in receipts
 
     body = b'{"ref": "refs/heads/main"}'

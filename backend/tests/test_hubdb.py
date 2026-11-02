@@ -61,7 +61,7 @@ class Schema(HubCase):
         task = H.task_create(self.conn, ANA, "Prepare packet", "Keep this task through upgrade.", CMO, lint=False)
         # Main has already applied the purpose migration; rotation must be appended after it.
         published_version = H.MIGRATIONS.index(H.RUN_PURPOSE_SCHEMA) + 1
-        self.conn.execute("INSERT INTO turns(id,bot,started,purpose) VALUES('before-rotation','cmo',?,'review PR')",
+        self.conn.execute("INSERT INTO turns(id,bot,started_at,purpose) VALUES('before-rotation','cmo',?,'review PR')",
                           (H.now(),))
         self.conn.execute("ALTER TABLE turns DROP COLUMN rotated")
         self.conn.execute(f"PRAGMA user_version={published_version}")
@@ -125,9 +125,9 @@ class Schema(HubCase):
         for query, index in (
                 ("SELECT id FROM tasks WHERE carried_by='existing-run'", "tasks_carried_by"),
                 ("SELECT 1 FROM messages WHERE in_reply_to='question' AND kind='answer'", "messages_reply_kind"),
-                ("SELECT id FROM messages WHERE from_actor='bot:cmo' AND kind='ask'", "messages_from_kind"),
+                ("SELECT id FROM messages WHERE sender_id='bot:cmo' AND kind='ask'", "messages_from_kind"),
                 ("SELECT id FROM messages WHERE conversation_id='task-thread' AND kind='ask' "
-                 "AND answered_by IS NULL AND deleted_at IS NULL", "messages_pending_conversation")):
+                 "AND answered_by_id IS NULL AND deleted_at IS NULL", "messages_pending_conversation")):
             plan = " ".join(r[3] for r in migrated.execute("EXPLAIN QUERY PLAN " + query))
             self.assertIn(index, plan)
 
@@ -183,18 +183,18 @@ class GrowthRethink(unittest.TestCase):
 
     def test_the_rethink_moves_idea_notes_channels_and_the_go_to_market_page_then_drops_the_tables(self):
         conn = self.before_rethink()
-        conn.execute("INSERT INTO task_types (id, name, created, updated) VALUES ('idea', 'Idea', 'x', 'x')")
-        conn.execute("INSERT INTO tasks (id, title, body, requester, owner, status, type_id, created, updated) "
+        conn.execute("INSERT INTO task_types (id, name, created_at, updated_at) VALUES ('idea', 'Idea', 'x', 'x')")
+        conn.execute("INSERT INTO tasks (id, title, body, requester_id, owner_id, status, type_id, created_at, updated_at) "
                      "VALUES ('t1', 'Try ads', 'Spend a small test.', 'me', 'cmo', 'open', 'idea', 'x', 'x')")
         conn.execute("INSERT INTO growth_ideas (task_id, hypothesis, prediction, result, learning, created_at, "
                      "updated_at) VALUES ('t1', 'Ads bring buyers', 'CPA under 40', '', 'Cheap wins', 'x', 'x')")
         conn.execute("INSERT INTO growth_channels (id, slug, name, created_at) "
                      "VALUES ('ch1', 'paid-search', 'Paid search', 'x')")
         conn.execute("INSERT INTO growth_idea_channels (task_id, channel_id) VALUES ('t1', 'ch1')")
-        conn.execute("INSERT INTO gtm_versions (id, n, body_json, published_at) VALUES ('g1', 1, ?, 'x')",
+        conn.execute("INSERT INTO gtm_versions (id, n, body, published_at) VALUES ('g1', 1, ?, 'x')",
                      (json.dumps({"motion": {"primary": "self_serve"}, "buyer": {"who_buys": "Ops leads"},
                                   "playbooks": ["Demo first"]}),))
-        conn.execute("INSERT OR REPLACE INTO strategy_versions (id, n, status, sections, updated) "
+        conn.execute("INSERT OR REPLACE INTO strategy_versions (id, n, status, sections, updated_at) "
                      "VALUES ('d1', 1, 'draft', ?, 'x')", (json.dumps({"serve": "SMBs", "how": ""}),))
         conn.execute("INSERT INTO goal_proposals (id, kind, proposed_by, proposed_at) VALUES "
                      "('p1', 'gtm_draft', 'cmo', 'x'), ('p2', 'kpi_add', 'cmo', 'x')")
@@ -233,8 +233,8 @@ class GrowthRethink(unittest.TestCase):
 
     def test_a_hypothesis_that_already_is_the_body_is_not_copied_into_it_again(self):
         conn = self.before_rethink()
-        conn.execute("INSERT INTO task_types (id, name, created, updated) VALUES ('idea', 'Idea', 'x', 'x')")
-        conn.execute("INSERT INTO tasks (id, title, body, requester, owner, status, type_id, created, updated) "
+        conn.execute("INSERT INTO task_types (id, name, created_at, updated_at) VALUES ('idea', 'Idea', 'x', 'x')")
+        conn.execute("INSERT INTO tasks (id, title, body, requester_id, owner_id, status, type_id, created_at, updated_at) "
                      "VALUES ('t2', 'Try ads', 'Ads bring buyers', 'me', 'cmo', 'open', 'idea', 'x', 'x')")
         conn.execute("INSERT INTO growth_ideas (task_id, hypothesis, prediction, result, learning, created_at, "
                      "updated_at) VALUES ('t2', 'Ads bring buyers', '', '', 'Cheap wins', 'x', 'x')")
@@ -246,7 +246,7 @@ class GrowthRethink(unittest.TestCase):
 
     def test_a_team_that_already_has_a_marketing_type_keeps_the_idea_type_under_its_old_name(self):
         conn = self.before_rethink()
-        conn.execute("INSERT INTO task_types (id, name, created, updated) VALUES ('idea', 'Idea', 'x', 'x'), "
+        conn.execute("INSERT INTO task_types (id, name, created_at, updated_at) VALUES ('idea', 'Idea', 'x', 'x'), "
                      "('mine', 'Marketing', 'x', 'x')")
 
         H.migrate(conn)
@@ -265,7 +265,7 @@ class GrowthRethink(unittest.TestCase):
     def test_an_idea_type_seeded_before_scaling_gets_the_step_when_the_store_starts(self):
         conn = self.before_rethink()
         # The idea type as the release before the rethink seeded it: every step of Marketing but Scaling.
-        conn.execute("INSERT INTO task_types (id, name, created, updated) VALUES ('idea', 'Idea', 'x', 'x')")
+        conn.execute("INSERT INTO task_types (id, name, created_at, updated_at) VALUES ('idea', 'Idea', 'x', 'x')")
         conn.executemany("INSERT INTO task_steps (id, type_id, name, position, status) VALUES (?, 'idea', ?, ?, ?)",
                          [(MT.step_id(key), name, position, status) for position, (key, name, status)
                           in enumerate(step for step in MT.STEPS if step[0] != "scaling")])
@@ -310,7 +310,7 @@ class Rule1Identity(HubCase):
 
     def test_only_the_addressee_answers_an_ask(self):
         ask = H.say(self.conn, CMO, SEO, "how many posts shipped?", kind="ask")
-        self.assertEqual(H.answer(self.conn, SEO, ask["id"], "four")["to_actor"], CMO)
+        self.assertEqual(H.answer(self.conn, SEO, ask["id"], "four")["recipient_id"], CMO)
         self.refused("identity", H.answer, self.conn, ANALYTICS, ask["id"], "four")
 
 # ----------------------------------------------------------------------------- rule 2
@@ -352,9 +352,9 @@ class Rule5Tasks(HubCase):
         row = self.open_task()
         H.task_update(self.conn, SEO, row["id"], status="done", note="posted")
         closed = H.task_close(self.conn, CMO, row["id"], note="reads well")
-        self.assertEqual((closed["status"], closed["closed_by"]), ("closed", CMO))
+        self.assertEqual((closed["status"], closed["closed_by_id"]), ("closed", CMO))
         woken = [m for m in H.messages(self.conn, row["conversation_id"])
-                 if m["to_actor"] == SEO and m["body"].startswith("Closed:")]
+                 if m["recipient_id"] == SEO and m["body"].startswith("Closed:")]
         self.assertEqual(len(woken), 1)
 
     def test_reopening_clears_completion_and_preserves_history(self):
@@ -382,11 +382,11 @@ class Rule5Tasks(HubCase):
         self.assertTrue(H.task_ask(self.conn, SEO, row["id"], "Which audience?"))
 
     def stale(self, row):
-        self.conn.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), days=-2), row["id"]))
+        self.conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-2), row["id"]))
 
     def closed_notices(self, row, to):
         return [m for m in H.messages(self.conn, row["conversation_id"])
-                if m["to_actor"] == to and m["body"].startswith(("Closed:", "Child closed:"))]
+                if m["recipient_id"] == to and m["body"].startswith(("Closed:", "Child closed:"))]
 
     def test_a_person_finishes_a_bot_request_in_one_tap_and_the_bot_hears_who_did(self):
         tapped = H.task_create(self.conn, CMO, "Decide whether to release the draft", "Review it.", ANA)
@@ -405,31 +405,31 @@ class Rule5Tasks(HubCase):
         row = H.task_create(self.conn, CMO, "Speed up the overview checks", "Make them pass alone.", SEO)
         H.task_update(self.conn, SEO, row["id"], status="review", note="Pushed; all changed scripts pass.")
         told = [m for m in H.messages(self.conn, row["conversation_id"])
-                if m["to_actor"] == CMO and m["body"].startswith("Ready for review:")]
+                if m["recipient_id"] == CMO and m["body"].startswith("Ready for review:")]
         self.assertEqual(len(told), 1)
         self.assertIn("all changed scripts pass", told[0]["body"])
 
     def test_a_task_with_a_worktree_moves_to_review_and_done_where_no_github_app_is_set_up(self):
         """No App table, so no branch Tico could check: the hand-off is not held waiting for one."""
         row = H.task_create(self.conn, CMO, "Trim the overview", "x", SEO)
-        self.conn.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,updated,"
-                          "detail_json) VALUES('w1',?,'worktree','worktree:w1','acme/site','present','bot:seo',?,"
+        self.conn.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch,updated_at,"
+                          "detail) VALUES('w1',?,'worktree','worktree:w1','acme/site','present','bot:seo',?,"
                           "'acme/site',?,?,'{}')", (row["id"], H.now(), f"tico/{row['id'][:8]}-trim", H.now()))
         self.assertEqual(H.task_update(self.conn, SEO, row["id"], status="review")["status"], "review")
         self.assertEqual(H.task_update(self.conn, SEO, row["id"], status="done")["status"], "done")
 
     def finished(self, row, to):
         return [m for m in H.messages(self.conn, row["conversation_id"])
-                if m["to_actor"] == to and m["body"].startswith("Ana Rivera marked this done:")]
+                if m["recipient_id"] == to and m["body"].startswith("Ana Rivera marked this done:")]
 
     def test_a_person_finishing_a_task_tells_every_bot_on_it_once(self):
         from backend.store import SCHEMA
         # Superseding its ask card exercises the server's versioned unblock path.
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
-        self.conn.execute("ALTER TABLE bot_config ADD COLUMN access_json TEXT")
+        self.conn.execute("ALTER TABLE bot_config ADD COLUMN access TEXT")
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN onboarding_state TEXT")
-        self.conn.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('cmo',?, 'ana')",
+        self.conn.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('cmo',?, 'ana')",
                           (json.dumps({"bot_contact": "tasks"}),))
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
@@ -446,9 +446,9 @@ class Rule5Tasks(HubCase):
         # The parent's bot hears it once, on the parent, where its session continues.
         self.assertFalse(self.finished(row, ANALYTICS))
         [on_parent] = [m for m in H.messages(self.conn, parent["conversation_id"])
-                       if m["to_actor"] == ANALYTICS and "Ana Rivera marked this subtask done: Pick the hero image" in m["body"]]
+                       if m["recipient_id"] == ANALYTICS and "Ana Rivera marked this subtask done: Pick the hero image" in m["body"]]
         self.assertIn("Use B.", on_parent["body"])
-        quiet = {m["to_actor"]: bool(json.loads(m["refs_json"]).get("quiet")) for m in H.messages(self.conn, row["conversation_id"])
+        quiet = {m["recipient_id"]: bool(json.loads(m["refs"]).get("quiet")) for m in H.messages(self.conn, row["conversation_id"])
                  if m["body"].startswith("Ana Rivera marked this done:")}
         self.assertEqual(quiet, {CMO: True, SEO: False, COO: False}, "tasks-only bots hear it quietly")
         # A private task tells only its parties: the parent's owner cannot read it.
@@ -461,13 +461,13 @@ class Rule5Tasks(HubCase):
         row = H.task_create(self.conn, ANA, "Ship the overview", "x", SEO)
         H.task_update(self.conn, ANA, row["id"], status="done")
         [told] = self.finished(row, SEO)
-        self.assertTrue(json.loads(told["refs_json"]).get("quiet"), "no run for a finished task with no note")
+        self.assertTrue(json.loads(told["refs"]).get("quiet"), "no run for a finished task with no note")
 
     def test_a_person_closing_work_not_started_with_nothing_said_does_not_wake_its_bot(self):
         quiet, noted = (H.task_create(self.conn, ANA, title, "x", SEO) for title in ("Old idea", "Other idea"))
         H.task_close(self.conn, ANA, quiet["id"])
         H.task_close(self.conn, ANA, noted["id"], note="Do the other one instead.")
-        refs = {row["id"]: [json.loads(m["refs_json"]) for m in H.messages(self.conn, row["conversation_id"])
+        refs = {row["id"]: [json.loads(m["refs"]) for m in H.messages(self.conn, row["conversation_id"])
                             if m["to_actor"] == SEO and m["body"].startswith("Closed:")] for row in (quiet, noted)}
         self.assertTrue(refs[quiet["id"]][0].get("quiet"), "a close with nothing said is news, not work")
         self.assertFalse(refs[noted["id"]][0].get("quiet"), "a person's close note can change what the bot does next")
@@ -484,9 +484,9 @@ class Rule5Tasks(HubCase):
         said = H.task_comment(self.conn, ANA, row["id"], "Ana answered: B.", answer_to=asked["id"],
                               extra_refs={"answer": {"target": {"comment": asked["id"]},
                                                      "answers": {"pick": ["B"]}, "by": ANA, "at": H.now()}})
-        self.assertEqual((said["kind"], said["to_actor"]), ("answer", CMO))
+        self.assertEqual((said["kind"], said["recipient_id"]), ("answer", CMO))
         self.assertIsNone(H.task(self.conn, row["id"])["waiting_on"])
-        self.assertFalse(json.loads(said["refs_json"]).get("quiet"), "it wakes the asker")
+        self.assertFalse(json.loads(said["refs"]).get("quiet"), "it wakes the asker")
 
 # ----------------------------------------------------------------------------- rule 6
 class Rule6Approvals(HubCase):
@@ -611,19 +611,19 @@ class Rule4Unsolicited(HubCase):
         chat = H.open_conversation(self.conn, ANA, [ANA, CMO], kind="chat")["id"]
         H.task_create(self.conn, ANA, "Draft the report", "Write a report", CMO, lint=False, conversation_id=chat)
         H.say(self.conn, ANA, CMO, "What is 12 times 7?", conversation_id=chat)
-        first = self.conn.execute("SELECT from_actor FROM messages WHERE conversation_id=? ORDER BY created LIMIT 1",
+        first = self.conn.execute("SELECT sender_id FROM messages WHERE conversation_id=? ORDER BY created_at LIMIT 1",
                                   (chat,)).fetchone()[0]
         self.assertEqual(first, H.KEEPER, "the task's notice opened the chat")
         reply = H.say(self.conn, CMO, ANA, "84.", conversation_id=chat)
-        self.assertNotIn("unsolicited", json.loads(reply["refs_json"]))
+        self.assertNotIn("unsolicited", json.loads(reply["refs"]))
 
     def test_a_bot_writing_in_a_chat_it_opened_is_unsolicited_even_after_a_new_task_notice(self):
         chat = H.open_conversation(self.conn, CMO, [CMO, ANA], kind="chat")["id"]
         H.task_create(self.conn, ANA, "Draft the report", "Write a report", CMO, lint=False, conversation_id=chat)
-        senders = [r[0] for r in self.conn.execute("SELECT from_actor FROM messages WHERE conversation_id=?", (chat,))]
+        senders = [r[0] for r in self.conn.execute("SELECT sender_id FROM messages WHERE conversation_id=?", (chat,))]
         self.assertEqual(senders, [H.KEEPER], "only the task's notice is in the chat")
         sent = H.say(self.conn, CMO, ANA, "Pick the launch date, or tell me to hold.", conversation_id=chat)
-        self.assertTrue(json.loads(sent["refs_json"]).get("unsolicited"), "the bot opened it, so the person asked nothing")
+        self.assertTrue(json.loads(sent["refs"]).get("unsolicited"), "the bot opened it, so the person asked nothing")
 
 # ----------------------------------------------------------------------------- rule 8
 class Rule8Counting(HubCase):
@@ -664,7 +664,7 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined", "a loop over new targets still stops")
         self.assertEqual(H.quarantine_reason(self.conn, "cmo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
         self.assertFalse(H.quarantine_is_escape(self.conn, "cmo"))
-        self.conn.execute("UPDATE events SET ts=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),))
+        self.conn.execute("UPDATE events SET created_at=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), ["cmo"])
 
     def test_a_quarantine_from_before_the_repeat_rule_still_cools_off(self):
@@ -753,7 +753,7 @@ class Rule8Counting(HubCase):
         self.refuse_reach(10)
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "quarantined")
         self.assertEqual(H.lift_cooled_quarantines(self.conn), [], "not before the hour is up")
-        self.conn.execute("UPDATE events SET ts=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),))
+        self.conn.execute("UPDATE events SET created_at=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), ["cmo"])
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
         self.refuse_reach(1)
@@ -769,9 +769,9 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
         H.quarantine(self.conn, "cmo", "escape: a secrets path")
         self.refused("quarantined", H.status_set, self.conn, botops, "cmo", state="active")
-        self.conn.execute("UPDATE events SET ts=? WHERE action='quarantine' AND detail_json NOT LIKE '%escape%'",
+        self.conn.execute("UPDATE events SET created_at=? WHERE action='quarantine' AND detail NOT LIKE '%escape%'",
                           (H.shift(H.now(), seconds=-8000),))
-        self.conn.execute("UPDATE events SET ts=? WHERE action='quarantine' AND detail_json LIKE '%escape%'",
+        self.conn.execute("UPDATE events SET created_at=? WHERE action='quarantine' AND detail LIKE '%escape%'",
                           (H.shift(H.now(), seconds=-7200),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), [], "an escape never cools off")
 
@@ -843,7 +843,7 @@ class APersonsReplyAnswersWhatWasAsked(HubCase):
     def test_older_untagged_questions_still_belong_to_their_dedicated_task(self):
         task = H.task_create(self.conn, ANA, "Draft a report", "Write it", CMO)
         ask = H.task_ask(self.conn, CMO, task["id"], "Which format?")
-        self.conn.execute("UPDATE messages SET refs_json='{}' WHERE id=?", (ask["id"],))
+        self.conn.execute("UPDATE messages SET refs='{}' WHERE id=?", (ask["id"],))
         self.assertEqual(H.unanswered_ask(self.conn, task)["id"], ask["id"])
         H.task_comment(self.conn, ANA, task["id"], "Markdown")
         self.assertIsNone(H.unanswered_ask(self.conn, task))
@@ -887,7 +887,7 @@ class WaitingWithDependency(HubCase):
         H.task_update(self.conn, CMO, blocker['id'], status='done')
         self.assertEqual(TR.blocker_ids(self.conn, task['id']), [])
         self.assertTrue(any('Unblocked:' in m['body'] for m in H._rows(
-            self.conn.execute("SELECT body FROM messages WHERE to_actor=?", (CMO,)))))
+            self.conn.execute("SELECT body FROM messages WHERE recipient_id=?", (CMO,)))))
 
     def test_removed_or_finished_blocker_does_not_justify_waiting(self):
         blocker = H.task_create(self.conn, CMO, 'Prepare the build environment', '', CMO)
@@ -954,10 +954,10 @@ class WaitingWithDependency(HubCase):
         task = H.task_create(self.conn, CMO, 'Fix the build host', 'The deploy fails at the SSH step.', CMO, private=False)
         after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=ask)
         # The task stays the bot's, blocked, and is not itself a card for Ana.
-        self.assertEqual((after['owner'], after['status'], after['waiting_on'], after['note']),
+        self.assertEqual((after['owner_id'], after['status'], after['waiting_on'], after['note']),
                          (CMO, 'waiting', None, f'Blocked on Ana Rivera: {ask}'))
         card = H.task(self.conn, after['asked_in']['id'])
-        self.assertEqual((card['owner'], card['requester'], card['title'], card['body'], card['status']),
+        self.assertEqual((card['owner_id'], card['requester_id'], card['title'], card['body'], card['status']),
                          (ANA, CMO, 'Restart the build host?', ask, 'open'))
         self.assertEqual((TR.parent_of(self.conn, card['id']), TR.blocker_ids(self.conn, task['id'])),
                          (task['id'], [card['id']]))
@@ -976,7 +976,7 @@ class WaitingWithDependency(HubCase):
         back = H.task(self.conn, task['id'])
         self.assertEqual((back['status'], back['note'], TR.blocker_ids(self.conn, task['id'])),
                          ('open', 'Ana Rivera answered: Yes. Restarted it.', []))
-        told = [m['body'] for m in H.messages(self.conn, task['conversation_id']) if m['to_actor'] == CMO
+        told = [m['body'] for m in H.messages(self.conn, task['conversation_id']) if m['recipient_id'] == CMO
                 and ('Restarted it' in m['body'] or m['body'].startswith('Unblocked'))]
         self.assertEqual(len(told), 1, told)
         self.assertEqual((needs(), H.needs_you(self.conn, 'ana')['tasks']), (0, []))
@@ -995,7 +995,7 @@ class WaitingWithDependency(HubCase):
         back = H.task(self.conn, moved['id'])
         self.assertEqual((back['status'], back['note'], TR.blocker_ids(self.conn, moved['id'])),
                          ('open', 'Ana Rivera closed the ask: Replaced by a setup task I filed myself.', []))
-        told = [m['body'] for m in H.messages(self.conn, back['conversation_id']) if m['to_actor'] == CMO
+        told = [m['body'] for m in H.messages(self.conn, back['conversation_id']) if m['recipient_id'] == CMO
                 and ('Replaced by' in m['body'] or m['body'].startswith('Unblocked'))]
         self.assertEqual(len(told), 1, told)
         # A question to a person counts too, once per task, until it is answered.
@@ -1044,7 +1044,7 @@ class WaitingWithDependency(HubCase):
             back = H.task(self.conn, row['id'])
             self.assertEqual(back['note'], 'Ana Rivera answered: Yes to both.')
             woken = [m for m in H.messages(self.conn, back['conversation_id'])
-                     if m['to_actor'] == bot and 'Yes to both.' in m['body']]
+                     if m['recipient_id'] == bot and 'Yes to both.' in m['body']]
             self.assertEqual(len(woken), 1, bot)
         # The root still has its own open subtask (the other bot's part), so it stays waiting on that.
 
@@ -1082,7 +1082,7 @@ class WaitingWithDependency(HubCase):
         H.task_update(self.conn, ANA, card['id'], status='done', note='Yes.')
         back = H.task(self.conn, other['id'])
         self.assertEqual((back['status'], back['note']), ('open', 'Ana Rivera answered: Yes.'))
-        woken = [m for m in H.messages(self.conn, back['conversation_id']) if m['to_actor'] == CMO
+        woken = [m for m in H.messages(self.conn, back['conversation_id']) if m['recipient_id'] == CMO
                  and ('Yes.' in m['body'] or m['body'].startswith('Unblocked'))]
         self.assertEqual(len(woken), 1, [m['body'] for m in woken])
         # The bot's own question under its task is the card: no second one, and the note names the person.
@@ -1111,10 +1111,10 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(person_asks.migrate(self.conn), [moved['id']])
         self.assertEqual(person_asks.migrate(self.conn), [], 'moved once')
         after = H.task(self.conn, moved['id'])
-        self.assertEqual((after['owner'], after['status'], after['waiting_on'], after['note']),
+        self.assertEqual((after['owner_id'], after['status'], after['waiting_on'], after['note']),
                          (CMO, 'waiting', None, f'Blocked on Ana Rivera: {plain}'))
         [card] = [H.task(self.conn, t) for t in TR.child_ids(self.conn, moved['id'])]
-        self.assertEqual((card['owner'], card['title'], card['body']), (ANA, 'Approve the venue for Friday?', plain))
+        self.assertEqual((card['owner_id'], card['title'], card['body']), (ANA, 'Approve the venue for Friday?', plain))
         # The one with no plain ask stays for its bot to restate (backend/restate_asks.py).
         self.assertEqual(H.task(self.conn, unclear['id'])['waiting_on'], ANA)
 
@@ -1169,7 +1169,7 @@ class WaitingWithDependency(HubCase):
             H.task_create(self.conn, CMO, 'Approve the video tool trial', 'Approve the video tool trial\n\nSee reports/x.md', ANA)
         self.assertIn('first paragraph of the task body', refused.exception.detail)
         made = H.task_create(self.conn, CMO, 'Approve the video tool trial', f'{plain}\n\nThe notes: reports/x.md', ANA)
-        self.assertEqual(made['owner'], ANA)
+        self.assertEqual(made['owner_id'], ANA)
 
     # The refused escalations of 2026-10-26: a pull request named in the ask, and a 71-word ask in four sentences.
     BLOCKER = "Approve the merge of PR #1555 so QA can test it? If yes, I will run the tests today."
@@ -1200,7 +1200,7 @@ class WaitingWithDependency(HubCase):
             self.assertIn(failed, "; ".join(H.lint_person_ask(ask)), ask)
         made = H.task_create(self.conn, CMO, 'Approve the merge', f'{self.BLOCKER}\n\nDetails: head 3f2a9c1d, '
                              'backend/hubdb.py, ValueError: bad date.', ANA)
-        self.assertEqual(made['owner'], ANA)
+        self.assertEqual(made['owner_id'], ANA)
 
     def test_a_too_long_ask_is_refused_with_a_rewrite_the_bot_retries_once(self):
         task = H.task_create(self.conn, CMO, 'Get the Settings change tested', '', CMO, private=False)
@@ -1228,7 +1228,7 @@ class WaitingWithDependency(HubCase):
         self.assertIn(f'"{rewrite}" Put the rest of your text in the body under it, after a blank line',
                       refused.exception.detail)
         made = H.task_create(self.conn, CMO, 'Approve the merge', f'{rewrite}\n\n{self.LONG_BLOCKER}', ANA)
-        self.assertEqual((made['owner'], H.task(self.conn, made['id'])['body']),
+        self.assertEqual((made['owner_id'], H.task(self.conn, made['id'])['body']),
                          (ANA, f'{rewrite}\n\n{self.LONG_BLOCKER}'))
         # A single sentence over the limit only by its context keeps the request; one with no outcome keeps it alone.
         self.assertEqual(H.person_ask_rewrite("Merge PR #1555. " + "The runner was slow all day. " * 8),
@@ -1401,7 +1401,7 @@ class WaitingWithDependency(HubCase):
 OLD_STRATEGY_TABLES = {
     "strategy_actions": ("ceo_actions", {"strategy_actions_created": ("ceo_actions_created", "created")}),
     "strategy_merges": ("ceo_merges", {"strategy_merges_original": ("ceo_merges_original", "original, state"),
-                                       "strategy_merges_person": ("ceo_merges_person", "person, created")}),
+                                       "strategy_merges_person": ("ceo_merges_person", "person, created_at")}),
 }
 
 
@@ -1428,12 +1428,12 @@ class StrategyTableNames(HubCase):
         return sorted(tuple(r) for r in self.conn.execute(f"SELECT {columns} FROM {table}"))
 
     def act(self, ident, state, table="strategy_actions"):
-        self.conn.execute(f"INSERT INTO {table}(id,created,actor,kind,state) VALUES(?,?,?,'level',?)",
+        self.conn.execute(f"INSERT INTO {table}(id,created_at,actor,kind,state) VALUES(?,?,?,'level',?)",
                           (ident, H.now(), "bot:goal-manager", state))
 
     def test_rows_move_to_the_new_names_when_an_older_schema_starts_again(self):
         self.act("a1", "done")
-        self.conn.execute("INSERT INTO strategy_merges(merged_into,original,person,asker,created) "
+        self.conn.execute("INSERT INTO strategy_merges(merged_into,original,person,asker,created_at) "
                           "VALUES('t1','t2','human:ana','bot:coo',?)", (H.now(),))
         self.back_to_old_names("strategy_actions")
         self.back_to_old_names("strategy_merges")
@@ -1463,11 +1463,11 @@ class StrategyTableNames(HubCase):
         answer is relayed to the original askers, and its Undo finds the entry."""
         self.act("a1", "done")
         self.act("a2", "done")
-        self.conn.execute("INSERT INTO strategy_merges(merged_into,original,person,asker,created) "
+        self.conn.execute("INSERT INTO strategy_merges(merged_into,original,person,asker,created_at) "
                           "VALUES('t1','t2','human:ana','bot:coo',?)", (H.now(),))
         self.conn.execute("UPDATE strategy_actions SET state='undone' WHERE id='a1'")
         self.conn.execute("DELETE FROM strategy_actions WHERE id='a2'")
-        self.conn.execute("INSERT INTO strategy_actions(id,created,actor,kind,state) VALUES('a3',?,?,'level','done') "
+        self.conn.execute("INSERT INTO strategy_actions(id,created_at,actor,kind,state) VALUES('a3',?,?,'level','done') "
                           "ON CONFLICT(id) DO NOTHING", (H.now(), "bot:goal-manager"))
         self.assertEqual(self.rows("ceo_actions"), self.rows("strategy_actions"))
         self.assertEqual(self.rows("ceo_actions"), [("a1", "undone"), ("a3", "done")])
@@ -1479,7 +1479,7 @@ class StrategyTableNames(HubCase):
         self.act("a1", "done")
         self.act("a2", "done")
         self.conn.commit()
-        for statement in ("INSERT INTO ceo_actions(id,created,actor,kind,state) VALUES('a3','x','bot:goal-manager',"
+        for statement in ("INSERT INTO ceo_actions(id,created_at,actor,kind,state) VALUES('a3','x','bot:goal-manager',"
                           "'level','done')", "UPDATE ceo_actions SET state='undone' WHERE id='a1'",
                           "DELETE FROM ceo_actions WHERE id='a2'",
                           "UPDATE ceo_merges SET state='settled' WHERE 0"):

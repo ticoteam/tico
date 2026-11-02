@@ -6,7 +6,7 @@ from backend.tests.test_api import api, get, post  # noqa: F401  (fixtures)
 
 
 def make(api, owner="ops", title="Write the report", token="ana-test"):
-    return post(api, "tasks", {"owner": owner, "title": title, "body": "Do it."}, token=token)
+    return post(api, "tasks", {"owner_id": owner, "title": title, "body": "Do it."}, token=token)
 
 
 def slip(ident, at=20):

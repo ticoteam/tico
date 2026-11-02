@@ -51,7 +51,7 @@ const path = require('node:path');
   assert.equal(created[0].body.status,'planned');
   assert.match(created[0].body.instructions,/Template rules[\s\S]*Answer tickets using our team docs/);
   assert.match(created[0].body.instructions,/Reviewer: Support lead/);
-  assert.equal(created[0].body.operator,'owner');
+  assert.equal(created[0].body.owner_id,'owner');
   context.get=async()=>{throw new Error('Catalog unavailable');};
   await context.settingsRecruitFlow({title:values.title,brief:values.brief});
   assert.equal(status.textContent,'Catalog unavailable','catalog failure remains visible');

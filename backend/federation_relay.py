@@ -217,7 +217,7 @@ class Relay:
                 if not isinstance(page, list):
                     break
                 views.extend(page)
-                stamps = [v["updated"] for v in page if isinstance(v, dict) and type(v.get("updated")) in (int, float)]
+                stamps = [v["updated_at"] for v in page if isinstance(v, dict) and type(v.get("updated_at")) in (int, float)]
                 top = max([*stamps, *([top] if top is not None else [])], default=None)
                 following = answer.get("next")
                 if following is None or (through is not None and any(stamp < through for stamp in stamps)):

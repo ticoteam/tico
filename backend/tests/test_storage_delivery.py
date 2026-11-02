@@ -108,7 +108,7 @@ def test_safe_disposition(mime, inline):
 
 
 def task(api):
-    return post(api, 'tasks', {'owner': 'ops', 'title': 'Review media', 'body': 'Open the file.'})['id']
+    return post(api, 'tasks', {'owner_id': 'ops', 'title': 'Review media', 'body': 'Open the file.'})['id']
 
 
 def attach(api, tid, name, data):
@@ -405,7 +405,7 @@ def test_storage_migration_preserves_old_version_and_reapplies():
     c.executescript(SCHEMA)
     c.execute('CREATE TABLE blobs(id TEXT PRIMARY KEY)')
     c.execute("INSERT INTO blobs VALUES('blob')")
-    c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,locator,first_activity_at,last_activity_at) "
+    c.execute("INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,first_activity_at,last_activity_at) "
               "VALUES('file','bot','task:task','old','Old report','document','tico_blob','then','then')")
     old = ('file', 1, 'blob', 'digest', None, 10, 'report.txt', 'text/plain', None, None, None, 'bot:bot', 'then')
     c.execute('INSERT INTO bot_file_versions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', old)
@@ -529,7 +529,7 @@ def test_shutdown_does_not_wait_for_in_flight_write_probe(tmp_path, blocked):
         release.set()
         assert finished.wait(2)
     with app.state.store.read() as c:
-        detail = json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='blob-s3'").fetchone()[0])
+        detail = json.loads(c.execute("SELECT detail FROM service_health WHERE service='blob-s3'").fetchone()[0])
     if blocked == 'create':
         assert detail['upload_id'] == 'upload'  # retained for cleanup on next startup
         assert not hasattr(s3, 'aborted')

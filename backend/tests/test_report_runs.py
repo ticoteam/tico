@@ -23,7 +23,7 @@ def finish(api, machine, attempt):
 
 def routine_run(api, machine, slug):
     """One run of an automation (what a routine became) that gives `slug` a turn: a task of its own."""
-    aid = post(api, "automations", {"name": "Sweep", "owner": "person:ana", "trigger": {"type": "event", "name": "x.y"},
+    aid = post(api, "automations", {"name": "Sweep", "owner_id": "person:ana", "trigger": {"type": "event", "name": "x.y"},
                                     "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:" + slug,
                                                "prompt": "Check prices."}]})["id"]
     post(api, f"automations/{aid}/run", {})
@@ -54,7 +54,7 @@ def test_a_manager_reads_its_reports_runs_and_peers_and_reports_do_not(api):
     turns = {}
 
     def review(slug):
-        post(api, "tasks", {"owner": slug, "title": "Weekly review", "body": "Review."})
+        post(api, "tasks", {"owner_id": slug, "title": "Weekly review", "body": "Review."})
         turns[slug] = claim(api, machine, slug)["token"]
     review("boss")
     # A wake the hub posts into the operator's chat room, outside any task: before, only that room's run read it.

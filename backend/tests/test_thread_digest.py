@@ -76,7 +76,7 @@ def test_a_person_gets_one_email_listing_each_thread_with_its_unread_count_and_a
         {"title": "Launch plans", "unread": 2, "path": f"/#/thread/{launch}"}]
     assert "Secret" not in json.dumps(items) and "Second note" not in json.dumps(items)
     with api.app.state.store.read() as c:
-        detail = [r[0] for r in c.execute("SELECT detail_json FROM events WHERE action='thread.digest'")]
+        detail = [r[0] for r in c.execute("SELECT detail FROM events WHERE action='thread.digest'")]
     assert len(detail) == 1 and "Launch plans" not in detail[0] and "Budget" not in detail[0]
     # What was listed is not listed again, and a new message counts with the ones the person has not read yet.
     assert sweep(api, issuer) == 0 and len(issuer.calls) == 1

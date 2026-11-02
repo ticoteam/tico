@@ -73,7 +73,7 @@ async function seedMonths(page) {
   }
 }
 async function seedKpis(page) {
-  const goal = await ok(page, 'POST', 'goals', {title: 'More active homes', owner: 'human:dana'});
+  const goal = await ok(page, 'POST', 'goals', {title: 'More active homes', owner_id: 'human:dana'});
   const goalId = goal.goal?.id || goal.id;
   const kpi = async (name, unit, target, role, parent, stage, values, goal_id = null) => {
     const made = await ok(page, 'POST', 'kpis', {name, unit, kind: 'improve', target, deadline: '2027-12-31', ...(goal_id ? {goal_id} : {})});
@@ -94,7 +94,7 @@ async function seedKpis(page) {
 // Marketing tasks moved through their steps, each move a marker; one left open on Google Ads.
 async function seedTasks(page, goalId) {
   const task = async (title, channel, steps, goal = null) => {
-    const made = await ok(page, 'POST', 'tasks', {title, body: title, owner: 'bot:engineering-lead', type: 'idea', labels: channel ? [`channel:${channel}`] : [], ...(goal ? {goal_id: goal} : {})});
+    const made = await ok(page, 'POST', 'tasks', {title, body: title, owner_id: 'bot:engineering-lead', type: 'idea', labels: channel ? [`channel:${channel}`] : [], ...(goal ? {goal_id: goal} : {})});
     const id = made.task?.id || made.id;
     for (const step of steps) {
       const read = await ok(page, 'GET', `tasks/${id}`);

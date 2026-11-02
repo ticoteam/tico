@@ -12,7 +12,7 @@ const V2_GROUPS = [['doing', 'Doing'], ['waiting', 'Waiting'],
 function taskStateLabel(t) {
   if (taskNeedsMe(t) || t.status === 'declined') return 'Needs you';
   if (t.status === 'waiting') return 'Waiting';
-  if (t.status === 'doing' || (t.status === 'open' && !actorPerson(t.owner))) return 'Doing';
+  if (t.status === 'doing' || (t.status === 'open' && !actorPerson(t.owner_id))) return 'Doing';
   return 'To do';
 }
 function actorAvatarOnly(a) {
@@ -26,12 +26,12 @@ function actorAvatarOnly(a) {
 // opens instead of the task (decide.js), when it is answered on a card.
 function v2TaskRow(t, slug, showStatus = true, below = '', card = '') {
   // On a bot's page the other party is whoever is not the bot; on a person's page (no slug) it is the requester.
-  const other = slug && actorSlug(taskRequester(t)) === slug ? t.owner : taskRequester(t);
+  const other = slug && actorSlug(taskRequester(t)) === slug ? t.owner_id : taskRequester(t);
   const age = taskAge(t);
   return `<div class="trow${showStatus ? '' : ' status-in-heading'}" data-task-detail="${esc(t.id)}" data-task-version="${esc(t.version || '')}"${card ? ` data-need-card="${esc(card)}"` : ''}><div class="trow-head">
-      ${showStatus ? `<span class="pill ${V2_PILL[t.status] ?? ''}">${esc({open: !actorPerson(t.owner) ? 'Doing · starting' : actorPerson(t.owner) === S.me?.id ? 'Needs you' : 'To do', waiting: t.blocked_since ? 'Blocked' : 'Waiting', doing: 'Doing'}[t.status] || t.status || '')}</span>${taskStatusText(t)}` : ''}
+      ${showStatus ? `<span class="pill ${V2_PILL[t.status] ?? ''}">${esc({open: !actorPerson(t.owner_id) ? 'Doing · starting' : actorPerson(t.owner_id) === S.me?.id ? 'Needs you' : 'To do', waiting: t.blocked_since ? 'Blocked' : 'Waiting', doing: 'Doing'}[t.status] || t.status || '')}</span>${taskStatusText(t)}` : ''}
       <a class="ttl" data-task-detail-open href="#/task/${encodeURIComponent(t.id)}" title="${esc(`${t.title || ''} · ${taskStateLabel(t)} · ${age}`)}">${esc(t.title || '')}</a>${prStateBadge(t.pr_state)}
-      <span class="tags">${actorChip(other)}</span>${actorAvatarOnly(t.owner)}
+      <span class="tags">${actorChip(other)}</span>${actorAvatarOnly(t.owner_id)}
       <span class="muted tnum" title="${esc(taskAgeTitle(t))}">${esc(age)}</span></div>${below ? `<div class="trow-waits muted">${esc(below)}</div>` : ''}</div>`;
 }
 // The rail and person rows open the same complete task as the manager; actor links keep their own destination.
@@ -53,7 +53,7 @@ function v2TaskGroups(list, slug, statuses) {
 }
 function taskNeedsMe(task) {
   const me = myActor();
-  return !!me && (task?.owner === me || (task?.ask?.to_actor === me && !task?.ask?.older) || taskWaitingOn(task) === me);
+  return !!me && (task?.owner_id === me || (task?.ask?.recipient_id === me && !task?.ask?.older) || taskWaitingOn(task) === me);
 }
 // The server counts editable filters for the viewer; Needs You also keeps questions and approvals.
 // Done Recently uses the bot’s finished work. A failed task load is retried, never shown as an empty list.
@@ -80,7 +80,7 @@ async function loadBotTasksV2(slug) {
   const byId = new Map();
   for (const t of [...(open?.tasks || []), ...(ended?.tasks || [])]) {
     const was = byId.get(t.id);
-    if (!was || String(t.updated || '') >= String(was.updated || '')) byId.set(t.id, t);
+    if (!was || String(t.updated_at || '') >= String(was.updated_at || '')) byId.set(t.id, t);
   }
   const owned = open && ended ? {tasks: [...byId.values()]} : null;
   if (!owned) {
@@ -294,16 +294,16 @@ function botTaskWaitsOn(t) {
 }
 // Questions and approvals remain in Needs You even when its task filter is changed.
 function botNeedsExtras(slug) {
-  return botNeeds(slug).filter(it => ['question', 'ask', 'approval'].includes(it.kind) || it.ask?.to_actor === myActor());
+  return botNeeds(slug).filter(it => ['question', 'ask', 'approval'].includes(it.kind) || it.ask?.recipient_id === myActor());
 }
 // An approval or a question asked outside any task, one line in the rail: a tap opens its card (decide.js).
 function botNeedRow(it) {
-  const from = it.requester || '', title = approvalTitle(it) || it.first_line || it.title || '';
+  const from = it.requester_id || '', title = approvalTitle(it) || it.first_line || it.title || '';
   return `<div class="trow" data-need-card="${esc(decideItemKey(it))}"><div class="trow-head">
       <span class="pill needs">${it.kind === 'approval' ? 'Approval' : 'Question'}</span>
       <a class="ttl" href="${esc(NEEDS_YOU)}" aria-haspopup="dialog" title="${esc(plainActors(title))}">${esc(plainActors(title))}</a>
       <span class="tags">${actorChip(from)}</span>
-      <span class="muted tnum" title="${esc(fmt(it.created))}">${esc(ageShort(it.created))}</span></div></div>`;
+      <span class="muted tnum" title="${esc(fmt(it.created_at))}">${esc(ageShort(it.created_at))}</span></div></div>`;
 }
 // Keep questions, approvals and matching tasks once each; one answered on a card leaves at once.
 function botNeedsPaint(slug) {
@@ -336,13 +336,13 @@ function botTasksRender(slug, owned) {
   if (!$('#t-open') || BOT?.slug !== slug) return;
   const needed = botNeedsPaint(slug);
   const mine = owned.tasks || [];
-  const newest = (a, b) => String(b.created || '').localeCompare(String(a.created || ''));
+  const newest = (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''));
   // Fallback while filters load (and for non-Keeper bots); saved filters are painted from server results below.
   const active = mine.filter(t => ['open', 'doing'].includes(String(t.status))).sort(newest);
   const blocked = mine.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:' + S.me?.id).sort(newest);
   // Done Recently: the bot's own work finished in the last two weeks, most recently done first. A schedule's runs (a
   // sweep every 30 minutes) are not work a person asked for; they live under Automations › Runs.
-  const doneAt = t => String(t.done_at || t.closed_at || t.updated || '');
+  const doneAt = t => String(t.done_at || t.closed_at || t.updated_at || '');
   const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
   const finished = mine.filter(t => !V2_ACTIVE.includes(String(t.status)) && !isRecurringTask(t) && doneAt(t) >= since)
     .sort((a, b) => doneAt(b).localeCompare(doneAt(a)));

@@ -18,14 +18,14 @@ const {unrouted} = require('./support/routes.cjs');
       efforts: ['low', 'high'], default_effort: 'high', harnesses: ['claude']});
     const choice = id => ({model: id, harness: 'claude', reasoning_effort: 'high'});
     const bot = (name, own, task) => ({name, display_name: name[0].toUpperCase() + name.slice(1), role: 'planner', team: 'research', description: 'Drafts forecasts',
-      status: 'active', operator: 'ana', can_manage: true, users: [], bot_owners: [], revision: 4, ...choice(own), task_model: task ? choice(task) : null,
-      machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7}});
+      status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: [], revision: 4, ...choice(own), task_model: task ? choice(task) : null,
+      machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7}});
     // `inherit` runs its tasks on its own model with a task context length (a model "" record): search reads it as no task model.
     const bots = [bot('alpha', opus, sonnet), bot('beta', sonnet, opus), bot('gamma', opus, opus), bot('delta', sonnet, null),
       {...bot('inherit', opus, null), task_model: {harness: '', model: '', reasoning_effort: '', runtime: '', compact_at: 600000}},
       {...bot('default', '', null), resolved_model: opus, resolved_runtime: 'claude'}];
     // The real UI must keep read-only results visible without selecting them.
-    bots.push({...bot('readable', sonnet, opus), can_manage: false, operator: 'other'});
+    bots.push({...bot('readable', sonnet, opus), can_manage: false, owner_id: 'other'});
     let calls = [], inflight = 0, maxInflight = 0, conflict = '', fail = '';
     await page.route('**/*', async route => {
       const req = route.request(), p = new URL(req.url()).pathname;
@@ -54,7 +54,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {research: {label: 'Research'}}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', operator: 'ana', bots: bots.map(b => b.name)}], services: [],
+      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: bots.map(b => b.name)}], services: [],
         runnable: {beta: {claude: {can_run: false, problem: 'Provider is signed out', short: 'sign in'}}}});
       if (p === '/api/v2/models') return json({models: [opus, sonnet, haiku].map(model), harnesses: [{id: 'claude', label: 'Claude Code', runtime: 'claude'}], enabled_providers: ['anthropic']});
       if (p === '/api/v2/providers') return json({enabled: ['anthropic'], revision: 1, providers: [{id: 'anthropic', label: 'Anthropic'}]});

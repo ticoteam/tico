@@ -78,19 +78,19 @@ def _bots(value):
 
 def policy(c, rid):
     """The computer's sharing as stored, and off for a removed or unknown computer, with its generation."""
-    row = c.execute("SELECT e.sharing,e.bots_json,e.daily_cap_bytes,e.generation,r.revoked_at FROM runners r "
+    row = c.execute("SELECT e.sharing,e.bots,e.daily_cap_bytes,e.generation,r.revoked_at FROM runners r "
                     "LEFT JOIN browser_exits e ON e.runner_id=r.id WHERE r.id=?", (rid,)).fetchone()
     if not row:
         return {"sharing": False, "bots": [], "daily_cap_bytes": DEFAULT_CAP, "generation": 0}
-    return {"sharing": bool(row["sharing"]) and not row["revoked_at"], "bots": _bots(row["bots_json"]),
+    return {"sharing": bool(row["sharing"]) and not row["revoked_at"], "bots": _bots(row["bots"]),
             "daily_cap_bytes": int(row["daily_cap_bytes"] or DEFAULT_CAP), "generation": int(row["generation"] or 0)}
 
 
 def policies(c):
     """{runner_id: policy} for every computer with a stored row: one query for a listing."""
-    return {r["runner_id"]: {"sharing": bool(r["sharing"]), "bots": _bots(r["bots_json"]),
+    return {r["runner_id"]: {"sharing": bool(r["sharing"]), "bots": _bots(r["bots"]),
                              "daily_cap_bytes": int(r["daily_cap_bytes"] or DEFAULT_CAP)}
-            for r in c.execute("SELECT runner_id,sharing,bots_json,daily_cap_bytes FROM browser_exits")}
+            for r in c.execute("SELECT runner_id,sharing,bots,daily_cap_bytes FROM browser_exits")}
 
 
 def used(c, rid, day=None):
@@ -106,7 +106,7 @@ def sharing(c, rid):
 
 def is_owner(who, runner):
     """The person whose computer it is: the only one who shares its internet."""
-    return bool(runner) and who.role in ("human", "owner") and who.actor == "human:" + runner["operator"]
+    return bool(runner) and who.role in ("human", "owner") and who.actor == "human:" + runner["owner_id"]
 
 
 BOT_EXIT_SQL = "SELECT * FROM bot_browser_exits WHERE bot=?"
@@ -231,7 +231,7 @@ def install(app, store, auth, mutate, execution, sessions):
 
     def changed(c, rid):
         # The heartbeat answer carries `browser_exit`: a change row asks the runner for one now (backend/events.py).
-        c.execute("INSERT INTO changes(topic,kind,subject_id,at) VALUES('runner','browser_exit',?,?)", (rid, H.now()))
+        c.execute("INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('runner','browser_exit',?,?)", (rid, H.now()))
 
     def view(c, who, runner):
         p = policy(c, runner["id"])
@@ -279,9 +279,9 @@ def install(app, store, auth, mutate, execution, sessions):
                     f"SELECT slug FROM bots WHERE slug IN ({','.join('?' * len(bots))})", bots)}
                 if unknown := [b for b in bots if b not in known]:
                     raise Problem("not_found", "No such bot: " + ", ".join(unknown), 404)
-            c.execute("INSERT INTO browser_exits(runner_id,sharing,bots_json,daily_cap_bytes,changed_by,changed_at) "
+            c.execute("INSERT INTO browser_exits(runner_id,sharing,bots,daily_cap_bytes,changed_by,changed_at) "
                       "VALUES(?,?,?,?,?,?) ON CONFLICT(runner_id) DO UPDATE SET sharing=excluded.sharing,"
-                      "bots_json=excluded.bots_json,daily_cap_bytes=excluded.daily_cap_bytes,"
+                      "bots=excluded.bots,daily_cap_bytes=excluded.daily_cap_bytes,"
                       "generation=generation+1,changed_by=excluded.changed_by,changed_at=excluded.changed_at",
                       (rid, int(body.sharing), json.dumps(bots), cap, who.actor, H.now()))
             H.event(c, who.actor, "runner.browser_exit", rid,
@@ -317,11 +317,11 @@ def install(app, store, auth, mutate, execution, sessions):
         return {"rows": rows[:limit], "days": totals, "next": offset + limit if more else None}
 
     def choices(c, bot):
-        return [{"runner_id": r["id"], "label": r["label"], "operator": r["operator"]}
-                for r in c.execute("SELECT r.id,r.label,r.operator,e.bots_json FROM browser_exits e "
+        return [{"runner_id": r["id"], "label": r["label"], "owner_id": r["owner_id"]}
+                for r in c.execute("SELECT r.id,r.label,r.owner_id,e.bots FROM browser_exits e "
                                    "JOIN runners r ON r.id=e.runner_id WHERE e.sharing=1 AND r.revoked_at IS NULL "
                                    "ORDER BY r.label")
-                if bot in _bots(r["bots_json"])]
+                if bot in _bots(r["bots"])]
 
     @app.get("/api/v2/bots/{bot}/browser-exit")
     def bot_browser_exit(request: Request, bot: str):

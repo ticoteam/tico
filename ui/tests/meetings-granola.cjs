@@ -18,8 +18,8 @@ const ago = minutes => new Date(now - minutes * 6e4).toISOString();
 const meeting = (id, title, minutes) => ({id, title, source: 'granola', kind: 'meeting', status: 'done', started: ago(minutes), created: ago(minutes),
   duration_ms: 1800000, participants: [{name: 'Ana', email: 'ana@acme.example'}, {name: 'Ben'}], outbox: {doc: [], task: [], feature: []}});
 // Shapes as the server sends them (OpenAPI GranolaStatus / GranolaSync); `syncing` is filled in by the fake below.
-const OFF = {mode: 'off', connected: false, plan_hint: null, last_sync: null, last_error: null, imported_count: 0, skipped: 0, needs_signin: false};
-const ON = {mode: 'account', connected: true, email: 'ana@acme.example', plan_hint: 'free', last_sync: ago(3), last_error: null, imported_count: 42, skipped: 0, needs_signin: false};
+const OFF = {mode: 'off', connected: false, plan_hint: null, last_synced_at: null, last_error: null, imported_count: 0, skipped: 0, needs_signin: false};
+const ON = {mode: 'account', connected: true, email: 'ana@acme.example', plan_hint: 'free', last_synced_at: ago(3), last_error: null, imported_count: 42, skipped: 0, needs_signin: false};
 const CODE = {user_code: 'WDJB-MJHT', verification_uri: 'https://mcp-auth.granola.ai/device',
   verification_uri_complete: 'https://mcp-auth.granola.ai/device?user_code=WDJB-MJHT', expires_in: 600, interval: 3};
 
@@ -48,7 +48,7 @@ async function open(browser, viewport, w, scheme = 'dark') {
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/setup/getting-started') return json({items: [], done: 0, total: 0, complete: true, dismissed: true, tour_seen: true, cards_dismissed: [],
-      can_build: true, owner: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
+      can_build: true, owner_id: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
     if (p === '/api/meetings/sources') return json({sources: [{id: 'import', name: 'Import', status: 'available'}]});
     if (p === '/api/v2/meetings') { w.listed++; return json({meetings: w.meetings, pending_count: 0}); }
     if (p === '/api/v2/meeting-importers') return json({computers: [{id: 'mac', label: 'Test Mac', platform: 'macos', online: true}],
@@ -67,13 +67,13 @@ async function open(browser, viewport, w, scheme = 'dark') {
     if (p === '/api/v2/meetings/granola/connect/status') {
       w.calls.push('poll');
       const next = w.polls.length > 1 ? w.polls.shift() : w.polls[0];
-      if (next.state === 'connected') w.granola = {...ON, email: next.email, last_sync: null, imported_count: 0};
+      if (next.state === 'connected') w.granola = {...ON, email: next.email, last_synced_at: null, imported_count: 0};
       return json(next);
     }
     if (p === '/api/v2/meetings/granola/sync' && method === 'POST') {
       w.calls.push('sync');
       w.syncLeft = w.syncSteps;
-      return json({state: 'syncing', last_sync: w.granola.last_sync});
+      return json({state: 'syncing', last_synced_at: w.granola.last_synced_at});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
@@ -171,8 +171,8 @@ const shot = async (page, name) => { if (shots) await page.screenshot({path: pat
 
       // ---- connected: sync once on open, list refreshes when last_sync moves; free plan line; Sync and Disconnect in …
       const before = ago(30);
-      w = world({granola: {...ON, last_sync: before, imported_count: 41}, syncSteps: 1});
-      w.finish = () => { w.granola = {...ON, last_sync: ago(3), imported_count: 42, skipped: 2}; w.meetings = [meeting('g2', 'Pricing review', 5), ...w.meetings]; };
+      w = world({granola: {...ON, last_synced_at: before, imported_count: 41}, syncSteps: 1});
+      w.finish = () => { w.granola = {...ON, last_synced_at: ago(3), imported_count: 42, skipped: 2}; w.meetings = [meeting('g2', 'Pricing review', 5), ...w.meetings]; };
       ({page, errors, context} = await open(browser, desk, w, scheme));
       await page.locator('#mg-row [data-g=more]').waitFor();
       await page.locator('#mg-row .mg-syncing .mg-spin').waitFor();

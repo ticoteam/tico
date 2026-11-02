@@ -216,7 +216,7 @@ def test_activity_leaves_out_a_message_the_viewer_may_not_read_and_a_carrier(api
         assert activity(api, who(api, "ben-test"), after) == []
     after = cursor(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO messages(id, conversation_id, from_actor, kind, body, refs_json, created) "
+        c.execute("INSERT INTO messages(id, conversation_id, sender_id, kind, body, refs, created_at) "
                   "VALUES('carrier-1',?,'human:ana','say','', ?, ?)",
                   (thread["id"], '{"carries": "task-1"}', H.now()))
     with api.app.state.store.read() as c:
@@ -242,8 +242,8 @@ def test_a_stream_following_a_conversation_and_a_thread_gets_the_messages_of_bot
 def test_a_hold_tells_its_author_and_its_reviewer_that_their_list_moved(api):
     after = cursor(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO org_rule_holds(id, operation, payload_json, author, destinations_json, rule_ids_json, "
-                  "verdict_json, nonce, state, reviewer, task_id, created) VALUES('hold-1','threads','{}','human:ben',"
+        c.execute("INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+                  "verdict, nonce, state, reviewer, task_id, created_at) VALUES('hold-1','threads','{}','human:ben',"
                   "'[]','[]','{}','nonce','held','human:ana',NULL,?)", (H.now(),))
     with api.app.state.store.read() as c:
         told = [r[0] for r in c.execute("SELECT subject_id FROM changes WHERE topic='needs' AND kind='hold' AND seq>? "

@@ -16,19 +16,19 @@ const pageHref = id => PAGE_ROUTE + encodeURIComponent(id);
 const pageBotName = x => x.bot && (S.emps || []).some(e => e.name === x.bot) ? botDisplayName(x.bot) : x.bot_name || x.bot || '';
 // `link: false` inside a card that is itself a link: the replacing page's title without its own link.
 function pageStatusHTML(p, {link = true} = {}) {
-  if (p.replaced_by) {
+  if (p.replaced_by_id) {
     const title = esc(p.replaced_by_title || 'a newer page');
-    return `<div class="pg-status pg-replaced">Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by))}">${title}</a>` : title}</div>`;
+    return `<div class="pg-status pg-replaced">Replaced by ${link ? `<a href="${esc(pageHref(p.replaced_by_id))}">${title}</a>` : title}</div>`;
   }
   const stale = Number.isInteger(p.stale_days);
   const by = String(p.updated_by || '');
   const who = by.startsWith('bot:') ? pageBotName({bot: by.slice(4), bot_name: p.updated_by_name}) : p.updated_by_name || pageBotName(p);
   const parts = [stale ? `Not updated in ${p.stale_days} day${p.stale_days === 1 ? '' : 's'}`
-    : `Updated ${esc(ago(p.updated))}${who ? ' by ' + esc(who) : ''}`];
+    : `Updated ${esc(ago(p.updated_at))}${who ? ' by ' + esc(who) : ''}`];
   if (Number.isInteger(p.version)) parts.push('v' + p.version);
   if (p.cadence && p.cadence !== 'none') parts.push(esc(p.cadence));
   if (p.as_of) parts.push('data from ' + esc(pageDay(p.as_of)));
-  return `<div class="pg-status${stale ? ' pg-stale' : ''}" title="${esc(fmt(p.updated))}">${parts.join(' · ')}</div>`;
+  return `<div class="pg-status${stale ? ' pg-stale' : ''}" title="${esc(fmt(p.updated_at))}">${parts.join(' · ')}</div>`;
 }
 
 // ----------------------------------------------------------------- the card
@@ -135,7 +135,7 @@ function pageFullHead(state) {
   const p = state.page, head = $('#pg-view .pg-head');
   if (!head) return;
   const versions = state.versions.length > 1 ? `<select class="pg-ver" aria-label="Version">${state.versions.map(v =>
-    `<option value="${v.version}"${v.version === state.shown ? ' selected' : ''}>v${v.version} · ${esc(pageDay((v.created || '').slice(0, 10)))}</option>`).join('')}</select>` : '';
+    `<option value="${v.version}"${v.version === state.shown ? ' selected' : ''}>v${v.version} · ${esc(pageDay((v.created_at || '').slice(0, 10)))}</option>`).join('')}</select>` : '';
   const items = [
     state.can.manage ? `<button type="button" role="menuitem" data-pg-act="archive">${p.archived ? 'Restore' : 'Archive'}</button>` : '',
     `<a role="menuitem" href="${API}/v2/files/${encodeURIComponent(p.file_id)}?v=${state.shown}" download>Download</a>`,
@@ -201,7 +201,7 @@ function taskPagesAdopt(d, task) {
   // The pages pinned to the task (a page published with --task pins itself there), in their order.
   get('/v2/places/' + encodeURIComponent('task:' + id)).then(r => {
     if (d.tpEl !== slot) return;
-    const pins = (r.pins || []).filter(x => x.page && !x.page.replaced_by && !x.page.archived);   // a replaced page links on
+    const pins = (r.pins || []).filter(x => x.page && !x.page.replaced_by_id && !x.page.archived);   // a replaced page links on
     slot.hidden = !pins.length;
     slot.replaceChildren(...pins.map(x => window.pageCard(x.page, {size: x.size || 'medium'})));
   }).catch(() => {});
@@ -306,7 +306,7 @@ async function lfLoad(more = false) {
       const r = await get(`/v2/files/search?q=${encodeURIComponent(f.q)}&limit=50`, {fresh: true});
       if (LF !== state || seq !== state.seq) return;
       state.rows = (r.results || []).filter(h => (!f.kind || h.library_kind === f.kind) && (!f.bot || h.bot === f.bot))
-        .map(h => ({...h, last_activity_at: h.updated, hit: true}));
+        .map(h => ({...h, last_activity_at: h.updated_at, hit: true}));
       state.cursor = null;
     } else {
       const r = await get('/v2/files?' + lfApiQuery(more ? state.cursor : ''), {fresh: true});

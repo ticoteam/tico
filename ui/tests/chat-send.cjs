@@ -37,7 +37,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
         if (answer === 'html') return route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Sign in</title>'});
         if (answer === 'slow') await new Promise(r => setTimeout(r, 700));
         sends.push(text);
-        const message = {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()};
+        const message = {id: 'm' + sends.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()};
         thread.push(message);
         return json({message, fast: true});
       }

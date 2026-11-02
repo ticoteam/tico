@@ -212,8 +212,8 @@ def test_refresh_paces_tickets_by_activity_and_asks_about_the_one_in_view(enviro
         for name, (status, created, checked, said) in rows.items():
             hq.tickets[hq_of[name]]["status"] = status
             hq.tickets[hq_of[name]]["messages"] = [{"id": 1, "created": said, "from": "person", "body": "hi"}]
-            c.execute("UPDATE support_tickets SET status=?, created=?, checked=?, messages_json=? WHERE id=?",
-                      (status, created, checked, json.dumps([{"id": 1, "created": said, "from": "person", "body": "hi",
+            c.execute("UPDATE support_tickets SET status=?, created_at=?, checked_at=?, messages=? WHERE id=?",
+                      (status, created, checked, json.dumps([{"id": 1, "created_at": said, "from": "person", "body": "hi",
                                                               "has_diagnostics": False}]), ids[name]))
 
     def asked(body=None):
@@ -226,15 +226,15 @@ def test_refresh_paces_tickets_by_activity_and_asks_about_the_one_in_view(enviro
     assert asked() == ([hq_of["busy"], hq_of["stale"]], False)
     # The one in view is asked about first, even closed, and every 30 s; another person's ticket is not.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE support_tickets SET checked=? WHERE id IN (?,?)", (ago(60), ids["busy"], ids["closed"]))
+        c.execute("UPDATE support_tickets SET checked_at=? WHERE id IN (?,?)", (ago(60), ids["busy"], ids["closed"]))
     assert asked({"ticket": ids["closed"]}) == ([hq_of["closed"], hq_of["busy"]], False)
     riley = file(api, headers=as_person(api, "riley"), message="Riley's").json()["id"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE support_tickets SET checked=?", (now,))
+        c.execute("UPDATE support_tickets SET checked_at=?", (now,))
     assert asked({"ticket": riley}) == ([], False)
     # HQ answering 429 ends the round after the first ask, the most recent first, and keeps what was known.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE support_tickets SET checked=?", (ago(400),))
+        c.execute("UPDATE support_tickets SET checked_at=?", (ago(400),))
     hq.read_status = 429
     assert asked() == ([hq_of["busy"]], True)
 
@@ -384,7 +384,7 @@ def as_bot(api, slug="coo"):
     """The bot, connected as an external agent (a Hermes profile): its own standing credential, no runner lease."""
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (slug, "hermes", "hash-" + slug, "2026-01-01T00:00:00Z", "human:test"))
     api.app.state.store.settings.test_identities["bot-" + slug] = Identity("bot:" + slug, "bot", agent="hermes")
     return signed_in("bot-" + slug)
@@ -400,7 +400,7 @@ def draft(api, headers, message=REPORT, **extra):
 
 def decide(api, approval_id, decision="approved"):
     with api.app.state.store.read() as c:
-        to = c.execute("SELECT m.to_actor FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
+        to = c.execute("SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
                        (approval_id,)).fetchone()[0]
     return to, api.post(f"/api/v2/approvals/{approval_id}", json={"decision": decision}, headers=signed_in())
 
@@ -470,8 +470,8 @@ def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_appro
     assert send(api, bot, "nope").status_code == 404
     # The stored message changed after the person read it: its hash no longer matches.
     with api.app.state.store.transaction() as c:
-        row = c.execute("SELECT payload_json FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
-        c.execute("UPDATE approvals SET payload_json=? WHERE id=?",
+        row = c.execute("SELECT payload FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
+        c.execute("UPDATE approvals SET payload=? WHERE id=?",
                   (row.replace("hub task update", "hub task delete"), approval["id"]))
     r = send(api, bot, approval["id"])
     assert r.status_code == 409 and "hash" in r.json()["error"]["detail"]
@@ -562,7 +562,7 @@ def test_a_persons_own_draft_is_theirs_to_approve_and_is_filed_as_them(environme
     for token, message in (("riley-token", REPORT), ("riley-token", "A second report from Riley's token")):
         approval = draft(api, signed_in(token), message=message).json()
         with api.app.state.store.read() as c:
-            to = c.execute("SELECT m.to_actor FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
+            to = c.execute("SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
                            (approval["id"],)).fetchone()[0]
         assert to == "human:riley"                                   # not the default person
         # Neither their token nor the Assistant says yes for them: only Riley at their browser.
@@ -591,7 +591,7 @@ def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(e
     api = environment()
     approval = draft(api, as_bot(api)).json()
     with api.app.state.store.read() as c:
-        approver = c.execute("SELECT m.to_actor FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
+        approver = c.execute("SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
                              (approval["id"],)).fetchone()[0]
     me = api.get("/api/me", headers=signed_in()).json()
     api.app.state.store.settings.test_identities["approver-token"] = Identity(
@@ -614,7 +614,7 @@ def test_a_setup_request_starts_from_a_snapshot_and_keeps_its_kind_even_at_an_ol
     api = environment()
     with api.app.state.store.transaction() as c:                   # a parked bot whose name must not go
         H.sync_registry(c, {"payroll": {"name": "Payroll for Acme Corp", "status": "active"}}, None)
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,operator,onboarding_state) "
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,owner_id,onboarding_state) "
                   "VALUES('payroll','{}','human:test','needs_setup')")
         c.execute("UPDATE bots SET display_name='Payroll for Acme Corp' WHERE slug='payroll'")
     owner_items = api.get("/api/v2/getting-started", headers=signed_in()).json()["items"]
@@ -642,13 +642,13 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     store = api.app.state.store
     question = lambda h=None: api.get("/api/v2/config", headers=h or signed_in()).json()["feedback_question"]
     with store.transaction() as c:                                 # everyone so far acted before any result
-        c.execute("UPDATE events SET ts=?", (H.shift(H.now(), days=-3),))
+        c.execute("UPDATE events SET created_at=?", (H.shift(H.now(), days=-3),))
     complete_a_bot_turn(api, H.shift(H.now(), days=-1))
     assert question() is None                                      # only the Assistant has answered
     complete_a_bot_turn(api, H.shift(H.now(), hours=2), bot="payroll")
     assert question() is None                                      # a result stamped ahead of this clock waits
     with store.transaction() as c:
-        c.execute("UPDATE attempts SET finished=? WHERE bot='payroll'", (H.shift(H.now(), days=-1),))
+        c.execute("UPDATE attempts SET finished_at=? WHERE bot_id='payroll'", (H.shift(H.now(), days=-1),))
     assert question() == {"moment": "first_result", "question": "How is Tico working for you?"}
     assert api.get("/api/v2/config", headers=as_bot(api)).json()["feedback_question"] is None
     r = api.post("/api/v2/support/feedback", json={"moment": "first_result", "answer": "Good so far"}, headers=signed_in())
@@ -658,13 +658,13 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     assert question() is None
     # A week on, the person is asked once more, but not within 3 days of their last answer.
     with store.transaction() as c:
-        c.execute("UPDATE attempts SET finished=? WHERE bot='payroll'", (H.shift(H.now(), days=-8),))
-        c.execute("UPDATE events SET ts=?", (H.shift(H.now(), days=-9),))
-        c.execute("UPDATE preferences SET value_json=json_set(value_json,'$.first_result.at',?) WHERE key=?",
+        c.execute("UPDATE attempts SET finished_at=? WHERE bot_id='payroll'", (H.shift(H.now(), days=-8),))
+        c.execute("UPDATE events SET created_at=?", (H.shift(H.now(), days=-9),))
+        c.execute("UPDATE preferences SET value=json_set(value,'$.first_result.at',?) WHERE key=?",
                   (H.shift(H.now(), days=-1), "support.feedback"))
     assert question() is None
     with store.transaction() as c:
-        c.execute("UPDATE preferences SET value_json=json_set(value_json,'$.first_result.at',?) WHERE key=?",
+        c.execute("UPDATE preferences SET value=json_set(value,'$.first_result.at',?) WHERE key=?",
                   (H.shift(H.now(), days=-7), "support.feedback"))
     assert question()["moment"] == "day_7"
     before = len(hq.seen)
@@ -677,7 +677,7 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
         H.event(c, "human:riley", "test.acted", "x", {})
     assert question(riley) is None
     with store.transaction() as c:
-        c.execute("UPDATE events SET ts=? WHERE actor='human:riley'", (H.shift(H.now(), days=-7),))
+        c.execute("UPDATE events SET created_at=? WHERE actor='human:riley'", (H.shift(H.now(), days=-7),))
     from backend import support_asks
     support_asks.JOINED.clear()             # the server keeps a first action once read; only this test rewrites one
     assert question(riley)["moment"] == "day_7"

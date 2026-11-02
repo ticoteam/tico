@@ -119,7 +119,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         cid = SK.insert(ctx.c, "fin_connections", {
             "provider": "mercury", "purpose": "bank", "credential_ref": cred, "status": "active", "name": name,
-            "settings_json": SK.dump(settings), "next_sync_at": ctx.at, "created_at": ctx.at, "created_by": who})
+            "settings": SK.dump(settings), "next_sync_at": ctx.at, "created_at": ctx.at, "created_by": who})
         if users is not None:
             SK.set_provider_users(ctx.c, cid, [V.obj(u, "a user") for u in V.items(users, "users")], ctx.at)
         mapped: list[Result] = []
@@ -271,7 +271,7 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
     fields: dict[str, object] = {
         "txn_date": t.txn_date, "amount": t.amount, "counterparty": t.counterparty, "description": t.description,
         "pending": 1 if t.pending else 0, "provider_status": t.status, "kind": t.kind,
-        "card_id": str(card["id"]) if card else None, "request_id": t.request_id or None, "raw_json": SK.dump(t.raw),
+        "card_id": str(card["id"]) if card else None, "request_id": t.request_id or None, "raw": SK.dump(t.raw),
         "version": max(t.version, int(row["version"]) if row is not None else 0), "updated_at": ctx.at,
         "posted_at": t.raw.get("postedAt") if not t.pending else None}
     if row is None:
@@ -282,7 +282,7 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
     else:
         fid = str(row["id"])
         if row["reconciliation_id"] and (int(row["amount"]) != t.amount or t.void or t.reversed):
-            SK.update(ctx.c, "fin_feed_txns", fid, {"raw_json": SK.dump(t.raw), "provider_status": t.status,
+            SK.update(ctx.c, "fin_feed_txns", fid, {"raw": SK.dump(t.raw), "provider_status": t.status,
                                                     "version": fields["version"], "updated_at": ctx.at})
             event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid, "why": "changed after it was reconciled"},
                   f"v{t.version}")
@@ -335,7 +335,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     if pay is None and t.amount < 0:
         pay = SK.direct_payment(ctx.c, t.provider_id) or _marked(ctx, money, t)
     if pay is not None and t.amount < 0:
-        tags = cast(dict[str, str], SK.loads(pay["tags_json"]))
+        tags = cast(dict[str, str], SK.loads(pay["tags"]))
         rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
         vendor = payments.vendor_of(rec) if rec is not None else t.counterparty
         entry = post_row(ctx, fid, t, [feed_line(str(pay["account_id"]), -t.amount, tags, vendor)], gl.id,
@@ -470,7 +470,7 @@ def _reclass(ctx: Ctx, row: Any, pay: Any) -> None:
     entry_id = str(row["entry_id"])
     spent = [x for _, x in SL.entry_lines(ctx.c, entry_id) if x.role != L.MONEY_ROLE]
     account = str(pay["account_id"])
-    tags = posting.with_team(ctx, cast(dict[str, str], SK.loads(pay["tags_json"])))
+    tags = posting.with_team(ctx, cast(dict[str, str], SK.loads(pay["tags"])))
     rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
     vendor = SAP.vendor_key(ctx.c, ctx.book.id,
                             (payments.vendor_of(rec) if rec is not None else str(row["counterparty"]))[:80])
@@ -648,14 +648,14 @@ def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
             posting.reverse(ctx, str(e["id"]), day=open_day(ctx, str(e["entry_date"])), memo=memo, by=SYSTEM)
     from .stripe_post import SUMMARY, SUMMARY_ENTRY  # local: stripe_post imports this module
     for r in SK.rows_of_entry(ctx.c, entry_id):
-        raw = dict(SK.loads(r["raw_json"]))
+        raw = dict(SK.loads(r["raw"]))
         changes: dict[str, object] = {"status": "new", "entry_id": None, "entry_line_id": None, "updated_at": ctx.at}
         if raw.get(SUMMARY):
             # The summary is reversed, but its closed period still holds this row's amount (see store row_effects).
             raw[SUMMARY_ENTRY] = entry_id
             if str(r["id"]) == str(row["id"]):
                 raw.pop(SUMMARY)        # this row leaves its summary; its own posting comes next
-            changes["raw_json"] = SK.dump(raw)
+            changes["raw"] = SK.dump(raw)
         SK.update(ctx.c, "fin_feed_txns", str(r["id"]), changes)
         SK.unlink_transfers(ctx.c, str(r["id"]), ctx.at)
     # A bill or invoice it paid is owed again.
@@ -861,7 +861,7 @@ def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         rid = SK.insert(ctx.c, "fin_reconciliations", {
             "money_account_id": str(money["id"]), "statement_end": end, "statement_balance": shown,
-            "cleared_json": SK.dump(ids), "difference": difference, "status": status,
+            "cleared": SK.dump(ids), "difference": difference, "status": status,
             "completed_at": ctx.at if status == "done" else None, "cleared_total": total,
             "statement_id": str(stmt["id"]) if stmt is not None else None, "action_id": aid, "created_at": ctx.at,
             "created_by": who})
@@ -885,7 +885,7 @@ def reconcile_undo(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(CONFLICT, "only the latest done reconciliation of an account can be undone")
 
     def apply(aid: str) -> Result:
-        ids = [str(r) for r in SK.loads_list(rec["cleared_json"])]
+        ids = [str(r) for r in SK.loads_list(rec["cleared"])]
         SK.set_cleared(ctx.c, ids, None, ctx.at)
         SK.update(ctx.c, "fin_reconciliations", str(rec["id"]), {"undone_at": ctx.at, "undone_by": who})
         return {"reconciliation_id": str(rec["id"]), "undone": True}

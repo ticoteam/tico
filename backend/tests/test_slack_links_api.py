@@ -17,7 +17,7 @@ ADMIN, MEMBER = "ana-test", "cara-test"          # ana is the owner; cara is an 
 def thread(api):
     """A company thread: the root a Slack channel can be linked to."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO conversations (id,kind,subject,created,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
+        c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
                   (THREAD, "thread", "Marketing", H.now(), "company", THREAD))
     return THREAD
 
@@ -76,7 +76,7 @@ def test_a_thread_that_does_not_exist_is_not_found(api):
 def test_the_list_pages_newest_first_and_every_link_is_read_once(api):
     with api.app.state.store.transaction() as c:
         for n in range(5):
-            c.execute("INSERT INTO conversations (id,kind,subject,created,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
+            c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
                       (f"T-{n}", "thread", f"Thread {n}", H.now(), "company", f"T-{n}"))
     made = [api.post("/api/v2/slack/links", json={"thread_id": f"T-{n}", "channel": f"#c{n}"}, headers=headers()).json()["id"]
             for n in range(5)]

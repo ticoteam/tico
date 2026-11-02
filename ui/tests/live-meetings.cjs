@@ -6,16 +6,16 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
-const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_actor: 'human:ana', seq: 2, event_id: 5,
+const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_id: 'human:ana', seq: 2, event_id: 5,
   window_ms: 30000, cooldown_ms: 60000, reply_cap: 3, imported_meeting_id: null,
   humans: [{actor: 'human:ana', name: 'Ana'}], bots: [{bot: 'ops'}],
   chunks: [{seq: 1, revision: 1, speaker: 'Ana', text: 'We should ship the new plan.'},
     {seq: 2, revision: 2, speaker: 'Ben', text: 'Ops, can you review?', start_ms: 30000}],
-  chat: [{id: 'c1', actor: 'human:ana', role: 'human', text: 'Welcome', transcript_seq: 1, created: '2026-10-30T10:00:01.000000Z'}],
+  chat: [{id: 'c1', actor: 'human:ana', role: 'human', text: 'Welcome', transcript_seq: 1, created_at: '2026-10-30T10:00:01.000000Z'}],
   notices: [
-    {event_id: 3, kind: 'waiting', bot: 'ops', reason: 'runner_update', detail: 'Test Mac needs a Tico update before it can join private meetings', created: '2026-10-30T10:00:00.000000Z'},
-    {event_id: 4, kind: 'deferred', bot: 'ops', reason: 'busy', behind: null, created: '2026-10-30T10:00:02.000000Z'},
-    {event_id: 5, kind: 'failed', bot: 'ops', reason: 'private_checkout', detail: "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository", created: '2026-10-30T10:00:03.000000Z'}],
+    {event_id: 3, kind: 'waiting', bot: 'ops', reason: 'runner_update', detail: 'Test Mac needs a Tico update before it can join private meetings', created_at: '2026-10-30T10:00:00.000000Z'},
+    {event_id: 4, kind: 'deferred', bot: 'ops', reason: 'busy', behind: null, created_at: '2026-10-30T10:00:02.000000Z'},
+    {event_id: 5, kind: 'failed', bot: 'ops', reason: 'private_checkout', detail: "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository", created_at: '2026-10-30T10:00:03.000000Z'}],
   router: {windows: [{window_index: 0, start_ms: 0, end_ms: 30000, outcome: 'pass', trace: {reason: 'below threshold', answers: {ops: 0.2}}}],
     turns: [{id: 't1', bot: 'ops', window_index: null, status: 'pending'}],
     bypasses: [{event_id: 6, bypass: 'named', source_key: 'chunk:2', targets: ['ops'], skipped: []}]}});
@@ -66,7 +66,7 @@ async function main() {
       if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
       if (p === '/api/v2/tasks') return json({tasks: []});
       if (p === '/api/v2/setup/getting-started') return json({items: [], done: 0, total: 0, complete: true, dismissed: true, tour_seen: true, cards_dismissed: [],
-        can_build: true, owner: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
+        can_build: true, owner_id: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
       if (p === '/api/v2/live-meetings/bot-candidates') return json({bots: [{slug: 'finance', name: 'Finance', team: 'Operations'}]});
       if (p === '/api/v2/live-meetings' && method === 'GET') return json({meetings: world.meetings, count: world.meetings.length});
       if (p === '/api/v2/live-meetings' && method === 'POST') {

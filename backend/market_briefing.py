@@ -5,7 +5,7 @@ The briefing is a market page (`market/briefings/<week>`) and a row here that al
 market entities it touches. The server works out which bets those entities touch: an active bet of the published
 strategy whose `cites`, or whose thesis wrong-if `market_id`, is one of them. It emits `market.briefing` with the
 touched bets, so the Strategy Bot's routine on that event looks only at them; with none touched, it has nothing to do.
-One row per ISO week: posting the same week again replaces it and keeps `created`. A briefing an automation posted
+One row per ISO week: posting the same week again replaces it and keeps `created_at`. A briefing an automation posted
 (`post_update` to market, backend/automation_actions.py) carries `source: {automation, run, task}`; a post by hand
 clears it. `cadence` says how Market labels it: `daily` when an automation posted it on a schedule that runs on more
 than one day a week (the built-in Market briefing, each morning) or on anything but a schedule, so it is dated by its
@@ -39,7 +39,7 @@ CATEGORY = "Market / Briefings"
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS market_briefings (id TEXT PRIMARY KEY, week TEXT NOT NULL UNIQUE, title TEXT NOT NULL, "
     "body TEXT NOT NULL, items TEXT NOT NULL DEFAULT '[]', bets TEXT NOT NULL DEFAULT '[]', created_by TEXT, "
-    "created TEXT, updated TEXT)",
+    "created_at TEXT, updated_at TEXT)",
 )
 
 
@@ -87,8 +87,8 @@ def cadence(c, source):
     aid = (source or {}).get("automation") if isinstance(source, dict) else None
     if not aid:
         return "weekly"
-    row = c.execute("SELECT flow_json FROM automations WHERE id=?", (aid,)).fetchone()
-    trigger = (MK.loads(row["flow_json"], {}) if row else {}).get("trigger")
+    row = c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()
+    trigger = (MK.loads(row["flow"], {}) if row else {}).get("trigger")
     trigger = trigger if isinstance(trigger, dict) else {}
     return "weekly" if trigger.get("type") == "schedule" and _once_a_week(trigger.get("cron")) else "daily"
 
@@ -153,10 +153,10 @@ def post(c, who, week, title, body, items, source=None):
     now = H.now()
     MK.write_page(c, who.actor, PAGE + week, title, body, CATEGORY, replace=True, record=False)
     if before:
-        c.execute("UPDATE market_briefings SET title=?, body=?, items=?, bets=?, updated=?, source=? WHERE week=?",
+        c.execute("UPDATE market_briefings SET title=?, body=?, items=?, bets=?, updated_at=?, source=? WHERE week=?",
                   (title, body, MK.dumps(items), MK.dumps(bets), now, MK.dumps(source) if source else None, week))
     else:
-        c.execute("INSERT INTO market_briefings (id, week, title, body, items, bets, created_by, created, updated, "
+        c.execute("INSERT INTO market_briefings (id, week, title, body, items, bets, created_by, created_at, updated_at, "
                   "source) VALUES (?,?,?,?,?,?,?,?,?,?)",
                   (H.new_id(), week, title, body, MK.dumps(items), MK.dumps(bets), who.actor, now, now,
                    MK.dumps(source) if source else None))

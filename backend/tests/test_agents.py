@@ -36,7 +36,7 @@ def test_a_message_to_a_hermes_bot_waits_in_its_inbox_and_the_agent_answers_over
     beat(api, token)
     msg = post(api, "chat/scout", {"text": "What did you find today?"})
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='scout'").fetchone()[0] == 0, "no runner will claim it"
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='scout'").fetchone()[0] == 0, "no runner will claim it"
     # The page has nothing to say about execution: no job, no machine to wait for.
     snapshot = api.get("/api/v2/conversations/" + msg["conversation_id"] + "/snapshot", headers=headers()).json()
     assert snapshot["execution"] is None
@@ -49,7 +49,7 @@ def test_a_message_to_a_hermes_bot_waits_in_its_inbox_and_the_agent_answers_over
     assert [m["body"] for m in page] == ["What did you find today?"]
     failed, sent = call(api, "hub_message_send", {"to": "ana", "text": "Three leads, all in Austin.",
                                           "conversation_id": msg["conversation_id"]}, token=token)
-    assert not failed and sent["from_actor"] == "bot:scout"
+    assert not failed and sent["sender_id"] == "bot:scout"
     failed, acked = call(api, "hub_message_mark_read", {"message_id": msg["id"]}, token=token)
     assert not failed and acked == {"read": True}
     assert call(api, "hub_message_list", token=token)[1]["messages"] == []
@@ -116,7 +116,7 @@ def test_agent_unread_inbox_is_privacy_checked_in_one_batch(api, monkeypatch):
     token = credential(api)["token"]
     beat(api, token)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE agents SET last_seen=? WHERE bot='scout'", (H.shift(H.now(), seconds=-600),))
+        c.execute("UPDATE agents SET last_seen_at=? WHERE bot='scout'", (H.shift(H.now(), seconds=-600),))
     for i in range(12):
         post(api, "chat/scout", {"text": f"Note {i}"})
     calls = []

@@ -111,15 +111,15 @@ OPERATIONS = {
 DRAFT_AS = {"message": "message", "comment": "comment", "task": "task_create", "assign": "task_owner"}
 
 SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS org_rule_verdicts(digest TEXT PRIMARY KEY, broken_json TEXT NOT NULL, "
-    "call_id TEXT, created TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS org_rule_verdicts_created ON org_rule_verdicts(created)",
+    "CREATE TABLE IF NOT EXISTS org_rule_verdicts(digest TEXT PRIMARY KEY, broken TEXT NOT NULL, "
+    "call_id TEXT, created_at TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS org_rule_verdicts_created ON org_rule_verdicts(created_at)",
     "CREATE INDEX IF NOT EXISTS org_rule_holds_task ON org_rule_holds(task_id) WHERE task_id IS NOT NULL",
     # Mails a bot's connector sent after a check that got no answer from Tico, by the id the connector gave each:
     # one `rules.unchecked` per id, however often it is reported (`record_misses`).
-    "CREATE TABLE IF NOT EXISTS org_rule_misses(author TEXT NOT NULL, id TEXT NOT NULL, created TEXT NOT NULL, "
+    "CREATE TABLE IF NOT EXISTS org_rule_misses(author TEXT NOT NULL, id TEXT NOT NULL, created_at TEXT NOT NULL, "
     "PRIMARY KEY (author, id))",
-    "CREATE INDEX IF NOT EXISTS org_rule_misses_created ON org_rule_misses(created)",
+    "CREATE INDEX IF NOT EXISTS org_rule_misses_created ON org_rule_misses(created_at)",
 )
 MISSES_MAX = 100              # ids one report carries (connectors/mail keeps at most this many per bot)
 MISSES_KEPT_DAYS = 90         # how long a reported id is remembered, so a late repeat still counts once
@@ -231,7 +231,7 @@ def hides_run(c, attempt):
     if not attempt:
         return False
     try:
-        if json.loads(attempt["result_json"] or "{}").get("held_reply"):
+        if json.loads(attempt["result"] or "{}").get("held_reply"):
             return True
     except (TypeError, ValueError):
         pass
@@ -278,8 +278,8 @@ def calls_today(c, people=False):
     A people's call's `judge.call` row says so, with `people`."""
     day = H.now()[:10] + "T00:00:00"
     flag = "IS 1" if people else "IS NOT 1"
-    return c.execute("SELECT count(*) FROM events WHERE actor=? AND action='judge.call' AND target LIKE ? AND ts>=? "
-                     f"AND json_extract(detail_json,'$.people') {flag}", (H.KEEPER, RULES_TARGET, day)).fetchone()[0]
+    return c.execute("SELECT count(*) FROM events WHERE actor=? AND action='judge.call' AND target LIKE ? AND created_at>=? "
+                     f"AND json_extract(detail,'$.people') {flag}", (H.KEEPER, RULES_TARGET, day)).fetchone()[0]
 
 
 def _questions(qset, rules):
@@ -364,7 +364,7 @@ def place_for(c, author, recipients=(), conversation_id=""):
         members += list((conv or {}).get("participants") or [])
         members += [r["actor"] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (root_id,))]
     teams = set()
-    for actor in (author, (conv or {}).get("owner_actor")):
+    for actor in (author, (conv or {}).get("owner_id")):
         if actor:
             teams |= set(R.who_key(c, actor)["chain"])
     if root is not None and root.get("audience_group_id"):
@@ -438,7 +438,7 @@ def check_as(store, primary, principal, sender, via, operation, output, recipien
                        "recipients": recipients, "rules": rules, "digest": key, "broken": [], "outcome": "pass",
                        "error": None, "call": None, "cached": False, "draft": draft, "matched": matched, "place": where,
                        "origin": origin, "attempt_id": attempt_id or "", "context": context or {}, "obj": obj or ""}
-            hit = c.execute("SELECT broken_json, call_id FROM org_rule_verdicts WHERE digest=?", (key,)).fetchone()
+            hit = c.execute("SELECT broken, call_id FROM org_rule_verdicts WHERE digest=?", (key,)).fetchone()
             if hit:
                 broken, unchecked = _cached(hit[0])
                 return {**verdict, "broken": broken, "outcome": "broken" if broken else "pass", "cached": True,
@@ -483,9 +483,9 @@ def check_as(store, primary, principal, sender, via, operation, output, recipien
                 # cache still records them unchecked.
                 unchecked = [r["id"] for r in rules[J.MAX_QUESTIONS:]]
                 stored = {"broken": broken, "unchecked": unchecked} if unchecked else broken
-                c.execute("INSERT OR REPLACE INTO org_rule_verdicts(digest, broken_json, call_id, created) "
+                c.execute("INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) "
                           "VALUES(?,?,?,?)", (key, json.dumps(stored), call["id"], H.now()))
-                c.execute("DELETE FROM org_rule_verdicts WHERE created<?", (H.shift(H.now(), days=-CACHE_DAYS),))
+                c.execute("DELETE FROM org_rule_verdicts WHERE created_at<?", (H.shift(H.now(), days=-CACHE_DAYS),))
         if len(rules) > J.MAX_QUESTIONS and broken is not None:
             verdict["unchecked_rules"] = [r["id"] for r in rules[J.MAX_QUESTIONS:]]
         if broken is None:
@@ -553,7 +553,7 @@ def outside_edition(store, primary, output, to=""):
             level = store.settings.rule_check_level or "medium"
             qset = J.load_set(QUESTION_SET)
             key = digest("outside_edition", "", [to], output, "", rules, qset["label"], level)
-            hit = c.execute("SELECT broken_json FROM org_rule_verdicts WHERE digest=?", (key,)).fetchone()
+            hit = c.execute("SELECT broken FROM org_rule_verdicts WHERE digest=?", (key,)).fetchone()
             if hit:
                 broken, _ = _cached(hit[0])
                 return result("held", "broken", broken) if broken else result("pass")
@@ -580,7 +580,7 @@ def outside_edition(store, primary, output, to=""):
             call = H.event(c, H.KEEPER, "judge.call", qset["label"],
                            {"label": qset["label"], "questions": len(questions), "operation": "outside_edition",
                             "level": level, "broken": len(broken), **B.audit_detail(answer)})
-            c.execute("INSERT OR REPLACE INTO org_rule_verdicts(digest, broken_json, call_id, created) VALUES(?,?,?,?)",
+            c.execute("INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) VALUES(?,?,?,?)",
                       (key, json.dumps(broken), call["id"], H.now()))
         return result("held", "broken", broken) if broken else result("pass")
     except J.JudgeError:
@@ -651,7 +651,7 @@ def reviewer_for(c, author, rules):
 
 def _repeats(c, author, rule_id):
     return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action IN "
-                     "('rules.blocked','rules.escalated') AND target=? AND ts>=?",
+                     "('rules.blocked','rules.escalated') AND target=? AND created_at>=?",
                      (author, "org_rule:" + rule_id, _day())).fetchone()[0]
 
 
@@ -659,8 +659,8 @@ def _tell_bot(c, author, text):
     """A note on the bot's next run, as the keeper (a plain row: a paused bot's note waits, nothing is refused)."""
     if not H.is_bot(author):
         return
-    row = {"id": H.new_id(), "from_actor": H.KEEPER, "to_actor": author, "body": text[:H.NOTE_MAX], "created": H.now()}
-    c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES (:id,:from_actor,:to_actor,:body,:created)",
+    row = {"id": H.new_id(), "from_actor": H.KEEPER, "to_actor": author, "body": text[:H.NOTE_MAX], "created_at": H.now()}
+    c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES (:id,:from_actor,:to_actor,:body,:created_at)",
               row)
     H.event(c, H.KEEPER, "note.create", row["id"], {"to": author, "org_rule": True})
 
@@ -806,9 +806,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     task_id = None
     if mode == "escalate":
         if repeat:
-            row = c.execute("SELECT task_id FROM org_rule_holds WHERE author=? AND created>=? AND task_id IS NOT NULL "
-                            "AND json_extract(verdict_json,'$.rule')=? AND json_extract(verdict_json,'$.repeat')=1 "
-                            "ORDER BY created LIMIT 1", (author, _day(), strictest["id"])).fetchone()
+            row = c.execute("SELECT task_id FROM org_rule_holds WHERE author=? AND created_at>=? AND task_id IS NOT NULL "
+                            "AND json_extract(verdict,'$.rule')=? AND json_extract(verdict,'$.repeat')=1 "
+                            "ORDER BY created_at LIMIT 1", (author, _day(), strictest["id"])).fetchone()
             task_id = row[0] if row else None
         if task_id is None and reviewer:
             task_id = _review_task(c, hold_id, author, strictest, reviewer)
@@ -827,8 +827,8 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
               "too_large": too_large, "cached": verdict["cached"], "call": verdict.get("call"),
               "digest": verdict["digest"], "versions": {r["id"]: r["version"] for r in verdict["rules"]},
               "matched": [list(x) for x in matched]}
-    c.execute("INSERT INTO org_rule_holds(id, operation, payload_json, author, destinations_json, rule_ids_json, "
-              "verdict_json, nonce, state, reviewer, task_id, created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+              "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
               (hold_id, operation, json.dumps(stored, default=str), author, json.dumps(verdict["recipients"]),
                json.dumps([r["id"] for r in broken]), json.dumps(detail), nonce, "held", reviewer, task_id, H.now()))
     action = "rules.escalated" if mode == "escalate" else "rules.blocked"
@@ -915,7 +915,7 @@ def _person_reviewer(c, who, hold, auth):
     if hold["reviewer"] == who.actor:
         return True
     ctx = None
-    for rid in json.loads(hold["rule_ids_json"] or "[]"):
+    for rid in json.loads(hold["rule_ids"] or "[]"):
         row = c.execute("SELECT * FROM org_rules WHERE id=?", (rid,)).fetchone()
         if not row:
             continue
@@ -992,10 +992,10 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         author, reviewer, stands_in = _is_author(who, hold), _is_reviewer(who, hold, c, auth), _is_represented(who, hold, c)
     if not (author or reviewer or stands_in):
         raise Problem("not_found", "There is no hold " + hold["id"], 404)
-    stored = {} if summary else json.loads(hold["payload_json"] or "{}")
-    verdict = json.loads(hold["verdict_json"] or "{}")
-    rule_ids = json.loads(hold["rule_ids_json"] or "[]")
-    destinations = json.loads(hold["destinations_json"] or "[]")
+    stored = {} if summary else json.loads(hold["payload"] or "{}")
+    verdict = json.loads(hold["verdict"] or "{}")
+    rule_ids = json.loads(hold["rule_ids"] or "[]")
+    destinations = json.loads(hold["destinations"] or "[]")
     if summary:
         # A list row is bounded whatever the hold names: a few short rule previews and names, and the counts.
         rule_ids, destinations = rule_ids[:SUMMARY_RULES], destinations[:SUMMARY_NAMES]
@@ -1011,13 +1011,13 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
            "outcome": "escalated" if verdict.get("outcome") == "escalate" else "blocked", "rules": rules,
            "to": [cut(n) for n in _names(c, destinations)],
            "reviewer": hold["reviewer"], "reviewer_name": cut(reviewer_name), "task_id": hold["task_id"],
-           "created": hold["created"], "decided_at": hold["decided_at"], "decided_by": hold["decided_by"],
+           "created_at": hold["created_at"], "decided_at": hold["decided_at"], "decided_by": hold["decided_by"],
            "can_send": reviewer and hold["state"] == "held" and hold["operation"] in REPLAY,
            "can_withdraw": (author or stands_in) and hold["state"] == "held"}
     if summary:
         out["appealed"] = bool(hold["why"])
-        out["rules_count"] = len(json.loads(hold["rule_ids_json"] or "[]"))
-        out["to_count"] = len(json.loads(hold["destinations_json"] or "[]"))
+        out["rules_count"] = len(json.loads(hold["rule_ids"] or "[]"))
+        out["to_count"] = len(json.loads(hold["destinations"] or "[]"))
         return out
     text = stored.get("text") or ""
     out["text"] = text[:HOLD_TEXT_CHARS]
@@ -1063,8 +1063,8 @@ def held_for(c, who, operations):
     it is held for, oldest first, each with its `role`. The owner's and Admins' fallback is not listed: a hold with no reviewer is for
     their review page, not a person's list."""
     marks = ",".join("?" * len(operations))
-    rows = c.execute(f"SELECT id, author, reviewer, created FROM org_rule_holds WHERE state='held' AND operation IN "
-                     f"({marks}) ORDER BY created, id", tuple(operations)).fetchall()
+    rows = c.execute(f"SELECT id, author, reviewer, created_at FROM org_rule_holds WHERE state='held' AND operation IN "
+                     f"({marks}) ORDER BY created_at, id", tuple(operations)).fetchall()
     out = []
     for row in rows:
         role = _reader(who, dict(row), c)
@@ -1085,8 +1085,8 @@ def _page(c, who, where, args, cursor, limit, auth, fallback):
         if not created or not hid:
             raise Problem("validation", "That cursor is not valid", 422)
         after = (created, hid)
-    query = c.execute(f"SELECT * FROM org_rule_holds WHERE {where} AND (created>? OR (created=? AND id>?)) "
-                      "ORDER BY created, id", (*args, after[0], after[0], after[1]))
+    query = c.execute(f"SELECT * FROM org_rule_holds WHERE {where} AND (created_at>? OR (created_at=? AND id>?)) "
+                      "ORDER BY created_at, id", (*args, after[0], after[0], after[1]))
     rows = []
     for row in query:                       # one row past the page says there is more
         role = _reader(who, dict(row), c, auth) if fallback else None
@@ -1108,7 +1108,7 @@ def _page(c, who, where, args, cursor, limit, auth, fallback):
         used += size
     more = len(out) < len(rows)
     last = out[-1] if out else None
-    return out, (f"{last['created']}|{last['id']}" if more and last else None)
+    return out, (f"{last['created_at']}|{last['id']}" if more and last else None)
 
 
 def holds_listed(c, who, task_id="", thread="", cursor=None, limit=HOLD_LIST_MAX, auth=None):
@@ -1120,7 +1120,7 @@ def holds_listed(c, who, task_id="", thread="", cursor=None, limit=HOLD_LIST_MAX
     if task_id:
         scope, scope_args = "task_id=?", (task_id,)
     elif thread:
-        scope = "state='held' AND json_extract(payload_json,'$.provenance.place.thread')=?"
+        scope = "state='held' AND json_extract(payload,'$.provenance.place.thread')=?"
         scope_args = (thread,)
     else:
         scope, scope_args = "state='held'", ()
@@ -1189,7 +1189,7 @@ def withdraw(c, who, hold_id, auth=None):
 def hold_provenance(hold):
     """What a hold keeps of its check: the attempt, the route, the actor that sent it (`authenticated`) and its `via`,
     the place, the outside origin, and the write's route (`path`)."""
-    return json.loads(hold["payload_json"] or "{}").get("provenance") or {}
+    return json.loads(hold["payload"] or "{}").get("provenance") or {}
 
 
 def replay_identity(c, hold, auth):
@@ -1207,21 +1207,21 @@ def replay_identity(c, hold, auth):
 
 def hold_matched(hold):
     """The (rule id, version) pairs that matched when the output was held."""
-    verdict = json.loads(hold["verdict_json"] or "{}")
+    verdict = json.loads(hold["verdict"] or "{}")
     if verdict.get("matched") is not None:
         return {tuple(x) for x in verdict["matched"]}
     return {(rid, v) for rid, v in (verdict.get("versions") or {}).items()}
 
 
 def _replay(hold):
-    return json.loads(hold["payload_json"] or "{}").get("replay") or {}
+    return json.loads(hold["payload"] or "{}").get("replay") or {}
 
 
 def current_people(c, hold, audience=None, auth=None):
     """Who the held write reaches now: its audience as the route counts it, or the destinations it was held for when its
     operation names no way to count them."""
     now = current_audience(c, hold, audience, auth)
-    return now if now is not None else json.loads(hold["destinations_json"] or "[]")
+    return now if now is not None else json.loads(hold["destinations"] or "[]")
 
 
 def place_now(c, hold, people, replay=None):
@@ -1249,7 +1249,7 @@ def current_matched(c, hold, audience=None, auth=None):
 
 def hold_input(hold):
     """What a hold's check was shown besides its text and audience: its context and its object."""
-    stored = json.loads(hold["payload_json"] or "{}")
+    stored = json.loads(hold["payload"] or "{}")
     return stored.get("input") or {"context": {}, "obj": ""}
 
 
@@ -1268,7 +1268,7 @@ def current_audience(c, hold, audience=None, auth=None):
     fn = (audience if audience is not None else AUDIENCE).get(hold["operation"])
     if fn is None:
         return None
-    stored = json.loads(hold["payload_json"] or "{}")
+    stored = json.loads(hold["payload"] or "{}")
     try:
         found = fn(c, replay_identity(c, hold, auth), stored.get("replay") or {})
     except Problem:
@@ -1281,7 +1281,7 @@ def _same_audience(c, hold, audience=None, auth=None):
     new owner since), or would be somewhere else (a team or an outside member since): a rule's With and Where are
     matched on the actual recipients and place, so that is a new check. Read inside Send anyway's transaction."""
     now = current_audience(c, hold, audience, auth)
-    if now is not None and now != sorted(json.loads(hold["destinations_json"] or "[]")):
+    if now is not None and now != sorted(json.loads(hold["destinations"] or "[]")):
         raise Problem("changed", "Who this goes to changed since it was held; it stays held. Write it again to "
                       "check it.", 409)
     stored = hold_provenance(hold).get("place")
@@ -1302,7 +1302,7 @@ def recheck(store, primary, hold, audience=None, auth=None):
         now = {(r["id"], r["version"]) for r in R.matching(c, hold["author"], people, place)}
     if now <= hold_matched(hold):
         return sorted(now), None
-    stored = json.loads(hold["payload_json"] or "{}")
+    stored = json.loads(hold["payload"] or "{}")
     shown, prov = hold_input(hold), hold_provenance(hold)
     verdict = check_as(store, primary, hold["author"], prov.get("authenticated") or hold["author"],
                        prov.get("via") or "", hold["operation"], stored.get("text") or "", people,
@@ -1345,7 +1345,7 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
     fn = (table or REPLAY).get(hold["operation"])
     if fn is None:
         raise Problem("unsupported", "This hold can't be sent from here", 409)
-    stored = json.loads(hold["payload_json"] or "{}")
+    stored = json.loads(hold["payload"] or "{}")
     if "path" not in (stored.get("provenance") or {}):
         raise Problem("recheck", "This hold is from an older version and can't be sent as it is; it stays held. "
                       "Write it again to check it.", 409)
@@ -1374,7 +1374,7 @@ def appeal(c, who, hold_id, why):
     if not hold["reviewer"]:
         raise Problem("no_reviewer", "Nobody on the team can review this hold", 409)
     if not task_id:
-        rid = (json.loads(hold["verdict_json"] or "{}")).get("rule")
+        rid = (json.loads(hold["verdict"] or "{}")).get("rule")
         rule = c.execute("SELECT id, text FROM org_rules WHERE id=?", (rid,)).fetchone()
         task_id = _review_task(c, hold_id, hold["author"], dict(rule) if rule else {"text": "a rule"},
                                hold["reviewer"])
@@ -1414,16 +1414,16 @@ def company(c):
 def mail_approved(c, author, key):
     """A held mail the reviewer chose to send anyway, not yet sent: the next identical check passes it, once."""
     row = c.execute("SELECT * FROM org_rule_holds WHERE author=? AND operation='mail' AND state='sent' "
-                    "AND json_extract(payload_json,'$.replay.mail_digest')=? "
-                    "AND json_extract(verdict_json,'$.used') IS NULL ORDER BY decided_at LIMIT 1",
+                    "AND json_extract(payload,'$.replay.mail_digest')=? "
+                    "AND json_extract(verdict,'$.used') IS NULL ORDER BY decided_at LIMIT 1",
                     (author, key)).fetchone()
     return dict(row) if row else None
 
 
 def claim_mail(c, hold_id):
     """Spend a mail approval inside the write: only one request ever changes the row."""
-    return c.execute("UPDATE org_rule_holds SET verdict_json=json_set(verdict_json,'$.used',1) WHERE id=? "
-                     "AND json_extract(verdict_json,'$.used') IS NULL", (hold_id,)).rowcount == 1
+    return c.execute("UPDATE org_rule_holds SET verdict=json_set(verdict,'$.used',1) WHERE id=? "
+                     "AND json_extract(verdict,'$.used') IS NULL", (hold_id,)).rowcount == 1
 
 
 def mail_warning_line(gate):
@@ -1435,7 +1435,7 @@ def open_mail_hold(c, author, key):
     """The hold already waiting on this exact mail, if any: a draft sent again while it waits is that hold, not a new
     one (one review task per mail)."""
     row = c.execute("SELECT * FROM org_rule_holds WHERE author=? AND operation='mail' AND state='held' "
-                    "AND json_extract(payload_json,'$.replay.mail_digest')=? ORDER BY created DESC LIMIT 1",
+                    "AND json_extract(payload,'$.replay.mail_digest')=? ORDER BY created_at DESC LIMIT 1",
                     (author, key)).fetchone()
     return dict(row) if row else None
 
@@ -1445,9 +1445,9 @@ def held_again(c, hold, verdict=None):
     attempt counts as a block of the hold's rule toward the repeats rule, and the third escalates that same hold."""
     if verdict is not None:
         hold = _blocked_again(c, hold, verdict)
-    verdict = json.loads(hold["verdict_json"] or "{}")
+    verdict = json.loads(hold["verdict"] or "{}")
     rules = []
-    for rid in json.loads(hold["rule_ids_json"] or "[]")[:SUMMARY_RULES]:
+    for rid in json.loads(hold["rule_ids"] or "[]")[:SUMMARY_RULES]:
         row = c.execute("SELECT id, text FROM org_rules WHERE id=?", (rid,)).fetchone()
         if row:
             rules.append(dict(row))
@@ -1459,24 +1459,24 @@ def held_again(c, hold, verdict=None):
 def _blocked_again(c, hold, verdict):
     """One more blocked attempt at a held mail: recorded as a block of its rule; the bot's third block of that rule
     today escalates the hold (a review task, the day's repeat task reused). The hold row comes back as it is now."""
-    detail = json.loads(hold["verdict_json"] or "{}")
+    detail = json.loads(hold["verdict"] or "{}")
     rid, author = detail.get("rule"), hold["author"]
     if detail.get("outcome") != "block" or not rid:
         return hold
-    rules = json.loads(hold["rule_ids_json"] or "[]")
+    rules = json.loads(hold["rule_ids"] or "[]")
     if _repeats(c, author, rid) < REPEAT_BLOCKS - 1:
         H.event(c, author, "rules.blocked", "org_rule:" + rid, {
             "hold": hold["id"], "operation": "mail", "rules": rules, "cached": bool(verdict.get("cached")),
             "reviewer": hold["reviewer"], "again": True})
         return hold
-    row = c.execute("SELECT task_id FROM org_rule_holds WHERE author=? AND created>=? AND task_id IS NOT NULL "
-                    "AND json_extract(verdict_json,'$.rule')=? AND json_extract(verdict_json,'$.repeat')=1 "
-                    "ORDER BY created LIMIT 1", (author, _day(), rid)).fetchone()
+    row = c.execute("SELECT task_id FROM org_rule_holds WHERE author=? AND created_at>=? AND task_id IS NOT NULL "
+                    "AND json_extract(verdict,'$.rule')=? AND json_extract(verdict,'$.repeat')=1 "
+                    "ORDER BY created_at LIMIT 1", (author, _day(), rid)).fetchone()
     task_id = hold["task_id"] or (row[0] if row else None)
     if task_id is None and hold["reviewer"]:
         rule = c.execute("SELECT id, text FROM org_rules WHERE id=?", (rid,)).fetchone()
         task_id = _review_task(c, hold["id"], author, dict(rule) if rule else {"text": "a rule"}, hold["reviewer"])
-    c.execute("UPDATE org_rule_holds SET verdict_json=json_set(verdict_json,'$.outcome','escalate','$.repeat',1), "
+    c.execute("UPDATE org_rule_holds SET verdict=json_set(verdict,'$.outcome','escalate','$.repeat',1), "
               "task_id=? WHERE id=?", (task_id, hold["id"]))
     H.event(c, author, "rules.escalated", "org_rule:" + rid, {
         "hold": hold["id"], "operation": "mail", "rules": rules, "cached": bool(verdict.get("cached")),
@@ -1488,8 +1488,8 @@ def federated_hold(c, origin_id, revision):
     """Whether this revision of a message from another install was held before: a catch-up brings it again, and the
     first hold stands, whatever its reviewer decided."""
     return c.execute("SELECT 1 FROM org_rule_holds WHERE operation='federated_message' "
-                     "AND json_extract(payload_json,'$.replay.origin_id')=? "
-                     "AND json_extract(payload_json,'$.replay.revision')=? LIMIT 1",
+                     "AND json_extract(payload,'$.replay.origin_id')=? "
+                     "AND json_extract(payload,'$.replay.revision')=? LIMIT 1",
                      (origin_id, int(revision))).fetchone() is not None
 
 
@@ -1498,16 +1498,16 @@ def supersede_federated(c, origin_id, revision):
     Send anyway cannot put old words back. Their review tasks close with them."""
     from .auth import Identity
     rows = c.execute("SELECT * FROM org_rule_holds WHERE state='held' AND operation='federated_message' "
-                     "AND json_extract(payload_json,'$.replay.origin_id')=? "
-                     "AND json_extract(payload_json,'$.replay.revision')<?", (origin_id, int(revision))).fetchall()
+                     "AND json_extract(payload,'$.replay.origin_id')=? "
+                     "AND json_extract(payload,'$.replay.revision')<?", (origin_id, int(revision))).fetchall()
     for row in rows:
         _decide(c, Identity(H.KEEPER, "service"), dict(row), "kept", "org_rule_hold.superseded")
 
 
 def supersede_mail(c, hold_id):
     """An approval a newer rule held again is spent: the new hold's Send anyway is the approval that counts."""
-    c.execute("UPDATE org_rule_holds SET verdict_json=json_set(verdict_json,'$.used','superseded') WHERE id=? "
-              "AND json_extract(verdict_json,'$.used') IS NULL", (hold_id,))
+    c.execute("UPDATE org_rule_holds SET verdict=json_set(verdict,'$.used','superseded') WHERE id=? "
+              "AND json_extract(verdict,'$.used') IS NULL", (hold_id,))
 
 
 @replayer("mail")
@@ -1537,7 +1537,7 @@ def thread_people(c, replay):
     thread and, for a company or team thread, everyone that audience names; or, for a write that starts its thread
     (`start`), the members and the audience it names. The route's preflight and the write inside `threads.post` both read
     this, so `apply` can tell the audience moved between them."""
-    to = replay.get("to_actor")
+    to = replay.get("recipient_id")
     out = {H.resolve_actor(c, to) or str(to)} if to else set()
     start = replay.get("start")
     if start is not None:
@@ -1575,18 +1575,18 @@ def stats(c, settings):
     day = _day()
     label = J.load_set(QUESTION_SET)["label"]
     checks = c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action='judge.call' "
-                       "AND target=? AND ts>=?", (H.KEEPER, label, day)).fetchone()[0]
+                       "AND target=? AND created_at>=?", (H.KEEPER, label, day)).fetchone()[0]
 
     def count(*actions):
-        return c.execute(f"SELECT count(*) FROM events WHERE action IN ({','.join('?' * len(actions))}) AND ts>=?",
+        return c.execute(f"SELECT count(*) FROM events WHERE action IN ({','.join('?' * len(actions))}) AND created_at>=?",
                          (*actions, day)).fetchone()[0]
     hits = count("rules.blocked", "rules.escalated", "rules.warned")
     cap = float(settings.rules_monthly_usd or 0)
     left = None if cap <= 0 else round(max(0.0, cap - B.spent_this_month(c, None, BUDGET)), 2)
     # What the people's checks cost this month, out of the same budget: the judge.call rows carry each call's cost.
     month = H.now()[:7] + "-01T00:00:00"
-    people = c.execute("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events WHERE actor=? AND "
-                       "action='judge.call' AND target LIKE ? AND ts>=? AND json_extract(detail_json,'$.people')=1",
+    people = c.execute("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events WHERE actor=? AND "
+                       "action='judge.call' AND target LIKE ? AND created_at>=? AND json_extract(detail,'$.people')=1",
                        (H.KEEPER, RULES_TARGET, month)).fetchone()[0]
     return {"checks_today": checks, "unchecked_today": count("rules.unchecked"),
             "blocked_today": count("rules.blocked", "rules.escalated"), "hits_today": hits,
@@ -1621,7 +1621,7 @@ def keep_miss(c, author, check_id):
     """The mail check `check_id` (its Idempotency-Key) is counted unchecked for this bot: a later report of the same
     id counts nothing. Inside the write that counted it."""
     if check_id:
-        return c.execute("INSERT OR IGNORE INTO org_rule_misses(author, id, created) VALUES(?,?,?)",
+        return c.execute("INSERT OR IGNORE INTO org_rule_misses(author, id, created_at) VALUES(?,?,?)",
                          (author, check_id, H.now())).rowcount == 1
     return False
 
@@ -1638,11 +1638,11 @@ def record_misses(c, author, ids):
     empty: an id says nothing of whom the mail went to), up to MISSES_DAY_MAX a UTC day. An id not counted is not
     kept. Every id is taken (the connector forgets them on the 2xx). Ids older than MISSES_KEPT_DAYS are forgotten."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=MISSES_KEPT_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
-    c.execute("DELETE FROM org_rule_misses WHERE created<?", (cutoff,))
+    c.execute("DELETE FROM org_rule_misses WHERE created_at<?", (cutoff,))
     counted = on(c) and bool(R.matching(c, author))
     room = MISSES_DAY_MAX - c.execute(
-        "SELECT count(*) FROM events WHERE action='rules.unchecked' AND actor=? AND ts>=? "
-        "AND json_extract(detail_json,'$.reason')='connector'", (author, _day())).fetchone()[0] if counted else 0
+        "SELECT count(*) FROM events WHERE action='rules.unchecked' AND actor=? AND created_at>=? "
+        "AND json_extract(detail,'$.reason')='connector'", (author, _day())).fetchone()[0] if counted else 0
     known, recorded, over = [], 0, 0
     for miss in ids:
         if counted and recorded < room:
@@ -1882,7 +1882,7 @@ def install(app, store, auth, mutate):
             # have for the original write (the rules it was held on are not asked again).
             check = recheck(store, app.state.judge, hold, audience, auth)
             if ident is not None:
-                stored = json.loads(hold["payload_json"] or "{}")
+                stored = json.loads(hold["payload"] or "{}")
                 try:
                     ingest = prepare[hold["operation"]](store, ident, stored.get("replay") or {})
                 except Exception as exc:  # noqa: BLE001 - ask ingest's own preflight never stops the send

@@ -92,7 +92,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   const step = (await automationNamed(page, 'New automation')).steps[0];
   assert.equal(step.do, 'create_task');
   assert.equal(step.args.title, 'File the yearly report');
-  assert.equal(step.args.owner, 'bot:' + BOT);
+  assert.equal(step.args.owner_id, 'bot:' + BOT);
 
   // On: the list files it under Due date, with its words and the next due day over when the task opens.
   await page.locator('.au-hd .au-sw').check();
@@ -130,18 +130,18 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   // Runs for two due days (the scheduler's payload, sent by hand): each opens the bot's task due that day.
   const opened = [];
   for (const day of ['2026-10-15', '2026-11-30']) {
-    const r = await settled(page, made.id, (await ok(page, 'POST', `automations/${made.id}/run`, {input: {due: {due_on: day, tz: 'UTC'}}})).run);
+    const r = await settled(page, made.id, (await ok(page, 'POST', `automations/${made.id}/run`, {input: {due_at: {due_on: day, tz: 'UTC'}}})).run);
     assert.equal(r.status, 'ok', `${tag}: the run for ${day} (${JSON.stringify(r).slice(0, 300)})`);
   }
   const tasks = (await ok(page, 'GET', 'tasks?limit=200')).tasks || [];
   for (const day of ['2026-10-15', '2026-11-30']) {
     const task = tasks.find(x => x.occurrence === `${made.id}:${day}`);
     assert.ok(task, `${tag}: the task for ${day}`);
-    assert.equal(task.owner, 'bot:' + BOT);
+    assert.equal(task.owner_id, 'bot:' + BOT);
     opened.push(task);
   }
-  const plain = await ok(page, 'POST', 'tasks', {title: 'Look again at the backlog', body: 'Later', owner: 'bot:' + BOT,
-    due: '2026-10-25T12:00:00Z'});
+  const plain = await ok(page, 'POST', 'tasks', {title: 'Look again at the backlog', body: 'Later', owner_id: 'bot:' + BOT,
+    due_at: '2026-10-25T12:00:00Z'});
   const plainId = plain.id || plain.task?.id;
 
   // The occurrence tasks read as deadlines on their pages (red once past); the bot's other task still wakes.
@@ -171,7 +171,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   assert.equal(manual.status, 'ok', `${tag}: the no-input run (${JSON.stringify(manual).slice(0, 300)})`);
   const ny = ((await ok(page, 'GET', 'tasks?limit=200')).tasks || []).find(x => x.occurrence === `${made.id}:2027-03-01`);
   assert.ok(ny, `${tag}: the no-input run made the Mar 1 task`);
-  assert.equal(ny.due, '2027-03-01T23:59:59-05:00', `${tag}: due at the end of its day in the trigger's zone`);
+  assert.equal(ny.due_at, '2027-03-01T23:59:59-05:00', `${tag}: due at the end of its day in the trigger's zone`);
   const utc = await open(browser, hub, 'dana', {phone, hash: '#/task/' + encodeURIComponent(ny.id), time: HUB_NOW,
     timezone: 'UTC'});
   const utcDue = utc.locator('[data-prop-row="due"] .prop-txt:visible').first();

@@ -149,13 +149,13 @@ def channel_tasks(c, auth, who, slug, limit=CHANNEL_TASKS_MAX):
     """The open tasks labelled `channel:<slug>` the reader may see, the most recently updated first."""
     key = H._labels([f"channel:{slug}"])[0]
     rows = H._rows(c.execute(
-        "SELECT t.id, t.title, t.owner, t.status, t.updated FROM tasks t "
+        "SELECT t.id, t.title, t.owner_id, t.status, t.updated_at FROM tasks t "
         "WHERE t.status IN ('open','doing','waiting','review','ready') "
         f"AND t.id IN (SELECT id FROM tasks WHERE {auth.task_sql(c, who)}) "
         "AND t.id IN (SELECT tt.task_id FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id WHERE tg.key=?) "
-        "ORDER BY t.updated DESC LIMIT ?", (key, limit)))
+        "ORDER BY t.updated_at DESC LIMIT ?", (key, limit)))
     return [{"task_id": r["id"], "title": r["title"], "assignee": r["owner"], "status": r["status"],
-             "updated_at": r["updated"]} for r in rows]
+             "updated_at": r["updated_at"]} for r in rows]
 
 
 def source_view(row):
@@ -178,7 +178,7 @@ def _cohort_view(row, slugs):
             "month": row["month"],
             **{k: row[k] for k in ("spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180",
                                    "revenue_month", "margin_pct", "quality")},
-            "sources": json.loads(row["sources_json"] or "{}"), "updated_by": row["updated_by"],
+            "sources": json.loads(row["sources"] or "{}"), "updated_by": row["updated_by"],
             "updated_at": row["updated_at"]}
 
 
@@ -219,8 +219,8 @@ def guardrails(c, hidden=()):
     out = []
     for ch in H._rows(c.execute("SELECT * FROM growth_channels WHERE retired_at IS NULL AND guardrail_kpi_id IS NOT NULL "
                                 "AND guardrail_max IS NOT NULL ORDER BY sort, name")):
-        kpi = H._one(c, "SELECT name, owner FROM kpis WHERE id=?", (ch["guardrail_kpi_id"],)) or {}
-        if kpi.get("owner") in hidden:
+        kpi = H._one(c, "SELECT name, owner_id FROM kpis WHERE id=?", (ch["guardrail_kpi_id"],)) or {}
+        if kpi.get("owner_id") in hidden:
             continue
         newest = _latest_value(c, ch["guardrail_kpi_id"])
         value = newest["value"] if newest else None
@@ -259,14 +259,14 @@ def economics(c, month=None, hidden=()):
 
 
 def kpis(c, hidden=(), may_edit=lambda record: False):
-    rows = H._rows(c.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created"))
-    rows = [r for r in rows if r.get("owner") not in hidden]
+    rows = H._rows(c.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created_at"))
+    rows = [r for r in rows if r.get("owner_id") not in hidden]
     from . import kpis as K
     readings = K.effective_many(c, [r["id"] for r in rows])
     out = []
     for r in rows:
         newest = K.latest(readings.get(r["id"], []))
-        link = H._one(c, "SELECT goal_id, target FROM goal_kpis WHERE kpi_id=? ORDER BY target IS NULL, created LIMIT 1",
+        link = H._one(c, "SELECT goal_id, target FROM goal_kpis WHERE kpi_id=? ORDER BY target IS NULL, created_at LIMIT 1",
                       (r["id"],)) or {}
         out.append({"id": r["id"], "name": r["name"], "unit": r.get("unit") or "",
                     "latest": newest["value"] if newest else None,
@@ -392,14 +392,14 @@ def cohort_set(c, actor, body):
     fields = {k: getattr(body, k) for k in body.model_fields_set if k not in ("channel", "month", "sources")}
     if "quality" in fields and fields["quality"] is None:
         fields["quality"] = "actual"
-    sources = dict(json.loads(row["sources_json"] or "{}")) if row else {}
+    sources = dict(json.loads(row["sources"] or "{}")) if row else {}
     if body.sources is not None:
         for key, text in body.sources.items():
             if text:
                 sources[key] = text
             else:
                 sources.pop(key, None)
-    fields.update(sources_json=json.dumps(sources, sort_keys=True), updated_by=actor, updated_at=H.now())
+    fields.update(sources=json.dumps(sources, sort_keys=True), updated_by=actor, updated_at=H.now())
     if row:
         c.execute(f"UPDATE growth_cohorts SET {', '.join(k + '=?' for k in fields)} WHERE id=?",
                   list(fields.values()) + [row["id"]])

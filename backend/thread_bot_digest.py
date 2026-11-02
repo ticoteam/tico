@@ -24,8 +24,8 @@ def _waiting(c):
 
 
 def _batch_open(c, slug):
-    return c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
-                     "AND j.state IN ('queued','leased') AND json_extract(m.refs_json,'$.wake')=? LIMIT 1",
+    return c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
+                     "AND j.state IN ('queued','leased') AND json_extract(m.refs,'$.wake')=? LIMIT 1",
                      (slug, WAKE)).fetchone() is not None
 
 
@@ -73,10 +73,10 @@ def sweep(store):
 def grant(c, attempt_id, message):
     """A run a digest notice started, or took in, reads the threads it names: each one the bot is still in the audience
     of, so a thread it lost since is not granted. Every other message is left alone at the cost of a dict look."""
-    refs = message.get("refs") if isinstance(message.get("refs"), dict) else H._json(message.get("refs_json"), {})
-    if (refs or {}).get("wake") != WAKE or message.get("from_actor") != H.KEEPER:
+    refs = message.get("refs") if isinstance(message.get("refs"), dict) else H._json(message.get("refs"), {})
+    if (refs or {}).get("wake") != WAKE or message.get("sender_id") != H.KEEPER:
         return
-    bot = message.get("to_actor")
+    bot = message.get("recipient_id")
     for thread_id in (refs.get("threads") or [])[:MAX_THREADS]:
         thread = threads.thread_row(c, thread_id)
         if thread is not None and threads.audience_has(c, thread, bot):

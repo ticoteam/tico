@@ -171,13 +171,13 @@ def live(docs, url, token, only, wait=3600):
         got = call("GET", f"tasks/{task_id}")
         status = (got.get("task") or got).get("status")
         runs = got.get("runs") or []
-        finished = sum(1 for r in runs if r.get("finished"))
+        finished = sum(1 for r in runs if r.get("finished_at"))
         return status in FINISHED and runs and finished == len(runs), status, len(runs), finished
 
     me = call("GET", "me")["actor"]
     # One holder per run: an open one from an earlier run would make this a duplicate ask.
     started = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
-    holder = call("POST", "tasks", {"owner": me, "title": f"Documents for the Counsel eval ({started})",
+    holder = call("POST", "tasks", {"owner_id": me, "title": f"Documents for the Counsel eval ({started})",
                                     "body": "Each document the Counsel eval adds to Rules, attached here."})
     holder_id = (holder.get("task") or holder)["id"]
     suggestions = {}

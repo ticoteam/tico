@@ -60,7 +60,7 @@ SCHEMA = (
     "CREATE UNIQUE INDEX IF NOT EXISTS rule_sources_name ON rule_sources(lower(name))",
     "CREATE TABLE IF NOT EXISTS org_rules(id TEXT PRIMARY KEY, "
     "kind TEXT NOT NULL CHECK (kind IN ('internal','external')), text TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
-    "source_id TEXT, cite_json TEXT, who_json TEXT NOT NULL, with_json TEXT NOT NULL DEFAULT '{}', "
+    "source_id TEXT, cite TEXT, who TEXT NOT NULL, with_scope TEXT NOT NULL DEFAULT '{}', "
     "where_terms TEXT NOT NULL DEFAULT '[]', "
     "if_broken TEXT NOT NULL DEFAULT 'block' CHECK (if_broken IN ('block','escalate','warn')), reviewer TEXT, "
     "status TEXT NOT NULL CHECK (status IN ('suggested','active','retired')), suggested_by TEXT NOT NULL, "
@@ -68,10 +68,10 @@ SCHEMA = (
     "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS org_rules_status ON org_rules(status, kind, created_at)",
     "CREATE INDEX IF NOT EXISTS org_rules_source ON org_rules(source_id) WHERE source_id IS NOT NULL",
-    "CREATE TABLE IF NOT EXISTS org_rule_holds(id TEXT PRIMARY KEY, operation TEXT NOT NULL, payload_json TEXT NOT NULL, "
-    "author TEXT NOT NULL, destinations_json TEXT NOT NULL DEFAULT '[]', rule_ids_json TEXT NOT NULL DEFAULT '[]', "
-    "verdict_json TEXT NOT NULL DEFAULT '{}', why TEXT NOT NULL DEFAULT '', nonce TEXT NOT NULL, "
-    "state TEXT NOT NULL CHECK (state IN ('held','sent','kept')), reviewer TEXT, task_id TEXT, created TEXT NOT NULL, "
+    "CREATE TABLE IF NOT EXISTS org_rule_holds(id TEXT PRIMARY KEY, operation TEXT NOT NULL, payload TEXT NOT NULL, "
+    "author TEXT NOT NULL, destinations TEXT NOT NULL DEFAULT '[]', rule_ids TEXT NOT NULL DEFAULT '[]', "
+    "verdict TEXT NOT NULL DEFAULT '{}', why TEXT NOT NULL DEFAULT '', nonce TEXT NOT NULL, "
+    "state TEXT NOT NULL CHECK (state IN ('held','sent','kept')), reviewer TEXT, task_id TEXT, created_at TEXT NOT NULL, "
     "decided_at TEXT, decided_by TEXT)",
     "CREATE INDEX IF NOT EXISTS org_rule_holds_author ON org_rule_holds(author, state)",
 )
@@ -172,10 +172,10 @@ def _where_hits(terms, place):
 
 def _row(r):
     d = dict(r)
-    d["who"] = json.loads(d.pop("who_json") or "{}")
-    d["with"] = json.loads(d.pop("with_json") or "{}")
+    d["who"] = json.loads(d.pop("who") or "{}")
+    d["with"] = json.loads(d.pop("with_scope") or "{}")
     d["where"] = json.loads(d.pop("where_terms", None) or "[]")
-    d["cite"] = json.loads(d.pop("cite_json") or "null")
+    d["cite"] = json.loads(d.pop("cite") or "null")
     return d
 
 
@@ -552,7 +552,7 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "if_broken": row["if_broken"], "reviewer": reviewer, "status": row["status"],
         "suggested_by": row["suggested_by"], "decided_by": row["decided_by"], "decided_at": row["decided_at"],
         "version": row["version"], "created_at": row["created_at"], "updated_at": row["updated_at"],
-        "due": [{"id": d["id"], "due_on": d["due_on"], "status": d["status"], "repeats": d["repeats"],
+        "due_at": [{"id": d["id"], "due_on": d["due_on"], "status": d["status"], "repeats": d["repeats"],
                  "task_days": d["task_days"]}
                 for d in dues[:DUE_PER_RULE]],
         "due_more": max(0, len(dues) - DUE_PER_RULE),
@@ -586,8 +586,8 @@ def settings_for(c, bot, ctx=None):
     name = ctx["bots"].get(bot, bot)
     out = []
 
-    row = c.execute("SELECT access_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    write = A.document(row["access_json"] if row else None)["write"]
+    row = c.execute("SELECT access FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    write = A.document(row["access"] if row else None)["write"]
     if write["everyone"]:
         text = f"Everyone can message {name}"
     else:
@@ -625,8 +625,8 @@ def settings_for(c, bot, ctx=None):
                 out.append({"text": f"Spends up to ${caps[key]:g} a {PERIOD_WORDS[key[:-4]]} across {label}",
                             "source": "usage_limits", "edit": {"page": "strategy", "anchor": "budget", "path": path}})
 
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    declared = turn_budgets._declared(config["config_json"] if config else None)
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    declared = turn_budgets._declared(config["config"] if config else None)
     own = turn_budgets.own(declared)
     shared = turn_budgets.limits(c, declared)
     for key, word in WINDOW_WORDS:
@@ -732,16 +732,16 @@ def add_rule(c, auth, who, body):
     status = "active" if who.role != "bot" and may_manage(c, auth, who, scope, ctx) else "suggested"
     now = H.now()
     row = {"id": H.new_id(), "kind": kind, "text": text, "description": description, "source_id": source_id,
-           "cite_json": _json(cite) if cite else None, "who_json": _json(scope), "with_json": _json(with_scope),
+           "cite": _json(cite) if cite else None, "who": _json(scope), "with_scope": _json(with_scope),
            "where_terms": _json(where),
            "if_broken": _if_broken(body.get("if_broken") or "block"), "reviewer": _reviewer(c, body.get("reviewer")),
            "status": status, "suggested_by": who.actor, "decided_by": who.actor if status == "active" else None,
            "decided_at": now if status == "active" else None, "via": _via(who), "version": 1,
            "created_at": now, "updated_at": now}
-    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite_json, who_json, with_json, "
+    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite, who, with_scope, "
               "where_terms, if_broken, reviewer, status, suggested_by, decided_by, decided_at, via, version, "
-              "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite_json, :who_json, "
-              ":with_json, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
+              "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
+              ":with_scope, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
               ":via, :version, :created_at, :updated_at)", row)
     stored = _get(c, row["id"])
     _audit(c, who.actor, row["id"], None, _core(stored), who)
@@ -761,7 +761,7 @@ def edit_rule(c, auth, who, rule_id, body):
     if body.get("who") is not None:
         scope = _scope_checked(c, auth, who, body["who"])
         _check_manage(c, auth, who, scope, ctx)
-        changes["who_json"] = _json(scope)
+        changes["who"] = _json(scope)
     _check_version(row, body.get("version"))
     if body.get("text") is not None:
         changes["text"] = _text(body["text"], TEXT_MAX, "rule")
@@ -770,7 +770,7 @@ def edit_rule(c, auth, who, rule_id, body):
     if body.get("with") is not None:
         if row["kind"] != "internal":
             raise Problem("validation", "With is for internal rules", 422)
-        changes["with_json"] = _json(scope_in(c, body["with"], flags=False))
+        changes["with_scope"] = _json(scope_in(c, body["with"], flags=False))
     if body.get("if_broken") is not None:
         changes["if_broken"] = _if_broken(body["if_broken"])
     if body.get("reviewer") is not None:
@@ -809,7 +809,7 @@ def decide_rule(c, auth, who, rule_id, body, action):
         before = _core(row)
         extra = {"decided_by": who.actor, "decided_at": H.now()}
         if scope != row["who"]:
-            extra["who_json"] = _json(scope)
+            extra["who"] = _json(scope)
         _save(c, rule_id, status="active", extra=extra)
         event = "accepted"
     elif action == "skip":
@@ -883,8 +883,8 @@ def add_due(c, auth, who, rule_id, body):
     if days is not RR.UNCHANGED and days is not None:
         RR.sync(c, who.actor, D.one(c, due_id), row["text"], days, _via(who))
     after = D.views(c, [D.one(c, due_id)])[0]
-    _audit(c, who.actor, rule_id, None, {"due": after}, who)
-    _event(c, who.actor, "due_added", rule_id, {"due": due_id})
+    _audit(c, who.actor, rule_id, None, {"due_at": after}, who)
+    _event(c, who.actor, "due_added", rule_id, {"due_at": due_id})
     return after
 
 
@@ -905,7 +905,7 @@ def edit_due(c, auth, who, due_text, body):
         changes["timezone"] = D.parse_zone(body["timezone"])
     if body.get("owner") is not None:
         changes["owner"] = owner_actor(c, body["owner"])
-        if changes["owner"] != row["owner"]:
+        if changes["owner"] != row["owner_id"]:
             # A changed owner passes the same test as a new one; an owner kept as it is is never asked again.
             _check_due_owner(c, auth, who, rule, changes["owner"])
     from . import rule_due_routine as RR
@@ -925,7 +925,7 @@ def edit_due(c, auth, who, due_text, body):
         RR.sync(c, who.actor, D.one(c, new_id), rule["text"], days, _via(who))
     after = D.views(c, [D.one(c, new_id)])[0]
     replaces = row["id"] if replaced else None
-    _audit(c, who.actor, rule["id"], {"due": before}, {"due": after}, who)
+    _audit(c, who.actor, rule["id"], {"due_at": before}, {"due_at": after}, who)
     _event(c, who.actor, "due_edited", rule["id"], {"due": new_id, "replaces": replaces})
     return {**after, "replaces": replaces}
 
@@ -942,14 +942,14 @@ def remove_due(c, auth, who, due_text):
         # An edit ended this row and started another (replaced_by), which now holds the routine: remove that one.
         later = c.execute("SELECT id FROM rule_due_dates WHERE replaces=?", (row["id"],)).fetchone()
         raise Problem("ended", f"Due date {row['id']} was replaced by an edit; remove the one in force", 409,
-                      extra={"replaced_by": later["id"] if later else None})
+                      extra={"replaced_by_id": later["id"] if later else None})
     before = D.views(c, [row])[0]
     D.remove(c, row["id"])
     from . import rule_due_routine as RR
     RR.off(c, who.actor, row, _via(who))
     stored = D.one(c, row["id"])
-    _audit(c, who.actor, rule["id"], {"due": before}, {"due": D.views(c, [stored])[0]}, who)
-    _event(c, who.actor, "due_removed", rule["id"], {"due": row["id"]})
+    _audit(c, who.actor, rule["id"], {"due_at": before}, {"due_at": D.views(c, [stored])[0]}, who)
+    _event(c, who.actor, "due_removed", rule["id"], {"due_at": row["id"]})
     return {"id": row["id"], "retired_at": stored["retired_at"]}
 
 
@@ -958,7 +958,7 @@ def satisfy_due(c, auth, who, due_text, due_on=None):
     if row["retired_at"] or row["ended_on"]:
         raise Problem("not_found", f"There is no due date {due_text}", 404)
     rule = _get(c, row["rule_id"])
-    if who.actor != row["owner"] and (who.role == "bot" or not may_manage(c, auth, who, rule["who"])):
+    if who.actor != row["owner_id"] and (who.role == "bot" or not may_manage(c, auth, who, rule["who"])):
         raise Problem("forbidden", "Only the due date's owner, or whoever can edit the rule, marks it satisfied", 403)
     day = D.satisfy(c, who.actor, row, due_on, via="person")
     _audit(c, who.actor, rule["id"], None, {"due": row["id"], "satisfied": day}, who)
@@ -997,14 +997,14 @@ def seed_external(c, who, text, source_name, source_kind):
     scope = {"everyone": True, "all_bots": False, "groups": [], "bots": [], "people": []}
     now = H.now()
     row = {"id": H.new_id(), "kind": "external", "text": text, "description": "", "source_id": source["id"],
-           "cite_json": None, "who_json": _json(scope), "with_json": _json({"groups": [], "bots": [], "people": []}),
+           "cite": None, "who": _json(scope), "with_scope": _json({"groups": [], "bots": [], "people": []}),
            "where_terms": "[]", "if_broken": "warn", "reviewer": None, "status": "active", "suggested_by": who.actor,
            "decided_by": who.actor, "decided_at": now, "via": _via(who), "version": 1, "created_at": now,
            "updated_at": now}
-    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite_json, who_json, with_json, "
+    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite, who, with_scope, "
               "where_terms, if_broken, reviewer, status, suggested_by, decided_by, decided_at, via, version, "
-              "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite_json, :who_json, "
-              ":with_json, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
+              "created_at, updated_at) VALUES (:id, :kind, :text, :description, :source_id, :cite, :who, "
+              ":with_scope, :where_terms, :if_broken, :reviewer, :status, :suggested_by, :decided_by, :decided_at, "
               ":via, :version, :created_at, :updated_at)", row)
     _audit(c, who.actor, row["id"], None, _core(_get(c, row["id"])), who)
     _event(c, who.actor, "added", row["id"], {"kind": "external", "status": "active"})
@@ -1119,12 +1119,12 @@ def due_list(c, auth, who, args):
         manage = may_manage(c, auth, who, rule["who"], ctx)
         rows.append({"id": found["id"], "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"],
                                                  "source": ctx["sources"].get(rule["source_id"])},
-                     "due_on": found["due_on"], "repeats": found["repeats"], "owner": found["owner"],
+                     "due_on": found["due_on"], "repeats": found["repeats"], "owner_id": found["owner_id"],
                      "first_due": found["first_due"], "timezone": found["timezone"],
                      "routine_id": found["routine_id"], "task_days": found["task_days"],
                      "status": found["status"], "open": found["open"],
                      "history": found["history"],
-                     "can_edit": manage, "can_satisfy": manage or who.actor == found["owner"]})
+                     "can_edit": manage, "can_satisfy": manage or who.actor == found["owner_id"]})
     rows.sort(key=lambda r: (r["due_on"], r["id"]))
     page, nxt = _page(rows, args.get("cursor"), _limit(args.get("limit"), 100, DUE_LIST_MAX))
     return {"due": page, "next_cursor": nxt}
@@ -1142,7 +1142,7 @@ def due_show(c, auth, who, due_id):
     manage = live and may_manage(c, auth, who, rule["who"])
     return {**D.detail(c, row), "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"],
                                          "status": rule["status"]},
-            "can_edit": manage, "can_satisfy": manage or (live and who.actor == row["owner"])}
+            "can_edit": manage, "can_satisfy": manage or (live and who.actor == row["owner_id"])}
 
 
 def counts(c, auth, who):
@@ -1339,7 +1339,7 @@ def install(app, store, auth, mutate):
         def work(c):
             return decide_rule(c, auth, who, rule_id, data, "accept")
         result = mutate(request, body, work)
-        return {"rule": fresh(who, rule_id), "due": result["due"]}
+        return {"rule": fresh(who, rule_id), "due": result["due_at"]}
 
     @app.post("/api/v2/rules/{rule_id}/skip")
     def rules_skip(request: Request, rule_id: str, body: RuleDecide):
@@ -1349,7 +1349,7 @@ def install(app, store, auth, mutate):
         def work(c):
             return decide_rule(c, auth, who, rule_id, {"version": body.version}, "skip")
         result = mutate(request, body, work)
-        return {"rule": fresh(who, rule_id), "due": result["due"]}
+        return {"rule": fresh(who, rule_id), "due": result["due_at"]}
 
     @app.post("/api/v2/rules/{rule_id}/retire")
     def rules_retire(request: Request, rule_id: str, body: RuleDecide):
@@ -1359,7 +1359,7 @@ def install(app, store, auth, mutate):
         def work(c):
             return decide_rule(c, auth, who, rule_id, {"version": body.version}, "retire")
         result = mutate(request, body, work)
-        return {"rule": fresh(who, rule_id), "due": result["due"]}
+        return {"rule": fresh(who, rule_id), "due": result["due_at"]}
 
     @app.post("/api/v2/rules/{rule_id}/due")
     def rules_due_add(request: Request, rule_id: str, body: DueAdd):

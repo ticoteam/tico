@@ -78,7 +78,7 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
     assert get(api, "brand", token="ben-test")["draft"]["body"]["positioning"] == "Acme cleans homes well"
 
     # Filed under a goal, its unpublished words would show on that goal's page to members.
-    goal = post(api, "goals", {"title": "More bookings", "owner": "ana"})["goal"]
+    goal = post(api, "goals", {"title": "More bookings", "owner_id": "ana"})["goal"]
     refused = post(api, "goal-proposals", {"kind": "brand_draft", "goal_id": goal["id"], "payload": {
         "sections": {"positioning": "Secret"}}}, token=ops, expected=422)
     assert refused["error"]["detail"].startswith("a brand draft proposal is about the page")

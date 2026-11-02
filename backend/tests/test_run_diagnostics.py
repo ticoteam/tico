@@ -12,7 +12,7 @@ def start(api):
     machine = runner(api)
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    post(api, 'tasks', {'owner': 'ops', 'title': 'Inspect runs', 'body': 'Please summarize the current work.'})
+    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Inspect runs', 'body': 'Please summarize the current work.'})
     attempt = claim(api, machine, 'ops')
     msg = attempt['message']
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'thread'}, machine['token'])
@@ -44,7 +44,7 @@ def test_kill_timeout_and_model_error_record_end_reason_and_last_tool(api, cause
     # Metadata uses the existing run gate, including a bot reading its own run.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE run_backoff SET wait_until=NULL")  # the failure's wait is over
-    post(api, 'tasks', {'title': 'Inspect previous run', 'body': 'Read the previous run reason.', 'owner': 'ops'})
+    post(api, 'tasks', {'title': 'Inspect previous run', 'body': 'Read the previous run reason.', 'owner_id': 'ops'})
     next_run = claim(api, machine, 'ops')
     assert next_run
     assert next(r for r in get(api, 'bots/ops/turns', next_run['token']) if r['id'] == a['id'])['end_reason'] == expected
@@ -156,9 +156,9 @@ def test_failed_reply_text_never_becomes_list_reason(api):
 
 
 def silent_since(api, aid, started):
-    """A run started at `started`, with no heartbeat and no event since: its computer went quiet at that moment."""
+    """A run started at `started_at`, with no heartbeat and no event since: its computer went quiet at that moment."""
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET started=?,created=?,lease_until=? WHERE id=?',
+        c.execute('UPDATE attempts SET started_at=?,created_at=?,lease_until=? WHERE id=?',
                   (started, started, H.shift(H.now(), hours=2), aid))
         c.execute('UPDATE attempt_diagnostics SET heartbeat_at=NULL,last_event_at=? WHERE attempt_id=?', (started, aid))
 

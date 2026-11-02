@@ -19,7 +19,7 @@ def body_of(api):
 def heartbeat(api, runner_id, *, seconds_ago=0, runtimes=None):
     """A runner's last word, as the heartbeat stores it."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?, readiness_json=? WHERE id=?",
+        c.execute("UPDATE runners SET last_seen_at=?, readiness=? WHERE id=?",
                   (H.shift(H.now(), seconds=-seconds_ago),
                    json.dumps({"schema_version": 1, "runtimes": runtimes or {}, "bots": {}}), runner_id))
 
@@ -84,7 +84,7 @@ def test_the_market_box_is_a_task_for_the_librarian(environment):
     made = api.post("/api/v2/getting-started/market", json=ask, headers=signed_in())
     assert made.status_code == 200, made.text
     assert made.json()["bot"] == "librarian"
-    task = api.get("/api/v2/tasks", params={"owner": "librarian"}, headers=signed_in()).json()["tasks"][0]
+    task = api.get("/api/v2/tasks", params={"owner_id": "librarian"}, headers=signed_in()).json()["tasks"][0]
     assert task["id"] == made.json()["task_id"] and "https://northwind.example" in task["body"]
     # Only the owner asks, and the box may not be empty.
     assert api.post("/api/v2/getting-started/market", json=ask, headers=as_person(api, "quinn")).status_code == 403

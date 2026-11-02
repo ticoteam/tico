@@ -263,7 +263,7 @@ def _adopt(c: sqlite3.Connection, cid: str, records: Sequence[Record], at: str) 
         if r is None or op not in RETRIED_CREATES:
             continue
         ext = _ext_of(r)
-        local = SK.loads(o["payload_json"])
+        local = SK.loads(o["payload"])
         c.execute("SAVEPOINT mirror_adopt")
         try:
             revised = _revised(c, cid, op, local, ext, r)
@@ -1176,7 +1176,7 @@ def _line_rows(rows: Sequence[tuple[str, int, str]], at: str, tags: Sequence[Map
     ids = list(items) or [""] * len(rows)
     po_ids = list(orders) or [""] * len(rows)
     return [{"account_id": account, "amount": amount, "description": description[:200],
-             "tags_json": SK.dump(dict(mark)), "external_line": key, "item_id": item or None,
+             "tags": SK.dump(dict(mark)), "external_line": key, "item_id": item or None,
              "created_at": at, "created_by": SYSTEM, **({"po_line_id": po} if po else {})}
             for (account, amount, description), mark, key, item, po
             in zip(rows, tags, marks, ids, po_ids, strict=True)]
@@ -1186,7 +1186,7 @@ def _carry_lines(c: sqlite3.Connection, kind: str, doc_id: str, old_entry: str, 
                  rows: Sequence[tuple[str, int, str]], sign: int) -> list[dict[str, str]]:
     """Each new line's tags: from the line the document held with the same provider line id (so an amount edit keeps
     its tags), else from the replaced entry's line on the same account and amount."""
-    by_key = {str(x["external_line"]): dict(SK.loads(x["tags_json"])) for x in SAP.lines(c, kind, [doc_id])[doc_id]
+    by_key = {str(x["external_line"]): dict(SK.loads(x["tags"])) for x in SAP.lines(c, kind, [doc_id])[doc_id]
               if x["external_line"]}
     marks = list(keys) or [""] * len(rows)
     fallback = _carried(_entry_tags(c, old_entry),
@@ -1574,7 +1574,7 @@ def _doc_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[
             "class": _bare(_tag_need(c, cid, "fin_dimensions", tags.get("class", ""))),
             "project": _customer_key(_tag_need(c, cid, "projects", tags.get("project", "")))})
     party = _need(_key(c, cid, "fin_contacts", str(local["party"])), f"contact {local['party']}")
-    out: dict[str, Any] = {"party": party, "number": local["number"], "day": local["day"], "due": local["due"],
+    out: dict[str, Any] = {"party": party, "number": local["number"], "day": local["day"], "due_at": local["due_at"],
                            "memo": local["memo"], "lines": lines}
     if local.get("estimate_id"):
         estimate = _need(_key(c, cid, "fin_estimates", str(local["estimate_id"])), f"estimate {local['estimate_id']}")
@@ -1691,7 +1691,7 @@ def queue_record_update(ctx: Ctx, who: str, aid: str, op: str, record_id: str, f
     waiting = SK.record_write_pending(ctx.c, op, record_id)
     body = {**fields, "local_id": record_id, "day": ctx.today}
     if waiting is not None:
-        joined = {**SK.loads(waiting["payload_json"]), **body}
+        joined = {**SK.loads(waiting["payload"]), **body}
         if SK.outbox_amend(ctx.c, str(waiting["id"]), joined, ctx.at):
             return str(waiting["id"])
     return queue_record(ctx, who, aid, op, body)
@@ -1824,7 +1824,7 @@ def _held(c: sqlite3.Connection, cid: str, kind: str, doc_id: str, *, skip: str 
     does not hold against itself."""
     held = 0
     for o in SK.open_writes(c, cid, BALANCE_OPS[kind]):
-        local = SK.loads(o["payload_json"])
+        local = SK.loads(o["payload"])
         if str(o["id"]) != skip and doc_id in (str(local.get("doc_id", "")), str(local.get("invoice_id", ""))):
             held += int(local["amount"])
     return held
@@ -1852,7 +1852,7 @@ def _over_order(c: sqlite3.Connection, local: Mapping[str, Any]) -> bool:
 
 
 def _prepare(c: sqlite3.Connection, cid: str, o: Any, now: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    local = SK.loads(o["payload_json"])
+    local = SK.loads(o["payload"])
     feed = str(local.get("feed_id") or "")
     if feed:
         frow = SK.get(c, "fin_feed_txns", feed)
@@ -1948,7 +1948,7 @@ def _confirm_document(c: sqlite3.Connection, cid: str, sent: Sent, local: Mappin
         return
     rows = [(str(x["account_id"]), int(x["amount"]), str(x["description"])) for x in local["lines"]]
     # Only the head is read here: the lines come in as rows, and the party as its local id.
-    head = M.Document(ext, party="", number=str(local["number"]), day=str(local["day"]), due=str(local["due"]),
+    head = M.Document(ext, party="", number=str(local["number"]), day=str(local["day"]), due=str(local["due_at"]),
                       total=sum(amount for _, amount, _ in rows), lines=(), memo=str(local["memo"]))
     tags = [dict(x.get("tags") or {}) for x in local["lines"]]
     items = [str(x.get("item_id") or "") for x in local["lines"]]
@@ -2349,7 +2349,7 @@ def mirror_start(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
             if SX.ref_for_local(ctx.c, cid, "fin_contacts", str(row_c["id"])) is not None:
                 continue
             body = {"local_id": str(row_c["id"]), "name": str(row_c["name"]), "kind": str(row_c["kind"]),
-                    "emails": SK.loads_list(row_c["emails_json"]), "active": bool(row_c["active"])}
+                    "emails": SK.loads_list(row_c["emails"]), "active": bool(row_c["active"])}
             _queue(ctx.c, cid, "party.create", body, by=who, at=M.stamp(ctx.at, 1000 + i),
                    key=f"export:{cid}:party:{row_c['id']}")
             queued += 1
@@ -2700,7 +2700,7 @@ def _estimate_convert(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     # The lines come first: a teammate who cannot see them is refused whatever state the estimate is in, an invoiced one
     # included, so the refusal says nothing about that state.
     lines = [AP.DocLine(str(r["account_id"]), int(r["amount"]), str(r["description"]),
-                        cast(dict[str, str], SK.loads(r["tags_json"])),
+                        cast(dict[str, str], SK.loads(r["tags"])),
                         None if r["taxable"] is None else bool(r["taxable"]), str(r["item_id"] or ""))
              for r in SP.lines(ctx.c, "estimate", eid)]
     if any(handlers.private_hidden(ctx, who, x.account_id) for x in lines):
@@ -2746,7 +2746,7 @@ def _confirm_order(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str,
         by = str(local.get("by") or SYSTEM)
         lines = [{"account_id": str(x["account_id"]), "item_id": str(x.get("item_id") or "") or None,
                   "amount": int(x["amount"]), "description": str(x["description"]),
-                  "tags_json": SK.dump(dict(x.get("tags") or {})), "created_at": now, "created_by": by,
+                  "tags": SK.dump(dict(x.get("tags") or {})), "created_at": now, "created_by": by,
                   **({} if po else {"taxable": None if x.get("taxable") is None else int(bool(x["taxable"]))})}
                  for x in local["lines"]]
         head = {"book_id": ctx.book.id, "number": str(local["number"]), "status": "draft",

@@ -17,7 +17,7 @@ KEEP, CLOSE = "Keep", "Close"
 
 
 def _last_activity(row):
-    return max(row.get("updated") or "", row.get("checkpoint_at") or "")
+    return max(row.get("updated_at") or "", row.get("checkpoint_at") or "")
 
 
 def _live(conn, task_id):
@@ -31,7 +31,7 @@ def _live(conn, task_id):
 
 def recipient(conn, row):
     """The requester when a person asked for it, else the owner when a person owns it, else nobody."""
-    for actor in (row["requester"], row["owner"]):
+    for actor in (row["requester_id"], row["owner_id"]):
         if H.is_human(actor) and H._actor_exists(conn, actor):
             return actor
     return None
@@ -43,8 +43,8 @@ def idle_tasks(conn, at=None):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     out = []
     for row in H._rows(conn.execute(
-            f"SELECT * FROM tasks WHERE status IN ({marks}) AND updated<? "
-            "AND coalesce(checkpoint_at,'')<? ORDER BY updated", (*H.ACTIVE_STATUSES, cutoff, cutoff))):
+            f"SELECT * FROM tasks WHERE status IN ({marks}) AND updated_at<? "
+            "AND coalesce(checkpoint_at,'')<? ORDER BY updated_at", (*H.ACTIVE_STATUSES, cutoff, cutoff))):
         if H.TS.snoozed(row, at):
             continue                     # set aside until a date: its owner hears when that comes
         if H.steps_only(conn, row):
@@ -79,8 +79,8 @@ def ask_idle(conn, at=None):
             H.task_comment(conn, H.KEEPER, row["id"],
                            f"Nothing has happened on this task for {IDLE_DAYS} days. Still wanted?",
                            wake=False, ask=ask, extra_refs={"still_wanted": True})
-            # The ask itself bumps `updated`; recording the same moment keeps it inside this stretch.
-            conn.execute("UPDATE tasks SET stale_asked_at=updated WHERE id=?", (row["id"],))
+            # The ask itself bumps `updated_at`; recording the same moment keeps it inside this stretch.
+            conn.execute("UPDATE tasks SET stale_asked_at=updated_at WHERE id=?", (row["id"],))
             H.event(conn, H.KEEPER, "task.still_wanted_ask", row["id"], {"to": person})
             asked.append(row["id"])
     return asked
@@ -88,14 +88,14 @@ def ask_idle(conn, at=None):
 
 def is_ask(asked):
     refs = (asked or {}).get("refs") or {}
-    return bool(asked and asked.get("from_actor") == H.KEEPER and refs.get("still_wanted"))
+    return bool(asked and asked.get("sender_id") == H.KEEPER and refs.get("still_wanted"))
 
 
 def choice(asked, answer, actor):
     """Keep, Close or None (dismissed, or answered only in words) for an answer to a still-wanted ask.
     Only the person it was put to decides: anyone else who may comment (the bot that filed the task
     included) answers it as an ordinary answer, with no Keep or Close effect."""
-    if not is_ask(asked) or answer.dismiss or not (H.is_human(actor) and actor == asked.get("to_actor")):
+    if not is_ask(asked) or answer.dismiss or not (H.is_human(actor) and actor == asked.get("recipient_id")):
         return None
     labels = answer.answers.get(QUESTION_ID) or []
     return labels[0] if labels and labels[0] in (KEEP, CLOSE) else None
@@ -109,4 +109,4 @@ def act(conn, actor, task_id, picked):
         if row and row["status"] in H.ACTIVE_STATUSES:
             H.task_close(conn, actor, task_id, f"Closed: no longer wanted after {IDLE_DAYS} idle days.")
     elif picked == KEEP:
-        conn.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task_id))
+        conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task_id))

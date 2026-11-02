@@ -63,7 +63,7 @@ function sameData(a, b) {
 }
 // What a list shows of a task: a link's own write time is not on any row, and a computer's heartbeat on a worktree
 // changes only that, once a minute per tree.
-const taskListCopy = t => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated, ...link}) => link)} : t;
+const taskListCopy = t => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated_at: updated, ...link}) => link)} : t;
 function liveTasksApply(events) {
   const state = TASKS_ST;
   // One change to many tasks (a type or tag edit) comes as one `bulk` event: the open list reads in full once (its
@@ -101,14 +101,14 @@ function liveTasksApply(events) {
   // These read whole lists, so at most every 15 s and not in a hidden tab (liveThrottle).
   if (BOT && isKeeper(BOT.slug)) {
     const me = 'bot:' + BOT.slug;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner === me || d.task?.requester === me)) liveThrottle('bot-tasks', () => {
+    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me || d.task?.requester_id === me)) liveThrottle('bot-tasks', () => {
       if (!BOT || BOT.slug !== me.slice(4)) return;
       if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
     });
   }
   if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) {
     const me = 'human:' + PERSON_TASKS;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner === me)) liveThrottle('person-tasks', personTasksReload);
+    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me)) liveThrottle('person-tasks', personTasksReload);
   }
   if (TASK_CHAT && events.some(d => d.bulk || String(d.id) === String(TASK_CHAT.id) && !unchanged.has(String(d.id)))) taskChatLive(TASK_CHAT);
 }

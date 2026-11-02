@@ -34,9 +34,9 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
   const config = {company_name: 'Acme'};
   // Goals: the company's, one with a measure that has a target, and Sales Lead's (goal_routes.py shapes, no rights).
   const goals = [
-    {id: 'g-co', title: 'Reach 100 paying customers', owner: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 1,
+    {id: 'g-co', title: 'Reach 100 paying customers', owner_id: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 1,
       kpis: [{id: 'k-cust', name: 'Paying customers', status: 'green', link: {kind: 'improve', baseline: 20, baseline_at: '2026-09-01', target: 100, deadline: '2026-12-31'}}]},
-    {id: 'g-sales', title: 'Book 40 demos a month', owner: 'bot:sales-lead', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
+    {id: 'g-sales', title: 'Book 40 demos a month', owner_id: 'bot:sales-lead', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
   ];
   const db = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals};
   const writes = [];
@@ -102,7 +102,7 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
     if (p === '/api/v2/goals/tree') return json({goals: db.goals, owners: {}, other_kpis: [], proposals: []});
     if (p === '/api/v2/goals/needs-you') return json({items: []});
     if (p === '/api/v2/goals' && method === 'POST') {
-      const g = {id: 'g-' + (db.goals.length + 1), title: body.title, owner: body.owner, parent_id: body.parent_id || null, status: 'gray', rank: 9, kpis: []};
+      const g = {id: 'g-' + (db.goals.length + 1), title: body.title, owner_id: body.owner_id, parent_id: body.parent_id || null, status: 'gray', rank: 9, kpis: []};
       db.goals.push(g);
       return json({goal: g});
     }

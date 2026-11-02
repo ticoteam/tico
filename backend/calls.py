@@ -168,7 +168,7 @@ def project_reply(c, rid, reply, who):
     attached = c.execute("SELECT joined_by FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (rid, bot)).fetchone()
     if not attached or not attachment_standing(c, attached[0], row["thread_id"], bot):
         raise Problem("forbidden", "The person who attached this bot can no longer read the call's thread", 403)
-    if not who.attempt_id or not c.execute("SELECT 1 FROM attempts WHERE id=? AND bot=?",
+    if not who.attempt_id or not c.execute("SELECT 1 FROM attempts WHERE id=? AND bot_id=?",
                                            (who.attempt_id, bot)).fetchone():
         raise Problem("forbidden", "This bot's reply has no run of its own to post it in the call's thread", 403)
     c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (who.attempt_id, row["thread_id"]))
@@ -291,7 +291,7 @@ class Calls:
     def _record(self, c, actor, call_id, thread_id, kind, detail=None):
         """The audit row and the threads change for one call write."""
         audit_log.write(c, actor, f"call:{call_id}", None, {"kind": kind, **(detail or {})})
-        c.execute("INSERT INTO changes(topic,kind,subject_id,conversation_id,actor,at) VALUES('threads',?,?,?,?,?)",
+        c.execute("INSERT INTO changes(topic,kind,subject_id,conversation_id,actor,created_at) VALUES('threads',?,?,?,?,?)",
                   (kind, call_id, thread_id, actor, H.now()))
 
     def _connector(self, c, who, call_id):
@@ -322,7 +322,7 @@ class Calls:
         meeting = live_meetings.Connect(title=title, visibility="private")
         meeting_id, call_id, stamp = str(uuid.uuid4()), str(uuid.uuid4()), H.now()
         c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,client_id,window_ms,cooldown_ms,reply_cap,"
-                  "threshold,created,updated,started_at,visibility,client,meeting_model,thread_id) "
+                  "threshold,created_at,updated_at,started_at,visibility,client,meeting_model,thread_id) "
                   "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (meeting_id, who.actor, meeting.title, "live", None, live_meetings._window_ms(self.app, meeting),
                    meeting.cooldown_seconds * 1000, meeting.reply_cap, meeting.threshold, stamp, stamp, stamp,
@@ -418,7 +418,7 @@ class Calls:
                   (reason, stamp, stamp, call_id))
         c.execute("UPDATE call_participants SET left_at=? WHERE call_id=? AND left_at IS NULL AND removed_at IS NULL",
                   (stamp, call_id))
-        c.execute("UPDATE live_meetings SET state='ended',ended_at=?,updated=? WHERE id=?",
+        c.execute("UPDATE live_meetings SET state='ended',ended_at=?,updated_at=? WHERE id=?",
                   (stamp, stamp, row["live_meeting_id"]))
         live_meetings._event(c, row["live_meeting_id"], "meeting.state", {"state": "ended", "by": actor,
                                                                           "action": reason})

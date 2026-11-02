@@ -86,7 +86,7 @@ def test_an_agent_reads_company_threads_only_in_a_turn_and_a_bot_writes_a_home_o
         made = made_threads(c, auth, who)
         bot, other = sorted(a for a in who if a.startswith("bot:"))[:2]
         home = made["home"]
-        assert threads.thread_row(c, home)["owner_actor"] == bot
+        assert threads.thread_row(c, home)["owner_id"] == bot
     # The run's attempt was granted the Home (attempt_conversations); the other bot reads the Home but may not write.
     monkeypatch.setattr(threads, "_bot_grant", lambda c, v, row: getattr(v.who, "attempt_id", "") == "att-1")
     from backend import teammate_access
@@ -118,10 +118,10 @@ def test_internal_bots_read_company_and_their_groups_threads_and_external_agents
     bot = "bot:content"
     with store.transaction() as c:
         # The demo's Content bot is in Leadership; here Leadership sits under Operations.
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         roster["org_groups"] = {"operations": {"name": "Operations"}, "marketing": {"name": "Marketing"},
                                 "leadership": {"name": "Leadership", "parent": "operations"}}
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
         other = next(a for a in people(who) if a != owner.actor)
@@ -342,7 +342,7 @@ def test_revisions_apply_highest_first_and_a_delete_is_final(world):
         c.execute("DELETE FROM registry_metadata WHERE key=?", (threads.AUDIT_SCRUB_KEY,))
         threads.ensure(c)
         audits = " ".join(str(r[0]) + str(r[1]) for r in c.execute(
-            "SELECT before_json, after_json FROM audit_log WHERE object IN (?, 'message:old')", ("message:" + mine["id"],)))
+            "SELECT before, after FROM audit_log WHERE object IN (?, 'message:old')", ("message:" + mine["id"],)))
         assert "words" not in audits and '"length"' in audits, "audit rows keep lengths, never a message's words"
 
 
@@ -375,7 +375,7 @@ def test_only_a_reader_gets_a_duplicate_a_sub_thread_or_a_tombstone(world):
     with store.read_transaction() as c:
         listed = threads.timeline(c, threads.viewer(auth, who[member]), tid)["messages"]
         row = next(m for m in listed if m["id"] == gone["id"])
-        assert row.get("hidden") and "from_actor" not in row and "refs" not in row
+        assert row.get("hidden") and "sender_id" not in row and "refs" not in row
         mine = next(m for m in threads.timeline(c, owner, tid)["messages"] if m["id"] == gone["id"])
         assert mine["deleted"] and mine["refs"] == {} and mine["body"] is None
 
@@ -591,13 +591,13 @@ def test_migration_keeps_each_crafted_messages_readers_and_a_roster_change_only_
                          refs={"task": secret["id"]})
         from backend.store import encode
         provenance = H.say(c, "human:ana", "bot:ops", "From the meeting", conversation_id=direct["id"])
-        c.execute("UPDATE messages SET refs_json=? WHERE id=?",
+        c.execute("UPDATE messages SET refs=? WHERE id=?",
                   (encode({"live_meeting": {"meeting_id": meeting}}), provenance["id"]))
         shared = H.open_conversation(c, "human:ben", ["human:ben", "bot:cpo"], kind="chat", subject="CPO room",
                                      scope="shared", room_key="cpo", allow_held=True)
         in_room = H.say(c, "human:ben", "bot:cpo", "Roadmap draft", conversation_id=shared["id"])
         nested = H.say(c, "human:ana", "bot:ops", "Nested reference", conversation_id=direct["id"])
-        c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode({"origin": {"task": secret["id"]}}), nested["id"]))
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (encode({"origin": {"task": secret["id"]}}), nested["id"]))
         ids = [plain["id"], task_ref["id"], provenance["id"], in_room["id"], nested["id"]]
         for statement in UNSTAMPED:
             c.execute(statement)
@@ -620,7 +620,7 @@ def test_migration_keeps_each_crafted_messages_readers_and_a_roster_change_only_
         assert threads.restricted_for(None, {"via": "assistant", "origin": {"install": "peer-1"}}, None, c=c) == 0
     with store.read_transaction() as c:
         home = threads.home(c, "bot:cpo", create=False)
-        assert home["audience"] == "home" and home["owner_actor"] == "bot:cpo"
+        assert home["audience"] == "home" and home["owner_id"] == "bot:cpo"
     with store.read_transaction() as c:
         after = message_readers(c, auth, ids)
     assert after == before
@@ -757,7 +757,7 @@ def test_a_remote_author_writes_only_through_the_keeper_in_its_installs_namespac
         assert unlinked.value.status == 404, "C1 for a remote author is membership"
         sent = threads.post(c, H.KEEPER, linked, "Hello from the partner", as_actor="human:ana@peer.acme.example",
                             via="peer", origin=origin)
-        assert sent["from_actor"] == "human:ana@peer.acme.example"
+        assert sent["sender_id"] == "human:ana@peer.acme.example"
         again = threads.post(c, H.KEEPER, linked, "Hello from the partner", as_actor="human:ana@peer.acme.example",
                              via="peer", origin=origin)
         assert again["id"] == sent["id"], "a repeat (origin_id, revision) writes nothing"

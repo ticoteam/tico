@@ -95,7 +95,7 @@ def wanted(conn, owner_id, at=None, reads=None):
                 items.append({"kind": "kpi_red", "ref": k["id"], "owner": who, "goal_id": goal_id,
                               "goal_title": goal["title"], "kpi_id": k["id"], "kpi_name": k["name"],
                               "reason": k["reason"]})
-    owned = [dict(r) for r in conn.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created")]
+    owned = [dict(r) for r in conn.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created_at")]
     data = K.effective_many(conn, [r["id"] for r in owned])
     for record in owned:
         who = _acts_for(record["owner"], owner_id)
@@ -308,7 +308,7 @@ def _reword(conn, task, item):
     if H.TITLE_LINT == "refuse" and H.lint_title(title):
         return
     with isolated(conn, "goal_ask_reword", task["id"]):
-        H.task_update(conn, G.AUTO_ACTOR, task["id"], title=_free_title(conn, task["owner"], title), body=body,
+        H.task_update(conn, G.AUTO_ACTOR, task["id"], title=_free_title(conn, task["owner_id"], title), body=body,
                       private=True if item.get("private") else None, quiet=True)
 
 
@@ -346,7 +346,7 @@ def _free_title(conn, owner, title):
     """task_create refuses a second live task with the same requester, owner and title; two different proposals
     can word the same, so the second one is numbered instead of refused."""
     taken = {r[0] for r in conn.execute(
-        f"SELECT title FROM tasks WHERE requester=? AND owner=? AND status IN ({','.join('?' * len(H.LIVE_STATUSES))})",
+        f"SELECT title FROM tasks WHERE requester_id=? AND owner_id=? AND status IN ({','.join('?' * len(H.LIVE_STATUSES))})",
         (G.AUTO_ACTOR, owner, *H.LIVE_STATUSES))}
     out, n = title[:290], 2
     while out in taken:
@@ -422,7 +422,7 @@ def sync(conn, owner_id, at=None, reads=None):
             made = H.task_create(conn, G.AUTO_ACTOR, _free_title(conn, item["owner"], title), body, item["owner"],
                                  lint=False, lane="company", top=item["kind"] == "vision",
                                  private=True if item.get("private") else None)
-            conn.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created) VALUES (?,?,?,?,?)",
+            conn.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created_at) VALUES (?,?,?,?,?)",
                          (*key, made["id"], H.now()))
             created.append(made["id"])
             if not rush:

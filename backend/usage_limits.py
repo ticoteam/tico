@@ -41,7 +41,7 @@ WORDS = {"per_30m": "30-minute", "hourly": "hourly", "daily": "daily", "weekly":
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS usage_pools (scope TEXT PRIMARY KEY, hourly_usd REAL, daily_usd REAL, "
-    "weekly_usd REAL, monthly_usd REAL, updated TEXT, updated_by TEXT)",
+    "weekly_usd REAL, monthly_usd REAL, updated_at TEXT, updated_by TEXT)",
 )
 
 
@@ -196,9 +196,9 @@ def save_pool(c, scope, caps, actor):
         c.execute("DELETE FROM usage_pools WHERE scope=?", (scope,))
         return
     marks = ",".join("?" * len(KEYS))
-    c.execute(f"INSERT INTO usage_pools(scope, {', '.join(KEYS)}, updated, updated_by) VALUES(?,{marks},?,?) "
+    c.execute(f"INSERT INTO usage_pools(scope, {', '.join(KEYS)}, updated_at, updated_by) VALUES(?,{marks},?,?) "
               "ON CONFLICT(scope) DO UPDATE SET " + ", ".join(f"{key}=excluded.{key}" for key in KEYS) +
-              ", updated=excluded.updated, updated_by=excluded.updated_by",
+              ", updated_at=excluded.updated_at, updated_by=excluded.updated_by",
               (scope, *(caps[key] for key in KEYS), H.now(), actor))
 
 
@@ -273,7 +273,7 @@ def by_bot(c, start, end, subscription, default=None):
     if key not in memo:
         from .usage_records import RUNS
         memo[key] = {row[0]: float(row[1] or 0) for row in c.execute(
-            f"SELECT bot, coalesce(sum(est_cost_usd), 0) FROM {RUNS} WHERE started >= ? AND started < ? "
+            f"SELECT bot, coalesce(sum(est_cost_usd), 0) FROM {RUNS} WHERE started_at >= ? AND started_at < ? "
             "AND (? OR coalesce(billing, 'api') != 'subscription') GROUP BY bot", (start, end, 1 if subscription else 0))}
     return memo[key]
 
@@ -504,8 +504,8 @@ def after_run(c, bot, owner_email="", at=None):
 
 def recipients(c, bot, owner_email=""):
     """The person to tell: the bot's operator, else the company owner."""
-    row = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone() if bot else None
-    person = H.human(c, row["operator"]) if row and row["operator"] else None
+    row = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (bot,)).fetchone() if bot else None
+    person = H.human(c, row["owner_id"]) if row and row["owner_id"] else None
     if not person and owner_email:
         owner = c.execute("SELECT id FROM humans WHERE lower(email)=?", (owner_email.lower(),)).fetchone()
         person = H.human(c, owner["id"]) if owner else None

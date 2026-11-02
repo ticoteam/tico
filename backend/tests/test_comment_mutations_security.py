@@ -8,7 +8,7 @@ from backend.tests.test_tasks_board import api, get, post  # noqa: F401
 
 
 def test_old_and_deleted_words_leave_retries_sql_events_and_bot_context(api):
-    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Review the report", "body": "Please review."})
     path = f"tasks/{task['id']}/comments"
     original_headers = headers()
     original = api.post("/api/v2/" + path, json={"text": "Withdrawn original words"}, headers=original_headers).json()
@@ -26,7 +26,7 @@ def test_old_and_deleted_words_leave_retries_sql_events_and_bot_context(api):
         assert retry.status_code == 200, retry.text
         assert "Withdrawn original words" not in retry.text and "Replacement words" not in retry.text
     for token in ("ana-test", "ben-test"):
-        query = {"sql": "SELECT body,refs_json FROM messages WHERE id=?", "params": [mid]}
+        query = {"sql": "SELECT body,refs FROM messages WHERE id=?", "params": [mid]}
         result = api.post("/api/v2/sql", json=query, headers=headers(token))
         assert result.status_code == 200, result.text
         assert result.json()["rows"] == []
@@ -36,14 +36,14 @@ def test_old_and_deleted_words_leave_retries_sql_events_and_bot_context(api):
         assert mid not in {m["id"] for m in H.inbox(c, "bot:ops")["messages"]}
         assert mid not in {m["id"] for m in H.undelivered(c)}
         assert mid not in {m["id"] for m in message_page(c, task["conversation_id"])["messages"]}
-        for table, field in (("messages", "body"), ("events", "detail_json"), ("idempotency", "response_json")):
+        for table, field in (("messages", "body"), ("events", "detail"), ("idempotency", "response")):
             saved = " ".join(str(r[0]) for r in c.execute(f"SELECT {field} FROM {table}"))
             assert "Withdrawn original words" not in saved and "Replacement words" not in saved
 
 
 def test_current_task_read_is_required_even_when_replaying_an_authorized_edit(api):
     as_member(api, "ben@acme.example")
-    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Review the report", "body": "Please review."})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "My original words"}, token="ben-test")["comment"]
     path = f"tasks/{task['id']}/comments/{said['id']}"
     same_headers = headers("ben-test")
@@ -63,7 +63,7 @@ def test_current_task_read_is_required_even_when_replaying_an_authorized_edit(ap
 
 @pytest.mark.parametrize("handoff", ["slack"])
 def test_already_handed_comments_change_current_record_without_recalling_copies(api, handoff):
-    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Review the report", "body": "Please review."})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Retained elsewhere"})["comment"]
     with api.app.state.store.transaction() as c:
         if handoff == "delivered":
@@ -71,12 +71,12 @@ def test_already_handed_comments_change_current_record_without_recalling_copies(
         elif handoff == "job":
             c.execute("UPDATE jobs SET state='done' WHERE message_id=?", (said["id"],))
         elif handoff == "slack":
-            c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) "
+            c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) "
                       "VALUES(?,'Dexample','','ops',?,'ready',?,?)", (said["id"], said["body"], H.now(), H.now()))
         elif handoff == "context":
             H.turn_start(c, "bot:ops", "ops")
         else:
-            c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.harness','hermes') WHERE bot='ops'")
+            c.execute("UPDATE bot_config SET config=json_set(config,'$.harness','hermes') WHERE bot='ops'")
     edited = post(api, f"tasks/{task['id']}/comments/{said['id']}", {"text": "Replacement words"})
     assert edited['comment']['body'] == 'Replacement words'
     detail = get(api, 'tasks/' + task['id'])
@@ -90,7 +90,7 @@ def test_already_handed_comments_change_current_record_without_recalling_copies(
 
 
 def test_bot_authorship_is_checked_in_the_domain(api):
-    task = post(api, "tasks", {"owner": "ben", "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner_id": "ben", "title": "Review the report", "body": "Please review."})
     with api.app.state.store.transaction() as c:
         said = H.task_comment(c, "bot:ops", task["id"], "Draft ready", wake=False)
         with pytest.raises(H.Refused):

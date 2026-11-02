@@ -43,7 +43,7 @@ def test_a_saved_config_with_the_removed_rotation_settings_still_loads_and_is_no
     branch(api, computer)
     with api.app.state.store.transaction() as c:
         declared = shared_bots.declared(c, 'cpo')
-        c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (json.dumps(
+        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (json.dumps(
             {**declared, 'model': 'team-model', 'rotate_at': 150000, 'rotate_after_turns': 3}), 'cpo'))
     assert get(api, 'bots/cpo')
     config = get(api, 'runners/assignments', computer['token'])[0]['config']
@@ -58,7 +58,7 @@ def test_follows_model_session_fallback_and_refuses_definition_edits(api):
         settings = {'runtime': 'fake', 'model': 'team-model', 'harness': 'fake', 'reasoning_effort': 'high',
                     'session': 'task', 'fallback': {'harness': 'fake', 'model': 'fallback-model'}}
         declared = shared_bots.declared(c, 'cpo')
-        c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (json.dumps({**declared, **settings}), 'cpo'))
+        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (json.dumps({**declared, **settings}), 'cpo'))
     assignment = get(api, 'runners/assignments', computer['token'])[0]
     assert all(assignment['config'][key] == value for key, value in settings.items())
     ready(api, computer, ['cpo-cara'])
@@ -78,15 +78,15 @@ def test_follows_model_session_fallback_and_refuses_definition_edits(api):
 def test_tasks_and_chat_route_only_to_an_active_branch_while_enabled(api):
     share(api)
     branch(api, runner(api, 'cara'))
-    mine = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review design', 'body': 'Please review.'}, 'cara-test')
-    assert mine['owner'] == 'bot:cpo-cara'
-    other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review another design', 'body': 'Please review.'})
-    assert other['owner'] == 'bot:cpo'
+    mine = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Review design', 'body': 'Please review.'}, 'cara-test')
+    assert mine['owner_id'] == 'bot:cpo-cara'
+    other = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Review another design', 'body': 'Please review.'})
+    assert other['owner_id'] == 'bot:cpo'
     task_chat = post(api, f'tasks/{other["id"]}/chat', {'text': 'Discuss the design'}, 'cara-test')
     assert task_chat['bot'] == 'cpo-cara'
-    assert task_chat['message']['to_actor'] == 'bot:cpo-cara'
+    assert task_chat['message']['recipient_id'] == 'bot:cpo-cara'
     chat = post(api, 'chat/cpo', {'text': 'Hello'}, 'cara-test')
-    assert chat['to_actor'] == 'bot:cpo-cara'
+    assert chat['recipient_id'] == 'bot:cpo-cara'
     conversation = get(api, 'conversations?chat_with=cpo-cara', 'cara-test')['conversations'][0]
     assert set(conversation['participants']) == {'human:cara', 'bot:cpo-cara'}
     chats = get(api, 'conversations?chat_with=cpo', 'cara-test')
@@ -94,9 +94,9 @@ def test_tasks_and_chat_route_only_to_an_active_branch_while_enabled(api):
     new = post(api, 'conversations', {'participants': ['bot:cpo'], 'kind': 'chat'}, 'cara-test')
     assert new['id'] == chat['conversation_id']
     share(api, False)
-    assert post(api, 'chat/cpo', {'text': 'Original now'}, 'cara-test')['to_actor'] == 'bot:cpo'
+    assert post(api, 'chat/cpo', {'text': 'Original now'}, 'cara-test')['recipient_id'] == 'bot:cpo'
     with api.app.state.store.transaction() as c:
-        assert H.task_create(c, 'human:cara', 'Direct task', 'Please.', 'cpo')['owner'] == 'bot:cpo'
+        assert H.task_create(c, 'human:cara', 'Direct task', 'Please.', 'cpo')['owner_id'] == 'bot:cpo'
 
 
 def test_refuses_a_computer_already_running_original_or_a_sibling_branch(api):
@@ -117,15 +117,15 @@ def test_archive_restores_branches_without_losing_their_work_or_assignment(api):
     share(api)
     computer = runner(api, 'cara')
     branch(api, computer)
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Keep work', 'body': 'Please.'}, 'cara-test')
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Keep work', 'body': 'Please.'}, 'cara-test')
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
     with api.app.state.store.read() as c:
         assert H.bot(c, 'cpo-cara')['state'] == 'archived'
-        assert H.task(c, task['id'])['owner'] == 'bot:cpo-cara'
+        assert H.task(c, task['id'])['owner_id'] == 'bot:cpo-cara'
         assert c.execute('SELECT runner_id FROM assignments WHERE bot=?', ('cpo-cara',)).fetchone()[0] == computer['runner_id']
     # Restore uses upstream's activation check; the original was already active before archive.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.materialize',true) WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.materialize',true) WHERE bot='cpo'")
     post(api, 'bots/cpo/restore', {})
     assert get(api, 'bots/cpo-cara')['state'] == 'active'
 
@@ -140,7 +140,7 @@ def test_original_archive_preserves_paused_and_independently_archived_branches(a
     post(api, 'bots/cpo-cara/definition', {'status': 'active', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test', expected=409)
     post(api, 'bots/cpo-cara/status', {'state': 'active'}, 'cara-test', expected=409)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.materialize',true) WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.materialize',true) WHERE bot='cpo'")
     post(api, 'bots/cpo/restore', {})
     with api.app.state.store.read() as c:
         assert H.bot(c, 'cpo-cara')['state'] == 'paused'
@@ -161,7 +161,7 @@ def test_archiving_the_original_closes_a_parked_branch_setup_reminder(api):
 
 def test_name_only_roster_marks_branches_without_exposing_the_original(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json, '$.shared_from', 'finance') WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config=json_set(config, '$.shared_from', 'finance') WHERE bot='cpo'")
         restrict(c, 'cpo', see={'everyone': True}, read={'people': ['ben']}, write={'people': ['ben']})
         restrict(c, 'finance', people=['ana'])
     response = api.get('/api/employees', headers={'Authorization': 'Bearer cara-test'})
@@ -170,5 +170,5 @@ def test_name_only_roster_marks_branches_without_exposing_the_original(api):
     assert 'finance' not in rows
     branch_row = rows['cpo']
     assert branch_row['my_access']['read'] is False
-    assert branch_row['is_branch'] is True and branch_row['operator'] == 'ben'
+    assert branch_row['is_branch'] is True and branch_row['owner_id'] == 'ben'
     assert not {'shared_from', 'repo', 'schedules', 'model'} & branch_row.keys()

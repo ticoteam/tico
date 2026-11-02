@@ -89,7 +89,7 @@ def test_native_pause_resume_discard_files_only_public_text(api, tmp_path, scena
                 if scenario == "remote":
                     assert "Uncertain pre-pause turn" not in filed
                 assert c.execute("SELECT count(*) FROM meetings").fetchone()[0] == 1
-                tasks = c.execute("SELECT title,body,owner FROM tasks").fetchall()
+                tasks = c.execute("SELECT title,body,owner_id FROM tasks").fetchall()
                 assert len(tasks) == 2
                 assert {t["owner"] for t in tasks} == {"human:ben"}
                 quote = next(t for t in tasks if t["title"] == "Review selected quote")

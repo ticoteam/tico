@@ -17,7 +17,7 @@ let GR_LOAD = 0;
 const GR_STAGES = [['reach', 'Reach'], ['acquire', 'Acquire'], ['activate', 'Activate'], ['retain', 'Retain'], ['refer', 'Refer']];
 const GR_ACQUISITION = ['reach', 'acquire', 'activate'];
 const GR_CH_STAGE = {idea: 'Idea', testing: 'Testing', scaling: 'Scaling', paused: 'Paused'};
-const GR_MOVES = {started: 'Started', won: 'Won', lost: 'Lost', inconclusive: 'Inconclusive', dropped: 'Dropped'};
+const GR_MOVES = {started_at: 'Started', won: 'Won', lost: 'Lost', inconclusive: 'Inconclusive', dropped: 'Dropped'};
 
 // ----------------------------------------------------------------- shared formats and pieces
 // Who may change company-level growth records: the owner or an admin (the server checks and is the one that enforces it).

@@ -10,12 +10,12 @@ from backend.tests.test_tasks_board import api, bot_token, get, headers, post  #
 @pytest.fixture(params=['bot', 'person'])
 def manager(api, request):
     with api.app.state.store.transaction() as c:
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         for p in roster['people']:
             p['reports_to'] = ''
         roster['org_groups'] = {'product': {'name': 'Product', 'reports_to': 'ben'}}
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
-        c.execute("UPDATE humans SET teams_json='[\"sales\"]' WHERE id='ben'")  # not a mover
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE humans SET teams='[\"sales\"]' WHERE id='ben'")  # not a mover
         c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='ops'")
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='cpo'")
         c.execute("UPDATE bot_config SET reports_to='human:priya' WHERE bot='cmo'")
@@ -88,19 +88,19 @@ def test_manager_comment_and_question_wake_owner_without_mention(api, manager):
     # The manager is not the direct boss: add a second bot layer for bot and human cases.
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {'middle': {'name': 'Middle', 'runtime': 'fake', 'status': 'active'}}, {})
-        c.execute("INSERT INTO bot_config(bot,config_json,reports_to,operator) VALUES('middle','{}','cpo','ana')")
+        c.execute("INSERT INTO bot_config(bot,config,reports_to,owner_id) VALUES('middle','{}','cpo','ana')")
         c.execute("UPDATE bot_config SET reports_to='middle' WHERE bot='ops'")
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
         config['bot_contact'] = 'tasks'
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps(config),))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
     for fields in ({'text': 'Please continue the work.'}, {'text': 'Which approach works?', 'ask': {
             'questions': [{'id': 'approach', 'header': 'Approach', 'question': 'Which approach works?', 'other': True}]}}):
         result = post(api, 'tasks/' + task['id'] + '/comments', fields, token=token)
         assert result['woke'], result
-        assert result['comment']['from_actor'] == actor
+        assert result['comment']['sender_id'] == actor
         with api.app.state.store.read() as c:
             message = H.message(c, result['comment']['id'])
-            assert message['to_actor'] == 'bot:ops' and not message['refs'].get('quiet')
+            assert message['recipient_id'] == 'bot:ops' and not message['refs'].get('quiet')
             assert c.execute('SELECT 1 FROM jobs WHERE message_id=?', (message['id'],)).fetchone()
 
 
@@ -108,10 +108,10 @@ def test_requester_manager_comment_wakes_owner_with_requester_permissions(api, m
     token, actor = manager
     task = make(api, owner='bot:cmo', requester='bot:ops')
     result = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Please continue the packet.'}, token=token)
-    assert result['woke'] and result['comment']['from_actor'] == actor
+    assert result['woke'] and result['comment']['sender_id'] == actor
     with api.app.state.store.read() as c:
         message = H.message(c, result['comment']['id'])
-        assert message['to_actor'] == 'bot:cmo'
+        assert message['recipient_id'] == 'bot:cmo'
         assert c.execute('SELECT 1 FROM jobs WHERE message_id=?', (message['id'],)).fetchone()
 
 
@@ -164,7 +164,7 @@ def test_requester_manager_closes_reopens_owner_manager_cannot_close(api, manage
     post(api, 'tasks/' + owned['id'], {'version': closed['version'], 'status': 'doing'}, token=token, expected=403)
     requested = make(api, requester='bot:ops', owner='bot:cmo')
     closed = change(api, requested, token, close=True)
-    assert closed['status'] == 'closed' and closed['closed_by'] == actor
+    assert closed['status'] == 'closed' and closed['closed_by_id'] == actor
     assert change(api, requested, token, status='doing')['status'] == 'doing'
     # A person's close (Ben's, above the requester) cannot be undone by the requester's bot manager.
     if actor.startswith('bot:'):
@@ -176,19 +176,19 @@ def test_manager_snoozes_defers_asks_and_resolves_its_reports_question(api, mana
     token, actor = manager
     task = make(api)
     snoozed = post(api, 'tasks/' + task['id'] + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=token)
-    assert snoozed['snoozed_by'] == actor
+    assert snoozed['snoozed_by_id'] == actor
     assert post(api, 'tasks/' + task['id'] + '/unsnooze', {}, token=token)['snoozed_until'] is None
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET next_run=1 WHERE id=?', (task['id'],))
     post(api, 'tasks/' + task['id'] + '/defer', {'at': '2027-01-01T00:00:00Z'}, token=token)
     ask = post(api, 'tasks/' + task['id'] + '/ask', {'text': 'Which packet should I use?'}, token=token)
-    assert ask['from_actor'] == actor
+    assert ask['sender_id'] == actor
     with api.app.state.store.transaction() as c:
         H.task_ask_resolve(c, actor, task['id'], ask['id'])
         question = H.task_comment(c, 'bot:ops', task['id'], 'Which format?', ask={
             'who': 'human:ana', 'questions': [{'id': 'format', 'header': 'Format', 'question': 'Which format?', 'other': True}]})
     result = post(api, 'tasks/' + task['id'] + '/comments/' + question['id'] + '/resolve', {'quote': 'Use Markdown.'}, token=token)
-    assert result['comment']['from_actor'] == actor
+    assert result['comment']['sender_id'] == actor
 
 
 def test_manager_finishing_report_subtask_returns_result_to_parent_once(api, manager):
@@ -203,8 +203,8 @@ def test_manager_finishing_report_subtask_returns_result_to_parent_once(api, man
     change(api, child, token, status='done', note='The packet is ready.')
     with api.app.state.store.read() as c:
         notices = c.execute(
-            "SELECT m.body,json_extract(m.refs_json,'$.task') AS parent_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-            "WHERE j.bot='cmo' AND j.state='queued' AND json_extract(m.refs_json,'$.subtask')=?",
+            "SELECT m.body,json_extract(m.refs,'$.task') AS parent_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='cmo' AND j.state='queued' AND json_extract(m.refs,'$.subtask')=?",
             (child['id'],)).fetchall()
         assert len(notices) == 1 and notices[0]['parent_id'] == parent['id']
         assert 'The packet is ready.' in notices[0]['body']
@@ -213,7 +213,7 @@ def test_manager_finishing_report_subtask_returns_result_to_parent_once(api, man
     with api.app.state.store.read() as c:
         assert c.execute(
             "SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
-            "WHERE j.bot='cmo' AND j.state='queued' AND json_extract(m.refs_json,'$.subtask')=?",
+            "WHERE j.bot_id='cmo' AND j.state='queued' AND json_extract(m.refs,'$.subtask')=?",
             (child['id'],)).fetchone()[0] == 1
 
 
@@ -227,7 +227,7 @@ def test_role_holder_keeps_snooze_right_without_lending_it_to_manager(api, manag
     path = 'tasks/' + task['id']
     post(api, path + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=token, expected=403)
     snoozed = post(api, path + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=report)
-    assert snoozed['snoozed_by'] == 'bot:ops'
+    assert snoozed['snoozed_by_id'] == 'bot:ops'
     post(api, path + '/unsnooze', {}, token=token, expected=403)
     with api.app.state.store.read() as c:
         assert H.task(c, task['id'])['snoozed_until'] == snoozed['snoozed_until']
@@ -251,7 +251,7 @@ def test_nonmanager_unchanged_and_refusal_names_managers(api, manager):
     get(api, 'tasks/' + private['id'], token=outsider, expected=404)
     task = make(api, private=False)
     refusal = post(api, 'tasks/' + task['id'], {'version': task['version'], 'status': 'doing'}, token=outsider, expected=403)
-    assert 'managers' in str(refusal) and 'owner' in str(refusal)
+    assert 'managers' in str(refusal) and 'owner_id' in str(refusal)
     post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Unrelated comment.'}, token=outsider, expected=403)
 
 
@@ -302,18 +302,18 @@ def test_task_management_never_grants_a_named_approval(api, manager):
 def test_person_report_task_changes_follow_chart_but_person_private_tasks_stay_private(api):
     # Person management already walks department groups; task rights use the identical chart.
     with api.app.state.store.transaction() as c:
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         for person in roster['people']:
             if person['id'] == 'priya':
                 person['reports_to'] = 'ben'
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
-        c.execute("UPDATE humans SET teams_json='[\"sales\"]' WHERE id='ben'")
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE humans SET teams='[\"sales\"]' WHERE id='ben'")
         assert H.task_represents(c, 'human:ben', 'human:priya')
     private = make(api, owner='human:priya')
     get(api, 'tasks/' + private['id'], token='ben-test', expected=404)
     assert private['id'] not in {t['id'] for t in get(api, 'tasks', token='ben-test')['tasks']}
     public = make(api, owner='human:priya', private=False)
-    assert change(api, public, 'ben-test', due='2027-01-01T00:00:00Z')['due']
+    assert change(api, public, 'ben-test', due='2027-01-01T00:00:00Z')['due_at']
 
 
 def test_archived_parent_cycle_terminates_without_a_task_grant():

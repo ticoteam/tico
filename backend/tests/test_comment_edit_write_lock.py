@@ -20,7 +20,7 @@ BIG = 20000
 
 
 def _comment(api, text="Words to withdraw", title="Review the report"):
-    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Please review."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Please review."})
     return task, post(api, f"tasks/{task['id']}/comments", {"text": text})["comment"]
 
 
@@ -129,7 +129,7 @@ def test_a_writer_waiting_on_an_edit_does_not_time_out(api, tmp_path):
     assert outcome == {"ok": True}, (outcome, timing)
     assert timing["held"] < 1.0, timing
     with api.app.state.store.read() as c:
-        stored = " ".join(r[0] for r in c.execute("SELECT response_json FROM idempotency"))
+        stored = " ".join(r[0] for r in c.execute("SELECT response FROM idempotency"))
         assert "old words" not in stored and stored.count("New words") >= 2 * (BIG // 500)
 
 
@@ -138,7 +138,7 @@ SHAPES = (
     lambda m: {"comments": [m, dict(m, id="other", body="kept")]},       # a list of comments
     lambda m: {"task": {"thread": [{"items": [m]}]}},                    # deep inside
     lambda m: [m, {"id": m["id"]}],                                       # an answer that is a list
-    lambda m: {"comment": dict(m, from_actor=None)},                     # from_actor present but null
+    lambda m: {"comment": dict(m, sender_id=None)},                     # from_actor present but null
     lambda m: {"ref": {"id": m["id"], "title": "not a message"}},         # the id without from_actor: kept
     lambda m: {"id": m["id"], "from_actor": "bot:ops", "body": "old"},   # the answer is the message
     lambda m: {"note": json.dumps(m)},                                    # quoted inside a string: kept
@@ -177,7 +177,7 @@ def test_retry_answers_are_rewritten_as_reading_every_answer_did(api, change, mo
                 H.task_comment_edit(c, "human:ana", task["id"], said["id"], "New words")
             else:
                 H.task_comment_delete(c, "human:ana", task["id"], said["id"])
-            found.update((r[0], r[1]) for r in c.execute("SELECT key,response_json FROM idempotency "
+            found.update((r[0], r[1]) for r in c.execute("SELECT key,response FROM idempotency "
                                                          "WHERE operation='/api/v2/shapes'"))
             raise Undo
         return found
@@ -199,7 +199,7 @@ def test_answers_written_before_the_index_are_found_after_the_backfill(api):
             c.execute(statement)
         c.execute("DELETE FROM registry_metadata WHERE key=?", (IM.READY,))
         _answers(c, 3000, quoting=said)        # an older server's answers, 6 of them quoting the comment
-        quoted = {r[0] for r in c.execute("SELECT rowid FROM idempotency WHERE instr(response_json, ?)>0",
+        quoted = {r[0] for r in c.execute("SELECT rowid FROM idempotency WHERE instr(response, ?)>0",
                                           (said["id"],))}
     assert len(quoted) == 7                     # and the answer to the request that wrote the comment
     with api.app.state.store.read() as c:
@@ -243,7 +243,7 @@ def test_answers_written_before_the_index_are_found_after_the_backfill(api):
         assert all(json.loads(r[1]).get("comments") == [] for r in IM.quoting(c, said["id"])
                    if "comments" in json.loads(r[1]))
         some = sorted(quoted)[0]
-        c.execute("UPDATE idempotency SET response_json='{}' WHERE rowid=?", (some,))   # a rewrite that drops the quote
+        c.execute("UPDATE idempotency SET response='{}' WHERE rowid=?", (some,))   # a rewrite that drops the quote
         assert {r[0] for r in IM.quoting(c, said["id"])} == quoted - {some}
         c.execute("DELETE FROM idempotency")                    # the retention sweep
         assert c.execute("SELECT count(*) FROM idempotency_messages").fetchone()[0] == 0

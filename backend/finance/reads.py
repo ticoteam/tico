@@ -1068,7 +1068,7 @@ def _state_row(s: _Seen, b: B.Budget, st: B.State) -> Row:
 def _budget_row(b: B.Budget) -> Row:
     return {"id": b.id, "name": b.name, "period": b.period, "account_id": b.account_id or None,
             "catch_all": b.catch_all, "team": b.team, "teammate": b.teammate, "vendor": b.vendor,
-            "parent_id": b.parent_id or None, "owner": b.owner, "warn_pct": b.warn_pct, "at_limit": b.at_limit,
+            "parent_id": b.parent_id or None, "owner_id": b.owner, "warn_pct": b.warn_pct, "at_limit": b.at_limit,
             "rollover": b.rollover, "active": b.active}
 
 
@@ -2005,11 +2005,11 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str, at: str | Non
         return None
     ctx = load(c, at)
     try:
-        payload = cast(Mapping[str, object], json.loads(str(row["payload_json"] or "{}")))
+        payload = cast(Mapping[str, object], json.loads(str(row["payload"] or "{}")))
     except ValueError:
         payload = dict[str, object]()
     try:
-        result = cast(Mapping[str, Any], json.loads(str(row["result_json"] or "{}")))
+        result = cast(Mapping[str, Any], json.loads(str(row["result"] or "{}")))
     except ValueError:
         result = dict[str, Any]()
     covers = True if ctx.view(viewer).everything else _covers(ctx, viewer, payload)

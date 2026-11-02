@@ -69,7 +69,7 @@ def test_a_chat_reply_cannot_attach_a_file_from_another_conversation(api):
 
 def task_with_file(api, *, private, name="page.html", text="<p>hi</p>"):
     task_with_file.n = getattr(task_with_file, "n", 0) + 1
-    task = post(api, "tasks", {"owner": "ops", "title": f"Chart {task_with_file.n}", "body": "x", "private": private},
+    task = post(api, "tasks", {"owner_id": "ops", "title": f"Chart {task_with_file.n}", "body": "x", "private": private},
                 "ben-test")
     tid = task["id"]
     made = api.post(f"/api/v2/tasks/{tid}/files", json={"name": name, "text": text}, headers=headers("ben-test"))
@@ -126,7 +126,7 @@ def test_over_the_limit_or_another_type_is_a_plain_file_never_a_visual(api, monk
 
 
 def test_six_attachments_come_back_all_in_order(api):
-    tid = post(api, "tasks", {"owner": "ops", "title": "Six", "body": "x", "private": False}, "ben-test")["id"]
+    tid = post(api, "tasks", {"owner_id": "ops", "title": "Six", "body": "x", "private": False}, "ben-test")["id"]
     refs = []
     for i in range(6):
         made = api.post(f"/api/v2/tasks/{tid}/files", json={"name": f"p{i}.html", "text": f"<p>{i}</p>"},
@@ -193,7 +193,7 @@ def test_a_reader_who_loses_access_loses_the_address_on_the_next_request(api):
 def test_a_reader_taken_off_a_private_task_is_refused_the_next_range_with_their_old_address(api):
     """The claim Review 2 and Security lean on: the address is checked against the reader's access on every request,
     each byte range included, so losing access ends it at once, not when the token expires."""
-    tid = post(api, "tasks", {"owner": "ops", "title": "Cara's chart", "body": "x", "private": True}, "cara-test")["id"]
+    tid = post(api, "tasks", {"owner_id": "ops", "title": "Cara's chart", "body": "x", "private": True}, "cara-test")["id"]
     made = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "chart.png", "content_base64": base64.b64encode(PNG).decode()},
                     headers=headers("cara-test"))
     assert made.status_code == 200, made.text
@@ -203,7 +203,7 @@ def test_a_reader_taken_off_a_private_task_is_refused_the_next_range_with_their_
     src = r.json()["comment"]["refs"]["attachments"][0]["src"]
     assert api.get(src, headers={"Range": "bytes=0-1"}).status_code == 206
     with api.app.state.store.transaction() as c:                # the task is handed to Ben: Cara no longer reads it
-        c.execute("UPDATE tasks SET requester='human:ben' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET requester_id='human:ben' WHERE id=?", (tid,))
     assert api.get(f"/api/v2/tasks/{tid}/comments", headers=headers("cara-test")).status_code in (403, 404)
     for request in ({"Range": "bytes=0-1"}, {"Range": "bytes=4-9"}, {}):
         assert api.get(src, headers=request).status_code == 404
@@ -306,7 +306,7 @@ def test_an_older_task_attachment_stays_a_plain_file(api):
     a picture, a clean page and a page cleaning would change all post, none becomes a visual or is marked removed."""
     from backend.auth import Identity
     from backend.blobs import register
-    tid = post(api, "tasks", {"owner": "ops", "title": "Old files", "body": "x", "private": False}, "ben-test")["id"]
+    tid = post(api, "tasks", {"owner_id": "ops", "title": "Old files", "body": "x", "private": False}, "ben-test")["id"]
     refs = []
     for name, data, mime in (("old.png", PNG, "image/png"), ("clean.html", b"<p>report</p>", "text/html"),
                              ("remote.html", b'<img src="remote.png"><p>report</p>', "text/html")):
@@ -481,7 +481,7 @@ def test_a_wav_on_a_task_is_an_audio_player_whatever_python_calls_its_type(api, 
     monkeypatch.setattr(mimetypes, "guess_type", lambda name, *a, **k: ("audio/vnd.wave", None)
                         if str(name).lower().endswith(".wav") else guess(name, *a, **k))
     data = wav()
-    task = post(api, "tasks", {"owner": "ops", "title": "Voice note", "body": "x", "private": True}, "ben-test")
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Voice note", "body": "x", "private": True}, "ben-test")
     tid = task["id"]
     by_json = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "private.wav",
                        "content_base64": base64.b64encode(data).decode()}, headers=headers("ben-test"))

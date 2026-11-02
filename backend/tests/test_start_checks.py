@@ -30,7 +30,7 @@ def employees(api, monkeypatch, token="ana-test"):
 
 def open_tasks(store, slug="ops"):
     with store.read_transaction() as c:
-        return H._rows(c.execute("SELECT * FROM tasks WHERE owner=? AND status IN ('open','doing') ORDER BY rowid",
+        return H._rows(c.execute("SELECT * FROM tasks WHERE owner_id=? AND status IN ('open','doing') ORDER BY rowid",
                                  ("bot:" + slug,)))
 
 
@@ -65,7 +65,7 @@ def counted_once(store, rows):
 def test_batched_counts_match_each_tasks_own_checks(api, monkeypatch):
     setup(api, monkeypatch, tasks=2)
     for n in range(2, 16):
-        post(api, "tasks", {"owner": "ops", "title": f"Review change {n}", "body": "Please review it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"Review change {n}", "body": "Please review it."})
     store = api.app.state.store
     by_title = {r["title"]: r["id"] for r in open_tasks(store)}
     flagged_titles = ("Review change 2", "Review change 3", "Review change 4", "Review change 5",
@@ -77,10 +77,10 @@ def test_batched_counts_match_each_tasks_own_checks(api, monkeypatch):
         c.execute("UPDATE tasks SET waiting_on='human:ben' WHERE id=?", (t[4],))
         c.execute("UPDATE tasks SET blocked_kind='manual', blocked_reason='Held for legal' WHERE id=?", (t[5],))
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (t[6],))
-        c.execute("INSERT INTO approvals(id,kind,task_id,decision,created) VALUES('ap-1','deploy',?,NULL,?)",
+        c.execute("INSERT INTO approvals(id,kind,task_id,decision,created_at) VALUES('ap-1','deploy',?,NULL,?)",
                   (t[7], H.now()))
         blocker = H.task_create(c, "human:ana", "Blocker", "Blocks it.", "human:ben")
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks',?)",
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
                   (blocker["id"], t[8], H.now()))
         H.task_ask(c, "bot:ops", t[9], "Which one?", park=False)
         H.task_create(c, "bot:ops", "Child", "Under it.", "human:ben", parent_id=t[10])
@@ -100,7 +100,7 @@ def test_counts_read_a_fixed_number_of_statements_however_many_open_tasks(api, m
     store = api.app.state.store
     small = counted(store, open_tasks(store))[1]
     for n in range(40):
-        post(api, "tasks", {"owner": "ops", "title": f"More {n}", "body": "Please review it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"More {n}", "body": "Please review it."})
     rows = open_tasks(store)
     assert len(rows) == 44
     got, big = counted(store, rows)
@@ -119,7 +119,7 @@ def test_employees_page_reads_no_more_statements_as_its_bots_open_tasks_grow(api
     employees(api, monkeypatch)                  # the first read warms the table checks each connection keeps
     _, small = employees(api, monkeypatch)
     for n in range(40):
-        post(api, "tasks", {"owner": "ops", "title": f"More {n}", "body": "Please review it."})
+        post(api, "tasks", {"owner_id": "ops", "title": f"More {n}", "body": "Please review it."})
     employees(api, monkeypatch)
     body, big = employees(api, monkeypatch)
     assert any(row.get("name") == "ops" for row in body if isinstance(row, dict))

@@ -53,7 +53,7 @@ def _read_from(c, viewer, thread):
     """Where this person's new messages start: (the last sequence number the threads migration carried over, when they
     joined this thread's tree). A person a thread never added, as on a company thread, has no join: "" passes all."""
     from . import threads
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (threads.MIGRATION_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (threads.MIGRATION_KEY,)).fetchone()
     carried = int((H._json(row[0], {}) or {}).get("seq") or 0) if row else 0
     root, names = thread.get("root_id") or thread["id"], viewer.member_names(c)
     joined = c.execute("SELECT MIN(created_at) FROM thread_members WHERE thread_id=? AND actor IN (%s)"
@@ -75,20 +75,20 @@ def transcript(c, viewer, thread, scope, me):
         where, args = "cv.path LIKE ?", [thread["path"] + "%"]
     carried, joined = _read_from(c, viewer, thread)
     rows = c.execute(
-        "SELECT m.id, m.conversation_id, m.seq, m.from_actor, m.body, m.created, m.refs_json FROM messages m "
+        "SELECT m.id, m.conversation_id, m.seq, m.sender_id, m.body, m.created_at, m.refs FROM messages m "
         "JOIN conversations cv ON cv.id=m.conversation_id "
         "LEFT JOIN thread_followers f ON f.thread_id=m.conversation_id AND f.actor=? "
-        f"WHERE {where} AND m.seq>MAX(COALESCE(f.last_read_seq, 0), ?) AND m.created>=? AND m.from_actor<>? "
+        f"WHERE {where} AND m.seq>MAX(COALESCE(f.last_read_seq, 0), ?) AND m.created_at>=? AND m.sender_id<>? "
         "AND m.kind IN ('say','ask','answer','notice') AND m.deleted_at IS NULL "
         "ORDER BY m.seq DESC LIMIT ?", [me, *args, carried, joined, me, SCAN_LIMIT]).fetchall()
     names, known = {}, viewer.known(c)
     kept, size, through, left_out = [], 0, 0, 0
     for row in rows:
-        refs = H._json(row["refs_json"], {}) or {}
+        refs = H._json(row["refs"], {}) or {}
         if any(key in refs for key in SYSTEM_REFS) or not threads.readable(c, viewer, row["id"]):
             continue
         through = max(through, row["seq"] or 0)
-        author = known.name(row["from_actor"], row["conversation_id"])
+        author = known.name(row["sender_id"], row["conversation_id"])
         line = f"{_name(c, author, names)}: {_clip(row['body'], LINE_CHARS)}"
         cost = len(line.encode("utf-8")) + 1
         if len(kept) >= MAX_MESSAGES or size + cost > MAX_BYTES:

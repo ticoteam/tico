@@ -23,8 +23,8 @@ const SHOTS = process.env.TASK_CODE_SHOTS || '';
 
 const now = new Date().toISOString();
 const worktreeError = 'This bot needs write access to the attached repository. Literal <b>diagnostic</b>: /workspace/' + 'nested-directory-'.repeat(24) + '/checkout';
-const task = (id, over = {}) => ({id, title: id, body: 'Details.', owner: 'bot:eng', requester: 'human:ana', status: 'doing',
-  lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 2, created: now, updated: now, ...over});
+const task = (id, over = {}) => ({id, title: id, body: 'Details.', owner_id: 'bot:eng', requester_id: 'human:ana', status: 'doing',
+  lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 2, created_at: now, updated_at: now, ...over});
 const pr = (id, number, title, over = {}) => ({id, kind: 'pr', repo: 'acme/web', number, url: `https://github.com/acme/web/pull/${number}`,
   title, state: 'open', checks: 'passing', mergeable: 'clean', review_state: null, pending_comments: 0, ...over});
 function fixtures() {
@@ -35,31 +35,31 @@ function fixtures() {
     links: [
       {id: 'w1', kind: 'worktree', url: 'worktree:9f2c1a', title: 'acme/web worktree', repo: 'acme/web', branch: 'tico/t-check-checkout',
        state: 'present', path: 'tasks/t-check/eng__web', computer_id: 'r1', number: null, checks: null,
-       detail_json: JSON.stringify({link_id: 'w1', state: 'present', branch: 'tico/t-check-checkout', ahead: 2, behind: 1, dirty_files: 3, last_commit: 'Add the summary step', size_mb: 41})},
+       detail: JSON.stringify({link_id: 'w1', state: 'present', branch: 'tico/t-check-checkout', ahead: 2, behind: 1, dirty_files: 3, last_commit: 'Add the summary step', size_mb: 41})},
       // No repo on the row: the folder (<bot>__<repo>) still names it.
       {id: 'w2', kind: 'worktree', url: 'worktree:77ab03', title: 'worktree', repo: null, branch: 'tico/t-check-api', state: 'unknown', path: 'tasks/t-check/api__payments-api',
-       detail_json: JSON.stringify({error: worktreeError})},
+       detail: JSON.stringify({error: worktreeError})},
       {id: 'w3', kind: 'worktree', url: 'worktree:0c11de', title: 'acme/docs worktree', repo: 'acme/docs', branch: 'tico/t-check-docs', state: 'removed',
-       detail_json: JSON.stringify({state: 'removed', ahead: 0, behind: 0, dirty_files: 0})},
+       detail: JSON.stringify({state: 'removed', ahead: 0, behind: 0, dirty_files: 0})},
       // Cleanup refused until it stopped retrying (backend/worktrees.py heartbeat): still present, Retry cleanup offered.
       {id: 'w4', kind: 'worktree', url: 'worktree:5e09aa', title: 'acme/web worktree', repo: 'acme/web', branch: 'tico/t-check-old', state: 'present',
-       detail_json: JSON.stringify({delete_requested: true, cleanup_requested: true, cleanup_attempts: 6, cleanup_gave_up: true,
+       detail: JSON.stringify({delete_requested: true, cleanup_requested: true, cleanup_attempts: 6, cleanup_gave_up: true,
          error: 'Worktree action failed; history kept. kept: ignored files'})},
       pr('p1', 212, 'Checkout summary step', {checks: 'failing', pending_comments: 2, review_state: 'changes_requested'}),
       pr('p2', 214, 'Price rounding', {checks: 'pending', mergeable: 'conflict'}),
       pr('p3', 198, 'Cart badge', {state: 'merged'}),
       {id: 'd1', kind: 'doc', url: 'https://docs.example.com/checkout', title: 'Checkout spec', state: 'open'},
       // Session rows as backend/hubdb.py writes them: a linked one (url session:<value>), then the owning bot's primary.
-      {id: 's2', kind: 'session', url: 'session:codex resume 019a2b', title: 'codex 019a2b', detail_json: JSON.stringify({primary: false, harness: 'codex', thread_id: '019a2b'})},
-      {id: 's0', kind: 'session', url: 'session:api/thread-old', title: 'api', detail_json: JSON.stringify({primary: false, harness: 'codex', thread_id: 'thread-old', bot: 'api'})},
-      {id: 's1', kind: 'session', url: 'session:eng/thread-abc', title: 'eng', detail_json: JSON.stringify({primary: true, harness: 'claude', thread_id: 'thread-abc', bot: 'eng'})},
+      {id: 's2', kind: 'session', url: 'session:codex resume 019a2b', title: 'codex 019a2b', detail: JSON.stringify({primary: false, harness: 'codex', thread_id: '019a2b'})},
+      {id: 's0', kind: 'session', url: 'session:api/thread-old', title: 'api', detail: JSON.stringify({primary: false, harness: 'codex', thread_id: 'thread-old', bot: 'api'})},
+      {id: 's1', kind: 'session', url: 'session:eng/thread-abc', title: 'eng', detail: JSON.stringify({primary: true, harness: 'claude', thread_id: 'thread-abc', bot: 'eng'})},
     ]});
-  const kid = (id, title, status, owner, pr_state = null, children = []) => ({id, title, status, owner, pr_state, children});
+  const kid = (id, title, status, owner, pr_state = null, children = []) => ({id, title, status, owner_id: owner, pr_state, children});
   const tree = [kid('k1', 'Summary step on web', 'review', 'bot:eng', 'failing', [kid('k1a', 'Copy for the summary', 'done', 'human:sam', 'merged')]),
     kid('k2', 'Rounding in the API', 'doing', 'bot:api', 'conflict'),
     kid('k3', 'Cart badge', 'done', 'bot:eng', 'merged'),
     kid('k4', 'Check the receipts email', 'open', 'human:sam')];
-  const plain = task('t-plain', {title: 'Book the team offsite', owner: 'human:ana'});
+  const plain = task('t-plain', {title: 'Book the team offsite', owner_id: 'human:ana'});
   const others = [task('t-review', {title: 'Review the pricing copy', pr_state: 'changes_requested'}),
     task('t-open', {title: 'Upgrade the image library', pr_state: 'open'}),
     task('t-none', {title: 'Write the release notes', pr_state: null})];
@@ -67,23 +67,23 @@ function fixtures() {
   const ago = s => new Date(Date.now() - s * 1000).toISOString();
   const runView = {task_id: 't-checkout', checkpoint: {text: 'Summary step built; receipts next.', at: ago(300), by: 'bot:eng'},
     attempts: [
-      {run: 'a2', bot: 'eng', job: 'j1', try: 2, tries: 2, state: 'running', outcome: null, created: ago(120), started: ago(118), finished: null,
+      {run: 'a2', bot: 'eng', job: 'j1', try: 2, tries: 2, state: 'running', outcome: null, created_at: ago(120), started_at: ago(118), finished_at: null,
        took_s: null, ran_on: {segments: [{model: 'claude-opus-5-5', effort: 'high'}],
          task_model: {source: 'fallback', note: "Ran on the bot's model claude-opus-5-5 (high): task model grok-4.6 (low) could not run (grok is not signed in on this bot's computer)"}},
        lease: [], reason: null, next: null,
        wake: {class: 'batched', reason: 'Review comments', preset: 'token_saver', preset_label: 'Token saver', held_until: ago(125)},
        subagents: [{id: 'g1', parent_id: null, type: 'general-purpose', model: null, status: 'completed', background: true, tool_uses: 3, duration_ms: 42000, running: false},
          {id: 'g2', parent_id: 'g1', type: 'Explore', model: 'claude-haiku-5-5', status: null, background: false, tool_uses: null, duration_ms: null, running: true}],
-       background: [{id: 'b1', tool: 'Bash', summary: 'npm', status: null, started: ago(60), ended: null, running: true},
-         {id: 'b2', tool: 'Monitor', summary: 'tail', status: 'completed', started: ago(90), ended: ago(80), running: false}]},
-      {run: 'a1', bot: 'eng', job: 'j1', try: 1, tries: 2, state: 'expired', outcome: 'interrupted', created: ago(900), started: ago(898), finished: ago(600),
+       background: [{id: 'b1', tool: 'Bash', summary: 'npm', status: null, started_at: ago(60), ended: null, running: true},
+         {id: 'b2', tool: 'Monitor', summary: 'tail', status: 'completed', started_at: ago(90), ended: ago(80), running: false}]},
+      {run: 'a1', bot: 'eng', job: 'j1', try: 1, tries: 2, state: 'expired', outcome: 'interrupted', created_at: ago(900), started_at: ago(898), finished_at: ago(600),
        took_s: 298, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [{kind: 'grace', at: ago(610)}],
        reason: 'Lease expired before completion', next: {kind: 'resumed', by: 'keeper', at: ago(130), note: 'Resumed automatically: it recorded no tool call.'},
        // Resumed by Tico, then the job ran try 2: the decision is history, with no state of the later try.
        job_state: 'running', decision: {decision: 'resume', attempt_id: 'a1', current: false, state: null, by: 'keeper', by_kind: 'tico',
          at: '2026-10-26T07:05:00Z', note: 'Resumed automatically: it recorded no tool call.'}, subagents: [], background: []},
       // The Dev 563 shape: cut at its time limit, then dismissed by BotOps with a note (job_recovery).
-      {run: 'a0', bot: 'eng', job: 'j0', try: 1, tries: 1, state: 'interrupted', outcome: 'interrupted', created: ago(5400), started: ago(5398), finished: ago(1800),
+      {run: 'a0', bot: 'eng', job: 'j0', try: 1, tries: 1, state: 'interrupted', outcome: 'interrupted', created_at: ago(5400), started_at: ago(5398), finished_at: ago(1800),
        took_s: 3598, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [], reason: 'Timeout: max_run_minutes (60 minutes)',
        next: {kind: 'dismissed', by: 'bot:botops', at: '2026-10-26T09:50:45.103088Z', note: 'Finished before the 60-min limit. Nothing to redo.'},
        job_state: 'cancelled', decision: {decision: 'dismiss', attempt_id: 'a0', current: true, state: 'cancelled', by: 'bot:botops', by_kind: 'botops',
@@ -96,15 +96,15 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   if (rich) {
     Object.assign(data.tasks[0], {body: 'Keep the old checkout behind a flag.\n\nVerify receipts in both flows.',
       note: 'The draft is checked; the rollout still needs a decision.', labels: ['checkout'], acceptance_criteria: ['Both flows send a receipt.']});
-    data.tasks.push(task('t-outward', {title: 'Choose the rollout day', owner: 'human:ben', requester: 'bot:eng', status: 'open'}),
-      task('t-finished', {title: 'Check the receipt wording', status: 'closed', requester: 'bot:eng', done_at: now, closed_at: now}),
-      ...data.tree.map(({children, ...t}) => task(t.id, {...t, relations: {parent: [{id: 't-checkout', title: 'Ship the checkout redesign', status: 'doing', owner: 'bot:eng', direction: 'out'}]}})));
-    data.comments = [{id: 'm1', kind: 'say', from_actor: 'bot:eng', body: 'The draft is checked.', created: now, refs: {task: 't-checkout', note: true}},
-      {id: 'm2', kind: 'ask', from_actor: 'bot:eng', body: 'Which rollout day?', created: now, answers: [], refs: {task: 't-checkout',
+    data.tasks.push(task('t-outward', {title: 'Choose the rollout day', owner_id: 'human:ben', requester_id: 'bot:eng', status: 'open'}),
+      task('t-finished', {title: 'Check the receipt wording', status: 'closed', requester_id: 'bot:eng', done_at: now, closed_at: now}),
+      ...data.tree.map(({children, ...t}) => task(t.id, {...t, relations: {parent: [{id: 't-checkout', title: 'Ship the checkout redesign', status: 'doing', owner_id: 'bot:eng', direction: 'out'}]}})));
+    data.comments = [{id: 'm1', kind: 'say', sender_id: 'bot:eng', body: 'The draft is checked.', created_at: now, refs: {task: 't-checkout', note: true}},
+      {id: 'm2', kind: 'ask', sender_id: 'bot:eng', body: 'Which rollout day?', created_at: now, answers: [], refs: {task: 't-checkout',
         questions: [{id: 'day', question: 'Which rollout day?', options: [{label: 'Tuesday'}, {label: 'Thursday'}], multi: true, other: true}]}}];
     data.events = [{id: 'e1', ts: now, actor: 'bot:eng', field: 'status', old: 'open', new: 'doing', note: 'The draft is checked.'}];
     data.files = [{id: 'f-notes', name: 'review.md', mime: 'text/markdown', current_version: 2, archived: false,
-      versions: [2, 1].map(n => ({n, size: 48, mime: 'text/markdown', created: now, by: 'bot:eng',
+      versions: [2, 1].map(n => ({n, size: 48, mime: 'text/markdown', created_at: now, by: 'bot:eng',
         url: `/api/v2/files/f-notes?v=${n}`, answers: []}))}];
   }
   const page = await browser.newPage({viewport, hasTouch: viewport.width <= 390, serviceWorkers: 'block'});
@@ -113,7 +113,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
   const me = {id: 'ana', name: 'Ana', email: 'ana@example.com', role: 'owner', mover, cloud: true, registered: true};
   const bots = [['eng', 'Engineer'], ['api', 'API Engineer'], ['botops', 'BotOps']].map(([name, display_name]) =>
-    ({name, display_name, host: 'keeper', status: 'active', state: 'active', can_chat: true, operator: 'ana', can_manage: true,
+    ({name, display_name, host: 'keeper', status: 'active', state: 'active', can_chat: true, owner_id: 'ana', can_manage: true,
       users: [{id: 'ana', name: 'Ana'}], my_access: {see: true, read: true, write: true}}));
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
@@ -138,23 +138,23 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       const owner = url.searchParams.get('owner');
       // List rows leave out the links' detail_json (and pr_sha), as backend/app.py lists do; the detail has them.
       const requester = url.searchParams.get('requester');
-      const rows = (owner ? data.tasks.filter(t => t.owner === (owner.includes(':') ? owner : 'bot:' + owner)) : requester ? data.tasks.filter(t => t.requester === 'bot:' + requester) : data.tasks)
-        .map(t => ({...t, links: (t.links || []).map(({detail_json, pr_sha, ...l}) => l)}));
+      const rows = (owner ? data.tasks.filter(t => t.owner_id === (owner.includes(':') ? owner : 'bot:' + owner)) : requester ? data.tasks.filter(t => t.requester_id === 'bot:' + requester) : data.tasks)
+        .map(t => ({...t, links: (t.links || []).map(({detail: detail_json, pr_sha, ...l}) => l)}));
       return json({tasks: rows, next_offset: null});
     }
     // The default sidebar (backend/bot_task_tabs.py): Assigned to Others is a filter tab the server counts.
     if (/^\/api\/v2\/bots\/[^/]+\/task-tabs$/.test(p)) return json({tabs: [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name: 'Doing'},
       {builtin: 'blocked', name: 'Blocked'}, {builtin: 'done', name: 'Done Recently'}, {name: 'Assigned to Others', conditions: []}], widgets: null, can_edit: false});
     if (/^\/api\/v2\/bots\/[^/]+\/task-tabs\/tasks$/.test(p)) {
-      const others = data.tasks.filter(t => t.requester === 'bot:eng' && !['human:ana', 'bot:eng'].includes(t.owner) && ['open', 'doing', 'waiting'].includes(t.status));
+      const others = data.tasks.filter(t => t.requester_id === 'bot:eng' && !['human:ana', 'bot:eng'].includes(t.owner_id) && ['open', 'doing', 'waiting'].includes(t.status));
       return json({tabs: [{key: 'c4', name: 'Assigned to Others', count: others.length, ids: others.map(t => t.id)}], tasks: others});
     }
     if (p === '/api/v2/tasks' && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});
-      const owner = body.owner.includes(':') ? body.owner : 'bot:' + body.owner;
+      const owner = body.owner_id.includes(':') ? body.owner_id : 'bot:' + body.owner_id;
       const up = (body.relations || []).find(r => r.kind === 'parent');
-      const made = task('k5', {title: body.title, owner, status: 'open', relations: up ? {parent: [{id: up.task, direction: 'out'}]} : {}});
-      data.tree.push({id: 'k5', title: body.title, status: 'open', owner, pr_state: null, children: []});
+      const made = task('k5', {title: body.title, owner_id: owner, status: 'open', relations: up ? {parent: [{id: up.task, direction: 'out'}]} : {}});
+      data.tree.push({id: 'k5', title: body.title, status: 'open', owner_id: owner, pr_state: null, children: []});
       data.tasks[0].children_summary = {...data.tasks[0].children_summary, total: 11, open: 7, direct_total: 5};
       return json({task: made});
     }
@@ -165,7 +165,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (links && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});
       const t = data.tasks.find(x => x.id === links[1]);
-      t.links.push({id: 's' + t.links.length, kind: body.kind || 'url', url: 'session:' + body.url, title: body.url, detail_json: '{"primary":false}'});
+      t.links.push({id: 's' + t.links.length, kind: body.kind || 'url', url: 'session:' + body.url, title: body.url, detail: '{"primary":false}'});
       return json({links: t.links});
     }
     const link = p.match(/^\/api\/v2\/tasks\/([^/]+)\/links\/([^/]+)$/);
@@ -192,7 +192,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (rich && p === '/api/v2/files/f-notes') return route.fulfill({contentType: 'text/markdown', body: '# Review\n\nReceipt check version ' + url.searchParams.get('v') + '.'});
     if (rich && p.endsWith('/comments') && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});
-      data.comments.push({id: 'm3', kind: 'say', from_actor: 'human:ana', body: body.text, created: now, refs: {task: 't-checkout'}});
+      data.comments.push({id: 'm3', kind: 'say', sender_id: 'human:ana', body: body.text, created_at: now, refs: {task: 't-checkout'}});
       return json({woke: true});
     }
     return json(unrouted(p));
@@ -265,10 +265,10 @@ async function desktop(browser) {
   // Not offered on a removed worktree, nor on a released one of an open task (its cleanup resumes once work is saved),
   // nor when the flag is only truthy.
   const offered = await page.evaluate(() => [
-    {state: 'removed', detail_json: JSON.stringify({cleanup_gave_up: true})},
-    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: true, release_requested: true})},
-    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: 'true'})},
-    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: true})},
+    {state: 'removed', detail: JSON.stringify({cleanup_gave_up: true})},
+    {state: 'present', detail: JSON.stringify({cleanup_gave_up: true, release_requested: true})},
+    {state: 'present', detail: JSON.stringify({cleanup_gave_up: 'true'})},
+    {state: 'present', detail: JSON.stringify({cleanup_gave_up: true})},
   ].map(l => taskCodeLineHTML({id: 'w9', kind: 'worktree', url: 'worktree:9', repo: 'acme/web', branch: 'tico/x', ...l}, true).includes('data-code-retry')));
   assert.deepEqual(offered, [false, false, false, true]);
   assert.equal(await rail.locator('.code-line[data-code-link="p1"] .code-chip[aria-label="Checks failing"]').count(), 1, 'a glyph chip has words');
@@ -363,7 +363,7 @@ async function desktop(browser) {
   const add = form.locator('input[name=title]');
   await add.fill('Check the receipts in the app'); await add.press('Enter');
   await rail.locator('.sub-row[data-sub="k5"]').waitFor();
-  assert.deepEqual(writes.at(-1), {method: 'POST', p: '/api/v2/tasks', body: {title: 'Check the receipts in the app', body: 'Check the receipts in the app', owner: 'api', relations: [{task: 't-checkout', kind: 'parent'}]}});
+  assert.deepEqual(writes.at(-1), {method: 'POST', p: '/api/v2/tasks', body: {title: 'Check the receipts in the app', body: 'Check the receipts in the app', owner_id: 'api', relations: [{task: 't-checkout', kind: 'parent'}]}});
   assert.equal(await rail.locator('#task-subs-h .cnt').innerText(), '5');
   assert.equal(await form.locator('input[name=owner]').inputValue(), 'api', 'the pick stays for the next one');
   assert.equal(await page.evaluate(() => document.activeElement?.name), 'title', 'ready for the next subtask');
@@ -593,10 +593,10 @@ async function botDetail(browser) {
     const historyNotes = await manager.page.evaluate(() => {
       const ts = new Date().toISOString(), note = 'Receipt check complete.';
       const events = ['done', 'closed'].map((status, i) => ({kind: 'event', ts, actor: 'bot:eng', field: 'status', old: i ? 'done' : 'doing', new: status, note}));
-      const comment = {kind: 'comment', ts, message: {from_actor: 'bot:eng', body: note, kind: 'say', created: ts, refs: {}}};
+      const comment = {kind: 'comment', ts, message: {sender_id: 'bot:eng', body: note, kind: 'say', created_at: ts, refs: {}}};
       const all = [...events, comment];
       return {html: all.map((x, i) => commentLineHTML(x, i, all)).join(''),
-        otherActor: commentLineHTML(events[0], 0, [events[0], {...comment, message: {...comment.message, from_actor: 'human:ana'}}]),
+        otherActor: commentLineHTML(events[0], 0, [events[0], {...comment, message: {...comment.message, sender_id: 'human:ana'}}]),
         later: commentLineHTML(events[0], 0, [events[0], {...comment, ts: new Date(Date.parse(ts) + 6000).toISOString()}])};
     });
     assert.match(historyNotes.html, /moved it to Done/); assert.match(historyNotes.html, /moved it to Closed/);

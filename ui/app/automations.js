@@ -288,7 +288,7 @@ function auDrawHead() {
   const name = a?.name || row?.name || '';
   const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
   hd.innerHTML = `<h2 class="au-name">${esc(name)}</h2>
-    ${a ? `<span class="au-own" title="${esc(auActorName(a.owner))}">${personCircle(auActorName(a.owner), 18)}<span class="au-own-n">${esc(auActorName(a.owner))}</span></span>
+    ${a ? `<span class="au-own" title="${esc(auActorName(a.owner_id))}">${personCircle(auActorName(a.owner_id), 18)}<span class="au-own-n">${esc(auActorName(a.owner_id))}</span></span>
     <span class="au-sp"></span>
     <div class="au-hd2">
       ${auHeadSwitch(a, name)}

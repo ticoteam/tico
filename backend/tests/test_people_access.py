@@ -11,7 +11,7 @@ def person_headers(api, pid):
     """A personal API token: its role is decided by the person's email, as a browser's is."""
     secret = "tok-" + pid + "-" + uuid.uuid4().hex
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) VALUES(?,?,?,?,?,?)",
                   (uuid.uuid4().hex, pid, "test", digest(secret), H.now(), "test"))
     return {"Authorization": "Bearer " + secret, "Idempotency-Key": str(uuid.uuid4())}
 
@@ -52,7 +52,7 @@ def test_only_owners_and_admins_read_access_and_only_the_owner_changes_who_signs
     call(api, "PUT", "/allow", {"allowed": [], "allowed_domains": ["acme.example"]}, riley, expected=403)
     call(api, "POST", "/owner", {"person": "riley", "confirm": True}, riley, expected=403)
     call(api, "POST", "/people/quinn", {"role": "admin"}, riley, expected=403)         # only an owner makes admins
-    assert view(api)["owner"]["email"] == OWNER_EMAIL
+    assert view(api)["owner_id"]["email"] == OWNER_EMAIL
 
 
 def test_transfer_changes_who_is_owner_at_once_and_the_old_owner_loses_owner_routes(environment):
@@ -60,7 +60,7 @@ def test_transfer_changes_who_is_owner_at_once_and_the_old_owner_loses_owner_rou
     old, new = person_headers(api, "morgan"), person_headers(api, "riley")
     before = view(api, old)
     result = transfer(api, "riley", previous_owner_bot_admin=True, headers=old)
-    assert result["owner"] == "riley@acme.example" and result["revision"] == before["owner"]["revision"] + 1
+    assert result["owner_id"] == "riley@acme.example" and result["revision"] == before["owner_id"]["revision"] + 1
     # No restart: the very next requests already see the new owner.
     view(api, new)
     view(api, old)                          # an admin now: may look, but the owner routes are the owner's
@@ -68,15 +68,15 @@ def test_transfer_changes_who_is_owner_at_once_and_the_old_owner_loses_owner_rou
     call(api, "PUT", "/allow", {"allowed": [], "allowed_domains": ["acme.example"]}, old, expected=403)
     assert api.get("/api/v2/config", headers=signed_in()).json()["owner_email"] == "riley@acme.example"
     after = view(api, new)
-    assert after["owner"]["person"] == "riley"
+    assert after["owner_id"]["person"] == "riley"
     morgan = next(p for p in after["people"] if p["id"] == "morgan")
-    assert not morgan["owner"] and morgan["bot_admin"]
+    assert not morgan["owner_id"] and morgan["bot_admin"]
     auth = api.app.state.auth
     assert auth.bot_admin(Identity("human:morgan", "human", OWNER_EMAIL)) and auth.owner_email == "riley@acme.example"
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT actor,target,detail_json FROM events WHERE action='owner.transferred'").fetchall()
+        events = c.execute("SELECT actor,target,detail FROM events WHERE action='owner.transferred'").fetchall()
     assert len(events) == 1 and events[0]["actor"] == "human:morgan" and events[0]["target"] == "riley"
-    assert "riley@acme.example" in events[0]["detail_json"]
+    assert "riley@acme.example" in events[0]["detail"]
 
 
 def test_a_person_who_left_loses_their_tokens_and_cannot_sign_in(environment):
@@ -109,7 +109,7 @@ def test_allow_list_changes_take_effect_without_a_restart(environment):
     assert api.get("/api/v2/tasks", headers=stranger).status_code == 200
     assert api.get("/api/v2/me", headers=colleague).json()["role"] == "human"
     ids = {p["email"]: p for p in view(api)["people"]}
-    assert set(ids) >= {"sam@partner.example", "kim@acme.example"} and not ids["kim@acme.example"]["owner"]
+    assert set(ids) >= {"sam@partner.example", "kim@acme.example"} and not ids["kim@acme.example"]["owner_id"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='person.joined'").fetchone()[0] == 2
     # Narrowing the list stops new people; those already on the roster stay until marked as left.

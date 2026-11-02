@@ -57,12 +57,12 @@ def _tasks(c, auth, who, attrs, base):
     clauses, args = ["status='waiting'", "waiting_on=?", "(snoozed_until IS NULL OR snoozed_until<=?)",
                      "(" + auth.task_sql(c, who) + ")"], [who.actor, H.now()]
     if attrs.get("bot"):
-        clauses.append("owner=?")
+        clauses.append("owner_id=?")
         args.append("bot:" + attrs["bot"])
     if attrs.get("parent"):
         clauses.append("parent_id=?")
         args.append(attrs["parent"])
-    rows = c.execute("SELECT id,title FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY created LIMIT ?",
+    rows = c.execute("SELECT id,title FROM tasks WHERE " + " AND ".join(clauses) + " ORDER BY created_at LIMIT ?",
                      (*args, _limit(attrs.get("limit")))).fetchall()
     if not rows:
         return '<p class="tico-live-empty">Nothing waiting on you</p>'

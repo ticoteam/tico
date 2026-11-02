@@ -684,7 +684,7 @@ def test_reopen_just_before_remove_defers_and_per_bot_lock_blocks_turn(trees):
         saved['task_status'] = 'open'
         saved['state'] = 'removed'
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            with manager.bot_lock(row['owner']):
+            with manager.bot_lock(row['owner_id']):
                 pool.submit(manager.sync, [{**row, 'action': 'restore'}]).result(timeout=3)
                 assert not path.exists()
         manager.sync([{**row, 'action': 'restore'}])

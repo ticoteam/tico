@@ -154,7 +154,7 @@ def hub(tmp_path):
             "default_user": "ana", "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
             "people": PEOPLE}),))
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,team,operator,description,reports_to) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
                       (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
     return store
 
@@ -194,7 +194,7 @@ def events(hub):
 
 
 def jobs(hub):
-    return rows(hub, "SELECT bot,state FROM jobs ORDER BY created")
+    return rows(hub, "SELECT bot_id,state FROM jobs ORDER BY created_at")
 
 
 def send(gateway, text, judge_answer=None, **kw):
@@ -318,7 +318,7 @@ def test_a_direct_message_the_org_rules_hold_reaches_no_bot_until_the_hold_is_se
                                          "with": {}, "if_broken": "block"})
     gateway._judge = BothJudges(Judge(hub), gateway.engine)
     send(gateway, "The favorite color is teal", judge_answer=answers(legal=0.9), channel=DM, kind="message")
-    assert rows(hub, "SELECT id FROM messages WHERE from_actor='human:ana'") == []
+    assert rows(hub, "SELECT id FROM messages WHERE sender_id='human:ana'") == []
     assert len(rows(hub, "SELECT id FROM org_rule_holds")) == 1
 
 
@@ -337,19 +337,19 @@ def test_a_persons_new_thread_to_a_bot_held_since_the_roster_was_read_is_kept_an
     result = send(gateway, "please review the vendor terms", judge_answer=hold, channel=DM, kind="message")
     assert result["state"] == "routed", result
     (kept,) = result["decision"]["delivered"]
-    assert kept["bot"] == "legal" and kept["opened"] and result["decision"]["dropped"] == []
+    assert kept["bot_id"] == "legal" and kept["opened"] and result["decision"]["dropped"] == []
     assert "Your message is kept for when it is back" in kept["held"]
     assert ("until about" if held == "quarantined" else "until a person resumes it") in kept["held"]
     assert [p["text"] for p in gateway.slack.posts] == [kept["held"]] and gateway.slack.posts[0]["channel"] == DM
     message = rows(hub, "SELECT * FROM messages WHERE id=?", kept["message_id"])[0]
-    assert (message["from_actor"], message["to_actor"], message["body"]) == ("human:ana", "bot:legal",
+    assert (message["sender_id"], message["recipient_id"], message["body"]) == ("human:ana", "bot:legal",
                                                                              "please review the vendor terms")
-    assert rows(hub, "SELECT bot,state FROM jobs WHERE message_id=?", kept["message_id"]) == [{"bot": "legal", "state": "queued"}]
+    assert rows(hub, "SELECT bot_id,state FROM jobs WHERE message_id=?", kept["message_id"]) == [{"bot_id": "legal", "state": "queued"}]
     # Nothing else woke up for it, and it is not sent again: the assistant got nothing, one job waits for Legal.
-    assert jobs(hub) == [{"bot": "legal", "state": "queued"}]
+    assert jobs(hub) == [{"bot_id": "legal", "state": "queued"}]
     with hub.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug='legal'")
-    assert gateway.tick()["events"] == [] and jobs(hub) == [{"bot": "legal", "state": "queued"}]
+    assert gateway.tick()["events"] == [] and jobs(hub) == [{"bot_id": "legal", "state": "queued"}]
 
 
 def test_a_new_thread_to_a_bot_that_is_gone_is_still_dropped_and_the_assistant_asks(gateway, hub):
@@ -377,8 +377,8 @@ def test_a_post_is_attempted_once_and_a_crash_between_send_and_record_is_uncerta
         c.execute("UPDATE slack_posts SET state='ready' WHERE message_id=?", (mid,))
     slack.failures.append(G.SlackError("chat.postMessage", "ratelimited", retry_after=5))
     gateway.tick()
-    post = rows(hub, "SELECT state,attempts,next_attempt FROM slack_posts")[0]
-    assert post["state"] == "rate_limited" and post["attempts"] == 2 and post["next_attempt"] > clock()
+    post = rows(hub, "SELECT state,attempts,next_attempt_at FROM slack_posts")[0]
+    assert post["state"] == "rate_limited" and post["attempts"] == 2 and post["next_attempt_at"] > clock()
     gateway.tick()
     assert rows(hub, "SELECT attempts FROM slack_posts")[0]["attempts"] == 2, "not before Retry-After"
     clock.advance(6)
@@ -389,7 +389,7 @@ def test_a_post_is_attempted_once_and_a_crash_between_send_and_record_is_uncerta
         H.say(c, "bot:legal", "human:ana", "One more thing.", conversation_id=rows(hub, "SELECT conversation_id FROM slack_threads")[0]["conversation_id"])
     slack.failures.append(G.SlackError("chat.postMessage", "channel_not_found"))
     gateway.tick()
-    assert [p["state"] for p in rows(hub, "SELECT state FROM slack_posts ORDER BY created")] == ["sent", "failed"]
+    assert [p["state"] for p in rows(hub, "SELECT state FROM slack_posts ORDER BY created_at")] == ["sent", "failed"]
     gateway.tick()
     assert len(slack.posts) == 1
 
@@ -447,7 +447,7 @@ channels:
             "default_user": "ana", "teams": {"marketing": {"root": "cmo"}, "engineering": {"root": "cto"}},
             "people": PEOPLE}),))
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,team,operator,description,reports_to) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
                       (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
     slack, engine, clock = FakeSlack(), FakeJudge(), Clock()
     gw = G.Gateway(store, slack, judge_engine=engine, clock=clock)
@@ -468,8 +468,8 @@ def channel_message(text, channel=MARKETING, user="U1", thread_ts=None, subtype=
 
 
 def digests(hub):
-    return rows(hub, "SELECT d.reader,d.count,d.skipped,d.channels_json,m.body,m.refs_json,m.from_actor,m.to_actor "
-                     "FROM slack_digests d JOIN messages m ON m.id=d.message_id ORDER BY d.created, d.reader")
+    return rows(hub, "SELECT d.reader,d.count,d.skipped,d.channels,m.body,m.refs,m.sender_id,m.recipient_id "
+                     "FROM slack_digests d JOIN messages m ON m.id=d.message_id ORDER BY d.created_at, d.reader")
 
 
 def cursors(hub):
@@ -491,16 +491,16 @@ def test_a_channel_message_is_stored_and_reaches_the_readers_once_on_the_hourly_
     sent = digests(hub)
     assert [d["reader"] for d in sent] == ["cmo", "cto", "seo"]
     cmo = sent[0]
-    assert cmo["from_actor"] == "keeper" and cmo["to_actor"] == "bot:cmo"
+    assert cmo["sender_id"] == "keeper" and cmo["recipient_id"] == "bot:cmo"
     assert "## #marketing — Marketing work log." in cmo["body"] and "Ana Rivera: Launch copy is ready for review" in cmo["body"]
     assert "Deploy 4.2" not in cmo["body"] and "Nobody reads this" not in cmo["body"]
     assert "Ben: Deploy 4.2 went out" in sent[1]["body"]
-    refs = json.loads(cmo["refs_json"])["slack"]
+    refs = json.loads(cmo["refs"])["slack"]
     assert refs["channel_name"] == "#marketing" and refs["permalink"] == f"https://acme.slack.com/archives/{MARKETING}"
     assert refs["digest"]["count"] == 1 and len(refs["digest"]["event_ids"]) == 1
     assert [j["bot"] for j in jobs(hub)] == ["cmo", "cto", "seo"], "each reader gets one turn"
-    assert rows(hub, "SELECT subject,scope,participants_json FROM conversations ORDER BY created")[0] == {
-        "subject": "Slack channels", "scope": "direct", "participants_json": '["keeper", "bot:cmo"]'}
+    assert rows(hub, "SELECT subject,scope,participants FROM conversations ORDER BY created_at")[0] == {
+        "subject": "Slack channels", "scope": "direct", "participants": '["keeper", "bot:cmo"]'}
     # The cursors moved with the delivery; nothing new means nothing sent and no turn.
     gw.clock.advance(3600)
     assert [d["state"] for d in gw.tick()["digests"]] == ["nothing"] * 3
@@ -621,9 +621,9 @@ def test_task_results_are_one_tico_dm_per_task_status(gateway, hub):
 def test_a_muted_bot_stays_in_tico_unless_the_person_is_talking_to_it_in_slack(gateway, hub):
     link_task_requester(hub)
     with hub.transaction() as c:
-        raw = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         raw["people"] = [{**p, "slack_muted_bots": ["legal"]} if p["id"] == "ana" else p for p in raw["people"]]
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(raw),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(raw),))
     # Ana asked Legal from Slack, so everything Legal says in that conversation still goes back there.
     answer = routed_reply(gateway, hub)
     thread = rows(hub, "SELECT * FROM slack_threads")[0]
@@ -634,7 +634,7 @@ def test_a_muted_bot_stays_in_tico_unless_the_person_is_talking_to_it_in_slack(g
     gateway.mirror()
     with hub.transaction() as c:
         # Days later, Legal's unprompted digest lands in the same chat; Ana is no longer talking there.
-        c.execute("UPDATE messages SET created=? WHERE conversation_id=? AND from_actor='human:ana'",
+        c.execute("UPDATE messages SET created_at=? WHERE conversation_id=? AND sender_id='human:ana'",
                   (H.shift(H.now(), days=-2), thread["conversation_id"]))
         muted = H.say(c, "bot:legal", "human:ana", "Weekly contract digest.", conversation_id=thread["conversation_id"])["id"]
     gateway.originate()
@@ -659,10 +659,10 @@ def test_routing_counts_against_the_senders_daily_cap_and_over_it_the_assistant_
     first = send(gateway, "please review the vendor terms", judge_answer=answers(legal=0.9), channel=DM,
                  kind="message", user="U2")
     assert first["state"] == "routed"
-    audit = rows(hub, "SELECT actor,target,detail_json FROM events WHERE action='judge.call'")
+    audit = rows(hub, "SELECT actor,target,detail FROM events WHERE action='judge.call'")
     assert [(r["actor"], r["target"]) for r in audit] == [("human:ben", G.JUDGE_LABEL)]
-    assert json.loads(audit[0]["detail_json"])["via"] == "slack" and "vendor" not in audit[0]["detail_json"]
-    kept = json.loads(audit[0]["detail_json"])["answers"]
+    assert json.loads(audit[0]["detail"])["via"] == "slack" and "vendor" not in audit[0]["detail"]
+    kept = json.loads(audit[0]["detail"])["answers"]
     assert kept["bot:legal"] == {"type": "noul", "value": 0.9, "confidence": 0.8}
     assert kept["asks"] == {"type": "noul", "value": 0.9, "confidence": 0.8}
     from backend.decide_readout import readout
@@ -824,7 +824,7 @@ def test_a_slack_thread_reply_links_to_its_own_room_not_the_bots_usual_chat(gate
         usual = H.say(c, "human:ana", "bot:legal", "Hi Legal.")["conversation_id"]
     first = routed_reply(gateway, hub)
     send(gateway, "<@U0BUS6WA4SY> Legal, another thing?", answers(legal=0.9))
-    threads = [r["conversation_id"] for r in rows(hub, "SELECT * FROM slack_threads ORDER BY created")]
+    threads = [r["conversation_id"] for r in rows(hub, "SELECT * FROM slack_threads ORDER BY created_at")]
     assert len(set(threads + [usual])) == 3
     with hub.transaction() as c:
         reply = H.say(c, "bot:legal", "human:ana", "The chart.", conversation_id=threads[0], in_reply_to=first,
@@ -885,12 +885,12 @@ def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_aft
     monkeypatch.setattr(automations, "on_slack", lambda c, event, person, channel, settings=None: (
         heard.append((event["text"], person["id"], channel["name"])) or ["run_1"]))
     with hub.transaction() as c:
-        c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('redesign',?)", ('{"enabled": true}',))
+        c.execute("INSERT INTO registry_metadata(key,value) VALUES('redesign',?)", ('{"enabled": true}',))
     assert gw.receive(channel_message("Before the automation")) == "stored"
     gw.clock.advance(60)
     with hub.transaction() as c:
-        c.execute("INSERT INTO automations(id,name,owner,grp,trigger_type,enabled,builtin,flow_json,version,created,"
-                  "created_by,updated) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
+        c.execute("INSERT INTO automations(id,name,owner_id,group_id,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by_id,updated_at) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
                   ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()))
     gw.clock.advance(60)
     assert gw.receive(channel_message("After the automation")) == "stored"
@@ -900,10 +900,10 @@ def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_aft
     assert heard == [("After the automation", "ana", "#marketing")]
     gw.clock.advance(60)
     assert gw.tick()["events"] == [] and len(heard) == 1, "offered once, never again"
-    states = rows(hub, "SELECT text,state,processed FROM slack_events ORDER BY received")
+    states = rows(hub, "SELECT text,state,processed_at FROM slack_events ORDER BY received_at")
     assert [s["state"] for s in states] == ["stored", "stored"], "the readers keep the row as it was"
-    assert states[0]["processed"] is None, "the backlog is not offered"
-    assert states[1]["processed"] is not None
+    assert states[0]["processed_at"] is None, "the backlog is not offered"
+    assert states[1]["processed_at"] is not None
 
 
 def test_a_linked_channel_is_left_out_of_the_readers_pass_its_backfill_its_digest_and_its_automations(readers, monkeypatch):
@@ -915,9 +915,9 @@ def test_a_linked_channel_is_left_out_of_the_readers_pass_its_backfill_its_diges
     monkeypatch.setattr(automations, "on_slack", lambda c, event, person, channel, settings=None: (
         heard.append(event["text"]) or ["run_1"]))
     with hub.transaction() as c:
-        c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('redesign',?)", ('{"enabled": true}',))
-        c.execute("INSERT INTO automations(id,name,owner,grp,trigger_type,enabled,builtin,flow_json,version,created,"
-                  "created_by,updated) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
+        c.execute("INSERT INTO registry_metadata(key,value) VALUES('redesign',?)", ('{"enabled": true}',))
+        c.execute("INSERT INTO automations(id,name,owner_id,group_id,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by_id,updated_at) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
                   ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()))
     gw.clock.advance(60)
     assert gw.receive(channel_message("Control message")) == "stored"
@@ -926,7 +926,7 @@ def test_a_linked_channel_is_left_out_of_the_readers_pass_its_backfill_its_diges
     gw.clock.advance(60)
     assert gw.receive(channel_message("Stored before the link")) == "stored"
     with hub.transaction() as c:
-        c.execute("INSERT INTO conversations (id,kind,subject,created,audience,root_id,path) "
+        c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) "
                   "VALUES ('T-link','thread','Marketing','x','company','T-link','')")
         c.execute("INSERT INTO slack_thread_links (id,thread_id,channel_ref,channel_id,channel_name,audience,state,"
                   "linked_by,created_at,updated_at) VALUES ('L1','T-link',?,?,'marketing','company','active','ana','x','x')",
@@ -953,7 +953,7 @@ def test_a_queued_slack_copy_to_someone_removed_from_the_thread_is_not_sent(gate
     slack, clock = gateway.slack, gateway.clock
 
     def queue(mid):
-        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated,recipient_actor) "
+        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
                   "VALUES(?,?,'','legal',?,'ready',?,?,'human:ben')", (mid, "D0U2", "copy", clock(), clock()))
 
     with hub.transaction() as c:
@@ -984,9 +984,9 @@ def test_a_copy_to_ben_never_reuses_another_members_slack_dm(gateway, hub):
     with hub.transaction() as c:
         tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])["id"]
         c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,user_id,event_type,"
-                  "text,received,state,actor) VALUES('ev-cara',?,'D0CARA','im','','','1','U5','message','hi',?,'routed',"
+                  "text,received_at,state,actor) VALUES('ev-cara',?,'D0CARA','im','','','1','U5','message','hi',?,'routed',"
                   "'human:cara')", (TEAM, "2000-01-01T00:00:00Z"))
-        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed,recipient_actor) "
+        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at,recipient_actor) "
                   "VALUES('D0CARA','','legal',?,'2000-01-01T00:00:00Z',NULL,'human:cara')", (tid,))
         dm_copy = threads.post(c, "bot:legal", tid, "Ben, the draft.", kind="say", to_actor="human:ben")["id"]
     gateway.mirror()
@@ -996,7 +996,7 @@ def test_a_copy_to_ben_never_reuses_another_members_slack_dm(gateway, hub):
 
     with hub.transaction() as c:
         channel_tid = threads.create(c, "human:ana", title="Shared", audience="members", members=["human:ben"])["id"]
-        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed) "
+        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) "
                   "VALUES(?,'','legal',?,'2000-01-01T00:00:00Z',NULL)", (MARKETING, channel_tid))
         shared = threads.post(c, "bot:legal", channel_tid, "Team, the draft.", kind="say", to_actor="human:ben")["id"]
     gateway.mirror()
@@ -1056,12 +1056,12 @@ def test_a_dm_mapping_from_before_the_column_takes_only_a_person_its_verified_me
         tid = threads.create(c, "human:ana", title="Old", audience="members", members=["human:ben"])["id"]
         other = threads.create(c, "human:ana", title="Older", audience="members", members=["human:cara"])["id"]
         for channel, conversation, actors in (("D0ONE", tid, ["human:ben"]), ("D0TWO", other, ["human:ben", "human:cara"])):
-            c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed) "
+            c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) "
                       "VALUES(?,'','legal',?,'2000-01-01T00:00:00Z',NULL)", (channel, conversation))
             c.execute("UPDATE slack_threads SET recipient_actor=NULL WHERE channel=?", (channel,))
             for n, actor in enumerate(actors):
                 c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,user_id,"
-                          "event_type,text,received,state,actor) VALUES(?,?,?,'im','','',?,'U1','message','hi',"
+                          "event_type,text,received_at,state,actor) VALUES(?,?,?,'im','','',?,'U1','message','hi',"
                           "'2000-01-01T00:00:00Z','routed',?)", (f"{channel}-{n}", TEAM, channel, f"{n + 1}.0", actor))
     hub.initialize()
     found = dict((r["channel"], r["recipient_actor"]) for r in rows(hub, "SELECT channel,recipient_actor FROM slack_threads "

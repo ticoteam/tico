@@ -89,7 +89,7 @@ def automations(world):
             otherwise={"steps": [_node("o", "action", do="note", args={"text": "Unsure"})]})]), "Route mail")
     # Not through automation(): it puts an empty Filter in a flow given no steps, and this one starts empty.
     _ok(world.api("post", "/api/v2/automations", {
-        "name": "Weekly digest", "owner": DANA_REF, "enabled": True, "builtin": False,
+        "name": "Weekly digest", "owner_id": DANA_REF, "enabled": True, "builtin": False,
         "trigger": {"type": "schedule", "cron": "0 8 * * 1", "tz": "UTC"}, "steps": []}, who=DANA), "Weekly digest")
     _ok(automation(world, "Standup notes", PRIYA_REF, who=PRIYA,
                    trigger={"type": "schedule", "cron": "0 9 * * 1-5", "tz": "UTC"},
@@ -175,12 +175,12 @@ def pages(world):
     # Written as the harness writes the bots' other fields: the definition route refuses the reports_to it set by hand.
     with world.store.transaction() as c:
         c.execute("UPDATE bots SET display_name='Engineering Lead' WHERE slug='engineering-lead'")
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='engineering-lead'").fetchone()[0]
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='engineering-lead'").fetchone()[0]
                             or "{}")
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='engineering-lead'",
+        c.execute("UPDATE bot_config SET config=? WHERE bot='engineering-lead'",
                   (json.dumps({**config, "display_name": "Engineering Lead"}),))
     made = _ok(world.api("post", "/api/v2/tasks", {"title": "Q3 launch", "body": "Plan the Q3 launch.",
-                                                    "owner": "engineering-lead"}, who=DANA), "task")
+                                                    "owner_id": "engineering-lead"}, who=DANA), "task")
     task = (made.get("task") or made)["id"]
 
     def act(token, attempt):
@@ -216,9 +216,9 @@ def counsel(world):
     from .harness import DANA, DANA_ID
     with world.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES(?, 'Counsel', 'active')", (H.COUNSEL,))
-        c.execute("INSERT OR REPLACE INTO bot_config(bot, config_json, team, operator) VALUES(?, '{}', '', ?)",
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, config, team, owner_id) VALUES(?, '{}', '', ?)",
                   (H.COUNSEL, DANA_ID))
-        c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created, created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created_at, created_by) VALUES(?,?,?,?,?)",
                   (H.COUNSEL, "test", "x-counsel", H.now(), "human:" + DANA_ID))
         data = VENDOR_TERMS.encode("utf-8")
         digest = world.app.state.blobs.put(data, "text/plain")

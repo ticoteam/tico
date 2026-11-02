@@ -60,8 +60,8 @@ def test_a_person_asks_their_assistant_for_a_direct_setting_and_it_changes(api):
     assert not err and done["value"] == ["09:30"], done
     assert release_times(api) == ["09:30"]
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail_json FROM events WHERE detail_json LIKE '%\"via\": \"assistant\"%' "
-                        "AND detail_json LIKE '%\"cited\"%' ORDER BY rowid DESC LIMIT 1").fetchone()
+        row = c.execute("SELECT actor,detail FROM events WHERE detail LIKE '%\"via\": \"assistant\"%' "
+                        "AND detail LIKE '%\"cited\"%' ORDER BY rowid DESC LIMIT 1").fetchone()
     assert row and row["actor"] == "human:ana", row
 
 
@@ -86,8 +86,8 @@ def test_a_confirm_setting_is_a_card_in_the_assistant_chat_and_the_tap_changes_i
     with api.app.state.store.read() as c:
         row = c.execute("SELECT proposer,conversation_id FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
         assert row["proposer"] == "assistant"
-        room = c.execute("SELECT owner_actor FROM conversations WHERE id=?", (row["conversation_id"],)).fetchone()
-        assert room["owner_actor"] == "human:ana"                # the person's own chat, not BotOps'
+        room = c.execute("SELECT owner_id FROM conversations WHERE id=?", (row["conversation_id"],)).fetchone()
+        assert room["owner_id"] == "human:ana"                # the person's own chat, not BotOps'
     # The Assistant can't tap it; the person's own tap runs it, as them.
     post(api, f"assistant/actions/{action['id']}/confirm", {}, token=attempt["token"], expected=403)
     done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
@@ -156,7 +156,7 @@ def outbound_automation(api):
     """A stored automation that sends outside, off: synthetic rows, no delivery worker runs here. Wake rules that sent
     outside became automations; an automation is no catalogue setting, so it is never the Assistant's to change."""
     hook = post(api, "webhooks", {"name": "Synthetic", "url": "https://example.com/hook", "events": ["*"]})["webhook"]
-    return post(api, "automations", {"name": "Send out", "owner": "person:ana", "enabled": False,
+    return post(api, "automations", {"name": "Send out", "owner_id": "person:ana", "enabled": False,
                                      "trigger": {"type": "event", "name": "task.created"},
                                      "steps": [{"id": "send", "type": "action", "do": "call_webhook",
                                                 "args": {"webhook": hook["id"], "type": "custom.settings_test"}}]})
@@ -182,7 +182,7 @@ def test_the_assistant_cannot_turn_on_or_edit_an_automation_that_sends_outside_n
 def test_with_the_rule_off_a_repository_setting_is_a_card_the_tap_runs(api):
     # A repository's id is owner/name, two segments of its route: the card names the route the Settings page uses.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)",
+        c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)",
                   ("repo-acme", "Acme/product", "2026-10-27T00:00:00Z"))
     put(api, "access/rules", {"assistant_direct": False})
     r, attempt = assistant_turn(api, "ana-test", "Switch off the product repository")

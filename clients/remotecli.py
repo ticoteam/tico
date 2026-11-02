@@ -936,7 +936,7 @@ def bots(client, args):
             rows = listing.get("computers", []) if isinstance(listing, dict) else listing
             me = hubtools._as_person(client).get("me")
             person = str(me.get("actor") or me.get("id") or "").removeprefix("human:")
-            matches = [row for row in rows if not row.get("revoked_at") and row.get("operator") == person
+            matches = [row for row in rows if not row.get("revoked_at") and row.get("owner_id") == person
                        and args.computer in (row.get("id"), row.get("label"))]
             if len(matches) != 1:
                 raise APIError("computer", "Choose one of your computers by its id or unique label")
@@ -1172,7 +1172,7 @@ def integration_text(page):
         out += [f"  {q['id']:<44} {q['title']}" for q in page["queries"]]
     notes = page.get("learnings") or []
     out += ["", f"## Learnings ({len(notes)}; add one with `hub tool learn {page['service']} \"...\"`)"]
-    out += [f"  {n['created'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
+    out += [f"  {n['created_at'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
     return "\n".join(out)
 
 

@@ -17,7 +17,7 @@ def test_private_two_party_matrix(api, requester, owner):
                             [{'name': 'Open', 'status': 'open'}], bots='work')
         task = H.task_create(c, requester, 'Review the sensitive packet', 'Sensitive packet.', owner,
                              private=True, type=typ['id'], lint=False)
-        c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) '
+        c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) '
                   'VALUES(?,?,?,?,?)', (task['id'], 'bot:cmo', requester, None, H.shift(H.now(), hours=24)))
     # Ana is the chart's root above cpo even when she is not a task party.
     readers = {requester, owner, 'human:ana'}
@@ -33,10 +33,10 @@ def test_private_two_party_matrix(api, requester, owner):
 
 def test_company_read_does_not_grant_work_but_dev_type_does(api):
     token = bot_token(api, 'ops')
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Build the board adapter', 'body': 'Implement the adapter.'})
+    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Build the board adapter', 'body': 'Implement the adapter.'})
     assert not task['private']
     assert get(api, 'tasks/' + task['id'], token=token)['task']['id'] == task['id']
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner': 'ops'}, token=token, expected=403)
+    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner_id': 'ops'}, token=token, expected=403)
     typ = post(api, 'task-types', {'name': 'Dev', 'bots': 'work', 'steps': [
         {'name': 'Todo', 'status': 'open'}, {'name': 'PR Review', 'status': 'review'}]})['type']
     task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'type': typ['id']})
@@ -55,16 +55,16 @@ def test_private_defaults_reassignment_and_human_publication(api):
     cpo = bot_token(api, 'cpo')
     with api.app.state.store.transaction() as c:
         for slug in ('ops', 'cpo'):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
             config['private_tasks_default'] = True
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(config), slug))
-    assigned = post(api, 'tasks', {'owner': 'ops', 'title': 'Review the request', 'body': 'Review it.'})
-    created = post(api, 'tasks', {'owner': 'cmo', 'title': 'Draft the response', 'body': 'Draft it.', 'private': False}, token=cpo)
+            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), slug))
+    assigned = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Review the request', 'body': 'Review it.'})
+    created = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Draft the response', 'body': 'Draft it.', 'private': False}, token=cpo)
     assert assigned['private'] and created['private']
-    explicit = post(api, 'tasks', {'owner': 'ops', 'title': 'Review the public request', 'body': 'Review it.', 'private': False})
+    explicit = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Review the public request', 'body': 'Review it.', 'private': False})
     assert not explicit['private']
     post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'private': False}, token=ops, expected=422)
-    changed = post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'owner': 'cpo'})
+    changed = post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'owner_id': 'cpo'})
     assert changed['private']
     get(api, 'tasks/' + assigned['id'], token=ops, expected=404)
     assert get(api, 'tasks/' + assigned['id'], token=cpo)['task']['private']
@@ -75,10 +75,10 @@ def test_private_defaults_reassignment_and_human_publication(api):
 
 
 def test_private_parent_has_no_ancestry_bypass_and_requires_detachment(api):
-    parent = post(api, 'tasks', {'owner': 'ben', 'title': 'Review the packet', 'body': 'Review it.', 'private': True})
-    child = post(api, 'tasks', {'owner': 'priya', 'title': 'Check the packet', 'body': 'Check it.',
+    parent = post(api, 'tasks', {'owner_id': 'ben', 'title': 'Review the packet', 'body': 'Review it.', 'private': True})
+    child = post(api, 'tasks', {'owner_id': 'priya', 'title': 'Check the packet', 'body': 'Check it.',
                                'relations': [{'task': parent['id'], 'kind': 'parent'}]}, token='ben-test')
-    assert child['private'] and child['requester'] == 'human:ben'
+    assert child['private'] and child['requester_id'] == 'human:ben'
     get(api, 'tasks/' + child['id'], expected=404)
     detail = get(api, 'tasks/' + parent['id'])
     assert not detail['children'] and detail['task']['parts']['total'] == 0
@@ -91,13 +91,13 @@ def test_private_parent_has_no_ancestry_bypass_and_requires_detachment(api):
 
 
 def test_cached_comment_response_cannot_bypass_reassignment(api):
-    task = post(api, 'tasks', {'owner': 'ben', 'title': 'Review the private draft', 'body': 'Review it.', 'private': True})
+    task = post(api, 'tasks', {'owner_id': 'ben', 'title': 'Review the private draft', 'body': 'Review it.', 'private': True})
     replay_headers = headers('ben-test')
     url = '/api/v2/tasks/' + task['id'] + '/comments'
     first = api.post(url, json={'text': 'Sensitive response.'}, headers=replay_headers)
     assert first.status_code == 200, first.text
     task = get(api, 'tasks/' + task['id'])['task']
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner': 'priya'})
+    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner_id': 'priya'})
     response = api.post(url, json={'text': 'Sensitive response.'}, headers=replay_headers)
     assert response.status_code == 404 and 'Sensitive response.' not in response.text
 
@@ -112,9 +112,9 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
     with api.app.state.store.transaction() as c:
         counts = {name: c.execute('SELECT count(*) FROM ' + name).fetchone()[0]
                   for name in ('tasks', 'blobs', 'task_assets', 'bot_files')}
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (json.dumps({'template': 'general-counsel'}),))
-        c.execute("UPDATE tasks SET requester='human:missing' WHERE id=?", (orphan['id'],))
-        c.execute("UPDATE tasks SET requester='keeper' WHERE id=?", (routine['id'],))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='cpo'", (json.dumps({'template': 'general-counsel'}),))
+        c.execute("UPDATE tasks SET requester_id='human:missing' WHERE id=?", (orphan['id'],))
+        c.execute("UPDATE tasks SET requester_id='keeper' WHERE id=?", (routine['id'],))
         # A database from before task privacy had no change log (backend/events.py) or parties counter (backend/row_clock.py).
         for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND "
                                  "(name LIKE 'changes_%' OR name LIKE 'row_clock_parties_%')").fetchall():
@@ -144,17 +144,17 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
 
 
 def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
-    private = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review sensitive evidence', 'body': 'Review it.', 'private': True})
-    public = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review release timing', 'body': 'Review it.'})
+    private = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Review sensitive evidence', 'body': 'Review it.', 'private': True})
+    public = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Review release timing', 'body': 'Review it.'})
     post(api, 'tasks/' + public['id'] + '/relations', {'task': private['id'], 'kind': 'blocked_by'}, expected=422)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,?,'now')", (private['id'], public['id'], 'blocks'))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')", (private['id'], public['id'], 'blocks'))
         H._unblock(c, H.task(c, private['id']))
         assert TR.blocker_ids(c, public['id']) == [private['id']]
         with pytest.raises(H.Refused) as exc:
             H.task_update(c, 'bot:cpo', private['id'], body='Read SECRET-PACKET', status='ready')
         assert exc.value.private
-        audit = c.execute("SELECT detail_json FROM events WHERE action='refused'").fetchall()
+        audit = c.execute("SELECT detail FROM events WHERE action='refused'").fetchall()
         assert all('SECRET-PACKET' not in row[0] for row in audit)
 
 
@@ -189,7 +189,7 @@ def test_acted_duplicate_diagnostics_keep_private_ids_out_of_responses_and_audit
             assert ordinary['id'] in str(public_duplicate.value)
         finally:
             H.VIA.reset(token)
-        diagnostics = c.execute("SELECT detail_json FROM events WHERE action='refused'").fetchall()
+        diagnostics = c.execute("SELECT detail FROM events WHERE action='refused'").fetchall()
         assert private['id'] not in str([tuple(row) for row in diagnostics])
 
 
@@ -201,7 +201,7 @@ def test_native_hub_upgrade_from_23_is_atomic_and_preserves_tasks_messages(tmp_p
     ordinary = H.task_create(c, 'human:ana', 'Review ordinary work', 'Review it.', 'human:ben', lint=False)
     orphan = H.task_create(c, 'human:ana', 'Review orphan work', 'Review it.', 'human:ben', lint=False)
     comment = H.task_comment(c, 'human:ana', orphan['id'], 'Preserved tracked comment.', wake=False)
-    c.execute("UPDATE tasks SET requester='human:missing' WHERE id=?", (orphan['id'],))
+    c.execute("UPDATE tasks SET requester_id='human:missing' WHERE id=?", (orphan['id'],))
     c.execute('DROP INDEX IF EXISTS tasks_private')
     c.execute('DROP INDEX IF EXISTS tasks_private_parties')
     c.execute('DROP INDEX IF EXISTS tasks_private_status')
@@ -230,7 +230,7 @@ def test_a_visuals_line_link_to_a_private_task_message_opens_only_for_its_reader
     What it opens is the task as the reader may see it: its readers get the message, anyone else not-found."""
     from urllib.parse import parse_qs, urlsplit
     from backend import visuals
-    task = post(api, 'tasks', {'owner': 'ben', 'title': 'Board pack', 'body': 'Chart the quarter.', 'private': True})
+    task = post(api, 'tasks', {'owner_id': 'ben', 'title': 'Board pack', 'body': 'Chart the quarter.', 'private': True})
     with api.app.state.store.transaction() as c:
         cid = H.task(c, task['id'])['conversation_id']
         said = H.say(c, 'human:ben', 'human:ana', 'Quarter attached, revenue up.', conversation_id=cid,

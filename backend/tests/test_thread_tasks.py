@@ -41,7 +41,7 @@ def make_task(api, body, token="ana-test"):
 
 
 def test_a_task_a_person_makes_for_a_bot_is_not_unread_for_them(api):
-    task = post(api, "tasks", {"owner": "ops", "title": "Own task", "body": "Details."})
+    task = post(api, "tasks", {"owner_id": "ops", "title": "Own task", "body": "Details."})
     assert thread_me(api, task["conversation_id"])["unread"] == 0
 
 
@@ -63,7 +63,7 @@ def test_a_task_made_from_a_thread_message_is_not_unread_for_its_maker(api):
 
 
 def test_the_maker_still_sees_what_others_post_to_their_task_later(api):
-    task = post(api, "tasks", {"owner": "human:ben", "title": "Ben's task", "body": "Details."})
+    task = post(api, "tasks", {"owner_id": "human:ben", "title": "Ben's task", "body": "Details."})
     assert thread_me(api, task["conversation_id"])["unread"] == 0
     response = api.post(f"/api/v2/threads/{task['conversation_id']}/messages", json={"text": "On it"},
                         headers=headers("ben-test"))

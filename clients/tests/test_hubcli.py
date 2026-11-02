@@ -399,14 +399,14 @@ class AgainstAStub(unittest.TestCase):
                             "--title", "Review PR 700", "--body", "https://github.com/ticoteam/tico/pull/700", env=self.env)
         self.assertEqual(code, 0, out)
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks")
-        self.assertEqual((posted["owner"], posted["check_model"], posted["check_role"], posted["relations"]),
+        self.assertEqual((posted["owner_id"], posted["check_model"], posted["check_role"], posted["relations"]),
                          ("bot:coo", "grok", "review", [{"task": "T1", "kind": "parent"}]))
         # With no value, the server picks the company's check model.
         code, out = run_hub("task", "child", "T1", "--check-model", "--role", "review", "--title", "Review PR 701",
                             env=self.env)
         self.assertEqual(code, 0, out)
         posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks"][-1]
-        self.assertEqual((posted["owner"], posted["check_model"]), ("bot:coo", "auto"))
+        self.assertEqual((posted["owner_id"], posted["check_model"]), ("bot:coo", "auto"))
 
     def test_decision_readout_reads_the_days_asked(self):
         code, out = run_hub("decision", "readout", "--days", "14", env=self.env)

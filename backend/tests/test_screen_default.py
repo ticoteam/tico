@@ -30,9 +30,9 @@ def test_a_new_computer_offering_its_screen_starts_at_control_and_a_persons_choi
     heartbeat(api, r, True)
     assert mode(api, rid) == "control"
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT actor,detail_json FROM events WHERE action='runner.screen' AND target=?",
+        rows = c.execute("SELECT actor,detail FROM events WHERE action='runner.screen' AND target=?",
                          (rid,)).fetchall()
-    assert [(row["actor"], json.loads(row["detail_json"])) for row in rows] == [
+    assert [(row["actor"], json.loads(row["detail"])) for row in rows] == [
         ("system", {"mode": "control", "reason": "first offer"})]
     post(api, f"computers/{rid}/screen", {"mode": "view"})
     restart(api, r)

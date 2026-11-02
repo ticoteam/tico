@@ -112,9 +112,9 @@ def test_a_turn_that_gave_its_login_up_at_the_cap_goes_back_in_the_queue_unanswe
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (origin["id"],)).fetchone()[0] == "queued"
         assert not c.execute("SELECT 1 FROM messages WHERE in_reply_to=?", (origin["id"],)).fetchone()
     # The bot is idle with the pause line until its continuation starts, not crashed, and Health raises nothing.
-    [status] = [s for s in get(api, "status")["bots"] if s and s["bot"] == a["bot"]]
+    [status] = [s for s in get(api, "status")["bots"] if s and s["bot_id"] == a["bot_id"]]
     assert (status["state"], status["focus"]) == ("idle", line)
-    assert not [i for i in get(api, "operations")["issues"] if i.get("bot") == a["bot"]]
+    assert not [i for i in get(api, "operations")["issues"] if i.get("bot_id") == a["bot_id"]]
     # It continues on the next claim, as the same work.
     again = claim(api, r)
     assert again["job_id"] == a["job_id"] and again["id"] != a["id"]
@@ -125,7 +125,7 @@ def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    tid = post(api, "tasks", {"owner": "ops", "title": "Count the words", "body": "Count them."})["id"]
+    tid = post(api, "tasks", {"owner_id": "ops", "title": "Count the words", "body": "Count them."})["id"]
     a = claim(api, r)
     assert "stop" not in post(api, f"attempts/{a['id']}/renew", {}, r["token"])
     with api.app.state.store.transaction() as c:
@@ -143,14 +143,14 @@ def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_
         assert not c.execute("SELECT 1 FROM messages WHERE kind='notice' AND body LIKE 'Stopped by%'").fetchone()
     assert claim(api, r) is None
     # A person's own comment waiting behind the login is never skipped: their words still get an answer.
-    tid = post(api, "tasks", {"owner": "ops", "title": "Count the lines", "body": "Count them."})["id"]
+    tid = post(api, "tasks", {"owner_id": "ops", "title": "Count the lines", "body": "Count them."})["id"]
     post(api, f"tasks/{tid}/comments", {"text": "@ops count the blank ones too"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id IN "
-                  "(SELECT id FROM messages WHERE from_actor NOT LIKE 'human:%')")
+                  "(SELECT id FROM messages WHERE sender_id NOT LIKE 'human:%')")
     b = claim(api, r)
     with api.app.state.store.transaction() as c:
-        assert c.execute("SELECT m.from_actor FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
+        assert c.execute("SELECT m.sender_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
                          (b["job_id"],)).fetchone()[0].startswith("human:")
         c.execute("UPDATE tasks SET status='closed',closed_at=? WHERE id=?", ("9999-01-01T00:00:00Z", tid))
     post(api, f"attempts/{b['id']}/events", {"events": [{"seq": 1, "kind": "status", "payload": wait}]}, r["token"])
@@ -162,7 +162,7 @@ def test_a_person_stopping_a_turn_before_it_started_ends_it_unstarted(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    post(api, "tasks", {"owner": "ops", "title": "Count the words", "body": "Count them."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Count the words", "body": "Count them."})
     a = claim(api, r)
     post(api, "bots/ops/stop", {"attempt_id": a["id"]})
     assert post(api, f"attempts/{a['id']}/renew", {}, r["token"])["stop"] is True

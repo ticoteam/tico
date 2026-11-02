@@ -18,7 +18,7 @@ def test_an_owner_changes_team_settings_through_botops_and_a_member_is_refused(a
     err, made = mcp(api, "hub_task_type_create", {"name": "Ops", "default_visibility": "private"}, ana["token"])
     assert not err and made["type"]["default_visibility"] == "private", made
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='task_type.create' ORDER BY rowid DESC "
+        row = c.execute("SELECT actor,detail FROM events WHERE action='task_type.create' ORDER BY rowid DESC "
                         "LIMIT 1").fetchone()
         assert row["actor"] == "human:ana", dict(row)            # hers, via BotOps
     finish(api, botops, ana)
@@ -44,7 +44,7 @@ def test_a_member_cannot_change_another_persons_trigger_through_botops(api, boto
     err, mine = mcp(api, "hub_trigger_create", {"name": "Cara orders"}, cara["token"])
     assert not err, mine
     err, tag = mcp(api, "hub_tag_create", {"key": "cara-launch", "label": "Launch"}, cara["token"])
-    assert not err and tag["tag"]["owner"] == "human:cara", tag
+    assert not err and tag["tag"]["owner_id"] == "human:cara", tag
     with api.app.state.store.read() as c:
         assert c.execute("SELECT created_by FROM triggers WHERE id=?", (mine["id"],)).fetchone()[0] == "human:cara"
         assert c.execute("SELECT name FROM triggers WHERE id='shop'").fetchone()[0] == "Shop"

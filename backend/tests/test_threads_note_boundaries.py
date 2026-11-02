@@ -56,17 +56,17 @@ def finish(api, r, attempt, text="Done"):
 
 
 def job_count(api, bot="cpo"):
-    return rows(api, "SELECT COUNT(*) AS n FROM jobs WHERE bot=?", bot)[0]["n"]
+    return rows(api, "SELECT COUNT(*) AS n FROM jobs WHERE bot_id=?", bot)[0]["n"]
 
 
 def wakes(api, bot="cpo"):
     """Wakes written so far, whatever came of them."""
-    return rows(api, "SELECT COUNT(*) AS n FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
-                     "AND json_extract(m.refs_json,'$.wake')='thread_notes'", bot)[0]["n"]
+    return rows(api, "SELECT COUNT(*) AS n FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
+                     "AND json_extract(m.refs,'$.wake')='thread_notes'", bot)[0]["n"]
 
 
 def waiting(api, bot="bot:cpo"):
-    return rows(api, f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} ORDER BY n.created", bot)
+    return rows(api, f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} ORDER BY n.created_at", bot)
 
 
 def drain(api, r, bot="cpo", most=12):
@@ -347,7 +347,7 @@ def test_a_company_threads_ordinary_turns_keep_the_public_session(api):
     assert first["conversation"]["audience_class"] == "public"
     finish(api, r, first, text="Our reply")
     reply = rows(api, "SELECT * FROM messages WHERE body='Our reply'")[0]
-    assert reply["restricted"] == 1 and json.loads(reply["refs_json"])["turn_id"] == first["id"]
+    assert reply["restricted"] == 1 and json.loads(reply["refs"])["turn_id"] == first["id"]
     assert session_class(api, company, reply["id"]) == "public"     # flagged for its turn_id, and every reader reads it
     bot_says(api, company, "@cpo about that", bot="human:ana", in_reply_to=reply["id"])
     answered = claim(api, r, "cpo")
@@ -557,6 +557,6 @@ def test_a_primary_message_a_member_still_holds_and_a_legacy_chat_still_claim(ap
 
 def test_a_task_turn_still_claims(api):
     r = bot_runner(api)
-    post(api, "tasks", {"owner": "cpo", "title": "Ship", "body": "Do it"})
+    post(api, "tasks", {"owner_id": "cpo", "title": "Ship", "body": "Do it"})
     attempt = claim(api, r, "cpo")
     assert attempt and attempt["task"]["title"] == "Ship"

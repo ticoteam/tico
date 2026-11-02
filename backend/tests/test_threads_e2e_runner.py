@@ -41,7 +41,7 @@ def test_a_real_runner_enrolls_with_a_one_time_code_and_the_server_holds_its_reg
     home, projects = tmp_path / "home", tmp_path / "projects"
     home.mkdir(), projects.mkdir()
     code_file = tmp_path / "code.json"
-    code_file.write_text(json.dumps({"code": post(api, "enrollments", {"operator": "ana"})["code"]}))
+    code_file.write_text(json.dumps({"code": post(api, "enrollments", {"owner_id": "ana"})["code"]}))
     config = tmp_path / "runner" / "runner.json"
 
     done = run(binary, home, *enroll_args(live, code_file, projects, config))
@@ -49,8 +49,8 @@ def test_a_real_runner_enrolls_with_a_one_time_code_and_the_server_holds_its_reg
     registration = json.loads(config.read_text())
     assert registration["url"] == live and registration["runner_id"]
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT label, operator FROM runners WHERE id=?", (registration["runner_id"],)).fetchone()
-    assert row is not None and row["label"] == LABEL and row["operator"] == "ana"
+        row = c.execute("SELECT label, owner_id FROM runners WHERE id=?", (registration["runner_id"],)).fetchone()
+    assert row is not None and row["label"] == LABEL and row["owner_id"] == "ana"
 
     # The code is one-time for a computer: another label is refused and writes no registration. The same label
     # retrying (a lost response) gets the same runner back, never a second computer (backend/execution.py enroll).

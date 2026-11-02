@@ -22,7 +22,7 @@ def test_claim_hands_out_the_queued_job_to_the_free_claude_fallback_that_health_
     with api.app.state.store.transaction() as c:
         login_holds.record(c, machine["runner_id"], "", "fake", hit=hit, reset=reset)
         login_holds.record(c, machine["runner_id"], "", "codex", hit=hit, reset=reset)
-    post(api, "tasks", {"owner": "ops", "title": "Free work", "body": "Please do it."})
+    post(api, "tasks", {"owner_id": "ops", "title": "Free work", "body": "Please do it."})
     with api.app.state.store.read() as c:
         reasons = list(queued_reasons(c, api.app.state.store.settings, machine["runner_id"], "ops"))
     assert [why for _, why in reasons] == [None], "Health should say the queued job is handed out"
@@ -39,7 +39,7 @@ def test_claim_hands_out_the_real_notice_behind_an_obsolete_one_that_health_says
     the claim must then go on to the next queued job instead of answering nothing."""
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='completed',finished=? WHERE id=?", (H.now(), original["id"]))
+        c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (original["job_id"],))
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
         refs = {"task": task["id"], "trigger": "other", "wake": "update"}
@@ -48,7 +48,7 @@ def test_claim_hands_out_the_real_notice_behind_an_obsolete_one_that_health_says
         real = H.say(c, H.KEEPER, "bot:ops", "Task closed by human:ana", kind="notice",
                      conversation_id=task["conversation_id"], refs={**refs, "caused_by": "human:ana"})
         # The obsolete notice is the older of the two, so the candidate's own order reaches it first.
-        c.execute("UPDATE jobs SET created=? WHERE message_id=?", (H.shift(H.now(), minutes=-5), obsolete["id"]))
+        c.execute("UPDATE jobs SET created_at=? WHERE message_id=?", (H.shift(H.now(), minutes=-5), obsolete["id"]))
         W.tick(c, H.shift(H.now(), minutes=2))
     with api.app.state.store.read() as c:
         obsolete_job = c.execute("SELECT id FROM jobs WHERE message_id=?", (obsolete["id"],)).fetchone()[0]

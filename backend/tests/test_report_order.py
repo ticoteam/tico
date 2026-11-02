@@ -65,7 +65,7 @@ def test_only_someone_who_may_put_reports_there_orders_them(api):
     from backend.tests.test_api import as_member
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='ben' WHERE bot='coo'")
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='coo'")
     put(api, "org/order/coo", {"reports": ["finance", "ops"]}, token="ben-test")
     put(api, "org/order/coo", {"reports": ["ops", "finance"]}, token="cara-test", expected=403)
     assert order(api, "coo") == ["finance", "ops", "doc-updater"]
@@ -124,8 +124,8 @@ def test_reports_nobody_placed_follow_one_rule_humans_then_a_bots_order_then_nam
         report_to(api, slug, "coo")
     with api.app.state.store.transaction() as c:          # a bot's own `order`, from its definition
         for slug, place in (("ops", 1), ("finance", 2)):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode({**config, "order": place}), slug))
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode({**config, "order": place}), slug))
     assert order(api, "coo") == ["ops", "finance", "doc-updater"], "ordered bots first, lowest first, then names"
     assert [r for r in order(api, "human:ana") if r in ("zoe", "eli", "bea")] == ["bea", "eli", "zoe"], (
         "by name, accents and case aside, not as the roster lists them")
