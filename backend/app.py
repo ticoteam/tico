@@ -3845,6 +3845,11 @@ def create_app(settings=None):
                 "carried_by": row.get("carried_by"), "cancelled_at": row.get("cancelled_at")}
 
     def note_visible(c, who, row):
+        # A note copied from a message is read only while its recipient still reads that message (the same check a
+        # run's claim makes, threads.revalidate_notes), whoever asks.
+        from . import threads
+        if not threads.note_readable(c, row, row["to_actor"]):
+            return False
         # A bot sees the notes it left and the ones left for it; a person, the ones they left and
         # every note between bots whose activity they may read.
         if who.role == "bot":

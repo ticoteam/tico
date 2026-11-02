@@ -212,3 +212,21 @@ def test_a_deferred_thread_note_the_bot_lost_access_to_is_cancelled_not_carried(
     with store.read() as c:
         cancelled = c.execute("SELECT cancelled_at FROM notes WHERE message_id=?", (lost_msg["id"],)).fetchone()[0]
     assert cancelled
+
+
+def test_a_note_whose_source_the_bot_lost_is_not_read_back_through_the_notes_list(api):
+    # Before the next claim, /notes must not return a copied body the recipient can no longer read.
+    from backend import threads
+    from backend.tests.test_threads_delivery import new_thread, say
+    r = setup(api)
+    store = api.app.state.store
+    lost = new_thread(api, members=("human:ben", "bot:ops"), title="Lost")
+    lost_msg = say(api, lost["id"], "Private: the payroll numbers")
+    with store.transaction() as c:
+        threads._defer_note(c, H.message(c, lost_msg["id"]), "bot:ops")
+        ana = api.app.state.auth.identity_for_actor(c, "human:ana")
+        threads.remove_member(c, ana, lost["id"], "bot:ops")
+    post(api, "chat/ops", {"text": "Unrelated turn"})
+    turn = claim(api, r, next_run=False)                  # an active turn: its notes are not carried
+    visible = get(api, "notes", token=turn["token"])["notes"]
+    assert not any("payroll" in (n.get("text") or "") for n in visible), visible
