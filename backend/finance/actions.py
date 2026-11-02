@@ -638,10 +638,15 @@ DEV_COPY_EMPTIED = (
 def scrub_dev_copy(c: sqlite3.Connection, at: str) -> dict[str, int]:
     """Make a dev copy's Finance tables inert: an action waiting on approval would commit when someone approves it in the
     copy, so it goes; an undrained budget event would reach rules and the owner, so it is marked drained without acting;
-    allocations lose their link to the holds, which go, not themselves; the DEV_COPY_EMPTIED tables are emptied.
-    {table: rows removed}."""
-    SB.unlink_allocation_holds(c)
-    SU.drain_all(c, at)
-    removed = {"fin_actions": SX.drop_waiting(c)}
-    removed.update(SX.empty_tables(c, DEV_COPY_EMPTIED))
+    allocations lose their link to the holds, which go, not themselves; the DEV_COPY_EMPTIED tables are emptied. A table
+    the copy does not have is skipped, and the others are still made inert. {table: rows removed}."""
+    present = {str(row[0]) for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    removed: dict[str, int] = {}
+    if "fin_allocations" in present:
+        SB.unlink_allocation_holds(c)
+    if "fin_events" in present:
+        SU.drain_all(c, at)
+    if "fin_actions" in present:
+        removed["fin_actions"] = SX.drop_waiting(c)
+    removed.update(SX.empty_tables(c, [table for table in DEV_COPY_EMPTIED if table in present]))
     return removed

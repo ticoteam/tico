@@ -201,6 +201,39 @@ def test_a_dev_copy_build_reports_the_rows_finance_emptied(tmp_path):
         assert [t for t in FA.DEV_COPY_EMPTIED if _count(c, t)] == []
 
 
+def test_a_dev_copy_scrub_with_one_emptied_table_missing_still_empties_the_others(tmp_path):
+    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    store.initialize(seed_market=False)
+    with closing(sqlite3.connect(store.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        c.commit()
+        c.execute("PRAGMA foreign_keys=OFF")               # as devcopy's copy runs: a missing child is not checked
+        c.execute("DROP TABLE fin_cards")
+        removed = FA.scrub_dev_copy(c, H.now())
+        assert "fin_cards" not in removed and removed["fin_connections"] == 1
+        assert _count(c, "fin_connections") == 0 and _count(c, "fin_outbox") == 0
+        c.commit()
+
+
+def test_a_dev_copy_build_still_empties_finance_when_one_of_its_tables_is_missing(tmp_path):
+    source = Store(Settings(db_path=tmp_path / "live" / "hub.sqlite"))
+    source.initialize(seed_market=False)
+    with closing(sqlite3.connect(source.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        c.execute("DROP TABLE fin_cards")
+        c.commit()
+    for conn in source.pool:
+        conn.close()
+    source.pool.clear()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, _ = devcopy.build(source.settings.db_path, dest, days=30)
+    assert removed["fin_connections"] == 1
+    with closing(sqlite3.connect(dest)) as c:
+        assert _count(c, "fin_connections") == 0
+
+
 def test_a_changed_approver_voids_the_decision_and_asks_the_new_one(books):
     with books.transaction() as c:
         asked = _coder_asks(c, _software(c))

@@ -305,8 +305,9 @@ def prune(c, days, keep_automations=False):
         c.execute("UPDATE registry_metadata SET value_json=? WHERE key='roadmap_ip_secret'",
                   (json.dumps(secrets.token_hex(32)),))
     # Finance makes its tables inert itself: pending actions, undrained events, links to emptied holds, and the rows that
-    # move money or call a provider (DEV_COPY_EMPTIED).
-    if present.issuperset(finance.DEV_COPY_EMPTIED):
+    # move money or call a provider (DEV_COPY_EMPTIED). Any Finance table present means the scrub runs: a copy missing one
+    # table still has the rest made inert (scrub_dev_copy skips the tables a copy does not have).
+    if present & (set(finance.DEV_COPY_KEPT) | set(finance.DEV_COPY_EMPTIED)):
         for table, count in finance.scrub_dev_copy(c, now()).items():
             if count:
                 removed[table] = removed.get(table, 0) + count
