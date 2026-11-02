@@ -234,7 +234,7 @@ def check_case(case, observed):
         checks.append(_check("saved as the live version", changed, "the live flow did not change"))
         if not changed:
             return _verdict(case, checks)
-        flow, owner, name = live, before.get("owner_id", OWNER), before.get("name", "Seed")
+        flow, owner, name = live, before.get("owner", OWNER), before.get("name", "Seed")
     error = validate(flow, owner, name)
     checks.append(_check("valid flow (the save check)", error is None, error or ""))
     if "trigger" in expect:

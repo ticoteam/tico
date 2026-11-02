@@ -183,7 +183,7 @@ const overviewStuck = () => (typeof HL !== 'undefined' && HL?.stuck) || [];
 function overviewFallbackLine() {
   const on = (typeof HL !== 'undefined' && HL?.on_fallback) || [], limited = (typeof HL !== 'undefined' && HL?.limited) || [];
   if (!on.length && !limited.length) return '';
-  const first = on.map(row => row.since).filter(Boolean).sort()[0];
+  const first = on.map(row => row.changed_at).filter(Boolean).sort()[0];
   const clock = first ? new Date(first).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
   const parts = [on.length ? `${on.length} ${on.length === 1 ? 'bot' : 'bots'} running on fallback${clock ? ' since ' + clock : ''}` : '',
     limited.length ? `${limited.length} limited` : ''].filter(Boolean);

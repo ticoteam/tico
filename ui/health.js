@@ -249,7 +249,7 @@ function hlMetricsHtml(m) {
     <td class="tnum">${r.n.toLocaleString()}</td><td class="tnum">${hlMs(r.p95)}</td><td class="tnum">${hlMs(r.total_ms)}</td></tr>`);
   const sql = (m.sql?.queries || []).slice(0, 8).map(q => `<tr><td class="hl-code" title="${esc(q.sql)}">${esc(q.sql)}</td>
     <td class="tnum">${q.n.toLocaleString()}</td><td class="tnum">${hlMs(q.p95)}</td><td class="tnum">${hlMs(q.total_ms)}</td></tr>`);
-  const slow = (m.slow || []).slice(0, 5).map(r => `<li><span class="hl-code">${esc(r.route)}</span> <span class="tnum">${hlMs(r.ms)}</span> <span class="muted">${esc(r.caller)} · ${esc(hlAt(r.ts))}</span></li>`).join('');
+  const slow = (m.slow || []).slice(0, 5).map(r => `<li><span class="hl-code">${esc(r.route)}</span> <span class="tnum">${hlMs(r.ms)}</span> <span class="muted">${esc(r.caller)} · ${esc(hlAt(r.created_at))}</span></li>`).join('');
   const stall = stalls.slice(0, 3).map(e => {
     const loop = (e.threads?.busy || []).find(t => t.loop);
     return `<li><details><summary><span class="err">Stalled ${esc(String(e.stalled_s))} s</span> <span class="muted">${esc(hlAt(e.at))}</span></summary>

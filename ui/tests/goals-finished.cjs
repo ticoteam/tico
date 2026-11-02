@@ -53,8 +53,8 @@ const goals = [
       if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ben', items: []});
       const one = p.match(/^\/api\/v2\/goals\/([^/]+)(\/status|\/reopen)?$/), g = one && goals.find(x => x.id === one[1]);
       if (g && !post && !one[2]) return json({goal: {...g, kpis: [{id: 'k1', name: 'Beta signups', status: 'gray'}],
-        checkins: [{id: 'c1', body: 'Paused for the redesign.', source_actor: 'human:ben', ts: at(23)}],
-        events: [{field: 'status', actor: 'human:ana', old: 'green', new: 'dropped', note: '', ts: at(24)}]}});
+        checkins: [{id: 'c1', body: 'Paused for the redesign.', source_actor: 'human:ben', created_at: at(23)}],
+        events: [{field: 'status', actor: 'human:ana', old: 'green', new: 'dropped', note: '', created_at: at(24)}]}});
       if (g && post && one[2] === '/status') { g.before = {status: g.status, status_note: g.status_note}; Object.assign(g, {status: body.status, status_note: body.note, rank: null}); return json({goal: g}); }
       if (g && post && one[2] === '/reopen' && body.undo) { Object.assign(g, g.before, {rank: 9}); return json({goal: g}); }
       if (g && post && one[2] === '/reopen') {

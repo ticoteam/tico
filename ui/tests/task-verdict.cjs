@@ -85,8 +85,8 @@ const refuse = (page, path, method, status, detail, code) => page.route('**' + p
       const {page, errors} = await open(browser, {hash: '#/tasks?view=list', baseTasks: tasks, local});
       await page.route('**/api/v2/tasks/t-dev', route => route.request().method() === 'GET'
         ? route.fulfill({contentType: 'application/json', body: JSON.stringify({task: tasks[0], children: [], comments: [], messages: [],
-          events: [{id: 'e1', ts: at(12), actor: 'bot:qa', field: 'verdict', old: null, new: 'pass 0f9e8d7c'},
-                   {id: 'e2', ts: at(10), actor: 'human:ana', field: 'qa_waiver', old: null, note: waiver.reason,
+          events: [{id: 'e1', created_at: at(12), actor: 'bot:qa', field: 'verdict', old: null, new: 'pass 0f9e8d7c'},
+                   {id: 'e2', created_at: at(10), actor: 'human:ana', field: 'qa_waiver', old: null, note: waiver.reason,
                     new: JSON.stringify({head: HEAD, step: 'In QA', pr: waiver.pr})}]})}) : route.fallback());
       await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't-dev')));
       const line = page.locator('#task-modal .task-comments .tcomment.qa-waiver');

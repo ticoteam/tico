@@ -180,7 +180,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       }
       return json({task: withRelations(task, tasks), children: tasks.filter(x => x._parent === id).map(x => withRelations(x, tasks)),
         comments: [{id: 'm1', kind: 'say', sender_id: 'human:ana', body: 'Keep the old flow behind a flag for a week.', created_at: at(90), refs: {}}],
-        events: [{id: 'e1', ts: at(60), actor: 'bot:engineer', field: 'status', old: 'open', new: 'doing'}], messages: []});
+        events: [{id: 'e1', created_at: at(60), actor: 'bot:engineer', field: 'status', old: 'open', new: 'doing'}], messages: []});
     }
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/messages')) return json({messages: []});

@@ -72,7 +72,7 @@ const judged = g => g.kpis.some(k => ['red', 'yellow', 'green'].includes(k.statu
         if (refuse === 'forbidden') return json({error: {code: 'forbidden', detail: 'The goal\'s owner, the owner of the goal it serves, someone above them or the Strategy Bot records a check-in'}}, 403);
         // The server's colour (backend/goals.py score): a judged measure wins, else the latest check-in that answered.
         const g = goals.find(x => x.id === add[1]);
-        const checkin = {id: 'c' + posted.length, goal_id: g.id, ts: new Date().toISOString(), author: 'human:ben', source_actor: 'human:ben', body: body.body, signal: body.signal || null};
+        const checkin = {id: 'c' + posted.length, goal_id: g.id, created_at: new Date().toISOString(), author: 'human:ben', source_actor: 'human:ben', body: body.body, signal: body.signal || null};
         g.checkin = checkin;
         if (body.signal && !judged(g) && g.status_source !== 'person') g.status = SIGNAL_COLOUR[body.signal];
         return json({checkin});

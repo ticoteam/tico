@@ -155,7 +155,7 @@ def install_fixture(org, facts):
         secret = url.rstrip("/").rsplit("/", 1)[-1]
     old = not isinstance(facts.get("fx:old"), Unmet)
     ids = {"routines": {name: routine_id(name) if old else None for name in ROUTINES},
-           "due": facts["fx:old"]["due_at"] if old else {},
+           "due": facts["fx:old"]["due"] if old else {},
            "rule_bots": facts["fx:old"]["rule_bots"] if old else [],   # every bot with wake rules of its own
            "hook": {"id": _id(facts, "fx:trigger", "trigger", "id"), "secret": secret},
            "rules": {name: rule_id(name) if old else None for name in WAKE_RULES},

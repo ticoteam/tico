@@ -299,9 +299,9 @@
     const sessions = t ? (access.sessions || []).filter(x => x.ticket_id === t.id) : [];
     if (sessions.length) {
       for (const x of sessions) if (!accessLogs.has(x.id) || x.id === here?.id) void loadLog(x.id);
-      const items = sessions.flatMap(x => accessLogs.get(x.id)?.items || []).sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0));
+      const items = sessions.flatMap(x => accessLogs.get(x.id)?.items || []).sort((a, b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0));
       html += `<details class="support-access-log"${here ? ' open' : ''}><summary>Requests Tico support made</summary>${items.length
-        ? `<ol>${items.map(x => `<li><time datetime="${escape(x.ts)}" data-ago="${escape(x.ts)}" title="${escape(fmt(x.ts))}">${escape(ago(x.ts))}</time> ${escape(x.by === 'support-agent' ? 'Support Agent' : 'Staff')} · ${escape(x.method)} ${escape(x.path)} · ${escape(x.status)}</li>`).join('')}</ol>`
+        ? `<ol>${items.map(x => `<li><time datetime="${escape(x.created_at)}" data-ago="${escape(x.created_at)}" title="${escape(fmt(x.created_at))}">${escape(ago(x.created_at))}</time> ${escape(x.by === 'support-agent' ? 'Support Agent' : 'Staff')} · ${escape(x.method)} ${escape(x.path)} · ${escape(x.status)}</li>`).join('')}</ol>`
         : '<p class="support-sent">None yet.</p>'}</details>`;
     }
     host.hidden = !html;

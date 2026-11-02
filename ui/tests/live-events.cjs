@@ -189,7 +189,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     assert.doesNotMatch(await page.locator('#bot-tip').innerText(), /Waiting for.*ChatGPT/);
     const waiting = 'Waiting for the ChatGPT login (held by Scribe on #7 Count the words since 19:06Z; position 2)';
     await send(following, block(seq++, 'bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
-      waiting, since: now, open_tasks: 1, needs_human: 0}}));
+      waiting, changed_at: now, open_tasks: 1, needs_human: 0}}));
     await page.waitForFunction(text => !document.querySelector('#bot-tip').hidden
       && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting);
     await send(following, block(seq++, 'bots', {bot: 'ops', status: null}));

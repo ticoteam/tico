@@ -271,9 +271,9 @@ const goalFinishedOf = (goals, owner) => goals.filter(g => g.owner_id === owner 
 function goalFinishedDetailHtml(d) {
   if (!d) return '<p class="muted">Loading…</p>';
   if (d.error) return '<p class="err">Could not load the goal.</p>';
-  const kpis = d.kpis || [], checkins = (d.checkins || []).slice().sort((x, y) => String(y.ts).localeCompare(String(x.ts)));
+  const kpis = d.kpis || [], checkins = (d.checkins || []).slice().sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)));
   const history = (d.events || []).filter(e => e.field === 'status').slice().reverse();
-  const said = e => `${esc(goalActorName(e.actor))} · ${esc(e.new || 'no colour')}${e.note ? ': ' + esc(e.note) : ''} · ${esc(kpiDay(e.ts))}`;
+  const said = e => `${esc(goalActorName(e.actor))} · ${esc(e.new || 'no colour')}${e.note ? ': ' + esc(e.note) : ''} · ${esc(kpiDay(e.created_at))}`;
   return `<div class="goal-fin-detail">
       <h4 class="kpi-h">Measures</h4>${kpis.length ? `<ul class="goal-fin-kpis">${kpis.map(k => `<li>${gdot(k.status)}<span>${esc(k.name)}</span>${kpiFresh(k) ? ` <span class="muted tnum">${esc(kpiNum(k.latest.value, k.unit))}</span>` : ''}</li>`).join('')}</ul>` : '<p class="muted">No KPIs.</p>'}
       <h4 class="kpi-h">Updates</h4>${checkins.length ? checkins.map(goalCheckinHtml).join('') : '<p class="muted">No check-ins.</p>'}

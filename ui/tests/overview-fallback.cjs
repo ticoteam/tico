@@ -18,8 +18,8 @@ const SCENE = `export function createBuilding() {
     const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
     const errors = [], since = '2026-10-13T10:04:00Z';
     const health = {audience: 'owner', checks: [], attention: 0, checked: since, stuck: [],
-      on_fallback: [{bot: 'writer', harness: 'codex', since: '2026-10-13T10:09:00Z'}, {bot: 'editor', harness: 'codex', since}],
-      limited: [{bot: 'vault', since}]};
+      on_fallback: [{bot: 'writer', harness: 'codex', changed_at: '2026-10-13T10:09:00Z'}, {bot: 'editor', harness: 'codex', changed_at: since}],
+      limited: [{bot: 'vault', changed_at: since}]};
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname;

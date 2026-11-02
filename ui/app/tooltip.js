@@ -104,12 +104,12 @@ async function v2HistoryLoad(slug) {
   const el = $('#v2-history'); if (!el) return;
   const d = await v2Get(`/v2/status?bot=${encodeURIComponent(slug)}&since=7d`);
   const box = $('#v2-history'); if (!box) return;
-  const rows = [...(d?.history || [])].sort((a, b) => String(b.since || '').localeCompare(String(a.since || '')));
+  const rows = [...(d?.history || [])].sort((a, b) => String(b.started_at || '').localeCompare(String(a.started_at || '')));
   box.innerHTML = rows.length
     ? `<ul class="sh-list">${rows.map(h => { const by = h.by && h.by !== 'keeper' && actorSlug(h.by) !== slug ? actorLabel(h.by) : '';   // the bot or the hub itself goes without saying
         const why = [h.reason || '', by].filter(Boolean).join(' · ');
         return `<li class="sh-row"><span class="pill ${V2_PILL[h.state] ?? ''}">${esc(V2_WORD[h.state] || h.state || '')}</span>
         <span class="sh-focus"${h.focus || why ? ` title="${esc([h.focus, why].filter(Boolean).join(' · '))}"` : ''}>${esc(h.focus || '')}${why ? ` <span class="muted">${esc(why)}</span>` : ''}</span>
-        <span class="sh-when muted tnum" title="${esc(fmt(h.since))}${h.until ? ' to ' + esc(fmt(h.until)) : ''}">${esc(ago(h.since))}</span></li>`; }).join('')}</ul>`
+        <span class="sh-when muted tnum" title="${esc(fmt(h.started_at))}${h.ended_at ? ' to ' + esc(fmt(h.ended_at)) : ''}">${esc(ago(h.started_at))}</span></li>`; }).join('')}</ul>`
     : '<div class="empty">No status changes in the last week.</div>';
 }

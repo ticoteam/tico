@@ -30,7 +30,7 @@ const comments = [
   {id: 'k4', conversation_id: 'r-docs', sender_id: 'bot:botops', kind: 'say', body: 'Shared the preview.', created_at: at(20),
     refs: {turn_id: 'a3'}, run: {steps: 1}},
 ];
-const events = [{id: 1, task_id: 't-docs', ts: at(35), actor: 'bot:botops', field: 'status', old: 'open', new: 'doing', note: ''}];
+const events = [{id: 1, task_id: 't-docs', created_at: at(35), actor: 'bot:botops', field: 'status', old: 'open', new: 'doing', note: ''}];
 const execution = {job_id: 'j2', message_id: 'k2', bot: 'botops', run_id: 'a2', state: 'running', label: 'Working', text: '',
   parts: [{kind: 'progress', text: 'Checking the API page.', at: at(1)}, {kind: 'tool', text: 'Ran hub task create', at: at(1)}]};
 

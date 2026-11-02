@@ -40,7 +40,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       {id: 'g-top', title: 'Grow revenue 30% this year', owner_id: 'company', parent_id: null, status: 'red', status_source: 'person', status_by_id: 'human:ana',
        status_note: 'Launch slipped', rank: 0, kpis: []},
       {id: 'g-cmo', title: 'Double organic signups', owner_id: 'bot:cmo', parent_id: 'g-top', status: 'yellow', status_source: 'auto', rank: 0, kpis: [activation, nps],
-       checkin: {id: 'c1', body: 'The onboarding email went out late.', signal: 'at_risk', source_actor: 'bot:cmo', ts: new Date(day).toISOString()}},
+       checkin: {id: 'c1', body: 'The onboarding email went out late.', signal: 'at_risk', source_actor: 'bot:cmo', created_at: new Date(day).toISOString()}},
       {id: 'g-cmo2', title: LONG, owner_id: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: []},
       {id: 'g-gm', title: 'Every KPI read on time', owner_id: 'bot:goal-manager', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
     ];
@@ -91,7 +91,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       if (/^\/api\/v2\/kpis\/[^/]+\/readings$/.test(p) && post) return json({reading: {id: 'r-new'}});
       const link = p.match(/^\/api\/v2\/goals\/([^/]+)\/kpis$/);
       if (link && post) { goals.find(g => g.id === link[1]).kpis.push(kpi('k-link', body.name, {freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: {}}); }
-      if (/^\/api\/v2\/goals\/[^/]+\/checkins$/.test(p)) return json({checkins: [goals[1].checkin, {id: 'c0', body: 'Started the email series.', source_actor: 'bot:cmo', ts: new Date(day - 7 * 86400000).toISOString()}]});
+      if (/^\/api\/v2\/goals\/[^/]+\/checkins$/.test(p)) return json({checkins: [goals[1].checkin, {id: 'c0', body: 'Started the email series.', source_actor: 'bot:cmo', created_at: new Date(day - 7 * 86400000).toISOString()}]});
       if (/\/status\/auto$/.test(p) && post) return json({goal: {}});
       if (/^\/api\/v2\/proposals\/[^/]+\/decide$/.test(p) && post) { needs.splice(1); return json({proposal: {}}); }
       const edit = p.match(/^\/api\/v2\/goals\/([^/]+)$/);
@@ -111,7 +111,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.deepEqual(requests.filter(r => /goals|kpis/.test(r)).sort(), ['GET /api/v2/goals/needs-you', 'GET /api/v2/goals/tree', 'GET /api/v2/growth/kpis']);
 
     // Every person and every bot that is not archived, goal or not, nested as the org chart nests them; helper bots off it.
-    const lines = await page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner_id}@${el.style.getPropertyValue('--d')}`));
+    const lines = await page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner}@${el.style.getPropertyValue('--d')}`));
     assert.deepEqual(lines, ['company@0', 'human:ana@0', 'human:ben@1', 'bot:cmo@1', '+g-cmo2', 'bot:seo@2', 'bot:sales@1', 'bot:support@1'], JSON.stringify(lines));   // the Strategy Bot is a helper too
     // The sidebar leaves the same helper bots off.
     assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"], #tree [data-org="b:goal-manager"]').count(), 0);

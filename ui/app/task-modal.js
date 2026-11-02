@@ -803,7 +803,7 @@ function taskCommentsRender(state, data, sent = '') {
   const host = state.host;
   const lines = [
     ...(data.comments || data.messages || []).filter(m => ['say', 'ask', 'answer'].includes(m.kind)).map(m => ({kind: 'comment', ts: m.created_at, message: m})),
-    ...(data.events || []).map(e => ({kind: 'event', ts: e.ts, ...e})),
+    ...(data.events || []).map(e => ({kind: 'event', ts: e.created_at, ...e})),
   ].sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
   if (!$('form', host)) {
     // The box is the main chat's composer: a pill, one line that grows, the send arrow, Return sends.

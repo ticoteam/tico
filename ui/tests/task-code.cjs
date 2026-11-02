@@ -102,7 +102,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     data.comments = [{id: 'm1', kind: 'say', sender_id: 'bot:eng', body: 'The draft is checked.', created_at: now, refs: {task: 't-checkout', note: true}},
       {id: 'm2', kind: 'ask', sender_id: 'bot:eng', body: 'Which rollout day?', created_at: now, answers: [], refs: {task: 't-checkout',
         questions: [{id: 'day', question: 'Which rollout day?', options: [{label: 'Tuesday'}, {label: 'Thursday'}], multi: true, other: true}]}}];
-    data.events = [{id: 'e1', ts: now, actor: 'bot:eng', field: 'status', old: 'open', new: 'doing', note: 'The draft is checked.'}];
+    data.events = [{id: 'e1', created_at: now, actor: 'bot:eng', field: 'status', old: 'open', new: 'doing', note: 'The draft is checked.'}];
     data.files = [{id: 'f-notes', name: 'review.md', mime: 'text/markdown', current_version: 2, archived: false,
       versions: [2, 1].map(n => ({n, size: 48, mime: 'text/markdown', created_at: now, by: 'bot:eng',
         url: `/api/v2/files/f-notes?v=${n}`, answers: []}))}];
@@ -151,7 +151,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     }
     if (p === '/api/v2/tasks' && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});
-      const owner = body.owner_id.includes(':') ? body.owner_id : 'bot:' + body.owner_id;
+      const owner = body.owner.includes(':') ? body.owner : 'bot:' + body.owner;
       const up = (body.relations || []).find(r => r.kind === 'parent');
       const made = task('k5', {title: body.title, owner_id: owner, status: 'open', relations: up ? {parent: [{id: up.task, direction: 'out'}]} : {}});
       data.tree.push({id: 'k5', title: body.title, status: 'open', owner_id: owner, pr_state: null, children: []});

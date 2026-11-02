@@ -276,7 +276,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       // A quarantine from repeated refusals says when it lifts and offers Resume now to a manager; the message box stays.
       const since = iso(-10 * 60e3), resumes = iso(50 * 60e3);
       const why = `Quarantined for repeated refused writes (rule 8; 10 repeated refusals today): resumes by itself at ${new Date(resumes).toISOString().slice(0, 16).replace('T', ' ')} UTC; a person who manages it can clear it sooner. Refused write (identity): Only a person changes a task number. <script>throw 1</script>`;
-      const held = {bot: 'cmo', state: 'quarantined', bot_state: 'quarantined', since, focus: '10 repeated refusals today',
+      const held = {bot: 'cmo', state: 'quarantined', bot_state: 'quarantined', changed_at: since, focus: '10 repeated refusals today',
         quarantine: {since, auto: true, resumes_at: resumes, why}};
       const {page, errors, context, cleared} = await open(browser, viewport, {timezoneId: 'America/Los_Angeles'}, {status: held});
       await page.goto('https://tico-ui.test/#/bot/cmo');
@@ -299,7 +299,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
     for (const scheme of ['dark', 'light']) {
       // A usage limit offers Try now beside the warning and in the chat banner; one click clears it.
       const {page, errors, context, cleared} = await open(browser, {width: 1440, height: 900}, {colorScheme: scheme},
-        {status: {bot: 'cmo', state: 'limited', bot_state: 'active', since: iso(-10 * 60e3), focus: 'claude usage limit at 01:43; retrying after 02:13 UTC'}});
+        {status: {bot: 'cmo', state: 'limited', bot_state: 'active', changed_at: iso(-10 * 60e3), focus: 'claude usage limit at 01:43; retrying after 02:13 UTC'}});
       await page.goto('https://tico-ui.test/#/bot/cmo');
       const banner = page.locator('#conv-paused:not([hidden])');
       await banner.waitFor();
@@ -320,7 +320,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       const since = iso(-10 * 60e3);
       const review = {what: 'task note', found: 'bot-coo/', preview: 'Paste this into bot-coo/tools.yaml: token=[hidden]', task: {id: 't9', title: 'Set up the tool'}};
       const {page, errors, context, cleared} = await open(browser, {width: 1440, height: 900}, {}, {bots: bots.map(b => ({...b, host: 'runner'})),
-        status: {bot: 'cmo', state: 'quarantined', bot_state: 'quarantined', since, focus: 'escape: the task note reaches outside the hub',
+        status: {bot: 'cmo', state: 'quarantined', bot_state: 'quarantined', changed_at: since, focus: 'escape: the task note reaches outside the hub',
           quarantine: {since, auto: false, resumes_at: null, review}}});
       await page.goto('https://tico-ui.test/#/bot/cmo/more');
       const card = page.locator('#bot-quarantine');
@@ -342,7 +342,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       // Never a bare "Crashed" (Oct 22): a run its computer never started is a grey line that says nothing is needed;
       // a run that stopped partway is red, offers the one action that exists, and a click says what happened.
       const NOT_STARTED = "Last run didn't start in time. Nothing was lost; nothing is needed.";
-      const soft = {bot: 'cmo', state: 'idle', bot_state: 'active', since: iso(-60e3), last_stop: {kind: 'not_started', tone: 'soft',
+      const soft = {bot: 'cmo', state: 'idle', bot_state: 'active', changed_at: iso(-60e3), last_stop: {kind: 'not_started', tone: 'soft',
         needs_person: false, action: null, at: iso(-60e3), run_id: 'a1', text: NOT_STARTED,
         reason: "Its computer took the run but didn't start it before its lease ran out. It is back in the queue and runs again shortly."}};
       let {page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: soft});
@@ -361,7 +361,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       await dialog.waitFor({state: 'detached'});
       assert.deepEqual(errors, [], 'soft last-run errors');
       await context.close();
-      const stopped = {bot: 'cmo', state: 'crashed', bot_state: 'active', since: iso(-60e3), focus: 'One run stopped; saved for later',
+      const stopped = {bot: 'cmo', state: 'crashed', bot_state: 'active', changed_at: iso(-60e3), focus: 'One run stopped; saved for later',
         last_stop: {kind: 'stopped', tone: 'alert', needs_person: true, action: 'review', at: iso(-60e3), run_id: 'a2',
           text: 'Last run stopped partway. Retry it or dismiss it.',
           reason: 'Its computer stopped answering while the run was going, so the run\'s lease ran out.'}};

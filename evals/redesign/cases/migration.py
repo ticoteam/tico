@@ -503,7 +503,7 @@ def next_run_kept(f):
     installed(f, "routine:standup")
     setup(f, "read")
     want = nine_london(21).astimezone(UTC)
-    old, new = fx(f)["due_at"].get("standup"), body(f, "read").get("next_run")
+    old, new = fx(f)["due"].get("standup"), body(f, "read").get("next_run")
     if not old or not new:
         return False, f"routine next_due {old}, automation next_run {new}"
     return when(old) == when(new) == want, f"routine next_due {old}, automation next_run {new}, want {want.isoformat()}"

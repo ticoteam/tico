@@ -1415,7 +1415,7 @@ def event_readable(c, actor, event):
     if H.is_bot(event.get("actor")):
         for row in c.execute("SELECT id FROM attempts WHERE bot_id=? AND created_at<=? "
                              "AND coalesce(finished_at,?)>=?", (H.actor_id(event["actor"]),
-                                                            event["ts"], H.now(), event["ts"])):
+                                                            event["created_at"], H.now(), event["created_at"])):
             if not meetings.attempt_readable(actor, row[0]):
                 return False
             ids.update(attempt_tasks(c, row[0]))

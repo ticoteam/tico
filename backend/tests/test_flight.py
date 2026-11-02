@@ -170,7 +170,7 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     with store.read() as c:
         refreshed = flight._db(c, MINUTE + 86400)
         assert [r[0] for r in c.execute("SELECT name FROM pragma_table_info('flight_db')")] == [
-            "ts", "bytes", "wal_bytes", "free_bytes", "detail"]
+            "created_at", "bytes", "wal_bytes", "free_bytes", "detail"]
     assert len(sizing) == 2 * one_pass
     assert refreshed["objects_at"] == MINUTE + 86400
     assert refreshed["objects"]["size_fixture"] > first["objects"]["size_fixture"]
