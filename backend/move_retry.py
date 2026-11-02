@@ -2,7 +2,7 @@
 
 The review gate (backend/review_gate.py) refuses a move to Review 1 or Review 2 while CI fails or cannot be read, or
 while no passing receipt names the current head. Each of those clears on its own: the checks finish, a receipt is
-posted, GitHub comes back. So the refusal is remembered on the ticket (task_events field `move_retry`, with the step it
+posted, GitHub comes back. So the refusal is remembered on the ticket (a task history row of kind `move_retry`, with the step it
 was going to (and its board, for a move onto another) and a fingerprint of what the gate read), and this pass
 retries the same move as Tico when that fingerprint changes: a PR link's head or checks, the ticket's note, a new
 message on the ticket, or another wait beside a Blocked hold ending. An unreadable GitHub is retried on a timer
@@ -115,7 +115,8 @@ def remember(c, actor, notice):
 
 
 def _latest(c, task_id):
-    return c.execute("SELECT rowid, * FROM task_events WHERE task_id=? AND field IN ('step', ?) "
+    return c.execute(f"SELECT rowid, {H.TASK_EVENT_COLUMNS} FROM history_events WHERE subject_type='task' "
+                     "AND subject_id=? AND kind IN ('step', ?) "
                      "ORDER BY created_at DESC, rowid DESC LIMIT 1", (task_id, FIELD)).fetchone()
 
 
@@ -144,7 +145,8 @@ def pending(c, at=None):
     at = at or datetime.now(timezone.utc)
     since = (at - RETRY_FOR).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     out = []
-    for (task_id,) in c.execute("SELECT DISTINCT task_id FROM task_events WHERE field=? AND created_at>=?",
+    for (task_id,) in c.execute("SELECT DISTINCT subject_id FROM history_events WHERE subject_type='task' AND kind=? "
+                                "AND created_at>=?",
                                 (FIELD, since)).fetchall():
         row = H.task(c, task_id)
         found = remembered(c, row, at)
@@ -253,7 +255,7 @@ def _delay_after_failure(store, row, at=None):
             if not found:
                 return
             last, _detail = found
-            c.execute("UPDATE task_events SET new=json_set(new,'$.failed_at',?) WHERE rowid=?",
+            c.execute("UPDATE history_events SET new=json_set(new,'$.failed_at',?) WHERE rowid=?",
                       (at.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z", last["rowid"]))
     except Exception:
         log.exception("move retry delay failed for %s", row["id"])

@@ -44,7 +44,7 @@ def migrate(c):
     # Marked on every database, so a fresh one does not take its own second start for a first-version one. The marker
     # is new with the per-field decision: 'roadmaps_copies_cleared' marked databases that ran the per-task one.
     if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_copies_cleared_by_field','true')").rowcount \
-            and ran_before and H._has_table(c, 'task_events'):
+            and ran_before and H._has_table(c, 'history_events'):
         clear_copies(c)
     c.execute('CREATE TABLE IF NOT EXISTS task_requesters('
               'id TEXT PRIMARY KEY,task_id TEXT NOT NULL REFERENCES tasks(id),actor TEXT,'
@@ -59,7 +59,8 @@ def migrate(c):
 # Public text someone wrote leaves a task event for its field (publication(), task_create); the first version's copies
 # left none.
 def written(field):
-    return f"EXISTS(SELECT 1 FROM task_events e WHERE e.task_id=tasks.id AND e.field='{field}')"
+    return (f"EXISTS(SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
+            f"AND e.kind='{field}')")
 
 
 def clear_copies(c):

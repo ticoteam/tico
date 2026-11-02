@@ -296,11 +296,11 @@ def test_steering_polls_and_output_batches_store_no_retry_receipts_and_replay_th
 
 def test_one_tasks_history_of_one_field_reads_by_task(api):
     with api.app.state.store.read() as c:
-        for sql in ("SELECT coalesce(max(rowid),0) FROM task_events WHERE task_id=? AND field='status' "
+        for sql in ("SELECT coalesce(max(rowid),0) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
                     "AND old IN ('done','closed','declined') AND new NOT IN ('done','closed','declined')",
-                    "SELECT * FROM task_events WHERE task_id=? AND field='owner' ORDER BY created_at DESC, rowid DESC LIMIT 1"):
+                    "SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner' ORDER BY created_at DESC, rowid DESC LIMIT 1"):
             plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, ("t",)))
-            assert "task_events_task_field" in plan, plan
+            assert "history_events_subject_kind" in plan, plan
 
 
 def test_a_steering_poll_with_nothing_queued_answers_without_the_writer(api, monkeypatch):

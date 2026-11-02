@@ -287,21 +287,22 @@ def settled_state(conn, task_row, bot, started, attempt_id):
                         "AND (state IN ('leased','running') OR finished_at>=?) LIMIT 1",
                         (bot, attempt_id, started)).fetchone():
             return None
-        if conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND created_at>? AND actor<>? LIMIT 1",
+        if conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND created_at>? "
+                        "AND actor_id<>? LIMIT 1",
                         (task_row["id"], started, me)).fetchone():
             return None
         # The hash includes related tasks' states too. Their events live on those tasks, not this one;
         # a change during the turn must not be saved as if the bot had already seen it.
-        if conn.execute("SELECT 1 FROM task_events WHERE task_id IN ("
+        if conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id IN ("
                         "SELECT CASE WHEN from_task=? THEN to_task ELSE from_task END FROM task_relations "
-                        "WHERE ? IN (from_task,to_task)) AND created_at>? AND actor<>? LIMIT 1",
+                        "WHERE ? IN (from_task,to_task)) AND created_at>? AND actor_id<>? LIMIT 1",
                         (task_row["id"], task_row["id"], started, me)).fetchone():
             return None
         if conn.execute("SELECT 1 FROM messages WHERE conversation_id=? AND created_at>? AND sender_id NOT IN (?,?) "
                         "LIMIT 1", (task_row["conversation_id"], started, me, H.KEEPER)).fetchone():
             return None
         # Starting a task lane records this turn's own session link after claim. That is known
-        # to this turn; explicit edits by someone else are already caught by task_events above.
+        # to this turn; explicit edits by someone else are already caught by the task history above.
         if conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind<>'session' "
                         "AND coalesce(updated_at,created_at)>? LIMIT 1",
                         (task_row["id"], started)).fetchone():

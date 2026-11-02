@@ -111,7 +111,7 @@ def test_named_reviewer_sees_card_after_both_private_tasks_close_and_sweep(api):
 def test_human_needs_you_and_discard_do_not_change_tasks_or_enqueue_work(api):
     with api.app.state.store.transaction() as c:
         card = offer(c)
-        before = {t: c.execute('SELECT count(*) FROM ' + t).fetchone()[0] for t in ('jobs', 'messages', 'task_events')}
+        before = {t: c.execute('SELECT count(*) FROM ' + t).fetchone()[0] for t in ('jobs', 'messages', 'history_events')}
     assert any(i['id'] == card['id'] and i['kind'] == 'memory_tidy' for i in get(api, 'needs-you')['items'])
     post(api, 'memory-tidy/cards/' + card['id'] + '/decide', {'decision': 'keep'}, expected=409)
     assert get(api, 'memory-tidy/cards')['cards'][0]['status'] == 'open'

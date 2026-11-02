@@ -630,7 +630,7 @@ def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited
             else:
                 G.update(c, "human:ana", row["id"], title="Private revised words")
         before = dict(G.goal(c, row["id"]))
-        events = c.execute("SELECT count(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0]
+        events = c.execute("SELECT count(*) FROM history_events WHERE subject_type='goal' AND subject_id=?", (row["id"],)).fetchone()[0]
         saved = c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
                           (GR.SAVED, back["message_id"])).fetchone()[0]
     for denied in (get(api, "goals/read-back/" + back["message_id"], attempt["token"], expected=403),
@@ -640,6 +640,6 @@ def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited
         assert "Private revised words" not in str(denied) and "inbox" not in str(denied)
     with api.app.state.store.read() as c:
         assert dict(G.goal(c, row["id"])) == before
-        assert c.execute("SELECT count(*) FROM goal_events WHERE goal_id=?", (row["id"],)).fetchone()[0] == events
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='goal' AND subject_id=?", (row["id"],)).fetchone()[0] == events
         assert c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
                          (GR.SAVED, back["message_id"])).fetchone()[0] == saved

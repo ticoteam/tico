@@ -164,3 +164,21 @@ class PrincipalRow(TypedDict):
     id: str
     kind: str
     deleted_at: str | None
+
+
+class HistoryEventRow(TypedDict):
+    """One `history_events` row (SELECT *): one change to a task, a goal, the company profile, the strategy or the
+    market graph (backend/migrations/0103_history_events.py). `kind` is the field that changed or what happened, `data`
+    a JSON object of the subject type's extras."""
+    id: str
+    subject_type: str
+    subject_id: str
+    actor_id: str | None
+    kind: str
+    old: str | None
+    new: str | None
+    note: str | None
+    action_id: str | None
+    via: str | None
+    data: str | None
+    created_at: str

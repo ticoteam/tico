@@ -143,10 +143,10 @@ def test_market_import_resolves_cites_skips_and_dry_runs(api, tmp_path):
     )
     store = api.app.state.store
     with store.read() as c:
-        before = c.execute("SELECT (SELECT COUNT(*) FROM market_events) + (SELECT COUNT(*) FROM market_insights)").fetchone()[0]
+        before = c.execute("SELECT (SELECT COUNT(*) FROM history_events WHERE subject_type IN ('market_entity','market_edge','market_evidence','market_document')) + (SELECT COUNT(*) FROM market_insights)").fetchone()[0]
     preview = post(api, "market/import", {"lines": lines, "name": "batch.jsonl", "dry_run": True})
     with store.read() as c:
-        assert c.execute("SELECT (SELECT COUNT(*) FROM market_events) + (SELECT COUNT(*) FROM market_insights)").fetchone()[0] == before
+        assert c.execute("SELECT (SELECT COUNT(*) FROM history_events WHERE subject_type IN ('market_entity','market_edge','market_evidence','market_document')) + (SELECT COUNT(*) FROM market_insights)").fetchone()[0] == before
         assert not M.entity(c, "company/turno")
     done = post(api, "market/import", {"lines": lines, "name": "batch.jsonl", "note": "Research batch one."})
     counts = {k: done[k] for k in M.IMPORT_OUTCOMES}
@@ -172,7 +172,7 @@ def test_market_import_resolves_cites_skips_and_dry_runs(api, tmp_path):
         assert "Turno integrates with Brightline." in cited("edge", new_edge["id"])
         row = M.insight(c, done["insight"])
         assert (row["status"], row["reported_by"], row["about"], row["claim"]) == ("applied", "human:ana", "batch.jsonl", "Research batch one.")
-        assert c.execute("SELECT COUNT(*) FROM market_events WHERE insight_id=?", (row["id"],)).fetchone()[0] >= len(row["applied_events"]) > 0
+        assert c.execute("SELECT COUNT(*) FROM history_events WHERE subject_type IN ('market_entity','market_edge','market_evidence','market_document') AND json_extract(data, '$.insight_id')=?", (row["id"],)).fetchone()[0] >= len(row["applied_events"]) > 0
 
 
 

@@ -107,8 +107,9 @@ def _kpis(c, hidden):
 def _markers(c, auth, who, since):
     visible = auth.task_sql(c, who)
     rows = H._rows(c.execute(
-        "SELECT e.task_id, e.created_at, e.new, t.title, t.goal_id FROM task_events e JOIN tasks t ON t.id=e.task_id "
-        f"WHERE e.field='step' AND e.new IN ({','.join('?' * len(MOVES))}) AND t.type_id=? AND e.created_at>=? "
+        "SELECT e.subject_id AS task_id, e.created_at, e.new, t.title, t.goal_id FROM history_events e "
+        "JOIN tasks t ON t.id=e.subject_id "
+        f"WHERE e.subject_type='task' AND e.kind='step' AND e.new IN ({','.join('?' * len(MOVES))}) AND t.type_id=? AND e.created_at>=? "
         f"AND t.id IN (SELECT id FROM tasks WHERE type_id=? AND {visible}) ORDER BY e.created_at DESC, e.id DESC LIMIT ?",
         [*MOVES, MT.TYPE_ID, since, MT.TYPE_ID, MARKERS_MAX]))
     tags = {}

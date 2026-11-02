@@ -1202,7 +1202,6 @@ def ensure_market_reads(conn):
             ("market_entities_name", "market_entities(name, id)"),
             ("market_entities_status_name", "market_entities(status, name, id)"),
             ("market_entities_type_name", "market_entities(type, name, id)"),
-            ("market_events_ts", "market_events(created_at, id)"),
             ("market_edges_rel_pair", "market_edges(rel, src, dst)"),
         ):
             conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
@@ -1507,12 +1506,8 @@ def migrate(conn, adopt_legacy=False):
                  "WHERE status IN ('done','closed')")
     conn.execute(TASKS_DUE_INDEX)                  # the scheduler's due-date reminder pass
     conn.execute(TASKS_RESUME_INDEX)               # ...and its quiet tasks whose deferred time came (quiet_work.due)
-    # A task's history, and the Tasks page's stats: how many tasks reached each status, by day.
-    conn.execute("CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id, created_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS task_events_field_ts ON task_events(field, created_at)")
-    # One task's history of one field (status, owner, waiting_on): without it, and without ANALYZE, SQLite picks
-    # task_events_field_ts and reads that field's changes on every task.
-    conn.execute("CREATE INDEX IF NOT EXISTS task_events_task_field ON task_events(task_id, field, created_at)")
+    # A task's history and the Tasks page's stats read history_events through the indexes its migration made
+    # (backend/migrations/0103_history_events.py).
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,created_at DESC)")
@@ -4224,7 +4219,7 @@ def retire_held_steps(conn):
             mine = steps[type_id]
             if held_as == "waiting":
                 working = {s["id"] for s in mine if s["status"] in ACTIVE_STATUSES}
-                left = (r[0] for r in conn.execute("SELECT old FROM task_events WHERE task_id=? AND field='step' "
+                left = (r[0] for r in conn.execute("SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
                                                    "ORDER BY created_at DESC,rowid DESC", (task_id,)))
                 target = next((old for old in left if old in working), None) \
                     or next((s["id"] for s in mine if s["status"] in ("open", "doing")), None)
@@ -5328,7 +5323,7 @@ def _subtask_result_key(conn, row, text):
 
 
 def _subtask_result_cycle(conn, row):
-    reopened = conn.execute("SELECT coalesce(max(rowid),0) FROM task_events WHERE task_id=? AND field='status' "
+    reopened = conn.execute("SELECT coalesce(max(rowid),0) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
                             "AND old IN ('done','closed','declined') AND new NOT IN ('done','closed','declined')",
                             (row["id"],)).fetchone()[0]
     return f"{reopened}:"
@@ -5336,12 +5331,12 @@ def _subtask_result_cycle(conn, row):
 
 def _check_cycle_start(conn, row):
     """When a check's current cycle began (its last reopen, else "") and whether its stored verdict came after it."""
-    reopened = _one(conn, "SELECT rowid AS n, created_at FROM task_events WHERE task_id=? AND field='status' "
+    reopened = _one(conn, "SELECT rowid AS n, created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
                           "AND old IN ('done','closed','declined') AND new NOT IN ('done','closed','declined') "
                           "ORDER BY rowid DESC LIMIT 1", (row["id"],))
     if not reopened:
         return {"at": "", "current": bool(row.get("verdict"))}
-    given = conn.execute("SELECT coalesce(max(rowid),0) FROM task_events WHERE task_id=? AND field='verdict' "
+    given = conn.execute("SELECT coalesce(max(rowid),0) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='verdict' "
                          "AND new IS NOT NULL", (row["id"],)).fetchone()[0]
     return {"at": reopened["created_at"], "current": bool(row.get("verdict")) and given > reopened["n"]}
 
@@ -6523,7 +6518,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                     # Older releases missed inline clauses. Recover only the owner's saved words from this
                     # cycle, never a requester or another participant's verdict.
                     sources = _rows(conn.execute(
-                        "SELECT created_at AS at, new AS text FROM task_events WHERE task_id=? AND actor=? AND field='note' "
+                        "SELECT created_at AS at, new AS text FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? AND kind='note' "
                         "AND created_at>? UNION ALL SELECT m.created_at AS at, m.body AS text FROM messages m "
                         "LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE m.conversation_id=? "
                         "AND m.sender_id=? AND m.kind IN ('say','notice') AND m.deleted_at IS NULL "
@@ -7568,20 +7563,38 @@ def _task_changed(conn, task_id, actor, field, old, new, revision):
                                        **({"owner_id": new} if field == "owner" else {})}, actor, revision=revision)
 
 
-def _task_event(conn, task_id, actor, field, old, new, note=""):
+# ----------------------------------------------------------------------------- history
+# What happened to each thing, one row per change, in `history_events` (backend/migrations/0103_history_events.py):
+# a task's, a goal's, the company profile's, the strategy's and the market graph's. `kind` is the field that changed
+# (or what happened), `old`/`new` its values, `data` a JSON object of the type's own extras. A task's rows read the
+# way its old `task_events` rows did through TASK_EVENT_COLUMNS, so its history keeps its shape in every answer.
+HISTORY_SUBJECTS = ("task", "goal", "company", "strategy",
+                    "market_entity", "market_edge", "market_evidence", "market_document")
+MARKET_SUBJECTS_SQL = "('market_entity','market_edge','market_evidence','market_document')"
+TASK_EVENT_COLUMNS = ("id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, "
+                      "action_id, via")
+
+
+def history_event(conn, subject_type, subject_id, actor, kind, old=None, new=None, note=None, data=None, *,
+                  action_id=None, via=None, created_at=None):
+    """Append one change to `history_events`; returns its id. Values are stored as text, `data` as JSON."""
+    if subject_type not in HISTORY_SUBJECTS:
+        raise ValueError(f"unknown history subject type {subject_type!r}")
     event_id = new_id()
-    via = VIA.get()
-    if via and not any(r[1] == "via" for r in conn.execute("PRAGMA table_info(task_events)")):
-        conn.execute("ALTER TABLE task_events ADD COLUMN via TEXT")
+    conn.execute("INSERT INTO history_events (id, subject_type, subject_id, actor_id, kind, old, new, note, action_id, "
+                 "via, data, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                 (event_id, subject_type, subject_id, actor, kind,
+                  None if old is None else str(old), None if new is None else str(new), note, action_id, via,
+                  None if data is None else json.dumps(data, sort_keys=True, ensure_ascii=False),
+                  created_at or now()))
+    return event_id
+
+
+def _task_event(conn, task_id, actor, field, old, new, note=""):
     # A Strategy Bot decision (or its Undo) stamps each change it makes with its action id (backend/strategy_acts.py).
     from .strategy_acts import ACTION
-    action = ACTION.get()
-    extra = (("via", via),) * bool(via) + (("action_id", action),) * bool(action)
-    conn.execute("INSERT INTO task_events (id, task_id, created_at, actor, field, old, new, note"
-                 + "".join(", " + k for k, _ in extra) + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?" + ", ?" * len(extra) + ")",
-                 (event_id, task_id, now(), actor, field,
-                  None if old is None else str(old), None if new is None else str(new), note,
-                  *(v for _, v in extra)))
+    event_id = history_event(conn, "task", task_id, actor, field, old, new, note,
+                             action_id=ACTION.get() or None, via=VIA.get() or None)
     if field in ("status", "owner"):
         # A reconnect card stands only on its unfinished task with the owner it was opened for (backend/reconnects.py).
         from .reconnects import moved as reconnects_moved
@@ -7594,7 +7607,7 @@ def _strategy_changed(conn, task_id):
     """Whether a Strategy Bot decision (or its Undo) is writing this task now or has changed it before."""
     from .strategy_acts import ACTION
     return bool(ACTION.get()) or bool(conn.execute(
-        "SELECT 1 FROM task_events WHERE task_id=? AND action_id IS NOT NULL LIMIT 1", (task_id,)).fetchone())
+        "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND action_id IS NOT NULL LIMIT 1", (task_id,)).fetchone())
 
 
 def _task_ref(value):
@@ -7739,7 +7752,7 @@ def task_report(conn, row, state, note=""):
     last = _one(conn, "SELECT created_at,detail FROM events WHERE actor=? AND action='task.report' AND target=? "
                       "ORDER BY created_at DESC LIMIT 1", (KEEPER, row["id"]))
     if last and _json(last["detail"], {}).get("state") == state and not _one(
-            conn, "SELECT 1 FROM task_events WHERE task_id=? AND field='status' AND created_at>? LIMIT 1", (row["id"], last["created_at"])):
+            conn, "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND created_at>? LIMIT 1", (row["id"], last["created_at"])):
         return None
     room = _main_room(conn, row)
     if not room or room["id"] == row["conversation_id"]:
@@ -9694,7 +9707,7 @@ FLOW_STATUSES = ("created",) + TASK_STATUSES
 
 def task_flow(conn, since, until=None, tz_minutes=0, visible="1", owner=None, requester=None,
               owner_kind=None, label=None, recurring=None, type_id=None):
-    """How tasks moved through their statuses between `since` and `until`, read from `task_events`.
+    """How tasks moved through their statuses between `since` and `until`, read from the task history.
 
     Every status change is already an event, so nothing extra is stored. `days` counts the tasks
     that entered each stage on each local day ("created" is a new task, "open" a reopened one);
@@ -9722,14 +9735,15 @@ def task_flow(conn, since, until=None, tz_minutes=0, visible="1", owner=None, re
         elif recurring:
             where.append("0")
     picked = "picked AS (SELECT id, owner_id FROM tasks WHERE " + " AND ".join(where) + ")"
-    fields = "e.field='status'" if not type_id else "(e.field='status' OR (e.field='step' AND e.new IS NOT NULL))"
+    fields = "e.subject_type='task' AND " + (
+        "e.kind='status'" if not type_id else "(e.kind='status' OR (e.kind='step' AND e.new IS NOT NULL))")
     window = f"{fields} AND e.created_at>=?" + (" AND e.created_at<?" if until else "")
     window_args = [since] + ([until] if until else [])
-    stage = ("CASE WHEN e.field='step' THEN 'step:' || e.new WHEN e.old IS NULL THEN 'created' ELSE e.new END")
+    stage = ("CASE WHEN e.kind='step' THEN 'step:' || e.new WHEN e.old IS NULL THEN 'created' ELSE e.new END")
     days, people = {}, {}
     for day, owner_actor, name, n in conn.execute(
-            f"WITH {picked} SELECT date(e.created_at, ?) AS day, t.owner_id, {stage} AS stage, count(*) FROM task_events e "
-            f"JOIN picked t ON t.id=e.task_id WHERE {window} GROUP BY day, t.owner_id, stage",
+            f"WITH {picked} SELECT date(e.created_at, ?) AS day, t.owner_id, {stage} AS stage, count(*) FROM history_events e "
+            f"JOIN picked t ON t.id=e.subject_id WHERE {window} GROUP BY day, t.owner_id, stage",
             (*args, f"{int(tz_minutes):+d} minutes", *window_args)):
         days.setdefault(day, {})
         days[day][name] = days[day].get(name, 0) + n
@@ -9738,10 +9752,10 @@ def task_flow(conn, since, until=None, tz_minutes=0, visible="1", owner=None, re
     # Time in a stage: from entering it to the field's next change, for stages left in the window.
     spans = {}
     for name, hours in conn.execute(
-            f"WITH {picked}, s AS (SELECT e.field, e.new, e.created_at, LEAD(e.created_at) OVER "
-            "(PARTITION BY e.task_id, e.field ORDER BY e.created_at, e.id) AS left_at FROM task_events e "
-            f"WHERE {fields} AND e.task_id IN (SELECT e.task_id FROM task_events e JOIN picked t ON t.id=e.task_id "
-            f"WHERE {window})) SELECT CASE WHEN field='step' THEN 'step:' || new ELSE new END, "
+            f"WITH {picked}, s AS (SELECT e.kind, e.new, e.created_at, LEAD(e.created_at) OVER "
+            "(PARTITION BY e.subject_id, e.kind ORDER BY e.created_at, e.id) AS left_at FROM history_events e "
+            f"WHERE {fields} AND e.subject_id IN (SELECT e.subject_id FROM history_events e JOIN picked t "
+            f"ON t.id=e.subject_id WHERE {window})) SELECT CASE WHEN kind='step' THEN 'step:' || new ELSE new END, "
             "(julianday(left_at)-julianday(created_at))*24 FROM s WHERE new IS NOT NULL AND left_at>=?"
             + (" AND left_at<?" if until else ""),
             (*args, *window_args, *window_args)):
@@ -9764,7 +9778,7 @@ def task_flow(conn, since, until=None, tz_minutes=0, visible="1", owner=None, re
 
 
 def task_history(conn, task_id):
-    return _rows(conn.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY created_at", (task_id,)))
+    return _rows(conn.execute(f"SELECT {TASK_EVENT_COLUMNS} FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at, rowid", (task_id,)))
 
 
 def unanswered_ask(conn, task_row, *, actor=None):
