@@ -463,7 +463,7 @@ def lift_eligible(ctx: Ctx, budget_id: str = "") -> list[Any]:
     budgets = ctx.budgets()
     scope = subtree(ctx, budget_id) if budget_id else None
     today = dates.day(ctx.today)
-    eligible = []
+    eligible: list[Any] = []
     for card in SK.budget_frozen_cards(ctx.c, scope):
         leaf = str(card["budget_id"] or "")
         if leaf in budgets and not blocking_budget(ctx, leaf, today):
