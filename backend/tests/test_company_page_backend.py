@@ -1,6 +1,7 @@
 """The Company page's backend seams: what the mission discloses, the edge's route allowlist, and the switch's side effects.
 Acme is the fictional company. Each test stands for a way something could leave the install that the owner did not allow."""
 import json
+from datetime import datetime, timezone
 
 from backend import company
 from backend.company_page import audiences as A, disclosure as D, release, render, settings as S
@@ -35,3 +36,16 @@ def test_a_hidden_mission_is_on_no_page_no_feed_and_no_data(store):  # noqa: F81
         assert shown["company"]["mission"] == VISION and VISION in _page_text(shown)
         board = {"id": "board", "kind": "board", "name": "Board"}
         assert release.view_model(c, board, [], [], None, "private", _settings(store))["company"]["mission"] == ""
+
+
+def test_going_open_turns_public_on_in_the_same_step(store):  # noqa: F811
+    """Open is a public page: the Public audience is on the moment the company goes Open, with nothing else to switch."""
+    with store.transaction() as c:
+        A.seed(c)
+        S.set_transparency(c, OWNER, "private")
+        assert c.execute("SELECT enabled FROM audiences WHERE kind='public'").fetchone()[0] == 0
+        S.set_transparency(c, OWNER, "open")
+        assert c.execute("SELECT enabled FROM audiences WHERE kind='public'").fetchone()[0] == 1
+        # Going back doesn't have to switch it off; a page is served only while the company is Open.
+        S.set_transparency(c, OWNER, "closed")
+        assert release.public_view(c, datetime.now(timezone.utc)) == {}
