@@ -2073,7 +2073,7 @@ def install_views(app, store, auth, mutate, task_view):
         # The viewer's own access to each bot, {see, read, write, manage}, from the teammate rules in one pass (the
         # `my_access` a row shows). The gates below still read `access`, which applies the same rules.
         from . import teammate_access
-        mine = teammate_access.levels_many(c, who, ["bot:" + bot["slug"] for bot in bots], auth=auth)
+        mine = teammate_access.levels_many(c, who, ["bot:" + bot["id"] for bot in bots], auth=auth)
         # What the loop reads per bot, read for every bot at once: its computer, its open and doing tasks, and its
         # declared configuration from the rows above.
         shown = [bot["id"] for bot in bots if bot.get("state") != "archived"

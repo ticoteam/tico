@@ -1537,7 +1537,7 @@ def thread_people(c, replay):
     thread and, for a company or team thread, everyone that audience names; or, for a write that starts its thread
     (`start`), the members and the audience it names. The route's preflight and the write inside `threads.post` both read
     this, so `apply` can tell the audience moved between them."""
-    to = replay.get("recipient_id")
+    to = replay.get("recipient_id") or replay.get("to_actor")    # a hold stored before the rename
     out = {H.resolve_actor(c, to) or str(to)} if to else set()
     start = replay.get("start")
     if start is not None:

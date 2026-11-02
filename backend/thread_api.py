@@ -114,6 +114,8 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
     a teammate the viewer may not see has no threads to show."""
     limit = max(1, min(int(limit or 50), threads.MAX_PAGE))
     actor = str(actor)
+    if actor.startswith("bot:"):
+        actor = H.resolve_actor(c, actor) or actor      # a bot named by its slug: rows hold its id
     try:
         seen = teammate_access.levels_for(c, v.who, actor, auth=v.auth)["see"]
     except (ValueError, KeyError):

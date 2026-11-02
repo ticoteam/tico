@@ -23,3 +23,11 @@ def test_a_bot_whose_id_is_not_its_slug_has_a_home_members_and_mentions(api):
         assert H.resolve_bot(c, "mira")["id"] == mira
     assert mention["actor"] == "bot:" + mira
     assert job is None or job["bot_id"] == mira
+
+    shared = api.get("/api/v2/threads", params={"with": "bot:mira"}, headers=headers("ana-test")).json()
+    assert thread["id"] in [t["id"] for t in shared["threads"] + shared["dms"] + shared["attention"]]
+
+    listed = api.get("/api/employees", headers=headers("ana-test")).json()
+    rows = listed if isinstance(listed, list) else listed["employees"]
+    mine = next(row for row in rows if row.get("id") == mira)
+    assert mine["my_access"]["manage"] is True
