@@ -629,6 +629,7 @@ def run_step4(ctx: Context) -> None:
     ctx.check(step, "the vendor's bank details are saved as a recipient", committed(rec), describe(rec))
     recipients = api.get("finance/recipients")
     recipient = by_field(recipients, "name", "REH Vendor Hosting Co")
+    ctx.state["recipient_id"] = recipient
     ctx.check(step, "the recipient list shows no full account number", bool(recipient)
               and "000123456789" not in json.dumps(recipients), f"recipient {recipient or 'none'}")
     bill = api.act("bill_create", {"vendor_id": vendor, "number": "REH-BILL-1", "bill_date": f"{PAST_MONTH}-20",
@@ -705,9 +706,12 @@ def run_step5(ctx: Context) -> None:
     overdue = api.get("finance/invoices", late="true", limit=200)
     ctx.check(step, "the unpaid invoice past its due date is listed as late", find_row(overdue, id=inv2) is not None,
               f"late list holds {len(json.dumps(overdue))} bytes")
-    chase = wait_for(lambda: inv2 in json.dumps(api.get("finance/inbox", kind="invoice_overdue", limit=200)), 60)
-    ctx.check(step, "the Bookkeeper's inbox holds an overdue item for it (event-driven, may not run here)", bool(chase),
-              "no invoice_overdue item appeared within 60 s")
+    def overdue_item() -> dict | None:
+        inbox = api.get("finance/inbox", kind="invoice_overdue", limit=200)
+        return next((d for d in walk(inbox) if d.get("kind") == "invoice_overdue" and inv2 in json.dumps(d)), None)
+    item = wait_for(overdue_item, 60)
+    ctx.check(step, "the Bookkeeper's inbox holds an invoice_overdue item for the invoice (the hourly watch raises it)",
+              bool(item), f"item {json.dumps(item)[:200]}" if item else "no invoice_overdue row for the invoice within 60 s")
     wo = api.act("invoice_write_off", {"invoice_id": inv2, "memo": "REH bad debt, written off"})
     ctx.check(step, "the rest of the second invoice is written off", committed(wo), describe(wo))
     written = status_of(api.get(f"finance/invoices/{inv2}"), inv2)
@@ -757,22 +761,33 @@ def run_step6(ctx: Context) -> None:
     mercury_status = fake.mercury(f"/cards/{fake_id}").get("status") if fake_id else None
     ctx.check(step, "Mercury shows the card frozen", mercury_status == "frozen", f"status {mercury_status}")
     row2 = until(ctx, lambda: next(iter(feed_rows(api, "REH CARD SPEND 2")), None), 180)
-    ctx.check(step, "the charge that went past the limit still posts (actuals always post)", row2 is not None,
-              f"row {bool(row2)}")
+    txn2 = s2[1].get("transaction", {}) if isinstance(s2[1], dict) else {}
+    ctx.check(step, "the charge that went past the limit still posts (actuals always post)",
+              (row2 or {}).get("status") == "posted",
+              f"feed status {(row2 or {}).get('status')}; Mercury {txn2.get('status')} ({txn2.get('reasonForFailure')})")
     unfrozen = api.act("card_unfreeze", {"card_id": card, "reason": "rehearsal: the owner unfreezes"})
     ctx.check(step, "the owner's unfreeze is refused while the budget is over (spec 738)",
               unfrozen.get("status") == "denied" and "used up" in json.dumps(unfrozen), describe(unfrozen))
     still = fake.mercury(f"/cards/{fake_id}").get("status") if fake_id else None
     ctx.check(step, "Mercury still shows the card frozen while the budget is over", still == "frozen",
               f"status {still}")
-    ctx.gap(step, "a raise releases the budget-frozen card on Mercury",
-            "not scripted in this run: spec 738 says cards a budget froze unfreeze when it has room again (a raise); "
-            "the raise action is not called here")
+    raised = api.act("budget_update", {"budget_id": budget, "amount": 100000, "effective_from": f"{PAST_MONTH}-01"})
+    ctx.check(step, "the owner raises the card budget to $1,000.00", committed(raised), describe(raised))
+    released = until(ctx, lambda: fake.mercury(f"/cards/{fake_id}").get("status") == "active" if fake_id else False, 240)
+    now_status = fake.mercury(f"/cards/{fake_id}").get("status") if fake_id else None
+    ctx.check(step, "a raise releases the budget-frozen card on Mercury (spec 738)", bool(released),
+              f"status {now_status}")
     spent = sum(int(r.get("amount") or 0) for r in feed_rows(api, "REH CARD SPEND"))
     ctx.check(step, "the two card charges reach the feed at $570.50", spent == -57050, f"feed sum {spent}")
     rec = next((r for r in budget_rows(api) if r.get("name") == "REH Card budget"), {})
+    for label, resp in (("1", s1), ("2", s2)):
+        print(f"DIAG fake charge {label}: {json.dumps(resp[1], sort_keys=True)[:700]}")
+    for row in feed_rows(api, "REH CARD SPEND"):
+        print(f"DIAG feed row: {json.dumps(row, sort_keys=True)[:900]}")
+    print(f"DIAG card: {json.dumps(find_row(api.get('finance/cards'), id=card) or {}, sort_keys=True)[:1200]}")
+    print(f"DIAG budget: {json.dumps(rec, sort_keys=True)[:1500]}")
     ctx.check(step, "card spend reconciles: the budget's actual is the two charges", rec.get("actual") == 57050,
-              f"budget actual {rec.get('actual')}")
+              f"budget actual {rec.get('actual')}, held {rec.get('held')}, remaining {rec.get('remaining')}")
 
 
 def run_step7(ctx: Context) -> None:
@@ -805,9 +820,29 @@ def run_step7(ctx: Context) -> None:
     ai = ai_row.get("state") if isinstance(ai_row.get("state"), dict) else {}
     ctx.check(step, "the AI services budget (the demo's own) holds the AI charge and posts it though over",
               (ai.get("actual") or 0) >= 8880, f"state {json.dumps(ai)[:200]}")
-    ctx.gap(step, "at_limit ask and hold_payment",
-            "not scripted in this run: both act on a payment made against an over-limit budget, and the step 4 "
-            "payments were not tied to a budget (decline is exercised in step 6, warn here)")
+    # Each at-limit budget sits on its own new expense line; a $100.00 payment on that line is over its $50.00 budget.
+    # A held payment stays queued with the budget named as its reason (payments.py _hold).
+    new_lines = [api.act("account_create", {"code": code, "name": name, "type": "expense"})
+                 for code, name in (("6210", "REH Travel"), ("6220", "REH Meals"))]
+    ctx.check(step, "two new expense lines for the at-limit budgets", all(committed(n) for n in new_lines),
+              " / ".join(describe(n) for n in new_lines))
+    ids = account_ids(api)
+    for label, line, at_limit, memo in (("REH Ask budget", "REH Travel", "ask", "REH-ASK"),
+                                        ("REH Hold budget", "REH Meals", "hold_payment", "REH-HOLD")):
+        made = api.act("budget_create", {"name": label, "account_id": ids.get(line, ""), "period": "month",
+                                         "amount": 5000, "at_limit": at_limit, "warn_pct": 80,
+                                         "effective_from": f"{PAST_MONTH}-01"})
+        ctx.check(step, f"a $50.00 monthly budget on {line} at {at_limit}", committed(made), describe(made))
+        pay = api.act("payment_create", {"recipient_id": ctx.state["recipient_id"], "amount": 10000,
+                                         "money_account_id": bank_id(api, "Acme Checking"), "memo": memo,
+                                         "account_id": ids.get(line, ""), "mode": "approval_queue"})
+        ctx.check(step, f"a $100.00 payment on {line} is queued for approval", committed(pay), describe(pay))
+        owner_decides(ctx, step, pay, f"the $100.00 payment on {line}")
+        row = next((d for d in walk(api.get("finance/payments", limit=200)) if "status" in d and memo in json.dumps(d)), {})
+        held_for = str(row.get("last_error") or row.get("reason") or "")
+        ctx.check(step, f"at {at_limit} the over-budget payment waits (queued), not sent, and names {label}",
+                  row.get("status") == "queued" and label in held_for,
+                  f"status {row.get('status')}, reason {held_for[:160]}")
     ctx.gap(step, "AI services Gateway meter and the AI-services cutoff",
             "the meter is read and sent by HQ's gateway_sync.py only; the demo's finance tick runs drain_events and "
             "watch_documents, and the cutoff's key cap goes through HQ, which this stack cannot reach")
@@ -862,10 +897,12 @@ def run_step8(ctx: Context) -> None:
     ctx.check(step, "a correction posts into the reopened month", committed(fix), describe(fix))
     again = api.act("close_period", {"month": PAST_MONTH})
     ctx.check(step, "October closes again", committed(again), describe(again))
-    snap2 = api.get(f"finance/close/{PAST_MONTH}")
-    restated = [v for d in walk(snap2) for k, v in d.items() if "restat" in k]
-    ctx.check(step, "the change after close is counted as a restatement", any(bool(v) for v in restated),
-              f"restatement fields {restated}; restate() has no production caller (backend/finance/closing.py:54-69; tests only)")
+    pnl2 = api.get("finance/pnl", start=f"{PAST_MONTH}-01", end=f"{PAST_MONTH}-31")
+    inc2 = sum(pnl2.get("income") or []) if isinstance(pnl2, dict) else None
+    exp2 = sum(pnl2.get("expense") or []) if isinstance(pnl2, dict) else None
+    moved = pnl_inc is not None and pnl_exp is not None and inc2 == pnl_inc + 1000 and exp2 == pnl_exp + 1000
+    ctx.check(step, "the re-closed month's P&L shows the correction in income and in expense (no restatement flag asserted)",
+              moved, f"income {pnl_inc} -> {inc2}, expense {pnl_exp} -> {exp2}")
 
 
 def run_step9(ctx: Context) -> None:
