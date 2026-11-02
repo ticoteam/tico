@@ -150,11 +150,7 @@ def test_a_dated_question_closes_on_its_date_after_a_clarify_without_going_ahead
         work = H.task_create(c, ANA, "Tidy the old drafts", "x", OPS)
         asked = pick(c, work["id"], "Archive the old drafts?",
                      default={"do": "July", "kind": "reversible", "by": H.shift(H.now(), days=10)})
-<<<<<<< HEAD
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-7), asked["id"]))
-=======
         c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-6), asked["id"]))
->>>>>>> origin/main
     post(api, "needs-you/clarify", {"ask": asked["id"]})                       # Ana's word: no answer, no go-ahead
     with api.app.state.store.transaction() as c:
         assert ask_deadlines.sweep(c, H.shift(H.now(), days=11)) == {"went_ahead": [], "expired": [asked["id"]],
