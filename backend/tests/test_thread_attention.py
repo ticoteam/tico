@@ -225,3 +225,25 @@ def test_a_dm_with_a_bot_and_a_person_is_listed(api):
     say(api, group, "Draft is ready.", actor="bot:finance")
     assert [i["conversation_id"] for i in needs(api, "thread_dm")] == [group]
     assert get(api, "threads", token="ana-test")["bot_dms"] == {}
+
+
+def test_a_dm_with_two_bots_is_still_listed(api):
+    setup_attempt(api, "finance")
+    setup_attempt(api, "ops")
+    with api.app.state.store.transaction() as c:
+        group = threads.dm(c, "human:ana", ["bot:finance", "bot:ops"], title="Close")["id"]
+    say(api, group, "Books are closed.", actor="bot:finance")
+    assert [i["conversation_id"] for i in needs(api, "thread_dm")] == [group]
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {}
+
+
+def test_a_bot_dms_count_takes_its_sub_threads(api):
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        dm = threads.dm(c, "human:ana", ["bot:finance"], title="Finance")["id"]
+    parent = say(api, dm, "Q3 is ready.", actor="bot:finance")
+    with api.app.state.store.transaction() as c:
+        threads.mark_all_read(c, ana_viewer(api), dm)
+        sub = threads.create(c, "bot:finance", parent_message_id=parent["id"])["id"]
+    say(api, sub, "Ana, one more line.", actor="bot:finance", to_actor="human:ana")      # addressed to her: unread
+    assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}

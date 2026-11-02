@@ -60,7 +60,7 @@ async function pageThreads() {
     list.map(t => threadRowHTML(t, opts).replace('</a></li>', `<time class="muted thp-at">${esc(ago(t.last_message_at))}</time></a></li>`)).join('')}</ul></section>` : '';
   const draw = () => {
     if (inbox) {
-      // What waits on the viewer, newest first, and the held messages that would start a thread (opened from their row).
+      // What waits on the viewer, newest first, then each held message with its review card (opened from its row).
       const rows = st.attention.filter(t => t && !t.archived_at), holds = inboxHolds();
       $('#threads-all').innerHTML = rows.length || holds.length
         ? section('', rows) + (holds.length ? `<div class="thp-holds" role="list">${holds.map(it => needRowHTML(it)).join('')}</div>` : '')
@@ -105,8 +105,12 @@ async function pageThreads() {
     if (inbox && d.kind !== 'activity') return liveThrottle('threads-page-inbox', () => { if (S.route === route) reload(true); }, 1500);
     if (d.kind === 'ranked' && sort === 'important' && !withActor) liveSoon('threads-page-ranked', () => { if (S.route === route) reload(true); }, 1500);
   });
-  // An ask answered or a hold decided elsewhere moves Needs you: Inbox follows it.
-  if (inbox) { const offNeeds = liveOn('needs', () => { if (S.route !== route) return offNeeds(); liveThrottle('threads-page-inbox', () => { if (S.route === route) reload(true); }, 1500); }); }
+  // A hold decided elsewhere moves Needs you: Inbox draws from the list once it is read again.
+  if (inbox) {
+    const offNeeds = liveOn('needs-list', () => { if (S.route !== route) return offNeeds(); draw(); });
+    // Its held messages come from Needs you, read a page at a time: the rest of it, so none is missed.
+    void (async () => { for (let i = 0; i < 10 && typeof needsAll === 'function' && !needsAll(); i++) if (await v2NeedsMore() === false) break; if (S.route === route) draw(); })();
+  }
   $('#threads-more').onclick = ev => { ev.currentTarget.disabled = true; load(st.next).finally(() => { ev.currentTarget.disabled = false; }); };
   try { await load(''); }
   catch (e) { if (S.route === route) $('#threads-all').innerHTML = `<p class="empty">${esc(e.status === 404 ? 'Threads are not on this server yet' : e.message)}</p>`; }

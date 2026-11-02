@@ -3599,8 +3599,8 @@ def bot_dm_unread(c, v):
     ids = [r[0] for r in c.execute(
         "SELECT cv.id FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id WHERE f.actor=? "
         "AND f.following=1 AND f.notify<>'muted' AND cv.parent_id IS NULL AND cv.closed_at IS NULL "
-        "AND cv.archived_at IS NULL AND cv.last_unread_seq>f.last_read_seq "
-        "AND COALESCE(cv.audience,'') IN ('personal','participants','')", (v.actor,))]
+        "AND cv.archived_at IS NULL AND COALESCE(cv.audience,'') IN ('personal','participants','')", (v.actor,))]
+    # Every such DM, read or not: what is unread may be in a sub-thread, which the subtree's summary counts.
     pairs = {}
     for thread_id in ids:
         root = thread_row(c, thread_id)

@@ -33,10 +33,15 @@ window.threadHref = threadHref;
 const threadIsDm = t => t?.audience === 'personal' || t?.audience === 'participants';
 // A DM with one bot and no one else: its bot's page holds it, so lists leave it to the Team list's count.
 const threadIsBotDm = t => threadIsDm(t) && !t.parent_id && Number(t.dm_with_count) === 1 && String(t.dm_with?.[0]?.actor || '').startsWith('bot:');
-// A held message that would start a thread has no thread row: Needs you has it, and so does Inbox.
-const inboxHolds = () => (S.v2?.needs || []).filter(it => it.kind === 'thread_held' && !it.thread_id);
+// Held messages, each with its review card (Inbox lists them; a held reply's thread is also an Inbox row, so only one
+// that would start a thread adds to the count).
+const inboxHolds = () => (S.v2?.needs || []).filter(it => it.kind === 'thread_held');
 const inboxRows = () => THREADS.attention.filter(t => t && !t.archived_at);
-const inboxCount = () => inboxRows().length + inboxHolds().length;
+const inboxCount = () => inboxRows().length + inboxHolds().filter(it => !it.thread_id).length;
+// The count may go on past what was read: a page of rows that all wait on the viewer. (Held messages past the first
+// page of Needs you are read when Inbox opens; the count does not wait for them.)
+const inboxMore = () => !!THREADS.attentionMore;
+const inboxCountText = n => n > 99 ? '99+' : n + (inboxMore() ? '+' : '');
 const threadPrivate = t => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience);
 // The other people in a DM: `dm_with` on a thread view, or a members list read for it. The viewer is left out.
 const threadOthers = t => (t?.dm_with || (Array.isArray(t?.members) ? t.members : t?.members?.members) || [])
@@ -111,7 +116,10 @@ async function threadsLoad() {
       // Only a real list turns Threads on; any other answer is a server without them.
       if (!Array.isArray(r?.threads)) { if (THREADS.on !== true) THREADS.on = false; return; }
       const botDms = r.bot_dms || {}, moved = JSON.stringify(botDms) !== JSON.stringify(THREADS.botDms);
-      Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads, dms: r.dms || [], botDms});
+      // A page of a list whose every row waits on the viewer may have more of them past it.
+      const ids = new Set((r.attention || []).map(t => t.id)), full = list => list.length >= 50 && list.every(t => ids.has(t.id));
+      const attentionMore = !!r.next_cursor && (full(r.threads) || full(r.dms || []));
+      Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads, dms: r.dms || [], botDms, attentionMore});
       if (moved && typeof renderTree === 'function') renderTree();
       liveTopicAdd('threads');
     } catch (e) {
@@ -131,16 +139,18 @@ function threadsSideRender() {
   if (tab) tab.hidden = !on;
   if (search) search.hidden = on;
   if (!on) return;
-  const rows = inboxRows(), n = inboxCount(), shown = rows.slice(0, THREADS_SIDE_MAX);
+  const rows = inboxRows(), n = inboxCount(), shown = rows.slice(0, THREADS_SIDE_MAX), holds = inboxHolds().length;
   const link = (href, label) => `<li><a class="th-row th-all${S.route === href ? ' cur' : ''}" href="${href}"><span class="th-row-title">${label}</span></a></li>`;
   const list = $('#th-list');
   // Every row waits on the viewer, so none carries the Needs attention dot.
   if (list) patchLiveHTML(list, shown.map(t => threadRowHTML(t)).join('')
-    + (!n ? '<li class="th-done muted">All caught up</li>' : n > shown.length ? link(INBOX_ROUTE, `All ${n}`) : '')
+    + (n > shown.length || inboxMore() ? link(INBOX_ROUTE, `All ${inboxCountText(n)}`) : '')
+    // Held messages are reviewed on Inbox's page, each from its row there.
+    + (holds ? link(INBOX_ROUTE, `${holds} held message${holds === 1 ? '' : 's'}`) : !n ? '<li class="th-done muted">All caught up</li>' : '')
     + link(THREADS_ROUTE, 'Threads'));
   // The header and the phone tab carry the same count: what is left to burn down.
   for (const badge of [$('#inbox-count'), $('#mobile-threads .nav-badge')]) {
-    if (badge) { badge.hidden = !n; badge.textContent = n > 99 ? '99+' : String(n); }
+    if (badge) { badge.hidden = !n; badge.textContent = inboxCountText(n); }
   }
 }
 // The row for one thread anywhere in the sidebar lists, updated in place from a thread view the server sent.
@@ -200,6 +210,8 @@ function threadsSync() {
   });
   // A hold or an ask moved on the viewer's Needs you list: the rows it marks are ranked first.
   liveOn('needs', () => { if (THREADS.on) liveThrottle('threads-side-live', threadsLoad, 3000); });
+  // Needs you read again (its holds are Inbox's): the count follows the list as it now stands.
+  liveOn('needs-list', () => { if (THREADS.on) threadsSideRender(); });
   liveOn('reset', () => { liveSoon('threads-side', threadsLoad, 400); threadViewsLive('reset', {}); });
 }
 document.addEventListener('click', ev => {

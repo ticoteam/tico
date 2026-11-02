@@ -160,6 +160,10 @@ async function open(browser, who, {phone = false} = {}) {
       await new Promise(r => setTimeout(r, 600));     // long enough to see "Checking…"
       return json({message: msg('n' + seen.posts.length, 9 + seen.posts.length, 'human:ana', body.text, {thread_id: send[1], parent_message_id: body.parent_message_id || null})});
     }
+    // A message held for Ana's review in a thread: Inbox lists it with its review card.
+    if (p === '/api/v2/needs-you' && !bob) return json({items: [{kind: 'thread_held', id: 'hold3', conversation_id: null, thread_id: 't-plan',
+      title: 'A message is held for your review', requester_id: 'Bea', created_at: at(5)}], count: 1, version: 'v1'});
+    if (p === '/api/v2/rule-holds/hold3') return json({id: 'hold3', operation: 'threads', can_send: true, reason: 'Names a customer'});
     if (p === '/api/v2/rule-holds/hold1') return json({id: 'hold1', can_send: false});
     if (p === '/api/v2/rule-holds/hold2') return json({id: 'hold2', operation: 'threads_edit', message_id: 'ed1', can_send: false});
     if (p === '/api/v2/rule-holds/hold2/withdraw') { seen.withdrawn.push('hold2'); return json({ok: true}); }
@@ -214,7 +218,7 @@ let browser = null;
     await page.locator('#th-list .th-row').first().waitFor();
     // Inbox: only what waits on Ana, then the way to every thread; no DMs section.
     const rows = await page.locator('#th-list .th-row').evaluateAll(els => els.map(a => ({title: a.querySelector('.th-row-title').textContent, attn: a.classList.contains('attn')})));
-    assert.deepEqual(rows.map(r => r.title), ['Launch plan', 'Threads'], 'Inbox: ' + rows.map(r => r.title));
+    assert.deepEqual(rows.map(r => r.title), ['Launch plan', '1 held message', 'Threads'], 'Inbox: ' + rows.map(r => r.title));
     assert.ok(!rows[0].attn, 'every Inbox row waits on her: no dot');
     assert.equal(await page.locator('#inbox-count').textContent(), '1');
     assert.equal(await page.locator('#dm-list, #nav-dms-section').count(), 0, 'no DMs section');
@@ -234,6 +238,9 @@ let browser = null;
     await page.waitForFunction(() => location.hash === '#/threads?view=inbox');
     await page.locator('.thp-sort [data-th-view="inbox"].cur').waitFor();
     assert.deepEqual(await page.locator('#threads-all .th-row-title').allTextContents(), ['Launch plan']);
+    // The held message has its review card here (not on Tasks), opened from its row.
+    await page.locator('#threads-all [data-hold-review="hold3"]').click();
+    await page.locator('#threads-all [data-hold-slot="hold3"]').waitFor();
     await shot(page, 'inbox-desktop');
     // A sort from Inbox opens the whole list.
     await page.locator('.thp-sort [data-th-sort="recent"]').click();
