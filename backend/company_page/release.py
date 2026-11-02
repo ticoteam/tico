@@ -61,8 +61,12 @@ def current_dir(settings):
 
 
 def _settings_of_connection(c):
-    """A bare connection doesn't carry the server's settings, so read what the server read from the environment. Those
-    settings only count if they describe this database; another install's folder is never written."""
+    """The server's settings, which the store attaches to every connection it hands out. A connection from anywhere else
+    falls back to what the server reads from the environment, which counts only if it describes this database: another
+    install's folder is never written. The folder served and the folder written must be the same one."""
+    server = getattr(c, "settings", None)
+    if server is not None:
+        return server
     path = next((r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main"), "")
     from ..config import DEFAULT_COMPANY_NAME, Settings
     try:
