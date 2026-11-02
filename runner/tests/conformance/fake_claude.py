@@ -17,6 +17,7 @@ import os
 import re
 import sys
 import time
+from memory_tidy_fixture import custody, reply as packet_reply
 
 GRANTED = ("ACME_API_KEY", "HUB_TOKEN", "HUB_API_URL", "HUB_BOT", "TICO_CRED_SOCKET", "HOME", "CODEX_HOME")
 
@@ -66,7 +67,7 @@ def main():
             continue
         text = " ".join(part.get("text", "") for part in message["message"]["content"])
         record({"harness": "claude", "argv": args, "prompt": text, "cwd": os.getcwd(),
-                "env": {k: os.environ.get(k) for k in GRANTED}, "at": time.time()})
+                "env": {k: os.environ.get(k) for k in GRANTED}, "at": time.time(), **custody(os.getcwd())})
         remember(os.getcwd(), text)
         send({**message, "isReplay": True})
         send({"type": "system", "subtype": "init", "session_id": session, "model": "claude-sonnet-5", "tools": []})
@@ -98,6 +99,8 @@ def main():
             with open(os.path.join("reports", "acme.md"), "w") as report:
                 report.write("# Acme report\n")
         reply = "Acme reply."
+        if os.environ.get("FAKE_MEMORY_TIDY"):
+            reply = packet_reply(text)
         if "RECALL" in text:
             word = re.search(r"code word is (\w+)", text)
             reply = f"The code word is {word.group(1)}." if word else "I do not know the code word."

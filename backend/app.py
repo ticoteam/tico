@@ -725,7 +725,7 @@ def create_app(settings=None):
                 # A run's raw provider stream: up to 5 MB of frames, escaped once more as a JSON string.
                 captured = (request.url.path.startswith("/api/v2/attempts/") and request.url.path.endswith("/capture")
                             and request.state.identity.role == "runner")
-                memory_report = (bool(re.fullmatch(r"/api/v2/bots/[^/]+/memory/report", request.url.path))
+                memory_report = (bool(re.fullmatch(r"/api/v2/(?:bots/[^/]+/memory/report|attempts/[^/]+/memory-tidy/prepare)", request.url.path))
                                  and request.state.identity.role == "runner")
                 # A bot's video or audio file streams to disk up to the server's upload limit (backend/files.py).
                 media_raw = published and raw_media(request, imported=request.url.path == "/api/v2/files/imports")
@@ -7693,7 +7693,10 @@ def create_app(settings=None):
 
         def finish(c):
             with automations.for_attempt(c, aid):
-                return execution.complete(c, request.state.identity, aid, body, rule_check=rc)
+                result = execution.complete(c, request.state.identity, aid, body, rule_check=rc)
+                from . import memory_tidy_transport
+                memory_tidy_transport.complete(c, aid, body, request.state.identity, app.state.files, app.state.blobs)
+                return result
         return mutate(request, body, finish)
 
     @org_rule_check.replayer("reply")
@@ -7844,6 +7847,8 @@ def create_app(settings=None):
     install_cards(app, store, auth, mutate, settings, task_view)
     from . import memory_tidy_cards
     memory_tidy_cards.install(app, store, auth, mutate)
+    from . import memory_tidy_transport
+    memory_tidy_transport.install(app, store, execution, mutate)
     turn_work.install(app, store, auth)
     from . import run_view
     run_view.install(app, store, auth)

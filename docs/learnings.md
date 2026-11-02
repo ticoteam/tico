@@ -286,3 +286,18 @@ stored `edits_json` and provenance under the same reviewer authorization, apply
 under the push lock, and mark `kept` only after a successful push. A failed Keep
 must leave the card open. Keep execution, pass scheduling and pilot activation
 are separate from this card change.
+
+Nightly memory tidy admits one pilot check at a time. It accounts for the finished
+pass's estimated usage, including subscription, failed and withdrawn usage, before
+the next check starts. At or over $50 it admits no more checks and reports the final
+total and any overshoot to Head of Product; a running check finishes or reaches the
+05:00 Pacific withdrawal. Unknown usage holds the next admission.
+
+The runner pins the upstream commit and supplies a scoped packet to an empty
+workspace, without Hub MCP or checkout tools. A fresh verification turn on the
+same named model checks the before and proposed rules against AGENT.md. Both turns
+use low effort and their combined usage is charged to the pass. Protected runner
+endpoints hold the snapshot and whole-checkout manifests; a model cannot submit
+those proofs. Code checks the result, saves its numbered-edit attachment, files the
+independent reviewer card, then closes the private container and child. Older
+computers without packet support skip the pass rather than run an ordinary turn.

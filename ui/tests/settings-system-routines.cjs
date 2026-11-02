@@ -27,7 +27,7 @@ function system(role) {
     job('still_wanted', 'Still wanted?', ctl({schedule: 'Daily at 09:00', preset: 'daily', at: '09:00', presets: ALL, group: 'checks', next: soon,
       when: ['every day at 09:00'], last: {started: before, finished: before, ok: false, result: 'Failed: the database was busy', runs: 1}})),
     job('health_scan', 'Health scan', ctl({group: 'checks', preset: 'hourly', presets: ALL, owner_only: true, can_change: owner})),
-    job('memory_tidy', 'Nightly memory tidy', ctl({on: false, run_unavailable: 'Nightly memory tidy passes are not available yet', schedule: 'Nightly at 03:30', group: 'learning', preset: 'daily', at: '03:30', presets: [{key: 'daily', label: 'Daily at a time'}], pilots: [], pilot_models: [{model: 'codex:gpt-6.1-sol', label: 'GPT-6.1 Sol', efforts: ['low', 'high']}, {model: 'claude:claude-sonnet-5-5', label: 'Sonnet 5.5', efforts: ['low', 'high']}]})),
+    job('memory_tidy', 'Nightly memory tidy', ctl({on: false, schedule: 'Nightly at 03:30', group: 'learning', preset: 'daily', at: '03:30', presets: [{key: 'daily', label: 'Daily at a time'}], pilots: [], pilot_models: [{model: 'codex:gpt-6.1-sol', label: 'GPT-6.1 Sol', efforts: ['low', 'high']}, {model: 'claude:claude-sonnet-5-5', label: 'Sonnet 5.5', efforts: ['low', 'high']}]})),
     job('learnings', 'Nightly learnings', ctl({ai: true, schedule: 'Nightly at 03:00', route: 'Company key', group: 'learning', preset: 'daily', at: '03:00',
       presets: [{key: 'daily', label: 'Daily at a time'}], when: ['nightly at 03:00'],
       fallback: 'Ran on your own key: Gateway unavailable', spent_this_month_usd: 1.5, next: soon,
@@ -203,7 +203,7 @@ const saved = async (page, writes, count, key) => {
         const tidy = row(page, 'memory_tidy');
         assert.equal(await tidy.locator('[data-sysr-on]').isChecked(), false);
         assert.equal(await tidy.locator('[data-sysr-run]').isDisabled(), true);
-        assert.match(await tidy.locator('[data-sysr-run]').getAttribute('title'), /not available yet/);
+        assert.match(await tidy.locator('[data-sysr-run]').getAttribute('title'), /Switch it on/);
         await tidy.locator('[data-memory-tidy-edit]').click();
         const dialog = page.locator('dialog:visible');
         assert.equal(await dialog.locator('[data-pilot-row]').count(), 0);
@@ -220,6 +220,13 @@ const saved = async (page, writes, count, key) => {
         await page.locator('dialog:visible [type="submit"]').click();
         await page.locator('.task-rule-dialog').waitFor({state: 'detached'});
         assert.deepEqual(writes.at(-1).body, {pilots: []});
+        const count = writes.length;
+        await tidy.locator('[data-sysr-on]').check();
+        await saved(page, writes, count + 1, 'memory_tidy');
+        assert.equal(await tidy.locator('[data-sysr-run]').isDisabled(), false);
+        await tidy.locator('[data-sysr-run]').click();
+        await saved(page, writes, count + 2, 'memory_tidy');
+        assert.equal(writes.at(-1).method, 'POST');
       }
       await page.close();
     }

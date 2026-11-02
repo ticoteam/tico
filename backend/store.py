@@ -1125,6 +1125,10 @@ class Store:
             c.executescript(_files.SCHEMA)
             from . import memory_history as _memory_history
             c.executescript(_memory_history.SCHEMA)
+            from . import memory_tidy_runs as _memory_tidy_runs
+            c.executescript(_memory_tidy_runs.SCHEMA)
+            from . import memory_tidy_transport as _memory_tidy_transport
+            c.executescript(_memory_tidy_transport.SCHEMA)
             from . import learnings as _learnings
             c.executescript(_learnings.SCHEMA)
             from . import stale_review as _stale_review

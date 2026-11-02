@@ -28,6 +28,7 @@ def test_default_off_empty_and_no_admission_or_manual_run(api):
     enable(api)
     j = job(api)
     assert j['on'] is False and j['pilots'] == [] and j['next'] is None
+    assert not j.get('run_unavailable')
     assert j['schedule'] == 'Nightly at 03:30'
     post(api, PATH + '/run', {}, expected=409)
     put(api, PATH, {'pilots': [entry()]})
@@ -105,12 +106,13 @@ def test_confirmed_pilot_defaults_use_exact_slugs_low_effort_and_preserve_everyd
     assert job(api)['pilots'] == []
 
 
-def test_run_now_fails_closed_until_execution_is_installed(api):
+def test_run_now_uses_free_skip_without_a_model_call(api):
     enable(api)
     put(api, PATH, {'on': True, 'pilots': [entry()]})
-    post(api, PATH + '/run', {}, expected=409)
+    post(api, PATH + '/run', {})
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM system_runs WHERE job='memory_tidy'").fetchone()[0] == 0
+        assert c.execute("SELECT reason FROM memory_tidy_passes").fetchone()[0] == 'skipped: no change'
+        assert c.execute('SELECT count(*) FROM task_check_models').fetchone()[0] == 0
 
 
 def test_failed_schedule_save_rolls_back_the_pilot_edit(api):
@@ -124,7 +126,7 @@ def test_nightly_and_run_now_share_seam_and_off_never_calls_it(api, monkeypatch)
 
     enable(api)
     calls = []
-    monkeypatch.setattr(tidy, 'run_now', lambda store, auth, actor: calls.append(actor) or True)
+    monkeypatch.setattr(tidy, 'run_now', lambda store, auth, actor, **kw: calls.append(actor) or True)
     at = datetime(2026, 11, 2, 12, tzinfo=timezone.utc)
     store = api.app.state.store
     assert tidy.nightly(store, None, at) is None
@@ -144,3 +146,16 @@ def test_corrupt_saved_haiku_is_also_refused_at_runtime(api):
         c.execute('INSERT OR REPLACE INTO registry_metadata VALUES(?,?)',
                   (tidy.PILOTS_KEY, json.dumps([entry(model='claude:claude-haiku-5-5')])))
         assert tidy.eligible(c, api.app.state.store.settings, 'ops') is None
+
+
+def test_nightly_respects_configured_time_and_revisits_after_first_pilot(api, monkeypatch):
+    from datetime import datetime, timezone
+    enable(api)
+    put(api, PATH, {'on': True, 'at': '04:00'})
+    calls = []
+    monkeypatch.setattr(tidy, 'run_now', lambda *a, **kw: calls.append(kw['at']) or True)
+    store = api.app.state.store
+    assert tidy.nightly(store, None, datetime(2026, 11, 2, 11, 59, tzinfo=timezone.utc)) is None
+    for minute in (0, 1):
+        assert tidy.nightly(store, None, datetime(2026, 11, 2, 12, minute, tzinfo=timezone.utc)) is True
+    assert len(calls) == 2

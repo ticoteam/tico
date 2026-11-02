@@ -213,8 +213,15 @@ const suggest = (hub, read, text, who, cite = {section: '4. Messaging', quote: O
     // A teammate who can't read the file (the Release Manager, a bot with no access to the Engineering Lead's files)
     // sees the rule but not its quote.
     assert.deepEqual((await call(hub, 'release-manager', 'GET', '/v2/rules/' + open.id)).cite, {hidden: true});
-    const other = await pageAs(browser, hub, 'release-manager');
-    await other.locator('#main').waitFor({timeout: t(20000)});
+    // The browser requires a person's sign-in. Restrict the source before using
+    // a person outside its readers, preserving the bot's API privacy check too.
+    const access = await call(hub, 'dana', 'GET', '/v2/bots/engineering-lead/access');
+    await call(hub, 'dana', 'PUT', '/v2/bots/engineering-lead/access', {
+      see: access.see, read: {people: ['dana']}, write: access.write, revision: access.revision,
+    });
+    assert.deepEqual((await call(hub, 'priya', 'GET', '/v2/rules/' + open.id)).cite, {hidden: true});
+    const other = await pageAs(browser, hub, 'priya');
+    await ready(other);
     await go(other, `#/rules/external?rule=${open.id}`);
     await other.locator(`#ru-side form[data-rule="${open.id}"]`).waitFor({timeout: t(20000)});
     assert.equal(await other.locator('#ru-side .ru-quote, #ru-side .ru-qsrc').count(), 0, 'no quote for a teammate who cannot read the file');

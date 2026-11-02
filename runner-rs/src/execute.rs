@@ -1264,6 +1264,8 @@ impl Runner {
         let mut capture: Option<Arc<crate::capture::Capture>> = None;
         let mut started_at = String::new();
         let mut memory_before = String::new();
+        let mut tidy_packet: Option<crate::memory_tidy::Packet> = None;
+        let packet_only = truthy(config.get("memory_tidy_packet"));
         let mut segments: Vec<Segment> = vec![];
         let mut carried: BTreeMap<String, Value> = BTreeMap::new();
         let mut auth_rejected: Option<(String, String)> = None;
@@ -1458,9 +1460,18 @@ impl Runner {
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
             memory_before = redact::head(&execution_path);
+            if packet_only {
+                if !crate::harness_tools::caps_of(&config).packet_only {
+                    return Err(Fail::runtime("Nightly memory tidy: named harness cannot run a packet-only pass"));
+                }
+                tidy_packet = Some(crate::memory_tidy::Packet::prepare(&self.client, &p.main_path,
+                    &execution_path, &aid, turn_identity).await?);
+                // The model receives only its packet, never its Hub credentials or MCP tools.
+                crate::memory_tidy::scrub_environment(&mut env);
+            }
             // What the bot kept in its AI tool's own memory moves into its repository, in whichever checkout the
             // turn runs: the bot's own or a task's worktree (crate::harness_memory). A stateless bot keeps none.
-            if crate::harness_memory::copies_into(p.private, stateless, &execution_path) {
+            if !packet_only && crate::harness_memory::copies_into(p.private, stateless, &execution_path) {
                 // A Gateway turn's HOME is its own empty one (turn_users::Lease::private_home); the tools' memory is in the real one.
                 let own = env.get("HOME").filter(|h| !h.is_empty() && turn_identity.is_none()).cloned();
                 let home = own.or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
@@ -1490,7 +1501,7 @@ impl Runner {
             side_run = key.starts_with("task:") && truthy(config.get("task_model_fallback"));
             let binding_changed = source_resume.as_ref().is_some_and(|s|
                 s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
-            let previous = if side_run || binding_changed || fresh_chat { None } else { self.state.session(&bot, &conv, &session_runtime)? };
+            let previous = if packet_only || side_run || binding_changed || fresh_chat { None } else { self.state.session(&bot, &conv, &session_runtime)? };
             let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {
@@ -1512,7 +1523,9 @@ impl Runner {
             let gids = crate::checkout_groups::gate(paths.clone()).await;
             if let Some((uid, _)) = turn_identity {
                 crate::checkout_groups::grant(uid, &gids);
-                self.turn_git(&mut vault, &mut env, &paths)?;
+                if !packet_only {
+                    self.turn_git(&mut vault, &mut env, &paths)?;
+                }
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
             }
             let made = if session_runtime != runtime {
@@ -1539,18 +1552,19 @@ impl Runner {
             mark("harness_started", &aid);
             let settings = Settings {
                 identity: turn_identity,
-                cwd: execution_path.display().to_string(),
+                cwd: tidy_packet.as_ref().map_or_else(|| execution_path.display().to_string(), |p| p.workspace.display().to_string()),
                 model: model.clone(),
                 effort: effort.clone(),
                 env: env.clone(),
                 slug: bot.clone(),
                 compact_at: config.get("compact_at").cloned().unwrap_or(Value::Null),
                 gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
-                add_dirs: p.add_dirs.clone(),
-                shared: crate::sessions::is_shared(&config),
-                mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config),
+                add_dirs: if packet_only { vec![] } else { p.add_dirs.clone() },
+                shared: packet_only || crate::sessions::is_shared(&config),
+                mcp_servers: if packet_only { vec![] } else { self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config) },
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
+                packet_only,
             };
             let mut resumed = false;
             if side_run {
@@ -1711,17 +1725,17 @@ impl Runner {
             if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
                 tail = format!("{tail}\n\n{line}");
             }
-            let prompt = format!("{}{tail}", built.text);
+            let prompt = tidy_packet.as_ref().map_or_else(|| format!("{}{tail}", built.text), |p| p.prompt.clone());
             // A resumed session that turns out to be missing restarts as a new one under its id (hosts::Host::full_prompt),
             // given what a new session that replaces it is given: the repo rules, the checkpoint, the room since its
             // last turn with its own replies, and the new-session note.
-            h.full_prompt(&th, resumed.then(|| {
+            h.full_prompt(&th, (resumed && !packet_only).then(|| {
                 let mut replacing = attempt.clone();
                 replacing["_replaced"] = json!(true);
                 replacing["_side_ran"] = json!(false);
                 replacement_prompt(&replacing, &names, after.as_deref(), &bot, &key)
             }));
-            h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
+            h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| !packet_only && prompt_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
             let _ = h.compacted(&th);
             let t = if let Some(_one) = cold_guard {
@@ -1750,6 +1764,25 @@ impl Runner {
             let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held), fresh: fresh.as_ref() };
             drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
             turn = Some(drove.turn.clone());
+            if let Some(packet) = tidy_packet.as_ref().filter(|_| drove.outcome == "completed" && !drove.limited) {
+                let edits = std::mem::replace(&mut drove.reply, "Nightly memory tidy: result received.".into());
+                if let Some(prompt) = packet.propose(&self.client, &aid, &edits).await? {
+                    // A new provider thread cannot see the editing model's reasoning or self-attestation.
+                    let verifier = h.start_thread(&bot, &settings).await?;
+                    let t = h.start_turn(&verifier, &prompt, Some("low")).await?;
+                    let verification = Drive { thread: &verifier, fresh: None, ..d };
+                    let checked = self.during_drain(&aid, self.drive(&verification, rx, t,
+                        segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
+                    if checked.outcome == "completed" && !checked.limited {
+                        packet.verify(&self.client, &aid, &checked.reply).await?;
+                    } else {
+                        drove = checked;
+                        drove.reply = "Nightly memory tidy: verification unavailable.".into();
+                    }
+                } else {
+                    packet.verify(&self.client, &aid, "").await?;
+                }
+            }
             h.compaction_refresh(&th, None);
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
@@ -1965,6 +1998,7 @@ impl Runner {
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
+                    packet_only: false,
                 };
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());

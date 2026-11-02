@@ -774,9 +774,6 @@ def listing(c, settings, now=None, who=None, auth=None):
                 "owner_only": bool(ctl and ctl.owner_only),
                 "can_change": bool(ctl and who is not None and auth is not None and can_change(auth, who, job.key)),
                 "last": None, "next": _stamp(following) if following else None}
-        if job.key == "memory_tidy":
-            from . import memory_tidy_controls
-            item["run_unavailable"] = memory_tidy_controls.UNAVAILABLE
         if job.key == "memory_tidy" and item["can_change"]:
             from . import memory_tidy_controls
             item["pilots"] = memory_tidy_controls.pilots(c)
