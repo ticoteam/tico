@@ -225,7 +225,48 @@ RELEASE_SELECTION = ('-m', 'slow or not slow', f'--ignore={ISOLATION_FILE}')
 TIMINGS = ROOT / 'scripts' / 'test-timings.json'
 
 
-def shard_files(index, total, env, selection=RELEASE_SELECTION):
+# Test files that run the release's own native binaries (runner-rs, relay-rs), by what their source names. The release
+# gate gives them python shard 1, the only python VM that waits for the native-linux build; the rest start at once.
+NATIVE_TEST = re.compile(r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
+                         r'engine\.current|screen_binary|from runner import engine|runner\.engine')
+NATIVE_BINARIES = ('runner-rs/target/release/tico-runner', 'relay-rs/target/release/tico-screen-relay')
+# A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
+TEST_IMPORT = re.compile(r'from\s+((?:backend|runner|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
+                         r'import\s+((?:backend|runner|scripts)\.tests(?:\.\w+)+)')
+
+
+def native_test_files(names):
+    """The files of `names` that run the native binaries: they name them, or import a test module that does. Only the
+    named files and the test modules they import are read (no folder listing: PR checks' selector would take one as
+    reading every test, and run the whole suite for any test change)."""
+    texts, verdicts = {}, {}
+
+    def text(name):
+        if name not in texts:
+            try:
+                texts[name] = (ROOT / name).read_text(errors='replace')
+            except OSError:   # not a file here (a test's stand-in name, a package): nothing to run natively
+                texts[name] = ''
+        return texts[name]
+
+    def imports(source):
+        for package, members, module in TEST_IMPORT.findall(source):
+            if module:
+                yield module.replace('.', '/') + '.py'
+            else:
+                yield package.replace('.', '/') + '.py'
+                yield from (f"{package.replace('.', '/')}/{m.strip()}.py" for m in members.split(',') if m.strip())
+
+    def native(name, seen=()):
+        if name not in verdicts:
+            source = text(name)
+            verdicts[name] = bool(NATIVE_TEST.search(source)) or any(
+                native(path, (*seen, name)) for path in imports(source) if path not in seen and path != name)
+        return verdicts[name]
+    return {name for name in names if native(name)}
+
+
+def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False):
     """The test files of shard `index` of `total`: every file pytest collects with `selection` (by default the
     release Python step's), grouped so each shard takes about the same time: the slowest file by its recorded
     seconds first, into the lightest shard. A file with no record weighs its test count times the recorded files'
@@ -242,7 +283,22 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION):
             counts[name] = counts.get(name, 0) + 1
     if len(counts) < total:
         raise RuntimeError(f'{len(counts)} test files cannot fill {total} shards')
-    groups, loads, unrecorded = bin_shards(counts, recorded_timings('release' if selection else 'default'), total)
+    timings = recorded_timings('release' if selection else 'default')
+    if native_first:
+        # Shard 1: every native test file; shards 2..total: the rest, balanced as usual.
+        if total < 2:
+            raise RuntimeError('native-first sharding needs at least 2 shards')
+        native = native_test_files(counts)
+        if index == 1:
+            mine = sorted(native)
+            print(f'Python shard 1/{total}: the {len(mine)} native test files, {sum(counts[n] for n in mine)} of '
+                  f'{sum(counts.values())} tests', flush=True)
+            return mine
+        counts = {name: n for name, n in counts.items() if name not in native}
+        groups, loads, unrecorded = bin_shards(counts, timings, total - 1)
+        index, total = index - 1, total - 1
+    else:
+        groups, loads, unrecorded = bin_shards(counts, timings, total)
     mine = groups[index - 1]
     print(f'Python shard {index}/{total}: {len(mine)} files, {sum(counts[name] for name in mine)} of '
           f'{sum(counts.values())} tests, about {loads[index - 1]:.0f} of {sum(loads):.0f} seconds, recorded or estimated '
@@ -462,7 +518,12 @@ def release(args):
                       f'--ignore={ISOLATION_FILE}', '--api-database-snapshots']
         name = 'all-python'
         if shard:
-            python_cmd += shard_files(shard[0], shard[1], test_env)
+            files = shard_files(shard[0], shard[1], test_env, native_first=True)
+            # Never skip a native test for want of its binary: only shard 1's VM waits for the native-linux build.
+            missing = [b for b in NATIVE_BINARIES if not (ROOT / b).exists()]
+            if missing and native_test_files(files):
+                raise RuntimeError(f'python shard {shard[0]} has native tests but no release binaries: {missing}')
+            python_cmd += files
             name = f'python-{shard[0]}-of-{shard[1]}'
         checks.append(Check(name, python_cmd, logs, test_env, tests=True))
     if runs('browser'):
