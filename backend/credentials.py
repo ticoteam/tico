@@ -762,7 +762,7 @@ def install_credentials(app,store,delegate=None,propose=None):
             return vault.reveal(c,request.state.identity,cid)
 
     @app.get('/api/v2/credential-runtime')
-    def runtime(request:Request):
+    def runtime(request:Request,subscription_runtime:Literal["claude","codex"]|None=None):
         who=request.state.identity
         if who.role!='bot':raise Problem('forbidden','An active bot run is required',403)
         with store.transaction() as c:
@@ -775,8 +775,10 @@ def install_credentials(app,store,delegate=None,propose=None):
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
             # The company subscriptions its claim handed it, for this run only (backend/model_subscriptions.py).
             from .model_subscriptions import run_values
-            subscriptions=run_values(c,vault,who)
-            return {'credentials':values,**({'subscriptions':subscriptions} if subscriptions else {})}
+            subscriptions=run_values(c,vault,who,subscription_runtime)
+            return {'credentials':values,**({'subscriptions':subscriptions} if subscriptions else {}),
+                    **({'subscription_activated':any(s['runtime']==subscription_runtime for s in subscriptions)}
+                       if subscription_runtime else {})}
 
     @app.get('/api/v2/runner-gateway-credentials')
     def gateway_credentials(request:Request,attempt:str):

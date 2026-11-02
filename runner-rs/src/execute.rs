@@ -1834,7 +1834,7 @@ impl Runner {
         };
         let mut pending = if unavailable && drove.outcome != "completed" && !native_control && continuing.is_empty() {
             crate::fallback::configured_for(&fallback_config, &self.sign_in, selected.as_ref(), &bot,
-                |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some())
+                |rt| crate::model_subscriptions::available(&vault.subscriptions, &attempt, rt))
         } else {
             None
         };
@@ -1843,7 +1843,7 @@ impl Runner {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
             // once (Settings > Computers can turn this off for the company).
             let choices = self.default_fallbacks().await;
-            pending = crate::fallback::default_choice(&fallback_config, &choices, &turn_env, |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref(), &bot));
+            pending = crate::fallback::default_choice(&fallback_config, &choices, &turn_env, |rt| crate::model_subscriptions::available(&vault.subscriptions, &attempt, rt) || self.fallback_ready(rt, selected.as_ref(), &bot));
         }
         // A Tico fallback needs the turn's relay; without one it is left out and the primary's outcome stands.
         pending = crate::gateway_relay::admit(pending, vault.relay.is_some());
@@ -1890,6 +1890,21 @@ impl Runner {
                 // Signed in with its own subscription only: the primary's leaves the copied environment, and its home
                 // is let go now that its host has stopped.
                 let mut hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
+                if crate::model_subscriptions::pending(&attempt, &hop.runtime) {
+                    match crate::model_subscriptions::activate(&self.config.url(), &text_of(&attempt["token"]),
+                            &self.state.directory, &attempt, &hop.runtime, &mut hop_env).await {
+                        Ok((given, secrets)) => {
+                            vault.subscriptions.retain(|d| d.runtime != hop.runtime);
+                            vault.subscriptions.extend(given);
+                            mask(&aid, &mut redactor, &mut vault, secrets);
+                        }
+                        Err(_) => {
+                            // No cached login is used after removal, rejection, a hold or an unreachable server.
+                            drove.limited = true;
+                            return Err(Fail::runtime("Automatic fallback subscription could not be activated"));
+                        }
+                    }
+                }
                 let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &hop.runtime, &mut hop_env);
                 mask(&aid, &mut redactor, &mut vault, placed);
                 segments.push(Segment {
@@ -2089,7 +2104,7 @@ impl Runner {
             if drove.limited && hop.default && !native_control && spent < 2 && source_saved.is_none() {
                 left = Some((hop.harness.clone(), true));
                 let choices = self.default_fallbacks().await;
-                let next = crate::fallback::next_choice(&fallback_config, &choices, &turn_env, &tried, |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref(), &bot));
+                let next = crate::fallback::next_choice(&fallback_config, &choices, &turn_env, &tried, |rt| crate::model_subscriptions::available(&vault.subscriptions, &attempt, rt) || self.fallback_ready(rt, selected.as_ref(), &bot));
                 pending = crate::gateway_relay::admit(next, vault.relay.is_some());
             }
         }

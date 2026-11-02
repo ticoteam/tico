@@ -48,7 +48,7 @@ def pending(conn):
 
 
 def enqueue(conn, event, task, actor, revision, *, field=None, new=None):
-    if event not in TRIGGERS:
+    if event not in TRIGGERS or H.NO_TRIGGERS.get():
         return
     state = _PENDING.get()
     facts = {"step_id" if field == "step" else field: new} if field in ("step", "status") else {}

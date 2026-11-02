@@ -43,7 +43,7 @@ def _delivery(args):
 
 def _rules_args(args):
     """`hub rules` flags as the API takes them: the Who and With flags become scope objects, the rest pass as they are."""
-    def scope(names, everyone=False, all_bots=False):
+    def scope(names, everyone=False, all_bots=False, outside_editions=False):
         out = {}
         if names:
             out["names"] = list(names)
@@ -51,9 +51,12 @@ def _rules_args(args):
             out["everyone"] = True
         if all_bots:
             out["all_bots"] = True
+        if outside_editions:
+            out["outside_editions"] = True
         return out or None
     if args.fn in ("rules add", "rules edit", "rules accept"):
-        who = scope(getattr(args, "who_names", None), getattr(args, "everyone", False), getattr(args, "all_bots", False))
+        who = scope(getattr(args, "who_names", None), getattr(args, "everyone", False), getattr(args, "all_bots", False),
+                    getattr(args, "outside_editions", False))
         if who is not None:
             args.who = who
     if args.fn in ("rules add", "rules edit"):
@@ -70,7 +73,8 @@ def _rules_args(args):
         args.cite = {"file_id": args.file_id, "section": getattr(args, "section", None) or "", "quote": args.quote}
         if getattr(args, "file_version", None):
             args.cite["version"] = args.file_version
-    for flag in ("who_names", "with_names", "everyone", "all_bots", "file_id", "section", "quote", "file_version"):
+    for flag in ("who_names", "with_names", "everyone", "all_bots", "outside_editions", "file_id", "section", "quote",
+                 "file_version"):
         if hasattr(args, flag):
             delattr(args, flag)
     return args

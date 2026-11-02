@@ -329,7 +329,7 @@ def test_a_trashed_idea_whose_snapshot_holds_a_dropped_growth_row_comes_back_and
     ticket = post(api, "tasks", {"owner": "priya", "title": "Try referral cards", "body": "Try it."}, token="ben-test")
     post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test")
     with store.transaction() as c:
-        # A trash row from before migration 72 dropped the idea tables: its snapshot still holds one of their rows.
+        # A trash row from before the growth rethink dropped the idea tables: its snapshot still holds one of their rows.
         assert c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='growth_ideas'").fetchone() is None
         snap = json.loads(c.execute("SELECT rows_json FROM task_trash WHERE task_id=?", (ticket["id"],)).fetchone()[0])
         snap["rows"]["growth_ideas"] = [{"_rowid": 1, "id": "idea-1", "task_id": ticket["id"], "hypothesis": "Try it."}]
