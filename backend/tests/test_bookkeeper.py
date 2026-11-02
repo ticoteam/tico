@@ -38,6 +38,15 @@ def ensure(api):
         return BK.ensure(c, api.app.state.onboarding, api.app.state.auth)
 
 
+def sees_everything(api):
+    """The owner's Everything grant to the Bookkeeper, which its queue needs to list bills (spec §7.5: the Bookkeeper gets no
+    view by default; the owner is asked to grant it Everything, since it cannot keep the books without seeing them)."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        owner = "human:" + api.app.state.auth.owner_id(c)
+        assert FA.act(c, owner, "view_grant", {"subject": BK.ACTOR, "what": "everything"}, "grant-view").status == "committed"
+
+
 def check(api):
     with api.app.state.store.transaction() as c:
         return BK.check(c, api.app.state.auth, H.now())
@@ -100,6 +109,7 @@ def test_an_install_from_before_rules_gets_that_one_right_once(environment):
 def test_an_empty_queue_is_a_quiet_check_and_news_opens_one_private_task_once(environment):
     api = built(environment)
     ensure(api)
+    sees_everything(api)
     assert check(api)["words"] == "Nothing new"
     assert checks(api) == []
     with api.app.state.store.read() as c:
@@ -217,6 +227,7 @@ def test_a_check_reads_every_page_of_the_queue(environment, monkeypatch):
 def test_a_failing_fetch_backs_off_then_is_listed_once_and_filed_work_closes(environment, monkeypatch):
     api = built(environment)
     ensure(api)
+    sees_everything(api)
     store = _addressed(api)
     with store.transaction() as c:
         c.execute("INSERT INTO inbound_inboxes(inbox_id,kind,name,address,state,created_by) "
@@ -259,6 +270,7 @@ def test_a_failing_fetch_backs_off_then_is_listed_once_and_filed_work_closes(env
 def test_only_the_failed_bills_the_body_lists_are_reported(environment, monkeypatch):
     api = built(environment)
     ensure(api)
+    sees_everything(api)
     store = api.app.state.store
     with store.transaction() as c:
         for i in range(50):
