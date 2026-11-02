@@ -676,24 +676,24 @@ RECENT_PERIODS = 12
 
 
 def unseen_values(c, audience_id, at=None):
-    """The recent exact values of the board's stats this audience may not see: Hidden for it, or held. The leak check
-    flags an edition's figure that equals one, even when a source says it. Only the numbers leave here: they never go
-    into the model's prompt or a check's detail."""
+    """The recent exact values of every board stat, private Finance lines included, that this audience does not see
+    exactly in its own projection: Hidden, held, delayed, or rounded to something else. The leak check flags an edition's
+    figure that equals one, even when a source says it. Only the numbers leave here: they never go into the model's
+    prompt or a check's detail."""
     at = _when(at)
-    _, held, _ = _build(c, audience_id, at)
+    built, held, _ = _build(c, audience_id, at)
+    seen = {float(s["value"]) for b in built if b["row"]["id"] not in held for s in b["shaped"] if s["value"] is not None}
     rules = D.all_rules(c, audience_id)
     books = _Books(c, at)
     values = set()
     for row in _board(c):
         rule = _rule(rules, row)
-        if rule["mode"] != "hidden" and row["id"] not in held:
-            continue
         if row["source_kind"] == "kpi":
             row = {**row, "_unit": (K.kpi(c, row["ref_id"]) or {}).get("unit")}
         found = _read(c, books, row, D.parse_rounding(rule["rounding"]).quarterly)
         if found:
             values.update(float(p.value) for p in found[0][-RECENT_PERIODS:])
-    return values
+    return values - seen
 
 
 # ------------------------------------------------------------------------------------------------- the board's approval

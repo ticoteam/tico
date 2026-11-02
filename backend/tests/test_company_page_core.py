@@ -257,6 +257,21 @@ def test_the_leak_check_knows_the_recent_values_a_hidden_stat_keeps_back_and_not
     assert {120.0, 148.0} <= values and 500.0 not in values
 
 
+def test_a_rounded_or_delayed_value_the_audience_does_not_see_exactly_is_unseen_too(store):
+    """A rounded stat shows 150 for 148, and a delayed one shows nothing yet: the exact 148 is still unseen. Only a value
+    this audience sees exactly is not."""
+    setup(store, shown("kpi"), ("customers", "", {"mode": "rounded"}), ("headcount", "", {"mode": "delayed", "lag_days": 60}))
+    with store.transaction() as c:
+        rounded = make_kpi(c, "Paying customers")
+        read(c, rounded, 148, "2026-09-30")
+        on_board(c, rounded, cls="customers", label="Paying customers")
+        waiting = make_kpi(c, "Staff")
+        read(c, waiting, 37, "2026-09-30")
+        on_board(c, waiting, cls="headcount", label="Staff")
+        values = ST.unseen_values(c, "investors", "2026-10-15")
+    assert {148.0, 37.0} <= values
+
+
 def test_a_plural_unit_reads_singular_at_exactly_one_and_a_word_ending_in_ss_does_not(store):
     assert ST._text(1, "posts") == "1 post" and ST._text(-1, "posts") == "-1 post"
     assert ST._text(2, "posts") == "2 posts" and ST._text(1, "class") == "1 class"
