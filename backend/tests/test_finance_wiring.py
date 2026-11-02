@@ -320,10 +320,11 @@ def test_a_bots_own_allocation_is_its_to_spend(books):
                                                 "amount": 100}).status == "committed"
         assert usage_limits.blocked(c, "coder", at=NOON) is None
         assert not FA.run_hold(c, "coder", "job-coder", at=AT).refused        # coder spends what was set aside for it
-        # Nothing is spent, so no budget is at its cutoff and the reserve pauses no bot on its own (spec 4.4). The reserve
-        # does leave the seller no room for a new run: its claim is refused where it is placed, not paused here.
+        # Nothing is spent, so no budget is at its cutoff and the reserve pauses no bot on its own (spec 4.4). A run claim
+        # is work, not a request for budget: the reserve does not refuse the seller's run either, it is held against the
+        # spend room that is left (only a budget at its cutoff refuses a run).
         assert usage_limits.blocked(c, "seller", at=NOON) is None
-        assert FA.run_hold(c, "seller", "job-seller", at=AT).refused
+        assert not FA.run_hold(c, "seller", "job-seller", at=AT).refused
         assert jobs.cap_wanted(c, AT)[0] == "clear"
 
 

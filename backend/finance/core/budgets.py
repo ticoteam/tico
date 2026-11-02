@@ -165,17 +165,19 @@ def state(budget: Budget, period: tuple[date, date], amount: int | None, actual:
                  at_limit=amount is not None and spent >= amount)
 
 
-def decide(chain: Sequence[tuple[Budget, State]], amount: int) -> Decision:
+def decide(chain: Sequence[tuple[Budget, State]], amount: int, past_reserves: bool = False) -> Decision:
     """A hold of `amount` against a budget and every parent at once. A hold the budget has no remaining room for (reserves
     count, §4.4) passes into its at-limit action; the strictest one wins, and only `warn` lets the hold through. The warn
     level is read on spend, as the crossing event is, so an unused allocation never warns a budget by itself. A refund
-    (negative amount) always goes through."""
+    (negative amount) always goes through. `past_reserves` fits the hold against spend alone: a run claim is work, not a
+    request for budget, so what unused allocations set aside does not refuse it (only a budget at its limit does)."""
     action, limit = "ok", ""
     warns: list[str] = []
     for budget, s in chain:
         if s.amount is None:
             continue
-        if amount > 0 and s.remaining is not None and amount > s.remaining and \
+        room = s.amount - s.spent if past_reserves else s.remaining
+        if amount > 0 and room is not None and amount > room and \
                 (action == "ok" or STRICTNESS[budget.at_limit] > STRICTNESS[action]):
             action, limit = budget.at_limit, budget.id
         if amount > 0 and s.amount > 0 and (s.spent + amount) * 100 >= s.amount * budget.warn_pct:

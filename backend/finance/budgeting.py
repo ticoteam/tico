@@ -468,13 +468,13 @@ def _scope(ctx: Ctx, budget_scope: str | Mapping[str, object]) -> B.Budget | Non
                 vendor_text(p, "vendor"))
 
 
-def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "") -> B.Decision:
+def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "", past_reserves: bool = False) -> B.Decision:
     """What a new spend of `amount` meets across its budget and every parent, on the budgets the spend sits on (the chain
-    of `leaf_id`)."""
+    of `leaf_id`). `past_reserves` checks against spend, not remaining (see core budgets decide)."""
     at = dates.day(ctx.today)
     spent_on = chain_of(ctx, leaf_id)
     chain = [(b, state(ctx, b.id, at, target, spent_on)) for b in B.chain(ctx.budgets(), leaf_id)]
-    return B.decide(chain, amount)
+    return B.decide(chain, amount, past_reserves)
 
 
 def would_place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int,
@@ -494,10 +494,12 @@ def scope_target(budget_scope: str | Mapping[str, object] | None) -> str:
 
 def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, currency: str, source: str,
           source_id: str, expires_at: str | None, target: str = "", by: str = SYSTEM,
-          force: bool = False, moved_from: tuple[str, str] | None = None) -> HoldDecision:
+          force: bool = False, moved_from: tuple[str, str] | None = None,
+          past_reserves: bool = False) -> HoldDecision:
     """A hold for a spend. `force` holds it past an ask or hold_payment limit, for a spend someone approved; decline
     still refuses. `moved_from` names a hold the spend takes over part of (an order line a bill bills): that hold
-    shrinks by the amount and the new hold takes it in the same step, without a fit check."""
+    shrinks by the amount and the new hold takes it in the same step, without a fit check. `past_reserves` fits it
+    against spend alone, so unused allocations do not refuse it (a run claim)."""
     money.minor(amount)
     if amount <= 0:
         raise invalid("a hold is for a positive amount")
@@ -519,7 +521,7 @@ def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, cu
         moved = _move(ctx, b, moved_from, amount, source, source_id, expires_at, by)
         if moved is not None:
             return moved
-    verdict = decide(ctx, b.id, amount, target)
+    verdict = decide(ctx, b.id, amount, target, past_reserves)
     if not verdict.allowed and not (force and verdict.action in ("ask", "hold_payment")):
         crossings(ctx, [verdict.limit_budget], by)
         limit = ctx.budgets()[verdict.limit_budget]
@@ -659,14 +661,14 @@ def release(ctx: Ctx, hold_id: str) -> bool:
 # ------------------------------------------------------------------------------------------------ connection-level API
 def hold_place(c: sqlite3.Connection, *, budget_scope: str | Mapping[str, object], amount: int, currency: str,
                source: str, source_id: str, expires_at: str | None, target: str = "", at: str | None = None,
-               by: str = SYSTEM) -> HoldDecision:
+               by: str = SYSTEM, past_reserves: bool = False) -> HoldDecision:
     """Reserve `amount` against the budget a spend belongs to (a budget id, or {account_id, team, teammate, vendor})
     and every parent at once. A retry with the same (source, source_id) returns the live hold. Before Finance is set up
-    nothing limits spend."""
+    nothing limits spend. `past_reserves`: fit against spend, not remaining (see place)."""
     if not is_set_up(c):
         return HoldDecision(allowed=True, action="ok", reason="Finance is not set up")
     return place(load(c, at), budget_scope=budget_scope, amount=amount, currency=currency, source=source,
-                 source_id=source_id, expires_at=expires_at, target=target, by=by)
+                 source_id=source_id, expires_at=expires_at, target=target, by=by, past_reserves=past_reserves)
 
 
 def hold_settle(c: sqlite3.Connection, hold_id: str, actual_amount: int, entry_id: str | None = None,
