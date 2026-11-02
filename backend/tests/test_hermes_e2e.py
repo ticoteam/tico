@@ -159,7 +159,7 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     assert (connector.profile / ".env").read_text().splitlines() == [f"TICO_AGENT_TOKEN={token}", f"TICO_URL={connector.url}"]
     for private in (connector.profile / ".env", connector.config_dir / "scout.json"):
         assert stat.S_IMODE(private.stat().st_mode) == 0o600
-    assert connector.credential()["token"] == token and connector.credential()["bot_id"] == scout
+    assert connector.credential()["token"] == token and connector.credential()["bot"] == scout
     assert connector.credential()["slug"] == "scout"
     assert [c for c in connector.timer_calls if c[0] == "launchctl" and "bootstrap" in c or c[:3] == ["systemctl", "--user", "enable"]]
     # ... and the heartbeat it sent is what the hub shows.
