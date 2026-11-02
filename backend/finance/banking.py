@@ -551,12 +551,15 @@ def _card_hold(ctx: Ctx, row: Any, card: Any, amount: int) -> None:
                                source_id=str(row["id"]), expires_at=until.isoformat() + "T00:00:00.000000Z",
                                target=f"card:{card['id']}")
     if decision.hold_id and decision.hold_id != row["hold_id"]:
-        SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"hold_id": decision.hold_id})
+        # One commitment for the charge: its row, hold and authorization (and the bill it pays, once it settles one).
+        commitment = str(row["commitment_id"] or "") or SL.new_id()
+        SB.set_commitment(ctx.c, decision.hold_id, commitment)
+        SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"hold_id": decision.hold_id, "commitment_id": commitment})
         SK.insert(ctx.c, "fin_card_auths", {"card_id": str(card["id"]), "provider_auth_id": str(row["provider_id"]),
                                             "amount": amount, "currency": ctx.book.base_currency,
                                             "merchant": str(row["counterparty"]), "mode": "synced",
                                             "decision": "approved", "hold_id": decision.hold_id,
-                                            "created_at": ctx.at, "created_by": SYSTEM})
+                                            "commitment_id": commitment, "created_at": ctx.at, "created_by": SYSTEM})
 
 
 def left_of(ctx: Ctx, row: Any) -> int:

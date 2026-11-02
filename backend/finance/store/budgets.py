@@ -215,6 +215,11 @@ def insert_hold(c: sqlite3.Connection, *, budget_id: str, amount: int, currency:
     return hid
 
 
+def set_commitment(c: sqlite3.Connection, hold_id: str, commitment_id: str) -> int:
+    """The commitment a hold belongs to: a bill's (its id), or a card authorization's until a bill claims it."""
+    return c.execute("UPDATE fin_holds SET commitment_id=? WHERE id=?", (commitment_id, hold_id)).rowcount
+
+
 def hold(c: sqlite3.Connection, hold_id: str) -> Any:
     return c.execute("SELECT * FROM fin_holds WHERE id=?", (hold_id,)).fetchone()
 

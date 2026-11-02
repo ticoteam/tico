@@ -57,6 +57,11 @@ def update(c: sqlite3.Connection, table: str, row_id: str, fields: Mapping[str, 
     return c.execute(sql, [*(fields[k] for k in cols), row_id, *args]).rowcount
 
 
+def set_auth_commitment(c: sqlite3.Connection, hold_id: str, commitment_id: str) -> int:
+    """The commitment of the card authorizations a hold was taken for, moved with the hold's (a bill claims both)."""
+    return c.execute("UPDATE fin_card_auths SET commitment_id=? WHERE hold_id=?", (commitment_id, hold_id)).rowcount
+
+
 def get(c: sqlite3.Connection, table: str, row_id: str) -> Any:
     assert table in TABLES
     return c.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone()

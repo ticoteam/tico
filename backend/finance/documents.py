@@ -349,6 +349,8 @@ def _hold(ctx: Ctx, bill_id: str, vendor_id: str, lines: Sequence[AP.DocLine], w
         d = budgeting.place(ctx, budget_scope={"account_id": account.id, **scope_tags(x.tags), "vendor": vendor_id},
                             amount=x.amount, currency=ctx.book.base_currency, source="bill",
                             source_id=f"{bill_id}:{n}", expires_at=None, by=who, moved_from=moved)
+        if d.hold_id:                                  # the hold is part of the bill's commitment (spec §4.2)
+            SB.set_commitment(ctx.c, d.hold_id, bill_id)
         if not d.allowed:
             refused.append(d.reason)
     return refused
@@ -1226,6 +1228,8 @@ def _link(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any],
     row. The row's entry id."""
     from .banking import mark_posted
     fid = str(row["id"])
+    if t.amount < 0:                                   # a money-out row pays the bills it is linked to
+        _commit_row(ctx, fid, [str(s["to_id"]) for s in group])
     if len(group) == 1 and not fees:
         mark_posted(ctx, [fid], str(group[0]["entry_id"]))
         SAP.update(ctx.c, "fin_settlements", str(group[0]["id"]), {"from_kind": "feed", "from_id": fid})
@@ -1410,8 +1414,27 @@ def feed_paid(ctx: Ctx, row: Any, kind: str, doc: Any, entry_id: str) -> None:
     money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
     if money is not None and str(money["kind"]) == "stripe":
         raise invalid("a Stripe sale settles through its own posting, on its gross")
+    if kind == "bill":
+        _commit_row(ctx, str(row["id"]), [str(doc["id"])])
     settle(ctx, kind, str(doc["id"]), amount=abs(int(row["amount"])), day=str(row["txn_date"]), from_kind="feed",
            from_id=str(row["id"]), entry_id=entry_id)
+
+
+def _commit_row(ctx: Ctx, feed_id: str, bill_ids: Sequence[str]) -> None:
+    """A bank or card row that pays a bill joins the bill's commitment (spec §4.2: a bill, a card authorization, its
+    settlement and the payment for it share one commitment id). The row, and the hold and card authorization it came
+    with, take the bill's id; a row paying several bills takes the first one's."""
+    if not bill_ids:
+        return
+    bill = SAP.get(ctx.c, "fin_bills", bill_ids[0])
+    commitment = str(bill["commitment_id"] or "") if bill is not None else ""
+    row = SK.get(ctx.c, "fin_feed_txns", feed_id)
+    if not commitment or row is None:
+        return
+    SK.update(ctx.c, "fin_feed_txns", feed_id, {"commitment_id": commitment, "updated_at": ctx.at})
+    if row["hold_id"]:
+        SB.set_commitment(ctx.c, str(row["hold_id"]), commitment)
+        SK.set_auth_commitment(ctx.c, str(row["hold_id"]), commitment)
 
 
 def _spent(ctx: Ctx, row: Any, ctl: str, sign: int) -> list[L.Line]:
