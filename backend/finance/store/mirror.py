@@ -51,6 +51,11 @@ def restatement_insert(c: sqlite3.Connection, *, book_id: str, period_id: str, d
               (new_id(), book_id, period_id, day, change, entry_id, reversal_id, cid, external_id, at, by))
 
 
+def restatement_count(c: sqlite3.Connection, period_id: str) -> int:
+    """How many provider changes have landed in a closed period, each flagged when it posted in the open period."""
+    return int(c.execute("SELECT COUNT(*) FROM fin_restatements WHERE period_id=?", (period_id,)).fetchone()[0])
+
+
 def restatements(c: sqlite3.Connection, book_id: str, most: int) -> list[Any]:
     """The newest restatements of closed months, for the close pages."""
     return c.execute("SELECT r.*, p.start_date AS period_start FROM fin_restatements r JOIN fin_periods p ON "

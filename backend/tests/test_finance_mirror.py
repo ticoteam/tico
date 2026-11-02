@@ -677,6 +677,9 @@ def test_a_void_of_a_closed_month_bill_at_the_provider_is_flagged_as_a_restateme
             ("deleted", "2026-09-10")]
         assert c.execute("SELECT status FROM fin_bills WHERE number='B-12'").fetchone()[0] == "void"
         assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0
+        # the change posted in the open period, so September's totals did not move, but its close snapshot flags it
+        assert FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", "month", "accrual", AT)["snapshot"] == {
+            "month": "2026-09", "restatements": 1}
 
 
 def test_a_bill_the_provider_took_before_its_answer_was_kept_is_adopted_from_the_change_feed_and_not_sent_again(books):

@@ -14,6 +14,7 @@ from .core.ledger import Account
 from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
+from .store import mirror as SX
 
 
 def take(ctx: Ctx, period_id: str, month: str, start: str, end: str, by: str) -> None:
@@ -42,13 +43,17 @@ def frozen(ctx: Ctx, month: str) -> Ctx | None:
 
 
 def marker(c: sqlite3.Connection, book_id: str, month: str) -> dict[str, Any] | None:
-    """A closed month's snapshot as reads show it: how many restatements it has taken. None without a snapshot."""
+    """A closed month's snapshot as reads show it: how many restatements it has taken, the totals a restate found and
+    the provider's changes that landed in it (each posted in the open period and flagged, spec 10). None without a
+    snapshot."""
     if month not in SL.closed_months(c, book_id):
         return None
     row = SL.snapshot(c, book_id, month)
     if row is None:
         return None
-    return {"month": month, "restatements": len(json.loads(str(row["restated_json"])))}
+    period = SL.period(c, book_id, f"{month}-01")
+    changed = SX.restatement_count(c, str(period["id"])) if period is not None else 0
+    return {"month": month, "restatements": len(json.loads(str(row["restated_json"]))) + changed}
 
 
 def restate(c: sqlite3.Connection, book_id: str, month: str, by: str, at: str) -> int:
