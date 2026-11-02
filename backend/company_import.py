@@ -30,6 +30,7 @@ from . import market_spend as MS
 from . import market_watch as MW
 from . import models as M
 from . import onboarding as O
+from . import sidebar
 from . import strategy as S
 from . import strategy_market as SM
 from . import strategy_setup as SS
@@ -156,6 +157,14 @@ def plan(onboarding, c, who, text):
                "builtins": sorted(required), "deferred": deferred}
     if D.has_strategy(saved):
         summary["strategy"] = strategy_preview(saved["strategy"])
+    # The file's business type sets the sidebar (backend/sidebar.py). An unknown one is a warning, never a failed import.
+    business = saved["company"].get("business_type")
+    if business is not None and business not in sidebar.BUSINESS_TYPES:
+        summary["warnings"] = ['Business type "%s" is not one Tico knows (%s), so the file does not set it.'
+                               % (business, ", ".join(sidebar.BUSINESS_TYPES))]
+        business = None
+    if business:
+        summary["business_type"] = business
     return body, saved, seats, summary
 
 
@@ -444,6 +453,10 @@ def apply(onboarding, c, who, text, fingerprint):
     bets, strategy = import_strategy(c, who.actor, saved["strategy"], body.names.company_name) \
         if D.has_strategy(saved) else ({}, None)
     onboarding.save(c, who, staging)
+    # The file's business type goes in before setup completes. A choice already made (in setup or in Settings) stays.
+    applied = summary.get("business_type") if sidebar.stored(c)["business_type"] is None else None
+    if applied:
+        sidebar.set_business_type(c, who.actor, applied, during_setup=True)
     onboarding.complete(c, who)
     # complete() preserves existing definitions, including the seeded built-ins'
     # managers. Apply the confirmed chart after all targets exist, parents first
@@ -477,7 +490,9 @@ def apply(onboarding, c, who, text, fingerprint):
               for person in summary["people"]]
     record["company_import"] = {"fingerprint": fingerprint, "imported_at": H.now(), "by": who.actor,
                                 "deferred": summary["deferred"], "seats": len(made), "people": people,
-                                **({"strategy": strategy} if strategy else {})}
+                                **({"strategy": strategy} if strategy else {}),
+                                **({"business_type": applied} if applied else {}),
+                                **({"warnings": summary["warnings"]} if "warnings" in summary else {})}
     onboarding._store(c, record, who.actor)
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
               (PLAN_KEY, encode(saved)))
