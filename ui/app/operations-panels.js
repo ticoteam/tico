@@ -136,8 +136,10 @@ async function opsPanelPnl(state, load, r, by, host) {
   const open = `<a href="${FIN_ROUTE}/pnl?split=${by}" data-ops-pnl>Open in P&amp;L</a>`;
   const title = by === 'project' ? 'P&L' : 'P&L this month';
   opsPut(state, load, host, `<section class="ops-sec"><header class="ops-sec-h"><h3>${esc(title)}</h3>${your}<span class="spacer"></span>${open}</header>
-    ${finKv('Income', finUsd(report.income ?? 0))}${finKv(by === 'project' ? 'Costs' : 'Expenses', finUsd(report.expense ?? 0))}${finKv(by === 'project' ? 'Profit' : 'Net', finUsd(report.net ?? 0))}${by === 'project' ? opsPnlAccounts(report) : ''}</section>`);
+    ${finKv('Income', finUsd(report.income ?? 0))}${finKv(by === 'project' ? 'Costs' : 'Expenses', finUsd(report.expense ?? 0))}${finKv(by === 'project' ? 'Profit' : 'Net', finUsd(report.net ?? 0))}${by === 'project' ? opsPnlGross(report) + opsPnlAccounts(report) : ''}</section>`);
 }
+// As Finance's drill-down words them, when the read carries them.
+const opsPnlGross = report => (report.cost_of_goods == null ? '' : finKv('Cost of goods', finUsd(report.cost_of_goods))) + (report.gross_margin == null ? '' : finKv('Gross margin', finUsd(report.gross_margin)));
 const opsPnlAccounts = report => report?.rows?.length ? `<table class="fin-t ops-pnl-accounts" data-ops-pnl-accounts><tbody>${report.rows.map(x =>
   `<tr><td>${esc(x.label)}</td><td class="fin-n">${finUsd(x.amount)}</td></tr>`).join('')}</tbody></table>` : '';
 // The open purchase orders, estimates and invoices that name this record on a line. A refused read shows nothing.
@@ -147,70 +149,21 @@ async function opsPanelDocs(state, load, kind, key, id) {
   const docs = (read?.[list] || []).filter(d => !open || open.includes(d.status));
   if (docs.length) opsPut(state, load, host, opsSec(title, opsDocLinks(docs, route)));
 }
-// The Library files this record links. The record's read names each by id; the name comes from the file's own meta, and a
-// file that can't be read says so rather than hiding a link someone may need to remove.
+// The Library files this record links, drawn and changed as a contact's are (finance-contact.js).
 async function opsPanelFiles(state, load, r) {
-  const files = r.files || [], edit = opsEditor();
-  if (!files.length && !edit) { opsPut(state, load, 'ops-m-files', ''); return; }
-  const metas = await Promise.all(files.map(f => get(`/v2/files/${encodeURIComponent(f.file_id)}/meta`).catch(() => null)));
+  const edit = opsEditor();
+  if (!r.files?.length && !edit) { opsPut(state, load, 'ops-m-files', ''); return; }
+  const files = await recordFileNames(r.files);
   if (!opsLive(state, load)) return;
-  const rows = files.map((f, n) => {
-    const name = metas[n]?.name || metas[n]?.title || 'File';
-    return `<li><a href="${API}/v2/files/${encodeURIComponent(f.file_id)}" data-name="${esc(name)}">${esc(name)}</a>${edit ? `<button type="button" class="ghost ops-mini" data-file-remove="${esc(f.id)}" aria-label="Remove ${esc(name)}">Remove</button>` : ''}</li>`;
-  }).join('');
-  opsPut(state, load, 'ops-m-files', opsSec('Files', rows ? `<ul class="ops-links">${rows}</ul>` : '<p class="muted ops-note">None yet</p>', edit ? '<span class="spacer"></span><button type="button" class="ghost ops-mini" data-file-add>+ Add</button>' : ''));
+  opsPut(state, load, 'ops-m-files', opsSec('Files', files.length ? recordFileRows(files, edit) : '<p class="muted ops-note">None yet</p>', edit ? '<span class="spacer"></span><button type="button" class="ghost ops-mini" data-file-add>+ Add</button>' : ''));
   const host = $('#ops-m-files');
   if (!host || !edit) return;
-  const reread = async () => {
+  const again = async () => {
     const read = await get(`/v2/${state.tab}/${encodeURIComponent(r.id)}`, {fresh: true}).catch(() => null);
     if (read && opsLive(state, load)) await opsPanelFiles(state, load, {...r, ...read[OPS_ONE[state.tab]]});
   };
-  const add = host.querySelector('[data-file-add]');
-  if (add) add.onclick = () => opsFilePicker(OPS_ONE[state.tab], r.id, files, reread);
-  host.querySelectorAll('[data-file-remove]').forEach(b => {
-    b.onclick = async () => {
-      b.disabled = true;
-      try {
-        const done = await finAct('record_file_remove', {record_file_id: b.dataset.fileRemove});
-        if (done?.status === 'committed') toast('Removed');   // otherwise finAct said who it went to
-        await reread();
-      } catch (e) { toast(e.message || 'Did not work', true); b.disabled = false; }
-    };
-  });
-}
-// Library files to link: the recent ones, then search hits by title and text, as the rule document picker offers them.
-async function opsFilePicker(subject_type, subject_id, linked, reread) {
-  const taken = new Set(linked.map(f => f.file_id));
-  const usable = f => !f.archived && !taken.has(f.id);
-  let recent = [], found = [], pick = '', soon = 0, seq = 0;
-  const dlg = finDialog('Add file', `${opsField('File', '<input type="search" name="find" placeholder="Search Files" autocomplete="off">')}<div class="ops-picks" role="listbox" aria-label="Files"></div>`, 'Add', async () => {
-    if (!pick) throw new Error('Choose a file');
-    const done = await finAct('record_file_add', {subject_type, subject_id, file_id: pick});
-    if (done?.status === 'committed') toast('File added');   // otherwise finAct said who it went to
-    await reread();
-  });
-  const find = dlg.querySelector('[name=find]'), picks = dlg.querySelector('.ops-picks');
-  const draw = () => {
-    const seen = new Set(), rows = (find.value.trim() ? found : recent).filter(f => usable(f) && !seen.has(f.id) && seen.add(f.id));
-    picks.innerHTML = rows.map(f => `<button type="button" class="ops-pick${f.id === pick ? ' on' : ''}" role="option" aria-selected="${f.id === pick}" data-file-pick="${esc(f.id)}">${esc(f.title || f.name || f.id)}</button>`).join('')
-      || `<p class="muted ops-note">${find.value.trim() ? 'No files match' : 'No files yet'}</p>`;
-  };
-  picks.onclick = ev => { const b = ev.target.closest('[data-file-pick]'); if (b) { pick = b.dataset.filePick; draw(); } };
-  find.oninput = () => {
-    clearTimeout(soon);
-    const q = find.value.trim(), mine = ++seq;
-    if (!q) { draw(); return; }
-    soon = setTimeout(async () => {
-      const read = await get('/v2/files/search?limit=20&q=' + encodeURIComponent(q)).catch(() => null);
-      if (mine !== seq || !dlg.open) return;
-      found = read?.results || [];
-      draw();
-    }, 250);
-  };
-  const read = await get('/v2/files?limit=50', {fresh: true}).catch(() => null);
-  if (!dlg.open) return;
-  recent = read?.files || [];
-  draw();
+  host.querySelector('[data-file-add]').onclick = () => void recordFilePick(OPS_ONE[state.tab], r.id, files, again);
+  host.querySelectorAll('[data-file-remove]').forEach(b => { b.onclick = () => void recordFileRemove(b, again); });
 }
 // Each opens that document in Finance (finOrdPage and finDocPage read ?doc=).
 const opsDocLinks = (docs, route) => opsLinks(docs.map(d => [finHref(route, {doc: d.id}), `${d.number || ''} ${d.contact?.name || d.customer?.name || ''}`.trim() || '—', finUsd(d.total)]));

@@ -39,10 +39,6 @@
 .ops-copy{display:flex;flex-wrap:wrap;gap:2px 8px;margin:0 0 8px;font-size:var(--t-xs)}
 .ops-stale{color:var(--wait-ink);font-size:var(--t-xs);font-weight:500}
 td .ops-stale{display:block;white-space:nowrap}
-.ops-picks{display:flex;flex-direction:column;max-height:40vh;overflow-y:auto;margin:4px 0 0}
-.ops-pick{justify-content:flex-start;height:auto;padding:6px 8px;border:0;background:none;text-align:left;font-weight:400;overflow-wrap:anywhere}
-.ops-pick:hover{background:var(--surface2)}
-.ops-pick.on{background:color-mix(in srgb,var(--accent) 10%,transparent);font-weight:500}
 .ops-desc{margin:0 0 8px;white-space:pre-wrap;overflow-wrap:anywhere}
 .ops-sec{margin-top:14px;padding-top:10px;border-top:1px solid var(--line)}
 .ops-sec-h{display:flex;align-items:center;gap:8px;margin:0 0 6px}

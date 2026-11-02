@@ -47,7 +47,7 @@ async function finContactRead(me) {
   const record = me.kind === 'customer' ? await get(`/v2/finance/contacts/${id}${as}`, {fresh: true}).catch(() => null)
     : await get(`/v2/finance/contacts/${id}${as}`, {fresh: true});
   if (record) me.name = record.contact.name;
-  const files = record ? await finContactFiles(record.files) : null;
+  const files = record ? await recordFileNames(record.files) : null;
   if (me.kind !== 'customer') {
     if (record.contact.kind !== 'customer') return {contact: record.contact, record: record.contact, files};
     me.kind = 'customer';
@@ -56,9 +56,6 @@ async function finContactRead(me) {
   me.name = d.contact?.name || me.name;
   return {contact: d.contact, record: record?.contact, files, sites: d.locations, gear: d.equipment, due: d.due_dates, estimates: d.estimates, invoices: d.invoices?.invoices};
 }
-// A link names only the file, so each one's name comes from its own meta read.
-const finContactFiles = files => Promise.all((files || []).map(async f =>
-  ({...f, name: (await get(`/v2/files/${encodeURIComponent(f.file_id)}/meta`).catch(() => null))?.name})));
 // A copy from a provider's books: when it last synced, and whether it may be behind. Tico's own record says nothing.
 function finContactFresh(c) {
   if (!c?.source || c.source === 'tico') return '';
@@ -67,9 +64,8 @@ function finContactFresh(c) {
 function finContactFilesHtml(files) {
   const edit = finCaps()?.may('finance.records');
   if (!files || (!files.length && !edit)) return '';
-  return `<h3 class="fin-h">Files</h3>${files.map(f => `<div class="fin-rec-file"><a href="/api/v2/files/${encodeURIComponent(f.file_id)}" target="_blank" rel="noopener">${esc(f.name || 'File')}</a>
-    ${edit ? `<button type="button" class="ghost tmodal-x" data-fin-file-remove="${esc(f.id)}" aria-label="Remove ${esc(f.name || 'file')}">✕</button>` : ''}</div>`).join('')}
-    ${edit ? '<div class="fin-acts"><button type="button" class="ghost" data-fin-file-add>Add file</button></div>' : ''}`;
+  return `<h3 class="fin-h">Files</h3>${recordFileRows(files, edit)}
+    ${edit ? '<div class="fin-acts"><button type="button" class="ghost" data-file-add>Add file</button></div>' : ''}`;
 }
 function finContactDraw(me, parts) {
   const head = `<button type="button" class="ghost fin-rail-back" data-fin-contact-back>‹ Back</button><div class="fin-rail-title"><h2>${esc(me.name || '—')}</h2></div>`;
@@ -102,22 +98,29 @@ function finContactWire(me, c, files) {
   rail.onclick = ev => {
     if (ev.target.closest('[data-fin-contact-back]')) { finContactBack(); return; }
     if (c && ev.target.closest('[data-fin-contact-edit]')) finVendorEdit(me, c);
-    if (ev.target.closest('[data-fin-file-add]')) void finFilePick(me, files || []);
-    const gone = ev.target.closest('[data-fin-file-remove]');
-    if (gone) void finFileRemove(me, gone);
+    const again = () => { if (FIN_CONTACT === me) void finContactShow(me); };
+    if (ev.target.closest('[data-file-add]')) void recordFilePick('contact', me.id, files || [], again);
+    const gone = ev.target.closest('[data-file-remove]');
+    if (gone) void recordFileRemove(gone, again);
   };
 }
+// A record's Library files, for a contact's panel here and an Operations record's. A link names only the file, so each one's
+// name comes from its own meta read.
+const recordFileNames = files => Promise.all((files || []).map(async f =>
+  ({...f, name: (await get(`/v2/files/${encodeURIComponent(f.file_id)}/meta`).catch(() => null))?.name})));
+const recordFileRows = (files, edit) => files.map(f => `<div class="fin-rec-file"><a href="${API}/v2/files/${encodeURIComponent(f.file_id)}" target="_blank" rel="noopener" data-name="${esc(f.name || 'File')}">${esc(f.name || 'File')}</a>
+    ${edit ? `<button type="button" class="ghost tmodal-x" data-file-remove="${esc(f.id)}" aria-label="Remove ${esc(f.name || 'file')}">✕</button>` : ''}</div>`).join('');
 // The same reads and rows as the rules' document picker: recent files whose name fits, then search hits. Stored files only:
-// a link has no copy to open from here.
-async function finFilePick(me, linked) {
+// a link has no copy to open from here. `done` runs once the link is made, not when it waits on a person.
+async function recordFilePick(subject_type, subject_id, linked, done) {
   const taken = new Set(linked.map(f => f.file_id));
   const fits = f => f.locator !== 'remote_link' && !f.url && !f.archived && !taken.has(f.id);
   let pick = '', found = [], recent = [], seq = 0, soon = 0;
   const dlg = finDialog('Add file', `<input name="find" type="search" placeholder="Search files" aria-label="Search files" autocomplete="off">
     <div class="ru-picks" role="listbox" aria-label="Files"></div>`, 'Add', async () => {
     if (!pick) throw new Error('Pick a file');
-    const r = await finAct('record_file_add', {subject_type: 'contact', subject_id: me.id, file_id: pick});
-    if (r.status === 'committed') { toast('Added'); if (FIN_CONTACT === me) void finContactShow(me); }
+    const r = await finAct('record_file_add', {subject_type, subject_id, file_id: pick});
+    if (r.status === 'committed') { toast('Added'); await done(); }
   });
   const find = dlg.querySelector('[name=find]'), box = dlg.querySelector('.ru-picks');
   const label = f => f.title || f.name || f.id;
@@ -142,11 +145,11 @@ async function finFilePick(me, linked) {
   if (dlg.open) draw();
 }
 // The file stays in the Library; only the link goes.
-async function finFileRemove(me, btn) {
+async function recordFileRemove(btn, done) {
   btn.disabled = true;
   try {
-    const r = await finAct('record_file_remove', {record_file_id: btn.dataset.finFileRemove});
-    if (r.status === 'committed') { toast('Removed'); if (FIN_CONTACT === me) void finContactShow(me); return; }
+    const r = await finAct('record_file_remove', {record_file_id: btn.dataset.fileRemove});
+    if (r.status === 'committed') { toast('Removed'); await done(); return; }
   } catch (e) { toast(e.message, true); }
   btn.disabled = false;
 }

@@ -9,36 +9,62 @@ const opsRepeatLabel = d => d.repeats === 'every_days' ? `Every ${d.every_count}
 const opsAssignees = () => [...(S.emps || []).filter(e => e.status !== 'archived').map(e => ['bot:' + e.name, e.display_name || e.name]),
   ...(S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id])];
 
+// How many due dates a panel shows before More. Each shown one costs a read for its history.
+const OPS_DUE_PAGE = 50;
+// The repeats that count from the last completion: the backend reopens only the latest of these.
+const OPS_DUE_ANCHORED = new Set(['every_days', 'every_months']);
+const OPS_DUE_RANK = {overdue: 0, due: 1, upcoming: 2};
+
 function opsDueMount(hostId, subjectType, subjectId, {onLoad, onWrite} = {}) {
-  const box = {hostId, subjectType, subjectId, onLoad, onWrite, open: new Set(), load: 0};
+  const host = document.getElementById(hostId);
+  if (!host) return;
+  const box = {host, subjectType, subjectId, onLoad, onWrite, open: new Set(), load: 0, shown: OPS_DUE_PAGE};
+  host.opsDueBox = box;
   void opsDueLoad(box);
 }
+// A late answer or a finished write belongs to the panel that asked: never to the record the panel shows now.
+const opsDueLive = box => box.host.isConnected && box.host.opsDueBox === box;
+// The list has no occurrences; a due date's detail has them, as `history`.
+const opsDueDetails = rows => Promise.all(rows.map(d => get(`/v2/due-dates/${encodeURIComponent(d.id)}`, {fresh: true}).then(x => x?.due_date || d).catch(() => d)));
+// Most pressing first, so an overdue date is on top however its name sorts.
+const opsDueOrder = rows => [...rows].sort((a, b) => (OPS_DUE_RANK[a.status] ?? 3) - (OPS_DUE_RANK[b.status] ?? 3)
+  || String(a.next_due_on || '9').localeCompare(String(b.next_due_on || '9')) || String(a.name).localeCompare(String(b.name)));
 async function opsDueLoad(box) {
-  const load = ++box.load, host = document.getElementById(box.hostId);
-  if (!host) return;
-  let dues = [], failed = null;
+  if (!opsDueLive(box)) return;
+  const load = ++box.load;
+  let rows = [], dues = [], failed = null;
   try {
-    const read = await get('/v2/due-dates?' + opsQs({subject_type: box.subjectType, subject_id: box.subjectId, limit: 50}), {fresh: true});
-    // The list has no occurrences; a due date's detail has them, as `history`.
-    dues = await Promise.all((read?.due_dates || []).map(d => get(`/v2/due-dates/${encodeURIComponent(d.id)}`, {fresh: true}).then(x => x?.due_date || d).catch(() => d)));
+    rows = opsDueOrder(await finPaged('/v2/due-dates', 'due_dates', opsQs({subject_type: box.subjectType, subject_id: box.subjectId})));
+    dues = await opsDueDetails(rows.slice(0, box.shown));
   } catch (e) { if (!opsAbsent(e)) failed = e; }
-  if (load !== box.load || !document.getElementById(box.hostId)) return;
+  if (load !== box.load || !opsDueLive(box)) return;
+  box.rows = rows;
   box.dues = dues;
   opsDueDraw(box, failed);
   box.onLoad?.(dues);
 }
+async function opsDueMore(box) {
+  const load = box.load, next = box.rows.slice(box.dues.length, box.dues.length + OPS_DUE_PAGE);
+  const dues = await opsDueDetails(next);
+  if (load !== box.load || !opsDueLive(box)) return;
+  box.dues = [...box.dues, ...dues];
+  box.shown = box.dues.length;
+  opsDueDraw(box);
+  box.onLoad?.(box.dues);
+}
 function opsDueDraw(box, failed = null) {
-  const host = document.getElementById(box.hostId), edit = opsEditor();
-  if (!host) return;
+  const host = box.host, edit = opsEditor();
   const add = edit ? '<span class="spacer"></span><button type="button" class="ghost ops-mini" data-due-add>+ Add</button>' : '';
-  const rows = (box.dues || []).filter(d => !d.archived_at).map(d => opsDueRow(box, d, edit)).join('');
+  const more = (box.rows?.length || 0) > (box.dues?.length || 0) ? '<button type="button" class="ghost ops-more" data-due-more>More</button>' : '';
+  const rows = (box.dues || []).filter(d => !d.archived_at).map(d => opsDueRow(box, d, edit)).join('') + more;
   // Nothing to show and nothing to add: no empty heading.
   if (!edit && !rows && !failed) { host.innerHTML = ''; return; }
   host.innerHTML = opsSec('Due dates', failed ? opsFail(failed) : rows, add);
   host.onclick = ev => {
-    const hit = ev.target.closest('[data-due-add],[data-due-done],[data-due-reopen],[data-due-stop]');
-    if (!hit) return;
+    const hit = ev.target.closest('[data-due-add],[data-due-done],[data-due-reopen],[data-due-stop],[data-due-more]');
+    if (!hit || !opsDueLive(box)) return;
     if (hit.matches('[data-due-add]')) return opsDueAdd(box);
+    if (hit.matches('[data-due-more]')) { hit.disabled = true; return void opsDueMore(box); }
     const write = hit.matches('[data-due-done]') ? ['due_date_occurrence_complete', {due_date_id: hit.dataset.dueDone, due_on: hit.dataset.on}, 'Done']
       : hit.matches('[data-due-reopen]') ? ['due_date_occurrence_reopen', {due_date_id: hit.dataset.dueReopen, due_on: hit.dataset.on}, 'Reopened']
       : ['due_date_update', {due_date_id: hit.dataset.dueStop, active: false}, 'Stopped'];
@@ -52,9 +78,12 @@ function opsDueDraw(box, failed = null) {
 function opsDueRow(box, d, edit) {
   const tag = d.status === 'overdue' ? '<span class="pill fail">Overdue</span>' : d.status === 'due' ? '<span class="pill waiting">Due soon</span>' : '';
   const done = (d.history || []).filter(o => o.completed_at).sort((a, b) => String(b.completed_at).localeCompare(String(a.completed_at)));
-  const next = edit && d.next_due_on ? `<button type="button" class="ghost ops-mini" data-due-done="${esc(d.id)}" data-on="${esc(d.next_due_on)}">Mark done</button>` : '';
+  // The assignee works their own without the records right (the backend's _may_work); changing the schedule stays an editor's.
+  const work = edit || (!!d.assignee_id && d.assignee_id === finMe());
+  const latest = OPS_DUE_ANCHORED.has(d.repeats) ? done.map(o => String(o.due_on)).sort().at(-1) : null;
+  const next = work && d.next_due_on ? `<button type="button" class="ghost ops-mini" data-due-done="${esc(d.id)}" data-on="${esc(d.next_due_on)}">Mark done</button>` : '';
   const hist = done.map(o => `<li><span>${esc(opsDay(o.due_on))}</span><span class="muted">${esc(opsDay(o.completed_at))}${o.completed_by_id ? ' · ' + esc(actorLabel(o.completed_by_id)) : ''}</span>
-    ${edit ? `<button type="button" class="linkish" data-due-reopen="${esc(d.id)}" data-on="${esc(o.due_on)}">Reopen</button>` : ''}</li>`).join('');
+    ${work && (latest == null || o.due_on === latest) ? `<button type="button" class="linkish" data-due-reopen="${esc(d.id)}" data-on="${esc(o.due_on)}">Reopen</button>` : ''}</li>`).join('');
   const history = hist || edit ? `<details data-due-history="${esc(d.id)}"${box.open.has(d.id) ? ' open' : ''}><summary>History</summary>
       ${hist ? `<ul class="ops-hist">${hist}</ul>` : '<p class="muted ops-note">None yet</p>'}
       ${edit ? `<button type="button" class="linkish" data-due-stop="${esc(d.id)}">Stop this due date</button>` : ''}</details>` : '';

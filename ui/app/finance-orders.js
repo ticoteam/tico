@@ -203,11 +203,11 @@ function finOrdBill(d) {
 
 // ----------------------------------------------------------------- what a line form picks from
 // Every page of a record read, up to a thousand rows: a <select> that stopped at the first page would hide the rest.
-async function finPaged(path, key) {
+async function finPaged(path, key, params = '') {
   const out = [];
   let cursor = '';
   for (let n = 0; n < 5; n++) {
-    const d = await get(`${path}?limit=200${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}${finAs()}`, {fresh: true});
+    const d = await get(`${path}?limit=200${params ? '&' + params : ''}${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}${finAs()}`, {fresh: true});
     out.push(...(d?.[key] || []));
     cursor = d?.next_cursor || '';
     if (!cursor) break;
