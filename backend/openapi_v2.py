@@ -2354,6 +2354,7 @@ STABLE.extend([
     ('/api/v2/rules/read', 'post', 'Rules', 'readRuleDocument', 'Add a document for Counsel to read: a file you can read, or a public link (saved as a file version); Counsel suggests the rules in it', None),
     ('/api/v2/rules/ask', 'post', 'Rules', 'askRules', 'A can-I question: the active rules that share words with it, cited, and Counsel\'s answer on a task', None),
     ('/api/v2/rules/due', 'get', 'Rules', 'listRuleDue', 'Due dates of rules in force: overdue, then those falling due within next days', None),
+    ('/api/v2/rules/by-teammate', 'get', 'Rules', 'listRulesByTeammate', 'The rules in force the caller may read, each with can_edit; and per bot and per person the caller may see, the ids of the rules whose Who (who) or With (with) names it, only those with one', 'RulesByTeammate'),
     ('/api/v2/rules/{rule_id}', 'get', 'Rules', 'getRule', 'One rule, its due dates, and the quote it cites where its file is readable', None),
     ('/api/v2/rule-due/{due_id}', 'get', 'Rules', 'getRuleDue', 'One due date in full: its status, open occurrences, and its chain of edits (ended and removed rows included)', None),
     ('/api/v2/rules/{rule_id}', 'post', 'Rules', 'updateRule', 'Edit a rule against its version; a bot cannot edit', None),
@@ -2376,6 +2377,13 @@ STABLE.extend([
     ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce; for a person\'s write that is the rule\'s author, its editors or an admin', None),
     ('/api/v2/rule-holds/{hold_id}/appeal', 'post', 'Rules', 'appealRuleHold', 'The author bot asks the reviewer to look, with why', None),
 ])
+_RULE_IDS = items({'type': 'string'})
+SCHEMAS['RulesByTeammate'] = obj({
+    'rules': items(obj({'id': 's', 'kind': {'enum': ['internal', 'external']}, 'text': 's',
+                        'if_broken': {'enum': ['block', 'escalate', 'warn', None]}, 'can_edit': 'b'})),
+    'bots': items(obj({'slug': 's', 'who': _RULE_IDS, 'with': _RULE_IDS})),
+    'people': items(obj({'id': 's', 'who': _RULE_IDS, 'with': _RULE_IDS})),
+})
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
                                                         'automation_runs', 'latest_pages', 'needs_attention',
                                                         'unread_threads', 'my_tasks', 'updates']},

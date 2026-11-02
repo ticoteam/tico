@@ -102,6 +102,7 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("getMe", "get", "/api/v2/me")
     call("getConfig", "get", "/api/v2/config")
     call("getOrg", "get", "/api/v2/org")
+    call("listRulesByTeammate", "get", "/api/v2/rules/by-teammate")
     call("listBots", "get", "/api/v2/bots")
     call("getBot", "get", "/api/v2/bots/ops")
     call("getBotInstructions", "get", "/api/v2/bots/ops/instructions")
