@@ -13,13 +13,6 @@ from pydantic import Field
 from . import memory_tidy as tidy, memory_tidy_runs as runs, models as M
 from .store import H, Problem
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS memory_tidy_packets(
- attempt_id TEXT PRIMARY KEY, pass_id TEXT NOT NULL UNIQUE, memory_commit TEXT NOT NULL,
- snapshot TEXT NOT NULL, before_digest TEXT NOT NULL, after_digest TEXT,
- since TEXT, previous_learnings TEXT, proposal TEXT, conflicts INTEGER,
- flags_json TEXT NOT NULL DEFAULT '[]', stage TEXT NOT NULL DEFAULT 'prepared');
-"""
 MAX_SNAPSHOT = 64_000_000
 
 
@@ -82,7 +75,7 @@ def proposal(c, aid, text):
         conflict_check=collect, previous_learnings=packet['previous_learnings'])
     if result.flags:
         # Invalid or secret-shaped edits never reach another model or an attachment.
-        c.execute("UPDATE memory_tidy_packets SET conflicts=-1,stage='proposed',flags_json=? WHERE attempt_id=?",
+        c.execute("UPDATE memory_tidy_packets SET conflicts=-1,stage='proposed',flags=? WHERE attempt_id=?",
                   (json.dumps(result.flags), aid))
         return None
     c.execute("UPDATE memory_tidy_packets SET proposal=?,stage='proposed' WHERE attempt_id=?", (text, aid))
@@ -117,7 +110,7 @@ def complete(c, aid, body, who, files, blobs):
     if (not packet or packet['stage'] != 'verified' or packet['pass_status'] != 'filed'
             or not attempt or attempt['state'] != 'completed' or body.outcome != 'completed'):
         return
-    flags = json.loads(packet['flags_json'])
+    flags = json.loads(packet['flags'])
     if flags:
         runs.close_pass(c, c.execute('SELECT * FROM memory_tidy_passes WHERE id=?', (packet['pass_id'],)).fetchone(),
                         'flagged: ' + '; '.join(flags))

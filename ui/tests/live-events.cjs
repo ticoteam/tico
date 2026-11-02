@@ -71,12 +71,15 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     }
     return json(unrouted(p));
   });
-  // Answer only this document's newest matching stream: a held route from before navigation can still be queued.
+  // Navigation and thread subscriptions can leave canceled routes queued. Deliver only to the page's active stream.
   const send = async (match, ...blocks) => {
     const deadline = Date.now() + t(8000);
     const document = new URL(page.url()); document.hash = '';
     let stream;
-    while (!(stream = streams.filter(s => s.document === document.href && match(s.url)).at(-1))) {
+    for (;;) {
+      const active = await page.evaluate(() => LIVE.es?.url);
+      stream = streams.filter(s => s.document === document.href && s.url.href === active && match(s.url)).at(-1);
+      if (stream) break;
       if (Date.now() > deadline) throw new Error('no stream: ' + streams.map(s => s.url.search).join(' | '));
       await new Promise(r => setTimeout(r, 50));
     }
@@ -191,6 +194,10 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     // Each viewport gets a fresh stream: these finite fixture responses otherwise accumulate reconnect backoff.
     await page.goto(`https://tico-ui.test/?tooltip=${width}#/bot/ops`);
     await page.locator('.bot-ident [data-tip-bot="ops"]').waitFor();
+    // The thread's first render can scroll; a scroll intentionally dismisses a tooltip.
+    // Open it after that render and the thread subscription have settled.
+    await page.waitForFunction(() => BOT?.slug === 'ops' && [...THV_VIEWS]
+      .filter(v => v.host.isConnected).every(v => v.state !== 'loading'));
     await page.locator('.bot-ident [data-tip-bot="ops"]').focus();
     await page.locator('#bot-tip:not([hidden])').waitFor();
     assert.doesNotMatch(await page.locator('#bot-tip').innerText(), /Waiting for.*ChatGPT/);
@@ -199,7 +206,12 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
       waiting, changed_at: now, open_tasks: 1, needs_human: 0}}));
     assert.equal(onBotPage.searchParams.get('party'), 'bot:ops', "a bot's page is sent its own tasks' changes, not every task's");
     await page.waitForFunction(text => !document.querySelector('#bot-tip').hidden
-      && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting);
+      && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting).catch(async error => {
+      console.error('tooltip live state', await page.evaluate(() => ({width: innerWidth,
+        hidden: document.querySelector('#bot-tip')?.hidden, text: document.querySelector('#bot-tip')?.textContent,
+        status: S.v2.status.ops, stream: LIVE.es?.url, cursor: LIVE.after, queued: [...LIVE_SOON.keys()]})));
+      throw error;
+    });
     await send(() => true, block(seq++, 'bots', {bot: 'ops', status: null}));
     await page.waitForFunction(() => !document.querySelector('#bot-tip').hidden
       && !document.querySelector('#bot-tip').textContent.includes('Waiting for the ChatGPT') && !LIVE_SOON.has('bots'));

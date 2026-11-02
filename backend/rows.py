@@ -164,3 +164,35 @@ class PrincipalRow(TypedDict):
     id: str
     kind: str
     deleted_at: str | None
+
+
+class MemoryTidyPassRow(TypedDict):
+    """One admission and its reconciled pilot cost."""
+    id: str
+    night: str
+    bot: str
+    model: str
+    started_at: str
+    deadline: str
+    status: str
+    reason: str
+    parent_task_id: str | None
+    check_task_id: str | None
+    baseline: str
+    cost_usd: float
+
+
+class MemoryTidyPacketRow(TypedDict):
+    """Trusted runner custody for one editing and verification attempt."""
+    attempt_id: str
+    pass_id: str
+    memory_commit: str
+    snapshot: str
+    before_digest: str
+    after_digest: str | None
+    since: str | None
+    previous_learnings: str | None
+    proposal: str | None
+    conflicts: int | None
+    flags: str
+    stage: str

@@ -57,7 +57,7 @@ def test_unsafe_output_never_persists_as_a_proposal_or_verification_input(api):
         assert transport.proposal(c, 'attempt', json.dumps(obj)) is None
         saved = dict(c.execute('SELECT * FROM memory_tidy_packets').fetchone())
         assert saved['proposal'] is None and secret not in json.dumps(saved)
-        assert '19:' in saved['flags_json']
+        assert '19:' in saved['flags']
 
 
 def test_snapshot_cannot_include_transcripts_state_or_paths_outside_memory(api):

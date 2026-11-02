@@ -283,7 +283,7 @@ def test_native_packet_runs_in_private_workspace_and_delivers_without_parent_tur
         assert c.execute("SELECT count(*) FROM memory_tidy_cards WHERE pass_id=?", (row["id"],)).fetchone()[0] == 1
         assets = c.execute("SELECT blob_id FROM task_assets WHERE task_id=?", (row["check_task_id"],)).fetchall()
         assert len(assets) == 1
-        assert not c.execute("SELECT 1 FROM jobs WHERE bot='ops' AND state='queued'").fetchone(), "no parent turn"
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone(), "no parent turn"
     download = api.get('/api/v2/files/' + assets[0]['blob_id'], headers=headers())
     assert download.status_code == 200 and download.content, "attachment stays readable after close"
 

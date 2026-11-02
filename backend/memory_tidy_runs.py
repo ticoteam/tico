@@ -11,15 +11,6 @@ from . import check_models, memory_tidy_controls as controls, providers, system_
 from .store import H, Problem
 from .updates import ZONE
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS memory_tidy_passes(
- id TEXT PRIMARY KEY, night TEXT NOT NULL, bot TEXT NOT NULL, model TEXT NOT NULL,
- started_at TEXT NOT NULL, deadline TEXT NOT NULL, status TEXT NOT NULL,
- reason TEXT NOT NULL DEFAULT '', parent_task_id TEXT, check_task_id TEXT,
- baseline TEXT NOT NULL DEFAULT '', cost_usd REAL NOT NULL DEFAULT 0,
- UNIQUE(night,bot));
-CREATE INDEX IF NOT EXISTS memory_tidy_passes_bot ON memory_tidy_passes(bot,started_at);
-"""
 STOP = 50.0
 
 

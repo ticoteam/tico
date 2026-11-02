@@ -18,6 +18,8 @@ TABLES = {
     rows.ApprovalRow: "approvals",
     rows.AttemptEventRow: "attempt_events",
     rows.PrincipalRow: "principals",
+    rows.MemoryTidyPassRow: "memory_tidy_passes",
+    rows.MemoryTidyPacketRow: "memory_tidy_packets",
 }
 
 
