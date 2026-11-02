@@ -3662,7 +3662,8 @@ def sidebar(c, v, *, cursor=None, limit=50, sort=None):
                  f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.sender_id<>:me AND m.deleted_at IS NULL)")
     place = f"CASE WHEN {is_needing} THEN 0 WHEN NOT {is_history} AND ({by_person} OR {to_viewer}) THEN 1 ELSE 2 END"
     from . import thread_rank
-    importance = thread_rank.importance_sql("r")
+    # Someone who reads only a migrated Home's old history gets the middle level for it: its level comes from all of it.
+    importance = f"(CASE WHEN {is_history} THEN {thread_rank.DEFAULT} ELSE {thread_rank.importance_sql('r')} END)"
     # The order a page is ranked and paged by, ascending: Needs attention (0) first, then by `sort`.
     rank = {None: "place", "recent": f"CASE WHEN {is_needing} THEN 0 ELSE 1 END",
             "important": f"CASE WHEN {is_needing} THEN 0 ELSE {thread_rank.LEVELS + 1}-importance END"}[sort]

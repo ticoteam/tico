@@ -132,9 +132,33 @@ def test_a_failed_call_keeps_the_rank_and_is_still_audited(api):
     done = TR.run_pass(store, engine=model)
     assert done["ranked"] == 0 and done["errors"] >= 1
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM thread_rankings WHERE thread_id=?", (thread["id"],)).fetchone()[0] == 0
+        assert c.execute("SELECT score FROM thread_rankings WHERE thread_id=?", (thread["id"],)).fetchone()[0] is None
         assert c.execute("SELECT count(*) FROM events WHERE action='judge.call' AND detail LIKE '%unavailable%'"
                          ).fetchone()[0] >= 1
+    row = next(t for t in sidebar(api, token="ben-test", sort="important")["threads"] if t["id"] == thread["id"])
+    assert row["importance"] == TR.DEFAULT
+    # A failed call waits the hour too, so a failing model is not asked again every pass.
+    at, calls = H.now(), len(model.calls)
+    model.fail = None
+    TR.run_pass(store, at=H.shift(at, minutes=10), engine=model)
+    assert len(model.calls) == calls
+    assert TR.run_pass(store, at=H.shift(at, minutes=61), engine=model)["ranked"] >= 1
+
+
+def test_a_level_that_moves_tells_the_lists(api):
+    store = api.app.state.store
+    thread = new_thread(api, title="Outage", members=("human:ben",), body="Site down")
+
+    def ranked():
+        with store.read() as c:
+            return c.execute("SELECT count(*) FROM changes WHERE topic='threads' AND kind='ranked' AND subject_id=?",
+                             (thread["id"],)).fetchone()[0]
+    with store.transaction() as c:
+        TR.save(c, thread["id"], 10, 1, H.now())
+    assert ranked() == 1
+    with store.transaction() as c:
+        TR.save(c, thread["id"], 10, 2, H.now())
+    assert ranked() == 1, "the same level is no change"
 
 
 def test_levels_map_from_the_score_position():

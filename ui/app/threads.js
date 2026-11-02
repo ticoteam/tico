@@ -93,10 +93,14 @@ function threadRowHTML(t, {attention = false} = {}) {
 
 // ----------------------------------------------------------------- loading and the sidebar
 async function threadsLoad() {
-  if (THREADS.loading) return THREADS.loading;
+  const sort = threadsSort();
+  // A read still out for the other order is followed by one for this order, not taken for it.
+  if (THREADS.loading) return THREADS.loadingSort === sort ? THREADS.loading : THREADS.loading.then(() => threadsLoad());
+  THREADS.loadingSort = sort;
   THREADS.loading = (async () => {
     try {
-      const r = await get('/v2/threads?limit=50&sort=' + threadsSort(), {fresh: true});
+      const r = await get('/v2/threads?limit=50&sort=' + sort, {fresh: true});
+      if (sort !== threadsSort()) return;     // the order changed meanwhile: read again below, this answer is dropped
       // Only a real list turns Threads on; any other answer is a server without them.
       if (!Array.isArray(r?.threads)) { if (THREADS.on !== true) THREADS.on = false; return; }
       Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads, dms: r.dms || []});
@@ -107,7 +111,8 @@ async function threadsLoad() {
     } finally { THREADS.loading = null; }
     threadsSideRender();
   })();
-  return THREADS.loading;
+  const loading = THREADS.loading;
+  return loading.then(() => sort !== threadsSort() ? threadsLoad() : undefined);
 }
 function threadsSideRender() {
   const on = THREADS.on === true;

@@ -37,13 +37,14 @@ async function pageThreads() {
   threadSearchWire(main);
   main.querySelector('[data-thp-new]').onclick = () => threadNewOpen({dm: dms, members: withActor ? [withActor] : []});
   const route = S.route;
-  let st = {attention: [], threads: [], dms: [], next: null};
+  let st = {attention: [], threads: [], dms: [], next: null}, gen = 0;
   const load = async cursor => {
     const p = new URLSearchParams({limit: '50', sort});
     if (cursor) p.set('cursor', cursor);
     if (withActor) p.set('with', withActor);
-    const asked = sort, r = await get('/v2/threads?' + p, {fresh: true});
-    if (S.route !== route || asked !== sort) return;
+    // Each switch starts a new list: a page asked for before it is dropped, whatever order it was for.
+    const mine = gen, r = await get('/v2/threads?' + p, {fresh: true});
+    if (S.route !== route || mine !== gen) return;
     for (const key of ['attention', 'threads', 'dms']) {
       const have = new Set(st[key].map(t => t.id));
       st[key].push(...(r[key] || []).filter(t => !have.has(t.id)));
@@ -65,6 +66,7 @@ async function pageThreads() {
     const k = ev.target.closest('[data-th-sort]')?.dataset.thSort;
     if (!k || k === sort) return;
     sort = k;
+    gen++;
     threadsSortSet(k);
     main.querySelectorAll('[data-th-sort]').forEach(b => { const on = b.dataset.thSort === k; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
     st = {attention: [], threads: [], dms: [], next: null};

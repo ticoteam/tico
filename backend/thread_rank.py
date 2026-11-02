@@ -5,7 +5,8 @@ Two parts. Plain rules first (`noise_sql`): a task's thread is noise once the ta
 its owner or requester (bots handing each other work); noise never lists in Important, whatever a model said. Then the
 decision model (`questions/thread-rank.json`, one `score` question on ten levels): on its own timer
 (backend/scheduler.py, every RUN_SECONDS) a pass ranks the roots with new messages since their last ranking, newest
-first, each at most once an hour, CALLS_PER_PASS a pass and CALLS_PER_HOUR an hour, within Decide's daily cap. A thread
+first, each at most once an hour, CALLS_PER_PASS a pass and CALLS_PER_HOUR an hour, and only while the server's Decide
+calls today stay under DAILY_SHARE of the daily cap, so the checks that act on tasks keep their room. A thread
 never ranked reads as DEFAULT; level 1 is noise too. The model sees the title, the kind, who is in it and the last few
 messages cut short; every call is audited as `judge.call` with the thread id, and a failed or missing model leaves the
 rank as it was (fails open). One pass at a time per process, on its own thread, never under the scheduler's lock."""
@@ -22,7 +23,7 @@ LOG = logging.getLogger("tico.thread_rank")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS thread_rankings(
- thread_id TEXT PRIMARY KEY, score INTEGER NOT NULL, ranked_seq INTEGER NOT NULL DEFAULT 0,
+ thread_id TEXT PRIMARY KEY, score INTEGER, ranked_seq INTEGER NOT NULL DEFAULT 0, tried_at TEXT NOT NULL,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 """
 
@@ -32,7 +33,8 @@ DEFAULT = 5             # a thread no pass has ranked yet
 NOISE = 1               # this level and below never list in Important
 RUN_SECONDS = 300
 CALLS_PER_PASS = 20
-CALLS_PER_HOUR = 60
+CALLS_PER_HOUR = 40
+DAILY_SHARE = 0.8       # ranking stops once the server's Decide calls today reach this share of the daily cap
 RERANK_SECONDS = 3600   # a thread is ranked again at most this often
 WINDOW_DAYS = 14        # only threads with a message this recent are ranked
 PASS_SECONDS = 4 * 60
@@ -69,14 +71,15 @@ def level_of(score):
 # ----------------------------------------------------------------------------- candidates and state (plain code)
 def candidates(c, at, limit=CALLS_PER_PASS):
     """The roots to rank now, newest activity first: open, with a message in the last WINDOW_DAYS, not noise by rule,
-    never ranked or with messages since their ranking an hour or more ago."""
+    never ranked or with messages since their ranking, and not tried (answered or not) in the last hour."""
     since, again = H.shift(at, days=-WINDOW_DAYS), H.shift(at, seconds=-RERANK_SECONDS)
     sql = (f"SELECT * FROM (SELECT r.id, (SELECT MAX(s.last_seq) FROM conversations s WHERE s.root_id=r.id) AS activity, "
            f"(SELECT MAX(s.last_message_at) FROM conversations s WHERE s.root_id=r.id) AS active_at, "
-           f"k.ranked_seq, k.updated_at AS ranked_at FROM conversations r "
+           f"k.ranked_seq, k.tried_at FROM conversations r "
            f"LEFT JOIN thread_rankings k ON k.thread_id=r.id "
            f"WHERE r.parent_id IS NULL AND r.archived_at IS NULL AND r.closed_at IS NULL AND NOT {noise_sql('r')}) "
-           "WHERE active_at>:since AND activity>0 AND (ranked_seq IS NULL OR (activity>ranked_seq AND ranked_at<:again)) "
+           "WHERE active_at>:since AND activity>0 AND (ranked_seq IS NULL OR activity>ranked_seq) "
+           "AND (tried_at IS NULL OR tried_at<:again) "
            "ORDER BY active_at DESC, id DESC LIMIT :n")
     return [dict(row) for row in c.execute(sql, {"since": since, "again": again, "n": limit})]
 
@@ -129,9 +132,22 @@ def calls_this_hour(c, at, label):
 
 
 def save(c, thread_id, level, seq, at):
-    c.execute("INSERT INTO thread_rankings(thread_id,score,ranked_seq,created_at,updated_at) VALUES(?,?,?,?,?) "
-              "ON CONFLICT(thread_id) DO UPDATE SET score=excluded.score, ranked_seq=excluded.ranked_seq, "
-              "updated_at=excluded.updated_at", (thread_id, int(level), int(seq or 0), at, at))
+    """Keep a thread's new level as of message `seq`; a level that moved tells the readers' lists (`ranked`)."""
+    old = c.execute("SELECT score FROM thread_rankings WHERE thread_id=?", (thread_id,)).fetchone()
+    c.execute("INSERT INTO thread_rankings(thread_id,score,ranked_seq,tried_at,created_at,updated_at) "
+              "VALUES(?,?,?,?,?,?) ON CONFLICT(thread_id) DO UPDATE SET score=excluded.score, "
+              "ranked_seq=excluded.ranked_seq, tried_at=excluded.tried_at, updated_at=excluded.updated_at",
+              (thread_id, int(level), int(seq or 0), at, at, at))
+    if (old[0] if old else None) != int(level) and (old is not None or int(level) != DEFAULT):
+        c.execute("INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) VALUES('threads','ranked',?,?,?)",
+                  (thread_id, thread_id, H.now()))
+
+
+def tried(c, thread_id, at):
+    """A call that did not answer: the thread keeps its level and waits the hour like any other."""
+    c.execute("INSERT INTO thread_rankings(thread_id,score,ranked_seq,tried_at,created_at,updated_at) "
+              "VALUES(?,NULL,0,?,?,?) ON CONFLICT(thread_id) DO UPDATE SET tried_at=excluded.tried_at, "
+              "updated_at=excluded.updated_at", (thread_id, at, at, at))
 
 
 # ----------------------------------------------------------------------------- the pass
@@ -162,7 +178,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
             if calls_this_hour(c, at, label) >= CALLS_PER_HOUR:
                 summary["why"] = "hourly_cap"
                 break
-            if used_today(c, H.KEEPER, at) >= daily_cap(settings, "bot"):
+            if used_today(c, H.KEEPER, at) >= DAILY_SHARE * daily_cap(settings, "bot"):
                 summary["why"] = "daily_cap"
                 break
             state = state_of(c, row["id"])
@@ -178,7 +194,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
             level = level_of(J.score(answers, "importance")[0])
         except J.JudgeError as exc:
             error = J.error_code(exc)
-        except Exception as exc:    # a fake, a provider bug: the thread keeps its rank until the next pass
+        except Exception as exc:  # noqa: BLE001 - a fake, a provider bug: the thread keeps its rank until the next pass
             LOG.warning("Thread ranking call failed: %s", type(exc).__name__)
             error = "error"
         detail = {"label": label, "questions": 1, "types": ["score"], "thread": row["id"]}
@@ -194,7 +210,9 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
             detail["level"] = level
         with store.transaction() as c:
             H.event(c, H.KEEPER, "judge.call", label, detail)
-            if not error:
+            if error:
+                tried(c, row["id"], at)
+            else:
                 save(c, row["id"], level, row["activity"], at)
                 summary["ranked"] += 1
     return summary
@@ -221,7 +239,7 @@ def tick(store, at=None, engine=None):
                 run.ai(summary.get("routes"), None, summary.get("cost_usd"))
             if summary.get("errors") and not summary.get("ranked"):
                 run.error = "Failed: Decide did not answer"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a failed pass is a run record, never a crashed thread
             LOG.warning("Thread ranking pass failed: %s", type(exc).__name__)
             run.error = SR.failure_words(exc)
         finally:
