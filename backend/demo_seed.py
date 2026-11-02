@@ -148,6 +148,7 @@ class Builder:
             self.messaging()
             self.files()
             demo_sections.seed_all(self)
+            self.routine_tasks(D.BRIEFING_DONE)
             self.finish()
 
     def write(self, work):
@@ -544,10 +545,9 @@ class Builder:
             self.write(work)
         self.call("POST", "files/links", {"bot": D.FILE_LINK["bot"], "url": D.FILE_LINK["url"], "title": D.FILE_LINK["title"]})
 
-    def routine_tasks(self):
-        """Each live meeting makes the Librarian a task; the Librarian reads the meeting and closes it a couple of hours on."""
-        done = D.ROUTINE_DONE
-
+    def routine_tasks(self, done=D.ROUTINE_DONE):
+        """A routine's task is read and closed a couple of hours on: the Librarian's task for each live meeting (before the
+        sections), or the goal-manager's bet review of the market briefing (after them, once the scheduler has made it)."""
         def work(c):
             rows = c.execute("SELECT id, created_at FROM tasks WHERE owner_id=? AND title=? AND status='open'",
                              (done["owner"], done["title"])).fetchall()
@@ -565,6 +565,7 @@ class Builder:
             c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND recipient_id LIKE 'bot:%'")
             c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running','input')")
             c.execute("DELETE FROM update_queue")
+            c.execute("DELETE FROM thread_routings")
             when = stamp(self.now)
             for (table,) in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall():
                 columns = {row[1] for row in c.execute(f'PRAGMA table_info("{table}")')}

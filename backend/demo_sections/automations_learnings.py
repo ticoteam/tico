@@ -271,9 +271,12 @@ def _automations(b):
     return ids
 
 
-def _newest_task(b, aid):
-    """The task the automation's newest run opened (its first action that made one), or None."""
+def _run_task(b, aid, trigger_ref=None):
+    """The task an automation's run opened (its first action that made one), or None. The newest run's, or with a
+    trigger_ref, the run that trigger started."""
     for run in b.call("GET", f"automations/{aid}/runs")["runs"]:
+        if trigger_ref is not None and run.get("trigger_ref") != trigger_ref:
+            continue
         for step in run.get("steps") or []:
             task = (step.get("outputs") or {}).get("task")
             if task:
@@ -281,9 +284,9 @@ def _newest_task(b, aid):
     return None
 
 
-def _close(b, aid, closer, note):
-    """The closer bot, which owns the newest task the automation opened, marks it done a couple of hours on."""
-    task = _newest_task(b, aid)
+def _close(b, aid, closer, note, trigger_ref=None):
+    """The closer bot, which owns the task the automation opened, marks it done a couple of hours on."""
+    task = _run_task(b, aid, trigger_ref)
     if not task:
         return
     b.clock.at += timedelta(hours=CONTENT["close_after_hours"])
@@ -319,13 +322,14 @@ def _mail_item(b, item, aids):
     b.store.automations.drain()
     if item.get("close"):
         auto = _spec(item["close"])
-        _close(b, aids[item["close"]], auto["closer"], auto["note"])
+        _close(b, aids[item["close"]], auto["closer"], auto["note"],
+               trigger_ref=f"mail:{CONTENT['mailbox']}:{item['id']}")
 
 
 def _mail_loop(b, aids):
-    """Each mail in its turn (drained as it goes), then the loop, which the run guard holds in one go, so no run is
-    started before the hold is in place."""
-    for item in CONTENT["mail"]:
+    """Each mail in its turn (drained as it goes), oldest first, then the loop, which the run guard holds in one go, so
+    no run is started before the hold is in place."""
+    for item in sorted(CONTENT["mail"], key=lambda i: -(i["at"][0] * 24 + i["at"][1])):
         _mail_item(b, item, aids)
     loop = CONTENT["loop"]
     _at(b, *loop["at"])

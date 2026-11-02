@@ -692,6 +692,16 @@ TASKS = [
     ("ap-bills", "Pay Friday's supplier bills after matching them",
      "Match each bill to its order, then schedule the payments.",
      "bot:accounts-payable", "human:ana", "open", 0.5, 0.5, "", None),
+    # The refund items the Learnings nights cite (automations_learnings.py): both began before their nights.
+    ("tag-refunds", "Tag last week's refund requests by reason",
+     "Read last week's refund tickets and tag each with the reason. Count the reasons.",
+     "bot:support", "human:ana", "done", 6.0, 4.0,
+     "Nine refund requests: five for a double charge, three for a unit returned after a failed install, one for a lost "
+     "invoice. Two are over $100.", None),
+    ("refund-policy", "Update the Support instructions with the refund policy",
+     "Put the refund policy in Support's instructions, with the limit Ana chooses.",
+     "bot:support-lead", "human:ana", "doing", 6.0, 0.3,
+     "Drafted the wording; the refund limit is still open, so the number is blank.", None),
 ]
 
 # Asks to a person: (key, title, owner bot, target person, body, days ago created, status). Each body opens with the
@@ -969,6 +979,9 @@ DOCS = [
 # The routine's task for each live meeting is closed by its bot once the page is kept up to date.
 ROUTINE_DONE = {"title": "Customer themes", "owner": "bot:librarian",
                 "note": "Read the two live meetings and updated market/customer-themes."}
+# The Market briefing routine's bet review (goal-manager's playbook): it reads the briefing against the bets it touches.
+BRIEFING_DONE = {"title": "Market briefing", "owner": "bot:goal-manager",
+                 "note": "Read the briefing against the bets it touches. No bet changes."}
 
 LINKS = (("https://help.acme.example", "Acme Lights help centre", "What customers read"),
          ("https://assets.acme.example/brand", "Brand assets", "Logos, colours and the tone guide"))

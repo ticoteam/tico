@@ -66,9 +66,9 @@ CONTENT = {
     },
     "notes": {"v1": "First strategy: two home bets from the setup answers.",
               "v2": "Business installs are a bet now; the summary and the sections name them."},
-    # Goals are read from the core seed by owner: the company's top goal, support's and sales' goals.
+    # Each bet serves a goal the core seed made, named by its owner: the company's top goal or a department's.
     "bets": [
-        {"key": "calibration", "rank": 0, "goal": "support", "version": 1,
+        {"key": "calibration", "rank": 0, "goal": "bot:product-manager", "version": 1,
          "statement": "Calibration that works first try is the product; everything else follows.",
          "why": "A homeowner gives the kit one night. If the scene lands crooked, the kit goes back, and a second visit "
                 "costs us more than the sale. A kit that maps the facade in one pass is what earns the review and the "
@@ -78,7 +78,7 @@ CONTENT = {
          "wrong_if": "Homes that needed a second calibration renew the Scene Library no less often than homes that got it "
                      "right the first time, over two seasons.",
          "check_days": 240},
-        {"key": "business", "rank": 1, "goal": "sales", "version": 2,
+        {"key": "business", "rank": 1, "goal": "bot:sales-lead", "version": 2,
          "statement": "Business installs are the margin; homes are the volume and the brand.",
          "why": "One storefront or facade job is worth many home kits, and business sites renew their scene license every "
                 "year. Our direct sales team and installer partners can run the survey and the crew, so each site adds "
@@ -169,14 +169,10 @@ def seed(b):
 
 
 def _goals(b):
-    """The goal ids the core seed made, found by their owner: the company's top goal and the support and sales goals."""
+    """The goal ids the core seed made, by the owner each bet names: the company's top goal or a department's."""
     rows = sorted(b.call("GET", "goals?all=true")["goals"], key=lambda g: (g["created_at"], g["id"]))
-
-    def first(match):
-        return next((g["id"] for g in rows if match(g)), None)
-    return {"company": first(lambda g: g["owner_id"] == G.COMPANY and not g["parent_id"]),
-            "support": first(lambda g: g["owner_id"] == "bot:support"),
-            "sales": first(lambda g: g["owner_id"] == "bot:sales")}
+    return {owner: next((g["id"] for g in rows if g["owner_id"] == owner), None)
+            for owner in {spec["goal"] for spec in CONTENT["bets"]}}
 
 
 def _revision(b):

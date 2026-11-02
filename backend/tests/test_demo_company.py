@@ -1,6 +1,7 @@
 """The company demo as its owner sees it: what the seed leaves behind, read through the same API the app uses. These
 check behaviour (who owns what, what waits for whom, what every bot has done), not the wording of the seed."""
 
+import re
 import sqlite3
 from datetime import datetime, timezone
 
@@ -15,14 +16,32 @@ NOW = datetime(2026, 11, 6, 18, 30, tzinfo=timezone.utc)      # a Friday evening
 ROSTER = {slug for slug, _template, _parent in D.BOTS}
 DAY = {"from": "2026-10-31", "to": "2026-11-06"}
 PER_INSTALL = {"credential_keys", "granola_connections", "slack_credentials"}   # this machine's keys and the secrets they seal
+# Bytes this machine's keys produce: a sealed secret (AES-GCM, a fresh nonce), and an idempotency fingerprint keyed
+# with the cipher key. Each install differs there by design, so they are compared as a mark, not as bytes.
+SEALED = re.compile(r"sealed:v1:[A-Za-z0-9+/=]+")
+KEYED = {("idempotency", "request_hash")}
+
+
+def _mark(table, column, value):
+    if column in ("ciphertext", "nonce") or (table, column) in KEYED:
+        return "<per-install>"
+    return SEALED.sub("sealed:v1:<per-install>", value) if isinstance(value, str) else value
 
 
 def stored(path):
-    """Every table's rows, as the build wrote them, less the per-install keys."""
+    """Every table's rows, as the build wrote them, less the per-install keys and the bytes they make."""
     with sqlite3.connect(path) as db:
         tables = [name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' "
                                                  "AND name NOT LIKE 'sqlite_%'")]
-        return {name: db.execute(f'SELECT * FROM "{name}"').fetchall() for name in tables if name not in PER_INSTALL}
+        out = {}
+        for name in tables:
+            if name in PER_INSTALL:
+                continue
+            cursor = db.execute(f'SELECT * FROM "{name}"')
+            columns = [column[0] for column in cursor.description]
+            out[name] = [tuple(_mark(name, column, value) for column, value in zip(columns, row))
+                         for row in cursor.fetchall()]
+        return out
 
 
 @pytest.fixture(scope="module")
