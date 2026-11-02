@@ -82,9 +82,30 @@ def delivery(c: Any, preset: str, body: Mapping[str, object]) -> str:
 
 def pass_once(store: Any, vault: object, settings: Any, *, now: str) -> list[str]:
     """One pass: the books connections' triggers that are missing are made first (books_link.ensure_triggers), then the
-    books pass runs. Returns what the pass recorded."""
+    grants of stopped books are taken off, then the books pass runs. Returns what the pass recorded."""
     books_link.ensure_triggers(store, now=now)
-    return _sync_pass(store, vault, settings, now=now)
+    return _revoke_stopped(store, vault, settings, now=now) + _sync_pass(store, vault, settings, now=now)
+
+
+def _revoke_stopped(store: Any, vault: object, settings: Any, *, now: str) -> list[str]:
+    """The grant of a book switched back to native is taken off at HQ here: the switch makes no HQ call, so the tokens
+    stay until HQ has them off. Tried again on each pass, whatever mode the book is in. Returns what failed."""
+    from ..hook_relay import link_of
+    with store.read() as c:
+        stopped = SX.stopped_books_grants(c)
+        link = link_of(c, vault, settings) if stopped else None
+    if not stopped:
+        return []
+    if link is None:
+        return ["the Gateway key is not set, so the grants of stopped books cannot be taken off"]
+    problems: list[str] = []
+    for cid, provider in stopped:
+        try:
+            books_link.disconnect_books(store, vault, link, cid, provider, now=now)
+        except books_link.BrokerFailed as failed:
+            problems.append(f"The Tico Gateway did not take off the {books_link.LABEL.get(provider, provider)} grant of a "
+                            f"stopped book ({failed.code})")
+    return problems
 
 
 def _sync_pass(store: Any, vault: object, settings: Any, *, now: str) -> list[str]:

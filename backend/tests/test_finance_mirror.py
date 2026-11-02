@@ -9,7 +9,8 @@ from typing import Any
 
 import pytest
 
-from backend.finance import books_sync, mirror
+from backend import hook_relay
+from backend.finance import books_link, books_sync, mirror
 from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import mirror as M
@@ -21,9 +22,11 @@ from backend.finance.store import banking as SK
 from backend.finance.store import ledger as SL
 from backend.finance.store import mirror as SX
 from backend.finance.store import schema
+from backend.finance.store import tico as T
 from backend.tests.test_finance_ap import _bill as _native_bill
 from backend.tests.test_finance_ap import _ingest, _txn
 from backend.tests.test_finance_ap import _vendor as _native_vendor
+from backend.tests.test_finance_books_link import COMPANY, LINK, HQ, tokens
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, OWNER, FakeMercury, account, act, books, connect, finance_template, store)
 from backend.tests.test_finance_payments import _checking
@@ -1836,3 +1839,45 @@ def test_a_payment_the_provider_could_not_rule_out_keeps_its_amount_held(books):
     with books.read() as c:
         assert tuple(c.execute("SELECT status, unknown FROM fin_outbox WHERE op='payment.invoice'").fetchone()) == (
             "failed", 1)
+
+
+def _granted_then_stopped(books: Any, monkeypatch: Any, disconnect: list[Any]) -> tuple[str, HQ]:
+    """A QuickBooks books connection that holds a grant, mirrored and read through, then switched back to native."""
+    hq = HQ(claim=[tokens("acc-1", "ref-1")], disconnect=disconnect)
+    monkeypatch.setattr(books_link, "_call", hq)
+    cid = books_link.connect_claim(books, T._VAULT[0], LINK, provider="quickbooks", company_id=COMPANY, claim_id="clm-s",
+                                   name="Acme books", by=OWNER, now=AT)
+    with books.transaction() as c:
+        SL.set_book_mode(c, SL.book(c).id, "mirror", cid)  # type: ignore[union-attr]
+        SX.set_mirror_state(c, cid, {"backfill": {entity: {"done": True} for entity in M.BOOK_ENTITIES["quickbooks"]}})
+        c.execute("UPDATE fin_connections SET last_ok_at=? WHERE id=?", (AT, cid))
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_stop", {}).status == "committed"
+    monkeypatch.setattr(hook_relay, "link_of", lambda c, vault, settings: LINK)
+    return cid, hq
+
+
+def test_a_stopped_book_loses_its_trigger_and_the_next_pass_takes_its_grant_off(books, monkeypatch):
+    cid, hq = _granted_then_stopped(books, monkeypatch, disconnect=[{"ok": True}])
+    with books.read() as c:
+        assert c.execute("SELECT deleted_at IS NOT NULL FROM triggers WHERE id=?", (cid,)).fetchone()[0] == 1
+        assert SX.books_settings(c, cid)["refresh"]                     # the grant is still held until the pass
+        assert [row[0] for row in SX.books_connections(c)] == []
+    assert books_sync.pass_once(books, T._VAULT[0], None, now=AT) == []
+    assert hq.calls[-1] == ("oauth/quickbooks/disconnect", {"company_id": COMPANY, "refresh_token": "ref-1"})
+    with books.read() as c:
+        assert not SX.books_settings(c, cid).get("refresh") and not SX.books_settings(c, cid).get("access")
+        assert SX.stopped_books_grants(c) == []
+
+
+def test_a_grant_HQ_does_not_take_off_is_tried_again_on_the_next_pass(books, monkeypatch):
+    cid, hq = _granted_then_stopped(books, monkeypatch,
+                                    disconnect=[books_link.BrokerFailed("revoke_failed"), {"ok": True}])
+    problems = books_sync.pass_once(books, T._VAULT[0], None, now=AT)
+    assert len(problems) == 1 and "revoke_failed" in problems[0]
+    with books.read() as c:
+        assert SX.books_settings(c, cid).get("refresh")                 # kept while HQ has not taken it off
+    assert books_sync.pass_once(books, T._VAULT[0], None, now=AT) == []
+    with books.read() as c:
+        assert not SX.books_settings(c, cid).get("refresh")
+    assert [path for path, _ in hq.calls].count("oauth/quickbooks/disconnect") == 2

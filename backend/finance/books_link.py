@@ -596,10 +596,10 @@ def disconnect_books(store: Any, vault: object, link: Link, cid: str, provider: 
                 tico.drop_credential(c, str(books[key]))
         SX.set_books_settings(c, cid, {"access": "", "refresh": "", "expires_at": ""})
         SX.disconnect(c, cid, now)
-        _drop_trigger(c, cid, now=now)
+        drop_trigger(c, cid, now=now)
 
 
-def _drop_trigger(c: Any, cid: str, *, now: str) -> None:
+def drop_trigger(c: Any, cid: str, *, now: str) -> None:
     """The connection's trigger goes with it: what HQ relayed to it and its seen ids."""
     c.execute("UPDATE triggers SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL", (now, now, cid))
     c.execute("DELETE FROM trigger_bodies WHERE trigger_id=?", (cid,))

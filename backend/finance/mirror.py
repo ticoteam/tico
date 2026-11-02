@@ -15,7 +15,7 @@ from typing import Any, Protocol, cast
 from ..records import core as RC
 from ..records import reads as RR
 from ..records import store as RS
-from . import banking, documents, handlers, posting
+from . import banking, books_link, documents, handlers, posting
 from . import purchasing as PU
 from .context import Ctx, load
 from .core import ap as AP
@@ -2406,6 +2406,7 @@ def mirror_stop(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
         SL.set_setting(ctx.c, f"mirror.snapshot.{cid}", snapshot, by=who, at=ctx.at)
         SL.set_book_mode(ctx.c, ctx.book.id, "native", "")
         SX.disconnect(ctx.c, cid, ctx.at)
+        books_link.drop_trigger(ctx.c, cid, now=ctx.at)     # its calls stop with the switch; the grant goes at the next pass
         return {"connection_id": cid, "mode": "native"}
 
     return handlers.Plan(K.default_gate(ctx.org, who, "mirror_stop"), "Switch the books back to native", apply_stop,
