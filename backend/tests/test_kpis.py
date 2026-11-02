@@ -360,3 +360,11 @@ def test_archived_kpis_do_not_change_remaining_measure_or_owner_fallback(api):
     post(api, f"kpis/{removed['id']}/restore", {})
     assert goal_of(api, goal["id"])["status_source"] == "person"
     assert goal_of(api, goal["id"])["status"] == "yellow"
+
+
+def test_a_target_with_no_kind_has_no_label():
+    # A kpi_target proposal's payload may name only a target; its card (GET /proposals) must not fail on it.
+    kpi = {"unit": "%"}
+    assert K.target_label(kpi, {"target": 65, "deadline": "2026-12-31"}) == ""
+    assert K.target_label(kpi, {}) == "" and K.target_label(kpi, None) == ""
+    assert K.target_label(kpi, {"kind": "improve", "target": 65, "deadline": "2026-12-31"}).startswith("→ 65")
