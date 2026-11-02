@@ -492,7 +492,8 @@ def org_view(roster, employees, archived=(), person_id="", team="", bare_people=
         boss = person(g.get("reports_to"), roster)
         parent = ("g:" + g["parent"]) if g.get("parent") else ("p:" + boss["id"]) if boss and not boss.get("hidden") else ""
         group_rows.append({"id": gid, "name": g.get("name") or gid, "reports_to": g.get("reports_to") or "",
-                           "parent": g.get("parent") or "", "org_parent": parent, "order": g.get("order", i)})
+                           "parent": g.get("parent") or "", "org_parent": parent, "order": g.get("order", i),
+                           "lead": g.get("lead") or ""})
     if wanted:
         keep = {"p:" + wanted}
         changed = True

@@ -1,7 +1,7 @@
 /* ui/styles/goals.css — Goals: tree, editor, KPI panel.
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* goals: one tree, a line per owner, hung from its manager like the team list, the goal to the right */
-.gt{--gt-pad:10px;--gt-gpad:10px;--gt-av:20px;--gt-el:12px;--ind:calc(var(--gt-av) / 2 + var(--gt-el) + var(--tree-gap));--name-w:230px;list-style:none;margin:0 0 var(--s5);padding:4px 0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
+.gt{--gt-pad:10px;--gt-gpad:10px;--gt-av:20px;--gt-el:12px;--ind:calc(var(--gt-av) / 2 + var(--gt-el) + var(--tree-gap));--name-w:300px;list-style:none;margin:0 0 var(--s5);padding:4px 0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
 .gt-row,.gt-group{display:grid;grid-template-columns:calc(var(--d,0) * var(--ind)) 28px max(48px,calc(var(--name-w) - var(--d,0) * var(--ind) - 28px)) minmax(0,1fr) auto 30px;
   grid-template-areas:"ind av name goal kpis add";align-items:stretch;min-height:36px;padding:0 var(--gt-pad);font-size:var(--t-base);line-height:var(--lh-tight)}
 .gt-row{cursor:pointer}.gt-row:hover,.gt-row:focus-visible{background:var(--surface2);outline:none}

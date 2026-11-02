@@ -56,38 +56,11 @@ function rdoMoveTargets(from) {
 function rdoTree() {
   const by = {};
   for (const [k, kids] of Object.entries(orgTreeWithHelpers(orgTreeByParent()))) by[k] = kids.filter(n => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers));
-  const nodes = new Map(), parentOf = new Map();
-  for (const [k, kids] of Object.entries(by)) for (const n of kids) { nodes.set(rdoKey(n), n); parentOf.set(rdoKey(n), k); }
-  const take = key => { const p = parentOf.get(key); by[p] = (by[p] || []).filter(n => rdoKey(n) !== key); parentOf.delete(key); };
-  const put = (parent, n) => { (by[parent] ||= []).push(n); parentOf.set(rdoKey(n), parent); };
-  const person = rdoTopPerson(), topKey = person && nodes.has('p:' + person.id) ? 'p:' + person.id : '';
-  const home = topKey ? parentOf.get(topKey) : '';
-  if (topKey && home) {
-    take(topKey); put('', nodes.get(topKey));
-    if (home.startsWith('g:') && parentOf.get(home) === '') {
-      for (const n of by[home] || []) put(topKey, n);
-      delete by[home]; take(home); nodes.delete(home);
-    }
-  }
-  // Under its head unless the head sits inside it (a loop); else it stays at the top, under the top person.
-  const reaches = (from, to) => {
-    const seen = new Set(), walk = k => (by[k] || []).some(n => { const key = rdoKey(n); if (key === to) return true; if (seen.has(key) || seen.size > 4000) return false; seen.add(key); return walk(key); });
-    return walk(from);
-  };
-  for (const g of (by[''] || []).filter(n => n.kind === 'group')) {
-    const head = orgGroupHead(g.id, rdoGroup(g.id)?.lead || ''), key = 'g:' + g.id;
-    if (!head || head === topKey || !nodes.has(head) || reaches(key, head)) continue;
-    take(key); put(head, g);
-  }
+  orgChartShape(by, rdoKey, id => rdoGroup(id)?.lead || '');
   by[''] = by[''] || [];
   return by;
 }
-// The owner when nobody is above them, else the one person nobody is above; with neither, the first person at the top.
-function rdoTopPerson() {
-  const tops = (S.people || []).filter(p => !p.hidden && !orgBossKey({kind: 'person', person: p}));
-  const owners = tops.filter(p => p.role === 'owner');
-  return tops.find(p => S.me?.owner_id && p.id === S.me.owner_id) || (owners.length === 1 ? owners[0] : null) || (tops.length === 1 ? tops[0] : null);
-}
+const rdoTopPerson = () => orgChartTop();
 function rdoTop(by) {
   const roots = (by[''] || []).filter(n => n.kind === 'person'), person = rdoTopPerson();
   return roots.find(n => n.id === person?.id) || roots.find(n => n.id === S.me?.owner_id) || roots.find(n => n.person?.role === 'owner') || roots[0] || null;

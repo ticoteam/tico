@@ -682,7 +682,9 @@ function goalTreeShape() {
     if (parent.startsWith('b:') && !keys.has(parent)) parent = e.owner_id || e.users?.[0]?.id ? 'p:' + (e.owner_id || e.users[0].id) : '';
     put(orgHang('b:' + e.id, parent, groupOf), {kind: 'bot', ...e});
   }
-  return {byParent: orgTreeWithHelpers(byParent)};
+  // Drawn as the Org tab draws it: the top person at the root and each department under whoever runs it.
+  const key = n => (n.kind === 'group' ? 'g:' : n.kind === 'person' ? 'p:' : 'b:') + n.id;
+  return {byParent: orgChartShape(orgTreeWithHelpers(byParent), key, id => (S.orgGroups || []).find(g => g.id === id)?.lead || '')};
 }
 // The org chart's order: a group's humans and bots first, then the groups in it; a manager's reports in the order
 // someone put them; then the chart's own order (chartFallback).
