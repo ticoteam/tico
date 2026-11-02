@@ -273,6 +273,9 @@ def test_an_invoice_the_provider_refuses_with_its_estimate_link_is_sent_again_wi
     sent: list[dict[str, Any]] = []
 
     def call(self: Any, method: str, path: str, **kw: Any) -> Any:
+        if path == "preferences":     # the company's class setting, read before a write that names a class
+            return SimpleNamespace(status=200,
+                                   body={"Preferences": {"AccountingInfoPrefs": {"ClassTrackingPerTxnLine": True}}})
         sent.append(kw["body"])
         if "LinkedTxn" in kw["body"]:
             return SimpleNamespace(status=400, body={"Fault": {"Error": [{"Message": "LinkedTxn is not valid"}]}})
