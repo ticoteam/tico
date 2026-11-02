@@ -3,8 +3,8 @@
 Only trusted filing code calls file_card with a checked memory_tidy.Result and the
 filing ledger's list-price estimate (including subscription usage). There is no
 public offer endpoint: a child cannot turn its own unchecked output into a card.
-No repository, model, approval, message or job writes happen here. Keep application
-is installed by the separate Keep ticket; until then it fails closed.
+No repository, model, approval, message or job writes happen here. Keep queues
+reviewer-authorized deterministic execution on the assigned capable computer.
 """
 import json
 import math
@@ -75,7 +75,7 @@ def view(row, *, detail=True, c=None):
     # Task ids and numbered edits remain internal provenance for Keep.
     return {**{k: row[k] for k in SUMMARY_FIELDS}, **({'diff': row['diff']} if detail else {}), 'kind': 'memory_tidy',
             'title': 'Nightly memory tidy: ' + row['bot'], 'requester': 'bot:' + row['bot'],
-            'keep_available': bool(ready_runner(c, row['bot'])) and not pending(c, row['id']),
+            'keep_available': row['status'] == 'open' and bool(ready_runner(c, row['bot'])) and not pending(c, row['id']),
             'keep_pending': bool(pending(c, row['id']))}
 
 
@@ -226,7 +226,7 @@ def install(app, store, auth, mutate):
                       (body.status, body.commit, body.reason, ident))
             if body.status == 'kept':
                 c.execute("UPDATE memory_tidy_cards SET status='kept',decided=?,decided_by=?,reason=? WHERE id=?",
-                          (H.now(), row['requested_by'], body.commit, row['card_id']))
+                          (H.now(), row['requested_by'], '', row['card_id']))
             else:
                 c.execute('UPDATE memory_tidy_cards SET reason=? WHERE id=?', (body.reason, row['card_id']))
             return {'ok': True}

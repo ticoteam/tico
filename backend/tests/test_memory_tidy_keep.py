@@ -102,7 +102,9 @@ def test_keep_one_commit_checkout_untouched_replay_and_next_rules(repos):
     text = git(remote, 'show', 'main:' + C.LEARNINGS)
     assert 'Day write 1.' in text and 'General rule.' in text
     assert before == (git(local, 'rev-parse', 'HEAD'), (local / C.LEARNINGS).read_bytes(), git(local, 'status', '--porcelain'))
-    assert apply(local, request) == result  # successful push, lost API ack, no duplicate commit
+    (local / 'state.md').write_text('New uncommitted day write')
+    assert apply(local, request) == result  # recovery precedes new dirty-checkout refusal
+    git(local, 'checkout', '--', 'state.md')
     git(local, 'pull', '--ff-only', 'origin', 'main')
     assert 'General rule.' in (local / C.LEARNINGS).read_text()  # ordinary next-turn refresh
 

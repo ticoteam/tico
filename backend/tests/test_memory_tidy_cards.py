@@ -196,7 +196,7 @@ def test_keep_queue_named_reviewer_scoped_computer_refusal_and_retry(api):
     assert get(api, 'memory-tidy/cards')['cards'] == []
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM memory_tidy_cards WHERE status='kept'").fetchone()[0] == 1
-        assert c.execute('SELECT reason FROM memory_tidy_cards WHERE id=?', (card['id'],)).fetchone()[0] == 'b' * 40
+        assert c.execute("SELECT commit_sha FROM memory_tidy_keeps WHERE status='kept'").fetchone()[0] == 'b' * 40
 
 
 def test_inflight_keep_not_expired_or_replaced_and_discard_queues_nothing(api):

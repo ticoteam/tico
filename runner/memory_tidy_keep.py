@@ -71,7 +71,7 @@ class Git:
     def run(self, *args, data=None, check=True):
         p = subprocess.run([*safe_git.prefix(self.path), '-C', str(self.path), *args],
                            input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           env=self.env, timeout=60)
+                           env=self.env, timeout=60, check=False)
         if check and p.returncode:
             # Never return git's stderr: credential helpers/remote URLs can contain secrets.
             raise RepositoryError('Repository operation failed')
@@ -106,8 +106,6 @@ def apply(repo, request, *, before_push=None, journal=None):
     if not re.fullmatch(r'[a-zA-Z0-9-]{1,80}', request['card_id']):
         raise Refused('Invalid card identity')
     local = Git(repo)
-    if local.run('status', '--porcelain').stdout:
-        raise Refused('Bot checkout has uncommitted writes; Keep can be tried after they are saved')
     origin = local.text('remote', 'get-url', 'origin')
     # The remote comes from runner-owned config, never the card. No local worktree writes.
     with tempfile.TemporaryDirectory(prefix='tico-memory-keep-') as temp:
@@ -125,6 +123,8 @@ def apply(repo, request, *, before_push=None, journal=None):
             for i in range(0, len(parts) - 1, 2):
                 if marker in parts[i+1].splitlines():
                     return {'status': 'kept', 'commit': parts[i].strip(), 'reason': ''}
+            if local.run('status', '--porcelain').stdout:
+                raise Refused('Bot checkout has uncommitted writes; Keep can be tried after they are saved')
             local_head = local.text('rev-parse', 'HEAD')
             if g.run('merge-base', '--is-ancestor', local_head, head, check=False).returncode:
                 raise Refused('Bot has unpushed writes; Keep can be tried after they are pushed')
