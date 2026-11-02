@@ -56,9 +56,13 @@ def fixed(clock):
     def digest():
         return hashlib.sha256(f"{NAMESPACE}:{next(counter)}".encode()).hexdigest()
 
-    from . import threads
-    saved = (hubdb.now, hubdb.new_id, hubdb.uuid7, threads.uuid7, secrets.token_urlsafe, secrets.token_hex, uuid.uuid4)
+    from . import inbound, threads
+    saved = (hubdb.now, hubdb.new_id, hubdb.uuid7, threads.uuid7, secrets.token_urlsafe, secrets.token_hex, uuid.uuid4,
+             inbound.now)
     hubdb.now = clock
+    # Inbound keeps a message's body for 90 days from when it arrived, counted on the demo's clock: a demo built months
+    # after its dates keeps every body.
+    inbound.now = lambda: clock.at.timestamp()
     hubdb.new_id = lambda: str(uuid.uuid5(NAMESPACE, str(next(counter))))
     # Time-ordered ids (messages, deliveries) and the product's own random ids for threads and calls.
     hubdb.uuid7 = threads.uuid7 = lambda: str(uuid.UUID(hex=digest()[:32]))
@@ -68,7 +72,8 @@ def fixed(clock):
     try:
         yield
     finally:
-        hubdb.now, hubdb.new_id, hubdb.uuid7, threads.uuid7, secrets.token_urlsafe, secrets.token_hex, uuid.uuid4 = saved
+        (hubdb.now, hubdb.new_id, hubdb.uuid7, threads.uuid7, secrets.token_urlsafe, secrets.token_hex, uuid.uuid4,
+         inbound.now) = saved
 
 
 def write_registry(settings):
@@ -132,6 +137,10 @@ class Builder:
                 "demo-eli": Identity("human:eli", "human", D.PEOPLE[3]["email"])})
         app = create_app(seeding)
         self.app, self.store = app, app.state.store
+        # The app's media worker would settle the scans at moments of its own choosing. The build settles them itself,
+        # in order, in `finish` (drain_media), so the same build always writes the same rows.
+        self.media = app.state.file_metadata
+        self.media.loop = lambda: None
         self.at(days=7)
         with TestClient(app) as api:
             self.api = api
@@ -626,10 +635,16 @@ class Builder:
                 hubdb.task_update(c, done["owner"], row["id"], status="done", note=done["note"])
         self.write(work)
 
+    def drain_media(self):
+        """Settle every pending scan here, as the app's worker would in the background: no row is left pending."""
+        while self.media.batch():
+            pass
+
     def finish(self):
         """Nothing is left waiting for a bot: every message reads as delivered and no job is queued. SQLite's own clock
         and random bytes stamp some rows (triggers, the change feed, a census), so those take this build's time and ids:
         the same build then writes the same rows."""
+        self.drain_media()
         self.read_task_threads()
         # Every bot gets its profile, as the next start would, without the notice that explains a change to bots an
         # owner already had (backend/profiles.py).

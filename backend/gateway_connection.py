@@ -141,9 +141,13 @@ def target(c, vault, settings=None):
     """(key, base URL, `_fingerprint`) for a call to the Gateway, all from one read of the saved connection; key '' when
     none is set. Every send takes its key and address from here, never from `key` and `url` one by one: outside a
     transaction each read sees the newest save, so a save in between (a new address with Clear, or with a newly typed
-    key) would pair the key it took away with an address it was never kept for."""
+    key) would pair the key it took away with an address it was never kept for. A demo's key is the sample's and goes
+    nowhere: here it is '' as if none were set, so every send that takes it (search, fetch, images, judges, the postal
+    reader, Billing) acts as it does without a key and sends nothing."""
     record = _row(c)
-    if env_key(settings):
+    if _demo(settings):
+        secret = ""
+    elif env_key(settings):
         secret = env_key(settings)
     else:
         secret = vault.cipher.unseal(c, CONTEXT, record["key"]) if record.get("key") else ""
