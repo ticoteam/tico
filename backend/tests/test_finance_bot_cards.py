@@ -210,15 +210,43 @@ def test_system_work_cannot_lift_a_person_freeze_through_the_action_path(books):
         assert _frozen_by(c, coder) == "budget"
 
 
-def test_the_card_help_marks_the_mercury_user_required_as_the_code_does(books):
-    """Mercury issues a card to one of its own users, so a card needs provider_user_id; the help says so too."""
+def test_the_card_help_says_the_mercury_user_may_be_left_out_because_tico_finds_one(books):
+    """Mercury issues a card to one of its own users. A card names that user, or Tico finds it (the holder's email,
+    then the connection's card user): provider_user_id is optional, and the next tests show each way it is found."""
     fields = {f["name"]: f["required"] for f in FA.help("card_create")["fields"]}
-    assert fields["provider_user_id"] is True
-    connect(books, FakeMercury())
+    assert fields["provider_user_id"] is False
+
+
+def test_a_card_for_a_teammate_is_issued_to_the_mercury_user_with_the_same_email(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-ben", "lastFourDigits": "3333"}]
     with books.transaction() as c:
-        refused = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": _budget(c), "amount": 20_000})
+        made = act(c, OWNER, "card_create", {"holder": "human:ben", "budget_id": _budget(c), "amount": 20_000})
+        assert made.status == "committed", (made.code, made.reason)
+    sync_once(books, fake)
+    assert fake.sent("create_card") == [("user-ben", 20_000)]
+
+
+def test_a_card_with_no_named_or_found_mercury_user_takes_the_connections_card_user_or_is_refused(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-coder", "lastFourDigits": "1111"}]
+    with books.transaction() as c:
+        budget = _budget(c)
+        refused = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 20_000})
         assert (refused.status, refused.code) == ("failed", "invalid")
-        assert "provider_user_id is required" in refused.reason
+        assert "Mercury user is needed" in refused.reason
+        assert c.execute("SELECT count(*) FROM fin_cards").fetchone()[0] == 0
+        connection = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+        assert act(c, OWNER, "connection_settings", {"connection_id": connection,
+                                                     "card_user_id": "user-zed"}).code == "invalid"
+        assert act(c, OWNER, "connection_settings", {"connection_id": connection,
+                                                     "card_user_id": "user-eve"}).status == "committed"
+        made = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 20_000})
+        assert made.status == "committed", (made.code, made.reason)
+    sync_once(books, fake)
+    assert fake.sent("create_card") == [("user-eve", 20_000)]
 
 
 def test_a_card_request_may_name_its_merchant_which_is_kept_on_the_card_and_not_sent_to_mercury(books):

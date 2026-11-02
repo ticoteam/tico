@@ -29,6 +29,7 @@ from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import tico as T
 
 STATE_OPS = {"card_freeze": ("freeze", "frozen"), "card_unfreeze": ("unfreeze", "active"),
              "card_cancel": ("cancel", "cancelled")}
@@ -307,9 +308,32 @@ def card_kind(p: V.Payload, bot: bool) -> str:
     return kind
 
 
+def _mercury_user(ctx: Ctx, p: V.Payload, holder: str, program: Any) -> tuple[str, str]:
+    """The Mercury user a card is issued to, and how it was found: the one the request names; else the one on the card's
+    connection whose email is the holder's (a teammate, exactly one); else the connection's card user (set by
+    `connection_settings`). Mercury issues a card to one of its own users, so nothing else is guessed: with none of
+    these the card is refused."""
+    named = V.opt_text(p, "provider_user_id", 120) or ""
+    if named:
+        return named, "named"
+    connection = str(program["connection_id"] or "")
+    email = T.person_email(ctx.c, holder)
+    if email:
+        found = [u for u in SK.provider_users_on(ctx.c, connection) if str(u["email"] or "").strip().lower() == email]
+        if len(found) == 1:
+            return str(found[0]["provider_user_id"]), "the holder's email"
+    row = SK.get(ctx.c, "fin_connections", connection)
+    setting = str(SK.loads(row["settings_json"] if row is not None else None).get("card_user_id") or "")
+    if setting:
+        return setting, "the connection's card user"
+    raise invalid("a Mercury user is needed to issue the card: name one (provider_user_id), or set the connection's "
+                  "card user")
+
+
 def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A card for a teammate or a bot under a budget, with `amount` a month set aside for it. `provider_user_id` is the
-    Mercury user the card is issued to (Mercury issues cards to its own users). `merchant` is the merchant the card is
+    Mercury user the card is issued to (Mercury issues cards to its own users); left out, `_mercury_user` finds one.
+    `merchant` is the merchant the card is
     asked for, kept as the request's intent: Mercury has no merchant locks (§8.1), so the limit is what it enforces."""
     V.only(p, ("holder", "budget_id", "amount", "kind", "nickname", "money_account_id", "provider_user_id", "merchant"))
     holder = V.text(p, "holder", 120)
@@ -328,7 +352,7 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                                                 "amount": amount}, route)
     nickname = V.opt_text(p, "nickname", 50) or holder.split(":", 1)[-1]
     merchant = V.opt_text(p, "merchant", 120) or ""
-    user = V.text(p, "provider_user_id", 120)
+    user, found = _mercury_user(ctx, p, holder, program)
 
     def apply(aid: str) -> Result:
         alloc.apply(aid)
@@ -345,7 +369,9 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 f"Issue a {kind} card to {holder} with {amount / 100:.2f} a month from {ctx.budgets()[budget_id].name}",
                 apply,
                 facts={"amount": amount, "holder": holder, "budget_id": budget_id, "card.kind": kind,
-                       "holder.kind": "bot" if bot else "human"})
+                       "holder.kind": "bot" if bot else "human"},
+                impact={"provider_user_id": user, "provider_user_from": found},
+                resolved={"provider_user_id": user})
 
 
 def card_update_limit(ctx: Ctx, who: str, p: V.Payload) -> Plan:

@@ -47,7 +47,8 @@ PLANNERS: dict[str, handlers.Planner] = {
     **handlers.PLANNERS, "connection_create": banking.connection_create, "reconcile": banking.reconcile,
     "reconcile_undo": banking.reconcile_undo,
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
-    "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
+    "connection_map": banking.connection_map, "connection_settings": banking.connection_settings,
+    **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
     **documents.PLANNERS, **mirror.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS, **catalog.PLANNERS,
     **purchasing.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
