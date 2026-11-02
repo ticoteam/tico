@@ -21,7 +21,7 @@ CONTENT = {
         {"key": "bills", "ago": 146, "who": {"groups": ["marketing"]}, "with": {"bots": ["bookkeeper"]},
          "text": "Don't ask @bookkeeper to pay anything; send bills to @accounts-payable.", "if_broken": "block"},
         {"key": "ben-tasks", "ago": 144, "who": {"all_bots": True}, "with": {"people": ["ben"]},
-         "text": "Ask @ben before you assign him a task.", "if_broken": "warn"},
+         "text": "Don't assign @ben a task without asking first.", "if_broken": "warn"},
         {"key": "firmware-bugs", "ago": 142, "who": {"groups": ["support"]}, "with": {"bots": ["firmware"]},
          "text": "Send firmware bugs to @firmware with the unit's log, not to the support queue.", "if_broken": "warn"},
         {"key": "quotes", "ago": 140, "who": {"groups": ["sales"]}, "with": {"bots": ["pricing"]},

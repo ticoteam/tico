@@ -64,7 +64,7 @@ def test_peer_rules_fill_the_with_column(built):
     peer = [r for r in rules if any(r["with"][k] for k in ("groups", "bots", "people"))]
     assert len(peer) >= 3
     by_text = {r["text"]: r for r in peer}
-    ben = by_text["Ask @ben before you assign him a task."]
+    ben = by_text["Don't assign @ben a task without asking first."]
     assert ben["who"]["all_bots"] and [p["id"] for p in ben["with"]["people"]] == ["ben"]
 
 
