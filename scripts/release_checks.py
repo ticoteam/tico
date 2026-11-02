@@ -57,6 +57,10 @@ ROOT = Path(__file__).resolve().parents[1]
 BUDGET_SECONDS = 480
 DEFAULT_BUDGET_SECONDS = 300
 CANDIDATE = 'v9.9.9'   # what scripts/journey-test.sh calls a local build
+# Checks whose failure is reported but does not fail the gate: none by default. The upgrade journey blocks, since it
+# finds real upgrade bugs (v0.5.54: two crashes on an upgraded database). TICO_RELEASE_OPTIONAL_CHECKS=journey
+# (comma-separated) waives a check for one release.
+OPTIONAL_CHECKS = frozenset(name for name in os.environ.get('TICO_RELEASE_OPTIONAL_CHECKS', '').split(',') if name)
 # The edge network range (A.B.C.0/28, see docker/edge-env.sh) of each compose stack the gate runs side by side. A
 # separate project and host port do not separate networks: Docker refuses a second network on a range in use.
 EDGE = {'journey': '172.30.252', 'smoke': '172.30.253', 'backup-test': '172.30.251'}   # the journey runs backup-test
@@ -493,6 +497,10 @@ def release(args):
     failed = [check for check in builds + checks if check.join() != 0]
     for check in failed:
         print(f'\n--- {check.name} (last lines of {check.log}) ---\n{check.tail()}', flush=True)
+    warned = [check for check in failed if check.name in OPTIONAL_CHECKS]
+    for check in warned:
+        print(f'::warning::{check.name} failed; it is optional (OPTIONAL_CHECKS), so the gate does not fail on it', flush=True)
+    failed = [check for check in failed if check not in warned]
     phase_table(builds + checks, started, not_run)
     elapsed = time.monotonic() - started
     verdict = 'failed' if failed else 'passed' if elapsed < BUDGET_SECONDS else 'passed, over budget'

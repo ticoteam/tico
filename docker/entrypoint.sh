@@ -390,10 +390,16 @@ environment_identity() {
 import json, os, re, secrets, sqlite3
 from backend.hubdb import leave_wal_for_litestream
 if os.path.exists(os.environ["TICO_DB"]):
-    # An upgraded database gets its pending migrations first: the cleanup renamed registry_metadata.value_json to value.
-    from backend.config import Settings
-    from backend.store import Store
-    Store(Settings.from_env()).migrate()
+    # A database from before the cleanup's renames (registry_metadata.value_json, now value) gets its pending migrations
+    # first; any other start opens it exactly as before. Not through Settings.from_env, which refuses a named team until
+    # TICO_ENVIRONMENT_ID is set, as this sets it.
+    probe = sqlite3.connect("file:%s?mode=ro" % os.environ["TICO_DB"], uri=True)
+    columns = {row[1] for row in probe.execute("PRAGMA table_info(registry_metadata)")}
+    probe.close()
+    if "value_json" in columns and "value" not in columns:
+        from backend import hubdb, migrations
+        migrations.preflight(os.environ["TICO_DB"])
+        hubdb.connect(os.environ["TICO_DB"]).close()
 db = leave_wal_for_litestream(sqlite3.connect(os.environ["TICO_DB"]))
 row = db.execute("SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
 value = os.environ.get("TICO_ENVIRONMENT_ID") or (json.loads(row[0]) if row else secrets.token_hex(8))
