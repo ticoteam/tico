@@ -61,7 +61,7 @@ function pagePerson(id, tab) {
     <div class="botid"><h1>${esc(p.name || p.id)}</h1>
       <ul class="goal-lines head-goals" id="head-goals" aria-label="Goals"></ul>
       ${String(p.goals || '').trim() ? `<div class="role" id="head-standing">${esc(String(p.goals).trim())}</div>` : ''}
-    </div></div>
+    </div>${S.me?.id !== p.id && THREADS.on !== false ? '<button type="button" class="ghost small" id="person-dm">DM</button>' : ''}</div>
   <div class="tabs bottabs" id="ptabs" role="tablist">
     ${tabs.map(t => `<button data-pt="${t}" role="tab" class="${t === tab ? 'cur' : ''}">${t === 'assistant' ? esc(myChatName()) : PERSON_TAB_LABELS[t]}</button>`).join('')}
   </div>
@@ -118,6 +118,8 @@ function pagePerson(id, tab) {
   </div>`;
   void headGoalsLoad('human:' + p.id);
   void personAccessLoad(p);
+  const dmButton = $('#person-dm');
+  if (dmButton) dmButton.onclick = () => threadNewOpen({dm: true, members: ['human:' + p.id]});
   $('#ptabs').onclick = ev => {
     const b = ev.target.closest('[data-pt]'); if (!b) return;
     location.hash = b.dataset.pt === 'assistant' ? ASSISTANT : `#/person/${encodeURIComponent(p.id)}${b.dataset.pt === 'profile' ? '' : '/' + b.dataset.pt}`;

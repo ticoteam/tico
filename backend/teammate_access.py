@@ -827,10 +827,20 @@ class Known:
         too, and never who added whom they may not see."""
         if self.member(conversation_id):
             return rows
+        strangers = self.strangers
+        return [{**row, "added_by": "" if row.get("added_by") in strangers else row.get("added_by")}
+                for row in rows if row["actor"] not in strangers]
+
+    @property
+    def strangers(self):
+        """Every teammate the viewer may not see, bots and groups too."""
         if self._strangers is None:
             self._strangers = hidden(self.c, self.viewer, "see", KINDS, self.auth)
-        return [{**row, "added_by": "" if row.get("added_by") in self._strangers else row.get("added_by")}
-                for row in rows if row["actor"] not in self._strangers]
+        return self._strangers
+
+    def seen(self, actors):
+        """`actors` as someone not in their conversation may be told of them."""
+        return [a for a in actors if a not in self.strangers]
 
     def message(self, message):
         if not self.people or not isinstance(message, dict):

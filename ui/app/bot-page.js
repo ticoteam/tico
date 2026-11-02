@@ -371,7 +371,7 @@ async function pageBot(slug, tab) {
         <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div></div></div>
     <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || slug)}">
       ${tabsShown.map(t => { const label = BOT_TAB_LABELS[t];
-        return `<button type="button" data-bt="${t}" role="tab" aria-label="${label}" title="${label}"><span class="nav-icon bt-icon" aria-hidden="true">${BOT_TAB_ICONS[t] || 'more_horiz'}</span><span class="bt-label">${label}</span></button>`; }).join('')}
+        return `<button type="button" data-bt="${t}" role="tab">${label}</button>`; }).join('')}
     </div>
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
     <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="Info" title="Info"><span class="nav-icon" aria-hidden="true">more_vert</span></a>
@@ -587,7 +587,6 @@ const BOT_WIDE = window.matchMedia('(min-width: 1100px)');
 // card first, then an alert, Learnings and branches (moved here from beside the name,
 // and back on a wider screen), then the cards in groups.
 const BOT_PHONE = window.matchMedia('(max-width: 760px)');
-const BOT_TAB_ICONS = {home: 'forum', dm: 'chat_bubble', tasks: 'task_alt', info: 'menu'};
 function placeBotHead() {
   const host = $('#bot-more-top'), top = $('#bot-top');
   if (!host || !top) return;
