@@ -437,7 +437,8 @@ def python_shard(index, total):
     env = {**os.environ, 'TICO_PYTHON': sys.executable}
     # Alone on its VM, a shard uses every core rather than pytest.ini's shared-box cap.
     workers = str(os.cpu_count() or 2)
-    result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-n', workers] + shard_files(index, total, env, selection=()),
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-n', workers, '--api-database-snapshots']
+                            + shard_files(index, total, env, selection=()),
                             cwd=ROOT, env=env)
     print(f'Python shard {index}/{total}: exit {result.returncode}, {time.monotonic() - started:.2f}s; '
           f'load {initial_load} -> {load()}', flush=True)
@@ -511,7 +512,7 @@ def release(args):
         ready.write_text('ok' if built else 'failed')
     if runs('python'):
         python_cmd = [sys.executable, '-m', 'pytest', '-q', '-n', workers, '-m', 'slow or not slow',
-                      f'--ignore={ISOLATION_FILE}']
+                      f'--ignore={ISOLATION_FILE}', '--api-database-snapshots']
         name = 'all-python'
         if shard:
             files = shard_files(shard[0], shard[1], test_env, native_first=True)
