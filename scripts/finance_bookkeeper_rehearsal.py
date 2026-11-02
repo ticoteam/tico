@@ -98,7 +98,8 @@ def pytest_checks():
     scratch = Path(tempfile.mkdtemp(prefix="bookkeeper-rehearsal-"))
     try:
         subprocess.run([sys.executable, "-m", "pytest", *TESTS, "-q", "-p", "no:cacheprovider",
-                        f"--junitxml={scratch / 'junit.xml'}"], cwd=ROOT, capture_output=True, text=True, timeout=1800)
+                        f"--junitxml={scratch / 'junit.xml'}"], cwd=ROOT, capture_output=True, text=True, timeout=1800,
+                       check=False)
         tree = ET.parse(scratch / "junit.xml")
     except (OSError, ET.ParseError) as exc:
         return None, f"pytest did not produce a report: {exc}"
@@ -124,7 +125,7 @@ def gates():
     results = {}
     for label, cmd in (("check_types", ["bash", "scripts/check_types.sh"]),
                        ("finance_lint", [sys.executable, "scripts/finance_lint.py"])):
-        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=1800)
+        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=1800, check=False)
         results[label] = proc.returncode
     return results
 

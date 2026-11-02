@@ -30,7 +30,7 @@ import traceback
 import urllib.error
 import urllib.request
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -215,7 +215,7 @@ def sign_mercury(body: bytes, secret: str = SIGNING_SECRET) -> str:
 
 
 def today() -> date:
-    return date.today()
+    return datetime.now(timezone.utc).astimezone().date()          # the local day, as date.today() gave it
 
 
 class Context:
@@ -771,7 +771,7 @@ def run_step6(ctx: Context) -> None:
     step, api, fake = "6 cards", ctx.api, ctx.fake
     cm = card_month()
     card_day = f"{cm}-22" if cm == PAST_MONTH else today().isoformat()
-    chk = bank_id(api, "Acme Checking")
+    bank_id(api, "Acme Checking")                   # the bank account must exist before the card steps run
     other = account_ids(api)["Other expenses"]
     line = api.act("budget_create", {"name": "REH Card line", "account_id": other, "period": "month", "amount": 100000000,
                                      "at_limit": "decline", "warn_pct": 80, "effective_from": f"{cm}-01"})
@@ -1100,7 +1100,7 @@ def main() -> int:
                 continue
             try:
                 fn(ctx)
-            except Exception as exc:  # a failed step is recorded, and the next one still runs
+            except Exception as exc:  # noqa: BLE001 - a failed step is recorded, and the next one still runs
                 ledger.check(f"{number}", "the step ran to its end", False,
                              f"{type(exc).__name__}: {str(exc)[:300]} | {traceback.format_exc().splitlines()[-2:]}")
     finally:

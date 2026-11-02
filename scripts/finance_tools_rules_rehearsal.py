@@ -28,12 +28,12 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
 REPO = Path(__file__).resolve().parents[1]
-TODAY = date.today().isoformat()
+TODAY = datetime.now(timezone.utc).astimezone().date().isoformat()          # the local day, as date.today() gave it
 # spec 5: the action kinds, as the spec lists them. Both surfaces must list each one as live.
 SPEC_KINDS = (
     "categorize", "journal", "reconcile", "close_period", "reopen_period", "reconcile_undo",
@@ -121,7 +121,7 @@ def first_diff(a, b, path=""):
     if isinstance(a, list):
         if len(a) != len(b):
             return (path + ".length", len(a), len(b))
-        for i, (x, y) in enumerate(zip(a, b)):
+        for i, (x, y) in enumerate(zip(a, b, strict=True)):
             found = first_diff(x, y, f"{path}[{i}]")
             if found:
                 return found
@@ -241,7 +241,7 @@ class Demo:
         msgs = [{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, *extra]
         done = subprocess.run([sys.executable, "-m", "clients.hubmcp"], cwd=str(REPO), env=env,
                               input="".join(json.dumps(m) + "\n" for m in msgs), capture_output=True, text=True,
-                              timeout=240)
+                              timeout=240, check=False)
         return [json.loads(x) for x in done.stdout.splitlines() if x.strip().startswith("{")]
 
     def cli(self, token, argv, bot=None):
@@ -251,7 +251,7 @@ class Demo:
         if bot:
             env["HUB_BOT"] = bot
         done = subprocess.run([sys.executable, str(REPO / "clients" / "hubcli.py"), *argv], cwd=str(REPO), env=env,
-                              capture_output=True, text=True, timeout=240)
+                              capture_output=True, text=True, timeout=240, check=False)
         text = done.stdout.strip()
         if not text:
             return done.returncode, {"stdout": "", "stderr": done.stderr[-400:]}
@@ -344,7 +344,7 @@ class Run:
         self.section = label
         try:
             fn(*extra)
-        except Exception as exc:  # a section that crashes is a failed check, with its reason
+        except Exception as exc:  # noqa: BLE001 - a section that crashes is a failed check, with its reason
             self.check("the section ran to its end", False, f"{type(exc).__name__}: {exc}")
 
 
@@ -364,7 +364,7 @@ def approval_state(d, approval_id):
 def cli_spec(sub):
     """The positional and option dests one CLI subcommand takes, from clients/hubcli.py's parser."""
     done = subprocess.run([sys.executable, "-c", PARSER_SPEC, str(REPO), sub], cwd=str(REPO), capture_output=True,
-                          text=True, timeout=120)
+                          text=True, timeout=120, check=False)
     if done.returncode != 0 or not done.stdout.strip():
         raise RuntimeError(f"could not read `hub finance {sub}`'s parser: {done.stderr[-200:]}")
     spec = json.loads(done.stdout)
@@ -519,7 +519,7 @@ def check1_surface(d, run, fx):
     run.check("card fill on the local MCP is refused as not available yet (spec 8.3)",
               "not_available" in text or "not available" in text.lower(), text[:200])
     helptext = subprocess.run([sys.executable, str(REPO / "clients" / "hubcli.py"), "finance", "--help"],
-                              cwd=str(REPO), capture_output=True, text=True, timeout=120)
+                              cwd=str(REPO), capture_output=True, text=True, timeout=120, check=False)
     shown = helptext.stdout + helptext.stderr
     run.check("the CLI `finance` command lists all seven subcommands",
               all(f" {s} " in shown or f"{{{s}" in shown or f",{s}" in shown or f" {s}," in shown for s in SPEC_TOOLS),

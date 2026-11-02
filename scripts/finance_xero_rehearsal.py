@@ -46,6 +46,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from contextlib import suppress
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
@@ -451,7 +452,7 @@ class XeroRehearsal:
         self.books_link = books_link
         self.settings = demo.build(self.data, url=f"http://127.0.0.1:{DEMO_PORT}")
         self.app = create_app(self.settings)
-        self.link = hook_relay.Link("gk_rehearsal_not_a_secret", "https://hq.invalid.example/v1/gateway", "fp-rehearsal")
+        self.link = hook_relay.Link("gk_rehearsal_not_a_secret", "https://hq.invalid.example/rehearsal", "fp-rehearsal")
         hook_relay.link_of = lambda c, vault, settings: self.link       # the worker's Gateway key (a fixed Link)
         books_link._call = self.hq                                          # HQ answered by the fake
         config = uvicorn.Config(self.app, host="127.0.0.1", port=DEMO_PORT, log_level="warning", access_log=False)
@@ -467,8 +468,8 @@ class XeroRehearsal:
         from backend.finance import books_sync
         try:
             books_sync.stop()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - teardown: a sync that will not stop is reported, the rest still closes
+            print(f"books sync did not stop cleanly: {type(exc).__name__}: {exc}", flush=True)
         if self.server is not None:
             self.server.should_exit = True
             if self.server_thread is not None:
@@ -512,11 +513,9 @@ class XeroRehearsal:
             if time.time() - last >= ring_every:
                 self.ring()
                 last = time.time()
-            try:
+            with suppress(Exception):           # a predicate that raises is not yet true; the deadline still ends the wait
                 if predicate():
                     return True
-            except Exception:
-                pass
             if time.time() > deadline:
                 return False
             time.sleep(1.0)
@@ -596,7 +595,6 @@ class XeroRehearsal:
         res.check("the mirror switch is committed", status == 200 and live.get("status") == "committed",
                   f"HTTP {status} {live.get('code') or live.get('reason') or ''}")
         books_sync.start(self.store, self.vault, self.settings, rehearsal=False)
-        seeded = {"pnl": pnl_of(seed, MONTH_SEPT), "oct": pnl_of(seed, MONTH_OCT)}
         exp_inc = pnl_of(seed, MONTH_SEPT)[0] + pnl_of(seed, MONTH_OCT)[0]
         exp_exp = pnl_of(seed, MONTH_SEPT)[1] + pnl_of(seed, MONTH_OCT)[1]
         exp_bank, exp_ar, exp_ap = balances_of(seed)
@@ -1014,7 +1012,7 @@ class XeroRehearsal:
         """A diagnostic for a check's detail. Its own failure is written out, and never ends the step."""
         try:
             return fn(*args)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a diagnostic that fails is written out, and never ends the step
             return f"diagnostic failed: {type(exc).__name__}: {str(exc)[:200]}"
 
     def bs_lines(self) -> dict[str, int]:
@@ -1101,7 +1099,7 @@ class XeroRehearsal:
                          self.step_refusals, self.step_budgets, self.step_disconnect):
                 try:
                     step()
-                except Exception as exc:  # a step that cannot run is a failed check, and the later steps still run
+                except Exception as exc:  # noqa: BLE001 - a step that cannot run is a failed check, and the later steps run
                     self.res.check("the step ran to the end", False, f"{type(exc).__name__}: {str(exc)[:300]}")
         finally:
             self.close()
@@ -1206,7 +1204,7 @@ def run_child(keep: bool) -> int:
     with demo.network_blocked():
         try:
             ok = rehearsal.run()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - the run's own error is a failed check, not a crash with no report
             rehearsal.res.check("the rehearsal ran to the end", False, f"{type(exc).__name__}: {exc}"[:400])
             rehearsal.close()
             ok = False

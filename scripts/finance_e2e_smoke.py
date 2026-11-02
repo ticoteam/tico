@@ -342,9 +342,9 @@ def layout_pass(browser, run: Run, base: str, shots: str) -> None:
         ctx = browser.new_context(viewport={"width": w, "height": h})
         pg = ctx.new_page()
         errors: list[str] = []
-        pg.on("console", lambda m: errors.append(f"console.error: {m.text}") if m.type == "error" else None)
-        pg.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
-        pg.on("response", lambda r: errors.append(f"{r.status} {r.url}")
+        pg.on("console", lambda m, errors=errors: errors.append(f"console.error: {m.text}") if m.type == "error" else None)
+        pg.on("pageerror", lambda e, errors=errors: errors.append(f"pageerror: {e}"))
+        pg.on("response", lambda r, errors=errors: errors.append(f"{r.status} {r.url}")
               if r.status >= 400 and "/api/v2/finance/" in r.url else None)
         run.current = f"layout {wname}"
         try:
@@ -786,8 +786,8 @@ def dark_and_light(browser, run: Run, base: str, shots: str) -> None:
             ctx = browser.new_context(viewport={"width": w, "height": h}, color_scheme=scheme)
             pg = ctx.new_page()
             errors: list[str] = []
-            pg.on("console", lambda m: errors.append(f"console.error: {m.text}") if m.type == "error" else None)
-            pg.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
+            pg.on("console", lambda m, errors=errors: errors.append(f"console.error: {m.text}") if m.type == "error" else None)
+            pg.on("pageerror", lambda e, errors=errors: errors.append(f"pageerror: {e}"))
             go(pg, base, "")
             # The theme is dark unless this browser saved another choice (ui/theme.js), so set it explicitly.
             pg.evaluate(f"() => window.ticoTheme.set('{scheme}')")
@@ -1074,7 +1074,7 @@ def tag_row(page: Page, run: Run, base: str, counterparty: str, teammate: str, e
     teammate_select = page.locator("#fin-rail select[name=teammate]")
     try:
         teammate_select.first.wait_for(timeout=6000)
-    except Exception:
+    except Exception:  # noqa: BLE001 - a wait that times out is the row with no tag form, noted, not failed
         run.note(f"6 tag {counterparty}", "no Teammate select in the rail (a row with no P&L line cannot be tagged)")
         return
     chosen = p2_select(page, "#fin-rail select[name=teammate]", teammate)
@@ -1219,7 +1219,7 @@ def item7(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
         try:
             page.locator("#fin-chips [data-fin-clear]").first.click(trial=True, timeout=2000)
             run.check("7 phone: the chip's remove (x) is tappable while the Filter popover is open", True)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - a click that cannot land is the check's recorded result
             covered = "intercepts pointer events" in str(e)
             run.check("7 phone: the chip's remove (x) is tappable while the Filter popover is open", False,
                       "covered by the open popover" if covered else str(e).splitlines()[0][:160])

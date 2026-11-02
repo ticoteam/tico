@@ -30,7 +30,6 @@ import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -706,7 +705,7 @@ class Rehearsal:
         for number, step in enumerate(steps, 1):
             try:
                 step()
-            except Exception as error:   # a crash fails its check; the others still run
+            except Exception as error:  # noqa: BLE001 - a crash fails its check; the others still run
                 self.checks[number].failures.append(f"raised {type(error).__name__}: {error}")
         return all(not check.failures for check in self.checks.values())
 

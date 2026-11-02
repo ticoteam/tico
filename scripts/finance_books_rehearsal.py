@@ -342,7 +342,7 @@ def qbo_expected() -> dict[str, int]:
     """What the books must say for the seed, in minor units, worked out from the seed lists alone."""
     income = expense = 0
     bank = ar = ap = 0
-    for _, day, _, _, lines, voided in BILLS:
+    for _, _, _, _, lines, voided in BILLS:
         if not voided:
             expense += sum(c for _, c in lines)
             ap += sum(c for _, c in lines)
@@ -352,7 +352,7 @@ def qbo_expected() -> dict[str, int]:
     for _, _, _, _, lines in INVOICES:
         income += sum(c for _, c in lines)
         ar += sum(c for _, c in lines)
-    for _, _, _, deposit, applied in PAYMENTS:
+    for _, _, _, _, applied in PAYMENTS:
         ar -= sum(c for _, c in applied)
         bank += sum(c for _, c in applied)
     for _, _, _, lines, _ in JOURNALS:
@@ -472,7 +472,7 @@ class Rehearsal:
             mirror.RETRY = RETRY_REHEARSAL                    # a lost answer is retried in seconds, not minutes
         self.settings = demo.build(self.data, url=f"http://127.0.0.1:{DEMO_PORT}")
         self.app = create_app(self.settings)
-        self.link = hook_relay.Link("gk_rehearsal_not_a_secret", "https://hq.invalid.example/v1/gateway", "fp-rehearsal")
+        self.link = hook_relay.Link("gk_rehearsal_not_a_secret", "https://hq.invalid.example/rehearsal", "fp-rehearsal")
         hook_relay.link_of = lambda c, vault, settings: self.link       # the worker's Gateway key (a fixed Link)
         books_link._call = self.hq                                          # HQ answered by the fake
         config = uvicorn.Config(self.app, host="127.0.0.1", port=DEMO_PORT, log_level="warning", access_log=False)
@@ -489,8 +489,8 @@ class Rehearsal:
         from backend.finance import books_sync
         try:
             books_sync.stop()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - teardown: a sync that will not stop is reported, the rest still closes
+            print(f"books sync did not stop cleanly: {type(exc).__name__}: {exc}", flush=True)
         if self.server is not None:
             self.server.should_exit = True
             if self.server_thread is not None:
@@ -999,7 +999,7 @@ class Rehearsal:
         try:
             books_link.drop(self.store, self.vault, self.link, self.cid, by=OWNER_ACTOR)
             dropped = "dropped"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a drop that raises is the check's recorded result
             dropped = f"{type(exc).__name__}: {exc}"
         active_after_drop = self.live_books()
         hq_paths = [path for path, _ in self.hq.calls[calls_before:]]
@@ -1025,7 +1025,7 @@ class Rehearsal:
             cid = books_link.connect_claim(self.store, self.vault, self.link, provider="quickbooks",
                                            company_id=COMPANY, claim_id="clm_rehearsal_4", name="back",
                                            by=OWNER_ACTOR, now=scenario_now())
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a reconnect that raises is the check's recorded result
             cid = f"{type(exc).__name__}: {exc}"
         active = self.live_books()
         res.check("reconnecting the same organisation leaves exactly one active books connection",
@@ -1103,7 +1103,7 @@ def run_child(provider: str, keep: bool) -> int:
     with demo.network_blocked():
         try:
             ok = rehearsal.run()
-        except Exception as exc:  # the run's own error is a failed check, not a crash with no report
+        except Exception as exc:  # noqa: BLE001 - the run's own error is a failed check, not a crash with no report
             rehearsal.res.check("the rehearsal ran to the end", False, f"{type(exc).__name__}: {exc}"[:400])
             rehearsal.close()
             ok = False
