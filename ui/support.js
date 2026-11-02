@@ -403,7 +403,10 @@
       shown('');
       if (!d.message.trim()) { form.elements.message.focus(); return; }
       // To the open conversation, or a new ticket that starts with this message; nothing about that is asked.
-      const to = latest()?.id || '', key = d.key;
+      // A new conversation already sent with this key (its reply lost) is sent again the same way, never as a follow-up
+      // to the ticket it may have made: HQ answers a repeated key with that ticket, so nothing is added twice.
+      const to = d.creating === d.key ? '' : latest()?.id || '', key = d.key;
+      if (!to) d.creating = key;
       // What goes is what was in the box when Send was pressed, with its own attachment.
       const sent = {message: d.message, diag: d.diag, perf: d.perf, report: d.report, bundle: d.bundle, kind: d.kind};
       sending = d; lockSending();
@@ -427,7 +430,7 @@
           state.tickets = state.tickets.map(t => t.id === to ? {...t, status: 'closed'} : t);
           // The draft keeps the new ticket's key: a retry after a lost reply repeats this creation, not a second one.
           rolled = (key + '-new').slice(0, 200);
-          if (d.key === key) d.key = rolled;
+          if (d.key === key) d.key = d.creating = rolled;
           next = await call('POST', '/support/tickets', fresh(), rolled);
         }
         stateRevision++;

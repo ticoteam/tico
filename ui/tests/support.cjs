@@ -553,6 +553,32 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     }
     await v.ctx.close();
 
+    // ---- Same, but the chat is closed and opened again first: it now shows the saved conversation, and Send still
+    // repeats the creation rather than adding the message to it.
+    v = await visit({seed: [{id: 'sup_1', created_at: at(30), status: 'answered', message: 'Long thread', sent: {}, messages: []}]});
+    Object.assign(v.hq, {full: ['sup_1'], loseCreate: true});
+    await openSupport(v.page);
+    {
+      let chat = v.page.locator('#support-pop');
+      await chat.locator('[name=message]').fill('One more thing');
+      await chat.locator('[name=message]').press('Enter');
+      await chat.locator('[data-error]').waitFor();
+      await v.page.keyboard.press('Escape');
+      await chat.waitFor({state: 'hidden'});
+      await openSupport(v.page);
+      chat = v.page.locator('#support-pop');
+      await chat.locator('.support-msg.you', {hasText: 'One more thing'}).first().waitFor();
+      assert.equal(await chat.locator('[name=message]').inputValue(), 'One more thing', 'the unsent words are still in the box');
+      await chat.locator('[name=message]').press('Enter');
+      await v.page.waitForFunction(() => document.querySelector('#support-pop [name=message]')?.value === '');
+      assert.equal(v.calls.filter(c => c.startsWith('POST tickets/sup_2/messages')).length, 0, 'not added to the new conversation');
+      assert.equal(v.hq.createKeys.length, 2);
+      assert.equal(v.hq.createKeys[0], v.hq.createKeys[1]);
+      const made = v.hq.tickets.find(t => t.message === 'One more thing');
+      assert.ok(made && made.messages.length === 0, 'the message is there once');
+    }
+    await v.ctx.close();
+
     // ---- Delete chat history with 51 conversations: the list holds 50, so it lists and deletes again until empty.
     v = await visit({seed: Array.from({length: 51}, (_, i) => ({id: 'old_' + i, created_at: at(100 + i), status: 'closed', message: 'Old ' + i, sent: {}, messages: []}))});
     await openSupport(v.page);
