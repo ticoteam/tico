@@ -648,3 +648,22 @@ def test_a_call_shows_only_the_people_the_viewer_may_see(meet, monkeypatch):
     monkeypatch.setattr(teammate_access, "levels_for", hidden)
     people = [p["actor"] for p in get(meet, f"calls/{call_id}")["participants"]]
     assert people == ["human:ana"]
+
+
+def test_a_rejoined_person_who_later_loses_the_thread_is_taken_out_of_the_room_again(meet):
+    """Leaving drops a person from LiveKit and records that. Rejoining must clear that record: otherwise a later loss
+    of thread access would leave them out of the pending removals and they would stay connected."""
+    cid = thread(meet)
+    call_id = start_call(meet, cid)["id"]
+    room = "tico-call-" + call_id
+    media = meet.app.state.call_media
+    join(meet, call_id, "ben-test")
+    post(meet, f"calls/{call_id}/leave", {}, token="ben-test")
+    assert (room, "human:ben") in media.removed
+    join(meet, call_id, "ben-test")
+    media.rooms[room].add("human:ben")                # Ben reconnects to the room
+    before = len(media.removed)
+    _remove_from_thread(meet, cid, "human:ben")
+    meet.app.state.calls.sweep()
+    assert (room, "human:ben") in media.removed[before:], "the sweep takes Ben out of the room after he loses the thread"
+    assert "human:ben" not in media.rooms[room]
