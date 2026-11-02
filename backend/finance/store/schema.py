@@ -441,6 +441,7 @@ CREATE INDEX IF NOT EXISTS fin_bills_status ON fin_bills(status, due_date);
 CREATE INDEX IF NOT EXISTS fin_bills_pay_on ON fin_bills(status, pay_on);
 CREATE INDEX IF NOT EXISTS fin_bills_list ON fin_bills(book_id, bill_date, id);
 CREATE INDEX IF NOT EXISTS fin_bill_lines_bill ON fin_bill_lines(bill_id);
+CREATE INDEX IF NOT EXISTS fin_bills_order ON fin_bills(purchase_order_id);
 CREATE INDEX IF NOT EXISTS fin_invoices_status ON fin_invoices(status, due_date);
 CREATE INDEX IF NOT EXISTS fin_invoices_list ON fin_invoices(book_id, invoice_date, id);
 CREATE INDEX IF NOT EXISTS fin_invoice_lines_invoice ON fin_invoice_lines(invoice_id);
@@ -520,6 +521,8 @@ ADDED = (
     ("fin_bills", "approved_at", "TEXT"), ("fin_bills", "schedule_json", "TEXT NOT NULL DEFAULT '{}'"),
     ("fin_bills", "amount_paid", "BIGINT NOT NULL DEFAULT 0"), ("fin_bills", "voided_at", "TEXT"),
     ("fin_bills", "pay_on", "TEXT"), ("fin_bill_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
+    # the purchase order a bill is linked to: a link only (it bills no line, holds nothing and posts nothing)
+    ("fin_bills", "purchase_order_id", "TEXT"),
     ("fin_invoice_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
     ("fin_invoice_lines", "taxable", "INTEGER NOT NULL DEFAULT 1"),
     ("fin_invoices", "terms_days", "INTEGER"), ("fin_invoices", "memo", "TEXT NOT NULL DEFAULT ''"),

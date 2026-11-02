@@ -45,8 +45,9 @@ def _held(c, po: str) -> int:
 
 # ----------------------------------------------------------------------------------------------------------------- H5
 def test_h5_a_procurement_bots_draft_po_carries_its_item_lines_and_holds_nothing_until_the_owner_approves(books):
-    """H5, the action side: a bot with the AP right drafts a PO from item lines tagged with a shop and a job. Its
-    approval of an order over $1,000 asks the owner; the owner's approval is what places the hold."""
+    """H5, the action side: a bot with the AP right drafts a PO from item lines tagged with a shop and a job. Its send
+    asks the owner, so nothing is sent until a person approves; its approval of an order over $1,000 asks the owner
+    too, and the owner's approval is what places the hold."""
     with books.transaction() as c:
         assert act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.ap"}).status == "committed"
         assert act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything",
@@ -64,13 +65,37 @@ def test_h5_a_procurement_bots_draft_po_carries_its_item_lines_and_holds_nothing
         assert made.status == "committed", made.reason
         po = str(made.result["po_id"])
         assert FR.order(c, OWNER, po)["lines"][0]["tags"] == {"location": shop, "project": job}
-        assert act(c, "bot:coder", "po_send", {"po_id": po}).status == "committed"
+        # approval asked, not sent: the owner's decision is what marks the order sent
+        sent_asked = act(c, "bot:coder", "po_send", {"po_id": po})
+        assert (sent_asked.status, sent_asked.approver) == ("needs_approval", OWNER), sent_asked
+        assert FR.order(c, OWNER, po)["status"] == "draft"
+        H.approval_decide(c, OWNER, str(sent_asked.approval_id), "approved")
+        assert FA.approval_decided(c, str(sent_asked.approval_id), AT).status == "committed"
+        assert FR.order(c, OWNER, po)["status"] == "sent"
         asked = act(c, "bot:coder", "po_approve", {"po_id": po})
         assert (asked.status, asked.approver) == ("needs_approval", OWNER), asked
         assert FR.order(c, OWNER, po)["status"] == "sent" and _held(c, po) == 0
         H.approval_decide(c, OWNER, str(asked.approval_id), "approved")
         assert FA.approval_decided(c, str(asked.approval_id), AT).status == "committed"
         assert FR.order(c, OWNER, po)["status"] == "approved" and _held(c, po) == 150_000
+
+
+def test_h5_a_procurement_bot_with_the_ap_right_and_a_company_expenses_view_drafts_a_tagged_po_line(books):
+    """H5, the setup gap: a Procurement Manager holds the AP right and a company view of expenses, not everything. Its
+    draft PO line naming an account and tags is refused outside its view until the expenses view is given."""
+    with books.transaction() as c:
+        assert act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.ap"}).status == "committed"
+        shop = str(act(c, OWNER, "location_create", {"name": "Acme North shop", "kind": "store"}).result["location_id"])
+        job = str(act(c, OWNER, "project_create", {"name": "Install"}).result["project_id"])
+        vendor = str(act(c, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor"}).result["contact_id"])
+        line = {"account_id": account(c, "6100"), "amount": 150_000, "description": "condenser",
+                "tags": {"location": shop, "project": job}}
+        refused = act(c, "bot:coder", "po_create", {"vendor_id": vendor, "po_date": DAY, "lines": [line]})
+        assert refused.status != "committed" and "outside your view" in str(refused.reason), refused
+        assert act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "expenses",
+                                            "whose": "company"}).status == "committed"
+        made = act(c, "bot:coder", "po_create", {"vendor_id": vendor, "po_date": DAY, "lines": [line]})
+        assert made.status == "committed", made.reason
 
 
 # ----------------------------------------------------------------------------------------------------------------- H7

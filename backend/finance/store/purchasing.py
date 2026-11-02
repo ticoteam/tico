@@ -194,6 +194,14 @@ def bill_orders(c: sqlite3.Connection, bill_id: str) -> list[str]:
         "JOIN fin_purchase_orders p ON p.id=l.po_id WHERE bl.bill_id=? ORDER BY p.id", (bill_id,))]
 
 
+def linked_bills(c: sqlite3.Connection, po_id: str) -> list[sqlite3.Row]:
+    """The bills linked to an order (`purchase_order_id`), of any vendor and status, oldest first, with the vendor's
+    name. A link bills no line, so these are not in the order's billed total."""
+    return c.execute(
+        "SELECT b.*, k.name AS contact_name FROM fin_bills b LEFT JOIN fin_contacts k ON k.id=b.vendor_id "
+        "WHERE b.purchase_order_id=? ORDER BY b.bill_date, b.id", (po_id,)).fetchall()
+
+
 def claim_invoice(c: sqlite3.Connection, estimate_id: str, invoice_id: str, at: str) -> int:
     """Link an accepted estimate to the invoice made from it. Only an estimate not yet invoiced takes the link; its
     stored status stays accepted, and it shows as invoiced."""

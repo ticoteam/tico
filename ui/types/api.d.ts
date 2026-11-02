@@ -1095,6 +1095,30 @@ export type DueSatisfied = {
 
 export type Empty = Record<string, unknown>;
 
+export type Equipment = {
+  archived_at?: string | null;
+  customer_id?: string | null;
+  id: string;
+  installed_on?: string | null;
+  kind: "owned" | "customer";
+  location_id?: string | null;
+  make: string;
+  model: string;
+  name: string;
+  photo_file_id?: string | null;
+  serial: string;
+  warranty_ends_on?: string | null;
+};
+
+export type EquipmentOne = {
+  equipment: Equipment;
+};
+
+export type Equipments = {
+  equipment: Array<Equipment>;
+  next_cursor: string | null;
+};
+
 export type Estimate = (FinanceOrderRow & {
   actions?: Array<Record<string, unknown>>;
   lines: Array<{
@@ -1568,6 +1592,7 @@ export type FinanceDocument = (FinanceDocumentRow & {
   tags: Record<string, unknown>;
   taxable?: boolean;
 }>;
+  purchase_order_id?: string | null;
   schedule?: Record<string, unknown> | null;
   settlement_count?: number;
   settlements: Array<{
@@ -1858,7 +1883,7 @@ export type FinanceReport = {
 };
 
 export type FinanceReportOf = {
-  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
+  kind: "pnl" | "pnl_by" | "pnl_by_account" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
   prior?: Record<string, unknown>;
 };
 
@@ -1905,7 +1930,7 @@ export type FinanceSearch = {
   next_cursor: string | null;
   results: Array<{
   id: string;
-  kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project";
+  kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "equipment";
   label: string;
 }>;
   view_version: number;
@@ -2575,9 +2600,11 @@ export type Item = {
   expense_account_id?: string | null;
   id: string;
   income_account_id?: string | null;
-  kind: "service" | "inventory" | "non_inventory" | "bundle" | "category";
+  kind: "service" | "inventory" | "non_inventory" | "bundle" | "category" | "raw_material" | "assembly";
   name: string;
   price?: number | null;
+  quantity_on_hand?: number | null;
+  quantity_synced_at?: string | null;
   sku: string;
   unit: string;
 };
@@ -2865,8 +2892,10 @@ export type Location = {
   customer_id?: string | null;
   customer_name?: string | null;
   id: string;
+  in_books?: boolean;
   kind: string;
   name: string;
+  next_due_on?: string | null;
   parent_id?: string | null;
 };
 
@@ -3412,6 +3441,13 @@ export type PurchaseOrder = (FinanceOrderRow & {
   id: string;
   line_no: number;
 }>;
+  linked_bills?: Array<{
+  id: string;
+  number?: string;
+  status: string;
+  total: number;
+  vendor?: string;
+}>;
   view_version?: number;
 });
 
@@ -3454,6 +3490,35 @@ export type Recent = {
   actor: string;
   bots: Array<unknown>;
   since: string;
+};
+
+export type RecordsImport = {
+  ignored_columns: Array<string>;
+  kind: string;
+  lines: Array<{
+  approval_id?: string;
+  line: number;
+  matches?: Record<string, unknown> | null;
+  name: string;
+  new_customer?: string;
+  reason?: string;
+  record_id?: string;
+  status: string;
+}>;
+  new_customers: number;
+  record_type: string;
+  report_csv?: string;
+  rows: number;
+  summary: Record<string, unknown>;
+  truncated: boolean;
+};
+
+export type RecordsImportRequest = {
+  assign?: Record<string, string>;
+  csv: string;
+  include_lines?: Array<number>;
+  record_type: "locations" | "items" | "equipment" | "due_dates";
+  report?: "json" | "csv";
 };
 
 export type Refresh = {
@@ -5432,6 +5497,13 @@ export type CommentOnTaskParams = {
 export type CommentOnTaskBody = TaskComment;
 export type CommentOnTaskResponse = CommentResult;
 
+/** POST /api/v2/imports/commit */
+export type CommitRecordsImportParams = {
+  "Idempotency-Key": string;
+};
+export type CommitRecordsImportBody = RecordsImportRequest;
+export type CommitRecordsImportResponse = RecordsImport;
+
 /** POST /api/v2/assistant/actions/{aid}/confirm */
 export type ConfirmAssistantActionParams = {
   "Idempotency-Key": string;
@@ -6037,6 +6109,14 @@ export type GetDueDateParams = {
 export type GetDueDateBody = never;
 export type GetDueDateResponse = DueDateOne;
 
+/** GET /api/v2/equipment/{equipment_id} */
+export type GetEquipmentParams = {
+  equipment_id: string;
+  view_as?: string | null;
+};
+export type GetEquipmentBody = never;
+export type GetEquipmentResponse = EquipmentOne;
+
 /** GET /api/v2/estimates/{estimate_id} */
 export type GetEstimateParams = {
   estimate_id: string;
@@ -6224,7 +6304,8 @@ export type GetFinanceReportParams = {
   by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "location" | "class" | "project" | "location_class" | "location_project" | "class_project" | null;
   compare?: "prior" | null;
   end?: string | null;
-  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
+  id?: string | null;
+  kind: "pnl" | "pnl_by" | "pnl_by_account" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
   period?: "day" | "week" | "month" | "quarter" | "year";
   start?: string | null;
   top_n?: number;
@@ -6924,6 +7005,23 @@ export type ListDueDatesParams = {
 export type ListDueDatesBody = never;
 export type ListDueDatesResponse = DueDates;
 
+/** GET /api/v2/equipment */
+export type ListEquipmentParams = {
+  archived?: "hide" | "only" | "all";
+  cursor?: string | null;
+  customer_id?: string | null;
+  due?: "soon" | "overdue" | null;
+  kind?: "owned" | "customer" | null;
+  limit?: number;
+  location_id?: string | null;
+  q?: string;
+  view_as?: string | null;
+  warranty?: "ending" | null;
+  warranty_ends_by?: string | null;
+};
+export type ListEquipmentBody = never;
+export type ListEquipmentResponse = Equipments;
+
 /** GET /api/v2/estimates */
 export type ListEstimatesParams = {
   cursor?: string | null;
@@ -7238,6 +7336,7 @@ export type ListInternalDocsResponse = InternalDocList;
 export type ListItemsParams = {
   archived?: "hide" | "only" | "all";
   cursor?: string | null;
+  kind?: "service" | "inventory" | "non_inventory" | "bundle" | "category" | "raw_material" | "assembly" | null;
   limit?: number;
   q?: string;
   view_as?: string | null;
@@ -7273,6 +7372,8 @@ export type ListLinkedDocsResponse = LinkedDocList;
 export type ListLocationsParams = {
   archived?: "hide" | "only" | "all";
   cursor?: string | null;
+  customer_id?: string | null;
+  kind?: "store" | "office" | "warehouse" | "plant" | "customer_site" | "vehicle" | "other" | null;
   limit?: number;
   q?: string;
   view_as?: string | null;
@@ -7350,8 +7451,10 @@ export type ListProfilesResponse = ProfileChoices;
 export type ListProjectsParams = {
   archived?: "hide" | "only" | "all";
   cursor?: string | null;
+  customer_id?: string | null;
   limit?: number;
   q?: string;
+  status?: "open" | "closed" | null;
   view_as?: string | null;
 };
 export type ListProjectsBody = never;
@@ -7697,6 +7800,13 @@ export type PreviewProductRepositoryParams = {
 };
 export type PreviewProductRepositoryBody = never;
 export type PreviewProductRepositoryResponse = ProductRepositoryPreview;
+
+/** POST /api/v2/imports/preview */
+export type PreviewRecordsImportParams = {
+  "Idempotency-Key": string;
+};
+export type PreviewRecordsImportBody = RecordsImportRequest;
+export type PreviewRecordsImportResponse = RecordsImport;
 
 /** POST /api/v2/tasks/{tid}/publication-preview */
 export type PreviewTaskPublicationParams = {
@@ -8276,9 +8386,12 @@ export type SearchFinanceParams = {
   contact_id?: string | null;
   contact_kind?: "vendor" | "customer" | "both" | null;
   cursor?: string | null;
+  customer_id?: string | null;
   end?: string | null;
-  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | "due_date" | null;
+  equipment_kind?: "owned" | "customer" | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | "equipment" | "due_date" | null;
   limit?: number;
+  location_id?: string | null;
   money_account_id?: string | null;
   q?: string;
   rule_kind?: "gate" | "posting" | null;
@@ -8286,6 +8399,7 @@ export type SearchFinanceParams = {
   status?: string | null;
   vendor?: string | null;
   view_as?: string | null;
+  warranty_ends_by?: string | null;
 };
 export type SearchFinanceBody = never;
 export type SearchFinanceResponse = FinanceSearch;

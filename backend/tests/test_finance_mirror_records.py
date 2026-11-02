@@ -2392,6 +2392,30 @@ def test_a_purchase_order_whose_lines_name_two_jobs_passes_and_each_line_is_writ
     assert [line["ItemBasedExpenseLineDetail"]["CustomerRef"]["value"] for line in wire] == ["12", "13"]
 
 
+def test_a_bill_linked_to_an_order_keeps_the_link_here_and_the_provider_is_sent_no_link(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["parties"].append(M.Party(M.Ext("Vendor", "10", "1"), "Acme Freight", "vendor"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    po, _ = _approved_order(books, fake, cid, 40_000)
+    with books.transaction() as c:
+        made = act(c, OWNER, "bill_create", {
+            "vendor_id": _local(c, "Vendor:10", "fin_contacts"), "number": "F-1", "bill_date": "2026-10-12",
+            "purchase_order_id": po, "lines": [{"account_id": account(c, "6100"), "amount": 1500,
+                                                 "description": "freight"}]})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER2) == []
+    assert "purchase_order_id" not in json.dumps(Q.bill_body(_sent(fake, "bill.create")))
+    with books.read() as c:
+        bill = c.execute("SELECT purchase_order_id FROM fin_bills WHERE number='F-1'").fetchone()
+        assert bill is not None and bill[0] == po
+        order = FR.order(c, OWNER, po)
+        assert order["billed"] == 0
+        assert [(b["vendor"], b["total"]) for b in order["linked_bills"]] == [("Acme Freight", 1500)]
+
+
 def test_a_bill_whose_lines_name_two_jobs_passes_and_each_line_is_written_with_its_own_job(books):
     """QuickBooks takes a job per line on a bill (CustomerRef on each line), so two jobs are not refused."""
     fake = FakeBooks()
