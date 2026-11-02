@@ -110,11 +110,14 @@ async function restrictPerson(hub) {
     await omar.getByText('Not found').waitFor({timeout: t(15000)});
     assert.ok(!(await omar.content()).includes(SECRET), 'the members-only text is not on Omar\'s page');
     await omar.goto(hub.url + '/#/bot/' + BOT + '/dm');
-    await omar.locator('#bot-work').waitFor({timeout: t(15000)});
+    // A peer who may only see the bot gets Info and Rules (bot-page.js botTabs): the DM route falls back to Info, with
+    // no Home, DM or Tasks tab and no work pane.
+    await omar.locator('#pane-more').waitFor({timeout: t(15000)});
     await omar.waitForLoadState('networkidle');
-    // Home and DM switch only when there are two (bot-page.js talkTabs); a peer who may not read the Home has DM alone.
-    assert.equal(await omar.locator('.bot-talk-switch').count(), 0, 'a peer with See only on the bot has no Home/DM switch');
     assert.equal(await omar.locator('#btabs [data-bt="home"]').count(), 0, 'a peer with See only on the bot gets no Home tab');
+    assert.equal(await omar.locator('#btabs [data-bt="dm"]').count(), 0, 'a peer who may not write to the bot gets no DM tab');
+    assert.equal(await omar.locator('.bot-talk-switch').count(), 0, 'a peer with See only on the bot has no Home/DM switch');
+    assert.equal(await omar.locator('#bot-work').isVisible(), false, 'a peer with See only on the bot has no work pane');
     await omar.context().close();
 
     // Priya's Home. Omar sees Priya but is not her manager (Priya reports to Dana), so her Home is hidden from him. Dana then
