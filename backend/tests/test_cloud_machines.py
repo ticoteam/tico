@@ -8,14 +8,20 @@ nothing changes. HQ is a fake client and the clock is a fake one."""
 
 import json
 import time
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from backend import cloud_access, cloud_machines as CM, placement
+from backend import cloud_access, cloud_machines as CM, placement, readiness
 from backend.store import H, Problem
 from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_cloud_access import signals
+from backend.tests.test_credentials import setup
+from backend.tests.test_model_subscriptions import OTHER, TOKEN, add, codex_file, company, give, on
+from backend import model_subscriptions as MS
+from backend.auth import Identity
+from backend.names import SUPPORT_ACTOR
 
 SIZES = [{"name": name, "cpu": cpu, "memory_gb": cpu * 2, "usd_per_hour": 0.05 * cpu, "start_usd": 0.04,
           "idle_stop_s": idle} for name, cpu, idle in (("small", 1, 600), ("default", 2, 300), ("large", 4, 180),
@@ -1024,6 +1030,252 @@ def test_another_bots_own_machine_is_never_a_computer_to_assign_and_the_shared_o
     assert cloud.row()["placement"] == "shared"
     assign(cloud.api, own, "ops", generation + 1)
     assert cloud.row()["placement"] == "own"
+
+
+# ----------------------------------------------------------------------------- a company plan on a new computer
+def plan_company(cloud, *bots, saved=True):
+    """A Tico Cloud company (no Gateway choice) with these bots running Claude, and a Claude plan saved unless not."""
+    setup(cloud.api)
+    company(cloud.api)
+    for bot in bots:
+        on(cloud.api, bot, "claude", "claude-sonnet-5-5")
+    return add(cloud.api)["id"] if saved else None
+
+
+def change_as(cloud, bot, token="ana-test", **body):
+    """A person's choice for the bot's cloud machine, through the real route (the row's changed_by is that person)."""
+    return post(cloud.api, f"bots/{bot}/cloud-machine", body, token=token)
+
+
+def enroll_made(cloud, key):
+    """The machine HQ was just asked to make for `key` enrolls with its code; returns the computer's enrollment answer."""
+    assert cloud.tick()[-1] == "create" and cloud.hq.calls[-1][1] == key
+    return post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+
+
+def own_computer(cloud, bot="ops", token="ana-test"):
+    """The bot's own cloud machine made for its work and enrolled; returns the computer's enrollment answer."""
+    change_as(cloud, bot, token, mode="cloud", placement="own")
+    work(cloud, bot)
+    return enroll_made(cloud, bot)
+
+
+def shared_for(cloud, bot, token="ana-test"):
+    """The bot on the shared cloud machine, which is made for its work and enrolled (the first member's)."""
+    change_as(cloud, bot, token, mode="cloud", placement="shared")
+    work(cloud, bot)
+    return enroll_made(cloud, CM.SHARED)
+
+
+def task_on(api, bot, model, harness):
+    """The bot's task model: a model on `harness` (its runtime), beside its own model."""
+    with api.app.state.store.transaction() as c:
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config["task_model"] = {"model": model, "harness": harness, "runtime": harness}
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(config), bot))
+
+
+def given(cloud, runner_id):
+    with cloud.store.read() as c:
+        return {r["runtime"]: r["subscription_id"] for r in c.execute(
+            "SELECT runtime,subscription_id FROM computer_subscriptions WHERE runner_id=?", (runner_id,))}
+
+
+def sign_in_report(cloud, computer, authenticated):
+    """The computer's first report: Claude signed in as `authenticated` (a takes-subscriptions runner)."""
+    return post(cloud.api, "runners/heartbeat", {
+        "version": "test", "platform": "linux", "capabilities": [MS.CAPABILITY],
+        "readiness": {"schema_version": 1, "runtimes": {"claude": {"installed": True, "authenticated": authenticated}},
+                      "bots": {}}}, token=computer["token"])
+
+
+def can_run(cloud, bot, runner_id):
+    with cloud.store.read() as c:
+        return readiness.can_run(c, bot, "claude", runner=runner_id)["can_run"]
+
+
+def test_a_new_own_machine_takes_the_companys_plan_and_its_bot_is_ready(cloud):
+    sid = plan_company(cloud, "ops")
+    computer = own_computer(cloud)
+    assert given(cloud, computer["runner_id"]) == {"claude": sid}
+    assert [e["actor"] for e in events(cloud, "subscription.given")] == ["human:ana"]    # the person who chose it
+    sign_in_report(cloud, computer, "missing")               # nobody signs in to a throwaway machine
+    assert can_run(cloud, "ops", computer["runner_id"]) is True
+
+
+def test_a_plan_already_on_the_shared_machine_is_preferred_to_a_newer_one(cloud):
+    first = plan_company(cloud, "cpo", "ops")
+    shared = shared_for(cloud, "cpo")["runner_id"]           # the shared machine's computer takes the only plan
+    assert given(cloud, shared) == {"claude": first}
+    add(cloud.api, secret=OTHER, name="Newer Max")           # newer, and no more used: still not the one
+    computer = own_computer(cloud)
+    assert given(cloud, computer["runner_id"]) == {"claude": first}
+
+
+def test_a_computer_with_a_plan_or_a_sign_in_of_its_own_keeps_it(cloud):
+    plan_company(cloud, "ops", "inbox", saved=False)
+    signed = own_computer(cloud, "inbox")                    # made before any plan; its own login is signed in
+    sign_in_report(cloud, signed, "ready")
+    sid = add(cloud.api)["id"]
+    with cloud.store.transaction() as c:
+        CM.lend_plans(c, cloud.api.app.state.execution, "inbox", signed["runner_id"], "human:ana")
+    assert given(cloud, signed["runner_id"]) == {}           # its own sign-in stays the one it runs on
+    first = own_computer(cloud, "ops")                       # made now: the plan is given to it
+    assert given(cloud, first["runner_id"]) == {"claude": sid}
+    add(cloud.api, secret=OTHER, name="Newer Max")
+    with cloud.store.transaction() as c:
+        CM.lend_plans(c, cloud.api.app.state.execution, "ops", first["runner_id"], "human:ana")
+    assert given(cloud, first["runner_id"]) == {"claude": sid}   # a plan it has is never replaced
+
+
+def test_with_no_plan_that_fits_nothing_changes_and_the_bot_still_waits(cloud):
+    plan_company(cloud, "ops", "inbox")
+    with cloud.store.transaction() as c:
+        c.execute("DELETE FROM model_subscriptions")         # no plan at all
+    computer = own_computer(cloud, "ops")
+    assert given(cloud, computer["runner_id"]) == {}
+    sid = add(cloud.api, secret=OTHER, name="Broken Max")["id"]
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE model_subscriptions SET status='needs_reconnect' WHERE id=?", (sid,))
+    waiting = own_computer(cloud, "inbox")                   # its only plan needs reconnecting: passed over
+    assert given(cloud, waiting["runner_id"]) == {}
+    assert events(cloud, "subscription.given") == []
+    sign_in_report(cloud, waiting, "missing")
+    assert can_run(cloud, "inbox", waiting["runner_id"]) is not True
+
+
+def test_a_bot_put_on_an_ordinary_computer_gets_no_plan(cloud):
+    plan_company(cloud, "ops")
+    mac = runner(cloud.api, label="Test Mac")
+    assign(cloud.api, mac, "ops")
+    assert given(cloud, mac["runner_id"]) == {}
+    assert events(cloud, "subscription.given") == []
+
+
+def test_a_member_moving_a_bot_gets_no_plan_on_a_computer_it_moves_to(cloud):
+    plan_company(cloud, "cpo", "ops", saved=False)
+    shared = shared_for(cloud, "cpo")["runner_id"]           # the owner's shared machine, with no plan yet
+    add(cloud.api)
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+    change_as(cloud, "ops", "cara-test", mode="cloud", placement="shared")
+    assert placed(cloud)["ops"] == shared and given(cloud, shared) == {}
+    change_as(cloud, "ops", "cara-test", mode="cloud", placement="own")  # a new machine, made and enrolled for her move
+    work(cloud, "ops")
+    computer = enroll_made(cloud, "ops")
+    assert given(cloud, computer["runner_id"]) == {} and events(cloud, "subscription.given") == []
+
+
+def test_an_admin_moving_a_bot_gets_the_plan_on_its_own_machine(cloud):
+    sid = plan_company(cloud, "ops")
+    computer = own_computer(cloud, "ops", token="ben-test")
+    assert given(cloud, computer["runner_id"]) == {"claude": sid}
+    assert [e["actor"] for e in events(cloud, "subscription.given")] == ["human:ben"]
+
+
+def test_a_bot_that_chose_its_machine_gets_no_plan(cloud):
+    plan_company(cloud, "ops")
+    change_as(cloud, "ops", mode="cloud", placement="own")
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE cloud_machines SET changed_by='bot:cpo' WHERE bot='ops'")
+    work(cloud, "ops")
+    assert given(cloud, enroll_made(cloud, "ops")["runner_id"]) == {}
+
+
+def test_a_plan_an_owner_took_off_a_computer_is_not_brought_back_by_a_later_change(cloud):
+    sid = plan_company(cloud, "cpo", "finance")
+    shared = shared_for(cloud, "cpo")["runner_id"]
+    assert given(cloud, shared) == {"claude": sid}
+    give(cloud.api, {"runner_id": shared}, "claude", None)
+    assert given(cloud, shared) == {}
+    change_as(cloud, "cpo", size="large")                    # a size change on the bot already placed there
+    change_as(cloud, "finance", mode="cloud", placement="shared")   # a second member joins the same computer
+    assert placed(cloud)["finance"] == shared and given(cloud, shared) == {}
+
+
+def test_a_claude_bot_with_a_codex_task_model_gets_the_codex_plan_too(cloud):
+    sid = plan_company(cloud, "ops")
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    task_on(cloud.api, "ops", "gpt-6.1-sol", "codex")
+    computer = own_computer(cloud, "ops")
+    assert given(cloud, computer["runner_id"]) == {"claude": sid, "codex": csid}
+
+
+def generation(cloud, bot):
+    with cloud.store.read() as c:
+        return c.execute("SELECT generation FROM assignments WHERE bot=?", (bot,)).fetchone()["generation"]
+
+
+def test_a_same_computer_reassignment_by_a_member_or_support_after_a_plan_is_removed_gives_nothing(cloud):
+    sid = plan_company(cloud, "ops")
+    computer = own_computer(cloud, "ops", token="ben-test")  # an admin chose the machine, and its plan was given
+    assert given(cloud, computer["runner_id"]) == {"claude": sid}
+    give(cloud.api, computer, "claude", None)
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+    idle(cloud)
+    assign(cloud.api, computer, "ops", generation(cloud, "ops"), operator="cara-test")
+    assert given(cloud, computer["runner_id"]) == {}
+    # Support's session is checked by the route; assign itself is what decides, so it is called with support's identity.
+    before = generation(cloud, "ops")
+    with cloud.store.transaction() as c:
+        cloud.api.app.state.execution.assign(c, Identity(SUPPORT_ACTOR, "owner", support="full"), "ops",
+                                             SimpleNamespace(runner_id=computer["runner_id"],
+                                                             expected_generation=before))
+    assert generation(cloud, "ops") == before + 1 and placed(cloud)["ops"] == computer["runner_id"]
+    assert given(cloud, computer["runner_id"]) == {}
+
+
+def test_a_member_moving_its_bot_off_and_back_through_the_assignment_route_gives_no_plan(cloud):
+    plan_company(cloud, "ops")
+    own = own_computer(cloud, "ops", token="ben-test")        # an admin chose the machine, and it had the plan
+    give(cloud.api, own, "claude", None)
+    other = runner(cloud.api, label="Office Mac")
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+        c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (other["runner_id"],))
+    idle(cloud)
+    assign(cloud.api, other, "ops", generation(cloud, "ops"), operator="cara-test")
+    assert placed(cloud)["ops"] == other["runner_id"] and given(cloud, other["runner_id"]) == {}
+    assign(cloud.api, own, "ops", generation(cloud, "ops"), operator="cara-test")
+    assert placed(cloud)["ops"] == own["runner_id"] and given(cloud, own["runner_id"]) == {}
+
+
+def test_only_an_admins_choice_of_the_machine_lends_a_direct_assignment_never_does(cloud):
+    sid = plan_company(cloud, "ops")
+    own = own_computer(cloud, "ops", token="ben-test")
+    give(cloud.api, own, "claude", None)
+    other = runner(cloud.api, label="Office Mac")
+    idle(cloud)
+    assign(cloud.api, other, "ops", generation(cloud, "ops"), operator="ben-test")
+    assign(cloud.api, own, "ops", generation(cloud, "ops"), operator="ben-test")
+    assert given(cloud, own["runner_id"]) == {}                 # assignment, even an admin's, gives no plan
+    assign(cloud.api, other, "ops", generation(cloud, "ops"), operator="ben-test")
+    chose = cloud.api.post("/api/v2/bots/ops/cloud-machine", headers=headers("ben-test"), json={"mode": "cloud"})
+    assert chose.status_code == 200, chose.text
+    assert given(cloud, own["runner_id"]) == {"claude": sid}
+    assert events(cloud, "subscription.given")[-1]["actor"] == "human:ben"
+
+
+def test_two_bots_chosen_before_a_new_shared_machine_enrolls_still_get_its_plan(cloud):
+    sid = plan_company(cloud, "ops", "finance")
+    for bot in ("ops", "finance"):
+        change_as(cloud, bot, mode="cloud", placement="shared")
+    work(cloud, "ops")
+    assert cloud.tick()[-1] == "create" and cloud.hq.calls[-1][1] == CM.SHARED
+    made = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert given(cloud, made["runner_id"]) == {"claude": sid}
+
+
+def test_a_look_never_gives_a_plan_back_after_a_bots_assignment_goes(cloud):
+    plan_company(cloud, "ops")
+    own = own_computer(cloud, "ops", token="ben-test")
+    give(cloud.api, own, "claude", None)
+    idle(cloud)
+    with cloud.store.transaction() as c:                        # archiving a bot drops its assignment, keeps its row
+        c.execute("DELETE FROM assignments WHERE bot='ops'")
+    cloud.tick()
+    assert placed(cloud)["ops"] == own["runner_id"] and given(cloud, own["runner_id"]) == {}
 
 
 def test_a_setup_finished_before_hq_listed_sizes_goes_on_cloud_machines_when_it_does(api, monkeypatch):  # noqa: F811
