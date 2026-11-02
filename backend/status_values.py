@@ -91,6 +91,8 @@ COLUMNS = (
     Column("model_subscriptions", "status", ("new", "working", "needs_reconnect"), enforce="check"),
     Column("strategy_actions", "state", ("proposed", "done", "undone"), enforce="check"),
     Column("google_connects", "status", GOOGLE_CONNECT_STATUSES, enforce="check"),
+    # An operation binding's state (backend/store.py's idempotency table); a saved answer is always completed.
+    Column("idempotency", "state", ("pending", "completed", "refused"), enforce="check"),
     Column("fin_cards", "status", ("active", "frozen", "canceled"), enforce="check", retired=(("cancelled", "canceled"),)),
     Column("fin_payments", "status", PAYMENT_STATUSES, enforce="check", retired=(("cancelled", "canceled"),)),
     Column("fin_transfers", "status", TRANSFER_STATUSES, enforce="check", retired=(("cancelled", "canceled"),)),

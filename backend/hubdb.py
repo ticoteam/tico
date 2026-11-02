@@ -5906,7 +5906,7 @@ def _refresh_comment_replies(conn, msg):
     # By index (backend/idempotency_messages.py): reading every stored answer here held the write lock for 35 s.
     rows = idempotency_messages.quoting(conn, msg["id"]) if _has_table(conn, "idempotency_messages") else None
     if rows is None:        # not indexed yet: an older file, or before its first start's backfill finished
-        rows = conn.execute("SELECT rowid,response FROM idempotency WHERE instr(response,?)>0",
+        rows = conn.execute("SELECT rowid,response FROM idempotency WHERE binding IS NULL AND instr(response,?)>0",
                             (msg["id"],)).fetchall()
     for row in rows:
         conn.execute("UPDATE idempotency SET response=? WHERE rowid=?",

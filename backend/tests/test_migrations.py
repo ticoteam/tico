@@ -3,6 +3,7 @@ migration rolls back its DDL and its row and runs again once fixed, an applied f
 code must not open is refused before anything is written to it."""
 import gzip
 import hashlib
+import importlib
 import json
 import re
 import shutil
@@ -255,7 +256,6 @@ def test_cloud_version_is_the_newest_cloud_step_store_writes():
 
 def test_a_session_link_keeps_its_thread_once_in_its_url(tmp_path):
     """Migration 0090 strips the thread_id copy from session rows whose url names it, and leaves every other row alone."""
-    import importlib
     up = importlib.import_module("backend.migrations.0090_task_session_thread_once").up
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE task_links(id TEXT PRIMARY KEY, kind TEXT, url TEXT, detail TEXT)")
@@ -276,3 +276,100 @@ def test_a_session_link_keeps_its_thread_once_in_its_url(tmp_path):
     up(conn)
     assert dict(conn.execute("SELECT id, detail FROM task_links").fetchall()) == stored
     up(sqlite3.connect(":memory:"))                 # a database with no task_links has nothing to strip
+
+
+# The tables 0091_idempotency_one_table.py moves into `idempotency`, as migration 0090 and earlier left them.
+LEGACY_TABLES = (
+    "CREATE TABLE idempotency(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+    "request_hash TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(actor,operation,key))",
+    "CREATE INDEX idempotency_by_created ON idempotency(created_at)",
+    "CREATE TABLE invite_sends(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+    "request_hash TEXT NOT NULL, person TEXT NOT NULL, "
+    "state TEXT NOT NULL CHECK(state IN ('sending','sent','refused')), error_code TEXT, error_detail TEXT, "
+    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(actor,operation,key))",
+    "CREATE TABLE github_product_repo_operations(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+    "request_hash TEXT NOT NULL, target_org TEXT NOT NULL, target_name TEXT NOT NULL, "
+    "state TEXT NOT NULL CHECK(state IN ('pending','completed','rejected')), response TEXT, error_code TEXT, "
+    "error_detail TEXT, error_status INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+    "PRIMARY KEY(actor,operation,key), CHECK(state!='completed' OR response IS NOT NULL), "
+    "CHECK(state!='rejected' OR (error_code IS NOT NULL AND error_detail IS NOT NULL AND error_status IS NOT NULL)))",
+    "CREATE TABLE github_review_operations(actor TEXT NOT NULL, key TEXT NOT NULL, request_hash TEXT NOT NULL, "
+    "response TEXT, PRIMARY KEY(actor,key))",
+)
+PRODUCT, REVIEWS = "/api/v2/github/product-repos", "/api/v2/github/reviews"
+TS = "2026-10-01T00:00:00.000000Z"
+
+
+def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_path):
+    path = fresh(tmp_path)
+    invite = "/api/v2/access/people/{}/invite"
+    with sqlite3.connect(path) as c:
+        c.execute("DROP TABLE idempotency")                    # the one table, with its triggers
+        for ddl in LEGACY_TABLES:
+            c.execute(ddl)
+        c.executemany("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) "
+                      "VALUES('human:ana',?,?,?,?,?)", [
+            ("/api/v2/tasks/t1/files", "ans-1", "h1", '{"ok": true}', TS),
+            (PRODUCT, "receipt", "h2", '{"repository": "Acme/tico-receipt", "html_url": "x"}', TS),
+            (invite.format("cara"), "collide", "h3", '{"invited": "cara"}', TS),   # shares its key with a send
+        ])
+        c.executemany("INSERT INTO invite_sends VALUES('human:ana',?,?,?,?,?,?,?,?,?)", [
+            (invite.format("cara"), "collide", "h3", "cara", "sent", None, None, TS, TS),
+            (invite.format("dan"), "sending", "h4", "dan", "sending", None, None, TS, TS),
+            (invite.format("eve"), "refused", "h5", "eve", "refused", "too_many", "Too many invites", TS, TS),
+        ])
+        c.executemany("INSERT INTO github_product_repo_operations VALUES('human:ana',?,?,?,?,?,?,?,?,?,?,?,?)", [
+            (PRODUCT, "prod-pending", "h6", "Acme", "tico-new", "pending", None, None, None, None, TS, TS),
+            (PRODUCT, "prod-done", "h7", "Acme", "tico-done", "completed", '{"repository": "Acme/tico-done"}',
+             None, None, None, TS, TS),
+            (PRODUCT, "prod-rejected", "h8", "Acme", "tico-bad", "rejected", None, "github_repo", "Taken", 409, TS, TS),
+        ])
+        c.executemany("INSERT INTO github_review_operations VALUES('human:ana',?,?,?)", [
+            ("rev-pending", "r1", None), ("rev-done", "r2", '{"id": 1}'),
+        ])
+        before = dict(c.execute("SELECT key, rowid FROM idempotency").fetchall())
+        c.execute("DELETE FROM schema_migrations WHERE version>='0091' AND version NOT LIKE 'legacy_%'")
+    boot(path)
+
+    with sqlite3.connect(path) as c:
+        c.row_factory = sqlite3.Row
+        rows = {(r["operation"], r["key"]): dict(r) for r in c.execute("SELECT rowid, * FROM idempotency")}
+        assert len(rows) == 10, sorted(rows)
+        answer = rows[("/api/v2/tasks/t1/files", "ans-1")]
+        assert (answer["binding"], answer["state"], answer["response"]) == (None, "completed", '{"ok": true}')
+        assert answer["rowid"] == before["ans-1"], "a stored answer keeps its rowid"
+        collide = rows[(invite.format("cara"), "collide")]
+        assert (collide["binding"], collide["subject"], collide["state"], collide["response"]) == \
+            ("invites", "cara", "completed", None), "the binding wins over the answer that shared its key"
+        assert rows[(invite.format("dan"), "sending")]["state"] == "pending"
+        eve = rows[(invite.format("eve"), "refused")]
+        assert (eve["state"], eve["error_code"], eve["error_detail"]) == ("refused", "too_many", "Too many invites")
+        receipt = rows[(PRODUCT, "receipt")]
+        assert (receipt["binding"], receipt["subject"], receipt["state"]) == \
+            ("github_product_repo", "Acme/tico-receipt", "completed")
+        assert receipt["response"] == '{"repository": "Acme/tico-receipt", "html_url": "x"}'
+        assert rows[(PRODUCT, "prod-pending")]["state"] == "pending"
+        assert rows[(PRODUCT, "prod-pending")]["subject"] == "Acme/tico-new"
+        assert rows[(PRODUCT, "prod-done")]["response"] == '{"repository": "Acme/tico-done"}'
+        rejected = rows[(PRODUCT, "prod-rejected")]
+        assert (rejected["state"], rejected["error_code"], rejected["error_status"]) == ("refused", "github_repo", 409)
+        review = rows[(REVIEWS, "rev-pending")]
+        assert (review["binding"], review["subject"], review["state"], review["response"]) == \
+            ("github_review", "", "pending", None)
+        assert rows[(REVIEWS, "rev-done")]["state"] == "completed"
+        assert not {"invite_sends", "github_product_repo_operations", "github_review_operations"} & _tables(c)
+        assert [r[1] for r in c.execute("PRAGMA table_info(idempotency)")] == [
+            "actor", "operation", "key", "request_hash", "response", "created_at", "updated_at", "binding", "subject",
+            "state", "error_code", "error_detail", "error_status"]
+        assert "idempotency_answers_by_created" in {r[1] for r in c.execute("PRAGMA index_list(idempotency)")}
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+def test_the_idempotency_table_the_migration_builds_is_the_one_store_declares():
+    import re
+    declared = re.search(r"CREATE TABLE IF NOT EXISTS (idempotency\(.*?'refused'\)\)\))", STORE_SOURCE.read_text(), re.S)
+    built = importlib.import_module("backend.migrations.0091_idempotency_one_table").TABLE
+    squash = lambda sql: re.sub(r"\s+", "", sql)
+    assert declared and squash("CREATE TABLE " + declared.group(1)) == squash(built)
