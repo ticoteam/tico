@@ -236,6 +236,11 @@ def age_minutes(ctx: Ctx, stamp: object) -> int | None:
     return max(0, int((now - then).total_seconds() // 60))
 
 
+# The fields a payment_create payload carries; recipient_version is the version an approval was asked for (Plan.resolved).
+CREATE_FIELDS = ("recipient_id", "amount", "money_account_id", "memo", "obligation", "account_id", "tags", "mode",
+                 "purpose", "recipient_version")
+
+
 def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Pay a recipient from a bank account through Mercury's approval queue. `account_id` (and tags) is the line the
     payment posts to when it settles; `obligation` (a bill or any key) allows one live payment at a time. `method` internal is a move between two of the company's bank accounts instead
@@ -243,8 +248,7 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if V.opt_text(p, "method", 20) == INTERNAL:
         from .transfers import plan_internal     # lazy: transfers imports this module
         return plan_internal(ctx, who, p)
-    V.only(p, ("recipient_id", "amount", "money_account_id", "memo", "obligation", "account_id", "tags", "mode",
-               "purpose", "recipient_version"))       # the version an approval was asked for (Plan.resolved)
+    V.only(p, CREATE_FIELDS)
     mode = V.choice(p, "mode", ("approval_queue", "direct"), "approval_queue")
     if mode == "direct" and SL.setting(ctx.c, DIRECT_KEY) is not True:
         raise FinanceError(NOT_AVAILABLE, "direct send is off for this company")
@@ -579,6 +583,23 @@ def approved_for(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str) ->
     return who_needed == "manager" or R.is_admin(ctx.org, by, ctx.rights(by))
 
 
+def _asked_again(ctx: Ctx, pay: Any, action: Any, successor: Any) -> str:
+    """A queued payment whose recipient was replaced: its approval is void (§5), so it is not cancelled quietly. It ends
+    cancelled (its hold and counters released, the bill owed again), and its action waits for a finance admin's approval
+    of the new details (§6.4 rule 1), with the new recipient version. Nothing goes to Mercury meanwhile."""
+    from . import actions as FA          # lazy: actions imports this module
+    why = "the recipient's details changed after it was approved"
+    body = {k: v for k, v in json.loads(str(action["payload_json"])).items() if k in CREATE_FIELDS}
+    body.update({"recipient_id": str(successor["id"]), "recipient_version": int(successor["version"])})
+    end(ctx, pay, "cancelled", f"{why}; asked again")
+    summary = (f"Pay {int(pay['amount']) / 100:.2f} {ctx.book.base_currency} to {successor['name']} "
+               "(its details changed; asked again)")
+    FA.void_for_recipient(ctx, str(action["id"]), "payment_create", body, summary,
+                          O.Principal(actor=str(action["actor"]), for_actor=str(action["on_behalf_of"] or ""),
+                                      rule=str(action["rule_id"] or "")))
+    return why
+
+
 def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     """Right before the provider call, the same judgment as at the action (§9): the payer still has the right and the
     line in view, the recipient is still that version, payments are on, the gate rules (with their counters, less this
@@ -600,18 +621,23 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         SK.update(ctx.c, "fin_payments", str(pay["id"]), {"mode": "approval_queue", "updated_at": ctx.at})
         pay = SK.get(ctx.c, "fin_payments", str(pay["id"]))
     right = K.authority(ctx.org, who, "payment_create", ctx.rights(who))
+    ended = "cancelled"
     if right is not None and right.outcome == "deny":
         why = "whoever asked for it no longer has the right to pay"
     elif line is None or not line.active or not may_write(ctx, who, line.id, tags):
         why = "its line is no longer in the payer's view"
     elif rec is None or str(rec["status"]) != "active" or int(rec["version"]) != int(pay["recipient_version"]):
-        why = "the recipient's details changed after it was approved"
+        # Changed details (§13) void the approval: asked again for the new version, never cancelled quietly.
+        successor = _current_version(ctx, rec) if rec is not None else None
+        if successor is not None and action is not None and str(successor["id"]) != str(pay["recipient_id"]):
+            return _asked_again(ctx, pay, action, successor)
+        why, ended = "the recipient is no longer active", "failed"       # a failure is told to whoever made it
     elif not rec["provider_recipient_id"]:
         return "wait"
     elif money is None or not settings(ctx.c, str(money["connection_id"])).get("payments_enabled"):
         why = "payments were turned off for this bank connection"
     if why:
-        end(ctx, pay, "cancelled", why)
+        end(ctx, pay, ended, why)
         return why
     assert line is not None and rec is not None and money is not None
     amount = int(pay["amount"])

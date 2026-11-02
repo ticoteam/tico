@@ -61,6 +61,7 @@ STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.
 RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check", "recipient_version"})
+RECIPIENT_RULE = "rule:recipient-details-changed"        # the rule an approval asked for changed payee details names
 
 
 @dataclass(frozen=True)
@@ -469,6 +470,26 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     except BaseException:
         _rollback(c, "fin_decide", mark)
         raise
+
+
+def void_for_recipient(ctx: Ctx, old_action_id: str, kind: str, body: Mapping[str, object], summary: str,
+                       p: O.Principal) -> str:
+    """A queued payment's recipient was replaced after its approval: that approval is void, and the new details are asked
+    for as a new action (its own payment, with its own key) of a finance admin (§5, §6.4 rule 1). The old action keeps its
+    record. Called by payments.recheck; a pending approval is asked again by approval_decided instead. Returns the new
+    approval's id."""
+    action_id = tico.new_id()
+    what = f"{summary} (Finance action {action_id})"
+    SX.insert(ctx.c, action_id=action_id, kind=kind, payload=body, actor=p.actor, on_behalf_of=p.for_actor,
+              rule_id=RECIPIENT_RULE, key=f"reask-{old_action_id}-{body.get('recipient_version')}",
+              rules=[{"rule": RECIPIENT_RULE, "outcome": "needs_approval"}], status="needs_approval",
+              result={"what": what}, code="", reason="the recipient's details changed; asked again", by=p.actor,
+              at=ctx.at)
+    approver = payments.admin_person(ctx)
+    approval_id = _ask(ctx, action_id, kind, body, what, p.who, approver, RECIPIENT_RULE)
+    _audit(ctx.c, p, action_id, kind, "needs_approval", "reask", {"void": old_action_id, "approval_id": approval_id,
+                                                                  "to": approver})
+    return approval_id
 
 
 def _drifted(body: Mapping[str, object], plan: handlers.Plan) -> bool:

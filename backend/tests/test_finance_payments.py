@@ -272,6 +272,42 @@ def _replace_payee(c, rid):
     return str(made.result["recipient_id"])
 
 
+def test_a_queued_payment_whose_recipient_changes_is_asked_again_not_cancelled_quietly(books):
+    """Item 3 (spec §5, §6.4 rule 1): a payment approved and queued whose recipient's details change before the send is
+    not cancelled quietly. It ends cancelled (its hold released), and the same action is asked again for the new details
+    of a finance admin. Nothing reaches Mercury meanwhile, and only the approved new details are paid."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        queued = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "obligation": "bill-40",
+                                                  "tags": {"team": "eng"}, "account_id": account(c, "6100"),
+                                                  "money_account_id": _checking(c)})
+        assert queued.status == "committed" and queued.result["status"] == "queued", queued
+        pid = str(queued.result["payment_id"])
+        _replace_payee(c, rid)
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("request_send_money") == []                                 # never sent at the old details
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _hold_of(c, pid) == (50_000, "released")
+        waiting = c.execute("SELECT approval_id FROM fin_actions WHERE status='needs_approval' AND "
+                            "kind='payment_create'").fetchall()
+        assert len(waiting) == 1 and waiting[0][0], "asked again for the new details, not left cancelled"
+        approval = str(waiting[0][0])
+        H.approval_decide(c, OWNER, approval, "approved")
+        decided = FA.approval_decided(c, approval, AT)
+        assert decided.status == "committed", decided
+        new_pid = str(decided.result["payment_id"])
+        new_rid = c.execute("SELECT recipient_id FROM fin_payments WHERE id=?", (new_pid,)).fetchone()[0]
+        assert new_rid != rid and _hold_of(c, new_pid) == (50_000, "held")
+        new_provider = c.execute("SELECT provider_recipient_id FROM fin_recipients WHERE id=?",
+                                 (new_rid,)).fetchone()[0]
+    sync_once(books, fake, HOURS[2])
+    sent = fake.sent("request_send_money")
+    assert len(sent) == 1 and sent[0]["recipientId"] == new_provider
+
+
 def test_a_pending_approval_is_void_once_its_recipient_details_change(books):
     """Item 4 (spec §5): an approval's payload hash includes the recipient-details version. Changed details between the
     ask and the decision void it: the payment is asked again for the new details, and is not paid on the old approval."""
