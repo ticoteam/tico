@@ -21,9 +21,11 @@ from .store import H, P, Problem
 from .usage_records import RUNS
 from .subscription_identity import usage_label
 
+# A subscription run is its computer's subscription; a run with no lease (from before leases) names only its profile.
 DIMENSIONS = {"harness": "coalesce(t.harness, '')", "model": "coalesce(t.model, '')",
               "effort": "coalesce(t.effort, '')", "subscription": "CASE WHEN t.billing='subscription' AND coalesce(t.profile, '') != '' "
-              "THEN coalesce((SELECT 'subscription:' || json_array(a.runner_id, t.profile) FROM attempts a WHERE a.id=t.id), "
+              "THEN coalesce((SELECT 'subscription:' || json_array(a.runner_id, t.profile) FROM attempts a WHERE a.id=t.id "
+              "AND a.runner_id IS NOT NULL), "
               "'legacy-profile:' || t.profile) ELSE '' END"}
 GROUPS = ("bot", "day", "routine", *DIMENSIONS)
 MAX_DAYS = 366
@@ -34,7 +36,7 @@ TOP_ROUTINES = 10
 LOW = ("coalesce(t.est_cost_low, lower(coalesce(t.model, '')) IN ("
        + ",".join(f"'{model}'" for model in sorted(providers.LONG_PROMPT)) + "))")
 
-# Sums over `turns` shared by every grouping. A run with no token counts (a runtime that reports none,
+# Sums over the runs (usage_records.RUNS) shared by every grouping. A run with no token counts (a runtime that reports none,
 # or one from before usage) still counts as a run.
 SUMS = f"""count(DISTINCT t.id) AS runs,
   sum(coalesce(t.input_tokens, 0)) AS input_tokens,

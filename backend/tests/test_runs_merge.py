@@ -100,6 +100,15 @@ def test_an_attempt_with_no_turn_has_no_record_and_a_turn_with_no_attempt_has_no
     assert conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 3
 
 
+def test_a_turn_saved_with_no_trigger_still_reads_as_a_run_record(conn):
+    conn.execute("INSERT INTO turns(id,bot,started_at,finished_at,trigger) VALUES('a2','ops','x','y',NULL)")
+    conn.execute("INSERT INTO turns(id,bot,started_at,finished_at,trigger) VALUES('bare','ops','x','y',NULL)")
+    up(conn)
+    assert dict(conn.execute("SELECT id, trigger FROM attempts WHERE id IN ('a2','bare')").fetchall()) == {
+        "a2": "message", "bare": "message"}
+    assert conn.execute("SELECT count(*) FROM attempts WHERE job_id IS NULL OR trigger IS NOT NULL").fetchone()[0] == 4
+
+
 def test_segments_and_deltas_follow_their_run(conn):
     up(conn)
     assert [tuple(r) for r in conn.execute(

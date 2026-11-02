@@ -20,8 +20,11 @@ NOON = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
 
 def _turn(c, bot, finished, cost, model="tico-medium", billing="api", tid=None):
     tid = tid or f"t{bot}{finished}{model}"
-    c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, usage_model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,settled_at=excluded.settled_at,usage_model=excluded.usage_model,est_cost_usd=excluded.est_cost_usd,billing=excluded.billing",
-              (tid, bot, finished, finished, model, cost, billing))
+    # The run's record (trigger and all) on its attempt, or a run with no lease when there is none.
+    c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, trigger, usage_model, est_cost_usd, billing) "
+              "VALUES(?,?,?,?,'message',?,?,?) ON CONFLICT(id) DO UPDATE SET settled_at=excluded.settled_at,"
+              "trigger=excluded.trigger,usage_model=excluded.usage_model,est_cost_usd=excluded.est_cost_usd,"
+              "billing=excluded.billing", (tid, bot, finished, finished, model, cost, billing))
     return tid
 
 

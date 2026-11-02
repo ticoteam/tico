@@ -22,7 +22,7 @@ def seed_turns(c, start, end, parent=None, tag="t"):
                   ("job-" + key, reply["id"], H.now(), aid))
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
-        c.execute("INSERT INTO attempts(id,bot_id,created_at,message_id,task_id,exit) VALUES(?,'ops',?,?,?,'ok') ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,message_id=excluded.message_id,task_id=excluded.task_id,exit=excluded.exit",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,message_id,task_id,exit,trigger) VALUES(?,'ops',?,?,?,'ok','message') ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,message_id=excluded.message_id,task_id=excluded.task_id,exit=excluded.exit,trigger=excluded.trigger",
                   (aid, H.now(), reply["id"], parent["id"]))
     return parent
 

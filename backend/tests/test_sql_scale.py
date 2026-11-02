@@ -38,7 +38,7 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
     with store.transaction() as c:
         runner_id = c.execute("SELECT runner_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]
         triggers = c.execute("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name IN "
-                             "('tasks','conversations','messages','jobs','attempts','turns','events','attempt_inputs')"
+                             "('tasks','conversations','messages','jobs','attempts','events','attempt_inputs')"
                              ).fetchall()
         for name, _ in triggers:
             c.execute(f'DROP TRIGGER "{name}"')
@@ -107,8 +107,8 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
         c.executemany("INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,?,?,?,?)", jobs)
         c.executemany("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
                       "started_at,finished_at) VALUES(?1,?2,substr(?3,5),?4,0,'synthetic-'||?1,'done',?5,?5,?5,?5)", attempts)
-        c.executemany("INSERT INTO attempts(id,bot_id,created_at,settled_at,message_id,task_id,trigger_kind,outcome) "
-                      "VALUES(?,?,?,?3,?,?,'message','acted') ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,settled_at=excluded.settled_at,message_id=excluded.message_id,task_id=excluded.task_id,trigger_kind=excluded.trigger_kind,outcome=excluded.outcome", turns)
+        c.executemany("INSERT INTO attempts(id,bot_id,created_at,settled_at,message_id,task_id,trigger,trigger_kind,outcome) "
+                      "VALUES(?,?,?,?3,?,?,'message','message','acted') ON CONFLICT(id) DO UPDATE SET trigger=excluded.trigger,created_at=excluded.created_at,settled_at=excluded.settled_at,message_id=excluded.message_id,task_id=excluded.task_id,trigger_kind=excluded.trigger_kind,outcome=excluded.outcome", turns)
         c.executemany("INSERT OR IGNORE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", inputs)
         c.executemany("INSERT INTO events(id,created_at,actor,action,target,detail) VALUES"
                       "(lower(hex(randomblob(16))),'2026-01-01T00:00:00.000000Z','keeper','task.next-run.carried',?,?)",
@@ -138,7 +138,7 @@ def test_bot_and_member_reads_stay_under_five_seconds_on_production_sized_histor
 
 
 def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
-    """The fast SQL gates only settle rows early: every caller reads the same messages, turns and attempts as when the
+    """The fast SQL gates only settle rows early: every caller reads the same messages and attempts as when the
     per-row privacy functions decide each one, denied private tasks, unreadable rooms and run provenance included."""
     from backend import sql as S
     from backend.auth import Identity
@@ -182,7 +182,7 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
             conn = S.connect(store.settings.db_path, c, auth, who)
             try:
                 return {table: {r[0] for r in conn.execute(f"SELECT id FROM {table}")}
-                        for table in ("messages", "turns", "attempts")}
+                        for table in ("messages", "attempts")}
             finally:
                 conn.close()
 
@@ -203,11 +203,11 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
                         if r["conversation_id"] in rooms and index.message(r["id"], r["conversation_id"],
                                                                            r["refs"], r["in_reply_to"])}
             jobs = {r[0] for r in c.execute("SELECT id,bot_id,message_id FROM jobs") if r[1] not in hidden and r[2] in messages}
-            attempts = {r[0] for r in c.execute("SELECT id,job_id FROM attempts") if r[1] in jobs and index.attempt(r[0])}
-            turns = {r[0] for r in c.execute("SELECT id,bot_id,message_id,task_id FROM attempts")
-                     if r[1] not in hidden and (r[2] is None or r[2] in messages)
-                     and (r[3] is None or r[3] in tasks) and index.attempt(r[0])}
-            return {"messages": messages, "turns": turns, "attempts": attempts}
+            # A run with a job is read with its job; one with no lease with its bot and message; its task either way.
+            attempts = {r[0] for r in c.execute("SELECT id,job_id,bot_id,message_id,task_id FROM attempts")
+                        if (r[1] in jobs if r[1] else r[2] not in hidden and (r[3] is None or r[3] in messages))
+                        and (r[4] is None or r[4] in tasks) and index.attempt(r[0])}
+            return {"messages": messages, "attempts": attempts}
 
     callers = [Identity("bot:ops", "bot", attempt_id=attempt["id"]), Identity("human:ben", "human"),
                Identity("human:ana", "owner")]

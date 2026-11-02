@@ -5,6 +5,7 @@ before the renames (schema 71), with a few rows written under the old column nam
 column, keeps the rows, keeps every index, rewrites every trigger and view so it still works, and a second boot
 changes nothing."""
 
+import importlib
 import json
 import re
 import sqlite3
@@ -73,6 +74,12 @@ RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_ch
            "gtm_versions", "gtm_drafts",
            # Moved onto attempts and attempt_usage_segments by backend/migrations/0060_turns_into_attempts.py.
            "turns", "turn_usage_segments"}
+# Columns later migrations drop after the renames ran on them, and the indexes and triggers that went with them:
+# a task's hold columns became task_holds rows (backend/migrations/0061_task_holds.py).
+_HOLDS = importlib.import_module("backend.migrations.0061_task_holds")
+DROPPED = {("tasks", column) for column in _HOLDS.COLUMNS}
+DROPPED_SCHEMA = {"tasks_snoozed", "tasks_blocked_since", "status_values_tasks_blocked_from_status_ins",
+                  "status_values_tasks_blocked_from_status_upd"}
 
 
 @pytest.fixture(scope="module")
@@ -108,6 +115,9 @@ def test_every_column_has_its_new_name_and_the_rows_kept_their_values(upgraded):
             continue
         have = columns(conn, table)
         renamed = NEW.get((table, renamed), renamed)
+        if (table, renamed) in DROPPED:
+            assert renamed not in have and old not in have, (table, old, renamed)
+            continue
         assert renamed in have and old not in have, (table, old, renamed)
     task = conn.execute("SELECT * FROM tasks WHERE id='task-1'").fetchone()
     assert json.loads(task[new("tasks", "labels_json")]) == ["launch"]
@@ -128,7 +138,8 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
         now = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
         # The tables later migrations retire take their indexes with them.
         kept = {name for name in before[kind + "es" if kind == "index" else kind + "s"]
-                if not any(table in name for table in RETIRED) and not name.startswith("growth_idea")}
+                if not any(table in name for table in RETIRED) and not name.startswith("growth_idea")
+                and name not in DROPPED_SCHEMA}
         assert kept <= now, kind
     # An old name may live on as a column elsewhere (or as another rename's new name), so look only for names
     # that no table has any more, outside string literals.

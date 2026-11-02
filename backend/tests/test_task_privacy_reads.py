@@ -414,7 +414,7 @@ def test_task_page_reads_a_fixed_number_of_statements_and_hides_private_provenan
                           ("job-" + aid, asked["id"], H.now(), aid))
                 c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                           "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + aid, aid, H.now(), H.now()))
-                c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id,exit) VALUES(?,'ops',?,?,'ok') ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,task_id=excluded.task_id,exit=excluded.exit", (aid, H.now(), parent["id"]))
+                c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id,exit,trigger) VALUES(?,'ops',?,?,'ok','message') ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,task_id=excluded.task_id,exit=excluded.exit,trigger=excluded.trigger", (aid, H.now(), parent["id"]))
                 H.task_comment(c, "bot:ops", parent["id"], f"Did {n}", wake=False, extra_refs={"turn_id": aid})
                 H.task_comment(c, "human:ana", parent["id"], f"See {n}", wake=False,
                                extra_refs={"see": "task:" + hidden["id"]} if n == 2 else None)

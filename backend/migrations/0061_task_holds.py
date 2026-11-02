@@ -14,7 +14,8 @@ A task has at most one open hold of each kind (the partial unique index); a hold
 as history. `blocker_key` stays on tasks: it is blocker_asks' match key for an ask, not a hold.
 
 The columns, their indexes and the status trigger on blocked_from_status go. On a new file the columns were never
-added (hubdb and task_blocked.ensure added them after the migrations), so only the table is made.
+added (hubdb and task_blocked.ensure added them after the migrations), so only the table is made; hubdb.migrate makes
+the empty table before its own steps (hubdb._holds_table), so the CREATE here may find it there.
 """
 
 TABLE = """CREATE TABLE IF NOT EXISTS task_holds(
@@ -63,7 +64,12 @@ def up(conn):
             "AND h.released_at IS NULL)")
     expected = sum(conn.execute(f"SELECT count(*) FROM tasks WHERE {c} IS NOT NULL").fetchone()[0]
                    for c in ("snoozed_until", "blocked_since") if c in have)
-    moved = conn.execute("SELECT count(*) FROM task_holds WHERE released_at IS NULL").fetchone()[0]
+    # Counted against the columns: a file hubdb's steps ran on before this made task_holds early (hubdb._holds_table)
+    # may hold rows those steps wrote for tasks with no hold column set.
+    moved = sum(conn.execute(
+        "SELECT count(*) FROM task_holds h JOIN tasks t ON t.id=h.task_id "
+        f"WHERE h.released_at IS NULL AND h.kind=? AND t.{c} IS NOT NULL", (kind,)).fetchone()[0]
+        for kind, c in (("snoozed", "snoozed_until"), ("blocked", "blocked_since")) if c in have)
     if moved != expected:
         raise RuntimeError(f"task_holds: {moved} open holds for {expected} held tasks")
     for name in ("tasks_snoozed", "tasks_blocked_since"):

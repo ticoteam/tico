@@ -16,7 +16,8 @@ attempts row and drops `turns`:
   trigger_kind, trigger_source, writes, outcome, did_nothing, purpose, rotated, session_kind, session_why, rule_id.
   Their values and meaning do not change.
 
-A turn with no attempts row (recorded before every run had a lease, or by the demo seed) becomes an attempts row with
+A turn saved with no trigger takes 'message', turn_start's default: readers tell a run record from a bare lease by
+its trigger, and the turn existed. A turn with no attempts row (recorded before every run had a lease, or by the demo seed) becomes an attempts row with
 no lease: job_id, runner_id, generation, token_hash, state and lease_until are NULL. So those six columns become
 nullable, with a CHECK that a run with a job still has all of its lease, and attempts.state's value triggers allow NULL
 (backend/status_values.py). An attempts row with no turns row keeps `trigger` NULL: it never had a run record.
@@ -80,12 +81,18 @@ def _columns(conn, table):
     return [row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')]
 
 
+def _picked(old):
+    """A turn's column as its attempts row takes it. A run record is told from a bare lease by its trigger
+    (`job_id IS NULL OR trigger IS NOT NULL`), so a turn saved with none takes turn_start's default."""
+    return "CASE WHEN t.id IS NULL THEN NULL ELSE coalesce(t.trigger,'message') END" if old == "trigger" else f"t.{old}"
+
+
 def _orphans(conn, target, turn_columns, guard):
     """Insert every turn with no attempts row into `target` as a run with no lease."""
     moved = [(old, new) for old, new in MOVED.items() if old in turn_columns]
     columns = ["id", "bot_id", "created_at", "thread_id", *(new for _, new in moved)]
     picked = ["t.id", "coalesce(t.bot,'')", "coalesce(t.started_at,t.finished_at,'')",
-              "t.thread_id" if "thread_id" in turn_columns else "NULL", *(f"t.{old}" for old, _ in moved)]
+              "t.thread_id" if "thread_id" in turn_columns else "NULL", *(_picked(old) for old, _ in moved)]
     conn.execute(f"INSERT INTO {target} ({', '.join(columns)}) SELECT {', '.join(picked)} FROM turns t {guard}")
 
 
@@ -103,7 +110,7 @@ def _rebuild_attempts(conn, turn_columns):
     moved = [(old, new) for old, new in MOVED.items() if old in turn_columns and new not in own]
     columns = [*own, *(new for _, new in moved)]
     picked = [("coalesce(a.thread_id,t.thread_id)" if c == "thread_id" and "thread_id" in turn_columns else f"a.{c}")
-              for c in own] + [f"t.{old}" for old, _ in moved]
+              for c in own] + [_picked(old) for old, _ in moved]
     before = conn.execute("SELECT count(*) FROM attempts").fetchone()[0]
     turns = conn.execute("SELECT count(*) FROM turns").fetchone()[0]
     conn.execute(f"INSERT INTO {target} ({', '.join(columns)}) SELECT {', '.join(picked)} "

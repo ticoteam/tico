@@ -1269,6 +1269,18 @@ def ensure_market_reads(conn):
         conn.execute("RELEASE market_read_indexes")
 
 
+def _holds_table(conn):
+    """task_holds, empty, before any step runs: task reads join it (TASKS), and the numbered steps below and the code
+    after the migration files read tasks on a file migration 0061 has not reached yet. The legacy hold columns still
+    on such a file keep their names in TASKS (the joined fields come second, renamed); 0061 copies them into this
+    table and drops them."""
+    import importlib
+    holds = importlib.import_module("backend.migrations.0061_task_holds")
+    conn.execute(holds.TABLE)
+    for statement in holds.INDEXES:
+        conn.execute(statement)
+
+
 def migrate(conn, adopt_legacy=False):
     """Apply every migration the file has not seen, by `PRAGMA user_version`.
 
@@ -1286,6 +1298,7 @@ def migrate(conn, adopt_legacy=False):
         # file has no tables to rename.
         from .migrations import renames
         renames.apply_now(conn)
+    _holds_table(conn)
     from .flight import begin
     for i in range(version, len(MIGRATIONS)):
         done = begin(conn)
@@ -9143,7 +9156,8 @@ def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message
     if is_bot(actor) and actor_id(actor) != slug:
         refuse(conn, actor, "identity", f"{actor_id(actor)} may only record its own turns")
     row = {"id": new_id(), "bot_id": slug, "thread_id": thread_id, "created_at": now(),
-           "trigger": trigger, "message_id": message_id, "task_id": task_id,
+           # A run record is told from a bare lease by its trigger, so it always has one.
+           "trigger": trigger or "message", "message_id": message_id, "task_id": task_id,
            "trigger_kind": trigger_kind or "other", "trigger_source": trigger_source,
            "purpose": RT.clean_purpose(purpose) or RT.purpose_for(slug, trigger_kind or "other"),
            "rule_id": (str(rule_id)[:80] if rule_id else None), "writes": 0,
