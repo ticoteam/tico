@@ -53,7 +53,7 @@ def runner_restarts(when):
         if run.running_at_restart:
             # The runner's list still names the first bot it was running as busy for its first rounds, though that
             # bot's turn is lost with the restart.
-            run.stale_busy = {"bot": run.running_at_restart[0], "rounds": STALE_ROUNDS, "sent": 0,
+            run.stale_busy = {"bot_id": run.running_at_restart[0], "rounds": STALE_ROUNDS, "sent": 0,
                               "corrected_at": None}
         for bot in team.all:
             if bot.running:
@@ -131,11 +131,11 @@ def stale_bot_starts(run):
         return False, "the runner's claims named no bot busy after the restart, so nothing was tested"
     since = stamp(stale["corrected_at"] - START)
     first = run.w.sql("SELECT started_at FROM attempts WHERE bot_id=? AND started_at>=? ORDER BY started_at LIMIT 1",
-                      (stale["bot"], since))
+                      (stale["bot_id"], since))
     if not first:
-        return False, (f"{stale['bot']} was named busy for {stale['sent']} rounds after the restart and did not start "
+        return False, (f"{stale['bot_id']} was named busy for {stale['sent']} rounds after the restart and did not start "
                        f"once its list was right, from {since}")
-    return True, (f"{stale['bot']} was named busy for {stale['sent']} rounds after the restart; its list was right from "
+    return True, (f"{stale['bot_id']} was named busy for {stale['sent']} rounds after the restart; its list was right from "
                   f"{since}, and it started at {first[0]['started_at']}")
 
 

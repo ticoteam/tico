@@ -340,7 +340,7 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<chat_message>",
         "message_id": "<chat_message>",
@@ -415,7 +415,7 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<reply_message>",
         "message_id": "<reply_message>",
@@ -475,7 +475,7 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<direct_message>",
         "message_id": "<direct_message>",
@@ -656,7 +656,7 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<id12>",
         "job_id": "<id15>",
         "message_id": "<id15>",
@@ -720,7 +720,7 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<id12>",
         "job_id": "<id17>",
         "message_id": "<id17>",
@@ -847,7 +847,7 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<id12>",
         "job_id": "<id21>",
         "message_id": "<id21>",
@@ -1126,7 +1126,7 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<id23>",
         "job_id": "<id26>",
         "message_id": "<id26>",
@@ -1313,7 +1313,7 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<id28>",
         "message_id": "<id28>",
@@ -1328,7 +1328,7 @@
       "data": {
         "actor": "runner:<id30>",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<chat_message>",
         "run_id": "<id9>",
@@ -1342,7 +1342,7 @@
       "data": {
         "actor": "runner:<id30>",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<chat_message>",
         "message_id": "<chat_message>",
@@ -1500,7 +1500,7 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<id31>",
         "job_id": "<id34>",
         "message_id": "<id34>",
@@ -1802,7 +1802,7 @@
       "data": {
         "actor": "runner:<id30>",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<chat_message>",
         "run_id": "<id9>",
@@ -1816,7 +1816,7 @@
       "data": {
         "actor": "runner:<id30>",
         "at": "<time>",
-        "bot": "ops",
+        "bot_id": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<chat_message>",
         "message_id": "<chat_message>",
