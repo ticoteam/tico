@@ -9,6 +9,7 @@ same `now` gives the same database.
 import contextlib
 import dataclasses
 import hashlib
+import io
 import itertools
 import json
 import secrets
@@ -147,6 +148,8 @@ class Builder:
             self.history()
             self.messaging()
             self.files()
+            self.page()
+            self.icon()
             demo_sections.seed_all(self)
             self.routine_tasks(D.BRIEFING_DONE)
             self.finish()
@@ -324,7 +327,8 @@ class Builder:
                 self.tasks[key] = task["id"]
             for key, title, owner, target, body, created, _ in D.ASKS:
                 self.at(days=created)
-                task = hubdb.task_create(c, owner, title, body, target, allow_planned=True)
+                due = stamp(self.now + timedelta(days=D.ASK_DUE[key])) if key in D.ASK_DUE else None
+                task = hubdb.task_create(c, owner, title, body, target, due=due, allow_planned=True)
                 self.tasks[key] = task["id"]
         self.write(work)
 
@@ -353,7 +357,10 @@ class Builder:
             last = None
             for sender, text in lines:
                 self.clock.at += timedelta(minutes=2)
-                if sender.startswith("human:"):
+                if bot == "coo":
+                    # Ana's own Assistant: the product answers it, so only her words are seeded.
+                    self.call("POST", "assistant/messages", {"text": text}, token=TOKENS[sender])
+                elif sender.startswith("human:"):
                     last = self.call("POST", f"chat/{bot}", {"text": text}, token=TOKENS[sender])["message"]
                 else:
                     last = self.write(lambda c: hubdb.say(c, sender, last["sender_id"], text,
@@ -410,11 +417,14 @@ class Builder:
 
         def level(slug):
             if slug not in depth:
-                depth[slug] = 0 if parent[slug] is None else 1 + level(parent[slug])
+                up = parent[slug]
+                depth[slug] = 0 if up is None or up.startswith("human:") else 1 + level(up)
             return depth[slug]
 
         roster = {slug: position for position, (slug, _, _) in enumerate(D.BOTS)}
         order = sorted(D.BOTS, key=lambda bot: -level(bot[0]))      # stable: roster order within each level
+        # People post after every bot, leads before Ana, so her update reads her leads' same-day words.
+        people = [f"human:{person['id']}" for person in [*D.PEOPLE[1:], D.PEOPLE[0]]]
 
         def work(c):
             posted = []
@@ -441,6 +451,23 @@ class Builder:
                         lines = (first, second)[(7 - back + roster[bot]) % 2]
                         body = "\n".join("- " + line for line in lines)
                         row = updates.post(c, bot, body, kind=kind, day=day.isoformat())
+                    posted.append((row, at))
+                for position, person in enumerate(people):
+                    at = when.astimezone(timezone.utc) + timedelta(minutes=(len(order) + position) * 2)
+                    if at > self.now - timedelta(minutes=5):
+                        continue
+                    content = D.PEOPLE_UPDATES[person]
+                    self.clock.at = at
+                    if kind == "weekly":
+                        week = content["week"]
+                        slides = {"goal": week["goal"], "done": list(week["done"]), "focus": list(week["focus"]),
+                                  "blockers": list(week["blockers"])}
+                        body = "\n".join("- " + line for line in week["done"])
+                        row = updates.post(c, person, body, kind=kind, day=day.isoformat(), slides=slides, drafted_by="coo")
+                    else:
+                        lines = content["daily"][(7 - back + position) % 2]
+                        body = "\n".join("- " + line for line in lines)
+                        row = updates.post(c, person, body, kind=kind, day=day.isoformat(), drafted_by="coo")
                     posted.append((row, at))
             # Everything older than yesterday is read; the last day's stays unread so the page has a badge.
             edge = self.now - timedelta(hours=30)
@@ -545,6 +572,48 @@ class Builder:
             self.write(work)
         self.call("POST", "files/links", {"bot": D.FILE_LINK["bot"], "url": D.FILE_LINK["url"], "title": D.FILE_LINK["title"]})
 
+    def page(self):
+        """The bot's own bot-wide page, as Home's Latest pages shows it: the bytes, the file and its version, the library
+        entry and the page row, as files.publish and pages.publish write them. The seed writes them itself because a
+        runner may not publish bot-wide outside a turn, and the seed runs no turn."""
+        from . import file_library
+        from .blobs import register
+        self.at(hours=5)
+        files, blobs = self.api.app.state.files, self.api.app.state.blobs
+        bot, name, data = D.PAGE["bot"], D.PAGE["name"], D.PAGE["text"].encode()
+        digest = blobs.put(data, "text/html")
+
+        def work(c):
+            item = register(c, Identity("bot:" + bot, "bot"), digest, len(data), name, "text/html")
+            row, _, _ = files.add_version(c, bot=bot, actor="bot:" + bot, scope="bot", task=None, conversation=None, attempt="",
+                                          identity="page:" + name, title=D.PAGE["title"], name=name, mime="text/html",
+                                          blob_id=item["id"], digest=digest, size=len(data), repo_path="", explicit_title=True)
+            file_library.index(c, row["id"], row["current_version"], row["title"], file_library.extract("text/html", data))
+            c.execute("INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at) VALUES(?,?,?,?,?)",
+                      (row["id"], "none", None, H.now(), H.now()))
+        self.write(work)
+
+    def icon(self):
+        """The team icon Settings shows, drawn here so its page has one; the owner sets it like anyone would."""
+        from PIL import Image, ImageDraw
+        image = Image.new("RGBA", (256, 256), D.ICON["background"])
+        ImageDraw.Draw(image).ellipse((64, 64, 192, 192), fill=D.ICON["mark"])
+        out = io.BytesIO()
+        image.save(out, format="PNG")
+        reply = self.api.request("POST", "/api/v2/team/icon", content=out.getvalue(), headers={
+            "Authorization": "Bearer " + OWNER, "Content-Type": "image/png", "Idempotency-Key": f"demo-{next(self.serial)}"})
+        assert reply.status_code == 200, f"team icon: {reply.status_code} {reply.text[:300]}"
+
+    def read_task_threads(self):
+        """Ana's task threads are read, except the decisions and the firmware rollout she still has to settle (KEEP_UNREAD),
+        so the sidebar's unread list shows those. Read through the API as her own reads."""
+        rows = self.write(lambda c: c.execute(
+            "SELECT t.title, cv.id, cv.last_seq FROM tasks t JOIN conversations cv ON cv.id=t.conversation_id "
+            "WHERE cv.last_seq>0 AND (t.owner_id='human:ana' OR t.requester_id='human:ana') ORDER BY cv.id").fetchall())
+        for row in rows:
+            if row["title"] not in D.KEEP_UNREAD:
+                self.call("POST", f"threads/{row['id']}/read", {"seq": row["last_seq"]})
+
     def routine_tasks(self, done=D.ROUTINE_DONE):
         """A routine's task is read and closed a couple of hours on: the Librarian's task for each live meeting (before the
         sections), or the goal-manager's bet review of the market briefing (after them, once the scheduler has made it)."""
@@ -561,6 +630,8 @@ class Builder:
         """Nothing is left waiting for a bot: every message reads as delivered and no job is queued. SQLite's own clock
         and random bytes stamp some rows (triggers, the change feed, a census), so those take this build's time and ids:
         the same build then writes the same rows."""
+        self.read_task_threads()
+
         def work(c):
             c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND recipient_id LIKE 'bot:%'")
             c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running','input')")

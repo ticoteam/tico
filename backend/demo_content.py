@@ -36,38 +36,39 @@ PEOPLE = [
      "reports_to": "ana"},
 ]
 
-# slug, catalog template, reports to. Each department has a lead bot under the Assistant (coo).
+# slug, catalog template, reports to. Each department has a lead bot under the person who runs it (a `human:` parent),
+# and the Assistant (coo) hangs under Ana.
 BOTS = [("coo", "assistant", None), ("botops", "botops", "coo"),
         # Operations and supply chain
-        ("ops-manager", "ops-manager", "coo"), ("procurement", "procurement", "ops-manager"),
+        ("ops-manager", "ops-manager", "human:ben"), ("procurement", "procurement", "ops-manager"),
         ("inventory", "inventory", "ops-manager"), ("logistics", "logistics", "ops-manager"),
         ("quality", "quality-inspections", "ops-manager"), ("compliance", "compliance", "ops-manager"),
         ("returns", "returns", "ops-manager"),
         # Engineering: calibration cloud, player, phone app
-        ("product-manager", "product-manager", "coo"), ("pr-reviewer", "pr-reviewer", "product-manager"),
+        ("product-manager", "product-manager", "human:eli"), ("pr-reviewer", "pr-reviewer", "product-manager"),
         ("issue-triage", "issue-triage", "product-manager"), ("devops", "devops-engineer", "product-manager"),
         ("release-notes", "release-notes", "product-manager"), ("health-monitor", "health-monitor", "product-manager"),
         ("firmware", "software-architect", "product-manager"), ("mobile", "software-architect", "product-manager"),
         ("cloud", "software-architect", "product-manager"), ("product-analyst", "product-analyst", "product-manager"),
         # Marketing and content (consumer)
-        ("marketing-lead", "marketing-lead", "coo"), ("content", "content", "marketing-lead"),
+        ("marketing-lead", "marketing-lead", "human:cara"), ("content", "content", "marketing-lead"),
         ("scene-designer", "content", "marketing-lead"), ("creators", "partnerships", "marketing-lead"),
         ("video-producer", "video-producer", "marketing-lead"), ("paid-media", "paid-media", "marketing-lead"),
         ("email-marketing", "email-marketing", "marketing-lead"), ("seo", "seo-visibility", "marketing-lead"),
         ("community", "community", "marketing-lead"), ("marketplace", "partnerships", "marketing-lead"),
         # Customer care
-        ("support-lead", "support-lead", "coo"), ("support", "support", "support-lead"),
+        ("support-lead", "support-lead", "human:ben"), ("support", "support", "support-lead"),
         ("support-qa", "support-qa", "support-lead"), ("technical-support", "technical-support", "support-lead"),
         ("escalations", "escalations", "support-lead"),
         ("reputation", "reputation", "support-lead"), ("inbox", "inbox", "support-lead"),
         # Business sales (B2B)
-        ("sales-lead", "sales-lead", "coo"), ("sales", "sales", "sales-lead"), ("sdr", "sdr-research", "sales-lead"),
+        ("sales-lead", "sales-lead", "human:cara"), ("sales", "sales", "sales-lead"), ("sdr", "sdr-research", "sales-lead"),
         ("account-manager", "account-manager", "sales-lead"),
         ("customer-success", "customer-success", "sales-lead"), ("sales-engineer", "sales-engineer", "sales-lead"),
         ("sales-ops", "sales-ops", "sales-lead"), ("retail", "partnerships", "sales-lead"),
         ("partners", "partnerships", "sales-lead"), ("bids", "sales", "sales-lead"),
         # Finance
-        ("finance-lead", "finance-lead", "coo"), ("bookkeeper", "bookkeeper", "finance-lead"),
+        ("finance-lead", "finance-lead", "human:ana"), ("bookkeeper", "bookkeeper", "finance-lead"),
         ("ar-followup", "ar-followup", "finance-lead"), ("spend-watcher", "spend-watcher", "finance-lead"),
         ("tax", "tax", "finance-lead"), ("accounts-payable", "accounts-payable", "finance-lead"),
         ("pricing", "pricing", "finance-lead"),
@@ -264,7 +265,7 @@ UPDATES = {
     "email-marketing": ("Every holiday email goes to the right segment, and only after Cara approves it.",
                         ("Built the holiday segments: 3,800 owners, with 1,100 business leads kept apart.",
                          "The holiday send waits on Cara's approval."),
-                        ("The November newsletter test had a 41 percent open rate.",
+                        ("The newsletter test had a 41 percent open rate.",
                          "Removed 210 bounced addresses from the list."),
                         ("Send the holiday list once Cara approves it.", "Set up the thank-you email for buyers."),
                         ("The holiday send waits on Cara's approval.",)),
@@ -407,7 +408,7 @@ UPDATES = {
                     "Closed the October card expenses; one transaction was a duplicate."),
                    ("Reconciled the Storefront deposits; the total matches the orders.",
                     "Sent the receipt list to Ben's team for the shops."),
-                   ("Close the week's receipts.", "Start the November reconciliation."), ()),
+                   ("Close the week's receipts.", "Start the month-end reconciliation."), ()),
     "ar-followup": ("Shop and hotel invoices are paid within 30 days.",
                     ("Chased 14 unpaid shop invoices; six paid by the end of the day.",
                      "Two hotel invoices are 30 days late; the reminder went out."),
@@ -425,7 +426,7 @@ UPDATES = {
              "Prepared the October workpapers; one state asks for a resale certificate."),
             ("Checked the Storefront kit's tax category with the accountant.",
              "Drafted the October estimate for Ana to review."),
-            ("Get the resale certificate from the shop.", "Start the November sales tax check."), ()),
+            ("Get the resale certificate from the shop.", "Start the sales tax check."), ()),
     "accounts-payable": ("Every supplier bill is paid on time and matched to an order.",
                          ("Paid 18 supplier bills after checks; two are held for a missing receipt.",
                           "The freight invoice is held until the port fee is settled."),
@@ -457,6 +458,67 @@ UPDATES = {
 }
 # A bot that skipped a day, as real ones do: (slug, days back). Four days back is never a Friday.
 UPDATE_GAPS = (("creators", 4),)
+# A person's update is the Assistant's draft of their day, from their leads' same-day updates (the seed posts it as a draft
+# labelled so). Two sets of daily bullets alternate by day, as the bots' do; Friday's is their week in review.
+PEOPLE_UPDATES = {
+    "human:ben": {
+        "daily": (("Support is running 14 calibration redos and calling the owners.",
+                   "Two owners failed the redo twice; both are waiting on my call.",
+                   "Port customs still holds 300 units; logistics is chasing the broker."),
+                  ("Support closed nine of the 14 calibration redos.",
+                   "The unit swap for owners who fail twice is waiting on my decision.",
+                   "The $310 port fee is still open; the freight invoice waits on it.")),
+        "week": {"goal": "Owners get calibrated on the first try, and the port hold clears before the next sailing.",
+                 "done": ["Support ran 14 calibration redos and closed nine.",
+                          "Ops has 4,450 units out; customs holds 300."],
+                 "focus": ["Decide the unit swap rule for owners who fail twice.",
+                           "Clear the port hold before the next sailing."],
+                 "blockers": ["The port fee decision is mine, and it holds the freight invoice."]},
+    },
+    "human:cara": {
+        "daily": (("Spent $3,700 of the $4,000 weekly ad budget on search and social.",
+                   "Cost per Home Pro sale is $71; one ad set with no sales is paused.",
+                   "The downtown shop list has 60 names, and eleven calls are logged."),
+                  ("Two downtown shops want a demo next week; Sales is booking them.",
+                   "The ad budget stays at $4,000 a week until Ana rules on the December cap.",
+                   "The Crown Hotel follow-up waits on my approval before it goes.")),
+        "week": {"goal": "Holiday demand builds through ads and the downtown shops, within the $4,000 weekly budget.",
+                 "done": ["Paid search and social spent $3,700 of the $4,000 budget.",
+                          "Eleven downtown shop calls logged; two want a demo."],
+                 "focus": ["Book the two shop demos for next week.",
+                           "Hold ad spend to the cap until Ana rules on December."],
+                 "blockers": ["The December ad cap waits on Ana."]},
+    },
+    "human:eli": {
+        "daily": (("Firmware 2.4 is held at the 5 percent ring while the lens-mount fix goes out.",
+                   "The lens-mount fix is in review; PR Reviewer waits on one Linux test.",
+                   "Ring 3 waits on my sign-off and cloud's holiday scene load check."),
+                  ("Ring 2 ran 48 hours on 1,100 devices with no crashes.",
+                   "Calibration retries fell from 16 in 100 to 3 in 100 in the test build.",
+                   "Ring 3 stays held until cloud confirms the Thursday load numbers.")),
+        "week": {"goal": "Firmware 2.4 reaches every owner with no crash spike and calibration that passes first try.",
+                 "done": ["Ring 2 ran 48 hours on 1,100 devices with no crashes.",
+                          "The lens-mount fix is in the test build; retries fell to 3 in 100."],
+                 "focus": ["Clear the fix review and give ring 3 a date.",
+                           "Sign off ring 3 once cloud confirms the load."],
+                 "blockers": ["Ring 3 holds on my sign-off and cloud's load check."]},
+    },
+    "human:ana": {
+        "daily": (("The Home Pro price is on my list: $449 now, $479 for December.",
+                   "Pricing expects 6 to 9 percent fewer units at $479, about 300 kits.",
+                   "The FCC filing, the Larkford bid and the December ad cap wait on me."),
+                  ("The rivals sit $20 to $40 above Home Pro, so we still win on price.",
+                   "The season is 6,000 units; 4,450 are out.",
+                   "Three decisions are on my list; the rest are with the team.")),
+        "week": {"goal": "Ship the season's 6,000 units at a Home Pro price that keeps the margin up.",
+                 "done": ["Ops has 4,450 of 6,000 units out.",
+                          "Firmware 2.4 ring 2 ran 48 hours with no crashes."],
+                 "focus": ["Decide the Home Pro price for December.",
+                           "Sign the FCC filing for Home Pro 2.",
+                           "Choose the Larkford bid price."],
+                 "blockers": ["Three decisions wait on me, and the port fee waits on Ben."]},
+    },
+}
 
 # Each bot's status focus right now, one short line.
 FOCUS = {"coo": "Routing requests", "botops": "Checking both computers", "ops-manager": "Watching the port hold",
@@ -708,8 +770,9 @@ TASKS = [
 # question, then the reason in a line or two, so the person can answer from the card.
 ASKS = [
     ("home-pro-price", "Raise Home Pro from $449 to $479 for December?", "bot:pricing", "human:ana",
-     "Should Home Pro go from $449 to $479 for December?\n\nDemand is 12 percent ahead of forecast, and the three rivals sit "
-     "$20 to $40 above our $449. At $479 we lose about 6 to 9 percent of units and keep more margin for the December stock buy.",
+     "Demand is 12 percent ahead of forecast, and December is peak season.\n\n"
+     "The three rivals sit $20 to $40 above our $449, so $479 still wins on price.\n\n"
+     "We lose about 6 to 9 percent of units, around 300 kits, and keep more margin for the stock buy. Pricing recommends yes.",
      1.0, "open"),
     ("cal-units", "Decide whether owners get a unit swap after two failed calibrations", "bot:technical-support", "human:ben",
      "Can owners whose calibration fails twice get a new projector?\n\nFour owners are asking now, and a swap costs about $60 in "
@@ -749,6 +812,9 @@ ASKS = [
      2.0, "open"),
 ]
 
+# Days from the build until an ask is due. Needs you sorts what is due soonest first, so the December price leads the queue.
+ASK_DUE = {"home-pro-price": 1.0}
+
 APPROVAL = {"kind": "send", "task": "approve-followup", "by": "bot:sales", "days": 0.4,
             "payload": {"to": "tom.reid@crown-hotel.example", "cc": "", "subject": "Following up on your lobby projectors",
                         "body_sha256": "3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b",
@@ -756,6 +822,8 @@ APPROVAL = {"kind": "send", "task": "approve-followup", "by": "bot:sales", "days
 
 # (bot, [(from, text)...]), hours ago at the first message. Owners' names are the three people the tokens belong to.
 CHATS = {
+    # The Assistant's own chat: its quick answer to "what's waiting" is the product's, read from the same queue.
+    "coo": (3, [("human:ana", "What's waiting on me?")]),
     "support-qa": (30, [
         ("human:ben", "Which calibration failures should Firmware see first?"),
         ("bot:support-qa", "The 14 that fail on the lens-mount step. Eleven share one cause, and the other three are batch 14 units. "
@@ -964,7 +1032,7 @@ DOCS = [
                 "- **The retry is hard to find.** Owners call support instead of retrying. A visible Try again button is on the feature list.\n"
                 "- **Port fees and freight.** A $310 port fee was charged twice on the last sailing; the broker is disputing one.\n"
                 "- **Lens failures after two tries.** Owners ask for a new projector. Ops is deciding whether to swap the lens set instead.\n\n"
-                "## Sources\n\n- Weekly ops sync, 2026-11-01\n- Holiday season planning, 2026-11-05\n"},
+                "## Sources\n\n- Weekly ops sync\n- Holiday season planning\n"},
     {"id": "help-add-project", "title": "How to calibrate your projector", "category": "External / Help centre",
      "content": "# How to calibrate your projector\n\n1. Open the Acme Lights app and choose **Calibrate**.\n2. Point the phone at the wall where the scene will play.\n3. Check the lens mount is seated and the cap is off.\n\nIf calibration fails twice, try the lens-mount step again. Still stuck? Contact support.\n"},
     {"id": "help-invoices", "title": "Where to find your order and receipt", "category": "External / Help centre",
@@ -982,6 +1050,28 @@ ROUTINE_DONE = {"title": "Customer themes", "owner": "bot:librarian",
 # The Market briefing routine's bet review (goal-manager's playbook): it reads the briefing against the bets it touches.
 BRIEFING_DONE = {"title": "Market briefing", "owner": "bot:goal-manager",
                  "note": "Read the briefing against the bets it touches. No bet changes."}
+
+# Task threads Ana still has to settle stay unread in her sidebar; the seed reads the rest of hers when it finishes.
+# "Let the Bookkeeper see the books" is the product's own ask, made when the app starts (backend/bookkeeper.py), so it
+# is not in the seed to be read: it is a decision she still owes, and it stays unread.
+KEEP_UNREAD = ("Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2",
+               "Roll firmware 2.4 out in three rings", "Let the Bookkeeper see the books")
+
+# The holiday plan Marketing keeps as a page: Home's Latest pages shows it. The bot publishes it as its own page.
+PAGE = {"bot": "marketing-lead", "name": "holiday-plan.html", "title": "Holiday season plan",
+        "text": ("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+                 "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Holiday season plan</title></head>\n"
+                 "<body>\n<h1>Holiday season plan</h1>\n"
+                 "<p>Ship 6,000 units this season, with Home Pro leading the ads.</p>\n"
+                 "<h2>This month</h2>\n<ul>\n"
+                 "<li>Ads run inside the $4,000 weekly budget.</li>\n"
+                 "<li>The owners' holiday email goes out Thursday at 10:00, once Cara approves the list.</li>\n"
+                 "<li>Sixty downtown shops are on the call list, and two want a demo next week.</li>\n</ul>\n"
+                 "<h2>Waiting on a person</h2>\n<ul>\n"
+                 "<li>The Home Pro price for December.</li>\n<li>The December ad cap.</li>\n</ul>\n</body></html>\n")}
+
+# The team icon Settings shows: a plain mark drawn at build time.
+ICON = {"background": "#e8a23a", "mark": "#fff6e0"}
 
 LINKS = (("https://help.acme.example", "Acme Lights help centre", "What customers read"),
          ("https://assets.acme.example/brand", "Brand assets", "Logos, colours and the tone guide"))

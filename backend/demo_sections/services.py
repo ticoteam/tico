@@ -56,25 +56,26 @@ CONTENT = {
     ],
     "mailbox": {"address": "1200 Example Way, Suite 4, Anytown, ST 00000"},
     # Scanned letters as HQ's relay delivers them, with the reading the scan gets. A letter is routed by kind; `handoff`
-    # is the task owner's change after routing, to the bot that does the work: (from, to, note).
+    # is the task owner's change after routing, to the bot that does the work: (from, to, note). `due_days` is the
+    # deadline counted from the day the letter arrived, so the dates stay right whenever the demo is built.
     "letters": [
-        {"id": "letter-fcc-lab", "days": 5.0, "pages": 3, "kind": "legal", "name": "fcc-test-lab-letter.pdf",
+        {"id": "letter-fcc-lab", "days": 5.0, "due_days": 14, "pages": 3, "kind": "legal",
+         "name": "fcc-test-lab-letter.pdf",
          "reading": {"sender": "Northgate EMC test lab",
                      "summary": "Emissions retest needed for the LX-400 projector filing",
-                     "deadline": "2026-10-09",
                      "text": "One conducted emissions result is above the limit. Retest before the filing goes in."},
          "handoff": ("human:ana", "bot:compliance",
                      "Compliance owns the LX-400 retest. Rerun the conducted emissions and file the report.")},
-        {"id": "letter-state-tax", "days": 3.1, "pages": 2, "kind": "government_tax", "name": "state-tax-notice.pdf",
+        {"id": "letter-state-tax", "days": 3.1, "due_days": 14, "pages": 2, "kind": "government_tax",
+         "name": "state-tax-notice.pdf",
          "reading": {"sender": "State Department of Revenue",
                      "summary": "Sales tax notice: a $212 underpayment for the second quarter",
-                     "deadline": "2026-10-15",
                      "text": "A notice of underpayment for the second quarter. Pay or dispute by the date shown."},
          "handoff": None},
-        {"id": "letter-invoice", "days": 1.4, "pages": 1, "kind": "bill", "name": "lens-housing-invoice.pdf",
+        {"id": "letter-invoice", "days": 1.4, "due_days": 30, "pages": 1, "kind": "bill",
+         "name": "lens-housing-invoice.pdf",
          "reading": {"sender": "Halvorsen Optics",
                      "summary": "Invoice 22731 for 500 lens housings, net 30",
-                     "deadline": "2026-10-12",
                      "text": "Invoice 22731 for 500 lens housings. Payment terms net 30."},
          "handoff": ("bot:finance-lead", "bot:accounts-payable",
                      "Pay invoice 22731 on terms and match it to the purchase order.")},
@@ -162,6 +163,9 @@ def _letters(b):
     for letter in CONTENT["letters"]:
         b.at(days=letter["days"])
         ident = letter["id"]
+        # The deadline falls `due_days` after the day the letter arrived (the same day `received_at` is stamped).
+        reading = {**letter["reading"],
+                   "deadline": b.ago(days=letter["days"] - letter["due_days"]).strftime("%Y-%m-%d")}
         scan = f"%PDF-1.4\n% {letter['reading']['summary']}\n%%EOF\n".encode()
         digest = blobs.put(scan, "application/pdf")
         body = json.dumps({"item_id": ident, "num_pages": letter["pages"], "address": CONTENT["mailbox"]["address"],
@@ -177,10 +181,9 @@ def _letters(b):
             return _letter_row(c, ident)["id"]
         postal.over_cap({"id": b.write(letter_id)})
 
-        def file(c, letter=letter, ident=ident, digest=digest, scan=scan):
+        def file(c, letter=letter, ident=ident, digest=digest, scan=scan, reading=reading):
             row = _letter_row(c, ident)
-            postal.file(c, row["id"], letter["kind"], letter["reading"], digest, len(scan), "application/pdf",
-                        letter["name"])
+            postal.file(c, row["id"], letter["kind"], reading, digest, len(scan), "application/pdf", letter["name"])
         b.write(file)
 
         if letter["handoff"]:

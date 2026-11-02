@@ -1,13 +1,18 @@
 """Demo mode's Strategy section: a published strategy with an earlier version to compare, three bets linked to goals, one
-Strategy Bot proposal waiting for the owner, and this week's briefing. Read as the owner, the way the page reads them."""
+Strategy Bot proposal waiting for the owner, and this week's briefing, the market map, listening news and the brand book.
+Read as the owner, the way the page reads them."""
 
+import os
 import sqlite3
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend import demo
+from backend import hubdb as H
+from backend import strategy
 from backend.app import create_app
 from backend.market_briefing import this_week
 
@@ -89,7 +94,8 @@ def test_this_weeks_briefing_is_posted_by_the_librarian(built):
 
 
 def test_the_same_now_builds_the_same_strategy_rows(built, tmp_path):
-    tables = ("strategy_versions", "strategy_bets", "strategy_events", "market_briefings", "goal_proposals")
+    tables = ("strategy_versions", "strategy_bets", "strategy_events", "market_briefings", "goal_proposals",
+              "market_sizes", "market_insights", "brand_versions")
 
     def rows(path):
         with sqlite3.connect(path) as db:
@@ -97,3 +103,73 @@ def test_the_same_now_builds_the_same_strategy_rows(built, tmp_path):
 
     again = demo.build(tmp_path, now=NOW)
     assert rows(again.db_path) == rows(built.db_path)
+
+
+def parse(stamp):
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+
+
+def test_a_check_day_is_the_servers_calendar_day(monkeypatch):
+    """A bet's check falls due on the day the server's own calendar shows. 01:30 UTC on the 3rd is 17:30 on the 2nd in
+    Los Angeles, so a server there does not trip a bet a day early."""
+    if not os.path.exists("/usr/share/zoneinfo/America/Los_Angeles"):
+        pytest.skip("no zone database on this machine")
+    monkeypatch.setattr(H, "now", lambda: "2026-11-03T01:30:00.000000Z")
+    saved = os.environ.get("TZ")
+    try:
+        os.environ["TZ"] = "America/Los_Angeles"
+        time.tzset()
+        assert strategy.local_day() == "2026-11-02"
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+        assert strategy.local_day() == "2026-11-03"
+    finally:
+        if saved is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = saved
+        time.tzset()
+
+
+def test_the_owners_card_for_the_proposal_is_dated_when_it_was_proposed(built):
+    with sqlite3.connect(built.db_path) as db:
+        row = db.execute(
+            "SELECT t.owner_id, t.status, t.created_at, p.proposed_at FROM goal_asks g JOIN tasks t ON t.id = g.task_id "
+            "JOIN goal_proposals p ON p.id = g.ref WHERE g.kind = 'proposal' AND p.kind = 'strategy_draft' "
+            "AND p.status = 'pending'").fetchone()
+    assert row is not None
+    owner, status, created, proposed = row
+    assert owner == "human:ana" and status in H.LIVE_STATUSES
+    assert parse(proposed) <= parse(created) < parse(proposed) + timedelta(minutes=1)
+    assert parse(created) > NOW - timedelta(days=2)
+
+
+def test_where_we_play_has_a_market_with_us_next_and_sized_segments(built):
+    with signed_in(built) as api:
+        spend = api.get("/api/v2/market/spend").json()
+    assert spend["definition"]["root"] == "segment/holiday-light-shows"
+    segments = {seg["name"]: seg for seg in spend["segments"]}
+    assert {"Home light shows", "Shops and hotels", "Towns, malls and HOAs", "Event venues"} <= set(segments)
+    assert segments["Home light shows"]["self"] and segments["Shops and hotels"]["self"]
+    assert segments["Towns, malls and HOAs"]["next"] and segments["Event venues"]["next"]
+    sized = [seg for seg in spend["segments"] if seg["size"]]
+    assert len(sized) >= 2 and all(seg["size"]["accepted"] for seg in sized)
+    assert spend["total"]["spend_usd"] > 0
+    assert "Lumenhaus" in {player["name"] for player in segments["Home light shows"]["players"]}
+
+
+def test_related_news_lists_listening_finds_from_the_last_week(built):
+    with signed_in(built) as api:
+        insights = api.get("/api/v2/market/insights").json()["insights"]
+    finds = [i for i in insights if i["about"].startswith("Listening:") and i["status"] != "rejected"]
+    recent = [i for i in finds if parse(i["reported_at"]) >= NOW - timedelta(days=7)]
+    assert {i["about"] for i in recent} >= {"Listening: rival", "Listening: market"}
+    assert all(i["source_url"].startswith("https://") for i in recent)
+
+
+def test_the_brand_book_is_published_by_the_owner(built):
+    with signed_in(built) as api:
+        published = api.get("/api/v2/brand").json()["published"]
+    assert published["n"] == 1 and published["published_by"] == "human:ana"
+    assert published["body"]["name"] == "Acme Lights"
+    assert published["body"]["words"]["avoid"] and published["body"]["claims"]["never"]

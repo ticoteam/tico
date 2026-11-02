@@ -3,7 +3,7 @@
 One story over eight weeks, from one daily model, so every figure adds up: a week's KPI reading is the sum of the same
 days the month rows add up. Each Monday the marketing lead's "Weekly numbers" routine sets the month rows through the
 Sunday before and logs the week's readings. Those runs are history, so they are written as the runs would have left
-them (a task, a note, a turn and an automation run each). Creator videos drive store sales and scale up. Paid ads cost more
+them, played through the engine as the scheduler fires them: each run's bot turn opens the routine's task, and the turn's end charges the run. Creator videos drive store sales and scale up. Paid ads cost more
 per unit than a unit earns, so they pause, and their test closes as Lost.
 
 The growth model counts revenue per customer per month. A unit's sale is spread over the months it counts (a $299 unit
@@ -15,7 +15,7 @@ import json
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from .. import automation_engine, automations, goals, growth, hubdb, marketing_tasks, models, providers, routines
+from .. import automations, goals, growth, hubdb, marketing_tasks, models, providers, routines
 from ..demo_seed import TOKENS
 from ..scheduler import next_due, stamp
 
@@ -282,17 +282,34 @@ def weekly(b, s, days, runs, k, monday):
         units=sum(sum(row["units"].values()) for row in week),
         split=", ".join(f"{name} {n}" for name, n in split), readings=len(CONTENT["kpis"]), rows=len(sums))
 
+    due = moment(monday, 7)
+
+    def fire(c):
+        # The schedule's fire, as the scheduler's tick makes it: the engine starts the run, and its bot turn opens the
+        # routine's task and wakes the bot on it.
+        return automations.fire(c, "schedule", {"schedule": {"at": stamp(due), "cron": routine["cron"],
+                                                             "tz": routine["timezone"]}},
+                                f"schedule:{stamp(due)}", only=s["automation"])
+    queued = b.write(fire)
+    if len(queued) != 1:
+        raise RuntimeError(f"the routine's run for {monday} was not queued: {queued}")
+    b.store.automations.drain()
+    run_id = queued[0]
+
     def work(c):
-        started = hubdb.now()
+        run = c.execute("SELECT * FROM automation_runs WHERE id=?", (run_id,)).fetchone()
+        ref = next(step["outputs"]["ref"] for step in json.loads(run["saved_state"])["steps"] if step["type"] == "bot_turn")
+        # The wake the turn runs from: its message names the run, and its job is the turn's work.
+        job = c.execute("SELECT j.id AS job_id, j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                        "WHERE json_extract(m.refs,'$.automation_run')=?", (run_id,)).fetchone()
         for (month, slug), total in sums.items():
             growth.cohort_set(c, "bot:" + routine["bot"], models.GrowthCohortSet(**cohort(by_slug.get(slug), month, total, monday)))
         for kpi in CONTENT["kpis"]:
             goals.kpi_log(c, "bot:" + kpi["owner"], s["kpis"][kpi["key"]], values[kpi["key"]],
                           period_start=(monday - timedelta(days=7)).isoformat(), period_end=(monday - timedelta(days=1)).isoformat(),
                           quality="measured")
-        task = hubdb.task_create(c, hubdb.KEEPER, routine["title"], summary, "bot:" + routine["bot"], deduplicate=False)
-        note = hubdb.say(c, "bot:" + routine["bot"], "human:ana", summary, refs={"task": task["id"]})
-        turn = hubdb.turn_start(c, hubdb.KEEPER, routine["bot"], trigger="routine", message_id=note["id"])
+        hubdb.say(c, "bot:" + routine["bot"], "human:ana", summary, refs={"task": ref})
+        turn = hubdb.turn_start(c, hubdb.KEEPER, routine["bot"], trigger="routine", message_id=job["message_id"], task_id=ref)
         b.clock.at += timedelta(minutes=4)
         model_name, provider, billing = CONTENT["usage"]
         tokens_in, tokens_out = CONTENT["tokens"]
@@ -301,15 +318,10 @@ def weekly(b, s, days, runs, k, monday):
         hubdb.turn_finish(c, hubdb.KEEPER, turn["id"], "completed", summary,
                           usage={"input_tokens": tokens_in - cached, "cached_tokens": cached, "output_tokens": tokens_out,
                                  "model": model_name, "provider": provider, "est_cost_usd": cost, "billing": billing})
-        hubdb.task_update(c, "bot:" + routine["bot"], task["id"], status="done", note=summary)
-        # The run the scheduler would have recorded for this Monday: an ok automation run on its cron fire.
-        due = stamp(moment(monday, 7))
-        state = {**automation_engine.start({"schedule": {"at": due, "cron": routine["cron"], "tz": routine["timezone"]}}),
-                 "status": "ok", "cost": round(cost, 6)}
-        version = c.execute("SELECT version FROM automations WHERE id=?", (s["automation"],)).fetchone()["version"]
-        c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,finished_at,status,saved_state,chain) "
-                  "VALUES(?,?,?,?,?,?,?,?,?)", ("run_" + hubdb.new_id(), s["automation"], version, f"schedule:{due}", started,
-                                               hubdb.now(), "ok", json.dumps(state, default=str), "[]"))
+        hubdb.task_update(c, "bot:" + routine["bot"], ref, status="done", note=summary)
+        c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job["job_id"],))
+        # The turn's end, as the runner reports it: the run takes the turn's answer and cost, and its day counts.
+        automations.turn_done(c, {"id": turn["id"], "job_id": job["job_id"]}, "completed", summary)
         hubdb.status_result(c, hubdb.KEEPER, routine["bot"], last_result=summary, last_turn_at=hubdb.now())
     b.write(work)
 
