@@ -3,8 +3,8 @@ watched against the numbers and the market.
 
 - The page is one row at a time in `strategy_versions`: a summary (400 characters, what every bot reads on every run),
   the vision (400 characters, kept but not shown on the Strategy page; the Goals page reads it from here and falls
-  back to the summary), five fixed sections (`serve`, `sell`, `know`, `how` (How we sell), `not`)
-  plus any extra ones the owner adds (`extra: {key: {title, body}}`), and a snapshot of the bets. Exactly one row is
+  back to the summary), seven fixed sections (`serve`, `sell`, `proof` (How we know they want it), `now` (Why now),
+  `know`, `how` (How we sell), `not`) plus any extra ones the owner adds (`extra: {key: {title, body}}`), and a snapshot of the bets. Exactly one row is
   the `draft` (`n` NULL); publishing stamps it `n` (1, 2, 3...), snapshots every bet that is not retired, and opens a
   fresh draft copied from it. The draft carries a `revision`: a write against an older one answers 409, so two
   editors never overwrite each other silently.
@@ -64,10 +64,13 @@ DEFAULT_GUIDE = "default"
 BET_STATUSES = ("proposed", "active", "retired")
 WRONG_KINDS = ("kpi", "thesis", "text")
 DIRECTIONS = ("above", "below")
-FIXED = (("serve", "Who we serve"), ("sell", "What we sell, and for how much"),
-         ("know", "What we know that others don't"), ("how", "How we sell"), ("not", "What we won't do"))
+FIXED = (("serve", "Who we serve"), ("sell", "What we sell, and for how much"), ("proof", "How we know they want it"),
+         ("now", "Why now"), ("know", "What we know that others don't"), ("how", "How we sell"),
+         ("not", "What we won't do"))
 FIXED_KEYS = tuple(k for k, _ in FIXED)
 TITLES = dict(FIXED)
+SECTIONS_SHAPE = "sections is an object: {" + ", ".join(FIXED_KEYS) + ", extra: {key: {title, body}}}"
+PROOF_STALE_DAYS = 30      # the Monday note says so when "How we know they want it" is older (playbooks/keep-proof-current.md)
 EXTRA_KEY = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 FIELDS = ("guide", "summary", "vision", "sections")
 SNAPSHOT = ("id", "statement", "why", "rules_out", "wrong_if", "cites", "status", "rank")
@@ -155,12 +158,20 @@ def _clean(c, actor, value, limit, what, one_line=False):
 
 
 def _sections(raw):
-    """The stored shape, whatever was stored: every fixed key (a string) and `extra` ({key: {title, body}})."""
+    """The stored shape, whatever was stored: every fixed key (a string) and `extra` ({key: {title, body}}). An extra
+    section stored under a key that later became a fixed one (`proof`, `now`) reads as `<key>-2` (or the next unused
+    number), its title and body kept, so the owner can still edit or remove it."""
     raw = raw if isinstance(raw, dict) else {}
     out = {k: str(raw.get(k) or "") for k in FIXED_KEYS}
     extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
-    out["extra"] = {k: {"title": str((v or {}).get("title") or k), "body": str((v or {}).get("body") or "")}
-                    for k, v in extra.items() if isinstance(v, dict)}
+    out["extra"] = {}
+    for k, v in extra.items():
+        if not isinstance(v, dict):
+            continue
+        key, n = k, 2
+        while key in FIXED_KEYS or key in out["extra"] or (key != k and key in extra):
+            key, n = f"{k}-{n}", n + 1
+        out["extra"][key] = {"title": str(v.get("title") or k), "body": str(v.get("body") or "")}
     return out
 
 
@@ -220,6 +231,26 @@ def versions(c, limit=VERSIONS_PAGE):
     """The published versions, newest first: what the history list shows, without the sections and the bets."""
     return H._rows(c.execute("SELECT n, note, published_at, published_by, guide, summary FROM strategy_versions "
                              "WHERE status='published' ORDER BY n DESC LIMIT ?", (max(1, min(limit, VERSIONS_PAGE)),)))
+
+
+def proof_since(c):
+    """When the published "How we know they want it" last changed: the publish time of the oldest version in the newest
+    run of versions with the same text. None before the first publish, or while the published one is empty."""
+    since, text, below = None, None, None
+    while True:                                  # newest first, a page at a time, until the text differs
+        rows = c.execute("SELECT n, sections, published_at FROM strategy_versions WHERE status='published' "
+                         "AND (? IS NULL OR n < ?) ORDER BY n DESC LIMIT ?", (below, below, VERSIONS_PAGE)).fetchall()
+        for n, sections, at in rows:
+            proof = _sections(loads(sections, {}))["proof"].strip()
+            if text is None:
+                if not proof:
+                    return None
+                text = proof
+            elif proof != text:
+                return since
+            since, below = at, n
+        if len(rows) < VERSIONS_PAGE:
+            return since
 
 
 def _bet(row):
@@ -308,7 +339,7 @@ def view(c, auth, who):
     # The draft is the owner's: a bot never reads an unpublished "What we won't do".
     return {**({"draft": mine} if editor else {}), "current": published, "bets": listed,
             "label": guide(gid)["bets_label"], "label_one": guide(gid)["bet_label"], "may_edit": editor,
-            "website": website(c),
+            "website": website(c), "proof_since": proof_since(c),
             "goals_by_bet": {bid: [{k: g[k] for k in ("id", "title", "owner_id", "status")} for g in rows[:GOALS_SHOWN]]
                              for bid, rows in linked.items()},
             # goals_by_bet is a sample; a retire's "N goals serve it" needs every live goal the caller may read.
@@ -401,7 +432,7 @@ def _merge_sections(c, actor, stored, sent):
     """`sent` merged onto `stored`: a fixed key sent is set and "" clears it; an extra section sent as {title, body}
     is set, sent as "" (or with an empty body) is removed; anything not sent is kept, whatever the guide."""
     if not isinstance(sent, dict):
-        H.refuse(c, actor, "kind", "sections is an object: {serve, sell, know, how, not, extra: {key: {title, body}}}")
+        H.refuse(c, actor, "kind", SECTIONS_SHAPE)
     out = _sections(stored)
     for key, value in sent.items():
         if key == "extra":
@@ -655,7 +686,7 @@ def proposal_error(c, payload):
     sections = payload.get("sections")
     if sections is not None:
         if not isinstance(sections, dict):
-            return "sections is an object: {serve, sell, know, how, not, extra: {key: {title, body}}}"
+            return SECTIONS_SHAPE
         for key, value in sections.items():
             if key == "extra":
                 if not isinstance(value, dict):

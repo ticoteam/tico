@@ -2,6 +2,7 @@
 way a real number could get out: a missing rule, a raw Finance field, a clock that starts in the wrong place, a replaced
 reading, a value worked out from what is shown, or a bot's hand on the switch."""
 import json
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest import mock
@@ -193,7 +194,8 @@ def test_the_delay_counts_from_period_end_never_collected_or_created_time(store)
         read(c, kpi, 222, "2026-09-30", supersedes=september["id"], note="recount")
         corrected = ST.project(c, "investors", "2026-10-15")
         assert [p["value"] for p in by_label(corrected)["Signups"]["series"]] == [111]
-        assert "222" not in json.dumps(corrected) and "200" not in json.dumps(corrected)
+        # Whole numbers only: an id in the dump may contain "222" or "200" by chance.
+        assert not re.search(r"(?<![\w-])(222|200)(?![\w-])", json.dumps(corrected))
         # September comes in at Sep 30 + 30 days, exactly, with its corrected value.
         assert [p["value"] for p in by_label(ST.project(c, "investors", "2026-10-30"))["Signups"]["series"]] == [111]
         later = by_label(ST.project(c, "investors", "2026-10-31"))["Signups"]

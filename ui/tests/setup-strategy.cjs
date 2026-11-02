@@ -262,7 +262,7 @@ async function building(page, website, text) {
       const found = page.locator('#ss-found');
       await found.waitFor();
       assert.match(await found.innerText(), /^The draft changed while this ran, so nothing was written\. It found:/);
-      // Summary, vision, the four sections and the one bet, in that order.
+      // Summary, vision, the sections it found and the one bet, in that order.
       assert.deepEqual(await found.locator('.ss-found-row .strat-bet-k').allTextContents(), ['Summary', 'Vision', 'Who we serve',
         'What we sell, and for how much', "What we know that others don't", "What we won't do", 'Bet']);
       await shot(page, '6-bets-found');

@@ -43,7 +43,7 @@ def ready(api, **bet):
 
 def test_draft_merges_only_what_is_sent_and_a_stale_revision_gets_409(api):
     first = draft(api)
-    assert first["guide"] == "default" and set(first["sections"]) == {"serve", "sell", "know", "how", "not", "extra"}
+    assert first["guide"] == "default" and set(first["sections"]) == {*S.FIXED_KEYS, "extra"}
     saved = write(api, sections={"serve": "Landlords with 1-20 units.",
                                  "extra": {"brand": {"title": "Brand and voice", "body": "Plain."}}})["draft"]
     assert saved["revision"] == first["revision"] + 1
@@ -125,6 +125,94 @@ def test_how_we_sell_is_a_section_that_publishes_with_the_rest_and_stays_out_of_
     assert get(api, "strategy")["current"]["sections"]["how"] == "Referrals from landlords first, then a door-to-door pilot."
     run_text = api.get("/api/v2/strategy/summary", headers={"Authorization": "Bearer cara-test"}).text
     assert "Referrals" not in run_text and "How we sell" not in run_text
+
+
+def test_proof_and_why_now_sit_after_what_we_sell_and_are_optional_for_publishing(api):
+    assert S.FIXED_KEYS == ("serve", "sell", "proof", "now", "know", "how", "not")
+    # A draft stored before the two sections existed reads them as empty and publishes without them.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE strategy_versions SET sections=? WHERE status='draft'",
+                  (json.dumps({"serve": "Landlords.", "not": "No enterprise deals."}),))
+    old = draft(api)["sections"]
+    assert old["proof"] == old["now"] == "" and old["serve"] == "Landlords."
+    add_bet(api)
+    assert publish(api)["sections"]["proof"] == ""
+    write(api, sections={"proof": "Forty landlords book weekly. (Growth, October)", "now": "Bots can do the office work."})
+    second = publish(api, "Proof")
+    assert second["sections"]["now"] == "Bots can do the office work."
+    assert get(api, "strategy/diff?from=1&to=2")["fields"] == [
+        {"key": "sections.proof", "from": "", "to": "Forty landlords book weekly. (Growth, October)"},
+        {"key": "sections.now", "from": "", "to": "Bots can do the office work."}]
+    write(api, sections={"why": "x"}, expected=422)
+
+
+def test_proof_since_is_when_the_published_proof_last_changed_and_every_reader_sees_it(api):
+    strategy_token = with_strategy_bot(api)
+    assert get(api, "strategy")["proof_since"] is None                         # nothing published
+    ready(api)
+    publish(api)
+    assert get(api, "strategy", token=strategy_token)["proof_since"] is None   # published, but proof is empty
+    # The Strategy Bot proposes proof from the evidence; the owner confirms; publishing dates it.
+    proposal = post(api, "goal-proposals", {"kind": "strategy_draft", "reason": "October's numbers are in.",
+                                            "payload": {"sections": {"proof": "Forty landlords book weekly."}}},
+                    token=strategy_token)["proposal"]
+    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"})
+    second = publish(api, "Proof")
+    write(api, summary="Acme runs small rentals with bots.")
+    publish(api, "Summary only")
+    assert get(api, "strategy", token=strategy_token)["proof_since"] == second["published_at"]
+    write(api, sections={"proof": "Fifty landlords book weekly."})
+    fourth = publish(api, "New proof")
+    assert get(api, "strategy", token="cara-test")["proof_since"] == fourth["published_at"] != second["published_at"]
+
+
+def test_an_extra_section_stored_as_proof_or_now_before_they_were_fixed_reads_under_a_new_key_and_stays_editable(api):
+    old = {"not": "No enterprise deals.", "extra": {"proof": {"title": "Proof", "body": "Ten pilots."},
+                                                    "now": {"title": "Now", "body": "Rates fell."},
+                                                    "now-2": {"title": "Later", "body": "A second office."}}}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE strategy_versions SET sections=? WHERE status='draft'", (json.dumps(old),))
+    sections = draft(api)["sections"]
+    assert sections["proof"] == sections["now"] == ""
+    assert sections["extra"] == {"proof-2": {"title": "Proof", "body": "Ten pilots."},
+                                 "now-3": {"title": "Now", "body": "Rates fell."},
+                                 "now-2": {"title": "Later", "body": "A second office."}}
+    # The owner edits one and removes another; the fixed sections are untouched.
+    write(api, sections={"extra": {"proof-2": {"title": "Pilots", "body": "Twelve pilots."}, "now-3": ""}})
+    write(api, sections={"proof": "Forty landlords book weekly."})
+    sections = draft(api)["sections"]
+    assert sections["proof"] == "Forty landlords book weekly." and sections["now"] == ""
+    assert sections["extra"] == {"proof-2": {"title": "Pilots", "body": "Twelve pilots."},
+                                 "now-2": {"title": "Later", "body": "A second office."}}
+    add_bet(api)
+    assert set(publish(api)["sections"]["extra"]) == {"proof-2", "now-2"}
+
+
+def test_proof_since_reaches_past_a_hundred_versions_with_the_same_proof(api):
+    ready(api)
+    write(api, sections={"proof": "Thirty landlords book weekly."})
+    publish(api)
+    write(api, sections={"proof": "Forty landlords book weekly."})
+    changed = publish(api, "New proof")
+    with api.app.state.store.transaction() as c:
+        cols = [r[1] for r in c.execute("PRAGMA table_info(strategy_versions)")]
+        row = dict(zip(cols, c.execute("SELECT * FROM strategy_versions WHERE n=2").fetchone()))
+        for n in range(3, S.VERSIONS_PAGE + 30):       # more unchanged versions than one page holds
+            copy = {**row, "id": f"v-copy-{n}", "n": n, "published_at": f"2099-01-01T00:{n // 60:02d}:{n % 60:02d}Z"}
+            c.execute(f"INSERT INTO strategy_versions ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                      [copy[k] for k in cols])
+        assert S.proof_since(c) == changed["published_at"]
+
+
+def test_the_default_guide_asks_in_the_style_of_yc_and_every_answer_lands_in_a_section(api):
+    questions = S.guide("default")["questions"]
+    keys = [q["key"] for q in questions]
+    assert 12 <= len(questions) <= 14 and len(set(keys)) == len(keys)
+    assert all(q["section"] in (*S.FIXED_KEYS, "bets") and q["ask"].strip() and q["claim"].strip() for q in questions)
+    where = {q["key"]: q["section"] for q in questions}
+    assert {k: where[k] for k in ("proof", "now", "acute", "next-100", "why-you")} == {
+        "proof": "proof", "now": "now", "acute": "serve", "next-100": "how", "why-you": "know"}
+    assert "not" in where.values()                                             # the one section publishing needs
 
 
 def test_live_by_bet_counts_every_live_goal_past_the_sample_of_20(api):

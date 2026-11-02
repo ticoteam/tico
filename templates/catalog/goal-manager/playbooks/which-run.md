@@ -3,6 +3,7 @@
 Read the first line of the work, then the playbook it names. Read `hub strategy show` first on every run.
 
 - A task "Draft the strategy", or the owner asking for the strategy through their Assistant: `draft-the-strategy.md`.
+- The owner asking to update "How we know they want it" (proof), or the Monday note finding it stale: `keep-proof-current.md`.
 - A task "Bet N: may be wrong", filed by the server when a bet's wrong-if trips, at every level: `bet-tripped.md`.
 - A note from the Librarian that a market entity contradicts a bet: one `strategy_draft` proposal adding the entity to that bet's
   `cites` (so a change to it trips the bet), unless one is already pending. Nothing more.
