@@ -20,7 +20,7 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        # not in §5: the Finance tab's Access and Sources pages (§12), attaching receipts and documents (§8.4), and
        # linking a bank row to payments marked paid when the automatic match cannot tell which (feed_match)
        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach",
-       "books_disconnect", "bills_address_set",
+       "books_disconnect", "bills_address_set", "finance_approver_set",
        "feed_match", "mirror_start", "mirror_stop", "mirror_tags", "mirror_xero_location", "tax_jurisdiction_add",
        "tax_remit",
        "import_raw_totals",
@@ -38,7 +38,7 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "payment_cancel",
         "rule_create", "rule_update", "rule_enable", "rule_disable", "rule_test",
         "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map",
-        "books_disconnect", "bills_address_set",
+        "books_disconnect", "bills_address_set", "finance_approver_set",
         # phase 2: contacts, bills, invoices and attachments
         "contact_create", "contact_update", "bill_create", "bill_update", "bill_approve", "bill_schedule",
         "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_record_payment",
@@ -82,7 +82,8 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map", "books_disconnect", "bills_address_set")
 # Only the owner turns direct send on or off for the company (§9) and sets what each role sees by default (§7.5).
-OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags", "mirror_xero_location")
+OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags", "mirror_xero_location",
+              "finance_approver_set")
 # System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
 SYSTEM_KINDS = ("card_freeze",)
 SPEND = ("payment_create",)
@@ -232,6 +233,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                           ("server_ip?", "str", "")),
     "connection_sync": (("connection_id", "str", ""),), "connection_disconnect": (("connection_id", "str", ""),),
     "books_disconnect": (("connection_id", "str", ""),), "bills_address_set": (("address", "str", "the bills address, or empty to clear it"),),
+    "finance_approver_set": (("approver", "str", "a person, or empty for the owner"),),
     "connection_map": (("money_account_id", "str", ""), ("account_id", "str", "")),
     "payment_settings": (("direct_send?", "bool", ""),
                          ("cash_below?", "minor", "finance.cash.below fires when cash drops under this; 0 turns "
@@ -389,6 +391,7 @@ WORDS: dict[str, str] = {
     "connection_disconnect": "Disconnect a provider.", "connection_map": "Point a money account at a line.",
     "books_disconnect": "Disconnect a books connection (its HQ grant is revoked first).",
     "bills_address_set": "Set or clear the address vendors send bills to (empty clears it).",
+    "finance_approver_set": "Name the one person who approves finance-admin actions (empty returns them to the owner).",
     "payment_settings": "Turn direct send on or off and set the cash alert.",
     "card_create": "Issue a card on a budget.", "card_update_limit": "Change a card's limit.",
     "card_freeze": "Freeze a card.", "card_unfreeze": "Unfreeze a card.", "card_cancel": "Cancel a card.",

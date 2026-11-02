@@ -222,6 +222,20 @@ def test_the_bills_address_and_a_books_disconnect_are_actions_only_a_finance_adm
     with books.read() as c:
         assert FR.bills_email(c) == "bills@acme.example"
 
+def test_the_finance_approver_is_the_owner_until_the_owner_names_a_person(books):
+    """Spec §16: the finance approver is the owner by default, with a setting to name one person. Only the owner sets it,
+    and a bot can't be named."""
+    from backend.finance.context import load
+    with books.transaction() as c:
+        assert load(c, AT).approver_setting() == ""
+        assert act(c, "human:dan", "finance_approver_set", {"approver": "human:dan"}).code == "denied"
+        assert act(c, OWNER, "finance_approver_set", {"approver": "bot:coder"}).code == "invalid"
+        assert act(c, OWNER, "finance_approver_set", {"approver": "human:dan"}).status == "committed"
+        assert load(c, AT).approver_setting() == "human:dan"
+        assert act(c, OWNER, "finance_approver_set", {"approver": ""}).status == "committed"
+        assert load(c, AT).approver_setting() == ""
+
+
 def test_budgets_read_at_a_date_show_the_version_in_effect_then(books):
     with books.transaction() as c:
         soft = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 1_000})

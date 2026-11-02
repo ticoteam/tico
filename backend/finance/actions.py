@@ -18,7 +18,7 @@ from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
 from . import rights, sync, tax, usage
-from .context import Ctx, is_set_up, load
+from .context import APPROVER_KEY, Ctx, is_set_up, load
 from .core import kinds as K
 from .core import org as O
 from .core import validate as V
@@ -75,13 +75,30 @@ def books_disconnect(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     return handlers.Plan(K.ALLOW, "Disconnect the books connection", apply)
 
 
+def finance_approver_set(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+    """The one person finance-admin approvals go to (spec §16): named by the owner, or "" to send them back to the owner.
+    Only a person on the org chart can be named, never a bot."""
+    from .store import ledger as SL
+    V.only(p, ("approver",))
+    if "approver" not in p:
+        raise FinanceError(INVALID, "approver is a person, or empty for the owner")
+    value = str(p["approver"] or "").strip()
+    if value and not ctx.org.is_person(value):
+        raise FinanceError(INVALID, "the finance approver is a person on the org chart")
+
+    def apply(aid: str) -> handlers.Result:
+        SL.set_setting(ctx.c, APPROVER_KEY, value or None, who, ctx.at)
+        return {"approver": value or None}
+    return handlers.Plan(K.ALLOW, "Name the finance approver" if value else "Send finance approvals to the owner", apply)
+
+
 # Every live kind's planner: phase 0's in handlers, then banking, cards, payments, rules, and payables/receivables.
 PLANNERS: dict[str, handlers.Planner] = {
     **handlers.PLANNERS, "connection_create": banking.connection_create, "reconcile": banking.reconcile,
     "reconcile_undo": banking.reconcile_undo,
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map, "bills_address_set": bills_address_set,
-    "books_disconnect": books_disconnect, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
+    "books_disconnect": books_disconnect, "finance_approver_set": finance_approver_set, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
     **documents.PLANNERS, **mirror.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS, **catalog.PLANNERS,
     **purchasing.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
