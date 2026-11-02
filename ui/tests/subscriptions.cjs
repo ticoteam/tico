@@ -132,7 +132,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       if (method === 'GET') return json(data.login);
       const body = req.postDataJSON(); writes.push({p, method, body});
       if (signIn[2] === 'code') Object.assign(data.login, {code_sent: true});
-      if (signIn[2] === 'cancel') Object.assign(data.login, {state: 'cancelled', url: ''});
+      if (signIn[2] === 'cancel') Object.assign(data.login, {state: 'canceled', url: ''});
       return json(data.login);
     }
     if (p === '/api/v2/model-subscriptions' && method === 'POST') {
@@ -401,7 +401,7 @@ async function connectPlan(browser) {
   await closing.waitFor({state: 'detached'});
   release(); data.connectHeld = null;
   await until(page, () => writes.at(-1).p.endsWith('/cancel'), 'the cancel');
-  assert.equal(data.login.state, 'cancelled');
+  assert.equal(data.login.state, 'canceled');
   // The same for Try again after a failure.
   await page.locator('#subs-add').click();
   const asking = page.locator('dialog.subs-dialog[open]');
@@ -419,7 +419,7 @@ async function connectPlan(browser) {
   await retrying.waitFor({state: 'detached'});
   release(); data.connectHeld = null;
   await until(page, () => writes.at(-1).p.endsWith('/cancel') && data.login.id !== failedLogin, 'the cancel of the retry');
-  assert.equal(data.login.state, 'cancelled');
+  assert.equal(data.login.state, 'canceled');
   assert.deepEqual(errors, []);
   await page.close();
   // No computer can run it right now: the button says so and paste still works.

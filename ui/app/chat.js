@@ -10,7 +10,6 @@ let V2C = null;                                   // the live v2 chat; one per v
 const CHAT_CACHE = new Map(), BOT_TASKS_CACHE = new Map();
 function v2ChatStop() {
   if (!V2C) return;
-  try { V2C.es?.close(); } catch {}
   V2C.liveOff?.();
   clearInterval(V2C.poll);
   clearTimeout(V2C.waitTimer);
@@ -43,7 +42,7 @@ const v2RunLive = x => !!x && !['completed', 'canceled'].includes(x.state);
 async function v2ChatLoad(slug, room = null) {
   v2ChatStop();
   const mode = v2ChatMode(slug);
-  const state = V2C = {slug, mode, conv: null, messages: [], mine: [], live: null, es: null, poll: 0, rendered: false,
+  const state = V2C = {slug, mode, conv: null, messages: [], mine: [], live: null, poll: 0, rendered: false,
                        loaded: false, failed: false, empty: room?.empty || ''};
   const seen = CHAT_CACHE.get(slug);
   if (room) {
@@ -60,7 +59,7 @@ async function v2ChatLoad(slug, room = null) {
   if (V2C !== state) return;
   v2ChatRender(state);
   void chatJumpPending(state);
-  if (S.me?.cloud && state.conv) v2ChatStream(state, true);
+  if (state.conv) v2ChatStream(state, true);
   void chatGoalLoad(state);
   v2BotsLoad(state);
   state.poll = setInterval(async () => {
@@ -70,7 +69,7 @@ async function v2ChatLoad(slug, room = null) {
       await v2ChatFind(state);
       if (V2C !== state) return;
       v2ChatRender(state);
-      if (state.loaded && S.me?.cloud && state.conv) v2ChatStream(state, true);
+      if (state.loaded && state.conv) v2ChatStream(state, true);
       void chatGoalLoad(state);
       return;
     }
@@ -79,11 +78,11 @@ async function v2ChatLoad(slug, room = null) {
       state.listed = false;
       await v2ChatFind(state);
       if (V2C !== state) return;
-      if (state.conv) { v2ChatRender(state); if (S.me?.cloud) v2ChatStream(state, true); void chatGoalLoad(state); } else state.failed = false;
+      if (state.conv) { v2ChatRender(state); v2ChatStream(state, true); void chatGoalLoad(state); } else state.failed = false;
       return;
     }
     // Live events carry every change to this chat (ui/app/live.js); the poll reads it only without them.
-    if (S.me?.cloud && state.liveOff && liveAvailable()) return;
+    if (state.liveOff && liveAvailable()) return;
     v2ChatMessages(state).then(() => v2ChatRender(state));
     void chatGoalLoad(state);
   }, 15000);
@@ -265,7 +264,8 @@ function v2RunRow(verb, what, {task = '', href = '', failed = false, title = ''}
 }
 const tookWords = s => s == null ? '' : s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m`;
 // What the run did reads as one folded line under the reply, named by its first few actions.
-function v2RunHTML(m) {
+// `state` keeps which folds are open and the steps read so far: the chat's (V2C), or a thread view's own.
+function v2RunHTML(m, state = V2C) {
   const run = m.run || {}, rows = [], said = [], given = new Set((run.did || []).filter(d => d.kind === 'task').map(d => d.task_id));
   for (const [id, t] of Object.entries(m.ref_tasks || {}))
     if (!given.has(id)) rows.push(v2RunRow('task ·', esc(t.title), {task: id}));
@@ -286,9 +286,9 @@ function v2RunHTML(m) {
   }
   if (run.steps) {
     const label = [`${run.steps} step${run.steps === 1 ? '' : 's'}`, run.tool_calls ? `${run.tool_calls} tool call${run.tool_calls === 1 ? '' : 's'}` : '', tookWords(run.took_s)].filter(Boolean).join(' · ');
-    const turn = m.refs?.turn_id, open = V2C?.openSteps?.has(turn);
+    const turn = m.refs?.turn_id, open = state?.openSteps?.has(turn);
     rows.push(`<details class="run-steps" data-turn="${esc(turn)}"${open ? ' open' : ''}><summary>${esc(label)}</summary><div class="steps-list">${
-      V2C?.steps?.[turn] || '<div class="step muted">Loading…</div>'}</div></details>`);
+      state?.steps?.[turn] || '<div class="step muted">Loading…</div>'}</div></details>`);
   }
   const about = Object.values(m.ref_tasks || {})[0]?.title;
   if (!said.length && !about) return rows.length ? `<div class="run-did">${rows.join('')}</div>` : '';
@@ -296,11 +296,11 @@ function v2RunHTML(m) {
   const named = [...new Set(said)], head = named.length
     ? named.slice(0, 2).join(', ') + (named.length > 2 ? ` +${named.length - 2}` : '') : chatLine(about, 60);
   const label = [head.charAt(0).toUpperCase() + head.slice(1), tookWords(run.took_s)].filter(Boolean).join(' · ');
-  return `<details class="run-did run-fold" data-fold="${esc(m.id || '')}"${v2FoldOpen(m) ? ' open' : ''}><summary>${esc(label)}</summary>${rows.join('')}</details>`;
+  return `<details class="run-did run-fold" data-fold="${esc(m.id || '')}"${v2FoldOpen(m, state) ? ' open' : ''}><summary>${esc(label)}</summary>${rows.join('')}</details>`;
 }
 const chatLine = (text, n) => { const t = String(text || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
 // Folded lines stay as the reader left them across redraws.
-const v2FoldOpen = m => !!(m.id && V2C?.openFolds?.has(m.id));
+const v2FoldOpen = (m, state = V2C) => !!(m.id && state?.openFolds?.has(m.id));
 const v2FoldAttrs = m => `data-fold="${esc(m.id || '')}"${v2FoldOpen(m) ? ' open' : ''}`;
 // A turn's steps are read when someone opens them, once, and kept open across redraws.
 function v2StepsHTML(d) {
@@ -310,7 +310,8 @@ function v2StepsHTML(d) {
     ? `<details class="step think"><summary>Thinking</summary><div class="step-text">${esc(st.text)}</div></details>`
     : `<div class="step${st.kind === 'error' ? ' err' : ''}${st.nested ? ' nested' : ''}" title="${esc(fmt(st.at))}"><span class="step-tool">${esc(st.kind === 'tool' ? st.tool : st.kind)}</span><span class="step-sum">${esc(st.text)}</span></div>`).join('');
 }
-async function v2StepsOpen(state, el) {
+// `root` is where the fold sits when it is not the chat's thread (a thread view).
+async function v2StepsOpen(state, el, root = null) {
   const turn = el.dataset.turn;
   state.openSteps ||= new Set(); state.steps ||= {};
   if (!el.open) { state.openSteps.delete(turn); return; }
@@ -320,8 +321,8 @@ async function v2StepsOpen(state, el) {
   let html;
   try { html = state.steps[turn] = v2StepsHTML(await get(`/v2/turns/${encodeURIComponent(turn)}/steps`)); }
   catch (error) { delete state.steps[turn]; html = `<div class="step err">${esc(error.message)}</div>`; }   // reopening tries again
-  if (V2C !== state) return;
-  const list = $(`#conv-thread details.run-steps[data-turn="${CSS.escape(turn)}"] .steps-list`);
+  if (root ? !root.isConnected : V2C !== state) return;
+  const list = (root || $('#conv-thread'))?.querySelector(`details.run-steps[data-turn="${CSS.escape(turn)}"] .steps-list`);
   if (list) list.innerHTML = html;
 }
 // Copy the original message, not timestamps, action labels or rendered link shortcuts.
@@ -639,6 +640,8 @@ function v2ChatRender(state) {
     });
   }
   // A goal's controls (the /goal messages the server sends for Set, Pause, Clear) are the bar above, not bubbles.
+  // The chat's held messages are read once per conversation, when it is drawn (ui/app/org-rule-holds.js).
+  if (state.loaded && state.holdsFor !== state.conv?.id) { state.holdsFor = state.conv?.id; void ruleChatHoldsLoad(state); }
   const shown = v2WithBotTalk(state, state.messages.filter(m => m.refs?.maintenance !== 'checkpoint' && !chatGoalControl(m)));
   state.lastMain = shown.findLast(m => !chatSideKind(m, state.slug)) || null;
   const goalLine = chatGoalLine(state, shown);
@@ -649,7 +652,8 @@ function v2ChatRender(state) {
     ? `<div class="conv-run chat"><div class="bubble bot reply"><span class="who">${empName(state.slug)}</span>
         <div class="md" id="v2-live">${safeMd(state.live.text, {shortLinks: true})}</div>${chatCopyHTML(state.live.text)}</div></div>`
     : pending ? `<div class="conv-run chat">${pending}</div>` : '';
-  const html = (groups + live) || (state.failed ? '<div class="empty">Could not load the conversation yet; trying again…</div>'
+  const held = (state.holds || []).map(ruleHoldHTML).join('');
+  const html = (groups + live + held) || (state.failed ? '<div class="empty">Could not load the conversation yet; trying again…</div>'
     : !state.loaded ? '<div class="empty">Loading the thread…</div>' : state.empty || '<div class="empty">Nothing yet. Say something below.</div>');
   // A poll or snapshot that changed nothing leaves the thread alone: no rebuild, nothing to jump.
   if (html !== state.html) {
@@ -659,6 +663,7 @@ function v2ChatRender(state) {
       const focused = thread.contains(document.activeElement) ? document.activeElement : null;
       // Only the messages that changed are redrawn; cards both trees share keep their node (ui/app/visual-cards.js).
       patchHTML(thread, html, visualSwap);
+      if (thread.querySelector('[data-hold]')) ruleChatWire(state, thread);
       if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
       if (focused?.isConnected && document.activeElement !== focused) focused.focus({preventScroll: true});
@@ -775,11 +780,22 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
   // the box says it is still going, and whether it is trying again.
   if (btn) { btn.disabled = true; btn.classList.add('p-sending'); btn.setAttribute('aria-busy', 'true'); pillBtnSay(btn, 'Sending…'); }
   const watch = chatSendWatch(P, files.length);
+  // Org rules check a message before it is sent: a send still out after a moment says so (ui/app/org-rule-holds.js).
+  const checking = setTimeout(() => void ruleChecksOn().then(on => {
+    if (on && P.sending && btn?.isConnected) pillBtnSay(btn, 'Checking…');
+  }), 400);
   try {
     let refs = {...extraRefs};
     const j = await cloudCompose(`/v2/chat/${encodeURIComponent(slug)}`, {text: text || 'Attached files.', refs, ...extra}, files,
       {timeout: P.unconfirmed ? Math.min(CHAT_SEND.timeout, CHAT_REPLAY_MS - (Date.now() - P.unconfirmed.at)) : CHAT_SEND.timeout,
         onRetry: watch.retry, onResponse: watch.response, operationId: P.unconfirmed?.key});
+    // An org rule held the message: nothing was sent, the box keeps the text, and the chat shows the hold with its rule.
+    if (j?.held) {
+      if (pending) pending.refused = true;          // Edit and resend is a new request, and a new check
+      watch.end('held');
+      if (V2C?.slug === slug) ruleChatHeld(V2C, j.held);
+      return false;
+    }
     // A 200 that created nothing (a sign-in page in front of the API) is not a send: the draft stays.
     if (!j?.message?.id) throw new Error('the server did not confirm it');
     watch.end('sent');
@@ -807,6 +823,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     return false;
   }
   finally {
+    clearTimeout(checking);
     if (pending) pending.inFlight = null;
     P.sending = false; P.sent = null; sent();
     if (btn) { btn.disabled = false; btn.classList.remove('p-sending'); btn.removeAttribute('aria-busy'); pillBtnSay(btn, label); }
@@ -916,7 +933,6 @@ function v2ChatApply(state, d) {
   // A finished turn may have closed or created tasks: show them now.
   if (wasRunning && !state.live && BOT?.slug === state.slug) {
     if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
-    void loadBotChatTasks(BOT.slug);
   }
 }
 // Read the snapshot again: one read at a time, and one more after it when changes arrived meanwhile, so a run
@@ -945,85 +961,46 @@ async function v2ChatGoalChanged(state) {
 const CHAT_SOON_MS = 30;
 function v2ChatStream(state, loaded = false) {
   if (!state.conv) return;
-  if (S.me?.cloud) {
-    if (!liveAvailable()) return;                   // the 15 s poll reads it instead
-    const cid = state.conv.id;
-    if (!loaded) liveSoon('chat:' + cid, () => v2ChatSnapshot(state), 120);
-    if (state.liveOff && state.liveCid === cid) return;
-    state.liveOff?.();
-    state.liveCid = cid;
-    const mine = d => d.conversation_id === cid && V2C === state;
-    let down = 0;
-    const offs = [
-      liveFollow(cid),
-      liveOn('messages', d => {
-        if (!mine(d)) return;
-        if (d.goal_id) void v2ChatGoalChanged(state);
+  if (!liveAvailable()) return;                   // the 15 s poll reads it instead
+  const cid = state.conv.id;
+  if (!loaded) liveSoon('chat:' + cid, () => v2ChatSnapshot(state), 120);
+  if (state.liveOff && state.liveCid === cid) return;
+  state.liveOff?.();
+  state.liveCid = cid;
+  const mine = d => d.conversation_id === cid && V2C === state;
+  let down = 0;
+  const offs = [
+    liveFollow(cid),
+    liveOn('messages', d => {
+      if (!mine(d)) return;
+      if (d.goal_id) void v2ChatGoalChanged(state);
+      liveSoon('chat:' + cid, () => v2ChatSnapshot(state), CHAT_SOON_MS);
+    }),
+    // A run's output arrives step by step (hundreds a minute while it works): the snapshot reads again at most every
+    // 0.4 s for the first 10 s of output, so a short reply streams, then every 3 s; never in a hidden tab. A run
+    // starting or ending reads at once.
+    liveOn('runs', d => {
+      if (!mine(d)) return;
+      if (d.output) {
+        const first = state.outputSince ||= Date.now();
+        liveThrottle('chat-output:' + cid, () => { if (V2C === state) void v2ChatSnapshot(state); },
+                     Date.now() - first < 10000 ? 400 : 3000);
+      } else {
+        state.outputSince = 0;
         liveSoon('chat:' + cid, () => v2ChatSnapshot(state), CHAT_SOON_MS);
-      }),
-      // A run's output arrives step by step (hundreds a minute while it works): the snapshot reads again at most every
-      // 0.4 s for the first 10 s of output, so a short reply streams, then every 3 s; never in a hidden tab. A run
-      // starting or ending reads at once.
-      liveOn('runs', d => {
-        if (!mine(d)) return;
-        if (d.output) {
-          const first = state.outputSince ||= Date.now();
-          liveThrottle('chat-output:' + cid, () => { if (V2C === state) void v2ChatSnapshot(state); },
-                       Date.now() - first < 10000 ? 400 : 3000);
-        } else {
-          state.outputSince = 0;
-          liveSoon('chat:' + cid, () => v2ChatSnapshot(state), CHAT_SOON_MS);
-        }
-      }),
-      liveOn('reset', () => { if (V2C === state) void v2ChatSnapshot(state); }),
-      // A stream that stays down for a few seconds (not the moment it takes to reconnect) marks the reply as interrupted;
-      // persisted messages stay on the page meanwhile.
-      liveOn('status', st => {
-        if (V2C !== state) return;
-        clearTimeout(down);
-        if (!st.connected) down = setTimeout(() => { if (V2C === state && state.live && !liveConnected()) { state.live.interrupted = true; v2ChatRender(state); } }, 3000);
-        else if (state.live?.interrupted) void v2ChatSnapshot(state);
-      }),
-    ];
-    state.liveOff = () => { clearTimeout(down); offs.forEach(off => off()); state.liveOff = null; state.liveCid = null; };
-    return;
-  }
-  if (typeof EventSource === 'undefined') return;
-  try { state.es?.close(); } catch {}
-  const es = state.es = new EventSource(`${API}/v2/stream?conversation=${encodeURIComponent(state.conv.id)}`);
-  const stop = () => { try { es.close(); } catch {} if (state.es === es) state.es = null; };
-  es.addEventListener('delta', ev => {
-    if (V2C !== state) return stop();
-    let d = {}; try { d = JSON.parse(ev.data); } catch {}
-    state.live = {text: (state.live?.text || '') + String(d.text || '')};
-    const box = $('#v2-live');
-    if (box && state.live.text) {
-      // The thread's stick follows the reply as it grows, if the reader is at the bottom.
-      box.innerHTML = safeMd(state.live.text, {shortLinks: true});
-      const copy = box.parentElement.querySelector('[data-chat-copy]');
-      if (copy) copy.dataset.chatCopy = state.live.text;
-    } else v2ChatRender(state);
-  });
-  es.addEventListener('goal', ev => {
-    if (V2C !== state) return stop();
-    let d = {}; try { d = JSON.parse(ev.data); } catch {}
-    chatGoalApply(state, d.goal || null);
-  });
-  es.addEventListener('message', ev => {
-    stop();
-    if (V2C !== state) return;
-    let d = {}; try { d = JSON.parse(ev.data); } catch {}
-    if (d.message) state.messages.push(d.message);
-    state.live = null;
-    v2ChatRender(state);
-    void v2Refresh();
-  });
-  es.addEventListener('error', () => {
-    stop();
-    if (V2C !== state) return;
-    state.live = null;
-    v2ChatMessages(state).then(() => v2ChatRender(state));
-  });
+      }
+    }),
+    liveOn('reset', () => { if (V2C === state) void v2ChatSnapshot(state); }),
+    // A stream that stays down for a few seconds (not the moment it takes to reconnect) marks the reply as interrupted;
+    // persisted messages stay on the page meanwhile.
+    liveOn('status', st => {
+      if (V2C !== state) return;
+      clearTimeout(down);
+      if (!st.connected) down = setTimeout(() => { if (V2C === state && state.live && !liveConnected()) { state.live.interrupted = true; v2ChatRender(state); } }, 3000);
+      else if (state.live?.interrupted) void v2ChatSnapshot(state);
+    }),
+  ];
+  state.liveOff = () => { clearTimeout(down); offs.forEach(off => off()); state.liveOff = null; state.liveCid = null; };
 }
 
 const ICON_CHAT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4c-4.7 0-8.5 3.1-8.5 7 0 2 1 3.8 2.6 5.1L5 20.5l4.3-1.6c.9.2 1.8.4 2.7.4 4.7 0 8.5-3.1 8.5-7S16.7 4 12 4z"/></svg>';

@@ -1,5 +1,6 @@
-/* ui/app/dashboard.js — Overview › Dashboard and team pages (#/team/<group>): a grid of pinned built-in cards and
-   pages (backend/cards.py). Each card shows its reader only what they may already see; a person who arranges the
+/* ui/app/dashboard.js — Overview › Mine (My dashboard, #/home, the landing page), Overview › Company (the Dashboard)
+   and team pages (#/team/<group>): a grid of pinned built-in cards and pages (backend/cards.py). My dashboard is the
+   place person:me, the reader's own. Each card shows its reader only what they may already see; a person who arranges the
    place drags, sizes, adds and removes pins. The bot sidebar draws its card and page widgets with the same pieces.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -13,7 +14,7 @@ let DASH = null;
 
 const dashApi = place => '/v2/places/' + encodeURIComponent(place);
 const dashTabsHTML = on => `<nav class="tabs slim strat-tabs dash-tabs" aria-label="Overview">${
-  [['dashboard', OVERVIEW, 'Dashboard'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Company page']] : [])].map(([id, href, label]) =>
+  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Company'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Company page']] : [])].map(([id, href, label]) =>
     `<a href="${href}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const dashNum = n => n == null ? '–' : Number(n).toLocaleString(undefined, {maximumFractionDigits: 2});
 const dashMoney = n => n == null ? '–' : '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
@@ -40,6 +41,17 @@ function dashPageRow(p) {
   return `<li><a href="#/page/${encodeURIComponent(p.file_id)}">${esc(p.title || 'Untitled')}</a>
     <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated_at)}</span></li>`;
 }
+// A thread's address: the threads page's own when this build has it (ui/app/threads*.js).
+const dashThreadHref = id => typeof window.threadHref === 'function' ? window.threadHref(id) : '#/threads/' + encodeURIComponent(id);
+function dashNeeds(d) {
+  return `<a class="dash-big" href="${NEEDS_YOU}"><strong>${dashNum(d.count)}</strong><span class="muted">waiting on you</span></a>
+    ${d.items.length ? `<ul class="dash-list">${d.items.map(it => `<li>${it.task_id ? `<a href="#/task/${encodeURIComponent(it.task_id)}">${esc(it.title || 'Untitled')}</a>` : `<a href="${NEEDS_YOU}">${esc(it.title || 'Untitled')}</a>`}</li>`).join('')}</ul>` : ''}`;
+}
+const dashDue = due => {
+  if (!due) return '';
+  const day = String(due).slice(0, 10), today = new Date().toISOString().slice(0, 10);
+  return `<span class="${day < today ? 'dash-bad' : 'muted'}">${day < today ? 'Overdue' : 'Due'} ${esc(day.slice(5))}</span>`;
+};
 const DASH_BODY = {
   tasks_by_status: (d, card) => `<div class="dash-stats">${[['open', 'Open'], ['doing', 'Doing'], ['waiting', 'Waiting'], ['done', 'Done this week']]
     .map(([k, label]) => `<a class="dash-stat" href="${dashTasksHref(card)}"><strong>${dashNum(d.counts[k])}</strong><span>${label}</span></a>`).join('')}</div>`,
@@ -47,8 +59,16 @@ const DASH_BODY = {
     const weeks = d.weeks || [], last = weeks[weeks.length - 1]?.done ?? 0, total = weeks.reduce((s, w) => s + w.done, 0);
     return `<div class="dash-big"><strong>${dashNum(last)}</strong><span class="muted">this week · ${dashNum(total)} in ${weeks.length} weeks</span></div>${dashBars(weeks)}`;
   },
-  needs_you: d => `<a class="dash-big" href="${NEEDS_YOU}"><strong>${dashNum(d.count)}</strong><span class="muted">waiting on you</span></a>
-    ${d.items.length ? `<ul class="dash-list">${d.items.map(it => `<li>${it.task_id ? `<a href="#/task/${encodeURIComponent(it.task_id)}">${esc(it.title || 'Untitled')}</a>` : `<a href="${NEEDS_YOU}">${esc(it.title || 'Untitled')}</a>`}</li>`).join('')}</ul>` : ''}`,
+  needs_you: dashNeeds,
+  needs_attention: dashNeeds,
+  unread_threads: d => d.threads.length ? `<ul class="dash-list">${d.threads.map(t => `<li><a href="${esc(window.threadRowHref ? window.threadRowHref(t) : dashThreadHref(t.id))}">${esc(window.threadTitle ? window.threadTitle(t) : t.title || 'Untitled')}</a>
+      <span class="muted">${t.unread ? dashNum(t.unread) + ' new · ' : ''}${agoSpan(t.updated_at)}</span></li>`).join('')}</ul>` : '<p class="muted dash-none">Nothing unread</p>',
+  my_tasks: d => d.tasks.length ? `<a class="dash-big" href="${TASKS}?view=list"><strong>${dashNum(d.count)}</strong><span class="muted">open</span></a>
+    <ul class="dash-list">${d.tasks.map(t => `<li><a href="#/task/${encodeURIComponent(t.id)}">${esc(t.title || 'Untitled')}</a> ${dashDue(t.due_at)}</li>`).join('')}</ul>`
+    : '<p class="muted dash-none">No open tasks</p>',
+  updates: d => `<a class="dash-big" href="${UPDATES}"><strong>${dashNum(d.unread)}</strong><span class="muted">unread</span></a>
+    ${d.updates.length ? `<ul class="dash-list">${d.updates.map(u => `<li><a href="${UPDATES}"${u.read ? '' : ' class="dash-unread"'}>${esc(u.headline || 'Update')}</a>
+      <span class="muted">${esc(String(u.author || '').startsWith('human:') ? (S.people || []).find(p => 'human:' + p.id === u.author)?.name || '' : dashBot(u.author))} · ${agoSpan(u.created_at)}</span></li>`).join('')}</ul>` : ''}`,
   spend: d => {
     const pct = d.budget ? Math.min(100, d.spent / d.budget * 100) : 0;
     return `<div class="dash-big"><strong>${dashMoney(d.spent)}</strong><span class="muted">${d.budget ? 'of ' + dashMoney(d.budget) : 'no budget'} · ${esc(d.month)}</span></div>
@@ -98,13 +118,16 @@ async function pageDashboard(place) {
   const team = place.startsWith('team:'), kept = (S.lastRead.places ||= {})[place];
   const main = $('#main'); main.classList.add('dash-layout');
   main.innerHTML = `<div class="dash" id="dash-root"><header class="dash-head">
-      <h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML('dashboard')}<span class="spacer"></span>
+      <h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML(place === 'person:me' ? 'mine' : 'dashboard')}<span class="spacer"></span>
       <span class="dash-actions" hidden>${team ? '<button type="button" class="ghost dash-audience" data-dash-audience></button>' : ''}
         <button type="button" class="ghost" data-dash-add="card"><span class="dash-plus" aria-hidden="true">+</span>Card</button>
         <button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button></span></header>
     <div class="dash-grid" id="dash-grid">${kept ? '' : skelRows(4, {card: true})}</div>
+    ${team ? '<section class="card home-card dash-home" id="dash-home"><header><h2>Home</h2><div class="home-card-acts" id="dash-home-acts"></div></header><div id="dash-home-thread"></div></section>' : ''}
     <dialog class="tmodal tmodal-shell dash-dialog" id="dash-dialog" aria-label="Card"></dialog></div>`;
-  const state = DASH = {place, view: null, choices: null, root: $('#dash-root'), menu: null};
+  const state = DASH = {place, view: null, choices: null, root: $('#dash-root'), menu: null, readAt: Date.now()};
+  // A team's Home: the thread everyone who can see the team reads.
+  if (team) threadMount($('#dash-home-thread'), {home: 'group:' + place.slice(5), card: true, header: 'compact', actsHost: $('#dash-home-acts'), hideGone: $('#dash-home'), compactEmpty: true});
   dashWire(state);
   if (kept) { state.view = kept; dashDraw(state); }
   let view;
@@ -112,7 +135,7 @@ async function pageDashboard(place) {
   catch (e) {
     if (DASH !== state) return;
     if (kept) delete S.lastRead.places[place];
-    $('#dash-grid').innerHTML = `<p class="empty">${esc(e.status === 404 ? 'No such team' : e.status === 403 ? 'This team page is not shared with you' : e.message)}</p>`;
+    $('#dash-grid').innerHTML = `<p class="empty">${esc(!team ? e.message : e.status === 404 ? 'No such team' : e.status === 403 ? 'This team page is not shared with you' : e.message)}</p>`;
     return;
   }
   if (!Array.isArray(view?.pins)) view = {kind: place.split(':')[0], pins: [], can_edit: false, saved: true};
@@ -124,6 +147,40 @@ async function pageDashboard(place) {
   state.view = view;
   dashDraw(state);
 }
+// "Seen by" is the group's Read (backend/teammate_access.py): it opens the group's Access editor, for its leads
+// and the admins (the same people who arrange the page), and the page is read again after a save.
+function dashAccessEdit(state) {
+  const gid = state.place.slice(5);
+  return teammateEditAccess('group', gid, state.view?.name || teamLabel(gid), async () => {
+    const view = await get(dashApi(state.place), {fresh: true}).catch(() => null);
+    if (view && DASH === state) { state.view = view; dashDraw(state); }
+  });
+}
+// My dashboard follows what its cards show: a task, Needs you or a thread changing reads it again (at most every 15 s,
+// never in a hidden tab), and it is read every 2 minutes while on screen, or every 10 with the live stream up. It is
+// drawn again only when the answer differs, and not while a menu or dialog is open or a card is being moved.
+const DASH_POLL_MS = 120e3, DASH_LIVE_POLL_MS = 600e3;
+function dashFollow() {
+  if (DASH?.place === 'person:me' && DASH.view) liveThrottle('dash', () => void dashReread(DASH));
+}
+async function dashReread(state) {
+  if (!state || DASH !== state || state.place !== 'person:me' || state.reading) return;
+  if (state.menu || state.root.querySelector('#dash-dialog')?.open || state.root.querySelector('.dash-pin.dragging')) return;
+  state.reading = true;
+  try {
+    const view = await get(dashApi(state.place), {fresh: true});
+    if (DASH !== state || !Array.isArray(view?.pins) || sameData(view, state.view)) return;
+    state.view = view;
+    dashDraw(state);
+  } catch (e) { /* the next change or tick reads again */ }
+  finally { state.reading = false; state.readAt = Date.now(); }
+}
+setInterval(() => {
+  const state = DASH;
+  if (!state || document.hidden || !state.view) return;
+  const every = typeof liveConnected === 'function' && liveConnected() ? DASH_LIVE_POLL_MS : DASH_POLL_MS;
+  if (Date.now() - (state.readAt || 0) >= every) void dashReread(state);
+}, 30e3);
 function dashDraw(state) {
   const v = state.view, root = state.root;
   S.lastRead.places[state.place] = v;
@@ -247,7 +304,7 @@ function dashWire(state) {
     if (state.menu && !ev.target.closest('.dash-menu')) dashMenuClose(state);
     const add = ev.target.closest('[data-dash-add]');
     if (add) return void (add.dataset.dashAdd === 'card' ? dashCardForm(state, -1) : dashPageForm(state));
-    if (ev.target.closest('[data-dash-audience]')) return void dashAudienceForm(state);
+    if (ev.target.closest('[data-dash-audience]')) return void dashAccessEdit(state);
   });
   root.addEventListener('keydown', ev => {
     const grip = ev.target.closest('[data-dash-grip]'); if (!grip) return;
@@ -264,7 +321,7 @@ function dashWire(state) {
   });
 }
 
-// ---- forms: a card's settings, a page to pin, a team page's audience
+// ---- forms: a card's settings, a page to pin
 async function dashChoices(state, team = '') {
   const key = 'c:' + team;
   if (!state.choicesBy) state.choicesBy = {};
@@ -275,7 +332,7 @@ function dashFieldsHTML(template, choices, settings) {
   const fields = choices.templates.find(t => t.id === template)?.fields || [];
   return fields.map(f => f === 'team' ? `<label>Team<select name="team">${dashTeamOptions(choices.teams, settings.team || '')}</select></label>`
     : f === 'weeks' ? `<label>Weeks<input type="number" name="weeks" min="4" max="26" value="${esc(settings.weeks ?? 8)}" required></label>`
-    : f === 'count' ? `<label>Pages<input type="number" name="count" min="1" max="10" value="${esc(settings.count ?? 5)}" required></label>`
+    : f === 'count' ? `<label>${{unread_threads: 'Threads', my_tasks: 'Tasks', updates: 'Updates'}[template] || 'Pages'}<input type="number" name="count" min="1" max="10" value="${esc(settings.count ?? 5)}" required></label>`
     : f === 'kpi' ? `<label>KPI<select name="kpi" required>${choices.kpis.length ? choices.kpis.map(k => `<option value="${esc(k.id)}"${k.id === settings.kpi ? ' selected' : ''}>${esc(k.name)}</option>`).join('') : '<option value="">No KPIs</option>'}</select></label>`
     : '').join('');
 }
@@ -357,23 +414,4 @@ async function dashPageForm(state) {
     if (!value) return;
     await dashWrite(state, async () => { await dashSaved(state); return post('/v2/pins', {place: state.place, item: 'page:' + value, size: f.elements.namedItem('size').value}); });
   });
-}
-async function dashAudienceForm(state) {
-  let choices;
-  try { choices = await dashChoices(state); } catch (e) { return dashToast(e.message); }
-  if (DASH !== state) return;
-  const aud = state.view.audience || {everyone: true}, people = (S.people || []).filter(p => p.id);
-  const box = (name, id, label, on) => `<label class="dash-pick-row"><input type="checkbox" name="${name}" value="${esc(id)}"${on ? ' checked' : ''}><span>${esc(label)}</span></label>`;
-  const form = dashDialog(state, 'Who sees this page', `
-    <label class="dash-pick-row"><input type="checkbox" name="everyone"${aud.everyone !== false ? ' checked' : ''}><span>Everyone</span></label>
-    <div class="dash-chosen"${aud.everyone !== false ? ' hidden' : ''}>
-      ${choices.teams.length ? `<fieldset class="dash-pick"><legend>Teams</legend>${choices.teams.map(t => box('teams', t.id, t.name, (aud.teams || []).includes(t.id))).join('')}</fieldset>` : ''}
-      ${people.length ? `<fieldset class="dash-pick"><legend>People</legend>${people.map(p => box('people', p.id, p.name || p.id, (aud.people || []).includes(p.id))).join('')}</fieldset>` : ''}</div>`,
-  async f => {
-    const all = name => [...f.querySelectorAll(`[name="${name}"]:checked`)].map(el => el.value);
-    const audience = f.elements.namedItem('everyone').checked ? {everyone: true} : {everyone: false, teams: all('teams'), people: all('people'), bots: aud.bots || []};
-    await dashWrite(state, () => put(dashApi(state.place), {audience}));
-  });
-  const every = form.elements.namedItem('everyone');
-  every.onchange = () => { form.querySelector('.dash-chosen').hidden = every.checked; };
 }

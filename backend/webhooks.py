@@ -148,6 +148,10 @@ def links_for(type_, subject, data):
         app, api = f"#/task/{data['task_id']}", f"/api/v2/tasks/{data['task_id']}"
     elif group == "bot":
         app, api = f"#/bot/{subject}", f"/api/v2/bots/{subject}"
+    elif group == "thread":
+        api = f"/api/v2/threads/{subject}/timeline"
+    elif group == "message" and data.get("thread_id"):
+        api = f"/api/v2/threads/{data['thread_id']}/timeline"
     elif group in ("meeting", "strategy", "market", "health"):
         app = {"meeting": "#/meetings", "strategy": "#/strategy", "market": "#/market", "health": "#/health"}[group]
     out = {}
@@ -232,7 +236,36 @@ def view_for(c, actor, type_, subject, data, cache):
         return data
     if group in ("health", "inbound", "webhook"):
         return data if _admin(c, actor, cache) or not _state["auth"] else None
+    if group in ("thread", "message"):
+        return _thread_view(c, actor, type_, subject, data, cache)
     return data
+
+
+def _thread_view(c, actor, type_, subject, data, cache):
+    """A thread event is the endpoint owner's when the owner may read the thread (`threads.readable`, the check the
+    timeline makes). A held message is not in its thread yet, so it is checked on the thread it was going to: an
+    owner or admin hears of it only where they could read that thread, as for any other event."""
+    auth = _state["auth"]
+    if not auth:
+        return data
+    who = _identity(c, actor, cache)
+    if not who:
+        return None
+    if type_ == "message.held":
+        subject = (data or {}).get("thread_id") or subject
+    from . import threads
+    if not threads.readable(c, threads.viewer(auth, who), subject):
+        return None
+    return _without_outside_words(c, threads, data or {})
+
+
+def _without_outside_words(c, threads, data):
+    """What another company wrote stays out of an endpoint: a title that may be theirs goes blank, and a remote author
+    is named by their install alone."""
+    if data.get("title") and data.get("id") and threads.title_from_outside(c, data):
+        data = {**data, "title": ""}
+    install = threads.remote_guest(c, data.get("sender_id"))
+    return {**data, "sender_id": f"peer:{install}"} if install else data
 
 
 # ------------------------------------------------------------------------------------------------------------ publish

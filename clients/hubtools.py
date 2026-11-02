@@ -267,6 +267,17 @@ def chat_goal(api, args):
                     key=_key(args))
 
 
+@tool("hub_thread_catchup", "Catch up on a thread: what is new in it (and its sub-threads, with scope subtree) that you "
+      "may read, summarized and posted to your Assistant DM. The newest 40 messages at most. Nothing new posts nothing.",
+      {"thread_id": _s("Thread id"),
+       "scope": {"type": "string", "enum": ["subtree", "thread"], "default": "subtree",
+                 "description": "subtree: the thread and its sub-threads; thread: this thread only"}},
+      required=("thread_id",), writes=True)
+def thread_catchup(api, args):
+    return api.post("threads/" + quote(args["thread_id"], safe="") + "/catch-up",
+                    {"scope": args.get("scope") or "subtree"}, key=_key(args))
+
+
 @tool("hub_chat_send", "Send a message or a headless slash command to a bot.",
       {"to": _s("The bot"), "text": _s("The message or command"),
        "conversation_id": _s("Continue this conversation"),
@@ -2705,11 +2716,14 @@ OLD_SERVER_MEDIA = ("This Tico server takes video and audio files up to 25 MB. A
 
 
 # ----------------------------------------------------------------------------- cards and pins (docs/overview.md)
-CARD_TEMPLATES = ("tasks_by_status", "done_per_week", "needs_you", "spend", "kpi", "automation_runs", "latest_pages")
-PLACE = _s("Where: dashboard, team:<group id>, bot:<slug> (a sidebar) or task:<id>")
+CARD_TEMPLATES = ("tasks_by_status", "done_per_week", "needs_you", "spend", "kpi", "automation_runs", "latest_pages",
+                  "needs_attention", "unread_threads", "my_tasks", "updates")
+PLACE = _s("Where: dashboard, team:<group id>, bot:<slug> (a sidebar), task:<id>, or person:me (My dashboard, the "
+           "person's own landing page)")
 CARD_SETTINGS = {"team": _s("A group id; empty for the whole company"),
                  "weeks": {"type": "integer", "description": "Done per week: weeks shown, 4 to 26"},
-                 "count": {"type": "integer", "description": "Latest pages: how many, 1 to 10"},
+                 "count": {"type": "integer", "description": "Latest pages, Unread threads, My tasks, Updates: how many, "
+                           "1 to 10"},
                  "kpi": _s("KPI: the KPI id")}
 SIZE = _s("small, medium or large", enum=["small", "medium", "large"])
 
@@ -3235,6 +3249,93 @@ def trigger_list(api, args):
             for t in api.get("triggers")["triggers"]]
 
 
+# ----------------------------------------------------------------------------- federation: peers and shared threads
+PEERING = {"peering": _s("The peering's id from hub_peer_list")}
+PEER_INSTALL = {"install": _s("The other install's id: gi_ and 24 hex digits")}
+PEER_THREAD = {"thread": _s("The thread's id: a thread this install owns")}
+
+
+@tool("hub_peer_list", "This install's federation with other Tico installs: its key id (no key material), the Gateway it goes "
+      "through, its peerings (newest first) and the threads you may read that it shares or was given (members listed for the "
+      "ones it owns, with how many messages each company has not taken). Owner or admin.", {})
+def peer_list(api, args):
+    return _as_person(api).get("federation")
+
+
+@tool("hub_peer_key", "Make this install's federation key and register it with Tico HQ. Does nothing when the install has "
+      "one. Owner or admin.", {}, writes=True)
+def peer_key(api, args):
+    return _as_person(api).post("federation/keys", {}, key=_key(args))
+
+
+@tool("hub_peer_rotate_key", "Give this install a new federation key and retire the old one. Every peering needs approving "
+      "again, on both sides. Owner or admin.", {}, writes=True)
+def peer_rotate_key(api, args):
+    return _as_person(api).post("federation/keys/rotate", {}, key=_key(args))
+
+
+@tool("hub_peer_request", "Ask another install to peer with this one. It approves on its side; then you approve here. "
+      "Owner or admin.", PEER_INSTALL, required=("install",), writes=True)
+def peer_request(api, args):
+    return _as_person(api).post("federation/peerings", {"peer": args["install"]}, key=_key(args))
+
+
+@tool("hub_peer_approve", "Approve a peering, having checked the other install's key: from now on its envelopes must be signed "
+      "with that key. The peering is active once both installs approve. Owner or admin.", PEERING, required=("peering",), writes=True)
+def peer_approve(api, args):
+    return _as_person(api).post(f"federation/peerings/{args['peering']}/approve", {}, key=_key(args))
+
+
+@tool("hub_peer_pause", "The kill switch: pause a peering. While it is paused nothing crosses it, in either direction. "
+      "Owner or admin.", PEERING, required=("peering",), writes=True)
+def peer_pause(api, args):
+    return _as_person(api).post(f"federation/peerings/{args['peering']}/pause", {"paused": True}, key=_key(args))
+
+
+@tool("hub_peer_resume", "Resume a paused peering. What was missed while it was paused is caught up. Owner or admin.",
+      PEERING, required=("peering",), writes=True)
+def peer_resume(api, args):
+    return _as_person(api).post(f"federation/peerings/{args['peering']}/pause", {"paused": False}, key=_key(args))
+
+
+@tool("hub_peer_revoke", "End a peering. Nothing more crosses it; a new request starts over and needs both approvals again. "
+      "Owner or admin.", PEERING, required=("peering",), writes=True)
+def peer_revoke(api, args):
+    return _as_person(api).post(f"federation/peerings/{args['peering']}/revoke", {}, key=_key(args))
+
+
+@tool("hub_peer_share", "Share a thread this install owns with an install it has an active peering with. That install gets "
+      "the thread from now on, not its history. You must read and manage the thread. Owner or admin.",
+      {**PEER_THREAD, **PEER_INSTALL}, required=("thread", "install"), writes=True)
+def peer_share(api, args):
+    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/installs",
+                                {"install": args["install"]}, key=_key(args))
+
+
+@tool("hub_peer_unshare", "Take an install out of a thread this install owns. It gets the removal and nothing after. You must "
+      "read and manage the thread. Owner or admin.", {**PEER_THREAD, **PEER_INSTALL}, required=("thread", "install"), writes=True)
+def peer_unshare(api, args):
+    return _as_person(api).call("DELETE", f"federation/threads/{quote(str(args['thread']), safe='')}/installs/"
+                                          f"{quote(str(args['install']), safe='')}", None, _key(args))
+
+
+@tool("hub_peer_retry", "Send again now what another install has not taken from a shared thread (Needs you lists it). "
+      "Whoever manages the thread.", {"thread": _s("The thread's id on this install"), **PEER_INSTALL},
+      required=("thread", "install"), writes=True)
+def peer_retry(api, args):
+    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/installs/"
+                                f"{quote(str(args['install']), safe='')}/retry", {}, key=_key(args))
+
+
+@tool("hub_peer_add_reader", "Let a person on this install read a shared copy of a thread. Until an admin who reads it adds "
+      "them, only the accepting admin reads a copy. Owner or admin.",
+      {"thread": _s("The thread's id on this install (a shared copy)"), "actor": _s("The person, as human:<name>")},
+      required=("thread", "actor"), writes=True)
+def peer_add_reader(api, args):
+    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/readers", {"actor": args["actor"]},
+                                key=_key(args))
+
+
 TRIGGER = {"id": _s("The trigger's id from hub_trigger_list")}
 
 
@@ -3691,14 +3792,40 @@ def bot_register(api, args):
        "write": _s("Who may send it messages and tasks")},
       required=("slug",), writes=True)
 def bot_access(api, args):
+    return _teammate_access(api, f"bots/{args['slug']}", args)
+
+
+def _teammate_access(api, path, args):
+    """Show, or set, a bot's, person's or group's See, Read and Write: levels left out stay as they are."""
     on_behalf = _for_person(api)
-    current = api.get(f"bots/{args['slug']}/access", **on_behalf)
+    current = api.get(f"{path}/access", **on_behalf)
     wanted = {level: args[level] for level in ("see", "read", "write") if args.get(level)}
     if not wanted:
         return current
     body = {level: audience(wanted[level]) if level in wanted else {k: current[level][k] for k in ("everyone", "people", "teams", "bots")}
             for level in ("see", "read", "write")}
-    return api.post(f"bots/{args['slug']}/access", {**body, "revision": current["revision"], **on_behalf}, key=_key(args))
+    return api.post(f"{path}/access", {**body, "revision": current["revision"], **on_behalf}, key=_key(args))
+
+
+@tool("hub_human_access", "Show, or set, who may see, read and write to a person, as the person who asked you (it must be "
+      "them, someone they report up to, or an admin). See: on the chart and lists; Read: their Home; Write: DM them or add "
+      "them to a thread. Each is `everyone`, or a comma list of person ids, `group:<id>` and `bot:<slug>`; a group names "
+      "the people and bots in it and the groups under it. Levels you leave out stay as they are.",
+      {"human": _s("The person's id"), "see": _s("everyone, or ben,group:legal,bot:analyst"),
+       "read": _s("Who may read their Home"), "write": _s("Who may DM them or add them to a thread")},
+      required=("human",), writes=True)
+def human_access(api, args):
+    return _teammate_access(api, f"humans/{quote(str(args['human']), safe='')}", args)
+
+
+@tool("hub_group_access", "Show, or set, who may see, read and write to a group, as the person who asked you (a lead of "
+      "the group or one above it, or an admin). By default everyone sees and reads it and its members write to it. Each "
+      "level is `everyone`, or a comma list of person ids, `group:<id>` and `bot:<slug>`. Levels left out stay as they are.",
+      {"group": _s("The group's id"), "see": _s("everyone, or ben,group:legal,bot:analyst"),
+       "read": _s("Who may read its Home"), "write": _s("Who may post to it or add it to a thread")},
+      required=("group",), writes=True)
+def group_access(api, args):
+    return _teammate_access(api, f"groups/{quote(str(args['group']), safe='')}", args)
 
 
 @tool("hub_bot_mail", "Show, or set, whether a bot sends mail without a per-message approval and its forward targets. "
@@ -4817,6 +4944,38 @@ def slack_channel_import(api, args):
     return _as_person(api).post("slack/channels/import", {}, key=_key(args))
 
 
+@tool("hub_thread_link_slack", "Link a thread to a Slack channel, list its Slack links, or take them away, as the person who "
+      "asked you (an owner or an admin). With a channel, asks for the link: Tico checks the channel and the thread, then "
+      "activates it or refuses it, and `state` says which (the thread alone shows it again). `history` with a channel also "
+      "brings in the channel's earlier messages. `off` takes the thread's Slack links away. With neither, lists them.",
+      {"thread": _s("The thread's id: the root of a company or members thread"),
+       "channel": _CHANNEL,
+       "history": {"type": "boolean", "default": False, "description": "With a channel: bring in its earlier messages too"},
+       "off": {"type": "boolean", "default": False, "description": "Take the thread's Slack link away"}},
+      required=("thread",), writes=True)
+def thread_link_slack(api, args):
+    """`hub thread link-slack` runs this same tool (clients/remotecli.py), so the CLI and MCP cannot differ."""
+    thread = str(args.get("thread") or "").strip()
+    channel = str(args.get("channel") or "").strip()
+    history, off = bool(args.get("history")), bool(args.get("off"))
+    if not thread:
+        raise APIError("usage", "Give the thread's id")
+    if off and (channel or history):
+        raise APIError("usage", "--off takes the thread's Slack link away: it takes no channel and no --history")
+    if history and not channel:
+        raise APIError("usage", "--history brings in a channel's earlier messages: name the channel too")
+    person = _as_person(api)
+    if channel:
+        return person.post("slack/links", {"thread_id": thread, "channel": channel, "history": history}, key=_key(args))
+    listing = person.get("slack/links", thread=thread, limit=100)
+    if not off:
+        return listing
+    if not listing["links"]:
+        raise APIError("not_found", "This thread has no Slack link to take away")
+    return {"links": [person.call("DELETE", "slack/links/" + quote(link["id"], safe=""), None, _key(args, ":" + link["id"]))
+                      for link in listing["links"]]}
+
+
 @tool("hub_credential_request", "Open a card in the conversation for the person to type a secret into: what it is for, the format, "
       "where to get one. The value goes straight to Credentials and is granted to the bot; you never see it. You are woken when "
       "it is saved: then test the connection and report, or open the card again if it fails. Use this whenever a bot needs a "
@@ -5456,6 +5615,277 @@ def inbox(api, args):
       {"message_id": _s("The message id from hub_message_list")}, required=("message_id",), writes=True)
 def ack(api, args):
     return api.post("messages/" + args["message_id"] + "/ack", {}, key=_key(args))
+
+
+# ----------------------------------------------------------------------------- threads (docs/threads.md)
+# A thread is any conversation: a root, a sub-thread (a side branch from one message), a DM or a Home. The routes are
+# /api/v2/threads (contract §10); the rules are the server's, and what a person or bot may read is decided there.
+THREAD_ID = _s("Thread id: from hub_thread_list or hub_thread_show")
+THREAD_CURSOR = _s("The page after this cursor: a page's next_cursor")
+THREAD_LIMIT = {"type": "integer", "minimum": 1, "maximum": 100, "description": "Items in this page (default 50)"}
+THREAD_ACTOR = _s("Who: human:<id>, bot:<slug> or group:<id>")
+
+
+def _thread_path(thread, *more):
+    return "/".join(["threads", quote(str(thread), safe="")] + list(more))
+
+
+def _reaction_path(args):
+    """The route of one reaction: the message's id, then the emoji (its shortcode's colons and plus sign stay as they are)."""
+    return "messages/" + quote(args["message_id"], safe="") + "/reactions/" + quote(args["emoji"], safe=":+")
+
+
+def _thread_message(args, **more):
+    """A message body for a thread post or reply: the text, its kind, who it is addressed to and its references."""
+    body = {"text": args["text"], "kind": args.get("kind") or "say", "to": args.get("to"), **more}
+    if args.get("refs"):
+        body["refs"] = _refs(args["refs"])
+    return {key: value for key, value in body.items() if value is not None}
+
+
+@tool("hub_thread_list", "Your threads: Needs attention first, then unread, then recent; direct messages are listed "
+      "apart. With with, only the threads shared with that person, bot or group. Paged: next_cursor says whether more "
+      "follow.",
+      {"with": _s("Only the threads shared with this person, bot or group: human:<id>, bot:<slug> or group:<id>"),
+       "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT})
+def thread_list(api, args):
+    return api.get("threads", **{"with": args.get("with")}, cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_show", "One thread in tree order: each message is followed by the sub-thread that branched from it, "
+      "with its depth. A long sub-thread shows its latest messages under a collapsed row: hub_thread_show on that thread "
+      "with the row's cursor reads the rest. Also its title and breadcrumb. Paged over the thread's own messages; "
+      "next_cursor reads on.",
+      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
+def thread_show(api, args):
+    return api.get(_thread_path(args["thread"], "timeline"), cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_create", "Start a thread. Its audience decides who reads it: members (the people and bots you add; "
+      "the default and private), team (the members of a group) or company (everyone). personal starts a direct message "
+      "with the members, and reuses an open one with exactly those members. `body` is the first message. A side topic "
+      "under a message is hub_thread_reply, not a new thread.",
+      {"title": _s("The title"),
+       "audience": {"type": "string", "enum": ["members", "team", "company", "personal"], "default": "members"},
+       "audience_group_id": _s("For audience team: the group's id"),
+       "members": {"type": "array", "items": {"type": "string"},
+                   "description": "The people, bots and groups to add, as human:<id>, bot:<slug> or group:<id>"},
+       "body": _s("The first message")}, writes=True)
+def thread_create(api, args):
+    body = {key: args[key] for key in ("title", "audience", "audience_group_id", "members", "body")
+            if args.get(key) not in (None, "", [])}
+    return api.post("threads", body, key=_key(args))
+
+
+@tool("hub_thread_post", "Post a message to a thread. kind ask asks the person or bot in `to` for an answer. A name in "
+      "the text does not add anyone: someone outside the thread gets a warning and nothing else, until you add them "
+      "with hub_thread_members_add.",
+      {"thread": THREAD_ID, "text": _s("The message"),
+       "kind": {"type": "string", "enum": ["say", "ask"], "default": "say"},
+       "to": THREAD_ACTOR,
+       "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"}},
+      required=("thread", "text"), writes=True)
+def thread_post(api, args):
+    return api.post(_thread_path(args["thread"], "messages"), _thread_message(args), key=_key(args))
+
+
+@tool("hub_thread_reply", "Reply in a message's sub-thread: a side branch under that message, made on its first reply. "
+      "Use it for a side topic; the main discussion stays in the thread.",
+      {"thread": THREAD_ID, "message": _s("The message the reply branches from"), "text": _s("The reply"),
+       "refs": {"type": "array", "items": {"type": "string"}, "description": "References like task:<id>"}},
+      required=("thread", "message", "text"), writes=True)
+def thread_reply(api, args):
+    return api.post(_thread_path(args["thread"], "messages"),
+                    _thread_message(args, parent_message_id=args["message"]), key=_key(args))
+
+
+@tool("hub_thread_edit", "Edit a message you wrote: its text becomes a new revision, shown as edited. Asks, answers and "
+      "notices cannot be edited. A progress message is one edited message per task, not a line per step.",
+      {"message": _s("The message's id"), "text": _s("The new text")}, required=("message", "text"), writes=True)
+def thread_edit(api, args):
+    return api.patch("messages/" + quote(args["message"], safe=""), {"text": args["text"]}, key=_key(args))
+
+
+@tool("hub_thread_sub", "Open a message's sub-thread without posting: it is made if it does not exist yet, and the "
+      "thread is returned either way.",
+      {"message": _s("The message whose sub-thread to open")}, required=("message",), writes=True)
+def thread_sub(api, args):
+    return api.post("threads", {"parent_message_id": args["message"]}, key=_key(args))
+
+
+@tool("hub_thread_react", "Add your reaction to a message, such as :+1:. The answer is the message's reactions: each "
+      "emoji, its count and who reacted with it.",
+      {"message_id": _s("The message's id"),
+       "emoji": _s("The reaction: an emoji, or its shortcode such as :+1:")},
+      required=("message_id", "emoji"), writes=True)
+def thread_react(api, args):
+    return api.call("PUT", _reaction_path(args), None, key=_key(args))
+
+
+@tool("hub_thread_unreact", "Remove your reaction from a message. The answer is the message's reactions, as "
+      "hub_thread_react gives them.",
+      {"message_id": _s("The message's id"),
+       "emoji": _s("The reaction to remove: the emoji, or its shortcode such as :+1:")},
+      required=("message_id", "emoji"), writes=True)
+def thread_unreact(api, args):
+    return api.call("DELETE", _reaction_path(args), None, key=_key(args))
+
+
+@tool("hub_thread_follow", "Follow a thread, so its activity reaches you at the level you choose. Following never gives "
+      "access: a thread you cannot read stays hidden whatever you follow.",
+      {"thread": THREAD_ID,
+       "notify": {"type": "string", "enum": ["live", "mentions", "digest", "muted"], "default": "live",
+                  "description": "live: every new message; mentions: only what names you; digest: in a batch; "
+                                 "muted: unread counts stay, nothing is sent"}},
+      required=("thread",), writes=True)
+def thread_follow(api, args):
+    return api.call("PUT", _thread_path(args["thread"], "follow"), {"notify": args.get("notify") or "live"},
+                    key=_key(args))
+
+
+@tool("hub_thread_unfollow", "Stop following a thread. You keep whatever you can read.",
+      {"thread": THREAD_ID}, required=("thread",), writes=True)
+def thread_unfollow(api, args):
+    return api.call("DELETE", _thread_path(args["thread"], "follow"), None, key=_key(args))
+
+
+@tool("hub_thread_read", "Mark a thread read up to a message's seq (from hub_thread_show), or all of it with all. "
+      "A sub-thread's read state is its own: reading the thread does not clear its side branches.",
+      {"thread": THREAD_ID,
+       "seq": {"type": "integer", "minimum": 0, "description": "The seq of the last message you read"},
+       "all": {"type": "boolean", "default": False, "description": "Read the thread and every sub-thread under it"}},
+      required=("thread",), writes=True)
+def thread_read(api, args):
+    if args.get("all"):
+        return api.post(_thread_path(args["thread"], "read-all"), {}, key=_key(args))
+    if args.get("seq") is None:
+        raise APIError("invalid", "Give seq, the seq of the last message read, or all")
+    return api.post(_thread_path(args["thread"], "read"), {"seq": args["seq"]}, key=_key(args))
+
+
+@tool("hub_thread_search", "Search the threads you can read, message by message. Only messages you may see are found, "
+      "and a thread you cannot read is not named.",
+      {"q": _s("The words to find"), "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("q",))
+def thread_search(api, args):
+    return api.get("threads/search", q=args["q"], cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_home", "A teammate's Home: their thread for what comes to them, made on first use. You need Read on "
+      "them; without it the answer is the same as for someone who does not exist.",
+      {"actor": _s("Whose Home: bot:<slug>, human:<id> or group:<id>")}, required=("actor",))
+def thread_home(api, args):
+    return api.get("threads/home/" + quote(args["actor"], safe=":"))
+
+
+@tool("hub_thread_dm", "Your direct message with one person or bot: the open one with exactly you two, or a new one. "
+      "You need Write on them, since the reply-back rule applies. A person you cannot see is not found.",
+      {"actor": _s("Who: human:<id> or bot:<slug>")}, required=("actor",))
+def thread_dm(api, args):
+    return api.get("threads/dm", **{"with": args["actor"]})
+
+
+@tool("hub_thread_dm_group", "A group direct message: you and the people or bots in members, with an optional first "
+      "message in body. The answer is the thread, with the message when a body was given.",
+      {"members": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                   "description": "The people or bots, as human:<id> or bot:<slug>: at least one"},
+       "body": _s("The first message, optional")},
+      required=("members",), writes=True)
+def thread_dm_group(api, args):
+    members = args.get("members") or []
+    if not members:
+        raise APIError("invalid", "Give at least one member: human:<id> or bot:<slug>", 422)
+    return api.post("threads/dm", {"members": members, "body": args.get("body")}, key=_key(args))
+
+
+@tool("hub_thread_members_list", "Who can read a thread: its people, bots and groups, with each one's role. Paged.",
+      {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
+def thread_members_list(api, args):
+    return api.get(_thread_path(args["thread"], "members"), cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_thread_members_add", "Add a person, bot or group to a thread, so it can read it. You need Write on them. A "
+      "group's members are resolved live, so leaving the group takes the access away. A company or team thread adds "
+      "only bots: everyone else already reads it.",
+      {"thread": THREAD_ID, "actor": THREAD_ACTOR,
+       "role": {"type": "string", "enum": ["member", "owner"], "default": "member"}},
+      required=("thread", "actor"), writes=True)
+def thread_members_add(api, args):
+    return api.post(_thread_path(args["thread"], "members"),
+                    {"actor": args["actor"], "role": args.get("role") or "member"}, key=_key(args))
+
+
+@tool("hub_thread_members_remove", "Remove a person, bot or group from a thread: they stop reading it. The thread's "
+      "owner or an admin only. A company or team thread removes only bots.",
+      {"thread": THREAD_ID, "actor": THREAD_ACTOR}, required=("thread", "actor"), writes=True)
+def thread_members_remove(api, args):
+    return api.call("DELETE", _thread_path(args["thread"], "members", quote(args["actor"], safe=":")), None,
+                    key=_key(args))
+
+
+@tool("hub_thread_update", "Rename a thread, archive or unarchive it, change who may read it: members, team (a group) "
+      "or company, or set how long it keeps its messages. Only its starter or an admin can make a thread public.",
+      {"thread": THREAD_ID, "title": _s("The new title"), "archived": {"type": "boolean"},
+       "audience": {"type": "string", "enum": ["members", "team", "company"]},
+       "audience_group_id": _s("For audience team: the group's id"),
+       "retention_days": {"type": ["integer", "null"], "description": "On a root thread: delete its messages and its "
+                          "sub-threads' after this many days; null keeps them for good"}},
+      required=("thread",), writes=True)
+def thread_update(api, args):
+    body = {key: args[key] for key in ("title", "archived", "audience", "audience_group_id") if args.get(key) is not None}
+    if "retention_days" in args:
+        body["retention_days"] = args["retention_days"]
+    return api.patch(_thread_path(args["thread"]), body, key=_key(args))
+
+
+@tool("hub_thread_open_earlier", "Open a bot's earlier messages to the people who read its Home. Only a manager of the "
+      "bot may. The answer is its Home and the messages.",
+      {"thread_id": THREAD_ID}, required=("thread_id",), writes=True)
+def thread_open_earlier(api, args):
+    return api.post(_thread_path(args["thread_id"], "open-earlier"), {}, key=_key(args))
+
+
+@tool("hub_thread_delete", "Delete a message you wrote. It leaves a marker with no text, its sub-thread stays, and the asks "
+      "it answered reopen. Asks, answers and notices cannot be deleted by their writers this way.",
+      {"message_id": _s("The message's id")}, required=("message_id",), writes=True)
+def thread_delete(api, args):
+    return api.call("DELETE", "messages/" + quote(args["message_id"], safe=""), None, key=_key(args))
+
+
+@tool("hub_thread_upload", "Post a message with a local file to a thread: the file is streamed to Tico, and `text` is the "
+      "message's words (optional). `under` posts it in that message's sub-thread. Needs a Computer to stream from.",
+      {"thread": THREAD_ID, "path": _s("A local file on this computer"), "text": _s("The message's text, optional"),
+       "kind": {"type": "string", "enum": ["say", "ask"], "default": "say", "description": "say, or ask for an answer"},
+       "to": _s("The person or bot an ask is for"),
+       "under": _s("The message whose sub-thread the file goes under (optional)")},
+      required=("thread", "path"), writes=True)
+def thread_upload(api, args):
+    if not hasattr(api, "post_multipart"):
+        raise ValueError("Stream local files with hub thread upload on your Computer")
+    from . import bot_files as BF
+    path, _ = BF.local_file(BF.checkout_root(), args["path"])
+    fields = {"text": args.get("text"), "kind": args.get("kind"), "to": args.get("to"),
+              "parent_message_id": args.get("under")}
+    fields = {name: value for name, value in fields.items() if value is not None}
+    return api.post_multipart("uploads/threads/" + quote(str(args["thread"]), safe="") + "/messages", {"file": path},
+                              fields, key=_key(args))
+
+
+@tool("hub_thread_slack_resume", "Check a suspended or refused Slack link again, as the person who asked (an owner or an "
+      "admin): Tico looks at the channel and the thread once more, then activates the link or refuses it. The link's id is "
+      "in hub_thread_link_slack's listing.",
+      {"link_id": _s("The Slack link's id")}, required=("link_id",), writes=True)
+def thread_slack_resume(api, args):
+    return _as_person(api).post("slack/links/" + quote(str(args["link_id"]), safe="") + "/resume", {}, key=_key(args))
+
+
+@tool("hub_thread_task", "Make a task from a thread message you can read. The server copies the message and a link "
+      "back, and the task is private unless the thread is company-wide.",
+      {"message_id": _s("The message id from hub_thread_show"), "title": _s("Task title"),
+       "owner": _s("Who does it: a bot slug, a person id, or `me`")},
+      required=("message_id", "title", "owner"), writes=True)
+def thread_task(api, args):
+    return api.post("threads/messages/" + quote(args["message_id"], safe="") + "/task",
+                    {"title": args["title"], "owner": _target(api, args["owner"])}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- the Assistant
@@ -6175,6 +6605,15 @@ def inbound_inboxes(api,args):
     return api.get('inbound/inboxes',**{k:args[k] for k in ('after','limit') if args.get(k) is not None})
 
 
+@tool('hub_inbound_audience','Who reads an inbox: company (everyone), or team with group (that group and the groups '
+      'under it). The owner and admins always read it. Owner or admin only (BotOps: the person who asked).',
+      {'inbox_id':_s('Inbox id'),'audience':_s('company or team',enum=['company','team']),
+       'group':_s('Group id, for team')},required=('inbox_id','audience'),writes=True)
+def inbound_audience(api,args):
+    body = {'audience':args['audience'],'group_id':args.get('group') or None}
+    return _as_person(api).call('PUT','inbound/inboxes/'+quote(args['inbox_id'],safe='')+'/audience',body,_key(args))
+
+
 @tool('hub_inbound_create_email','Create a free inbound-only @tico.team inbox for company agents. Usage is recorded, not billed.',
       {'name':_s('Inbox name')},writes=True)
 def inbound_create_email(api,args):
@@ -6219,6 +6658,16 @@ def inbound_code(api,args):
 def inbound_wait(api,args):
     body = {k:v for k,v in args.items() if k in ('inbox_ids','kind','sender','has_code','after','timeout','limit') and v is not None}
     return api.post('inbound/wait',body)
+
+
+# ----------------------------------------------------------------------------- connections (backend/connections.py)
+@tool('hub_connections_list','Every connection you may see: Slack, GitHub, mail bots, Email & Phone inboxes, meeting '
+      'importers, incoming and outgoing webhooks, physical mail and Listening. Each row: name, status, scope, who reads '
+      'it, its bots and where to configure it. Follow next with cursor.',
+      {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':100}})
+def connections_list(api,args):
+    page = dict(limit=args.get('limit'), cursor=args.get('cursor'))
+    return _as_person(api).get('connections', **{k: v for k, v in page.items() if v is not None})
 
 
 # ----------------------------------------------------------------------------- physical mail (backend/postal_mail.py)
@@ -6582,6 +7031,9 @@ def _present(values):
 
 
 RULE_VERSION = {"type": "integer", "minimum": 1, "description": "The rule's version as you read it"}
+RULE_WHERE = {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": "Where it applies, any of: "
+              "thread:<id> (a conversation), team:<group>, kind:dm (a direct chat), has_outside_members. Empty or left "
+              "out: everywhere"}
 
 
 @tool("hub_rules_list", "The org rules in force, newest first, paged: internal (between teammates) and external "
@@ -6655,11 +7107,11 @@ def rules_ask(api, args):
                                "section": _s("The section it is in"), "quote": _s("The exact words")},
                 "required": ["file_id", "quote"]},
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
-       "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
+       "where": RULE_WHERE, "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
       required=("kind", "text"), writes=True)
 def rules_add(api, args):
-    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "source_id", "cite",
-                                              "if_broken", "reviewer")})
+    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "where", "source_id",
+                                              "cite", "if_broken", "reviewer")})
     who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
     return who.post("rules", body, key=_key(args))
 
@@ -6667,11 +7119,11 @@ def rules_add(api, args):
 @tool("hub_rules_edit", "Edit an org rule: only the fields sent, against the version you read. A bot cannot edit.",
       {"id": _s("The rule's id"), "version": RULE_VERSION, "text": _s("The rule in one sentence"),
        "description": _s("Longer text"), "who": _rule_scope("Who follows it"), "with": _rule_scope("Internal: with whom"),
-       "source_id": _s("External: the From, by name or id"),
+       "source_id": _s("External: the From, by name or id"), "where": RULE_WHERE,
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]}, "reviewer": _s("A reviewer")},
       required=("id", "version"), writes=True)
 def rules_edit(api, args):
-    body = _present({k: args.get(k) for k in ("version", "text", "description", "who", "with", "source_id",
+    body = _present({k: args.get(k) for k in ("version", "text", "description", "who", "with", "where", "source_id",
                                               "if_broken", "reviewer")})
     return _as_person(api).post(f"rules/{args['id']}", body, key=_key(args))
 
@@ -6768,6 +7220,101 @@ def rules_appeal(api, args):
     return api.post(f"rule-holds/{args['id']}/appeal", {"why": args.get("why") or ""}, key=_key(args))
 
 
+@tool("hub_rules_withdraw", "Take back your held write so you can edit it and send it again: the hold is kept and "
+      "nothing is sent. Only the author of the held write may withdraw it.",
+      {"id": _s("The hold's id, from the held answer")}, required=("id",), writes=True)
+def rules_withdraw(api, args):
+    return api.post(f"rule-holds/{args['id']}/withdraw", {}, key=_key(args))
+
+
+# ----------------------------------------------------------------------------- calls (Tico Meet: docs/meet.md)
+# A call belongs to a thread. Starting, joining, ending and attaching bots are people's acts; BotOps acts as the person it
+# works for, and the server refuses a bot on each of them. Every read checks the caller's access to the thread.
+CALL_TOOLS = ("hub_call_list", "hub_call_show", "hub_call_start", "hub_call_join", "hub_call_token", "hub_call_leave",
+              "hub_call_end", "hub_call_retry", "hub_call_bot_add", "hub_call_bot_remove")
+
+
+@tool("hub_call_list", "The calls in a thread, newest first: id, title, state (`live` or `ended`), connector, and how each "
+      "ended. `next_before` reads older ones.",
+      {"thread_id": _s("The thread's id"),
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+       "before": _s("The `next_before` of the page you read, from that page's answer")}, required=("thread_id",))
+def call_list(api, args):
+    query = {key: args[key] for key in ("limit", "before") if args.get(key) not in (None, "")}
+    return _as_person(api).get(f"threads/{args['thread_id']}/calls", **query)
+
+
+@tool("hub_call_show", "A call: its state, title, connector, who joined (and when they left or were removed), the bots "
+      "listening, and how it ended. Only people who can read its thread see it.", {"call_id": _s("The call's id")},
+      required=("call_id",))
+def call_show(api, args):
+    return _as_person(api).get(f"calls/{args['call_id']}")
+
+
+@tool("hub_call_start", "Start a call in a thread you can write to. Its audio and screen share reach the people in the "
+      "thread, and a live transcript is kept while it runs and posted to the thread when it ends. You are its connector. "
+      "Refused while another call runs in the thread, and while Tico Meet is not set up on this server.",
+      {"thread_id": _s("The thread's id"), "title": _s("What the call is called, up to 200 characters"),
+       "speak_replies": {"type": "boolean", "description": "Bots speak their replies on this call. Off unless asked; "
+                         "spoken replies are refused until the Gateway has text-to-speech, so leave it out"}},
+      required=("thread_id",), writes=True)
+def call_start(api, args):
+    body = {"title": str(args["title"])} if args.get("title") else {}
+    if args.get("speak_replies"):
+        body["speak_replies"] = True
+    return _as_person(api).post(f"threads/{args['thread_id']}/calls", body, key=_key(args))
+
+
+@tool("hub_call_join", "Join a call you can read. The answer has `url` and `token`: connect a LiveKit client to them to speak "
+      "and share your screen (never a camera). The token lasts 5 minutes; get a fresh one with hub_call_token while you stay.",
+      {"call_id": _s("The call's id")}, required=("call_id",), writes=True)
+def call_join(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/join", {}, key=_key(args))
+
+
+@tool("hub_call_token", "A fresh token for a call you have joined, good for 5 minutes. Refused once you were removed from the "
+      "call (you lost access to its thread), and once you have left it or it has ended.",
+      {"call_id": _s("The call's id")}, required=("call_id",))
+def call_token(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/token", {})
+
+
+@tool("hub_call_leave", "Leave a call you joined. The others stay in it.", {"call_id": _s("The call's id")},
+      required=("call_id",), writes=True)
+def call_leave(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/leave", {}, key=_key(args))
+
+
+@tool("hub_call_end", "End a call you started. The speech so far is transcribed and the transcript is posted to the thread. "
+      "Tasks are made by hand.", {"call_id": _s("The call's id")}, required=("call_id",), writes=True)
+def call_end(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/end", {}, key=_key(args))
+
+
+@tool("hub_call_retry", "Ask again for a call's action items when the Gateway could not make them. Only the person who "
+      "started the call may ask, and only after it ended. The sweep makes them again shortly.",
+      {"call_id": _s("The call's id")}, required=("call_id",), writes=True)
+def call_retry(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/action-items/retry", {}, key=_key(args))
+
+
+@tool("hub_call_bot_add", "Let bots listen to a call you have joined and reply in its thread. You must be able to write to "
+      "each bot; up to 10 at once.",
+      {"call_id": _s("The call's id"),
+       "bots": {"type": "array", "items": _s("A bot's slug"), "minItems": 1, "maxItems": 10}},
+      required=("call_id", "bots"), writes=True)
+def call_bot_add(api, args):
+    return _as_person(api).post(f"calls/{args['call_id']}/bots", {"bots": [str(bot) for bot in args["bots"]]},
+                                key=_key(args))
+
+
+@tool("hub_call_bot_remove", "Take a bot out of a call. Its replies already in the thread stay.",
+      {"call_id": _s("The call's id"), "bot": _s("The bot's slug")}, required=("call_id", "bot"), writes=True)
+def call_bot_remove(api, args):
+    return _as_person(api).call("DELETE", f"calls/{args['call_id']}/bots/{quote(str(args['bot']), safe='')}", {},
+                                key=_key(args))
+
+
 BY_NAME = {t["name"]: t for t in TOOLS}
 
 
@@ -6826,7 +7373,8 @@ AUDIENCE = {
                                     "hub_bot_keep_tasks_going", "hub_stall_triage", "hub_bot_budget",
                                     "hub_bot_profile", "hub_bot_release", "hub_bot_pause",
                                     "hub_bot_scope",
-                                    "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add",
+                                    "hub_bot_resume", "hub_bot_access", "hub_human_access", "hub_group_access",
+                                    "hub_bot_owners", "hub_human_add",
                                     "hub_tool_add", "hub_tool_update", "hub_tool_remove",
                                     "hub_bot_copy", "hub_bot_update_from_original", "hub_bot_suggest_to_original", "hub_skill_copy")},
     **{name: REQUESTER_READ for name in ("hub_credential_list", "hub_health_check")},
@@ -6834,12 +7382,13 @@ AUDIENCE = {
     "hub_health_metrics": REQUESTER,
     **{name: REQUESTER for name in ("hub_bot_archive", "hub_doc_archive", "hub_file_archive", "hub_meeting_delete", "hub_meeting_granola_status", "hub_meeting_granola_sync",
                                    "hub_meeting_pending", "hub_meeting_approve", "hub_meeting_dismiss", "hub_meeting_restore")},
+    **{name: REQUESTER for name in CALL_TOOLS},     # a person's act; BotOps acts as the person it works for
     # The Assistant only.
     "hub_assistant_propose": ("assistant",), "hub_approval_read_back": ("assistant",),
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
     "hub_rules_add": KINDS,
     # A bot checks its own drafts and appeals its own holds; a person's writes are never checked.
-    "hub_rules_check": BOTS, "hub_rules_appeal": BOTS,
+    "hub_rules_check": BOTS, "hub_rules_appeal": BOTS, "hub_rules_withdraw": PEOPLE + BOTS,
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,

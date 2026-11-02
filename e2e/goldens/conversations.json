@@ -8,13 +8,20 @@
     },
     "conversations": [
       {
+        "archived_at": null,
+        "audience": null,
+        "audience_group_id": null,
         "closed_at": null,
         "created_at": "<time>",
         "id": "<conversation>",
         "kind": "chat",
         "last_message_at": "<time>",
+        "last_seq": 17,
+        "last_unread_seq": 17,
         "owner_id": "human:ana",
         "owner_name": "Ana",
+        "parent_id": null,
+        "parent_message_id": null,
         "participant_names": [
           "Ana",
           "ops"
@@ -23,18 +30,29 @@
           "human:ana",
           "bot:ops"
         ],
+        "path": "/<conversation>/",
+        "retention_days": null,
         "room_key": "ops",
+        "root_id": "<conversation>",
         "scope": "personal",
         "subject": "Chat with ops",
-        "task_id": null
+        "task_id": null,
+        "updated_at": "<time>"
       },
       {
+        "archived_at": null,
+        "audience": null,
+        "audience_group_id": null,
         "closed_at": null,
         "created_at": "<time>",
         "id": "<id1>",
         "kind": "notice",
         "last_message_at": "<time>",
+        "last_seq": 16,
+        "last_unread_seq": 16,
         "owner_id": null,
+        "parent_id": null,
+        "parent_message_id": null,
         "participant_names": [
           "ops",
           "Ana"
@@ -43,18 +61,29 @@
           "bot:ops",
           "human:ana"
         ],
+        "path": "/<id1>/",
+        "retention_days": null,
         "room_key": null,
+        "root_id": "<id1>",
         "scope": "direct",
         "subject": "",
-        "task_id": null
+        "task_id": null,
+        "updated_at": "<time>"
       },
       {
+        "archived_at": null,
+        "audience": null,
+        "audience_group_id": null,
         "closed_at": null,
         "created_at": "<time>",
         "id": "<id2>",
         "kind": "task",
         "last_message_at": "<time>",
+        "last_seq": 12,
+        "last_unread_seq": 12,
         "owner_id": null,
+        "parent_id": null,
+        "parent_message_id": null,
         "participant_names": [
           "Ana",
           "ops"
@@ -63,36 +92,58 @@
           "human:ana",
           "bot:ops"
         ],
+        "path": "/<id2>/",
+        "retention_days": null,
         "room_key": null,
+        "root_id": "<id2>",
         "scope": "task",
         "subject": "Check the vendor list",
-        "task_id": "<open_task>"
+        "task_id": "<open_task>",
+        "updated_at": "<time>"
       },
       {
+        "archived_at": null,
+        "audience": null,
+        "audience_group_id": null,
         "closed_at": null,
         "created_at": "<time>",
         "id": "<id3>",
         "kind": "task",
         "last_message_at": "<time>",
+        "last_seq": 10,
+        "last_unread_seq": 10,
         "owner_id": null,
+        "parent_id": null,
+        "parent_message_id": null,
         "participant_names": [
           "Ana"
         ],
         "participants": [
           "human:ana"
         ],
+        "path": "/<id3>/",
+        "retention_days": null,
         "room_key": null,
+        "root_id": "<id3>",
         "scope": "task",
         "subject": "Draft the launch plan",
-        "task_id": "<task>"
+        "task_id": "<task>",
+        "updated_at": "<time>"
       },
       {
+        "archived_at": null,
+        "audience": null,
+        "audience_group_id": null,
         "closed_at": null,
         "created_at": "<time>",
         "id": "<id4>",
         "kind": "notice",
         "last_message_at": "<time>",
+        "last_seq": 1,
+        "last_unread_seq": 1,
         "owner_id": null,
+        "parent_id": null,
+        "parent_message_id": null,
         "participant_names": [
           "keeper",
           "Ana"
@@ -101,10 +152,14 @@
           "keeper",
           "human:ana"
         ],
+        "path": "/<id4>/",
+        "retention_days": null,
         "room_key": null,
+        "root_id": "<id4>",
         "scope": "direct",
         "subject": "",
-        "task_id": null
+        "task_id": null,
+        "updated_at": "<time>"
       }
     ]
   },

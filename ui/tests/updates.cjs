@@ -375,10 +375,10 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const p = phone.page;
     await p.goto('http://tico-ui.test/#/updates');
     await p.locator('#upd-feed .upd-card').first().waitFor();
-    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Ask Tico', 'Tasks', 'Updates', 'More']);
+    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Ask Tico', 'Tasks', 'Updates', 'More']);
     // Six items; Ask Tico (the Liquid Dot) sits in the middle of the bar, and the items on each side of it share their
     // side evenly.
-    const nav = () => p.locator('#mobile-nav .mobile-nav-item').evaluateAll(items => items.map(el => { const r = el.getBoundingClientRect(); return {w: r.width, mid: r.left + r.width / 2}; }));
+    const nav = () => p.locator('#mobile-nav .mobile-nav-item:not([hidden])').evaluateAll(items => items.map(el => { const r = el.getBoundingClientRect(); return {w: r.width, mid: r.left + r.width / 2}; }));
     const even = list => Math.max(...list.map(i => i.w)) - Math.min(...list.map(i => i.w)) < 1;
     const items = await nav();
     assert.equal(items.length, 6);

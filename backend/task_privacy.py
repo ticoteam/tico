@@ -349,6 +349,9 @@ def prime_messages(c, messages):
 
 # Events whose target is a run and whose `tasks` the run took in: carried tasks, and the tasks
 # of an input that a later run took over after this one had already read it.
+# Message columns threads keeps for itself (backend/threads.py): never part of an API row. A page only holds live
+# messages, so `deleted_at` is always empty there.
+INTERNAL_MESSAGE_COLUMNS = frozenset({"restricted", "legacy_audience", "deleted_at"})
 INPUT_MOVED = "attempt.input.moved"
 RUN_TASK_EVENTS_SQL = "'task.next-run.carried','" + INPUT_MOVED + "'"
 
@@ -380,6 +383,18 @@ def message_readable(c, actor, message, current=False):
     message = stored or message
     if message.get("deleted_at") or message.get("deleted"):
         return False
+    from . import threads
+    if not threads.legacy_gate(c, actor, message):
+        return False
+    carried = H._json(message.get("refs"), {}) or {}
+    if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.KEEPER:
+        # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
+        source = H.message(c, carried["carries"], include_deleted=True)
+        source_refs = (source or {}).get("refs") or {}
+        if (not source or source.get("conversation_id") != message.get("conversation_id")
+                or (isinstance(source_refs, dict) and source_refs.get("carries"))):
+            return False
+        return message_readable(c, actor, source)
     try:
         return (meeting_sources(c).message_readable(actor, message)
                 and readable(c, actor, message_tasks(c, message, current=bool(stored))))
@@ -438,6 +453,10 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
         if stored.get("deleted_at") or stored.get("deleted"):
             return False
         try:
+            # A carrier is read as the message it carries (message_readable): with that message gone or closed to this
+            # reader it leaves the page, and a run's claim, which checks every message it hands out, is not refused for it.
+            if '"carries"' in (stored.get("refs") or "") and not message_readable(c, reader, stored, current=True):
+                return False
             tasks = message_tasks(c, stored, current=True)
             if task_id and task_id not in tasks:
                 return False
@@ -445,7 +464,8 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
                 return False
         except Problem:
             return False
-        message = {**stored, "refs": H._json(stored["refs"], {}) or {}}
+        message = {key: value for key, value in stored.items() if key not in INTERNAL_MESSAGE_COLUMNS}
+        message["refs"] = H._json(stored["refs"], {}) or {}
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:
@@ -1041,6 +1061,14 @@ def guard_write(c, who, path, auth):
         raise Problem("privacy", PRIVATE_MEETING_REFUSAL, 403)
     if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run"):
         return
+    native = re.fullmatch(r"/api/v2/threads/([^/]+)/messages", path)
+    if native:
+        # The native message route: admitted only into the run's own private task thread (private_thread_destination).
+        from . import threads
+        thread = threads.thread_row(c, native[1])
+        if thread is None:
+            raise Problem("not_found", "Thread not found", 404)
+        return private_thread_destination(c, who, thread)
     if path == "/api/v2/task-questions":
         return              # a private task of its own, to a person question_party lets read the run's work (media.py)
     if path.startswith(("/api/v2/files/", "/api/v2/messages",
@@ -1060,6 +1088,23 @@ def guard_write(c, who, path, auth):
         if counsel.run_read(c, who):
             return          # Counsel's suggestions from its own read task; the route checks each (counsel.private_suggestion)
     raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
+
+
+PRIVATE_THREAD_REFUSAL = "Private task work posts only in its own private task's thread"
+
+
+def private_thread_destination(c, who, thread):
+    """A private run's write into a thread (a post or an edit) stays in its own private task's thread: the root's task
+    is the one private task the run carries, and no private meeting. Thread readers of a task thread are the readers of
+    its task, so nothing reaches anyone who cannot read the run's work. Refused otherwise. One check for the native
+    message route (guard_write) and for an edit (threads.edit_message). A run that is not private, or no run, passes."""
+    if who is None or not getattr(who, "attempt_id", None) or not private_execution(c, who):
+        return
+    root = H.conversation(c, thread.get("root_id") or thread["id"]) or thread
+    own = root.get("task_id")
+    carried = {tid for tid in attempt_tasks(c, who.attempt_id) if H.task_private(c, _task(c, tid))}
+    if not own or carried != {own} or private_meetings(c, meeting_sources(c).attempt(who.attempt_id)):
+        raise Problem("privacy", PRIVATE_THREAD_REFUSAL, 403)
 
 
 def tag_readable(c, who, row):
@@ -1116,6 +1161,11 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     `sealed` are the private tasks a sealed subtask for `to` keeps from it (sealed_for): `to` need not read those.
     A private subtask's words may go to its parent's readers when every party of the subtask reads the parent
     (hubdb.subtask_flows_up): a guest's answer comes back to the task it was asked for."""
+    conv = H.conversation(c, conversation_id) if conversation_id else None
+    if conv and conv.get("audience") and private_execution(c, who):
+        # A native thread's readers are its audience, not its participants list: a private run writes into it only as
+        # private_thread_destination allows (its own private task's thread). Both legacy send routes come through here.
+        private_thread_destination(c, who, conv)
     ids = references(c, refs)
     ids.update(message_tasks(c, reply) if reply else ())
     if who.attempt_id:
@@ -1130,7 +1180,6 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     private = [_task(c, tid) for tid in ids if H.task_private(c, _task(c, tid))]
     if not private and not restricted_meetings:
         return
-    conv = H.conversation(c, conversation_id) if conversation_id else None
     audience = set((conv or {}).get("participants") or []) | {who.actor, to}
     if getattr(who, "task_actor", ""):
         audience.add(who.task_actor)

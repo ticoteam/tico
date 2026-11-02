@@ -14,7 +14,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import browser_exit, claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, runner_wire, runs, turn_budgets
+from . import browser_exit, claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, runner_wire, runs, thread_bot_digest, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
@@ -120,6 +120,11 @@ CAPACITY_CONTINUE = "capacity_continue_v1"
 # wrote, so it is never handed one: the turn waits for an updated runner (live_meetings `meeting.bot_turn_waiting`).
 PRIVATE_LANES = "private_lanes_v1"
 SOURCE_CONTINUE = "source_continue_v1"
+
+# A runner that advertises this keeps the threads of a bot's chats apart: a public thread's turn never resumes a direct
+# message's provider thread (runner-rs session_key). Any other runner keys a `session: bot` chat on the bot's one thread,
+# so the server gives it each chat's own session instead (start_claimed).
+THREADS = "threads_v1"
 
 
 def positive_effect(c, aid, body):
@@ -238,6 +243,10 @@ def roots_on(runner):
     return bool(runner) and ROOTS in _capability_set(runner["capabilities"])
 
 
+def threads_on(runner):
+    return bool(runner) and THREADS in _capability_set(runner["capabilities"])
+
+
 def task_goals_on(runner):
     return bool(runner) and TASK_GOALS in _capability_set(runner["capabilities"])
 
@@ -262,6 +271,21 @@ def reply_target(message, conversation, task):
         target = ((conversation.get("owner_id") if conversation.get("scope") == "personal" else None)
                   or (humans[0] if humans else None) or task["requester_id"])
     return target
+
+
+def reply_source(c, message):
+    """The message a turn's reply answers. A turn woken through a carrier (a keeper notice that starts a further
+    bot's run, backend/threads.py `_carrier`) answers the message it carries, which sits in the carrier's own thread;
+    any other turn answers its own message. None when the carried message is gone or was moved elsewhere: there is
+    nothing left to answer. Only the keeper writes carriers, so a `carries` ref on anyone else's message is ignored."""
+    refs = message.get("refs") if isinstance(message.get("refs"), dict) else H._json(message.get("refs"), {})
+    carried = (refs or {}).get("carries")
+    if not carried or message.get("sender_id") != H.KEEPER:
+        return message
+    found = H.message(c, str(carried), include_deleted=True)
+    if not found or found["conversation_id"] != message["conversation_id"]:
+        return None
+    return found
 
 
 def work_task_id(message, conversation=None):
@@ -1302,6 +1326,21 @@ def source_continuation(c, job_id):
     from .read_cache import one
     row = one(c, SOURCE_CONTINUATION_SQL, (job_id,))
     return json.loads(row[0]).get('source_continuation') if row else None
+
+
+def thread_payload(c, conv, msg):
+    """The claim's conversation, with what keys the turn's session: its root (`root_id`) and whether the thread is
+    private or public (`audience_class`, backend/threads.py). A private thread's session never serves a public one, nor
+    does a public session take in what some reader of its thread may not read: a turn for a message narrower than its
+    thread, or for a thread's private notes, has a private session even when the thread is public."""
+    if not conv:
+        return conv
+    from . import threads
+    # A carrier's turn is classed by the message it carries (reply_source).
+    source = (reply_source(c, msg) if msg else None) or msg
+    private = threads.private_task_thread(c, conv) or threads.note_wake(msg) or threads.message_narrower(c, source)
+    return {**conv, "root_id": conv.get("root_id") or conv.get("id"),
+            "audience_class": "private" if private else threads.audience_class(conv, source)}
 
 
 def continuation_thread(c, job_id):
@@ -3496,8 +3535,12 @@ class Execution:
         """The preparation of the job a claim hands out: its turn, attempt, inputs and hand-out. The claim runs it in a
         savepoint of its own (claim), so an error here rolls back only this job's writes."""
         msg = H.message(c, row["message_id"])
-        if not privacy.message_readable(c, "bot:" + row["bot_id"], msg):
+        from . import threads
+        if (not privacy.message_readable(c, "bot:" + row["bot_id"], msg)
+                or not threads.still_addressed(c, msg, "bot:" + row["bot_id"])):
             c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
+            threads.moot_delivery(c, msg, "bot:" + row["bot_id"])
+            threads.replace_note_wake(c, msg, "bot:" + row["bot_id"])
             H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
             return {"attempt": None}
         # The bot's budget and back-off: an error in them passes the bot over, and holds no run.
@@ -3576,6 +3619,7 @@ class Execution:
         c.execute("UPDATE attempts SET wake=?,handed_runtime=?,handed_model=? WHERE id=?",
                   (json.dumps(wake_presets.record(c, job, msg, row["bot_id"])), *handed, aid))
         c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, conv["id"]))
+        thread_bot_digest.grant(c, aid, msg)
         task_models.handed(c, aid, task["id"] if task else None, model_record)
         held = None
         source = source_continuation(c, row["id"])
@@ -3620,17 +3664,32 @@ class Execution:
         # A stateless bot (Counsel): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
         if H.stateless(followed):
             config = {**config, "stateless": True}
+        # A runner without threads_v1 keys every bot-keyed turn on the bot's one provider thread (`session: bot`), so a
+        # chat's turn would resume another thread's session. Its chats get a session each instead (`session: task` with no
+        # task keys on the conversation, runner-rs session_key); a task keeps its own session as before.
+        if (not threads_on(runner) and task is None and config.get("session") in (None, "", "bot")
+                and not config.get("stateless")):
+            config = {**config, "session": "task"}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The
         # hub keeps no pointer to the bot's session and rebuilds nothing on its behalf.
         epoch = c.execute("SELECT epoch,updated_at FROM session_epochs WHERE conversation_id=?", (conv["id"],)).fetchone()
         bot_epoch = c.execute("SELECT epoch FROM bot_session_epochs WHERE bot=?", (row["bot_id"],)).fetchone()
+        # A sub-thread's turn continues its root's session (clients/sessions.py root keys), so the epoch that clears
+        # that session is the root's: a Clear on the chat starts its sub-threads' next turn anew too.
+        root_id = conv.get("root_id") or conv["id"]
+        session_epoch = epoch if root_id == conv["id"] else c.execute(
+            "SELECT epoch FROM session_epochs WHERE conversation_id=?", (root_id,)).fetchone()
         bot_who = Identity("bot:" + row["bot_id"], "bot", attempt_id=aid)
         history = privacy.page(c, bot_who, conv["id"], limit=HISTORY_PAGE * (2 if lanes else 1),
                                since=epoch["updated_at"] if epoch else None)["messages"]
         if lanes:
             history = lane_history(c, row["bot_id"], followed, history, conv, lane, roots)[-HISTORY_PAGE:]
+        conversation = thread_payload(c, conv, msg)
+        if conversation and conversation.get("audience_class") == "public":
+            from . import threads
+            threads.mark_narrower(c, history)
         principal = (conv.get("owner_id") if conv.get("scope") == "personal"
                      else msg["sender_id"] if str(msg["sender_id"]).startswith("human:") else None)
         routine = None
@@ -3733,14 +3792,19 @@ class Execution:
         notes = []
         if getattr(body, "next_run", False) and not check and not scope:
             from . import bot_to_bot
-            waiting = H.notes_waiting(c, row["bot_id"])
+            from . import threads
+            # A deferred thread note goes only while the bot still reads its source (a lost one is canceled here), and
+            # only into a session inside its source's boundary: one that does not fit waits, and its own thread gets a run.
+            waiting, left = threads.notes_for_run(c, "bot:" + row["bot_id"], conv, (conversation or {}).get("audience_class"))
+            threads.wake_note_threads(c, "bot:" + row["bot_id"], left)
             for item in waiting:
                 c.execute("UPDATE notes SET carried_by=? WHERE id=?", (aid, item["id"]))
             # A bot's message that waited for this run is read now; a backlog past one run's notes gets a run of its own.
             for item in bot_to_bot.carried(c, waiting, H.now()):
                 notes.append({"id": item["id"], "from": item["from_actor"], "sent": item["created_at"],
                               "text": item["body"], **({"message": item["message_id"]} if item.get("message_id") else {})})
-            bot_to_bot.continue_backlog(c, row["bot_id"])
+            if waiting:
+                bot_to_bot.continue_backlog(c, row["bot_id"], skip=[item["id"] for item in left])
             if notes:
                 H.event(c, H.KEEPER, "note.carried", aid, {"bot": row["bot_id"], "notes": [n["id"] for n in notes]})
         # What was deferred to this turn (backend/delivery.py): the session's comments and messages, written out in the
@@ -3797,7 +3861,12 @@ class Execution:
                             "generation": row["generation"], "lease_until": until,
                             **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,
-                            "message": msg, "conversation": conv, "task": wire_task,
+                            # The thread's root and audience class key the turn's session (clients/sessions.py).
+                            # A message in a sub-thread names the message it hangs off: the runner sends it back
+                            # with the completion, and the reply lands in that sub-thread (Execution._say_reply).
+                            "message": ({**msg, "parent_message_id": (conv or {}).get("parent_message_id")}
+                                        if msg else msg),
+                            "conversation": conversation, "task": wire_task,
                             **({"continue_thread": continue_thread} if continue_thread else {}),
                             **({"source_continuation": source} if source else {}),
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
@@ -3814,7 +3883,7 @@ class Execution:
                             "config": rooms.session_config(conv, row["bot_id"], config),
                             # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
                             # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
-                            "session_epoch": epoch["epoch"] if epoch else 0,
+                            "session_epoch": session_epoch["epoch"] if session_epoch else 0,
                             # Moved by any clear or reset of this bot: the runner starts the bot's shared thread anew.
                             "bot_session_epoch": bot_epoch[0] if bot_epoch else 0}}
 
@@ -4257,10 +4326,13 @@ class Execution:
         results, comments: the claim's fence, unfenced_sql, kept them back), so no separate turn waits after it to
         read them again (Dev 543). Each joins this turn as an input given in its prompt, already acknowledged, and its
         job settles with the turn (complete); a lane's other work, a command and a redirect keep their own turns."""
+        from . import threads
         rows = c.execute("SELECT m.*,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "JOIN conversations cv ON cv.id=m.conversation_id "
                          "WHERE j.bot_id=? AND j.state='queued' AND j.held=0 AND j.redirect=0 AND j.id<>? "
                          "AND m.deleted_at IS NULL AND coalesce(json_extract(m.refs,'$.command'),0)!=1 "
+                         # A run for a thread's waiting notes carries them at its own claim, so it is never folded.
+                         f"AND coalesce(json_extract(m.refs,'$.wake'),'')<>'{threads.NOTE_WAKE}' "
                          f"AND {queued_task_sql()}=? ORDER BY m.rowid",
                          (row["bot_id"], row["id"], task_id)).fetchall()
         lines, folded = [], []
@@ -4268,6 +4340,8 @@ class Execution:
             if not privacy.message_readable(c, "bot:" + row["bot_id"], queued):
                 continue
             message = H.message(c, queued["id"])
+            if not threads.still_addressed(c, message, "bot:" + row["bot_id"]):
+                continue                    # left queued: its own claim settles it
             if lanes and job_lane(c, row["bot_id"], followed, message, H.conversation(c, queued["conversation_id"]),
                                   lanes, roots) != lane:
                 continue
@@ -4283,6 +4357,7 @@ class Execution:
             c.execute("UPDATE attempt_inputs SET attempt_id=?,acked_at=? WHERE message_id=?", (aid, H.now(), queued["id"]))
             c.execute("INSERT OR IGNORE INTO attempt_inputs VALUES(?,?,?)", (aid, queued["id"], H.now()))
             c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, queued["conversation_id"]))
+            thread_bot_digest.grant(c, aid, dict(queued))
             c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE id=?", (aid, queued["job_id"]))
             H.mark_delivered(c, H.KEEPER, queued["id"])
             text = str(queued["body"] or "")
@@ -4347,6 +4422,7 @@ class Execution:
         channel. The runner calls this endpoint only for hosts that advertise steering support.
         Re-deliver until acknowledged; a crash remains uncertain, not a new turn.
         """
+        from . import threads
         attempt = self.attempt(c, who, aid, active=not if_idle)
         if if_idle and (attempt["state"] != "running" or attempt["lease_until"] <= H.now()
                         or not self.current_owner(c, who, attempt)):
@@ -4375,6 +4451,8 @@ class Execution:
                              "WHERE j.bot_id=? AND j.state='queued' AND coalesce(json_extract(m.refs,'$.command'),0)!=1 "
                              # Queued, not steered: it goes in right after the turn (backend/delivery.py).
                              "AND coalesce(json_extract(m.refs,'$.delivery'),'')<>'queue' "
+                             # A run for a thread's waiting notes carries them at its own claim, so it is never folded.
+                             f"AND coalesce(json_extract(m.refs,'$.wake'),'')<>'{threads.NOTE_WAKE}' "
                              # A run the claim holds is not taken into a running turn until its wait ends, as the
                              # claim would not start it either.
                              "AND (j.held=0 OR (j.hold_reason=? AND j.hold_until<=?)) "
@@ -4414,6 +4492,9 @@ class Execution:
                 # Folding another task's private message into this run would make the run private
                 # too, shutting out whoever started it. It waits queued and gets its own run.
                 continue
+            # After the checks above: this reads the thread and its root, and a poll passes over a whole backlog.
+            if not threads.still_addressed(c, H.message(c, row["id"]), "bot:" + attempt["bot_id"]):
+                continue                    # left queued: its own claim settles it
             if attempt["bot_id"] == H.FLEET_MAINTAINER:
                 refs = json.loads(row["refs"] or "{}")
                 origin = c.execute("SELECT j.message_id,m.sender_id FROM jobs j JOIN messages m ON m.id=j.message_id "
@@ -4456,6 +4537,7 @@ class Execution:
                       "WHERE message_id=?", (aid, aid, row["id"]))
             c.execute("INSERT OR IGNORE INTO attempt_inputs VALUES(?,?,NULL)", (aid, row["id"]))
             c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, row["conversation_id"]))
+            thread_bot_digest.grant(c, aid, dict(row))
             claim_holds.clear(c, row["job_id"], "Its held run went into a running turn.")
             c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE message_id=?", (aid, row["id"]))
             taken += 1
@@ -4611,6 +4693,53 @@ class Execution:
         self.forget_held_reply(c, row, row["id"], found[0] if found else None, note)
         return note
 
+    def _say_reply(self, c, actor, target, text, conv, msg, refs, parent_id, aid, carried=False):
+        """The reply to the message a turn answers (`msg`; for a turn a carrier started, the message it carries,
+        reply_source): in that message's thread, or under `parent_id` in its sub-thread when the runner names one. The
+        parent is checked as the attempt, whose grant is its own root (threads._bot_grant): it must be a message there
+        that the bot can read, in a thread the bot can post to, reaching a target who can read it too. Anything else
+        keeps the reply where the message was. threads.post makes or finds the sub-thread.
+
+        A carrier's turn always posts through the write door as the bot under its turn's grant: addressed to the sender
+        when that is a person or a bot that asked, and only when they are in the thread's audience; otherwise open in
+        the thread, where the wake rule and the loop guard decide whom it starts. A thread the bot may no longer read
+        or post in (it was removed, the thread was archived) withholds that reply, and the run is still done."""
+        from . import threads
+        to = target if not carried or H.is_human(target) or msg["kind"] == "ask" else None
+        v = threads.viewer(None, Identity(actor, "bot", attempt_id=aid))
+        thread, under = conv, None
+        if parent_id and text and str(text).strip() and str(target).startswith(("human:", "bot:")):
+            root = threads.root_of(c, conv)
+            parent = H.message(c, parent_id)
+            if (parent and root and parent["conversation_id"] == root["id"] and threads.readable(c, v, parent)
+                    and threads.can_post(c, v, root) and (to is None or threads.audience_has(c, root, to))):
+                if not carried:
+                    return threads.post(c, v, root["id"], text, refs=refs, parent_message_id=parent_id,
+                                        to_actor=to, in_reply_to=msg["id"])
+                thread, under = root, parent_id
+        if not carried:
+            return H.say(c, actor, target, text, conversation_id=conv["id"], in_reply_to=msg["id"], refs=refs)
+        if to and not threads.audience_has(c, thread, to):
+            to = None
+        # A refusal undoes whatever the post began (a sub-thread, a mention), and leaves the finished run standing.
+        c.execute("SAVEPOINT carried_reply")
+        try:
+            sent = threads.post(c, v, thread["id"], text, refs=refs, parent_message_id=under, to_actor=to,
+                                in_reply_to=msg["id"])
+        except Problem as refusal:
+            c.execute("ROLLBACK TO carried_reply")
+            c.execute("RELEASE carried_reply")
+            if refusal.status not in (403, 404):
+                raise
+            H.event(c, H.KEEPER, "reply.withheld", aid, {"bot": actor.split(":", 1)[1], "to": target,
+                                                         "reason": refusal.code})
+            return None
+        except BaseException:
+            c.execute("RELEASE carried_reply")
+            raise
+        c.execute("RELEASE carried_reply")
+        return sent
+
     def complete(self, c, who, aid, body, rule_check=None):
         """`rule_check`: the org rule check of the reply (backend/org_rule_check.py), made before this write."""
         row = self.attempt(c, who, aid, final=True)
@@ -4685,30 +4814,36 @@ class Execution:
         reply, held = None, False
         # Nothing is posted under a comment taken back mid-turn: the reply would stand where it was and could
         # restate it. The turn's own result is still recorded below.
-        if body.text and body.outcome == "completed" and msg["deleted_at"] is None:
+        # A turn a carrier started answers the message it carries (reply_source): its sender, in its thread.
+        source = reply_source(c, msg)
+        carried = source is not None and source["id"] != msg["id"]
+        if body.text and body.outcome == "completed" and msg["deleted_at"] is None and source is not None \
+                and source["deleted_at"] is None:
             text, notices = split_runner_notices(body.text)
-            already = c.execute("SELECT id FROM messages WHERE sender_id=? AND in_reply_to=?",
-                                (actor, msg["id"])).fetchone()
+            already = c.execute("SELECT id FROM messages WHERE sender_id=? AND in_reply_to IN (?,?)",
+                                (actor, msg["id"], source["id"])).fetchone()
             # Tool sends need not name in_reply_to. Their authenticated mutation receipt,
             # unlike caller-supplied refs or matching historical text, proves this attempt sent it.
             same = c.execute(
                 "SELECT m.id FROM idempotency i JOIN messages m "
                 "ON m.id=coalesce(json_extract(i.response,'$.id'),json_extract(i.response,'$.message.id')) "
-                "WHERE i.actor=? AND i.operation IN (?,?) "
+                "WHERE i.actor=? AND i.operation IN (?,?,?) "
                 "AND m.conversation_id=? AND m.sender_id=? AND m.body=?",
                 (actor + ":" + aid, "/api/v2/messages", "/api/v2/conversations/" + conv["id"] + "/messages",
-                 conv["id"], actor, text)).fetchone()
-            task = H.task(c, work_task_id(msg, conv)) if work_task_id(msg, conv) else None
+                 "/api/v2/threads/" + conv["id"] + "/messages", conv["id"], actor, text)).fetchone()
+            task = H.task(c, work_task_id(source, conv)) if work_task_id(source, conv) else None
             # A bot delivered through a desktop app: the computer may have reported the reply from the app first.
             same = same or app_delivery.echoes(c, conv["id"], actor, text, any_source=False)
             # A reply the turn already sent (a tool message) is not posted again; the rule check's verdict on the final
             # text still applies (held, the run keeps only the note), so `posting` decides only the post.
             posting = not already and not same
-            if msg["kind"] in ("say", "ask", "steer") or task:
-                target = msg["sender_id"]
-                replyable = not str(target).startswith("bot:") or msg["kind"] == "ask"
+            if source["kind"] in ("say", "ask", "steer") or task:
+                target = source["sender_id"]
+                # A bot is answered only when it asked, except where the thread's wake rule chose to start this run
+                # for its message (a carrier): the loop guard, not this rule, bounds bots answering bots there.
+                replyable = not str(target).startswith("bot:") or source["kind"] == "ask" or carried
                 if target == H.KEEPER and task:
-                    target = reply_target(msg, conv, task)
+                    target = reply_target(source, conv, task)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
                     # its own room (H.task_from_chat). Any other dedicated task thread waits until the owner
                     # has marked the work done, or, for a finished turn that came in after its lease lapsed,
@@ -4734,7 +4869,7 @@ class Execution:
                     try:
                         if replyable:
                             privacy.require_destination(c, Identity(actor, "bot", attempt_id=aid), target, conv["id"],
-                                                        refs, msg)
+                                                        refs, source)
                     except Problem as refusal:
                         if refusal.code != "privacy":
                             raise
@@ -4778,10 +4913,10 @@ class Execution:
                                 sent = reply_answer(c, self.auth, Identity(actor, "bot", attempt_id=aid), msg,
                                                     asked_text, org_rule_check.warn_line(rule_gate))
                             else:
-                                sent = H.say(c, actor, target, text, conversation_id=conv["id"], in_reply_to=msg["id"],
-                                             refs=refs)
+                                sent = self._say_reply(c, actor, target, text, conv, source, refs,
+                                                       body.parent_message_id, aid, carried)
                             if sent:
-                                self.stamp_reply(c, sent, row, aid, msg)
+                                self.stamp_reply(c, sent, row, aid, source)
                             return sent
                         # A paused or quarantined bot's full held queue withholds only this answer: the run is
                         # still done, its text kept on the attempt, so the runner's completion is not refused.
@@ -5046,8 +5181,8 @@ class Execution:
             # The followed config, as the turn's runner keyed it (a branch's session keys come from its original).
             from .shared_bots import follow
             followed_config = follow(c, row["bot_id"], json.loads(bot_config[0]) if bot_config else {})
-            own = sessions.session_key(followed_config, row["bot_id"],
-                                       checkpoint_task["id"], conv["id"]) == "task:" + checkpoint_task["id"]
+            own = sessions.session_key(followed_config, row["bot_id"], checkpoint_task["id"], conv["id"],
+                                       task_private=H.task_private(c, checkpoint_task)) == "task:" + checkpoint_task["id"]
             # Only a turn in the task's own session leaves a checkpoint: a shared bot thread carries
             # other tasks. And a session that once took in another private task may carry it in every
             # later turn, even one that does not, so that task never gets a checkpoint again (a private
@@ -5600,6 +5735,8 @@ class Execution:
                 if privacy.message_readable(c, "bot:" + row["bot_id"], H.message(c, row["message_id"])):
                     continue
                 c.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (row["id"],))
+                from . import threads
+                threads.replace_note_wake(c, H.message(c, row["message_id"]), "bot:" + row["bot_id"])
                 H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
                 dropped.append(row["id"])
         return dropped

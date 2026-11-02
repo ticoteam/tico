@@ -215,7 +215,12 @@ def install(app, store, auth, mutate, send):
     @app.post("/api/v2/conversations/{cid}/goal")
     def write(request: Request, cid: str, body: GoalAction):
         def work(c):
-            goal = set_goal(c, auth, request.state.identity, cid, body.action, body.objective, send)
+            who = request.state.identity
+            # A goal is words the conversation's readers see: a private run sets one only where its own work may
+            # post (the same check as a message; task_privacy.private_thread_destination for a native thread).
+            from . import task_privacy
+            task_privacy.require_destination(c, who, who.actor, cid, {})
+            goal = set_goal(c, auth, who, cid, body.action, body.objective, send)
             return {"goal": goal}
         return mutate(request, body, work)
 

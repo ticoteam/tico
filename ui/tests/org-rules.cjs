@@ -67,6 +67,22 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     assert.equal(rule.with.groups.length, 1);
     assert.ok(rule.can_edit);
 
+    // Where: a thread the viewer can read is in the picker, and the rule keeps it.
+    const thread = await ok(page, 'POST', '/v2/conversations', {kind: 'chat', participants: ['bot:engineering-lead'], subject: 'Deploy talk'});
+    await go(page, '#/rules');
+    await page.locator('.ru-ph [data-ru-add]').click();
+    const threaded = page.locator('#ru-add');
+    await threaded.locator('textarea[name=text]').fill('Post deploy notes in the thread');
+    await threaded.locator('[data-scope="who"] [data-seg="bots"]').click();
+    await threaded.locator('[data-scope="who"] .ru-addsel').selectOption('engineering-lead');
+    await threaded.locator('input[name=where_kind][value=thread]').check();
+    await threaded.locator('select[name=where_thread]').selectOption(thread.id);
+    await threaded.locator('button[type=submit]').click();
+    const threadRow = page.locator('.ru-int a.ru-row', {hasText: 'Post deploy notes in the thread'});
+    await threadRow.waitFor({timeout: t(10000)});
+    const threadRule = await ok(page, 'GET', '/v2/rules/' + (await threadRow.getAttribute('data-rule')));
+    assert.deepEqual(threadRule.where, ['thread:' + thread.id]);
+    await row.click();   // saving the threaded rule opened its panel; the edit below is for the first rule
     // Outside editions travels with the rule: shown in its Who, and still set after a save that doesn't touch Who.
     let outside = await ok(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Never name a customer outside the company', who: {outside_editions: true}});
     assert.equal(outside.who.outside_editions, true);

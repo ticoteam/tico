@@ -205,7 +205,7 @@ def answer_text(c, auth, who, asked, text, *, unknown=False, warn=""):
             target=target, answers={questions[0]["id"]: matches}), wake=True, warn=warn)
     # The original words stay on the task; an unmatched note cannot settle its question.
     note = H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, unknown=unknown,
-                    classify_text=text)
+                    classify_text=text, turn_id=who.attempt_id)
     return {**note, "decision_open": True,
             "feedback": "Note saved. Decision still open; choose one of the options."}
 
@@ -226,7 +226,8 @@ def reply_answer(c, auth, who, asked, text, warn=""):
             c.execute("RELEASE reply_answer")
             made = out.get("comment") or (out if out.get("id") else None)
             return H.message(c, made["id"]) if made else None      # None: that very pick was already recorded
-    return H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, classify_text=text)
+    return H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, classify_text=text,
+                    turn_id=who.attempt_id)
 
 
 def answer_task(c, auth, who, task_id, body, wake, warn=""):

@@ -61,12 +61,12 @@ def test_a_question_goes_to_the_persons_private_docs_conversation_and_is_answere
 def test_nobody_else_reads_or_posts_in_a_persons_docs_conversation_the_owner_included(desk):
     ana, ben = ask(desk, "What is our refund policy?"), ask(desk, "What is Ben's private question?", token="ben-test")
     assert ana["conversation_id"] != ben["conversation_id"]
-    get(desk, f"conversations/{ben['conversation_id']}/messages", "ana-test", expected=403)      # the owner too
-    get(desk, f"conversations/{ana['conversation_id']}/messages", "ben-test", expected=403)
-    get(desk, f"conversations/{ana['conversation_id']}/snapshot", "cara-test", expected=403)
-    ask(desk, "Sneaking in", token="ben-test", expected=403, conversation_id=ana["conversation_id"])
+    get(desk, f"conversations/{ben['conversation_id']}/messages", "ana-test", expected=404)      # the owner too
+    get(desk, f"conversations/{ana['conversation_id']}/messages", "ben-test", expected=404)
+    get(desk, f"conversations/{ana['conversation_id']}/snapshot", "cara-test", expected=404)
+    ask(desk, "Sneaking in", token="ben-test", expected=404, conversation_id=ana["conversation_id"])
     post(desk, "messages", {"to": "librarian", "text": "Injected", "conversation_id": ana["conversation_id"]},
-         token="ben-test", expected=403)
+         token="ben-test", expected=404)
     # A conversation that is not a docs conversation is not a place to ask.
     other = post(desk, "chat/ops", {"text": "hi"})["conversation_id"]
     ask(desk, "Wrong room", expected=422, conversation_id=other)
@@ -79,8 +79,8 @@ def test_docs_history_is_private_and_only_docs_rooms_can_be_reopened(desk):
     assert [row["id"] for row in get(desk, "librarian/conversations")["conversations"]] == [mine["conversation_id"]]
     other_history = get(desk, "librarian/conversations", token="ben-test")["conversations"]
     assert mine["conversation_id"] not in {row["id"] for row in other_history}
-    post(desk, f"librarian/conversations/{theirs['conversation_id']}/reopen", {}, expected=403)
-    post(desk, f"librarian/conversations/{mine['conversation_id']}/reopen", {}, token="ben-test", expected=403)
+    post(desk, f"librarian/conversations/{theirs['conversation_id']}/reopen", {}, expected=404)
+    post(desk, f"librarian/conversations/{mine['conversation_id']}/reopen", {}, token="ben-test", expected=404)
     post(desk, "librarian/conversations/missing/reopen", {}, expected=404)
     with desk.app.state.store.transaction() as c:
         other = H.open_conversation(c, "human:ana", ["human:ana", "bot:coo"], kind="chat",
@@ -124,7 +124,7 @@ def test_mcp_docs_ask_status_collects_the_same_private_answer(desk):
     err, waiting = call(desk, "hub_doc_ask_status", ids)
     assert not err and waiting == pending
     err, refused = call(desk, "hub_doc_ask_status", ids, token="ben-test")
-    assert err and refused["error"] == "forbidden"
+    assert err and refused["error"] == "not_found"
     attempt = claim(desk, desk.runner)
     post(desk, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=desk.runner["token"])
     post(desk, f"attempts/{attempt['id']}/complete",

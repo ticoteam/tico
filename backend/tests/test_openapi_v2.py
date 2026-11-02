@@ -260,3 +260,71 @@ def test_closed_status_uses_close_permissions_and_rejects_combined_edits(api):
     assert closed["status"] == "closed" and closed["closed_by_id"] == "human:ana"
     assert closed["version"] == task["version"] + 1
     post(api, path, {"version": task["version"], "status": "closed"}, expected=409)
+
+
+def test_the_thread_answers_match_the_live_ones(api):
+    """The thread routes' declared answers, checked against what they return (the sidebar, a thread, its timeline,
+    a message, search and the read mark)."""
+    document = api.get("/api/v2/openapi.json", headers=headers()).json()
+    by_id = {op["operationId"]: op for ops in document["paths"].values() for op in ops.values()}
+
+    def call(operation, method, path, who="ana-test", expected=200, **kw):
+        response = getattr(api, method)(path, headers=headers(who), **kw)
+        assert response.status_code == expected, (path, response.text)
+        schema = by_id[operation]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert conforms(response.json(), schema, document) is None, (operation, conforms(response.json(), schema, document))
+        return response.json()
+
+    created = call("createThread", "post", "/api/v2/threads", json={
+        "title": "Budget", "audience": "members", "members": ["human:ben"], "body": "Quarterly budget review"})
+    thread_id = created["id"]
+    call("listThreads", "get", "/api/v2/threads")
+    call("getThread", "get", f"/api/v2/threads/{thread_id}", who="ben-test")
+    call("getThreadHome", "get", "/api/v2/threads/home/human:ben")
+    call("openThreadDm", "get", "/api/v2/threads/dm", params={"with": "human:ben"})
+    call("createThreadDm", "post", "/api/v2/threads/dm", json={"members": ["human:ben"], "body": "Quick question"})
+    call("listThreads", "get", "/api/v2/threads", params={"with": "human:ben"})
+    ops_home = call("getThreadHome", "get", "/api/v2/threads/home/bot:ops")
+    call("openEarlierMessages", "post", f"/api/v2/threads/{ops_home['id']}/open-earlier")
+    uploaded = call("uploadThreadMessage", "post", f"/api/v2/uploads/threads/{thread_id}/messages",
+                    data={"text": "Notes attached"}, files={"files": ("notes.txt", b"budget notes", "text/plain")})
+    call("reactToMessage", "put", f"/api/v2/messages/{uploaded['message']['id']}/reactions/:+1:", who="ben-test")
+    call("unreactToMessage", "delete", f"/api/v2/messages/{uploaded['message']['id']}/reactions/:+1:", who="ben-test")
+    call("getThreadTimeline", "get", f"/api/v2/threads/{thread_id}/timeline", who="ben-test")
+    call("listThreadMembers", "get", f"/api/v2/threads/{thread_id}/members")
+    call("searchThreads", "get", "/api/v2/threads/search", who="ben-test", params={"q": "budget"})
+    message = call("postThreadMessage", "post", f"/api/v2/threads/{thread_id}/messages", json={"text": "Draft attached"})
+    call("editMessage", "patch", f"/api/v2/messages/{message['id']}", json={"text": "Draft attached, revised"})
+    call("markThreadRead", "post", f"/api/v2/threads/{thread_id}/read", who="ben-test", json={"seq": 1})
+    call("markThreadAndSubthreadsRead", "post", f"/api/v2/threads/{thread_id}/read-all", who="ben-test")
+    call("deleteMessage", "delete", f"/api/v2/messages/{message['id']}")
+
+
+# Every thread route contract section 10 lists (docs/dev/threads-contract.md), as the server spells its paths.
+THREAD_CONTRACT = {
+    ("get", "/api/v2/threads"), ("post", "/api/v2/threads"), ("get", "/api/v2/threads/search"),
+    ("get", "/api/v2/threads/{thread_id}"), ("patch", "/api/v2/threads/{thread_id}"),
+    ("get", "/api/v2/threads/{thread_id}/timeline"), ("post", "/api/v2/threads/{thread_id}/read"),
+    ("post", "/api/v2/threads/{thread_id}/read-all"), ("get", "/api/v2/threads/{thread_id}/members"),
+    ("post", "/api/v2/threads/{thread_id}/members"), ("delete", "/api/v2/threads/{thread_id}/members/{actor}"),
+    ("put", "/api/v2/threads/{thread_id}/follow"), ("delete", "/api/v2/threads/{thread_id}/follow"),
+    ("post", "/api/v2/threads/{thread_id}/messages"), ("patch", "/api/v2/messages/{message_id}"),
+    ("delete", "/api/v2/messages/{message_id}"),
+}
+# The threads build's own route families: each one the server serves is in the document, and each documented one is
+# served (spec() raises on that half).
+THREAD_AREAS = ("/api/v2/threads", "/api/v2/calls", "/api/v2/federation", "/api/v2/slack/links",
+                "/api/v2/uploads/threads", "/api/v2/messages/{message_id}", "/api/v2/rule-holds")
+
+
+def test_every_thread_route_the_server_serves_is_documented(api):
+    stable = {(m, p) for p, m, *_ in openapi_v2.STABLE}
+    assert THREAD_CONTRACT <= stable
+    served = set()
+    for route in api.app.routes:
+        path = re.sub(r"\{(\w+):path\}", r"{\1}", getattr(route, "path", ""))
+        if path.startswith(THREAD_AREAS):
+            served |= {(m.lower(), path) for m in getattr(route, "methods", None) or () if m not in ("HEAD", "OPTIONS")}
+    documented = {(m, p) for m, p in stable if p.startswith(THREAD_AREAS)}
+    assert served == documented, {"served, not documented": sorted(served - documented),
+                                  "documented, not served": sorted(documented - served)}

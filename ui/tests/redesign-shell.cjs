@@ -93,13 +93,14 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       const {page, errors, goals} = await open(browser, {goalsDelay: 400});
       await page.locator('#tree li').first().waitFor();
       assert.deepEqual(await railKeys(page), ['side-update', 'overview', 'welcome', 'strategy', 'growth', 'updates', 'tasks', 'automations',
-        'library', 'rd-lib', 'rules', 'rd-rules', 'nav-pins', 'side-section', 'nav-inboxes-section'], tag + ': the order');
+        'library', 'rd-lib', 'rules', 'rd-rules', 'nav-pins', 'nav-threads-section', 'nav-dms-section',
+        'side-section', 'nav-inboxes-section'], tag + ': the order');
       assert.equal(await page.getAttribute('a[data-nav="automations"]', 'href'), '#/automations', tag + ': Automations');
       for (const helper of ['b:mail-sorter', 'b:botops', 'b:librarian'])
         assert.equal(await page.locator(`#tree [data-org="${helper}"]`).count(), 0, `${tag}: ${helper} is off the Team list`);
       assert.equal(await page.locator('#tree [data-org="b:eng-lead"]').count(), 1, tag + ': the Team list keeps the chart');
       assert.equal(await page.getAttribute('a[data-nav="strategy"]', 'href'), '#/strategy/market', tag + ': Strategy opens on Market');
-      assert.deepEqual(await page.locator('#mobile-nav .mobile-nav-label').allInnerTexts(), PHONE_BAR, tag + ': the phone bar is the mock\'s');
+      assert.deepEqual(await page.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), PHONE_BAR, tag + ': the phone bar is the mock\'s');
       for (const [from, to] of [['#/tasks/routines', '#/automations'], ['#/recurring', '#/automations'], ['#/goals', '#/strategy/goals'],
         ['#/goals/g-1', '#/strategy/goals/g-1'], ['#/settings/listening', '#/strategy/market/listening']]) {
         await page.evaluate(h => { location.hash = h; }, from);
@@ -144,7 +145,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       const {page, errors} = await open(browser, {viewport: DESKTOP, route: '#/strategy/budget'});
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
-      assert.deepEqual(shown, ['Overview', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Library', 'Docs', 'Files', 'Meetings', 'Tools', 'Rules'], tag + ': the rail, with no Strategy Bot entry');
+      assert.deepEqual(shown, ['Overview', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Library', 'Docs', 'Files', 'Meetings', 'Tools', 'Connections', 'Rules'], tag + ': the rail, with no Strategy Bot entry');
       assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, tag + ': the Strategy Bot is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');

@@ -3,13 +3,14 @@
     {
       "data": {
         "after": 0,
-        "seq": 97,
+        "seq": 146,
         "topics": [
           "tasks",
           "messages",
           "runs",
           "bots",
-          "needs"
+          "needs",
+          "threads"
         ]
       },
       "event": "ready",
@@ -18,8 +19,53 @@
     {
       "data": {
         "actor": null,
+        "at": "<time>",
+        "kind": "created",
+        "root_id": "<id1>",
+        "seq": 1,
+        "thread": {
+          "archived_at": null,
+          "audience": "participants",
+          "audience_group_id": null,
+          "created_at": "<time>",
+          "dm_with": [],
+          "dm_with_count": 0,
+          "id": "<id1>",
+          "kind": "notice",
+          "last_message_at": "<time>",
+          "last_seq": 1,
+          "last_unread_seq": 1,
+          "me": {
+            "activity": true,
+            "can_manage": true,
+            "can_post": true,
+            "following": false,
+            "last_read_seq": 0,
+            "member": true,
+            "notify": "live",
+            "unread": 1
+          },
+          "owner_id": null,
+          "parent_id": null,
+          "parent_message_id": null,
+          "path": [
+            "<id1>"
+          ],
+          "retention_days": null,
+          "root_id": "<id1>",
+          "task_id": null,
+          "title": ""
+        },
+        "thread_id": "<id1>"
+      },
+      "event": "threads",
+      "id": "1"
+    },
+    {
+      "data": {
+        "actor": null,
+        "at": "<time>",
         "conversation_id": "<id1>",
-        "created_at": "<time>",
         "id": "<id2>",
         "message": {
           "answered_by_id": null,
@@ -34,56 +80,222 @@
           "id": "<id2>",
           "in_reply_to": null,
           "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id3>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "human:ana",
           "refs": {},
+          "restricted": 0,
+          "revision": 0,
+          "root_id": "<id1>",
           "sender_id": "keeper",
+          "seq": 1,
           "superseded_at": null,
+          "thread_id": "<id1>",
           "wait_s": null
         },
-        "seq": 1
-      },
-      "event": "messages",
-      "id": "1"
-    },
-    {
-      "data": {
-        "actor": null,
-        "conversation_id": "<id3>",
-        "created_at": "<time>",
-        "id": "<id4>",
-        "message": {
-          "answered_by_id": null,
-          "body": "Tico gave each of your bots a profile, which decides what wakes it and what tasks it takes:\n- cpo (cpo): Lead\n- product-design (product-design): Doer\nChange one in Settings > Bots > Edit, or with `hub bot profile <bot> <name>`.",
-          "conversation_id": "<id3>",
-          "created_at": "<time>",
-          "deleted_at": null,
-          "delivered_at": null,
-          "edited_at": null,
-          "expires_at": "<time>",
-          "hidden_at": null,
-          "id": "<id4>",
-          "in_reply_to": null,
-          "kind": "notice",
-          "public": 0,
-          "read_at": null,
-          "recipient_id": "human:ben",
-          "refs": {},
-          "sender_id": "keeper",
-          "superseded_at": null,
-          "wait_s": null
-        },
-        "seq": 2
+        "message_seq": 1,
+        "revision": 0,
+        "root_id": "<id1>",
+        "seq": 2,
+        "thread_id": "<id1>"
       },
       "event": "messages",
       "id": "2"
     },
     {
       "data": {
+        "actor": null,
+        "at": "<time>",
+        "counters": {
+          "last_seq": 1,
+          "last_unread_seq": 1
+        },
+        "kind": "activity",
+        "root_id": "<id1>",
+        "seq": 3,
+        "thread_id": "<id1>"
+      },
+      "event": "threads",
+      "id": "3"
+    },
+    {
+      "data": {
+        "actor": null,
+        "at": "<time>",
+        "kind": "attention",
+        "root_id": "<id1>",
+        "seq": 4,
+        "thread_id": "<id1>"
+      },
+      "event": "threads",
+      "id": "4"
+    },
+    {
+      "data": {
+        "actor": null,
+        "at": "<time>",
+        "kind": "created",
+        "root_id": "<id5>",
+        "seq": 6,
+        "thread": {
+          "archived_at": null,
+          "audience": "participants",
+          "audience_group_id": null,
+          "created_at": "<time>",
+          "dm_with": [
+            {
+              "actor": "human:ben",
+              "name": "Ben"
+            }
+          ],
+          "dm_with_count": 1,
+          "id": "<id5>",
+          "kind": "notice",
+          "last_message_at": "<time>",
+          "last_seq": 2,
+          "last_unread_seq": 2,
+          "me": {
+            "activity": true,
+            "can_manage": true,
+            "can_post": true,
+            "following": false,
+            "last_read_seq": 0,
+            "member": false,
+            "notify": "live",
+            "unread": 0
+          },
+          "owner_id": null,
+          "parent_id": null,
+          "parent_message_id": null,
+          "path": [
+            "<id5>"
+          ],
+          "retention_days": null,
+          "root_id": "<id5>",
+          "task_id": null,
+          "title": ""
+        },
+        "thread_id": "<id5>"
+      },
+      "event": "threads",
+      "id": "6"
+    },
+    {
+      "data": {
+        "actor": null,
+        "at": "<time>",
+        "conversation_id": "<id5>",
+        "id": "<id6>",
+        "message": {
+          "answered_by_id": null,
+          "body": "Tico gave each of your bots a profile, which decides what wakes it and what tasks it takes:\n- cpo (cpo): Lead\n- product-design (product-design): Doer\nChange one in Settings > Bots > Edit, or with `hub bot profile <bot> <name>`.",
+          "conversation_id": "<id5>",
+          "created_at": "<time>",
+          "deleted_at": null,
+          "delivered_at": null,
+          "edited_at": null,
+          "expires_at": "<time>",
+          "hidden_at": null,
+          "id": "<id6>",
+          "in_reply_to": null,
+          "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id7>@<id4>",
+          "public": 0,
+          "read_at": null,
+          "recipient_id": "human:ben",
+          "refs": {},
+          "restricted": 0,
+          "revision": 0,
+          "root_id": "<id5>",
+          "sender_id": "keeper",
+          "seq": 2,
+          "superseded_at": null,
+          "thread_id": "<id5>",
+          "wait_s": null
+        },
+        "message_seq": 2,
+        "revision": 0,
+        "root_id": "<id5>",
+        "seq": 7,
+        "thread_id": "<id5>"
+      },
+      "event": "messages",
+      "id": "7"
+    },
+    {
+      "data": {
+        "actor": null,
+        "at": "<time>",
+        "counters": {
+          "last_seq": 2,
+          "last_unread_seq": 2
+        },
+        "kind": "activity",
+        "root_id": "<id5>",
+        "seq": 8,
+        "thread_id": "<id5>"
+      },
+      "event": "threads",
+      "id": "8"
+    },
+    {
+      "data": {
         "actor": "human:ana",
+        "at": "<time>",
+        "kind": "created",
+        "root_id": "<conversation>",
+        "seq": 11,
+        "thread": {
+          "archived_at": null,
+          "audience": "personal",
+          "audience_group_id": null,
+          "created_at": "<time>",
+          "dm_with": [
+            {
+              "actor": "bot:ops",
+              "name": "ops"
+            }
+          ],
+          "dm_with_count": 1,
+          "id": "<conversation>",
+          "kind": "chat",
+          "last_message_at": "<time>",
+          "last_seq": 17,
+          "last_unread_seq": 17,
+          "me": {
+            "activity": true,
+            "can_manage": true,
+            "can_post": true,
+            "following": true,
+            "last_read_seq": 3,
+            "member": true,
+            "notify": "live",
+            "unread": 3
+          },
+          "owner_id": "human:ana",
+          "parent_id": null,
+          "parent_message_id": null,
+          "path": [
+            "<conversation>"
+          ],
+          "retention_days": null,
+          "root_id": "<conversation>",
+          "task_id": null,
+          "title": "Chat with ops"
+        },
+        "thread_id": "<conversation>"
+      },
+      "event": "threads",
+      "id": "11"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
         "id": "<chat_message>",
         "message": {
           "answered_by_id": null,
@@ -98,41 +310,67 @@
           "id": "<chat_message>",
           "in_reply_to": null,
           "kind": "say",
+          "legacy_audience": null,
+          "origin_id": "<id8>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "bot:ops",
           "refs": {
             "rule": "person_message"
           },
+          "restricted": 0,
+          "revision": 0,
+          "root_id": "<conversation>",
           "sender_id": "human:ana",
+          "seq": 3,
           "superseded_at": null,
+          "thread_id": "<conversation>",
           "wait_s": null
         },
-        "seq": 3
+        "message_seq": 3,
+        "revision": 0,
+        "root_id": "<conversation>",
+        "seq": 12,
+        "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "3"
+      "id": "12"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
         "bot_id": "ops",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
         "job_id": "<chat_message>",
         "message_id": "<chat_message>",
-        "run_id": "<id5>",
-        "seq": 4,
+        "run_id": "<id9>",
+        "seq": 14,
         "state": "completed"
       },
       "event": "runs",
-      "id": "4"
+      "id": "14"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
+        "kind": "read",
+        "read": {
+          "last_read_seq": 3
+        },
+        "root_id": "<conversation>",
+        "seq": 15,
+        "thread_id": "<conversation>"
+      },
+      "event": "threads",
+      "id": "15"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
         "id": "<reply_message>",
         "message": {
           "answered_by_id": null,
@@ -147,41 +385,52 @@
           "id": "<reply_message>",
           "in_reply_to": null,
           "kind": "say",
+          "legacy_audience": null,
+          "origin_id": "<id10>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "bot:ops",
           "refs": {
             "rule": "person_message"
           },
+          "restricted": 0,
+          "revision": 0,
+          "root_id": "<conversation>",
           "sender_id": "human:ana",
+          "seq": 4,
           "superseded_at": null,
+          "thread_id": "<conversation>",
           "wait_s": null
         },
-        "seq": 5
+        "message_seq": 4,
+        "revision": 0,
+        "root_id": "<conversation>",
+        "seq": 16,
+        "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "5"
+      "id": "16"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
         "bot_id": "ops",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
         "job_id": "<reply_message>",
         "message_id": "<reply_message>",
         "run_id": null,
-        "seq": 6,
+        "seq": 18,
         "state": "queued"
       },
       "event": "runs",
-      "id": "6"
+      "id": "18"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
         "id": "<direct_message>",
         "message": {
           "answered_by_id": null,
@@ -196,55 +445,111 @@
           "id": "<direct_message>",
           "in_reply_to": null,
           "kind": "say",
+          "legacy_audience": null,
+          "origin_id": "<id11>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "bot:ops",
           "refs": {
             "rule": "person_message"
           },
+          "restricted": 0,
+          "revision": 0,
+          "root_id": "<conversation>",
           "sender_id": "human:ana",
+          "seq": 5,
           "superseded_at": null,
+          "thread_id": "<conversation>",
           "wait_s": null
         },
-        "seq": 7
+        "message_seq": 5,
+        "revision": 0,
+        "root_id": "<conversation>",
+        "seq": 19,
+        "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "7"
+      "id": "19"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
         "bot_id": "ops",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
         "job_id": "<direct_message>",
         "message_id": "<direct_message>",
         "run_id": null,
-        "seq": 8,
+        "seq": 21,
         "state": "queued"
       },
       "event": "runs",
-      "id": "8"
+      "id": "21"
     },
     {
       "data": {
         "actor": "human:ana",
-        "conversation_id": "<id6>",
-        "created_at": "<time>",
-        "id": "<id7>",
+        "at": "<time>",
+        "kind": "created",
+        "root_id": "<id12>",
+        "seq": 22,
+        "thread": {
+          "archived_at": null,
+          "audience": "task",
+          "audience_group_id": null,
+          "created_at": "<time>",
+          "id": "<id12>",
+          "kind": "task",
+          "last_message_at": "<time>",
+          "last_seq": 10,
+          "last_unread_seq": 10,
+          "me": {
+            "activity": true,
+            "can_manage": true,
+            "can_post": true,
+            "following": false,
+            "last_read_seq": 6,
+            "member": true,
+            "notify": "live",
+            "unread": 0
+          },
+          "owner_id": null,
+          "parent_id": null,
+          "parent_message_id": null,
+          "path": [
+            "<id12>"
+          ],
+          "retention_days": null,
+          "root_id": "<id12>",
+          "task_id": "<task>",
+          "title": "Draft the launch plan"
+        },
+        "thread_id": "<id12>"
+      },
+      "event": "threads",
+      "id": "22"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
+        "conversation_id": "<id12>",
+        "id": "<id13>",
         "message": {
           "answered_by_id": null,
           "body": "New task from human:ana: Draft the launch plan",
-          "conversation_id": "<id6>",
+          "conversation_id": "<id12>",
           "created_at": "<time>",
           "deleted_at": null,
           "delivered_at": null,
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id7>",
+          "id": "<id13>",
           "in_reply_to": null,
           "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id14>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "human:ana",
@@ -253,34 +558,72 @@
             "task": "<task>",
             "trigger": "status_or_relation"
           },
+          "restricted": 1,
+          "revision": 0,
+          "root_id": "<id12>",
           "sender_id": "keeper",
+          "seq": 6,
           "superseded_at": null,
+          "thread_id": "<id12>",
           "wait_s": null
         },
-        "seq": 17
+        "message_seq": 6,
+        "revision": 0,
+        "root_id": "<id12>",
+        "seq": 31,
+        "thread_id": "<id12>"
       },
       "event": "messages",
-      "id": "17"
+      "id": "31"
     },
     {
       "data": {
         "actor": "human:ana",
-        "conversation_id": "<id6>",
-        "created_at": "<time>",
-        "id": "<id8>",
+        "at": "<time>",
+        "kind": "read",
+        "read": {
+          "last_read_seq": 6
+        },
+        "root_id": "<id12>",
+        "seq": 35,
+        "thread_id": "<id12>"
+      },
+      "event": "threads",
+      "id": "35"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
+        "kind": "attention",
+        "root_id": "<id12>",
+        "seq": 36,
+        "thread_id": "<id12>"
+      },
+      "event": "threads",
+      "id": "36"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
+        "conversation_id": "<id12>",
+        "id": "<id15>",
         "message": {
           "answered_by_id": null,
           "body": "Open: Draft the launch plan",
-          "conversation_id": "<id6>",
+          "conversation_id": "<id12>",
           "created_at": "<time>",
           "deleted_at": null,
           "delivered_at": null,
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id8>",
+          "id": "<id15>",
           "in_reply_to": null,
           "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id16>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "bot:ops",
@@ -291,49 +634,60 @@
             "task": "<task>",
             "trigger": "status_or_relation"
           },
+          "restricted": 1,
+          "revision": 0,
+          "root_id": "<id12>",
           "sender_id": "keeper",
+          "seq": 7,
           "superseded_at": null,
+          "thread_id": "<id12>",
           "wait_s": null
         },
-        "seq": 22
+        "message_seq": 7,
+        "revision": 0,
+        "root_id": "<id12>",
+        "seq": 42,
+        "thread_id": "<id12>"
       },
       "event": "messages",
-      "id": "22"
+      "id": "42"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
         "bot_id": "ops",
-        "conversation_id": "<id6>",
-        "created_at": "<time>",
-        "job_id": "<id8>",
-        "message_id": "<id8>",
+        "conversation_id": "<id12>",
+        "job_id": "<id15>",
+        "message_id": "<id15>",
         "run_id": null,
-        "seq": 23,
+        "seq": 44,
         "state": "queued"
       },
       "event": "runs",
-      "id": "23"
+      "id": "44"
     },
     {
       "data": {
         "actor": "human:ana",
-        "conversation_id": "<id6>",
-        "created_at": "<time>",
-        "id": "<id9>",
+        "at": "<time>",
+        "conversation_id": "<id12>",
+        "id": "<id17>",
         "message": {
           "answered_by_id": null,
           "body": "Ana marked this done: Draft the launch plan\nDrafted.",
-          "conversation_id": "<id6>",
+          "conversation_id": "<id12>",
           "created_at": "<time>",
           "deleted_at": null,
           "delivered_at": null,
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id9>",
+          "id": "<id17>",
           "in_reply_to": null,
           "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id18>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "bot:ops",
@@ -344,36 +698,45 @@
             "task": "<task>",
             "trigger": "status_or_relation"
           },
+          "restricted": 1,
+          "revision": 0,
+          "root_id": "<id12>",
           "sender_id": "keeper",
+          "seq": 8,
           "superseded_at": null,
+          "thread_id": "<id12>",
           "wait_s": null
         },
-        "seq": 42
+        "message_seq": 8,
+        "revision": 0,
+        "root_id": "<id12>",
+        "seq": 63,
+        "thread_id": "<id12>"
       },
       "event": "messages",
-      "id": "42"
+      "id": "63"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
         "bot_id": "ops",
-        "conversation_id": "<id6>",
-        "created_at": "<time>",
-        "job_id": "<id9>",
-        "message_id": "<id9>",
+        "conversation_id": "<id12>",
+        "job_id": "<id17>",
+        "message_id": "<id17>",
         "run_id": null,
-        "seq": 43,
+        "seq": 65,
         "state": "queued"
       },
       "event": "runs",
-      "id": "43"
+      "id": "65"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
-        "id": "<id10>",
+        "id": "<id19>",
         "message": {
           "answered_by_id": null,
           "body": "Draft the launch plan: done. Drafted.",
@@ -384,9 +747,11 @@
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id10>",
+          "id": "<id19>",
           "in_reply_to": null,
           "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id20>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "human:ana",
@@ -395,34 +760,45 @@
             "task": "<task>",
             "task_report": "done"
           },
+          "restricted": 1,
+          "revision": 0,
+          "root_id": "<conversation>",
           "sender_id": "keeper",
+          "seq": 9,
           "superseded_at": null,
+          "thread_id": "<conversation>",
           "wait_s": null
         },
-        "seq": 44
+        "message_seq": 9,
+        "revision": 0,
+        "root_id": "<conversation>",
+        "seq": 66,
+        "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "44"
+      "id": "66"
     },
     {
       "data": {
         "actor": "human:ana",
-        "conversation_id": "<id6>",
-        "created_at": "<time>",
-        "id": "<id11>",
+        "at": "<time>",
+        "conversation_id": "<id12>",
+        "id": "<id21>",
         "message": {
           "answered_by_id": null,
           "body": "Closed: Draft the launch plan\nAccepted.",
-          "conversation_id": "<id6>",
+          "conversation_id": "<id12>",
           "created_at": "<time>",
           "deleted_at": null,
           "delivered_at": null,
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id11>",
+          "id": "<id21>",
           "in_reply_to": null,
           "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id22>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "bot:ops",
@@ -433,36 +809,61 @@
             "task": "<task>",
             "trigger": "status_or_relation"
           },
+          "restricted": 1,
+          "revision": 0,
+          "root_id": "<id12>",
           "sender_id": "keeper",
+          "seq": 10,
           "superseded_at": null,
+          "thread_id": "<id12>",
           "wait_s": null
         },
-        "seq": 55
+        "message_seq": 10,
+        "revision": 0,
+        "root_id": "<id12>",
+        "seq": 80,
+        "thread_id": "<id12>"
       },
       "event": "messages",
-      "id": "55"
+      "id": "80"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
+        "counters": {
+          "last_seq": 10,
+          "last_unread_seq": 10
+        },
+        "kind": "activity",
+        "root_id": "<id12>",
+        "seq": 81,
+        "thread_id": "<id12>"
+      },
+      "event": "threads",
+      "id": "81"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
         "bot_id": "ops",
-        "conversation_id": "<id6>",
-        "created_at": "<time>",
-        "job_id": "<id11>",
-        "message_id": "<id11>",
+        "conversation_id": "<id12>",
+        "job_id": "<id21>",
+        "message_id": "<id21>",
         "run_id": null,
-        "seq": 56,
+        "seq": 82,
         "state": "queued"
       },
       "event": "runs",
-      "id": "56"
+      "id": "82"
     },
     {
       "data": {
         "actor": "human:ana",
-        "created_at": "<time>",
+        "at": "<time>",
         "id": "<task>",
-        "seq": 57,
+        "seq": 83,
         "task": {
           "acceptance": "[]",
           "acceptance_criteria": [],
@@ -485,7 +886,7 @@
           },
           "closed_at": "<time>",
           "closed_by_id": "human:ana",
-          "conversation_id": "<id6>",
+          "conversation_id": "<id12>",
           "cover": null,
           "created_at": "<time>",
           "done_at": "<time>",
@@ -552,14 +953,57 @@
         }
       },
       "event": "tasks",
-      "id": "57"
+      "id": "83"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
+        "kind": "created",
+        "root_id": "<id23>",
+        "seq": 85,
+        "thread": {
+          "archived_at": null,
+          "audience": "task",
+          "audience_group_id": null,
+          "created_at": "<time>",
+          "id": "<id23>",
+          "kind": "task",
+          "last_message_at": "<time>",
+          "last_seq": 12,
+          "last_unread_seq": 12,
+          "me": {
+            "activity": false,
+            "can_manage": true,
+            "can_post": true,
+            "following": false,
+            "last_read_seq": 12,
+            "member": true,
+            "notify": "live",
+            "unread": 0
+          },
+          "owner_id": null,
+          "parent_id": null,
+          "parent_message_id": null,
+          "path": [
+            "<id23>"
+          ],
+          "retention_days": null,
+          "root_id": "<id23>",
+          "task_id": "<open_task>",
+          "title": "Check the vendor list"
+        },
+        "thread_id": "<id23>"
+      },
+      "event": "threads",
+      "id": "85"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
-        "id": "<id12>",
+        "id": "<id24>",
         "message": {
           "answered_by_id": null,
           "body": "Started task: Check the vendor list",
@@ -570,9 +1014,11 @@
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id12>",
+          "id": "<id24>",
           "in_reply_to": null,
           "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id25>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "human:ana",
@@ -581,34 +1027,57 @@
             "task": "<open_task>",
             "task_started": true
           },
+          "restricted": 1,
+          "revision": 0,
+          "root_id": "<conversation>",
           "sender_id": "keeper",
+          "seq": 11,
           "superseded_at": null,
+          "thread_id": "<conversation>",
           "wait_s": null
         },
-        "seq": 67
+        "message_seq": 11,
+        "revision": 0,
+        "root_id": "<conversation>",
+        "seq": 94,
+        "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "67"
+      "id": "94"
     },
     {
       "data": {
         "actor": "human:ana",
-        "conversation_id": "<id13>",
-        "created_at": "<time>",
-        "id": "<id14>",
+        "at": "<time>",
+        "kind": "attention",
+        "root_id": "<conversation>",
+        "seq": 96,
+        "thread_id": "<conversation>"
+      },
+      "event": "threads",
+      "id": "96"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
+        "conversation_id": "<id23>",
+        "id": "<id26>",
         "message": {
           "answered_by_id": null,
           "body": "New task from human:ana: Check the vendor list",
-          "conversation_id": "<id13>",
+          "conversation_id": "<id23>",
           "created_at": "<time>",
           "deleted_at": null,
           "delivered_at": null,
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id14>",
+          "id": "<id26>",
           "in_reply_to": null,
           "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id27>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "bot:ops",
@@ -619,36 +1088,76 @@
             "task": "<open_task>",
             "trigger": "status_or_relation"
           },
+          "restricted": 1,
+          "revision": 0,
+          "root_id": "<id23>",
           "sender_id": "keeper",
+          "seq": 12,
           "superseded_at": null,
+          "thread_id": "<id23>",
           "wait_s": null
         },
-        "seq": 68
+        "message_seq": 12,
+        "revision": 0,
+        "root_id": "<id23>",
+        "seq": 98,
+        "thread_id": "<id23>"
       },
       "event": "messages",
-      "id": "68"
+      "id": "98"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
+        "counters": {
+          "last_seq": 12,
+          "last_unread_seq": 12
+        },
+        "kind": "activity",
+        "root_id": "<id23>",
+        "seq": 99,
+        "thread_id": "<id23>"
+      },
+      "event": "threads",
+      "id": "99"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
         "bot_id": "ops",
-        "conversation_id": "<id13>",
-        "created_at": "<time>",
-        "job_id": "<id14>",
-        "message_id": "<id14>",
+        "conversation_id": "<id23>",
+        "job_id": "<id26>",
+        "message_id": "<id26>",
         "run_id": null,
-        "seq": 69,
+        "seq": 100,
         "state": "queued"
       },
       "event": "runs",
-      "id": "69"
+      "id": "100"
     },
     {
       "data": {
         "actor": "human:ana",
-        "created_at": "<time>",
+        "at": "<time>",
+        "kind": "read",
+        "read": {
+          "last_read_seq": 12
+        },
+        "root_id": "<id23>",
+        "seq": 101,
+        "thread_id": "<id23>"
+      },
+      "event": "threads",
+      "id": "101"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
         "id": "<open_task>",
-        "seq": 70,
+        "seq": 102,
         "task": {
           "acceptance": "[]",
           "acceptance_criteria": [],
@@ -670,7 +1179,7 @@
           },
           "closed_at": null,
           "closed_by_id": null,
-          "conversation_id": "<id13>",
+          "conversation_id": "<id23>",
           "cover": null,
           "created_at": "<time>",
           "done_at": null,
@@ -737,14 +1246,14 @@
         }
       },
       "event": "tasks",
-      "id": "70"
+      "id": "102"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
-        "id": "<id15>",
+        "id": "<id28>",
         "message": {
           "answered_by_id": null,
           "body": "Write the plan",
@@ -755,58 +1264,166 @@
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id15>",
+          "id": "<id28>",
           "in_reply_to": null,
           "kind": "say",
+          "legacy_audience": null,
+          "origin_id": "<id29>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "bot:ops",
           "refs": {
             "rule": "person_message"
           },
+          "restricted": 0,
+          "revision": 0,
+          "root_id": "<conversation>",
           "sender_id": "human:ana",
+          "seq": 13,
           "superseded_at": null,
+          "thread_id": "<conversation>",
           "wait_s": null
         },
-        "seq": 74
+        "message_seq": 13,
+        "revision": 0,
+        "root_id": "<conversation>",
+        "seq": 106,
+        "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "74"
+      "id": "106"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
+        "counters": {
+          "last_seq": 17,
+          "last_unread_seq": 17
+        },
+        "kind": "activity",
+        "root_id": "<conversation>",
+        "seq": 107,
+        "thread_id": "<conversation>"
+      },
+      "event": "threads",
+      "id": "107"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
         "bot_id": "ops",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
-        "job_id": "<id15>",
-        "message_id": "<id15>",
+        "job_id": "<id28>",
+        "message_id": "<id28>",
         "run_id": null,
-        "seq": 76,
+        "seq": 109,
         "state": "queued"
       },
       "event": "runs",
-      "id": "76"
+      "id": "109"
+    },
+    {
+      "data": {
+        "actor": "runner:<id30>",
+        "at": "<time>",
+        "bot_id": "ops",
+        "conversation_id": "<conversation>",
+        "job_id": "<chat_message>",
+        "run_id": "<id9>",
+        "seq": 110,
+        "state": "completed"
+      },
+      "event": "runs",
+      "id": "110"
+    },
+    {
+      "data": {
+        "actor": "runner:<id30>",
+        "at": "<time>",
+        "bot_id": "ops",
+        "conversation_id": "<conversation>",
+        "job_id": "<chat_message>",
+        "message_id": "<chat_message>",
+        "run_id": "<id9>",
+        "seq": 111,
+        "state": "completed"
+      },
+      "event": "runs",
+      "id": "111"
     },
     {
       "data": {
         "actor": "bot:ops",
-        "conversation_id": "<id16>",
-        "created_at": "<time>",
-        "id": "<id17>",
+        "at": "<time>",
+        "kind": "created",
+        "root_id": "<id31>",
+        "seq": 112,
+        "thread": {
+          "archived_at": null,
+          "audience": "participants",
+          "audience_group_id": null,
+          "created_at": "<time>",
+          "dm_with": [
+            {
+              "actor": "bot:ops",
+              "name": "ops"
+            }
+          ],
+          "dm_with_count": 1,
+          "id": "<id31>",
+          "kind": "notice",
+          "last_message_at": "<time>",
+          "last_seq": 16,
+          "last_unread_seq": 16,
+          "me": {
+            "activity": true,
+            "can_manage": true,
+            "can_post": true,
+            "following": true,
+            "last_read_seq": 14,
+            "member": true,
+            "notify": "live",
+            "unread": 2
+          },
+          "owner_id": null,
+          "parent_id": null,
+          "parent_message_id": null,
+          "path": [
+            "<id31>"
+          ],
+          "retention_days": null,
+          "root_id": "<id31>",
+          "task_id": null,
+          "title": ""
+        },
+        "thread_id": "<id31>"
+      },
+      "event": "threads",
+      "id": "112"
+    },
+    {
+      "data": {
+        "actor": "bot:ops",
+        "at": "<time>",
+        "conversation_id": "<id31>",
+        "id": "<id32>",
         "message": {
           "answered_by_id": null,
           "body": "Approve this spend: {\"account\": \"ads\", \"amount\": 5, \"what\": \"Launch test\"}",
-          "conversation_id": "<id16>",
+          "conversation_id": "<id31>",
           "created_at": "<time>",
           "deleted_at": null,
           "delivered_at": null,
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id17>",
+          "id": "<id32>",
           "in_reply_to": null,
           "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id33>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "human:ana",
@@ -814,34 +1431,45 @@
             "approval": "<approval>",
             "task": "<open_task>"
           },
+          "restricted": 1,
+          "revision": 0,
+          "root_id": "<id31>",
           "sender_id": "bot:ops",
+          "seq": 14,
           "superseded_at": null,
+          "thread_id": "<id31>",
           "wait_s": null
         },
-        "seq": 81
+        "message_seq": 14,
+        "revision": 0,
+        "root_id": "<id31>",
+        "seq": 119,
+        "thread_id": "<id31>"
       },
       "event": "messages",
-      "id": "81"
+      "id": "119"
     },
     {
       "data": {
         "actor": "human:ana",
-        "conversation_id": "<id16>",
-        "created_at": "<time>",
-        "id": "<id18>",
+        "at": "<time>",
+        "conversation_id": "<id31>",
+        "id": "<id34>",
         "message": {
           "answered_by_id": null,
           "body": "Declined: your spend approval.\nNot now.",
-          "conversation_id": "<id16>",
+          "conversation_id": "<id31>",
           "created_at": "<time>",
           "deleted_at": null,
           "delivered_at": null,
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id18>",
+          "id": "<id34>",
           "in_reply_to": null,
           "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id35>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "bot:ops",
@@ -850,35 +1478,87 @@
             "caused_by": "human:ana",
             "rule": "person_message"
           },
+          "restricted": 1,
+          "revision": 0,
+          "root_id": "<id31>",
           "sender_id": "keeper",
+          "seq": 15,
           "superseded_at": null,
+          "thread_id": "<id31>",
           "wait_s": null
         },
-        "seq": 83
+        "message_seq": 15,
+        "revision": 0,
+        "root_id": "<id31>",
+        "seq": 121,
+        "thread_id": "<id31>"
       },
       "event": "messages",
-      "id": "83"
+      "id": "121"
     },
     {
       "data": {
         "actor": "human:ana",
+        "at": "<time>",
         "bot_id": "ops",
-        "conversation_id": "<id16>",
-        "created_at": "<time>",
-        "job_id": "<id18>",
-        "message_id": "<id18>",
+        "conversation_id": "<id31>",
+        "job_id": "<id34>",
+        "message_id": "<id34>",
         "run_id": null,
-        "seq": 85,
+        "seq": 124,
         "state": "queued"
       },
       "event": "runs",
-      "id": "85"
+      "id": "124"
+    },
+    {
+      "data": {
+        "actor": "human:ana",
+        "at": "<time>",
+        "kind": "read",
+        "read": {
+          "last_read_seq": 14
+        },
+        "root_id": "<id31>",
+        "seq": 127,
+        "thread_id": "<id31>"
+      },
+      "event": "threads",
+      "id": "127"
     },
     {
       "data": {
         "actor": "bot:ops",
+        "at": "<time>",
+        "counters": {
+          "last_seq": 16,
+          "last_unread_seq": 16
+        },
+        "kind": "activity",
+        "root_id": "<id31>",
+        "seq": 129,
+        "thread_id": "<id31>"
+      },
+      "event": "threads",
+      "id": "129"
+    },
+    {
+      "data": {
+        "actor": "bot:ops",
+        "at": "<time>",
+        "kind": "attention",
+        "root_id": "<id31>",
+        "seq": 130,
+        "thread_id": "<id31>"
+      },
+      "event": "threads",
+      "id": "130"
+    },
+    {
+      "data": {
+        "actor": "bot:ops",
+        "at": "<time>",
         "count": 1,
-        "created_at": "<time>",
         "items": [
           {
             "actions": [
@@ -887,7 +1567,7 @@
             "age_s": "<volatile>",
             "body": null,
             "consumed_at": null,
-            "conversation_id": "<id16>",
+            "conversation_id": "<id31>",
             "created_at": "<time>",
             "decided_at": null,
             "decided_by_id": null,
@@ -899,7 +1579,7 @@
             "from_person": "human:ana",
             "id": "<pending_approval>",
             "kind": "approval",
-            "message_id": "<id19>",
+            "message_id": "<id36>",
             "need": "pay",
             "payload": {
               "account": "ads",
@@ -921,7 +1601,7 @@
             "what": "spend"
           }
         ],
-        "seq": 87,
+        "seq": 132,
         "went_away": {
           "assistant": 0,
           "days": 7,
@@ -931,27 +1611,29 @@
         }
       },
       "event": "needs",
-      "id": "87"
+      "id": "132"
     },
     {
       "data": {
         "actor": "bot:ops",
-        "conversation_id": "<id16>",
-        "created_at": "<time>",
-        "id": "<id19>",
+        "at": "<time>",
+        "conversation_id": "<id31>",
+        "id": "<id36>",
         "message": {
           "answered_by_id": null,
           "body": "Approve this spend: {\"account\": \"ads\", \"amount\": 9, \"what\": \"Second test\"}",
-          "conversation_id": "<id16>",
+          "conversation_id": "<id31>",
           "created_at": "<time>",
           "deleted_at": null,
           "delivered_at": null,
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id19>",
+          "id": "<id36>",
           "in_reply_to": null,
           "kind": "notice",
+          "legacy_audience": null,
+          "origin_id": "<id37>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "human:ana",
@@ -959,21 +1641,117 @@
             "approval": "<pending_approval>",
             "task": "<open_task>"
           },
+          "restricted": 1,
+          "revision": 0,
+          "root_id": "<id31>",
           "sender_id": "bot:ops",
+          "seq": 16,
           "superseded_at": null,
+          "thread_id": "<id31>",
           "wait_s": null
         },
-        "seq": 88
+        "message_seq": 16,
+        "revision": 0,
+        "root_id": "<id31>",
+        "seq": 133,
+        "thread_id": "<id31>"
       },
       "event": "messages",
-      "id": "88"
+      "id": "133"
     },
     {
       "data": {
-        "actor": "runner:<id20>",
+        "actor": "runner:<id30>",
+        "at": "<time>",
+        "counters": {
+          "last_seq": 17,
+          "last_unread_seq": 17
+        },
+        "kind": "activity",
+        "root_id": "<conversation>",
+        "seq": 139,
+        "thread_id": "<conversation>"
+      },
+      "event": "threads",
+      "id": "139"
+    },
+    {
+      "data": {
+        "actor": "runner:<id30>",
+        "at": "<time>",
+        "kind": "attention",
+        "root_id": "<conversation>",
+        "seq": 140,
+        "thread_id": "<conversation>"
+      },
+      "event": "threads",
+      "id": "140"
+    },
+    {
+      "data": {
+        "actor": "runner:<id30>",
+        "at": "<time>",
+        "count": 1,
+        "items": [
+          {
+            "actions": [
+              "decide"
+            ],
+            "age_s": "<volatile>",
+            "body": null,
+            "consumed_at": null,
+            "conversation_id": "<id31>",
+            "created_at": "<time>",
+            "decided_at": null,
+            "decided_by_id": null,
+            "decided_for": null,
+            "decided_via": null,
+            "decision": null,
+            "decision_owner": "human:ana",
+            "decision_owner_name": "Ana",
+            "from_person": "human:ana",
+            "id": "<pending_approval>",
+            "kind": "approval",
+            "message_id": "<id36>",
+            "need": "pay",
+            "payload": {
+              "account": "ads",
+              "amount": 9,
+              "what": "Second test"
+            },
+            "payload_hash": "<digest>",
+            "pressing": false,
+            "ready_since": "<time>",
+            "requested_by_id": "bot:ops",
+            "requester_id": "bot:ops",
+            "subject": {
+              "id": "<pending_approval>",
+              "type": "approval"
+            },
+            "task_id": "<open_task>",
+            "tier": 2,
+            "title": "Pay 9: Second test",
+            "what": "spend"
+          }
+        ],
+        "seq": 141,
+        "went_away": {
+          "assistant": 0,
+          "days": 7,
+          "expired": 0,
+          "total": 0,
+          "withdrawn": 0
+        }
+      },
+      "event": "needs",
+      "id": "141"
+    },
+    {
+      "data": {
+        "actor": "runner:<id30>",
+        "at": "<time>",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
-        "id": "<id21>",
+        "id": "<id38>",
         "message": {
           "answered_by_id": null,
           "body": "Drafted the launch plan.",
@@ -984,9 +1762,11 @@
           "edited_at": null,
           "expires_at": null,
           "hidden_at": null,
-          "id": "<id21>",
+          "id": "<id38>",
           "in_reply_to": "<chat_message>",
           "kind": "say",
+          "legacy_audience": null,
+          "origin_id": "<id39>@<id4>",
           "public": 0,
           "read_at": null,
           "recipient_id": "human:ana",
@@ -996,54 +1776,63 @@
             ],
             "run": {
               "job_id": "<chat_message>",
-              "run_id": "<id5>"
+              "run_id": "<id9>"
             },
-            "turn_id": "<id5>"
+            "turn_id": "<id9>"
           },
+          "restricted": 1,
+          "revision": 0,
+          "root_id": "<conversation>",
           "sender_id": "bot:ops",
+          "seq": 17,
           "superseded_at": null,
+          "thread_id": "<conversation>",
           "wait_s": null
         },
-        "seq": 94
+        "message_seq": 17,
+        "revision": 0,
+        "root_id": "<conversation>",
+        "seq": 143,
+        "thread_id": "<conversation>"
       },
       "event": "messages",
-      "id": "94"
+      "id": "143"
     },
     {
       "data": {
-        "actor": "runner:<id20>",
+        "actor": "runner:<id30>",
+        "at": "<time>",
         "bot_id": "ops",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
         "job_id": "<chat_message>",
-        "run_id": "<id5>",
-        "seq": 95,
+        "run_id": "<id9>",
+        "seq": 144,
         "state": "completed"
       },
       "event": "runs",
-      "id": "95"
+      "id": "144"
     },
     {
       "data": {
-        "actor": "runner:<id20>",
+        "actor": "runner:<id30>",
+        "at": "<time>",
         "bot_id": "ops",
         "conversation_id": "<conversation>",
-        "created_at": "<time>",
         "job_id": "<chat_message>",
         "message_id": "<chat_message>",
-        "run_id": "<id5>",
-        "seq": 96,
+        "run_id": "<id9>",
+        "seq": 145,
         "state": "completed"
       },
       "event": "runs",
-      "id": "96"
+      "id": "145"
     },
     {
       "data": {
-        "actor": "runner:<id20>",
+        "actor": "runner:<id30>",
+        "at": "<time>",
         "bot": "ops",
-        "created_at": "<time>",
-        "seq": 97,
+        "seq": 146,
         "status": {
           "bot": "ops",
           "bot_state": "active",
@@ -1061,7 +1850,7 @@
         }
       },
       "event": "bots",
-      "id": "97"
+      "id": "146"
     }
   ],
   "request": "GET /api/v2/events?after=0",

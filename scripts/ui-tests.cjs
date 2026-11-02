@@ -224,7 +224,7 @@ const GROUPS = {e2e: 'e2e-'};
 async function main() {
   const dir = path.join(__dirname, '..', 'ui', 'tests');
   const CORE = ['account-status', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
-                'settings-forms', 'settings-no-dead-ends', 'sign-in-redirect', 'strategy', 'task-privacy', 'tasks-page', 'team-groups', 'dashboard', 'visual-cards', 'visual-fallback', 'visual-hosted', 'visual-media', 'visual-media-app'];
+                'settings-forms', 'settings-no-dead-ends', 'sign-in-redirect', 'strategy', 'task-privacy', 'tasks-page', 'team-groups', 'threads', 'dashboard', 'visual-cards', 'visual-fallback', 'visual-hosted', 'visual-media', 'visual-media-app'];
   const args = process.argv.slice(2);
   let jobs;
   let all = false;
@@ -248,8 +248,10 @@ async function main() {
   const allFiles = fs.readdirSync(dir).filter(f => f.endsWith('.cjs')).sort();
   const grouped = groups.flatMap(group => allFiles.filter(f => f.startsWith(GROUPS[group])).map(f => f.replace(/\.cjs$/, '')));
   const named = [...wanted, ...grouped];
+  // A tour that takes its own screenshots runs by name, on its own time: --all would stop it at the script timeout.
+  const WALKTHROUGHS = ['threads-walkthrough'];
   const chosen = named.length ? named : all ? null : CORE;
-  const files = allFiles.filter(f => !chosen || chosen.includes(f.replace(/\.cjs$/, '')));
+  const files = allFiles.filter(f => chosen ? chosen.includes(f.replace(/\.cjs$/, '')) : !WALKTHROUGHS.includes(f.replace(/\.cjs$/, '')));
   if (!files.length) { console.error('no UI test scripts matched'); process.exit(1); }
   if (list) { console.log(files.map(f => f.replace(/\.cjs$/, '')).join('\n')); return; }
   const {cores, idleFraction} = await sampleCpu();

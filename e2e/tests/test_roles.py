@@ -1,7 +1,7 @@
 """Conversation visibility per role (e2e/README.md "roles"): the owner, a plain member and a bot each read exactly the
 conversations they should, across personal rooms, the shared CPO room, a direct conversation between people and a DM to
-a bot. The rules are backend/auth.py `conversation` and docs/conversation.md ("personal" rooms are not opened to the
-owner; "shared" rooms need membership; "direct" rooms are open to the owner and to their participants; a bot turn
+a bot. The rules are backend/threads.py `denial` (C1) and docs/threads.md ("personal" rooms are not opened to the
+owner; "shared" rooms need membership; a direct conversation between people reads by membership only, the owner's included (docs/threads.md); a bot turn
 reads only the conversations its attempt was handed).
 
 Each cell of the matrix is one request through the v2 API as that viewer. The expected answers are written here from the
@@ -67,7 +67,7 @@ def test_each_viewer_reads_exactly_the_rooms_its_role_allows(api, rooms):  # noq
             # The task is public (no private flag), so its thread reads like the task does for everyone.
             "open_task_thread": {"owner": True,  "member": True,  "shared_member": True,  "bot": True},
             "cpo_shared":       {"owner": True,  "member": False, "shared_member": True,  "bot": False},
-            "ben_cara_direct":  {"owner": True,  "member": True,  "shared_member": True,  "bot": False},
+            "ben_cara_direct":  {"owner": False, "member": True,  "shared_member": True,  "bot": False},
         }
         tokens = {"owner": OWNER, "member": MEMBER, "shared_member": SHARED_MEMBER, "bot": bot}
         for name, who in expected.items():

@@ -294,6 +294,34 @@ def routed_reply(gateway, hub, text="Done."):
     return reply["id"]
 
 
+class BothJudges:
+    """The org rule check's judge for its own `rule-check` calls, and the decision engine for the rest."""
+
+    def __init__(self, rules, engine):
+        self.rules, self.engine = rules, engine
+
+    def __call__(self, state, questions, label=None, level=None):
+        if str(label or "").startswith("rule-check"):
+            return self.rules(state, questions, label, level=level)
+        return self.engine(state, questions, label)
+
+
+def test_a_direct_message_the_org_rules_hold_reaches_no_bot_until_the_hold_is_sent(gateway, hub):
+    """An org rule the message breaks holds its copy before any bot has it: nothing is written to a bot's conversation,
+    and the hold waits for its author."""
+    from backend import org_rules as R
+    from backend.auth import Auth, Identity
+    from backend.tests.test_org_rule_check import COLOR, Judge
+    owner = Identity("human:ben", "owner", email="ben@acme.example")
+    with hub.transaction() as c:
+        R.add_rule(c, Auth(hub), owner, {"kind": "internal", "text": COLOR, "who": {"everyone": True},
+                                         "with": {}, "if_broken": "block"})
+    gateway._judge = BothJudges(Judge(hub), gateway.engine)
+    send(gateway, "The favorite color is teal", judge_answer=answers(legal=0.9), channel=DM, kind="message")
+    assert rows(hub, "SELECT id FROM messages WHERE sender_id='human:ana'") == []
+    assert len(rows(hub, "SELECT id FROM org_rule_holds")) == 1
+
+
 @pytest.mark.parametrize("held", ["paused", "quarantined"])
 def test_a_persons_new_thread_to_a_bot_held_since_the_roster_was_read_is_kept_and_said_so(gateway, hub, held):
     """Legal is paused or quarantined while the decision model reads the roster: the new thread's message is kept for
@@ -876,3 +904,166 @@ def test_a_stored_channel_message_reaches_a_message_automation_once_and_only_aft
     assert [s["state"] for s in states] == ["stored", "stored"], "the readers keep the row as it was"
     assert states[0]["processed_at"] is None, "the backlog is not offered"
     assert states[1]["processed_at"] is not None
+
+
+def test_a_linked_channel_is_left_out_of_the_readers_pass_its_backfill_its_digest_and_its_automations(readers, monkeypatch):
+    """A channel a thread link carries reaches its thread through the bridge only. The hourly digest, the backfill and
+    the message automations leave it out, including the rows stored before the link (the readers' copies)."""
+    from backend import automations
+    gw, hub, slack = readers, readers.store, readers.slack
+    heard = []
+    monkeypatch.setattr(automations, "on_slack", lambda c, event, person, channel, settings=None: (
+        heard.append(event["text"]) or ["run_1"]))
+    with hub.transaction() as c:
+        c.execute("INSERT INTO registry_metadata(key,value) VALUES('redesign',?)", ('{"enabled": true}',))
+        c.execute("INSERT INTO automations(id,name,owner_id,group_id,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by_id,updated_at) VALUES('a1','Marketing','ana',NULL,'message',1,0,?,1,?,'human:ana',?)",
+                  ('{"trigger": {"type": "message", "inbox": "slack:#marketing"}}', gw.clock(), gw.clock()))
+    gw.clock.advance(60)
+    assert gw.receive(channel_message("Control message")) == "stored"
+    gw.offer()
+    assert heard == ["Control message"], "control: an unlinked channel's stored message is offered"
+    gw.clock.advance(60)
+    assert gw.receive(channel_message("Stored before the link")) == "stored"
+    with hub.transaction() as c:
+        c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) "
+                  "VALUES ('T-link','thread','Marketing','x','company','T-link','')")
+        c.execute("INSERT INTO slack_thread_links (id,thread_id,channel_ref,channel_id,channel_name,audience,state,"
+                  "linked_by,created_at,updated_at) VALUES ('L1','T-link',?,?,'marketing','company','active','ana','x','x')",
+                  (MARKETING, MARKETING))
+    assert gw.linked_channels() == {MARKETING}
+    gw.offer()
+    assert heard == ["Control message"], "the stored row of a linked channel is not offered"
+    slack.calls.clear()
+    gw.backfill()
+    assert not [c for c in slack.calls if c[0] == "conversations.history" and c[1] == MARKETING]
+    assert [c for c in slack.calls if c[0] == "conversations.history" and c[1] == RELEASE], "the other channels still run"
+    gw.clock.advance(3600)
+    gw.tick()
+    bodies = " ".join(d["body"] for d in digests(hub))
+    assert "Control message" not in bodies and "Stored before the link" not in bodies
+
+
+# ----------------------------------------------------------------------------- membership revoked after queueing
+def test_a_queued_slack_copy_to_someone_removed_from_the_thread_is_not_sent(gateway, hub):
+    """A bot message in a members thread is copied to the addressee's Slack DM. If that person is removed from the
+    thread after the copy is queued (here, while it waits out a rate limit), the copy must not go out: Slack would
+    show them a thread they can no longer open."""
+    from backend import threads
+    slack, clock = gateway.slack, gateway.clock
+
+    def queue(mid):
+        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
+                  "VALUES(?,?,'','legal',?,'ready',?,?,'human:ben')", (mid, "D0U2", "copy", clock(), clock()))
+
+    with hub.transaction() as c:
+        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben"])["id"]
+        before = threads.post(c, "bot:legal", tid, "Ben, the first draft.", kind="say", to_actor="human:ben")["id"]
+        queue(before)
+    # Control: Ben is still a member, so his copy goes out.
+    gateway.deliver()
+    assert len(slack.posts) == 1
+    with hub.transaction() as c:
+        after = threads.post(c, "bot:legal", tid, "Ben, the second draft.", kind="say", to_actor="human:ben")["id"]
+        queue(after)
+    slack.failures.append(G.SlackError("chat.postMessage", "ratelimited", retry_after=1))
+    gateway.deliver()
+    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", after)[0]["state"] == "rate_limited"
+    with hub.transaction() as c:
+        threads.remove_member(c, "human:ana", tid, "human:ben")
+    clock.advance(5)
+    gateway.deliver()
+    assert len(slack.posts) == 1, "no copy reaches a Slack user who left the thread"
+    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", after)[0]["state"] == "canceled"
+
+
+def test_a_copy_to_ben_never_reuses_another_members_slack_dm(gateway, hub):
+    """A members thread whose Slack mapping is Cara's DM: a bot's message to Ben must not be copied into Cara's DM,
+    since the copy would reach Cara with Ben's message. A shared channel mapping of the same thread still gets it."""
+    from backend import threads
+    with hub.transaction() as c:
+        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])["id"]
+        c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,user_id,event_type,"
+                  "text,received_at,state,actor) VALUES('ev-cara',?,'D0CARA','im','','','1','U5','message','hi',?,'routed',"
+                  "'human:cara')", (TEAM, "2000-01-01T00:00:00Z"))
+        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at,recipient_actor) "
+                  "VALUES('D0CARA','','legal',?,'2000-01-01T00:00:00Z',NULL,'human:cara')", (tid,))
+        dm_copy = threads.post(c, "bot:legal", tid, "Ben, the draft.", kind="say", to_actor="human:ben")["id"]
+    gateway.mirror()
+    gateway.deliver()
+    assert not any(post["channel"] == "D0CARA" for post in gateway.slack.posts)
+    assert not rows(hub, "SELECT 1 FROM slack_posts WHERE message_id=?", dm_copy)     # queued for no one else's DM
+
+    with hub.transaction() as c:
+        channel_tid = threads.create(c, "human:ana", title="Shared", audience="members", members=["human:ben"])["id"]
+        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) "
+                  "VALUES(?,'','legal',?,'2000-01-01T00:00:00Z',NULL)", (MARKETING, channel_tid))
+        shared = threads.post(c, "bot:legal", channel_tid, "Team, the draft.", kind="say", to_actor="human:ben")["id"]
+    gateway.mirror()
+    gateway.deliver()
+    assert rows(hub, "SELECT channel FROM slack_posts WHERE message_id=?", shared)[0]["channel"] == MARKETING
+    assert any(post["channel"] == MARKETING for post in gateway.slack.posts)
+
+
+def test_a_copy_to_a_member_of_a_native_dm_with_no_inbound_yet_is_delivered_and_a_non_member_gets_nothing(gateway, hub):
+    """A native DM keeps its other people in thread membership. A member with no inbound message yet gets the copy in
+    their own DM, which originate opens for them; a removed person gets nothing."""
+    from backend import threads
+    with hub.transaction() as c:
+        c.execute("UPDATE humans SET slack_id='U2' WHERE id='ben'")
+        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])["id"]
+        to_ben = threads.post(c, "bot:legal", tid, "Ben, the draft.", kind="say", to_actor="human:ben")["id"]
+        to_cara = threads.post(c, "bot:legal", tid, "Cara, the draft.", kind="say", to_actor="human:cara")["id"]
+        threads.remove_member(c, "human:ana", tid, "human:cara")
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", to_ben)[0]["state"] == "sent"
+    assert any(post["channel"] == "D0U2" and "Ben, the draft." in post["text"] for post in gateway.slack.posts)
+    assert not rows(hub, "SELECT 1 FROM slack_posts WHERE message_id=?", to_cara)
+    assert not any("Cara, the draft." in post["text"] for post in gateway.slack.posts)
+
+
+def test_a_bot_message_to_ben_never_goes_through_caras_dm_after_she_leaves_the_thread(gateway, hub):
+    """originate opens Cara's DM for a members thread; Cara leaves; the next bot message is to Ben. It must reach Ben
+    through his own DM, and Cara's DM must carry nothing for him: a DM mapping carries copies only to its stored person."""
+    from backend import threads
+    with hub.transaction() as c:
+        c.execute("UPDATE humans SET slack_id='UC' WHERE id='cara'")
+        c.execute("UPDATE humans SET slack_id='U2' WHERE id='ben'")
+        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])["id"]
+        threads.post(c, "bot:legal", tid, "Cara, the first draft.", kind="say", to_actor="human:cara")
+    gateway.originate()
+    gateway.deliver()
+    assert any(post["channel"] == "D0UC" for post in gateway.slack.posts)
+    with hub.transaction() as c:
+        threads.remove_member(c, "human:ana", tid, "human:cara")
+        ben_msg = threads.post(c, "bot:legal", tid, "Ben, the second draft.", kind="say", to_actor="human:ben")["id"]
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    ben_posts = [post for post in gateway.slack.posts if "Ben, the second draft." in post["text"]]
+    assert [post["channel"] for post in ben_posts] == ["D0U2"]
+    assert not any(post["channel"] == "D0UC" and "second draft" in post["text"] for post in gateway.slack.posts)
+    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", ben_msg)[0]["state"] == "sent"
+
+
+def test_a_dm_mapping_from_before_the_column_takes_only_a_person_its_verified_messages_name(hub):
+    """A DM mapping made before recipient_actor existed: one verified sender names its person; two senders, or none,
+    leave it empty, so its copies fail closed."""
+    from backend import threads
+    with hub.transaction() as c:
+        tid = threads.create(c, "human:ana", title="Old", audience="members", members=["human:ben"])["id"]
+        other = threads.create(c, "human:ana", title="Older", audience="members", members=["human:cara"])["id"]
+        for channel, conversation, actors in (("D0ONE", tid, ["human:ben"]), ("D0TWO", other, ["human:ben", "human:cara"])):
+            c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) "
+                      "VALUES(?,'','legal',?,'2000-01-01T00:00:00Z',NULL)", (channel, conversation))
+            c.execute("UPDATE slack_threads SET recipient_actor=NULL WHERE channel=?", (channel,))
+            for n, actor in enumerate(actors):
+                c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,user_id,"
+                          "event_type,text,received_at,state,actor) VALUES(?,?,?,'im','','',?,'U1','message','hi',"
+                          "'2000-01-01T00:00:00Z','routed',?)", (f"{channel}-{n}", TEAM, channel, f"{n + 1}.0", actor))
+    hub.initialize()
+    found = dict((r["channel"], r["recipient_actor"]) for r in rows(hub, "SELECT channel,recipient_actor FROM slack_threads "
+                                                                        "WHERE channel IN ('D0ONE','D0TWO')"))
+    assert found == {"D0ONE": "human:ben", "D0TWO": None}

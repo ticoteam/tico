@@ -1535,6 +1535,9 @@ def migrate(conn, adopt_legacy=False):
                  "value TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(actor, key))")
     # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
     from . import message_links
+    from . import threads
+    threads.ensure(conn)
+    threads.migrate(conn)
     message_links.ensure(conn)
     clear_finished_close_times(conn)
     return len(MIGRATIONS)
@@ -2912,8 +2915,9 @@ def sync_registry(conn, employees, people):
 
 # ----------------------------------------------------------------------------- conversations
 def open_conversation(conn, actor, participants, kind="chat", subject="", task_id=None,
-                      scope=None, owner_actor=None, room_key=None, allow_planned=False, allow_held=False):
-    """A thread between any set of bots and humans. Reach (rule 2) is checked per participant."""
+                      scope=None, owner_actor=None, room_key=None, allow_planned=False, allow_held=False, announce=True):
+    """A thread between any set of bots and humans. Reach (rule 2) is checked per participant. `announce=False`: the
+    caller has not finished it (who reads a task's room depends on the task), and announces it when it has."""
     _writer(conn, actor)
     if kind not in CONVERSATION_KINDS:
         refuse(conn, actor, "kind", f"a conversation is {'|'.join(CONVERSATION_KINDS)}, not {kind}")
@@ -2924,6 +2928,11 @@ def open_conversation(conn, actor, participants, kind="chat", subject="", task_i
             people.append(resolved)
     if actor not in people:
         people.insert(0, actor)
+    # A person's new DM (any set of people, or bots beyond a canonical one-bot room) is `personal`, however it was
+    # asked for: `participants` is for migrated rows alone, and no owner inspection reaches a new DM.
+    new_dm = (scope is None and not task_id and is_human(actor) and len(people) >= 2
+              and all(is_human(p) or is_bot(p) for p in people)
+              and (len(people) > 2 or all(is_human(p) for p in people)))
     if scope is None:
         scope = "task" if task_id else "direct"
         humans = [p for p in people if is_human(p)]
@@ -2947,12 +2956,25 @@ def open_conversation(conn, actor, participants, kind="chat", subject="", task_i
                  ":room_key, :created_at, :last_message_at, :closed_at)", row)
     event(conn, actor, "conversation.open", row["id"],
           {"kind": kind, "scope": scope, "participants": people})
-    return conversation(conn, row["id"])
+    if new_dm and scope == "direct":
+        from . import threads
+        threads.personal_dm(conn, row["id"], actor, people)
+    made = conversation(conn, row["id"])
+    if announce:
+        from . import threads
+        threads._emit_thread_created(conn, made, actor)
+    return made
 
 
 def _pair_conversation(conn, actor, other, kind, subject="", allow_held=False):
     """The live conversation of this kind between these two, opened if there is none."""
     want = {actor, other}
+    if is_human(actor) and is_human(other):
+        # Two people have one DM, a native row included: its participant list names only its starter.
+        from . import threads
+        dm = threads._open_dm(conn, actor, [other])
+        if dm:
+            return conversation(conn, dm)
     for row in _rows(conn.execute(
             "SELECT * FROM conversations WHERE kind=? AND closed_at IS NULL AND task_id IS NULL "
             "ORDER BY COALESCE(last_message_at, created_at) DESC LIMIT 200", (kind,))):
@@ -2993,6 +3015,9 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     target = _reach(conn, actor, to_actor, allow_held=True)
     refs = dict(refs or {})
     warnings = []
+    from . import threads
+    if threads.never_wakes(refs, target):
+        refs["quiet"] = True       # decided before anything below reads quiet: no hold, no note, no run
 
     if is_bot(actor) and actor == target:
         refuse(conn, actor, "self", "a bot cannot send work to itself")
@@ -3022,18 +3047,9 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
 
     # rules 4 and 7: what a person has to read
     if is_bot(actor) and is_human(target) and kind in ("say", "notice"):
-        parent = (_one(conn, "SELECT sender_id,conversation_id FROM messages WHERE id=?", (in_reply_to,))
-                  if in_reply_to else None)
-        replying_to_person = bool(parent and parent["sender_id"] == target and
-                                  parent["conversation_id"] == conv["id"])
-        solicited = (replying_to_person or _opener(conn, conv["id"]) == target or
-                     bool(refs.get("task") or refs.get("approval")))
-        if not solicited:
-            day = now()[:10]
-            n = conn.execute(
-                "SELECT COUNT(*) FROM messages WHERE sender_id=? AND recipient_id=? "
-                "AND substr(created_at,1,10)=? AND refs LIKE '%\"unsolicited\": true%'",
-                (actor, target, day)).fetchone()[0]
+        if not threads.solicited(conn, conv["id"], actor, target, refs, in_reply_to):
+            # Counted per delivery (backend/threads.py): what reached this person, addressed or not.
+            n = threads.unsolicited_today(conn, actor, target)
             if n >= UNSOLICITED_PER_DAY:
                 refuse(conn, actor, "unsolicited",
                        f"{n} unsolicited messages to {actor_name(conn, target)} today; the cap is "
@@ -3077,7 +3093,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
              actor, revision=0)
     if warnings:
         event(conn, actor, "message.lint", msg["id"], {"problems": warnings})
-        return {**msg, "warnings": warnings}
+        return {**msg, "warnings": list(msg.get("warnings") or []) + warnings}
     return msg
 
 
@@ -3320,6 +3336,9 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         refs = {**(refs or {}), wake_rules.CAUSED_BY: wake_rules.CAUSE.get()}
     # Token saving 2/9: a wake its bot's own write caused, or news about a parked task, waits for the next run. The
     # rules engine (backend/rules.py) decides, names the rule on the message (refs.rule) and fails open.
+    from . import threads as thread_rules
+    if thread_rules.never_wakes(refs, target) and not (refs or {}).get("quiet"):
+        refs = {**refs, "quiet": True}      # a writer that came here without `say` (a remote author's post)
     from . import rules as wake_rule_engine
     if isinstance(refs, dict) and wake_rule_engine.PARKED_NOTICE in refs:
         refs = {k: v for k, v in refs.items() if k != wake_rule_engine.PARKED_NOTICE}
@@ -3338,9 +3357,13 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
            "read_at": read_at, "expires_at": expires_at, "wait_s": wait_s}
     if delivered_at is None:
         _held_queue_admit(conn, actor, target, row["body"], row["refs"])
+    # Native threads (backend/threads.py): the origin, revision and restricted flag; the insert trigger adds the seq.
+    from . import threads
+    threads.stamp(conn, row, conv, refs)
     # Capacity waiting is not loop misconduct, even when this conversation also hit its cap.
-    # rule 3: the loop caps
-    if check_cap and is_bot(actor) and is_bot(target):
+    # rule 3: the loop caps. A message written through threads.post is held by the thread loop guard instead, which
+    # makes the run it would start wait (`capped`) rather than refusing the message.
+    if check_cap and is_bot(actor) and is_bot(target) and threads.POSTING.get() is None:
         since = shift(now(), hours=-1)
         # The cap stops two bots talking in circles, so it counts bot-to-bot messages only: the
         # keeper's notices (a routine's "new task", "finished") and a person's messages are not a
@@ -3354,10 +3377,13 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
                    f"{n} messages in this conversation in the last hour; the cap is {CAP_PER_HOUR}")
     conn.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, "
-        "in_reply_to, created_at, delivered_at, read_at, expires_at, wait_s) VALUES (:id, "
-        ":conversation_id, :sender_id, :recipient_id, :kind, :body, :refs, :in_reply_to, "
-        ":created_at, :delivered_at, :read_at, :expires_at, :wait_s)", row)
+        "in_reply_to, created_at, delivered_at, read_at, expires_at, wait_s, origin_id, revision, restricted, "
+        "legacy_audience) VALUES (:id, :conversation_id, :sender_id, :recipient_id, :kind, :body, :refs, "
+        ":in_reply_to, :created_at, :delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, "
+        ":restricted, :legacy_audience)", row)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created_at"], conv["id"]))
+    # A mention outside the audience grants nothing and warns the author (contract §2): carried on the result.
+    mention_warnings = (threads.record(conn, message(conn, row["id"]), conv) or {}).get("warnings") or []
     # Notes, comments and runner final replies all pass here, including quiet ones
     # and checks requested by a person. Only the check owner may supply its verdict.
     if kind in ("say", "notice") and wake_rules.VERDICT_FIELDS.search(str(body or "")):
@@ -3370,7 +3396,8 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
-    return message(conn, row["id"])
+    written = message(conn, row["id"])
+    return {**written, "warnings": mention_warnings} if mention_warnings else written
 
 
 def feed(conn, target, body, conv, refs=None):
@@ -3422,8 +3449,10 @@ def has_pick_options(msg):
     return any(q.get("options") for q in refs.get("questions", []))
 
 
-def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, comment_target=None, classify_text=None):
-    """Reply to an ask. A checked task comment may also answer a structured task ask."""
+def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, comment_target=None, classify_text=None,
+           turn_id=None):
+    """Reply to an ask. A checked task comment may also answer a structured task ask. `turn_id`: the run writing it, whose
+    private tasks and meetings it may draw on, so it stays readable only by who reads those (task_privacy.message_tasks)."""
     _writer(conn, actor)
     asked = message(conn, message_id)
     if not asked:
@@ -3438,6 +3467,8 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     refs = {"depth": (asked.get("refs") or {}).get("depth", 1), **(comment_refs or {})}
     if unknown:
         refs["unknown"] = True
+    if turn_id:
+        refs["turn_id"] = turn_id
     if has_pick_options(asked) and not refs.get("answer"):
         refs.update({"decision_open": True})
         about = message_task_id(asked, conversation(conn, asked["conversation_id"]))
@@ -3473,17 +3504,37 @@ def notice(conn, actor, to_actor, body, refs=None, expires_days=NOTICE_DAYS):
     return message(conn, msg["id"])
 
 
-def mark_delivered(conn, actor, message_id):
-    """The keeper sets this only once the runtime accepted the input (at-least-once delivery)."""
-    conn.execute("UPDATE messages SET delivered_at=? WHERE id=? AND delivered_at IS NULL",
-                 (now(), message_id))
+def _secondary_recipient(conn, message_id, recipient):
+    """True when `recipient` is one of the message's further deliveries (a mention, a DM member), not its addressee:
+    their receipt is theirs alone (message_deliveries), the message row's is the addressee's."""
+    if recipient is None:
+        return False
+    row = _one(conn, "SELECT recipient_id FROM messages WHERE id=?", (message_id,))
+    return bool(row) and row["recipient_id"] != recipient
+
+
+def mark_delivered(conn, actor, message_id, recipient=None):
+    """The keeper sets this only once the runtime accepted the input (at-least-once delivery). The addressee's
+    delivery row follows the message row (a trigger, backend/threads.py); another recipient's is set here."""
+    if _secondary_recipient(conn, message_id, recipient):
+        conn.execute("UPDATE message_deliveries SET delivered_at=COALESCE(delivered_at,?), state=CASE WHEN "
+                     "state='pending' THEN 'delivered' ELSE state END, updated_at=? WHERE message_id=? AND recipient=?",
+                     (now(), now(), message_id, recipient))
+    else:
+        conn.execute("UPDATE messages SET delivered_at=? WHERE id=? AND delivered_at IS NULL",
+                     (now(), message_id))
     event(conn, actor, "message.delivered", message_id)
     return message(conn, message_id)
 
 
-def mark_read(conn, actor, message_id):
-    conn.execute("UPDATE messages SET read_at=? WHERE id=? AND read_at IS NULL",
-                 (now(), message_id))
+def mark_read(conn, actor, message_id, recipient=None):
+    if _secondary_recipient(conn, message_id, recipient):
+        conn.execute("UPDATE message_deliveries SET read_at=COALESCE(read_at,?), state=CASE WHEN state IN "
+                     "('pending','delivered') THEN 'read' ELSE state END, updated_at=? WHERE message_id=? AND recipient=?",
+                     (now(), now(), message_id, recipient))
+    else:
+        conn.execute("UPDATE messages SET read_at=? WHERE id=? AND read_at IS NULL",
+                     (now(), message_id))
     event(conn, actor, "message.read", message_id)
     return message(conn, message_id)
 
@@ -5851,7 +5902,7 @@ def _refresh_comment_replies(conn, msg):
     def refresh(value):
         if isinstance(value, dict):
             if value.get("id") == msg["id"] and ("sender_id" in value or "from_actor" in value):
-                return msg
+                return {**value, **msg}     # what the route added beside the message (thread_id, warnings) stays
             return {k: refresh(v) for k, v in value.items()}
         if isinstance(value, list):
             return [refresh(v) for v in value if not (msg.get("deleted_at") and isinstance(v, dict)
@@ -6180,7 +6231,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         # The person of the chat it came from follows it into its room, where its replies reach them.
         watcher = _room_person(conn, started_in, {"requester_id": requester, "owner_id": target}) if started_in and not private else None
         conv = open_conversation(conn, actor, list(dict.fromkeys([actor, requester, target, *([watcher] if is_human(watcher) else [])])),
-                                 kind="task", subject=title, scope="task", allow_planned=allow_planned)
+                                 kind="task", subject=title, scope="task", allow_planned=allow_planned, announce=False)
         dedicated = True
     row = {"id": new_id(), "title": title, "body": body, "requester_id": requester, "owner_id": target,
            "status": "open", "due_at": due, "conversation_id": conv["id"],
@@ -6245,6 +6296,9 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         event(conn, actor, "task.lint", row["id"], {"problems": plain})
     event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
     _building(conn, None)
+    if dedicated:
+        from . import threads
+        threads._emit_thread_created(conn, conversation(conn, conv["id"]), actor)
     hook(conn, "task.created", row["id"], lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id), actor, revision=0)
     from . import task_trigger_rules
     task_trigger_rules.created(conn, row["id"], actor)
@@ -6285,13 +6339,18 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     from . import profiles
     gate_child = {"wake": "review_request"} if profiles.is_review_task(conn, task(conn, row["id"])) \
         else {"news": "assignment"}
-    _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
-          {**({"reconcile": reconcile} if reconcile else {}), **({"filed_in": filed_in} if filed_in else {}),
-           **gate_child, **(wake_refs or {})} or None,
-          quiet_bots=next_run or quiet_notice, quiet=next_run or quiet_notice, trigger=trigger, source=trigger_source)
+    notice = _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
+                   {**({"reconcile": reconcile} if reconcile else {}), **({"filed_in": filed_in} if filed_in else {}),
+                    **gate_child, **(wake_refs or {})} or None,
+                   quiet_bots=next_run or quiet_notice, quiet=next_run or quiet_notice, trigger=trigger,
+                   source=trigger_source)
     if parent and is_bot(parent["owner_id"]) and is_human(target):
         # A bot's task now waits on a person: one line in the bot's main chat.
         task_report(conn, task(conn, parent["id"]), "blocked", f"Waiting on {actor_name(conn, target)}: {title}")
+    if dedicated:
+        # Its own thread: the maker reads the notice their action wrote; a requester who did not make it sees it as new.
+        from . import threads
+        threads.task_opened(conn, conv, actor, requester, notice)
     _recount(conn, target)
     _recount(conn, actor)
     made = task(conn, row["id"])
@@ -9248,14 +9307,13 @@ def prime_conversations(conn, ids):
 
 def conversations_for(conn, actor, limit=100):
     """Every conversation this actor is a participant in, newest first."""
+    # Filtered in SQL: a window of the newest conversations company-wide lost an older chat behind many newer ones.
     out = []
-    for row in _rows(conn.execute("SELECT * FROM conversations ORDER BY "
-                                  "COALESCE(last_message_at, created_at) DESC LIMIT ?", (limit * 5,))):
+    for row in _rows(conn.execute("SELECT * FROM conversations c WHERE EXISTS (SELECT 1 FROM "
+                                  "json_each(CASE WHEN json_valid(c.participants) THEN c.participants END) WHERE value=?) ORDER BY "
+                                  "COALESCE(c.last_message_at, c.created_at) DESC LIMIT ?", (actor, limit))):
         row["participants"] = _json(row.get("participants"), []) or []
-        if actor in row["participants"]:
-            out.append(row)
-        if len(out) >= limit:
-            break
+        out.append(row)
     return out
 
 
@@ -9388,12 +9446,17 @@ def answers_to(conn, message_ids):
 
 
 def undelivered(conn, to_actor=None, limit=200):
-    """What the keeper's mailbox loop reads: messages no runtime has accepted yet."""
+    """What the keeper's mailbox loop reads: messages no runtime has accepted yet. For one recipient, its pending
+    deliveries (message_deliveries: the messages addressed to it and those that reach it otherwise)."""
+    if to_actor:
+        out = _rows(conn.execute(
+            "SELECT m.* FROM message_deliveries d JOIN messages m ON m.id=d.message_id WHERE d.recipient=? "
+            "AND d.state='pending' AND m.deleted_at IS NULL ORDER BY d.created_at LIMIT ?", (to_actor, limit)))
+        for row in out:
+            row["refs"] = _json(row.get("refs"), {}) or {}
+        return out
     sql = "SELECT * FROM messages WHERE delivered_at IS NULL AND deleted_at IS NULL"
     args = []
-    if to_actor:
-        sql += " AND recipient_id=?"
-        args.append(to_actor)
     out = _rows(conn.execute(sql + " ORDER BY created_at LIMIT ?", (*args, limit)))
     for row in out:
         row["refs"] = _json(row.get("refs"), {}) or {}
@@ -9404,9 +9467,15 @@ def undelivered(conn, to_actor=None, limit=200):
 # word for word, or SQLite does not use it (`inbox_pages`).
 UNREAD_TERMS = "(delivered_at IS NULL OR read_at IS NULL) AND deleted_at IS NULL"
 UNREAD_INDEX = "CREATE INDEX IF NOT EXISTS messages_unread_to ON messages(recipient_id, created_at) WHERE " + UNREAD_TERMS
-UNREAD_PAGE_SQL = ("SELECT rowid AS _seq,* FROM messages WHERE recipient_id=? AND " + UNREAD_TERMS +
-                   " AND (expires_at IS NULL OR expires_at > ?) AND created_at<=? AND (created_at<? OR rowid<?)"
-                   " ORDER BY created_at DESC, rowid DESC LIMIT ?")
+# The inbox reads deliveries (backend/threads.py): a message addressed to the reader, or reaching them another way (a
+# mention, a DM), still waiting. The addressee's row follows the message's delivered_at/read_at. The terms repeat the
+# partial index message_deliveries_waiting word for word, or SQLite does not use it.
+WAITING_TERMS = "d.state IN ('pending','delivered','capped','held')"
+# Paged on the delivery's own (created_at, rowid), which the waiting index holds in order: no sort.
+UNREAD_PAGE_SQL = ("SELECT d.rowid AS _seq, d.created_at AS _at, m.* FROM message_deliveries d "
+                   "JOIN messages m ON m.id=d.message_id WHERE d.recipient=? AND " + WAITING_TERMS + " "
+                   "AND m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? "
+                   "AND (d.created_at<? OR d.rowid<?) ORDER BY d.created_at DESC, d.rowid DESC LIMIT ?")
 
 
 def inbox_pages(conn, actor, at=None, size=100):
@@ -9420,9 +9489,9 @@ def inbox_pages(conn, actor, at=None, size=100):
         rows = _rows(conn.execute(UNREAD_PAGE_SQL, (actor, at, created, created, seq, size)))
         if not rows:
             return
-        created, seq = rows[-1]["created_at"], rows[-1]["_seq"]
+        created, seq = rows[-1]["_at"], rows[-1]["_seq"]
         for row in rows:
-            del row["_seq"]
+            del row["_seq"], row["_at"]
             row["refs"] = _json(row.get("refs"), {}) or {}
         yield rows
         if len(rows) < size:
@@ -9721,12 +9790,14 @@ def tasks_asked_of(conn, actor):
 
 def loose_asks_to(conn, actor):
     """Unanswered questions bots asked this person outside any task (`hub question ask <person>`), oldest first.
-    No task carries them into Needs you, so they are listed on their own; an expired one has left."""
-    return _rows(conn.execute(
+    No task carries them into Needs you, so they are listed on their own; an expired one has left, and so has one in a
+    thread they may no longer read."""
+    from . import threads
+    return threads.asks_still_readable(conn, actor, _rows(conn.execute(
         "SELECT m.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE m.recipient_id=? AND m.kind='ask' AND m.answered_by_id IS NULL AND m.deleted_at IS NULL "
         f"AND m.sender_id LIKE 'bot:%' AND {MESSAGE_TASK_SQL} IS NULL AND {OPEN_ASK_SQL} "
-        "AND (m.expires_at IS NULL OR m.expires_at>?) ORDER BY m.created_at", (actor, now())))
+        "AND (m.expires_at IS NULL OR m.expires_at>?) ORDER BY m.created_at", (actor, now()))))
 
 
 def needs_you(conn, who):

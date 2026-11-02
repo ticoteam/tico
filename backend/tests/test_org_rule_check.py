@@ -13,6 +13,7 @@ import pytest
 
 from backend import call_slots as CS
 from backend import org_rule_check as K
+from backend import threads
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import claim, get, headers, post, setup_attempt  # noqa: F401
@@ -93,7 +94,7 @@ def test_a_short_break_is_held_with_a_200_and_never_a_refusal(ruled):
     api, judge = ruled
     color_rule(api)
     got = say(api, "My favorite color is blue")
-    assert got["held"]["outcome"] == "blocked" and "hub rules appeal" in got["held"]["text"]
+    assert got["held"]["outcome"] == "blocked" and "hub rules appeal" in got["held"]["reason"]
     assert bodies(api, "favorite color") == []
     assert len(judge.calls) == 1 and judge.locked == [False]
     # A hold is an answer, not a refusal: the bot is not quarantined and keeps working.
@@ -136,19 +137,23 @@ def test_too_large_under_warn_rules_only_is_delivered_with_its_line_and_counted_
     assert events(api, "rules.warned") == [] and get(api, "rules/stats")["unchecked_today"] == 1
 
 
-def test_botops_acting_as_a_person_is_checked(ruled):
+def test_a_persons_writes_and_their_botops_and_assistant_writes_are_checked_as_that_person(ruled):
     api, judge = ruled
-    rule(api, {"kind": "internal", "text": COLOR, "who": {"all_bots": True}})
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
     store = api.app.state.store
-    as_ana = Identity("human:ana", "owner", "ana@acme.example", via="botops", task_actor="bot:botops")
-    verdict = K.preflight(store, judge, as_ana, "message", "Acme's favorite color is green", ["human:ben"])
-    assert verdict["author"] == "bot:botops" and verdict["outcome"] == "broken" and K.holds(verdict)
-    for own in (Identity("human:ana", "owner", "ana@acme.example"),
-                Identity("human:ana", "owner", "ana@acme.example", via="assistant")):
-        assert K.preflight(store, judge, own, "message", "Acme's favorite color is green", ["human:ben"]) is None
-    # Ana's own message is never checked.
-    assert "held" not in say(api, "My favorite color is green", to="ben", token="ana-test")
-    assert len(judge.calls) == 1
+    as_botops = Identity("human:ana", "owner", "ana@acme.example", via="botops", task_actor="bot:botops")
+    verdict = K.preflight(store, judge, as_botops, "message", "Acme's favorite color is green", ["human:ben"])
+    assert verdict["author"] == "human:ana" and verdict["sender"] == "bot:botops" and verdict["via"] == "botops"
+    assert verdict["outcome"] == "broken" and K.holds(verdict)
+    # Her own write, and her Assistant's, are held as her too: the same text is one check, the Assistant's the same
+    # verdict from the cache.
+    own = Identity("human:ana", "owner", "ana@acme.example")
+    assert K.preflight(store, judge, own, "message", "Acme's favorite color is green", ["human:ben"])["author"] \
+        == "human:ana"
+    assisted = Identity("human:ana", "owner", "ana@acme.example", via="assistant")
+    assert K.preflight(store, judge, assisted, "message", "Acme's favorite color is green", ["human:ben"])["author"] \
+        == "human:ana"
+    assert "held" in say(api, "My favorite color is green", to="ben", token="ana-test")
 
 
 def test_an_all_bots_rule_covers_a_bot_made_later(ruled):
@@ -278,6 +283,37 @@ def test_the_third_block_in_a_day_escalates_with_one_review_task(ruled):
     assert len(tasks) == 1
 
 
+def test_a_rule_review_task_is_titled_plainly_and_its_thread_keeps_the_hold(ruled):
+    api, _ = ruled
+    color_rule(api)
+    [say(api, f"Try {n}: our favorite color is gold") for n in range(3)]
+    [task] = sql(api, "SELECT id, title, body, conversation_id FROM tasks WHERE id IN "
+                      "(SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL)")
+    hold = sql(api, "SELECT id FROM org_rule_holds WHERE task_id=?", (task["id"],))[0]["id"]
+    assert task["title"] == "Rule review"
+    assert [s["subject"] for s in sql(api, "SELECT subject FROM conversations WHERE id=?", (task["conversation_id"],))] \
+        == ["Rule review"]
+    assert "Hold: " + hold in task["body"]
+
+
+def test_an_old_rule_review_row_takes_the_plain_title_and_no_other_held_row_does(ruled):
+    api, _ = ruled
+    color_rule(api)
+    [say(api, f"Try {n}: our favorite color is gold") for n in range(3)]
+    [review] = sql(api, "SELECT id, conversation_id FROM tasks WHERE id IN "
+                        "(SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL)")
+    with api.app.state.store.transaction() as c:
+        # Rows as main wrote them: the review's thread took the task's "Held: ..." title, and a screening hold keeps its own.
+        c.execute("UPDATE conversations SET subject=? WHERE id=?", ("Held: ops and the rule 'old'", review["conversation_id"]))
+        screening = c.execute("INSERT INTO conversations(id, kind, subject, participants, scope, created_at) "
+                              "VALUES('screen-held', 'task', 'Held: Order', '[]', 'task', '2026-11-01')").rowcount
+        assert screening == 1
+        assert threads.rename_rule_reviews(c) == 1
+    subjects = {r["id"]: r["subject"] for r in sql(api, "SELECT id, subject FROM conversations WHERE id IN (?, 'screen-held')",
+                                                  (review["conversation_id"],))}
+    assert subjects == {review["conversation_id"]: "Rule review", "screen-held": "Held: Order"}
+
+
 def test_cache_hits_count_toward_repeats(ruled):
     api, judge = ruled
     color_rule(api)
@@ -393,6 +429,39 @@ def test_keep_blocked_and_only_the_reviewer_or_author_reads_a_hold(ruled):
     kept = post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
     assert kept["state"] == "kept"
     post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test", expected=409)
+
+
+def test_the_person_a_bot_reports_to_reads_and_withdraws_its_held_post_but_cannot_release_it(ruled):
+    api, _ = ruled
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
+    color_rule(api, reviewer="ana")
+    held = say(api, "Our favorite color is gold")["held"]
+    view = get(api, f"rule-holds/{held['id']}", token="ben-test")          # the person ops works for reads its post
+    assert view["can_withdraw"] and not view["can_send"] and "nonce" not in view and "gold" in view["text"]
+    post(api, f"rule-holds/{held['id']}/send", {"nonce": "not-the-nonce"}, token="ben-test", expected=404)
+    get(api, f"rule-holds/{held['id']}", token="cara-test", expected=404)   # a peer does not read it
+    assert "nonce" in get(api, f"rule-holds/{held['id']}", token="ana-test")  # the reviewer still releases it
+    kept = post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
+    assert kept["state"] == "kept" and kept["decided_by"] == "human:ben"
+    assert bodies(api, "gold") == []
+
+
+def test_a_person_reads_and_withdraws_a_hold_on_their_own_post_and_a_peer_does_not(ruled):
+    api, _ = ruled
+    with api.app.state.store.transaction() as c:          # rules-people's person checks write holds with a person author
+        c.execute("INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+                  "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                  ("h-cara", "message", json.dumps({"text": "Our favorite color is gold", "replay": {}}), "human:cara",
+                   "[]", "[]", "{}", "n-cara", "held", "human:ana", None, H.now()))
+    view = get(api, "rule-holds/h-cara", token="cara-test")
+    assert view["can_withdraw"] and not view["can_send"] and "nonce" not in view and "gold" in view["text"]
+    assert view["author_name"] == "Cara"                      # the person's name, not the actor id
+    get(api, "rule-holds/h-cara", token="ben-test", expected=404)
+    post(api, "rule-holds/h-cara/send", {"nonce": "n-cara"}, token="cara-test", expected=404)
+    assert "nonce" in get(api, "rule-holds/h-cara", token="ana-test")
+    kept = post(api, "rule-holds/h-cara/keep", {}, token="cara-test")
+    assert kept["state"] == "kept" and kept["decided_by"] == "human:cara"
 
 
 def test_an_appeal_reaches_the_reviewer_even_when_a_rule_blocks_messaging_them(ruled):
@@ -852,7 +921,8 @@ def test_a_mail_approval_is_spent_once(ruled):
 
 def test_botops_mail_for_a_person_finds_its_own_hold_and_spends_its_approval_once(ruled):
     api, _ = ruled
-    rule(api, {"kind": "internal", "text": COLOR, "who": {"all_bots": True}, "if_broken": "escalate", "reviewer": "ben"})
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "escalate",
+               "reviewer": "ben"})
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR IGNORE INTO bots(id, slug, display_name, state) VALUES('botops', 'botops', 'BotOps', 'active')")
     as_bot(api, "botops", "botops-test")
@@ -863,7 +933,7 @@ def test_botops_mail_for_a_person_finds_its_own_hold_and_spends_its_approval_onc
     again = post(api, "bots/botops/mail-check", mail, token="ana-botops")
     assert first["outcome"] == again["outcome"] == "held" and first["held"]["id"] == again["held"]["id"]
     [hold] = sql(api, "SELECT id, author FROM org_rule_holds WHERE operation='mail'")
-    assert hold["author"] == "bot:botops"
+    assert hold["author"] == "human:ana"
     view = get(api, f"rule-holds/{hold['id']}", token="ben-test")
     post(api, f"rule-holds/{hold['id']}/send", {"nonce": view["nonce"]}, token="ben-test")
     sent = post(api, "bots/botops/mail-check", mail, token="ana-botops")
@@ -1004,7 +1074,7 @@ def test_a_report_counts_only_under_a_rule_with_no_with_and_up_to_a_days_cap(rul
     assert get(api, "rules/stats")["unchecked_today"] == 3
 
 
-def test_a_mail_check_that_cannot_run_is_counted_unchecked_and_a_persons_mail_is_not_checked(ruled, monkeypatch):
+def test_a_mail_check_that_cannot_run_is_counted_unchecked(ruled, monkeypatch):
     api, judge = ruled
     color_rule(api)
     mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Our favorite color is gold."}
@@ -1012,19 +1082,31 @@ def test_a_mail_check_that_cannot_run_is_counted_unchecked_and_a_persons_mail_is
     post(api, "bots/ops/mail-check", mail, token="finance-test", expected=403)
     [event] = events(api, "rules.unchecked")
     assert event["actor"] == "bot:finance" and json.loads(event["detail"])["reason"] == "forbidden"
-    # A person's Assistant writing as them: their own mail, never checked, and no refusal.
-    settings = api.app.state.auth.settings
-    settings.test_identities["ben-assistant"] = Identity("human:ben", "human", "ben@acme.example", via="assistant")
-    assert post(api, f"bots/{settings.assistant_bot}/mail-check", mail, token="ben-assistant") == \
-        {"outcome": "not_checked"}
-    assert post(api, f"bots/{settings.assistant_bot}/mail-check/misses", {"ids": [str(uuid.uuid4())]},
-                token="ben-assistant") == {"recorded": 0, "known": []}
     # A server error inside the check: recorded before it surfaces.
     monkeypatch.setattr(K, "mail_approved", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
     with pytest.raises(RuntimeError):
         api.post("/api/v2/bots/ops/mail-check", json=mail, headers=headers("ops-test"))
     assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["forbidden", "error"]
     assert judge.calls == [] and get(api, "rules/stats")["unchecked_today"] == 2
+
+
+def test_an_assistant_mail_is_checked_as_the_person_it_is_written_for(ruled):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    settings = api.app.state.auth.settings
+    as_bot(api, settings.assistant_bot, "coo-test")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug=?", (settings.assistant_bot,))
+    # As `auth.chat_person` builds it: the person, acting through their Assistant bot's credential.
+    settings.test_identities["ben-assistant"] = Identity("human:ben", "human", "ben@acme.example", via="assistant",
+                                                         task_actor="bot:" + settings.assistant_bot, agent="test")
+    mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Our favorite color is gold."}
+    assert post(api, f"bots/{settings.assistant_bot}/mail-check", mail, token="ben-assistant")["outcome"] == "held"
+    [hold] = sql(api, "SELECT author FROM org_rule_holds WHERE operation='mail'")
+    assert hold["author"] == "human:ben" and len(judge.calls) == 1
+    # Its report of a check that gave no verdict counts once, as the person's mail under the rule that covers them.
+    assert post(api, f"bots/{settings.assistant_bot}/mail-check/misses", {"ids": [str(uuid.uuid4())]},
+                token="ben-assistant") == {"recorded": 1, "known": []}
 
 
 def test_a_warned_mail_carries_its_line_and_external_addresses_split_the_cache(ruled):
@@ -1153,6 +1235,18 @@ def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
     assert bodies(api, "favorite color is red") == [] and bodies(api, "favorite color is teal") == []
     paths = [json.loads(hold_row(api, h["id"])["payload"])["provenance"]["path"] for h in held]
     assert paths == [f"/api/v2/tasks/{task['id']}/comments", f"/api/v2/messages/{ask['id']}/answer"]
+
+
+def test_a_replayed_answer_keeps_the_run_it_came_from(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    r, msg, attempt = started_turn(api)
+    ask = post(api, "messages", {"to": "ops", "kind": "ask", "text": "Which color?",
+                                 "conversation_id": msg["conversation_id"]})
+    held = post(api, f"messages/{ask['id']}/answer", {"text": "Our favorite color is teal."}, token=attempt["token"])["held"]
+    send_anyway(api, held["id"])
+    answer = sql(api, "SELECT refs FROM messages WHERE body LIKE '%favorite color is teal%'")[0]
+    assert json.loads(answer["refs"])["turn_id"] == attempt["id"]
 
 
 def test_a_task_answer_replay_is_refused_once_the_run_turned_private(ruled):

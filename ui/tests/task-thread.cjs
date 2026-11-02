@@ -1,6 +1,6 @@
-// Offline browser regression: a bot-owned task talks in its own room. In the bot's main chat a task's start and its
-// milestone reports are one quiet row each, and a tap opens the task's thread; a "What needs you" row opens the same
-// thread, and what is typed there goes to the task (POST /v2/tasks/{id}/comments), never to the main chat.
+// Offline browser regression: a bot-owned task talks in its own room. In the Assistant's chat (ui/app/chat.js, the one
+// chat that still folds them) a task's start and its milestone reports are one quiet row each, and a tap opens the
+// task's thread; what is typed there goes to the task (POST /v2/tasks/{id}/comments), never to the main chat.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -49,11 +49,11 @@ async function run(viewport, shot) {
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);
       if (p === '/api/issues') return json([]);
-      if (p === '/api/v2/conversations')
-        return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
-      if (p === '/api/v2/conversations/c1/snapshot' || p === '/api/v2/conversations/c1/messages') return json({messages, execution: null});
+      if (p === '/api/v2/assistant' && req.method() === 'GET') return json({available: true, state: 'active', bot: 'botops', name: 'Assistant',
+        room_id: 'c1', messages, has_more: false, next_before: null, execution: null, actions: {}, pending: []});
+      if (p === '/api/v2/conversations/c1/snapshot') return json({messages, execution: null, next_before: null});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      if (p === '/api/v2/chat/botops') { chatSends.push(req.postDataJSON().text); return json({error: {detail: 'not here'}}, 500); }
+      if (p === '/api/v2/assistant/messages') { chatSends.push(req.postDataJSON().text); return json({error: {detail: 'not here'}}, 500); }
       if (p === '/api/v2/tasks') {
         const owned = url.searchParams.get('owner') === 'botops';
         return json({tasks: owned ? Object.values(tasks) : []});
@@ -73,8 +73,8 @@ async function run(viewport, shot) {
       if (p.startsWith('/api/v2/tasks/') && p.endsWith('/files')) return json({files: []});
       return json(unrouted(p));
     });
-    await page.goto('https://tico-ui.test/#/bot/botops');
-    await page.waitForFunction(() => V2C?.loaded && document.querySelector('#conv-thread .chat-task-row'));
+    await page.goto('https://tico-ui.test/#/assistant');
+    await page.waitForFunction(() => document.querySelector('#conv-thread .chat-task-row'));
 
     // The main chat folds the task's start and its report to one quiet row each; its report text is not a bubble.
     const thread = page.locator('#conv-thread');
@@ -117,22 +117,12 @@ async function run(viewport, shot) {
     await modal.locator('[data-thread-back]').click();
     await page.waitForFunction(() => !document.querySelector('#task-modal')?.open);
 
-    // A "What needs you" row (above the chat where chat and tasks do not sit side by side; beside them the rail lists
-    // the tasks) opens that task's thread, and a message sent there goes to the task.
-    const split = await page.evaluate(() => document.querySelector('#main').classList.contains('bot-split-layout'));
-    if (split) {
-      await rows.nth(1).click();
-      await modal.locator('.task-comments', {hasText: 'Docs build fails'}).waitFor();
-    } else {
-      const banner = page.locator('#bot-chat-tasks [data-bot-chat-task="t-key"]');
-      await banner.waitFor();
-      await banner.click();
-      await modal.locator('.task-comments', {hasText: 'Which key should staging use?'}).waitFor();
-      assert.equal(await modal.locator('.tthread-title').innerText(), 'Pick the API key for staging');
-    }
-    const id = split ? 't-docs' : 't-key';
+    // Reopen it and send: Return sends on a computer; the arrow sends anywhere.
+    const split = viewport.width > 760;
+    await rows.nth(1).click();
+    await modal.locator('.task-comments', {hasText: 'Docs build fails'}).waitFor();
+    const id = 't-docs';
     if (shot) { await page.waitForTimeout(600); await page.screenshot({path: shot}); }
-    // Return sends on a computer; the arrow sends anywhere.
     await modal.locator('.task-pill .p-text').fill('Use the staging key in the vault');
     if (split) await page.keyboard.press('Enter'); else await modal.locator('.task-pill .p-send').click();
     await modal.locator('.task-comments', {hasText: 'Use the staging key in the vault'}).waitFor();
@@ -150,7 +140,7 @@ async function run(viewport, shot) {
 
 (async () => {
   const shot = name => SHOTS ? path.join(SHOTS, name) : '';
-  assert.equal(await run({width: 1200, height: 800}, shot('task-thread-desktop.png')), true, 'desktop: chat and tasks side by side');
-  assert.equal(await run({width: 390, height: 844}, shot('task-thread-mobile.png')), false, 'phone: the banner path');
+  await run({width: 1200, height: 800}, shot('task-thread-desktop.png'));
+  await run({width: 390, height: 844}, shot('task-thread-mobile.png'));
   console.log('ok');
 })().catch(e => { console.error(e); process.exit(1); });

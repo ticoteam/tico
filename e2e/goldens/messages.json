@@ -5,13 +5,20 @@
       "human:ana": "Ana"
     },
     "conversation": {
+      "archived_at": null,
+      "audience": null,
+      "audience_group_id": null,
       "closed_at": null,
       "created_at": "<time>",
       "id": "<conversation>",
       "kind": "chat",
       "last_message_at": "<time>",
+      "last_seq": 17,
+      "last_unread_seq": 17,
       "owner_id": "human:ana",
       "owner_name": "Ana",
+      "parent_id": null,
+      "parent_message_id": null,
       "participant_names": [
         "Ana",
         "ops"
@@ -20,10 +27,14 @@
         "human:ana",
         "bot:ops"
       ],
+      "path": "/<conversation>/",
+      "retention_days": null,
       "room_key": "ops",
+      "root_id": "<conversation>",
       "scope": "personal",
       "subject": "Chat with ops",
-      "task_id": null
+      "task_id": null,
+      "updated_at": "<time>"
     },
     "has_more": false,
     "messages": [
@@ -32,7 +43,6 @@
         "body": "Plan the launch.",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
-        "deleted_at": null,
         "delivered_at": "<time>",
         "edited_at": null,
         "expires_at": null,
@@ -40,6 +50,7 @@
         "id": "<chat_message>",
         "in_reply_to": null,
         "kind": "say",
+        "origin_id": "<id1>@<id2>",
         "public": 0,
         "read_at": null,
         "recipient_id": "bot:ops",
@@ -47,13 +58,15 @@
         "refs": {
           "rule": "person_message"
         },
+        "revision": 0,
         "run": {
           "job_id": "<chat_message>",
-          "run_id": "<id1>",
+          "run_id": "<id3>",
           "state": "started_run"
         },
         "sender_id": "human:ana",
         "sender_name": "Ana",
+        "seq": 3,
         "superseded_at": null,
         "wait_s": null
       },
@@ -62,7 +75,6 @@
         "body": "Add the budget.",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
-        "deleted_at": null,
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
@@ -70,6 +82,7 @@
         "id": "<reply_message>",
         "in_reply_to": null,
         "kind": "say",
+        "origin_id": "<id4>@<id2>",
         "public": 0,
         "read_at": null,
         "recipient_id": "bot:ops",
@@ -77,8 +90,10 @@
         "refs": {
           "rule": "person_message"
         },
+        "revision": 0,
         "sender_id": "human:ana",
         "sender_name": "Ana",
+        "seq": 4,
         "superseded_at": null,
         "wait_s": null
       },
@@ -87,7 +102,6 @@
         "body": "Third note.",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
-        "deleted_at": null,
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
@@ -95,6 +109,7 @@
         "id": "<direct_message>",
         "in_reply_to": null,
         "kind": "say",
+        "origin_id": "<id5>@<id2>",
         "public": 0,
         "read_at": null,
         "recipient_id": "bot:ops",
@@ -102,8 +117,10 @@
         "refs": {
           "rule": "person_message"
         },
+        "revision": 0,
         "sender_id": "human:ana",
         "sender_name": "Ana",
+        "seq": 5,
         "superseded_at": null,
         "wait_s": null
       },
@@ -112,14 +129,14 @@
         "body": "Draft the launch plan: done. Drafted.",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
-        "deleted_at": null,
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
-        "id": "<id2>",
+        "id": "<id6>",
         "in_reply_to": null,
         "kind": "notice",
+        "origin_id": "<id7>@<id2>",
         "public": 0,
         "read_at": null,
         "recipient_id": "human:ana",
@@ -137,7 +154,9 @@
           "task": "<task>",
           "task_report": "done"
         },
+        "revision": 0,
         "sender_id": "keeper",
+        "seq": 9,
         "superseded_at": null,
         "wait_s": null
       },
@@ -146,14 +165,14 @@
         "body": "Started task: Check the vendor list",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
-        "deleted_at": null,
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
-        "id": "<id3>",
+        "id": "<id8>",
         "in_reply_to": null,
         "kind": "notice",
+        "origin_id": "<id9>@<id2>",
         "public": 0,
         "read_at": null,
         "recipient_id": "human:ana",
@@ -171,7 +190,9 @@
           "task": "<open_task>",
           "task_started": true
         },
+        "revision": 0,
         "sender_id": "keeper",
+        "seq": 11,
         "superseded_at": null,
         "wait_s": null
       },
@@ -180,14 +201,14 @@
         "body": "Write the plan",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
-        "deleted_at": null,
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
-        "id": "<id4>",
+        "id": "<id10>",
         "in_reply_to": null,
         "kind": "say",
+        "origin_id": "<id11>@<id2>",
         "public": 0,
         "read_at": null,
         "recipient_id": "bot:ops",
@@ -195,8 +216,10 @@
         "refs": {
           "rule": "person_message"
         },
+        "revision": 0,
         "sender_id": "human:ana",
         "sender_name": "Ana",
+        "seq": 13,
         "superseded_at": null,
         "wait_s": null
       },
@@ -208,14 +231,14 @@
         "body": "Drafted the launch plan.",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
-        "deleted_at": null,
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
-        "id": "<id5>",
+        "id": "<id12>",
         "in_reply_to": "<chat_message>",
         "kind": "say",
+        "origin_id": "<id13>@<id2>",
         "public": 0,
         "read_at": null,
         "recipient_id": "human:ana",
@@ -226,20 +249,22 @@
           ],
           "run": {
             "job_id": "<chat_message>",
-            "run_id": "<id1>"
+            "run_id": "<id3>"
           },
-          "turn_id": "<id1>"
+          "turn_id": "<id3>"
         },
+        "revision": 0,
         "run": {
           "did": [],
           "job_id": "<chat_message>",
-          "run_id": "<id1>",
+          "run_id": "<id3>",
           "steps": 0,
           "took_s": "<volatile>",
           "tool_calls": 0
         },
         "sender_id": "bot:ops",
         "sender_name": "ops",
+        "seq": 17,
         "superseded_at": null,
         "wait_s": null
       }

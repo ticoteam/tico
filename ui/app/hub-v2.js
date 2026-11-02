@@ -86,6 +86,7 @@ async function v2Refresh() {
   if (needs && !needs.unchanged && typeof BOT !== 'undefined' && BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
   if (needs && !needs.unchanged && typeof DEC !== 'undefined' && DEC) decideRefresh(DEC, S.v2.needs || []);   // the open Needs you card
   if (needs && !needs.unchanged && typeof askPeek === 'function') askPeek();   // a peek beside Ask's dot
+  if (needs && !needs.unchanged && typeof notifyNewThreadNeeds === 'function') notifyNewThreadNeeds(S.v2.needs || []);
 }
 // Needs you as the page holds it: the first items of the list, a page at a time (GET /v2/needs-you?limit=), in the
 // server's order, with its version, its whole count, each bot's count over the whole list (`bots`) and where the next
@@ -277,12 +278,13 @@ function agentQuiet(slug) {
   return !(S.status?.health_issues || []).some(i => i.kind === 'agent' && i.bot === slug) && !!botRow(slug)?.agent?.credential;
 }
 function pausedRender() {
-  const el = $('#conv-paused'); if (!el || !V2C) return;
-  const text = pausedNotice(V2C.slug);
-  const agent = text ? '' : agentNotice(V2C.slug);
+  // The Assistant's chat (V2C), or a bot page, whose Home and DM are threads (ui/app/bot-page.js).
+  const el = $('#conv-paused'), slug = V2C?.slug || (typeof BOT !== 'undefined' && BOT?.slug); if (!el || !slug) return;
+  const text = pausedNotice(slug);
+  const agent = text ? '' : agentNotice(slug);
   patchLiveHTML(el, text || agent); el.hidden = !(text || agent);
-  el.classList.toggle('agent', !text && !!agent && agentQuiet(V2C.slug));
-  const resume = el.querySelector('[data-quarantine-resume]'), slug = V2C.slug;
+  el.classList.toggle('agent', !text && !!agent && agentQuiet(slug));
+  const resume = el.querySelector('[data-quarantine-resume]');
   if (resume) resume.onclick = async () => {
     resume.disabled = true;
     try {

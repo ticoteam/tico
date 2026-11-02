@@ -96,7 +96,8 @@ def observe(*, root=ROOT, environ=None, database=Path("/data/hub.sqlite"), direc
     serve_reader = bool(reader_origin.strip())
     runner = caddy_assets._runner_host(env.get("TICO_RUNNER_URL", ""), app) if enabled or serve_reader else ""
     config, generation, serving, reason, reading, reader_reason = caddy_assets._configuration(
-        app, env.get("TICO_VISUAL_ORIGIN", ""), runner, enabled, reader_origin, serve_reader)
+        app, env.get("TICO_VISUAL_ORIGIN", ""), runner, enabled, reader_origin, serve_reader,
+        signal=caddy_assets._signal_dial(env))
     actual = read_file(directory / "caddy.json", 262144)
     if (reason or reader_reason or serving != enabled or reading != serve_reader
             or actual != caddy_assets._encoded(config) + b"\n"):

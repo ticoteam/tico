@@ -23,9 +23,9 @@ def test_bot_execution_cannot_read_another_humans_personal_chat(api):
     own = post(api, "chat/ops", {"text": "Ben work"}, "ben-test")
     attempt = claim(api, r)
     assert attempt["message"]["id"] == own["id"]
-    get(api, f"conversations/{secret['conversation_id']}/messages", attempt["token"], expected=403)
+    get(api, f"conversations/{secret['conversation_id']}/messages", attempt["token"], expected=404)
     assert secret["id"] not in {row["id"] for row in get(api, "inbox", attempt["token"])["messages"]}
-    post(api, "messages", {"to": "human:ana", "text": "Use an old private chat"}, attempt["token"], expected=403)
+    post(api, "messages", {"to": "human:ana", "text": "Use an old private chat"}, attempt["token"], expected=404)
     question = post(api, "messages", {"to": "finance", "text": "What is the budget?", "kind": "ask"}, attempt["token"])
     assert get(api, f"conversations/{question['conversation_id']}/messages", attempt["token"])
 

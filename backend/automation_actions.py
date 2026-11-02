@@ -140,9 +140,10 @@ def _slack(c, auto, run_id, do, args, message):
                                {"automation": auto["id"], "automation_run": run_id,
                                 "automation_inbox": _inbox(message), **_chain_refs(auto)}, None, None)
         now = H.now()
-        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) "
-                  "VALUES(?,?,?,?,?,'ready',?,?)",
-                  (msg["id"], message.get("channel"), message.get("thread_ts") or message.get("ts"), bot, text, now, now))
+        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
+                  "VALUES(?,?,?,?,?,'ready',?,?,?)",
+                  (msg["id"], message.get("channel"), message.get("thread_ts") or message.get("ts"), bot, text, now, now,
+                   msg.get("recipient_id")))
         return {"ok": True, "detail": "posted", "message": msg["id"]}
     if do in ("send_reply", "draft_reply"):
         if do == "send_reply":
