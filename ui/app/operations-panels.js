@@ -57,7 +57,9 @@ function opsPanelDraw(state, load, r) {
   const facts = {locations: opsLocationFacts, items: opsItemFacts, projects: opsProjectFacts, equipment: opsEquipmentFacts}[tab](r);
   $('#ops-panel').innerHTML = `<div class="ops-panel-head"><h2>${esc(r.name)}</h2>${opsSourceIcon(r)}<span class="spacer"></span><a class="ghost ops-x" href="${opsHref(tab)}" aria-label="Close">✕</a></div>
     ${r.archived_at ? '<p class="ops-off-note"><span class="pill">Inactive</span></p>' : ''}
+    ${opsCopyLine(r) ? `<p class="ops-copy muted" data-ops-copy>${esc(opsCopyLine(r))}${opsStale(r)}</p>` : ''}
     <div class="ops-facts">${facts}</div>
+    <div id="ops-m-files"></div>
     <div id="ops-panel-more"></div>
     ${edit ? `<div class="ops-panel-foot"><button type="button" class="ghost" data-ops-edit>Edit</button><button type="button" class="ghost" data-ops-archive>${r.archived_at ? 'Make active' : 'Make inactive'}</button></div>` : ''}`;
   const panel = $('#ops-panel'), on = (sel, run) => { const el = panel.querySelector(sel); if (el) el.onclick = run; };
@@ -105,6 +107,7 @@ const OPS_DOC_READS = {
   invoice: ['Invoices', 'ops-m-inv', 'finance/invoices', 'invoices', {status: 'unpaid'}, null, '/receivables'],
 };
 function opsPanelMore(state, load, r) {
+  if (state.tab !== 'projects') void opsPanelFiles(state, load, r);
   const more = $('#ops-panel-more'), docs = key => { for (const kind of Object.keys(OPS_DOC_READS)) void opsPanelDocs(state, load, kind, key, r.id); };
   const hosts = '<div id="ops-m-pnl"></div><div id="ops-m-pos"></div><div id="ops-m-est"></div><div id="ops-m-inv"></div>';
   if (state.tab === 'locations') {
@@ -143,6 +146,71 @@ async function opsPanelDocs(state, load, kind, key, id) {
   const read = await get(`/v2/${path}?${opsQs({[key]: id, limit: 50, ...params})}`, {fresh: true}).catch(() => null);
   const docs = (read?.[list] || []).filter(d => !open || open.includes(d.status));
   if (docs.length) opsPut(state, load, host, opsSec(title, opsDocLinks(docs, route)));
+}
+// The Library files this record links. The record's read names each by id; the name comes from the file's own meta, and a
+// file that can't be read says so rather than hiding a link someone may need to remove.
+async function opsPanelFiles(state, load, r) {
+  const files = r.files || [], edit = opsEditor();
+  if (!files.length && !edit) { opsPut(state, load, 'ops-m-files', ''); return; }
+  const metas = await Promise.all(files.map(f => get(`/v2/files/${encodeURIComponent(f.file_id)}/meta`).catch(() => null)));
+  if (!opsLive(state, load)) return;
+  const rows = files.map((f, n) => {
+    const name = metas[n]?.name || metas[n]?.title || 'File';
+    return `<li><a href="${API}/v2/files/${encodeURIComponent(f.file_id)}" data-name="${esc(name)}">${esc(name)}</a>${edit ? `<button type="button" class="ghost ops-mini" data-file-remove="${esc(f.id)}" aria-label="Remove ${esc(name)}">Remove</button>` : ''}</li>`;
+  }).join('');
+  opsPut(state, load, 'ops-m-files', opsSec('Files', rows ? `<ul class="ops-links">${rows}</ul>` : '<p class="muted ops-note">None yet</p>', edit ? '<span class="spacer"></span><button type="button" class="ghost ops-mini" data-file-add>+ Add</button>' : ''));
+  const host = $('#ops-m-files');
+  if (!host || !edit) return;
+  const reread = async () => {
+    const read = await get(`/v2/${state.tab}/${encodeURIComponent(r.id)}`, {fresh: true}).catch(() => null);
+    if (read && opsLive(state, load)) await opsPanelFiles(state, load, {...r, ...read[OPS_ONE[state.tab]]});
+  };
+  const add = host.querySelector('[data-file-add]');
+  if (add) add.onclick = () => opsFilePicker(OPS_ONE[state.tab], r.id, files, reread);
+  host.querySelectorAll('[data-file-remove]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const done = await finAct('record_file_remove', {record_file_id: b.dataset.fileRemove});
+        if (done?.status === 'committed') toast('Removed');   // otherwise finAct said who it went to
+        await reread();
+      } catch (e) { toast(e.message || 'Did not work', true); b.disabled = false; }
+    };
+  });
+}
+// Library files to link: the recent ones, then search hits by title and text, as the rule document picker offers them.
+async function opsFilePicker(subject_type, subject_id, linked, reread) {
+  const taken = new Set(linked.map(f => f.file_id));
+  const usable = f => !f.archived && !taken.has(f.id);
+  let recent = [], found = [], pick = '', soon = 0, seq = 0;
+  const dlg = finDialog('Add file', `${opsField('File', '<input type="search" name="find" placeholder="Search Files" autocomplete="off">')}<div class="ops-picks" role="listbox" aria-label="Files"></div>`, 'Add', async () => {
+    if (!pick) throw new Error('Choose a file');
+    const done = await finAct('record_file_add', {subject_type, subject_id, file_id: pick});
+    if (done?.status === 'committed') toast('File added');   // otherwise finAct said who it went to
+    await reread();
+  });
+  const find = dlg.querySelector('[name=find]'), picks = dlg.querySelector('.ops-picks');
+  const draw = () => {
+    const seen = new Set(), rows = (find.value.trim() ? found : recent).filter(f => usable(f) && !seen.has(f.id) && seen.add(f.id));
+    picks.innerHTML = rows.map(f => `<button type="button" class="ops-pick${f.id === pick ? ' on' : ''}" role="option" aria-selected="${f.id === pick}" data-file-pick="${esc(f.id)}">${esc(f.title || f.name || f.id)}</button>`).join('')
+      || `<p class="muted ops-note">${find.value.trim() ? 'No files match' : 'No files yet'}</p>`;
+  };
+  picks.onclick = ev => { const b = ev.target.closest('[data-file-pick]'); if (b) { pick = b.dataset.filePick; draw(); } };
+  find.oninput = () => {
+    clearTimeout(soon);
+    const q = find.value.trim(), mine = ++seq;
+    if (!q) { draw(); return; }
+    soon = setTimeout(async () => {
+      const read = await get('/v2/files/search?limit=20&q=' + encodeURIComponent(q)).catch(() => null);
+      if (mine !== seq || !dlg.open) return;
+      found = read?.results || [];
+      draw();
+    }, 250);
+  };
+  const read = await get('/v2/files?limit=50', {fresh: true}).catch(() => null);
+  if (!dlg.open) return;
+  recent = read?.files || [];
+  draw();
 }
 // Each opens that document in Finance (finOrdPage and finDocPage read ?doc=).
 const opsDocLinks = (docs, route) => opsLinks(docs.map(d => [finHref(route, {doc: d.id}), `${d.number || ''} ${d.contact?.name || d.customer?.name || ''}`.trim() || '—', finUsd(d.total)]));

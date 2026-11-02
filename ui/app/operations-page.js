@@ -44,10 +44,18 @@ const opsEditor = () => settingsIsAdmin() || !!finCapsOf(FIN_ACCESS, finMe())?.m
 // Part of the company's lines: figures are labeled, never called a total.
 const opsPartial = report => !!report?.excluded || !finCapsOf(FIN_ACCESS, finMe())?.company;
 const opsSourceKey = r => String(r.source || 'tico').toLowerCase();
-function opsSourceIcon(r) {
+// A provider's copy says when it last synced; Tico's own record has no copy to date. as_of is null on a copy never synced.
+function opsCopyLine(r) {
   const key = opsSourceKey(r), name = OPS_SOURCE_NAMES[key] || key;
-  return `<span class="nav-icon ops-src" title="${esc(name)}" role="img" aria-label="${esc(name)}">${esc(OPS_SOURCE_ICONS[key] || 'description')}</span>`;
+  if (key === 'tico' || r.as_of === undefined) return '';
+  return `${name} copy · ${r.as_of ? 'synced ' + ago(r.as_of) : 'not synced yet'}`;
 }
+function opsSourceIcon(r) {
+  const key = opsSourceKey(r), name = OPS_SOURCE_NAMES[key] || key, says = opsCopyLine(r) || name;
+  return `<span class="nav-icon ops-src" title="${esc(says)}" role="img" aria-label="${esc(says)}">${esc(OPS_SOURCE_ICONS[key] || 'description')}</span>`;
+}
+const opsStale = r => opsSourceKey(r) !== 'tico' && r.stale ? '<span class="ops-stale" data-ops-stale>May be out of date</span>' : '';
+const opsSourceCell = r => opsSourceIcon(r) + opsStale(r);
 const opsCustomerName = r => r.customer_name || '';
 const opsLocationName = r => r.location_name || '';
 
@@ -101,19 +109,19 @@ async function opsRefs(fresh = false) {
 // ----------------------------------------------------------------- the columns
 const OPS_COLS = {
   locations: state => [['Name', r => opsNameCell(r)], ['Kind', r => esc(opsLabel(OPS_LOCATION_KINDS, r.kind))], ['Customer', r => esc(opsCustomerName(r))],
-    ['City, State', r => esc([r.address?.city, r.address?.state].filter(Boolean).join(', '))], ...(state.rows.some(r => r.in_books != null) ? [['In books', r => r.in_books == null ? '' : r.in_books ? 'Yes' : 'No']] : []), ['Source', opsSourceIcon]],
+    ['City, State', r => esc([r.address?.city, r.address?.state].filter(Boolean).join(', '))], ...(state.rows.some(r => r.in_books != null) ? [['In books', r => r.in_books == null ? '' : r.in_books ? 'Yes' : 'No']] : []), ['Source', opsSourceCell]],
   // On hand shows once a row carries it.
   items: state => [['Name', r => opsNameCell(r)], ['SKU', r => esc(r.sku || '')], ['Kind', r => esc(opsLabel(OPS_ITEM_KINDS, r.kind))],
     ['Price', r => opsMoney(r), 'ops-n'],
-    ...(state.rows.some(r => r.quantity_on_hand != null) ? [['On hand', r => r.quantity_on_hand == null ? '' : esc(String(r.quantity_on_hand)), 'ops-n']] : []), ['Source', opsSourceIcon]],
+    ...(state.rows.some(r => r.quantity_on_hand != null) ? [['On hand', r => r.quantity_on_hand == null ? '' : esc(String(r.quantity_on_hand)), 'ops-n']] : []), ['Source', opsSourceCell]],
   projects: state => {
     const money = state.money;
     const cell = field => r => { const m = money?.get(r.id); return m ? finUsd(m[field]) : ''; };
     return [['Name', r => opsNameCell(r)], ['Customer', r => esc(opsCustomerName(r))], ['Status', r => esc(opsLabel(OPS_PROJECT_STATUSES, r.status))],
-      ...(money ? [['Income', cell('income'), 'ops-n'], ['Costs', cell('expense'), 'ops-n'], ['Profit', cell('net'), 'ops-n']] : []), ['Source', opsSourceIcon]];
+      ...(money ? [['Income', cell('income'), 'ops-n'], ['Costs', cell('expense'), 'ops-n'], ['Profit', cell('net'), 'ops-n']] : []), ['Source', opsSourceCell]];
   },
   equipment: () => [['Name', r => opsNameCell(r)], ['Kind', r => esc(opsLabel(OPS_EQUIPMENT_KINDS, r.kind))], ['Customer', r => esc(opsCustomerName(r))], ['Location', r => esc(opsLocationName(r))],
-    ['Make / model', r => esc([r.make, r.model].filter(Boolean).join(' '))], ['Serial', r => esc(r.serial || '')], ['Next due', opsNextDue], ['Source', opsSourceIcon]],
+    ['Make / model', r => esc([r.make, r.model].filter(Boolean).join(' '))], ['Serial', r => esc(r.serial || '')], ['Next due', opsNextDue], ['Source', opsSourceCell]],
 };
 const opsNameCell = r => `<a href="${opsHref(OPS.tab, r.id)}" class="ops-name">${esc(r.name)}</a>${r.archived_at ? ' <span class="pill">Inactive</span>' : ''}`;
 function opsNextDue(r) {

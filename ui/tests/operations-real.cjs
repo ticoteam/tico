@@ -146,7 +146,7 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       await row.locator('[data-due-done]').click();
       await page.waitForFunction(() => document.querySelectorAll('[data-due-reopen]').length === 1, null, {timeout: t(15000)});
       await page.waitForFunction(was => document.querySelector('tr.ops-on td[data-l="Next due"]')?.innerText !== was, before, {timeout: t(15000)});
-      await page.locator('.ops-due summary').click();
+      await row.locator('summary').click();   // a warranty adds a due date of its own
       assert.equal(await page.locator('[data-due-reopen]').getAttribute('data-on'), first, 'history lists the day just done');
       await shot(page, 'real-desktop-equipment-panel');
       await page.locator('[data-due-reopen]').click();
@@ -175,6 +175,24 @@ const tabReady = (page, tab) => page.locator(`.ops-t-${tab} tr[data-ops-row]`).f
       await page.locator('#ops-table').getByText('Acme South Yard').click();
       await page.locator('#ops-panel h2', {hasText: 'Acme South Yard'}).waitFor();
       await page.locator('#ops-panel').getByText('9 Dock Rd').waitFor();
+
+      // Tico's own record says nothing about a copy. A Library file links to it and leaves it again, by the real name.
+      assert.equal(await page.locator('[data-ops-copy]').count(), 0);
+      const upload = await fetch(hub.url + '/api/v2/files/uploads?name=acme-manual.png&title=Acme%20manual&scope=bot', {method: 'POST', body: PNG,
+        headers: {Authorization: 'Bearer ' + hub.tokens['engineering-lead'], 'Content-Type': 'image/png', 'Idempotency-Key': 'ops-record-file'}});
+      assert.ok(upload.ok, await upload.clone().text());
+      const library = page.locator('#ops-m-files');
+      await library.locator('[data-file-add]').click();
+      await page.locator('dialog.fin-dlg [data-file-pick]', {hasText: 'Acme manual'}).click({timeout: t(15000)});
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      const linked = library.locator('a', {hasText: /acme.manual/i});
+      await linked.waitFor({timeout: t(15000)});
+      await shot(page, 'real-desktop-location-files');
+      await library.locator('[data-file-remove]').click();
+      await linked.waitFor({state: 'detached', timeout: t(15000)});
+      await library.locator('[data-file-add]').click();
+      await page.locator('dialog.fin-dlg [data-file-pick]', {hasText: 'Acme manual'}).waitFor({timeout: t(15000)});
+      await page.locator('dialog.fin-dlg [data-close]').first().click();
 
       // The customer's panel, from a location's panel, as the owner.
       await page.locator('#ops-panel [data-ops-customer]').click();

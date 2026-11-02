@@ -94,6 +94,12 @@ async function open(browser, who, w, hash, viewport = DESKTOP) {
       if (w.approve) return json({status: 'needs_approval'});
       if (body.kind === 'location_update' && !('active' in load)) { const {location_id, ...fields} = load; Object.assign(w.locations.find(l => l.id === location_id), fields); }
       if (body.kind === 'location_update' && 'active' in load) w.locations.find(l => l.id === load.location_id).archived_at = load.active ? null : '2026-11-01T00:00:00Z';
+      if (body.kind === 'record_file_add') {
+        const one = {location: 'locations', item: 'items', equipment: 'equipment'}[load.subject_type];
+        const row = w[one].find(r => r.id === load.subject_id);
+        row.files = [...(row.files || []), {id: 'link-' + load.file_id, file_id: load.file_id, added_at: '2026-11-01T10:00:00Z', added_by_id: 'human:ana'}];
+      }
+      if (body.kind === 'record_file_remove') for (const one of ['locations', 'items', 'equipment']) for (const r of w[one]) r.files = (r.files || []).filter(f => f.id !== load.record_file_id);
       if (body.kind === 'due_date_create') w.due_dates.push({id: 'dd-new', archived_at: null, history: [], next_due_on: load.starts_on, status: 'upcoming', ...load});
       if (body.kind === 'due_date_occurrence_complete') {
         const d = w.due_dates.find(x => x.id === load.due_date_id);
@@ -106,6 +112,9 @@ async function open(browser, who, w, hash, viewport = DESKTOP) {
       }
       return json({status: 'committed', result: {}});
     }
+    if (p === '/api/v2/files') return json({files: [{id: 'f-1', title: 'Manual.pdf'}, {id: 'f-2', title: 'Warranty.pdf'}], next_cursor: null});
+    if (p === '/api/v2/files/search') return json({results: [{id: 'f-2', title: 'Warranty.pdf'}]});
+    if (/^\/api\/v2\/files\/[^/]+\/meta$/.test(p)) return json({name: {'f-1': 'Manual.pdf', 'f-2': 'Warranty.pdf'}[p.split('/')[4]] || 'File'});
     if (p === '/api/v2/setup' && req.method() === 'PUT') { w.setupPut = req.postDataJSON(); return json({}); }
     if (p === '/api/v2/imports/preview') {
       return json({rows: 3, summary: {new: 1, possible_duplicate: 1, error: 1}, lines: [{line: 2, name: 'Rooftop unit 9', status: 'new', reason: ''},
@@ -519,6 +528,82 @@ const close = async (o, label) => { assert.deepEqual(o.errors, [], label + ' pag
     await set.page.locator('[data-sbset-type]').waitFor();
     assert.equal(await set.page.locator('[data-sbset-type] option[value=""]').count(), 0);
     await close(set, 'business set');
+  }
+
+  // A provider's copy says when it synced and flags when stale, on the row and the panel; Tico's own record says nothing.
+  {
+    const w = world();
+    const hours = h => new Date(Date.now() - h * 3600e3).toISOString();
+    Object.assign(w.locations[0], {source: 'quickbooks', as_of: hours(2), stale: false});
+    Object.assign(w.equipment[0], {source: 'xero', as_of: null, stale: true});
+    Object.assign(w.items[0], {source: 'stripe', as_of: hours(72), stale: true});
+    Object.assign(w.equipment[1], {source: 'tico', as_of: hours(0), stale: false});
+    const o = await open(browser, 'ana', w, '#/operations/locations?id=loc-1'), {page} = o;
+    const copy = page.locator('[data-ops-copy]');
+    await copy.waitFor();
+    assert.equal(await copy.textContent(), 'QuickBooks copy · synced 2h ago');
+    assert.equal(await page.locator('[data-ops-stale]').count(), 0, 'a fresh copy has no flag');
+    await page.evaluate(() => { location.hash = '#/operations/items?id=it-1'; });
+    await copy.filter({hasText: 'Stripe copy · synced 3d ago'}).waitFor();
+    assert.match(await copy.textContent(), /May be out of date/);
+    assert.match(await page.locator('tr[data-ops-row="it-1"]').textContent(), /May be out of date/, 'the row flags it too');
+    await page.evaluate(() => { location.hash = '#/operations/equipment?id=eq-1'; });
+    await copy.filter({hasText: 'Xero copy · not synced yet'}).waitFor();
+    assert.match(await copy.textContent(), /May be out of date/);
+    await page.evaluate(() => { location.hash = '#/operations/equipment?id=eq-2'; });
+    await page.locator('#ops-panel h2', {hasText: 'Walk-in cooler'}).waitFor();
+    assert.equal(await copy.count(), 0, "Tico's own record shows nothing extra");
+    assert.doesNotMatch(await page.locator('tr[data-ops-row="eq-2"]').textContent(), /out of date/);
+    await close(o, 'freshness');
+  }
+
+  // Files: add from the Library, remove (the file stays there), no controls without the right, and a request that waits
+  // for a person shows no success toast and changes nothing.
+  for (const [tab, id] of [['locations', 'loc-1'], ['items', 'it-1'], ['equipment', 'eq-1']]) {
+    const w = world(), one = {locations: 'location', items: 'item', equipment: 'equipment'}[tab];
+    const o = await open(browser, 'ana', w, `#/operations/${tab}?id=${id}`), {page} = o;
+    const files = page.locator('#ops-m-files');
+    await files.locator('[data-file-add]').click();
+    const dlg = page.locator('dialog.fin-dlg');
+    await dlg.locator('[type=submit]').click();
+    await dlg.locator('[data-error]', {hasText: 'Choose a file'}).waitFor();
+    await dlg.locator('[name=find]').fill('warr');
+    await dlg.locator('[data-file-pick="f-1"]').waitFor({state: 'detached'});
+    await dlg.locator('[data-file-pick="f-2"]').click();
+    await dlg.locator('[type=submit]').click();
+    await files.getByRole('link', {name: 'Warranty.pdf'}).waitFor();
+    assert.deepEqual(w.actions.at(-1), {kind: 'record_file_add', payload: {subject_type: one, subject_id: id, file_id: 'f-2'}});
+    assert.match(await files.getByRole('link', {name: 'Warranty.pdf'}).getAttribute('href'), /\/v2\/files\/f-2$/);
+    // A linked file isn't offered again.
+    await files.locator('[data-file-add]').click();
+    await dlg.locator('[data-file-pick="f-1"]').waitFor();
+    assert.equal(await dlg.locator('[data-file-pick="f-2"]').count(), 0);
+    await dlg.locator('[data-close]').first().click();
+    if (tab === 'equipment') await shot(page, 'desktop-equipment-files');
+    // Sent for approval: no success toast, the link stays.
+    w.approve = true;
+    await files.locator('[data-file-remove="link-f-2"]').click();
+    await page.waitForFunction(() => document.querySelector('.toast')?.textContent.includes('Sent for approval'));
+    await page.waitForTimeout(200);
+    assert.doesNotMatch((await page.locator('.toast').allTextContents()).join(), /Removed/);
+    await files.getByRole('link', {name: 'Warranty.pdf'}).waitFor();
+    w.approve = false;
+    await files.locator('[data-file-remove="link-f-2"]').click();
+    await files.getByRole('link', {name: 'Warranty.pdf'}).waitFor({state: 'detached'});
+    assert.deepEqual(w.actions.at(-1), {kind: 'record_file_remove', payload: {record_file_id: 'link-f-2'}});
+    await close(o, 'files ' + tab);
+  }
+  {
+    const w = world();
+    w.locations[0].files = [{id: 'link-1', file_id: 'f-1', added_at: '2026-11-01T10:00:00Z', added_by_id: 'human:ana'}];
+    const m = await open(browser, 'cara', w, '#/operations/locations?id=loc-1'), files = m.page.locator('#ops-m-files');
+    await files.getByRole('link', {name: 'Manual.pdf'}).waitFor();
+    assert.equal(await files.locator('[data-file-add],[data-file-remove]').count(), 0, 'no write controls without the right');
+    await m.page.evaluate(() => { location.hash = '#/operations/locations?id=loc-3'; });
+    await m.page.locator('#ops-panel h2', {hasText: 'Beta Foods Site'}).waitFor();
+    await m.page.waitForTimeout(200);
+    assert.equal(await m.page.locator('#ops-m-files .ops-sec').count(), 0, 'no empty section for a viewer');
+    await close(m, 'files viewer');
   }
 
   // Setup: the question asks once the server's record carries the answer, and the answer goes top level on the save.
