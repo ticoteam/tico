@@ -63,10 +63,25 @@ def restate(c: sqlite3.Connection, book_id: str, month: str, by: str, at: str) -
     now = _sums(SL.rollup_rows(c, book_id, first.isoformat(), last.isoformat()))
     changes = {k: [was.get(k, 0), now.get(k, 0)] for k in sorted(set(was) | set(now)) if was.get(k, 0) != now.get(k, 0)}
     if changes:
-        restated: list[Any] = json.loads(str(row["restated_json"]))
-        restated.append({"at": at, "by": by, "changes": changes})
-        SL.set_restated(c, str(row["id"]), json.dumps(restated, sort_keys=True))
+        _append(c, row, {"at": at, "by": by, "changes": changes})
     return len(changes)
+
+
+def flag(c: sqlite3.Connection, book_id: str, month: str, by: str, at: str, change: str) -> int:
+    """Flag a closed month on its snapshot because an edit landed in it (spec 10: a mirrored record edited inside a
+    closed month). The flag keeps when it happened and what kind of change it was, never the entries or amounts, so a
+    private line's detail stays private. Returns the flags the snapshot holds; 0 without a snapshot."""
+    row = SL.snapshot(c, book_id, month)
+    if row is None:
+        return 0
+    return _append(c, row, {"at": at, "by": by, "change": change})
+
+
+def _append(c: sqlite3.Connection, row: Any, entry: dict[str, Any]) -> int:
+    restated: list[Any] = json.loads(str(row["restated_json"]))
+    restated.append(entry)
+    SL.set_restated(c, str(row["id"]), json.dumps(restated, sort_keys=True))
+    return len(restated)
 
 
 def _sums(rows: Iterable[Any]) -> dict[str, int]:

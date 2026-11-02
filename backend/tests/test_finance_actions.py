@@ -251,7 +251,7 @@ def test_defaults_are_fixed_when_asked_not_when_approved(books):
         assert '"effective_from": "2026-10-01"' in stored
         assert _coder_asks(c, parent).action_id == asked.action_id         # a retry without it is the same request
         H.approval_decide(c, "human:cara", asked.approval_id, "approved")
-        done = FA.approval_decided(c, asked.approval_id, "2026-11-02T09:00:00.000000Z")
+        done = FA.approval_decided(c, asked.approval_id, "2026-10-20T09:00:00.000000Z")
         assert done.status == "committed" and done.result["effective_from"] == "2026-10-01"
 
 

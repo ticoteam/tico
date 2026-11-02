@@ -6655,14 +6655,17 @@ def finance_search(api, args):
        "basis": _s("cash or accrual (default: the company's)", enum=["cash", "accrual"]),
        "compare": _s("prior adds the window before", enum=["prior"]),
        "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows before Other (default 20)"},
-       "by": _s("spend_by: group by", enum=["department", "team", "teammate", "bot", "person", "vendor", "account"]),
+       "by": _s("spend_by: group by", enum=["department", "team", "teammate", "bot", "person", "vendor", "account",
+                                             "location", "class", "project", "location_class", "location_project",
+                                             "class_project"]),
        "month": _s("close: the month, YYYY-MM")},
       ("kind",))
 def finance_report(api, args):
     if args["kind"] == "close":
         if not args.get("month"):
             raise APIError("validation", "close needs month (YYYY-MM)")
-        return _fin_guard(api.get("finance/close/" + quote(str(args["month"]), safe="")), FINANCE_CHARS)
+        query = _fin_query(args, ("top_n",))
+        return _fin_guard(api.get("finance/close/" + quote(str(args["month"]), safe=""), **query), FINANCE_CHARS)
     query = _fin_query(args, ("start", "end", "period", "basis", "compare", "top_n", "by"))
     result = api.get("finance/reports/" + quote(str(args["kind"]), safe=""), **query)
     budget = _fin_budget(args.get("top_n"), 20)
