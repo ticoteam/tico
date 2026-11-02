@@ -20,7 +20,7 @@ function route(hash = location.hash) {
     DECIDE_WANT = q.get('item') || q.get('task') || q.get('approval') || '';
     location.replace(NEEDS_YOU); return;
   }
-  overviewStop(); DASH = null;
+  overviewStop(); graphStop(); DASH = null;
   $('#main').classList.remove('overview-layout');
   const from = LAST_ROUTE;
   S.route = LAST_ROUTE = hash || UPDATES;
@@ -74,6 +74,7 @@ function route(hash = location.hash) {
   else if (S.route === HOME) pageDashboard('person:me');
   else if (S.route === OVERVIEW) pageDashboard('dashboard');
   else if (S.route === OVERVIEW_CAMPUS) pageOverview();
+  else if (S.route === OVERVIEW_GRAPH || S.route.startsWith(OVERVIEW_GRAPH + '?')) pageOverviewGraph();
   else if (S.route === OVERVIEW_COMPANY) pageOverviewCompany();
   else if (S.route.startsWith(TEAM_PAGE)) pageDashboard('team:' + decodeURIComponent(S.route.slice(TEAM_PAGE.length).split('?')[0]));
   else if (S.route === WELCOME) pageWelcome();
