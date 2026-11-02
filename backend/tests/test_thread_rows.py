@@ -6,6 +6,7 @@ from backend.auth import Identity
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helpers)
 from backend.tests.test_teammate_access import NOBODY, acme, set_access, who  # noqa: F401
 from backend.tests.test_thread_api import new_thread, row_of, say, sidebar
+from backend.tests.test_thread_tasks import make_task
 from backend.tests.threads_e2e import call, ok
 
 
@@ -182,3 +183,58 @@ def test_a_page_of_dms_reads_its_people_once(acme):
     people = [s for s in statements if "SELECT thread_id, actor FROM thread_members" in s]
     names = [s for s in statements if "SELECT id, name FROM humans" in s]
     assert len(people) == 1 and len(names) == 1, statements
+
+
+# ----------------------------------------------------------------------------- Task threads are listed only while unread
+def task_for_ben(api, title="Ben's review"):
+    """A task Ana makes for Ben: Ana is its requester and Ben its owner, both parties to its thread."""
+    return make_task(api, {"owner": "human:ben", "title": title, "body": "Details."})
+
+
+def test_a_task_thread_with_nothing_unread_is_not_a_sidebar_row_but_still_opens(api):
+    task = task_for_ben(api)
+    listed = sidebar(api, token="ana-test")
+    assert row_of(listed, task["conversation_id"]) is None
+    opened = api.get(f"/api/v2/threads/{task['conversation_id']}", headers=headers("ana-test"))
+    assert opened.status_code == 200, opened.text
+
+
+def test_a_task_thread_is_listed_while_unread_and_leaves_the_sidebar_once_read(api):
+    task = task_for_ben(api)
+    reply = say(api, task["conversation_id"], "On it", token="ben-test")
+    row = row_of(sidebar(api, token="ana-test"), task["conversation_id"])
+    assert row is not None and row["me"]["unread"] == 1
+    read(api, task["conversation_id"], reply["seq"], "ana-test")
+    assert row_of(sidebar(api, token="ana-test"), task["conversation_id"]) is None
+
+
+def test_a_person_who_posted_in_a_task_thread_gets_no_row_from_it_as_any_reader_would_not(api):
+    task = task_for_ben(api)
+    say(api, task["conversation_id"], "Question for Ben")
+    assert row_of(sidebar(api, token="ana-test"), task["conversation_id"]) is None
+    say(api, task["conversation_id"], "Ben, ping", token="ben-test")
+    assert row_of(sidebar(api, token="ana-test"), task["conversation_id"]) is not None
+
+
+def test_bot_activity_in_a_task_thread_does_not_list_it(api):
+    task = task_for_ben(api)
+    with api.app.state.store.transaction() as c:
+        threads.post(c, "bot:ops", task["conversation_id"], "Checked the work")
+    listed = sidebar(api, token="ana-test")
+    assert row_of(listed, task["conversation_id"]) is None
+
+
+def test_task_threads_do_not_crowd_out_real_threads_and_each_page_reads_on(api):
+    for n in range(12):
+        task_for_ben(api, title=f"Task {n}")
+    real = [new_thread(api, title=f"Real {n}", members=("human:ana",), body="Discussion") for n in range(2)]
+    first = sidebar(api, token="ana-test", limit=1)
+    listed = sidebar(api, token="ana-test", limit=10)
+    assert sorted(t["id"] for t in listed["threads"]) == sorted(t["id"] for t in real)
+    assert listed["next_cursor"] is None
+    seen, cursor = [t["id"] for t in first["threads"]], first["next_cursor"]
+    while cursor:
+        page = sidebar(api, token="ana-test", limit=1, cursor=cursor)
+        seen += [t["id"] for t in page["threads"]]
+        cursor = page["next_cursor"]
+    assert sorted(seen) == sorted(t["id"] for t in real)

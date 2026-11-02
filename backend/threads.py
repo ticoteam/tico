@@ -3359,8 +3359,10 @@ def sidebar(c, v, *, cursor=None, limit=50):
     needs their attention first, then what is unread for them, then the rest, each newest activity first. Following a
     sub-thread lists its root. A root row speaks for its whole subtree, for this viewer (`subtree_summaries`), and a
     sub-thread is never a row of its own. `threads` and `dms` are ranked and paged apart, up to `limit` rows each, so
-    someone with many threads still gets their DMs: one query each, whatever the page holds. `attention` is the page's
-    rows with an open Needs attention item. `cursor` is the `next_cursor` of the page before."""
+    someone with many threads still gets their DMs: one query each, whatever the page holds. A task's thread is listed
+    only while it has unread for the viewer (its parties and posters are no reason), so task threads never crowd out
+    the rest. `attention` is the page's rows with an open Needs attention item. `cursor` is the `next_cursor` of the
+    page before."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     readable = readable_sql(c, v, "r")
@@ -3387,7 +3389,11 @@ def sidebar(c, v, *, cursor=None, limit=50):
                  "AND f.actor=d.recipient WHERE d.recipient=:me AND d.state IN ('pending','delivered','capped','held') "
                  f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.from_actor<>:me AND m.deleted_at IS NULL)")
     place = f"CASE WHEN {is_needing} THEN 0 WHEN NOT {is_history} AND ({by_person} OR {to_viewer}) THEN 1 ELSE 2 END"
+    # A task's thread lists only while it has unread for the viewer: its parties (maker, requester, owner) and anyone who
+    # posted in it are no reason on their own. The full Threads page, the Tasks page and search still show it.
+    is_task = f"COALESCE(r.audience,{_derived_audience('r')})='task'"
     where = ["r.parent_id IS NULL", "r.archived_at IS NULL", "r.closed_at IS NULL",
+             f"(NOT {is_task} OR {by_person} OR {to_viewer})",
              f"(r.audience IN ('company','team') OR r.owner_actor=:me OR {is_needing} OR EXISTS (SELECT 1 FROM "
              f"thread_members m WHERE m.thread_id=r.id AND m.actor IN ({marks})) OR EXISTS (SELECT 1 FROM "
              f"thread_followers f JOIN conversations s ON s.id=f.thread_id WHERE s.root_id=r.id AND f.actor=:me "
