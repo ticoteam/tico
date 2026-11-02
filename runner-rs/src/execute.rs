@@ -2870,15 +2870,18 @@ mod tests {
         let (url, seen) = crate::client::tests::serve(vec![]).await;
         let (runner, dir) = lease_runner(&url, "kept-pool");
         let relay = crate::gateway_relay::start("http://127.0.0.1:9/v1/gateway", "tgw-synthetic".into(), None).await.unwrap();
-        let address = relay.url.trim_start_matches("http://").split('/').next().unwrap().to_string();
-        crate::hosts::pi::testing::kept(runner.pi.clone(), &dir, "acme\nchat:c1", crate::hosts::pi::Held { user: None, relay: Some(relay) }).await;
+        let owner = "acme\nchat:c1";
+        crate::hosts::pi::testing::kept(runner.pi.clone(), &dir, owner, crate::hosts::pi::Held { user: None, relay: Some(relay) }).await;
+        assert!(crate::hosts::pi::testing::has_held(&runner.pi, owner));
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
         runner.state.record(&turn).unwrap();
-        // Busy while the kept pi holds its user (here, its relay listens).
+        // Observe the held resource itself: a closed ephemeral port can be reused
+        // by another parallel fixture before a TCP probe gets to it.
         let user = runner.take_turn_user(&turn, &lease_flags(), || {
-            if std::net::TcpStream::connect(&address).is_ok() { Err(crate::turn_users::BUSY.to_string()) } else { Ok(10100) }
+            if crate::hosts::pi::testing::has_held(&runner.pi, owner) { Err(crate::turn_users::BUSY.to_string()) } else { Ok(10100) }
         }).await.unwrap();
         assert_eq!(user, 10100);
+        assert!(!crate::hosts::pi::testing::has_held(&runner.pi, owner));
         assert!(seen.lock().unwrap().is_empty(), "the turn never gave its place back to wait");
         assert!(std::fs::read_to_string(dir.join("exits.log")).unwrap().lines().count() == 1, "the kept pi was stopped");
         std::fs::remove_dir_all(dir).unwrap();
