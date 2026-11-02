@@ -770,8 +770,9 @@ TASKS = [
 # question, then the reason in a line or two, so the person can answer from the card.
 ASKS = [
     ("home-pro-price", "Raise Home Pro from $449 to $479 for December?", "bot:pricing", "human:ana",
+     "Should Home Pro go from $449 to $479 for December? The three rivals sit $20 to $40 above us, so $479 still wins on "
+     "price.\n\n"
      "Demand is 12 percent ahead of forecast, and December is peak season.\n\n"
-     "The three rivals sit $20 to $40 above our $449, so $479 still wins on price.\n\n"
      "We lose about 6 to 9 percent of units, around 300 kits, and keep more margin for the stock buy. Pricing recommends yes.",
      1.0, "open"),
     ("cal-units", "Decide whether owners get a unit swap after two failed calibrations", "bot:technical-support", "human:ben",
@@ -1055,7 +1056,7 @@ BRIEFING_DONE = {"title": "Market briefing", "owner": "bot:goal-manager",
 # "Let the Bookkeeper see the books" is the product's own ask, made when the app starts (backend/bookkeeper.py), so it
 # is not in the seed to be read: it is a decision she still owes, and it stays unread.
 KEEP_UNREAD = ("Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2",
-               "Roll firmware 2.4 out in three rings", "Let the Bookkeeper see the books")
+               "Roll firmware 2.4 out in three rings")
 
 # The holiday plan Marketing keeps as a page: Home's Latest pages shows it. The bot publishes it as its own page.
 PAGE = {"bot": "marketing-lead", "name": "holiday-plan.html", "title": "Holiday season plan",
