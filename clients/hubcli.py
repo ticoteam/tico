@@ -443,6 +443,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub bot create --record-only --name N [<slug>] [--description D] [--reports-to R] [--template T]
                                            only register a new bot with Tico (planned), as the requester (BotOps)
     hub bot check <slug>                   what preflight would still refuse about that repository
+    hub bot check-names <slug|folder> [--fix]
+                                           old column, field and command names left in a bot's files; --fix rewrites
+                                           the ones with one new spelling (runs here: no server)
     hub bot update <slug> [--new-slug S] [--reports-to R] [--display-name N] [--description D] [--status S]
                                            apply a person's bot-settings request as them (BotOps)
     hub bot access <slug> [--see V] [--read V] [--write V]
@@ -3041,6 +3044,10 @@ def parser():
     s = bot.add_parser("check", help="what preflight would still refuse about that repository")
     s.add_argument("slug")
     s.set_defaults(fn="bot check")
+    s = bot.add_parser("check-names", help="old column, field and command names left in a bot's files")
+    s.add_argument("target", help="the bot's slug, or its checkout folder")
+    s.add_argument("--fix", action="store_true", help="rewrite the names that have one new spelling")
+    s.set_defaults(fn="bot check-names")
     s = bot.add_parser("access", help="show or set who may see, read and write to a bot")
     s.add_argument("slug")
     for level in ("see", "read", "write"):
@@ -3629,6 +3636,9 @@ def main(argv):
             from clients import judge
             print(json.dumps(judge.list_sets(), indent=2))
             return 0
+        if args.fn == "bot check-names":           # reads the bot's own files here: no hub, no credential
+            from clients import bot_names
+            return bot_names.command(args.target, args.fix, os.environ.get("HUB_WORKSPACE"))
         if args.fn == "doc fetch":                 # runs here, beside the bot: no hub, no credential
             from clients import doc_fetch
             try:

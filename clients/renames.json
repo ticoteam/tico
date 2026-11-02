@@ -1,0 +1,755 @@
+{
+  "api_fields": {
+    "attempt": "run",
+    "attempt_id": "run_id"
+  },
+  "api_fields_removed": {
+    "blocked_from_status": "holds",
+    "blocked_from_step": "holds",
+    "blocked_gate": "holds",
+    "blocked_kind": "holds",
+    "blocked_reason": "holds",
+    "blocked_since": "holds",
+    "snoozed_by": "holds",
+    "snoozed_note": "holds",
+    "snoozed_until": "holds"
+  },
+  "applied_waves": [
+    1,
+    2
+  ],
+  "columns": {
+    "acceptance_json": "acceptance",
+    "access_json": "access",
+    "account_ids_json": "account_ids",
+    "accounts_json": "accounts",
+    "actions_json": "actions",
+    "after_json": "after",
+    "alerts_json": "alerts",
+    "args_json": "args",
+    "attachments_json": "attachments",
+    "attendees_json": "attendees",
+    "audience_json": "audience",
+    "balances_json": "balances",
+    "before_json": "before",
+    "blocked_gate_json": "blocked_gate",
+    "body_json": "body",
+    "bot_owners_json": "bot_owners",
+    "bots_json": "bots",
+    "broken_json": "broken",
+    "can_json": "can",
+    "capabilities_json": "capabilities",
+    "category_locks_json": "category_locks",
+    "cc_json": "cc",
+    "chain_json": "chain",
+    "changes_json": "changes",
+    "channels_json": "channels",
+    "checkout_json": "checkout",
+    "checkpoint_json": "checkpoint",
+    "cite_json": "cite",
+    "cleared_json": "cleared",
+    "code_expires": "code_expires_at",
+    "config_json": "config",
+    "counted_json": "counted",
+    "created": "created_at",
+    "criteria_json": "criteria",
+    "decided_for_json": "decided_for",
+    "definition_json": "definition",
+    "definition_updated": "definition_updated_at",
+    "destinations_json": "destinations",
+    "detail_json": "detail",
+    "diff_json": "diff",
+    "edits_json": "edits",
+    "emails_json": "emails",
+    "end_json": "at_end",
+    "entry_json": "entry",
+    "event_ids_json": "event_ids",
+    "events_json": "events",
+    "examples_json": "examples",
+    "expires": "expires_at",
+    "files_json": "files",
+    "filter_json": "filter",
+    "finished": "finished_at",
+    "first_seen": "first_seen_at",
+    "first_started": "first_started_at",
+    "fix_json": "fix",
+    "flow_json": "flow",
+    "forward_to_json": "forward_to",
+    "found_json": "found",
+    "full_detail_json": "full_detail",
+    "gaps_json": "gaps",
+    "headers_json": "headers",
+    "inputs_json": "inputs",
+    "inventory_json": "inventory",
+    "item_keys_json": "item_keys",
+    "items_json": "items",
+    "labels_json": "labels",
+    "last_checked": "last_checked_at",
+    "last_failed": "last_failed_at",
+    "last_fired": "last_fired_at",
+    "last_routed": "last_routed_at",
+    "last_seen": "last_seen_at",
+    "last_success": "last_succeeded_at",
+    "last_sync": "last_synced_at",
+    "last_used": "last_used_at",
+    "last_verified": "last_verified_at",
+    "last_woke": "last_woke_at",
+    "later_json": "later",
+    "lines_json": "lines",
+    "members_json": "members",
+    "merchant_locks_json": "merchant_locks",
+    "messages_json": "messages",
+    "metadata_json": "metadata",
+    "model_json": "model",
+    "next_attempt": "next_attempt_at",
+    "next_check": "next_check_at",
+    "next_try": "next_try_at",
+    "outcome_json": "outcome",
+    "owner_ids_json": "owner_ids",
+    "params_json": "params",
+    "participants_json": "participants",
+    "payload_json": "payload",
+    "pnl_json": "pnl",
+    "procs_json": "procs",
+    "purpose_json": "purpose",
+    "raw_json": "raw",
+    "readers_json": "readers",
+    "readiness_json": "readiness",
+    "reasons_json": "reasons",
+    "redirect_uris_json": "redirect_uris",
+    "ref_json": "ref",
+    "refresh_expires": "refresh_expires_at",
+    "refs_json": "refs",
+    "report_json": "report",
+    "response_json": "response",
+    "responses_json": "responses",
+    "restart_requested": "restart_requested_at",
+    "restated_json": "restated",
+    "result_json": "result",
+    "resume_json": "resume",
+    "routing_json": "routing",
+    "rows_json": "rows",
+    "rule_hits_json": "rule_hits",
+    "rule_ids_json": "rule_ids",
+    "rule_results_json": "rule_results",
+    "runtimes_json": "runtimes",
+    "schedule_json": "schedule",
+    "scores_json": "scores",
+    "senders_json": "senders",
+    "sent_json": "sent",
+    "settings_json": "settings",
+    "slides_json": "slides",
+    "source_json": "source",
+    "sources_json": "sources",
+    "start_json": "at_start",
+    "started": "started_at",
+    "state_json": "state",
+    "stop_requested": "stop_requested_at",
+    "tabs_json": "tabs",
+    "tags_json": "tags",
+    "target_json": "target",
+    "teams_json": "teams",
+    "to_json": "to_addresses",
+    "trace_json": "trace",
+    "tried_json": "tried",
+    "triggers_json": "triggers",
+    "turns_json": "turns",
+    "undo_json": "undo",
+    "updated": "updated_at",
+    "value_json": "value",
+    "verdict_json": "verdict",
+    "wake_json": "wake",
+    "when_json": "condition",
+    "who_json": "who",
+    "widgets_json": "widgets",
+    "with_json": "with_scope"
+  },
+  "commands": [
+    {
+      "fixable": true,
+      "new": [
+        "message",
+        "send"
+      ],
+      "old": [
+        "say"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "message",
+        "send"
+      ],
+      "old": [
+        "notice"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "message",
+        "list"
+      ],
+      "old": [
+        "inbox"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "message",
+        "mark-read"
+      ],
+      "old": [
+        "ack"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "conversation",
+        "show"
+      ],
+      "old": [
+        "history"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "question",
+        "ask"
+      ],
+      "old": [
+        "ask"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "question",
+        "answer"
+      ],
+      "old": [
+        "answer"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "note",
+        "list"
+      ],
+      "old": [
+        "notes"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "note",
+        "delete"
+      ],
+      "old": [
+        "unnote"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "task",
+        "list"
+      ],
+      "old": [
+        "board"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "task",
+        "list"
+      ],
+      "old": [
+        "task",
+        "stuck"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "goal",
+        "list"
+      ],
+      "old": [
+        "goals"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "goal",
+        "status"
+      ],
+      "old": [
+        "goal",
+        "auto"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "goal",
+        "checkin-list"
+      ],
+      "old": [
+        "goal",
+        "checkins"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "kpi",
+        "create"
+      ],
+      "old": [
+        "kpi",
+        "add"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "kpi",
+        "show"
+      ],
+      "old": [
+        "kpi",
+        "readings"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "doc",
+        "search"
+      ],
+      "old": [
+        "context",
+        "search"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "doc",
+        "read"
+      ],
+      "old": [
+        "context",
+        "show"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "doc",
+        "link-list"
+      ],
+      "old": [
+        "docs",
+        "links"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "doc"
+      ],
+      "old": [
+        "docs"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "file",
+        "link"
+      ],
+      "old": [
+        "files",
+        "add-link"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "file"
+      ],
+      "old": [
+        "files"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "meeting",
+        "read"
+      ],
+      "old": [
+        "meetings",
+        "transcript"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "meeting"
+      ],
+      "old": [
+        "meetings"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "listening",
+        "decide"
+      ],
+      "old": [
+        "listen",
+        "judge"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "listening"
+      ],
+      "old": [
+        "listen"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "listening",
+        "item"
+      ],
+      "old": [
+        "intake"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "tool"
+      ],
+      "old": [
+        "tools"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "tool",
+        "list"
+      ],
+      "old": [
+        "integrations"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "tool",
+        "show"
+      ],
+      "old": [
+        "integration"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "tool",
+        "query-search"
+      ],
+      "old": [
+        "queries"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "tool",
+        "learn"
+      ],
+      "old": [
+        "learn"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "bot",
+        "status"
+      ],
+      "old": [
+        "status"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "bot",
+        "recent"
+      ],
+      "old": [
+        "recent"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "run",
+        "list"
+      ],
+      "old": [
+        "turns"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "team",
+        "show"
+      ],
+      "old": [
+        "org"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "health",
+        "check"
+      ],
+      "old": [
+        "fleet"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "health",
+        "check"
+      ],
+      "old": [
+        "fleet-check"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "computer",
+        "list"
+      ],
+      "old": [
+        "computers"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "template",
+        "list"
+      ],
+      "old": [
+        "catalog"
+      ]
+    },
+    {
+      "fixable": false,
+      "new": [
+        "bot",
+        "create"
+      ],
+      "old": [
+        "bot",
+        "register"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "bot",
+        "update"
+      ],
+      "old": [
+        "bot",
+        "set"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "bot",
+        "setup-done"
+      ],
+      "old": [
+        "bot",
+        "onboarded"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "bot",
+        "repo-create"
+      ],
+      "old": [
+        "github",
+        "create-bot-repo"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "human"
+      ],
+      "old": [
+        "people"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "human"
+      ],
+      "old": [
+        "person"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "update",
+        "create"
+      ],
+      "old": [
+        "update",
+        "post"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "update",
+        "mark-read"
+      ],
+      "old": [
+        "update",
+        "read"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "update",
+        "list"
+      ],
+      "old": [
+        "updates"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "needs-you"
+      ],
+      "old": [
+        "batch"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "brief"
+      ],
+      "old": [
+        "live",
+        "brief"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "mcp",
+        "stats"
+      ],
+      "old": [
+        "live",
+        "stats"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "calendar",
+        "list"
+      ],
+      "old": [
+        "calendar",
+        "upcoming"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "decision",
+        "ask"
+      ],
+      "old": [
+        "decisions"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "decision",
+        "ask"
+      ],
+      "old": [
+        "judge"
+      ]
+    }
+  ],
+  "commands_exempt": [
+    [
+      "notice",
+      "list"
+    ],
+    [
+      "org",
+      "order"
+    ],
+    [
+      "org",
+      "reports-to"
+    ]
+  ],
+  "commands_removed": [
+    {
+      "new": [
+        "automation"
+      ],
+      "old": [
+        "routine"
+      ]
+    }
+  ],
+  "source": "scripts/cleanup/renames.yaml"
+}

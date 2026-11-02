@@ -44,7 +44,7 @@ impl Hub for HubFixture {
     fn call(&mut self, args: &[&str], key: Option<&str>) -> Result<Value> {
         if args == ["whoami"] {
             return Ok(
-                json!({"actor": "bot:upgrades", "role": "bot", "attempt_id": "fixture-attempt", "runner_id": "fixture-runner"}),
+                json!({"actor": "bot:upgrades", "role": "bot", "run_id": "fixture-attempt", "runner_id": "fixture-runner"}),
             );
         }
         if args == ["api", "GET", "bots/upgrades"] {
@@ -313,7 +313,7 @@ fn assigned_runner_serializes_distinct_attempts_escalates_and_renews() {
         fn call(&mut self, args: &[&str], key: Option<&str>) -> Result<Value> {
             if args == ["whoami"] {
                 return Ok(
-                    json!({"actor": "bot:upgrades", "role": "bot", "attempt_id": self.id, "runner_id": "fixture-runner"}),
+                    json!({"actor": "bot:upgrades", "role": "bot", "run_id": self.id, "runner_id": "fixture-runner"}),
                 );
             }
             // Match the real cloud's attempt-scoped receipts and atomic title duplicate guard.
@@ -435,7 +435,7 @@ fn nonassigned_or_external_writers_are_rejected_before_discovery() {
         fn call(&mut self, args: &[&str], _: Option<&str>) -> Result<Value> {
             if args == ["whoami"] {
                 return Ok(
-                    json!({"actor": "bot:upgrades", "role": "bot", "attempt_id": "fixture-attempt", "runner_id": "previous-runner"}),
+                    json!({"actor": "bot:upgrades", "role": "bot", "run_id": "fixture-attempt", "runner_id": "previous-runner"}),
                 );
             }
             if args == ["api", "GET", "bots/upgrades"] {

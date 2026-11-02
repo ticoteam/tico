@@ -425,7 +425,7 @@ background when Granola advertises a trusted endpoint. Connections are removed w
 or loses sign-in. A pending reconnect retains the working token until success or expiry; a successful
 new sign-in starts a fresh 30-day backfill.
 
-`hub meetings granola status` shows your connection and `hub meetings granola sync` starts a background
+`hub meeting granola status` shows your connection and `hub meeting granola sync` starts a background
 sync. `POST /api/v2/meetings/granola/sync` returns `state: "syncing"` when a job is running
 (or `recent`, `off`, `needs_signin`). `GET /api/v2/meetings/granola` includes `syncing: bool`
 and `skipped` for the last attempt. The account email comes only from display claims supplied by
