@@ -2022,6 +2022,17 @@ CREATE TABLE editions (
 CREATE INDEX editions_stream ON editions(audience_id, status, published_at);
 CREATE UNIQUE INDEX editions_one_per_period
   ON editions(audience_id, author, period_start, period_end, version);
+CREATE TABLE federation_outbox_items (
+  id TEXT PRIMARY KEY, recipient TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('delivery','item','catch_up','refusal')),
+  delivery_id TEXT, item_id TEXT, payload BLOB, thread_origin TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at REAL NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+  UNIQUE (kind, delivery_id), UNIQUE (kind, item_id, recipient));
+CREATE INDEX federation_outbox_items_due ON federation_outbox_items(next_attempt_at);
+CREATE TABLE federation_states (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1), cursor INTEGER NOT NULL DEFAULT 0,
+  acked INTEGER NOT NULL DEFAULT 0, last_pull_at REAL, started_failing_at REAL, last_error TEXT NOT NULL DEFAULT '',
+  listed_at REAL, company TEXT NOT NULL DEFAULT '', history_through REAL, history_cursor TEXT, history_top REAL);
 CREATE INDEX messages_to_delivered ON messages(to_actor, delivered_at);
 CREATE INDEX messages_conversation ON messages(conversation_id, created);
 CREATE INDEX events_ts ON events(ts);
