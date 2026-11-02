@@ -16,7 +16,6 @@ import shutil
 import sqlite3
 import sys
 import tempfile
-import uuid
 from pathlib import Path
 
 TS = "2026-01-01T00:00:00Z"
@@ -37,8 +36,8 @@ def seed(c, bots="INSERT"):
     keyed = "id" in {row[1] for row in c.execute("PRAGMA table_info(bots)")}   # bots gained an id in the cleanup
     for slug in ("coo", "cmo", "seo"):
         names = _cols(c, "bots", *(["id"] if keyed else []), "slug", "display_name", "runtime", "state", created)
-        values = ([str(uuid.uuid5(uuid.NAMESPACE_URL, f"tico-fixture-bot:{slug}"))] if keyed else []) + \
-            [slug, slug.upper(), "codex", "active", TS]
+        # a bot's id is its slug (hubdb.new_bot_id for product bots), and actors are `bot:<id>`, so `bot:coo` resolves
+        values = ([slug] if keyed else []) + [slug, slug.upper(), "codex", "active", TS]
         c.execute(f"{bots} INTO bots({names}) VALUES({','.join('?' * len(values))})", values)
     names = _cols(c, "conversations", "id", "kind", "subject", ("participants", "participants_json"), created,
                   "last_message_at")
