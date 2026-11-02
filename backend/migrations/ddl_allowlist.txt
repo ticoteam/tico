@@ -25,7 +25,7 @@ backend/docs.py:7
 backend/events.py:5
 backend/file_library.py:5
 backend/files.py:10
-backend/finance/store/schema.py:129
+backend/finance/store/schema.py:138
 backend/finance/store/tico.py:1
 backend/flight.py:7
 backend/github_app.py:3
@@ -49,10 +49,10 @@ backend/market_briefing.py:2
 backend/market_watch.py:3
 backend/meetings_schema.py:39
 backend/memory_history.py:5
-backend/memory_tidy_cards.py:4
+backend/memory_tidy_cards.py:6
 backend/message_links.py:10
 backend/milestone_waits.py:4
-backend/model_subscriptions.py:5
+backend/model_subscriptions.py:7
 backend/org_rule_check.py:5
 backend/org_rules.py:7
 backend/org_turns.py:1
@@ -64,6 +64,7 @@ backend/provenance_clock.py:2
 backend/public_roadmaps.py:1
 backend/read_deps.py:22
 backend/reconnects.py:3
+backend/records/store.py:4
 backend/redesign_migration.py:4
 backend/repositories_schema.py:2
 backend/roadmap_flow.py:2
@@ -87,7 +88,7 @@ backend/start_places.py:2
 backend/status_values.py:5
 backend/step_flow.py:1
 backend/storage_schema.py:11
-backend/store.py:179
+backend/store.py:181
 backend/strategy.py:8
 backend/subscriptions_schema.py:2
 backend/support.py:2

@@ -124,6 +124,8 @@ class RunnerRow(TypedDict):
     performance: str
     restart_since: str | None
     turns_at_once: int | None
+    memory_hold: int
+    last_sampled_at: int | None
 
 
 class ApprovalRow(TypedDict):

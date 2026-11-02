@@ -1014,6 +1014,28 @@ def test_a_model_at_capacity_after_the_bot_acted_continues_its_thread_once(api, 
     assert claim_at(api, monkeypatch, machine, at(600)) is None
 
 
+def test_a_capacity_notice_alone_is_no_work_to_continue(api, monkeypatch):
+    # The runner reads Claude's own "overloaded" message as work and sends `continues`; the server's stricter proof wins.
+    from backend.store import H
+    machine, message, attempt = setup_attempt(api)
+    at = later()
+    monkeypatch.setattr(H, 'now', lambda: at(0))
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'capacity-thread'}, machine['token'])
+    notice = 'Selected model is at capacity. Please try a different model.'
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
+        {'seq': 2, 'kind': 'message', 'payload': {'text': notice, 'final': False}},
+        {'seq': 3, 'kind': 'error', 'payload': {'error': notice, 'limit': True}},
+    ]}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'failed', 'last_seq': 3, 'text': notice,
+                                                     'continues': True}, machine['token'])
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
+    assert claim_at(api, monkeypatch, machine, at(60)) is None                  # the capacity hold still applies
+    following = claim_at(api, monkeypatch, machine, at(121))
+    assert following['job_id'] == attempt['job_id'] and not following.get('continue_thread')
+
+
 def test_a_capacity_continuation_with_a_missing_session_is_held_without_a_silent_retry(api, monkeypatch):
     machine, message, attempt = setup_attempt(api)
     at = later()

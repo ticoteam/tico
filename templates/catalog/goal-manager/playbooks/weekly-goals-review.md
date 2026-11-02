@@ -6,6 +6,8 @@ only above Passive (`level` in `hub goal strategy-bot`): the server starts this 
 Passive and pauses it back at Passive. Leave the routine as it is; at Passive, a run of it ends with one line
 saying the note is off at Passive.
 
+Inputs: `hub goal list --all`, `hub proposal list`, the week's pass reports, `hub strategy show`, `hub goal strategy-bot`, and `hub lens runs`.
+
 Run `playbooks/goals-make-sense.md` first, so the proposals it files are in the list. Facts first, then
 interpretation, labelled:
 1. **Red**: each red goal, its reason line, and how long it has been red.
@@ -30,3 +32,5 @@ interpretation, labelled:
    run one yourself from this routine.
 Say plainly when nothing needs attention. Send it with `hub message send <person> "<text>"`, and to the Chief of Staff
 the same text. Nothing goes outside the team.
+
+**Done when:** the note is sent to the owner (and to the Chief of Staff, if the team has one), under 200 words, or the run has ended with the one-line Passive note.

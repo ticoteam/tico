@@ -118,8 +118,11 @@ class Stream:
             self.response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
         except (AttributeError, OSError):
             pass
+        # shutdown wakes the reader; it owns the response until it exits. Closing underneath it races http.client.
         if self.reader:
-            self.reader.join(timeout=10)
+            self.reader.join(timeout=5)
+            assert not self.reader.is_alive(), "stream reader did not stop after shutdown"
+        self.response.close()
         self.conn.close()
 
 

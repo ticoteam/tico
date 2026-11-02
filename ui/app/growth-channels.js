@@ -1,6 +1,6 @@
 /* ui/app/growth-channels.js — Growth › Channels (#/growth/channels, growth spec §5): the channels being tried, one row
    each with its stage, owner and one month's New · CAC · LTV:CAC from GET /api/v2/growth/economics, then Unknown and
-   All channels. A month switcher picks the month (?m=). Choosing a row opens it in place: its guardrail, retention by
+   All channels. A month switcher under the list picks the month (?m=). Choosing a row opens it in place: its guardrail, retention by
    month joined (GET /api/v2/growth/cohorts?channel=), where the numbers come from and its ideas. The owner or an admin
    adds, edits and retires a channel (/api/v2/growth/channels), corrects a month's numbers (PUT /api/v2/growth/cohorts)
    and keeps the settings the maths uses (PUT /api/v2/growth/settings); a bot may record numbers too.
@@ -49,7 +49,8 @@ function gcDraw(state) {
   patchHTML($('#strat-actions'), may ? '<button class="primary" type="button" data-ch-add>+ Channel</button>' : '');
   const months = (d.econ.months || []).slice().sort().reverse();
   if (state.month && !months.includes(state.month)) months.unshift(state.month);
-  const pick = months.length ? `<label class="gr-inline gc-month"><span class="sr-only">Month</span><select data-gc-month>${months.map(m => `<option value="${esc(m)}"${m === state.month ? ' selected' : ''}>${esc(grMonth(m))}</option>`).join('')}</select></label>` : '';
+  const pick = months.length > 1 ? `<label class="gr-inline gc-month"><span class="sr-only">Month</span><select data-gc-month>${months.map(m => `<option value="${esc(m)}"${m === state.month ? ' selected' : ''}>${esc(grMonth(m))}</option>`).join('')}</select></label>` : '';
+  // Below the list: the month, when there is a choice, and the settings. The list itself shows the latest month.
   const tools = pick + '<span class="spacer"></span>' + (may ? '<button class="ghost gc-set" type="button" data-gc-settings aria-label="Settings" title="Settings"><span class="nav-icon" aria-hidden="true">settings</span></button>' : '');
   const breached = new Set((d.econ.guardrails || []).filter(g => g.breached).map(g => gcKey(g.channel)));
   const row = x => {
@@ -59,8 +60,8 @@ function gcDraw(state) {
       <span class="muted gc-own">${esc(owner)}</span>${gcStats(x.r)}</button>${on ? '<div class="gc-detail" id="gc-detail"></div>' : ''}</li>`;
   };
   const t = d.econ.total || {};
-  body.innerHTML = `<div class="gr-bar gc-bar">${tools}</div><section class="card gc-list" aria-label="Channels"><ul class="gc-ul">${gcRows(d).map(row).join('')}
-    <li class="gc-li gc-all"><div class="gc-row"><span class="gc-name"><span class="gc-n">All channels</span></span><span class="gc-own"></span>${gcStats(t)}</div></li></ul></section>`;
+  body.innerHTML = `<section class="card gc-list" aria-label="Channels"><ul class="gc-ul">${gcRows(d).map(row).join('')}
+    <li class="gc-li gc-all"><div class="gc-row"><span class="gc-name"><span class="gc-n">All channels</span></span><span class="gc-own"></span>${gcStats(t)}</div></li></ul></section>${pick || may ? `<div class="gr-bar gc-bar">${tools}</div>` : ''}`;
   const sel = body.querySelector('[data-gc-month]');
   if (sel) sel.onchange = () => { state.month = sel.value; history.replaceState(history.state, '', gcHref(state)); void gcRead(state); };
   const set = body.querySelector('[data-gc-settings]');

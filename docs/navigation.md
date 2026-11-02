@@ -23,7 +23,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask BotOps to change |
 | Change model, effort, owners or status | Settings → Bots |
 | Register or remove a Computer | Settings → Computers → Add computer; open a computer → Revoke computer |
-| Add a subscription and give it to computers | Settings → Models → Add subscription; then Settings → Computers ([Subscriptions](computers.md#subscriptions)) |
+| Add a subscription (Connect or paste) and give it to computers | Settings → Models → Add subscription; then Settings → Computers ([Subscriptions](computers.md#subscriptions)) |
 | Sign a computer in to an AI tool | Settings → Computers → open a computer → Connections ([Computers](computers.md)) |
 | Change company turn limits | Settings → Models → Limits |
 | Check problems and recovery | Settings → Health |

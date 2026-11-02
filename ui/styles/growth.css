@@ -99,11 +99,16 @@ a.gr-btn:hover{background:var(--surface2);text-decoration:none}
 .gr-grid{border-collapse:collapse;min-width:100%}
 .gr-grid th,.gr-grid td{border:1px solid var(--line);padding:8px;vertical-align:top;text-align:left}
 .gr-grid th{letter-spacing:normal;text-transform:none}
-.gr-grid thead th{font-size:var(--t-sm);font-weight:600;min-width:180px;background:var(--surface2)}
-.gr-grid thead th:first-child{min-width:160px}
-.gr-grid tbody th{font-size:var(--t-sm);font-weight:500;width:220px;min-width:160px;white-space:normal;line-height:1.35;color:var(--text)}
-.gr-grid td{min-width:180px}
-.gr-grid td .gr-ic+.gr-ic{margin-top:6px}
+.gr-grid thead th{font-size:var(--t-sm);font-weight:600;min-width:200px;width:220px;max-width:260px;white-space:normal;line-height:1.35;background:var(--surface2)}
+.gr-grid tbody th{font-size:var(--t-sm);font-weight:500;width:200px;min-width:200px;max-width:200px;white-space:normal;line-height:1.35;color:var(--text);background:var(--surface)}
+/* The bet stays in view when the channels scroll sideways. */
+.gr-grid thead th:first-child,.gr-grid tbody th{position:sticky;left:0;z-index:1;min-width:200px;width:200px;max-width:200px;box-shadow:inset -1px 0 0 var(--line)}
+.gr-grid td{min-width:200px;max-width:260px}
+.gr-grid td .gr-ic+.gr-ic,.gr-done{margin-top:6px}
+.gr-done>summary{cursor:pointer;font-size:var(--t-xs);color:var(--muted)}
+.gr-done>.gr-ic{margin-top:6px}
+.gr-pbet .gr-done{margin:0;border-top:1px solid var(--line)}
+.gr-pbet .gr-done>summary{padding:10px 14px}
 .gr-plist{display:none;flex-direction:column;gap:12px}
 .gr-body .card.gr-pbet{padding:0}
 .gr-pbet-h{margin:0;padding:10px 14px;font-size:var(--t-sm);font-weight:600;line-height:1.35;border-bottom:1px solid var(--line)}

@@ -13,6 +13,10 @@ Nothing is shared and nothing stays linked: the copy and the original change on 
 from, so the two explicit requests below can work. A branch follows its original and shares its repository; this copy stays independent: anyone who may read a bot may ask
 for a copy.
 
+Inputs: the human's own chat message naming the bot to copy, to update from its original, or to send changes back to.
+
+Done when: the copy exists as an ordinary bot the asker owns, or the update or suggestion is made, and the result is reported in one message; a refusal is reported in one line with who can change it.
+
 ## 1. Copy it
 
     hub bot copy <original> [--name "<Display>"] [--slug <slug>] [--with-memory] [--computer <label>]

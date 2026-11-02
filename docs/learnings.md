@@ -280,9 +280,15 @@ retries harmless and pass starts reject late older offers. Unreviewed cards leav
 the list at two business days using the existing team Pacific weekday clock;
 the existing hourly sweep persists withdrawal. No new routine is enabled.
 
-Keep is visible but disabled until the separate Keep slice installs application.
-The server refuses `keep` without changing the open proposal. That slice can read
-stored `edits` and provenance under the same reviewer authorization, apply
-under the push lock, and mark `kept` only after a successful push. A failed Keep
-must leave the card open. Keep execution, pass scheduling and pilot activation
-are separate from this card change.
+Keep is installed. `POST memory-tidy/cards/<id>/decide` with
+`{"decision":"keep"}` queues the apply on the bot's assigned computer and returns the card
+with `keep_pending` true; the card stays open until that computer reports. `keep_available`
+is true only while the card is open, no Keep is pending, and the bot's assigned computer
+reports the `memory_tidy_keep_v1` capability. Otherwise `keep` is refused with 409 and the
+card stays open: "Update this bot's computer to enable Keep". A second `keep` while one is
+pending returns the same card; `discard` then returns 409 until the Keep finishes.
+The computer applies the stored anchored edits under the repository push lock against fetched
+main, checks the result with the contract, and makes at most three non-force pushes. Success
+marks the card `kept` with the pushed commit. A failed Keep leaves the card open with its reason.
+Discard still changes only the card. Pass scheduling and pilot activation are separate: no
+routine is enabled, so no card is filed yet.

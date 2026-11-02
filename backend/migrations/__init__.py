@@ -44,7 +44,8 @@ MIN_BRIDGE_USER_VERSION = 71
 # for a file that already ran it. This server opens such a file as it is; the number never grows.
 NEWEST_USER_VERSION = 72
 # The newest cloud_migrations version Store.initialize writes; tests/test_migrations.py keeps it in step with store.py.
-CLOUD_VERSION = 75
+# Steps 76 and 77 came from releases made while this cleanup was open; they use today's names and run after the files.
+CLOUD_VERSION = 77
 # A legacy row has no file to hash, so its checksum says so.
 LEGACY = "legacy"
 TABLE = ("CREATE TABLE IF NOT EXISTS schema_migrations(version TEXT PRIMARY KEY, checksum TEXT NOT NULL, "

@@ -219,6 +219,26 @@
     meeting: () => {},
     transcript: () => {},
     live: () => { state.meetings.m2 = live; state.transcripts.m2 = { id: 'm2', blocks: longBlocks.slice(0, 22) }; },
+    // A live meeting whose sent lines can be edited (acknowledged), removed, or only read (not yet sent).
+    shared: () => {
+      state.meetings.m2 = live;
+      // A second shared meeting with the same line numbers, to check drafts never cross meetings.
+      const second = state.library.rows.find((row) => row.id === 'm2');
+      state.library.rows.push({ ...second, id: 'm3', title: 'Second shared call' });
+      state.meetings.m3 = { ...live, id: 'm3', title: 'Second shared call' };
+      const lines = [
+        ['Me', true, 'Hello there, shall we start with the release?', 1, false, false, true],
+        ['Sam Okafor', false, 'Yes. The recorder change is in review.', 2, false, false, true],
+        ['Sam Okafor', false, 'It should ship on Thursday if QA passes.', 3, true, false, false],
+        ['Me', true, 'Still being sent to Tico.', 4, false, false, false],
+      ];
+      const blocks = lines.map(([speaker, me, text, seq, edited, removed, editable], i) => ({
+        speaker, me, start_ms: 60000 + i * 20000, paragraphs: [removed ? '[removed]' : text], partial: false,
+        streamed: false, seq, edited, removed, editable,
+      }));
+      state.transcripts.m2 = { id: 'm2', live: true, blocks };
+      state.transcripts.m3 = { id: 'm3', live: true, blocks: blocks.map((block) => ({ ...block })) };
+    },
     recording: () => {
       state.status.recording = recordingStatus(streamLive);
       state.library.rows.unshift({ id: 'm0', title: 'Streaming rollout check-in', started_at: iso(-1), duration_ms: 0, recording: true, status: { label: 'Recording', tone: 'red' }, sync_error: '', sent: false, can_send: false, targets: [] });
@@ -339,6 +359,14 @@
   const toast = (message) => { state.status.message = message; setTimeout(() => (state.status.message = ''), 6000); };
   const open = () => state.meetings[state.status.meeting];
   const commands = {
+    edit_shared_line: ({ id, seq, text }) => {
+      const block = state.transcripts[id].blocks.find((b) => b.seq === seq);
+      Object.assign(block, { paragraphs: [text], edited: true });
+    },
+    remove_shared_line: ({ id, seq }) => {
+      const block = state.transcripts[id].blocks.find((b) => b.seq === seq);
+      Object.assign(block, { paragraphs: ['[removed]'], edited: true, removed: true });
+    },
     view: ({ have }) => {
       const id = state.status.meeting;
       const rec = state.status.recording;
