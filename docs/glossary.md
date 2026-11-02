@@ -21,6 +21,7 @@ The words Tico uses, and what each replaces.
 - **Version**: a published strategy, numbered, with a note. There is one draft at a time, the owner's; publishing stamps it and opens the next draft. Also a Tico release.
 - **Company section**: the old Vision and Description at the top of Goals; both now live on the Strategy page, and Goals shows one line linking there ([Goals](goals-and-kpis.md#the-company-section)).
 - **Why**: one line on a goal tying it to the team's vision. The Strategy Bot proposes it and a person accepts it; a goal tied to a bet needs none ([Goals](goals-and-kpis.md#a-goals-why)).
+- **Inbox**: the sidebar section, above Team, of the chats that wait on you: a question or mention in a thread, an unread DM with a person, or a held message. A DM with one bot is not in it; that bot's row in **Team** shows its unread count ([Navigation](navigation.md)).
 - **Message bot**: a bot that works a human's email or a Slack channel, such as Inbox Manager. These appear separately under **Message bots** in the sidebar, Goals and setup.
 - **External agent**: an agent outside the team connected to Tico (Codex, Claude, Grok), run by a human or a bot.
 - **MCP** and **CLI**: two ways for humans and agents to reach the same shared Tico tools; an external agent connects over MCP with a token.

@@ -12,6 +12,8 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 |---|---|
 | Give work or review a result | Tasks → New task, List, Board or Done |
 | Talk to a bot about one task | Bot's Home → tap the task's row ([Sessions](sessions.md)) |
+| See the chats that wait on you | **Inbox** in the sidebar, above Team, with its count; on a phone, the bottom bar's **Inbox** tab. Review held messages from their rows there |
+| Read every thread | Threads (`#/threads`): **Important** (the default, most urgent first) or **Recent** (newest first); **Inbox** is its first tab (`#/threads?view=inbox`) |
 | See or link a task's sessions | Task → Sessions +; ⋯ → Copy session ID |
 | Add or edit a Routine | Automations → New automation ([Routines](routines.md)) |
 | See what Tico runs on its own | Settings → System → What Tico runs on its own ([System routines](system-routines.md)) |
