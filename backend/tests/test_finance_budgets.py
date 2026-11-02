@@ -191,10 +191,11 @@ def test_a_raise_that_no_longer_fits_is_asked_again_of_the_manager_not_the_paren
         assert (grow.status, grow.approver) == ("needs_approval", "human:dan")
         assert act(c, OWNER, "budget_update", {"budget_id": kids["sales"], "amount": 3_000}).status == "committed"
         H.approval_decide(c, "human:dan", grow.approval_id, "approved")
-        # No raise is needed now, so Dan's approval is void: Cara's manager decides the change itself.
+        # No raise is needed now, so Dan's approval is void. The raise is still a raise in the current period, which
+        # goes to the web budget's owner (§12), not to Cara's manager.
         again = FA.approval_decided(c, grow.approval_id, AT)
-        assert (again.status, again.approver) == ("needs_approval", "human:ben")
-        H.approval_decide(c, "human:ben", again.approval_id, "approved")
+        assert (again.status, again.approver) == ("needs_approval", OWNER)
+        H.approval_decide(c, OWNER, again.approval_id, "approved")
         done = FA.approval_decided(c, again.approval_id, AT)
         assert done is not None and done.status == "committed"
         assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_000)
@@ -467,7 +468,8 @@ def test_a_settled_hold_draws_its_allocation_down_once(books):
 def test_rollover_carries_from_the_first_version(books):
     with books.transaction() as c:
         r = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 1_000,
-                                            "rollover": "unused", "effective_from": "2025-01-01"})
+                                            "rollover": "unused", "effective_from": "2025-01-01"},
+                   at="2025-01-01T12:00:00.000000Z")
         assert r.status == "committed", r
         assert FA.budget_state(c, str(r.result["budget_id"]), AT).amount == 22_000   # Oct 2026 + 21 months unused
 
@@ -577,6 +579,42 @@ def test_a_rule_test_never_reads_the_fingerprint_of_a_hidden_raise(books):
                     dry_run=True)
         assert probe.status == "committed", probe
         assert probe.impact["test"]["changed_count"] == 0
+
+
+def test_a_finance_admin_who_tests_a_rule_checks_only_its_own_actions(books):
+    """finance.admin adds no view (§7.4, §7.5): a rule test it runs covers its own actions, not the owner's."""
+    with books.transaction() as c:
+        assert act(c, OWNER, "budget_create", {"name": "Web", "account_id": account(c, "6100"),
+                                               "amount": 1_000}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
+        probe = {"when": {"kind": "budget_create"}, "outcome": {"outcome": "deny"}}
+        owner = act(c, OWNER, "rule_test", probe, dry_run=True).impact["test"]
+        admin = act(c, "human:fay", "rule_test", probe, dry_run=True).impact["test"]
+        assert owner["checked"] >= 1 and owner["changed_count"] >= 1
+        assert admin["checked"] == 0 and admin["changed_count"] == 0
+
+
+def test_a_rule_test_lists_only_the_actions_a_draft_would_change(books):
+    """An action a rule already denied is not a change when the draft denies it too; a committed one is. A limit that
+    still fits leaves a committed action committed, so it is not a change either."""
+    with books.transaction() as c:
+        journal = {"date": "2026-10-15", "memo": "rule test", "lines": [
+            {"account_id": account(c, "6900"), "amount": 500}, {"account_id": account(c, "1000"), "amount": -500}]}
+        kept = act(c, OWNER, "journal", journal)
+        assert kept.status == "committed", kept
+        frozen = act(c, OWNER, "rule_create", {"kind": "gate", "name": "Frozen journals", "when": {"kind": "journal"},
+                                               "outcome": {"outcome": "deny", "reason": "frozen"},
+                                               "examples": [{"input": {"kind": "journal"}, "expect": "deny"}]})
+        assert frozen.status == "committed", frozen
+        refused = act(c, OWNER, "journal", journal)
+        assert refused.status == "denied", refused
+        deny = {"when": {"kind": "journal"}, "outcome": {"outcome": "deny", "reason": "test"}}
+        tested = act(c, OWNER, "rule_test", deny, dry_run=True).impact["test"]
+        changed = {x.get("action_id") for x in tested["changed"]}
+        assert kept.action_id in changed and refused.action_id not in changed, tested
+        fits = {"when": {"kind": "journal"}, "outcome": {"outcome": "limit", "limit": 10_000_000, "per": "action"}}
+        fit = act(c, OWNER, "rule_test", fits, dry_run=True).impact["test"]
+        assert kept.action_id not in {x.get("action_id") for x in fit["changed"]}, fit
 
 
 def test_a_set_aside_adds_only_the_part_its_target_does_not_already_hold(books):

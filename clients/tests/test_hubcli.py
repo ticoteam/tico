@@ -1008,6 +1008,13 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
         "brand/draft", {"sections": {"positioning": "Acme cleans homes"}})
 
 
+def test_finance_card_fill_takes_the_arguments_its_tool_takes():
+    p = hubcli.parser()
+    args = hubcli.parse(p, ["finance", "card-fill", "crd_1", "--merchant", "example.com", "--amount", "1000"])
+    assert (args.fn, args.card_id, args.merchant, args.amount) == ("finance card-fill", "crd_1", "example.com", 1000)
+    assert hubcli.parse(p, ["finance", "card-fill"]).card_id is None
+
+
 def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_notice(monkeypatch, capsys):
     ran = []
     monkeypatch.setattr(hubcli, "run", lambda argv, who: ran.append(argv) or 0)

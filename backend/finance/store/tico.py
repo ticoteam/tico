@@ -47,6 +47,25 @@ def owner_person(c: sqlite3.Connection, fallback: str = "") -> str:
     return fallback
 
 
+def person_email(c: sqlite3.Connection, actor: str) -> str:
+    """A teammate's email in lower case: their humans row, else their line on the people roster. A bot has none."""
+    from ... import people
+    P: Any = people
+    if not actor.startswith("human:"):
+        return ""
+    ident = actor.partition(":")[2]
+    row = c.execute("SELECT email FROM humans WHERE id=?", (ident,)).fetchone()
+    email = str(row[0] or "").strip() if row else ""
+    if not email:
+        doc = _metadata(c, "people")
+        roster = cast(dict[str, Any], P.load(doc if isinstance(doc, dict) else {"people": []}))
+        for person in cast(list[dict[str, Any]], roster.get("people") or []):
+            if str(person.get("id") or "") == ident:
+                email = str(person.get("email") or "").strip()
+                break
+    return email.lower()
+
+
 def _actor(value: str, bots: set[str]) -> str:
     """A reports-to or lead reference as an actor: `bot:x`/`human:x` kept, `person:x` is a human, a bare bot id
     is that bot, anything else a person id."""
@@ -94,6 +113,8 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     for person in cast(list[dict[str, Any]], roster.get("people") or []):
         actor = "human:" + str(person.get("id") or "")
         humans.add(actor)
+        if person.get("hidden"):      # left the company (access.leave): on no team and reporting to no one (spec 7.5)
+            continue
         if person.get("team") in teams:
             team_of[actor] = str(person["team"])
         if person.get("reports_to"):
@@ -129,6 +150,17 @@ def approval(c: sqlite3.Connection, approval_id: str) -> Row | None:
 
 def approval_consume(c: sqlite3.Connection, actor: str, approval_id: str) -> None:
     _H.approval_consume(c, actor, approval_id)
+
+
+def approval_decide(c: sqlite3.Connection, actor: str, approval_id: str, decision: str) -> None:
+    """A person's decision, recorded as theirs. Only a person can make it (hubdb refuses any other actor); Finance calls
+    this only for an invoice email's send approval, decided by the person whose yes the action waited on."""
+    _H.approval_decide(c, actor, approval_id, decision)
+
+
+def is_person(actor: str) -> bool:
+    """Whether the actor is a person: only a person decides an approval."""
+    return bool(_H.is_human(actor))
 
 
 def approval_withdraw(c: sqlite3.Connection, approval_id: str, note: str) -> None:
@@ -243,11 +275,29 @@ def run_gateway_cost(c: sqlite3.Connection, turn_id: str) -> str | None:
 
 
 def bot_average_run(c: sqlite3.Connection, bot: str, since: str, most: int) -> str | None:
-    """A bot's average Gateway-billed cost per run over its last `most` such runs started since `since`, or None."""
+    """A bot's average token-priced cost per run over its last `most` such runs started since `since`, or None. Runs
+    count whichever key paid for them (the Gateway or the bot's own key); a flat subscription's run never does (§9)."""
     row = c.execute(f"SELECT count(*), printf('%.9f', avg(cost)) FROM (SELECT id, sum(coalesce(est_cost_usd, 0)) AS cost "
-                    f"FROM {_runs()} WHERE bot=? AND started_at >= ? AND finished_at IS NOT NULL AND {_GATEWAY} GROUP BY id "
+                    f"FROM {_runs()} WHERE bot=? AND started_at >= ? AND finished_at IS NOT NULL "
+                    "AND coalesce(billing, 'api') != 'subscription' GROUP BY id "
                     "ORDER BY max(started_at) DESC LIMIT ?)", (bot, since, most)).fetchone()
     return str(row[1]) if row and int(row[0]) else None
+
+
+def idle_bot_cards(c: sqlite3.Connection, at: str, days: int) -> dict[str, str]:
+    """Each card a bot holds whose bot is archived, or has run no turn since `days` before `at`: card id -> the bot's
+    slug (a holder is `bot:<id>`; the slug is what a person reads). A bot that never ran is idle; a holder with no bot
+    row is not judged. The bot facts are the hub's (bots)."""
+    holders = {str(r[0]): str(r[1]).split(":", 1)[1] for r in c.execute(
+        "SELECT id, holder FROM fin_cards WHERE holder LIKE 'bot:%' AND status <> 'canceled'")}
+    ids = sorted(set(holders.values()))
+    if not ids:
+        return {}
+    cutoff = shift(at, -days)
+    idle = {str(r[0]): str(r[1] or r[0]) for r in c.execute(
+        f"SELECT id, slug, state, last_turn_at FROM bots WHERE id IN ({','.join('?' * len(ids))})", ids)
+        if str(r[2] or "") == "archived" or not r[3] or str(r[3]) < cutoff}
+    return {card: idle[bot_id] for card, bot_id in holders.items() if bot_id in idle}
 
 
 def attempt_job(c: sqlite3.Connection, attempt_id: str) -> str | None:

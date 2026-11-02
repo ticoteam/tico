@@ -20,7 +20,7 @@ from backend.finance.core.errors import FinanceError
 from backend.finance.mercury import Answer
 from backend.tests.test_api import api, get, headers  # noqa: F401
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, FakeMercury, account, act, books, connect, finance_template, store)
+    AT, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template, reopen_rows, store)
 
 DAY = int(datetime(2026, 10, 10, 12, tzinfo=timezone.utc).timestamp())
 WEBHOOK_SECRET = "whsec_test_secret_0123456789abcdef"
@@ -940,7 +940,8 @@ def test_a_summarized_sale_recategorized_after_its_month_closed_still_reconciles
     stripe_pass(books, stripe)
     money = _stripe_money(books)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-10"}, at="2026-11-05T12:00:00.000000Z").status == "committed"
+        assert close_month(c, "2026-10", at="2026-11-05T12:00:00.000000Z").status == "committed"
+        reopen_rows(c)
         row = str(_feed(c, "txn_0001")["id"])
         moved = act(c, OWNER, "categorize", {"feed_id": row, "account_id": account(c, "4000")},
                     at="2026-11-05T12:00:00.000000Z")
@@ -993,15 +994,52 @@ def test_a_webhook_with_a_bad_or_stale_signature_is_refused():
 def test_a_webhook_is_kept_once_for_the_one_stripe_connection_and_then_reads_the_balance(books):
     event = {"id": "evt_stripe_1", "type": "charge.succeeded", "data": {}}
     with books.transaction() as c:
-        assert sync.stripe_delivery(c, event, AT) is False          # no Stripe connection yet: not kept
+        assert sync.stripe_delivery(c, event, AT) == "no_connection"   # no Stripe connection yet: refused, not seen
     stripe = FakeStripe()
     connect_stripe(books, stripe)
     stripe.add("charge", 4_000, 120, "Acme Buyer")
     with books.transaction() as c:
-        assert sync.stripe_delivery(c, event, AT) is True
+        assert sync.stripe_delivery(c, event, AT) == "kept"
     with books.transaction() as c:
-        assert sync.stripe_delivery(c, event, AT) is False          # a replay is not kept again
+        assert sync.stripe_delivery(c, event, AT) == "seen"         # a replay is not kept again
     stripe_pass(books, stripe)
     with books.read() as c:
         assert c.execute("SELECT status FROM fin_inbox WHERE provider_event_id='evt_stripe_1'").fetchone()[0] == "done"
         assert _sum(c, "1050") == 3_880
+
+
+def _stripe_opening(c: Any) -> int:
+    """The live opening balance entry's amount on the Stripe line (1050)."""
+    return int(c.execute("SELECT coalesce(sum(l.amount), 0) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
+                         "JOIN fin_accounts a ON a.id=l.account_id WHERE e.source='sync' AND e.source_id LIKE 'opening:%' "
+                         "AND e.status='posted' AND e.reverses_id IS NULL AND a.code='1050'").fetchone()[0])
+
+
+def test_a_stripe_opening_moves_by_a_raw_post_and_back_by_its_reversal(books):
+    """Phase 2 #2 (§4.1 opening): a Stripe row a raw-totals month covers moves the opening the way a bank row does: the
+    opening takes its amount in, with no balance read, and its reversal takes it back out. The Stripe line is the
+    provider's balance once the row is covered; before and after, the unposted row is the only difference."""
+    sep = int(datetime(2026, 9, 10, 12, tzinfo=timezone.utc).timestamp())
+    stripe = FakeStripe(start=7_000)
+    connect_stripe(books, stripe)
+    stripe.add("transfer", 500, created=sep)            # a balance type nothing posts: the balance holds it, it is asked
+    stripe.add("charge", 2_000, 0, "Acme Buyer")        # October: posted as a sale
+    stripe_pass(books, stripe)
+    with books.transaction() as c:
+        assert _stripe_opening(c) == 7_000
+        assert _sum(c, "1050") == 9_000                 # the asked transfer is the one row the books do not carry
+        assert _asked(c, "txn_0001") == 1
+    csv = "month,line,amount,team\n2026-09,Sales revenue,250000,sales\n"
+    with books.transaction() as c:
+        r = act(c, OWNER, "import_raw_totals", {"csv": csv, "basis": "cash", "mapping": {"Sales revenue": "4000"},
+                                                "source_name": "Stripe history"})
+        assert r.status == "committed", r.reason
+        entry = r.result["months"][0]["entry_id"]
+        assert _stripe_opening(c) == 7_500
+        assert _sum(c, "1050") == stripe.total() == 9_500
+        assert _every_entry_balances(c)
+    with books.transaction() as c:
+        assert act(c, OWNER, "journal", {"reverses": entry}).status == "committed"
+        assert _stripe_opening(c) == 7_000
+        assert _sum(c, "1050") == stripe.total() - 500
+        assert _feed(c, "txn_0001")["status"] == "new"    # uncovered again: it waits for a person

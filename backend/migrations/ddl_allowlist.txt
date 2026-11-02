@@ -29,7 +29,7 @@ backend/events.py:5
 backend/federation_schema.py:16
 backend/file_library.py:5
 backend/files.py:10
-backend/finance/store/schema.py:138
+backend/finance/store/schema.py:141
 backend/finance/store/tico.py:1
 backend/flight.py:7
 backend/github_app.py:3

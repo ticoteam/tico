@@ -30,14 +30,14 @@ def _masked(email: str) -> str | None:
 
 def provider_users(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     """The Mercury users a card can be issued to (Mercury issues cards only to its own users), as the last sync read
-    them: for teammates who may issue cards. Id and name; a finance admin also sees each email, masked."""
+    them: for teammates who may issue cards. Id and name; whoever sees everything also sees each email, masked."""
     ctx = load(c, at)
     held = ctx.rights(viewer)
     if not R.has(ctx.org, viewer, R.CARDS, held):
         raise denied("picking a card holder is for teammates who may issue cards")
-    admin = R.is_admin(ctx.org, viewer, held)
+    everything = ctx.view(viewer).everything
     return {"users": [{"id": str(r["provider_user_id"]), "name": str(r["name"]), "connection_id": str(r["connection_id"]),
-                       "email": _masked(str(r["email"])) if admin else None, "updated_at": str(r["updated_at"])}
+                       "email": _masked(str(r["email"])) if everything else None, "updated_at": str(r["updated_at"])}
                       for r in SK.provider_users(c)]}
 
 
@@ -47,11 +47,11 @@ def payments(c: sqlite3.Connection, viewer: str, *, status: str | None = None, c
     and their own. A payment to a private line the viewer has no full detail for is left out (phase 0's row rule). The
     payer of a payment their current view does not cover (a revoked grant, a private line) still sees that it exists
     and its status, with amount, recipient, memo, bill and line withheld (null or empty). A provider error shows only
-    to someone who sees the payment and can act on it (the payer or a finance admin)."""
+    to someone who sees the payment whole and can act on it (the payer, or whoever sees everything)."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     cut = set(private_cut(ctx, view))
-    admin = R.is_admin(ctx.org, viewer, ctx.rights(viewer))
+    admin = view.everything
     most = page_size(limit)
     recs: dict[str, Any] = {}
     out: list[Row] = []
@@ -95,11 +95,11 @@ def payments(c: sqlite3.Connection, viewer: str, *, status: str | None = None, c
 def transfers(c: sqlite3.Connection, viewer: str, *, cursor: str | None = None, limit: int = 50,
               at: str | None = None) -> Row:
     """Internal transfers (payment_create method "internal") between money accounts the viewer sees both of, newest
-    first, with their status. The provider's error shows to whoever made the transfer or a finance admin."""
+    first, with their status. The provider's error shows to whoever made the transfer or sees everything."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     money = {str(m["id"]): m for m in SK.money_accounts(c, ctx.book.id) if sees_money_account(ctx, view, m)}
-    admin = R.is_admin(ctx.org, viewer, ctx.rights(viewer))
+    admin = view.everything
     most = page_size(limit)
     rows = SK.transfers(c, list(money), before=cursor or "", most=most + 1)
     nxt = str(rows[most - 1]["created_at"]) if len(rows) > most else None

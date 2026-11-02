@@ -35,6 +35,8 @@ from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import raw_totals as SR
+from .store import tico
 
 NEW_EVENT, CATEGORY_EVENT, DECLINED_EVENT = "finance.feed.new", "finance.feed.needs_category", "finance.card.declined"
 OTHER, BANK, CARDS, OPENING = "6900", "1000", "2100", "3900"
@@ -48,11 +50,43 @@ def event(ctx: Ctx, name: str, subject: str, payload: Mapping[str, object], key:
     SB.event(ctx.c, name, subject, key, payload, SYSTEM, ctx.at)
 
 
+def _review_match(ctx: Ctx, fid: str, t: F.FeedTxn, found: str) -> None:
+    """A row that may pay an open document is not posted (its document is still open, so posting it would expense it
+    twice): it stays new and is asked about (needs_category). Where several documents could be the one it pays, the
+    event names them (ids only) for the review."""
+    payload: dict[str, object] = {"feed_id": fid}
+    if found == documents.MANY:
+        payload["candidates"] = documents.match_candidates(ctx, t)
+    event(ctx, CATEGORY_EVENT, fid, payload)
+
+def sync_failed(ctx: Ctx, cid: str, prior: str, why: str) -> None:
+    """A bank sync that failed tells the owner what failed (spec 11: no BotOps in the way). `prior` is the connection's
+    status before this run: only the first failure of a run is told (one finance.sync.failed event and one keeper
+    notice, as budget warnings send theirs). A retry that still fails says nothing more; a run after a clean sync is
+    a new run."""
+    if prior == "error":
+        return
+    row = ctx.c.execute("SELECT name, provider FROM fin_connections WHERE id=?", (cid,)).fetchone()
+    label = (str(row[0]) if row and row[0] else f"the {row[1] if row else 'bank'} connection")
+    event(ctx, "finance.sync.failed", cid, {"connection_id": cid}, ctx.at)
+    owner = ctx.org.owner
+    if not owner:
+        return
+    ctx.c.execute("SAVEPOINT fin_sync_notice")
+    try:
+        tico.notice(ctx.c, owner, f"Finance could not sync {label}: {why[:300]}. Tico keeps retrying on its own; "
+                                  "this is the one notice for this failure.")
+        ctx.c.execute("RELEASE fin_sync_notice")
+    except tico.Refused:
+        ctx.c.execute("ROLLBACK TO fin_sync_notice")
+        ctx.c.execute("RELEASE fin_sync_notice")
+
+
 def by_code(ctx: Ctx, code: str) -> L.Account | None:
     return next((a for a in ctx.accounts.values() if a.code == code), None)
 
 
-def _gl(ctx: Ctx, money: Any) -> L.Account:
+def gl_account(ctx: Ctx, money: Any) -> L.Account:
     account = ctx.accounts.get(str(money["account_id"] or ""))
     if account is None:
         raise invalid("that money account has no account in the books")
@@ -142,6 +176,11 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             if (kept := _reuse(ctx, cid, a)) is not None:
                 mapped.append(kept)
                 continue
+            if str(a.get("kind") or "").lower() == "debit":
+                # A debit card program spends cash it holds: an asset with its own account, no card liability (§8.1).
+                gl = new_account(ctx, BANK, f"{a.get('name') or 'Mercury'} debit card", "asset", "bank", who)
+                mapped.append(_money(ctx, cid, a, "card_program", "debit", gl, who))
+                continue
             cards = by_code(ctx, CARDS)
             gl = cards if cards is not None and not any(
                 str(r["account_id"]) == cards.id for r in SK.money_accounts(ctx.c, ctx.book.id)) else None
@@ -173,7 +212,8 @@ def _money(ctx: Ctx, cid: str, a: Mapping[str, object], kind: str, subtype: str,
     mid = SK.insert(ctx.c, "fin_money_accounts", {
         "book_id": ctx.book.id, "kind": kind, "subtype": subtype, "name": str(a.get("name") or "Mercury")[:120],
         "provider": "mercury", "connection_id": cid, "account_id": gl.id, "provider_account_id": str(a.get("id")),
-        "last4": str(a.get("last4") or "")[-4:] or None, "holds_cash": 0 if kind == "card_program" else 1,
+        "last4": str(a.get("last4") or "")[-4:] or None,
+        "holds_cash": 0 if kind == "card_program" and subtype == "credit" else 1,  # a credit program holds no cash
         "balance": current if isinstance(current, int) else None,
         "available_balance": available if isinstance(available, int) else None,
         "balance_currency": ctx.book.base_currency, "balance_as_of": ctx.at if isinstance(current, int) else None,
@@ -207,7 +247,8 @@ def set_opening(ctx: Ctx, money: Any, amount: int, day: str) -> str | None:
     """Make the money account's one opening-balance entry say `amount` on `day` (Dr/Cr its GL line against Opening
     balance equity). Unchanged: nothing. Changed: the old entry is reversed and the new one posted, each on an open
     day (a closed month keeps its meaning). The live entry's id, or None when the opening is 0."""
-    gl = _gl(ctx, money)
+    gl = gl_account(ctx, money)
+    day = _opening_day(ctx, day)
     prior = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
     if prior is not None:
         moved = sum(line.amount for _, line in SL.entry_lines(ctx.c, str(prior["id"])) if line.account_id == gl.id)
@@ -218,7 +259,9 @@ def set_opening(ctx: Ctx, money: Any, amount: int, day: str) -> str | None:
     if amount == 0:
         return None
     mid = str(money["id"])
-    source_id = f"opening:{mid}" if prior is None else f"opening:{mid}:{ctx.at}"
+    # Each repost is a new source id (fresh_source): a repost under the same timestamp as an earlier reversed entry
+    # would otherwise be deduplicated onto it, and the opening would not post at all.
+    source_id = fresh_source(ctx, "sync", f"opening:{mid}")
     done = posting.post_entry(ctx.c, {"date": open_day(ctx, day), "source": "sync", "source_id": source_id,
                                       "memo": f"Opening balance: {money['name']}"[:200],
                                       "lines": [feed_line(gl.id, amount), feed_line(_opening_line(ctx).id, -amount)]},
@@ -226,31 +269,132 @@ def set_opening(ctx: Ctx, money: Any, amount: int, day: str) -> str | None:
     return str(done["entry_id"])
 
 
+def _term(ctx: Ctx, money: Any) -> int:
+    """What the opening nets out of the balance: the settled rows the books carry (uncovered_total: not covered history,
+    not ignored, unposted rows included, since they will post), plus what live raw totals put on the money account's GL
+    line. The line's raw movement counts once, against the lowest-id money account on that line."""
+    book, gl = ctx.book.id, str(money["account_id"] or "")
+    moved = SR.line_movement(ctx.c, book, gl) if gl and SK.money_on_line(ctx.c, book, gl) == str(money["id"]) else 0
+    return SK.uncovered_total(ctx.c, str(money["id"]), str(money["kind"])) + moved
+
+
+def opening_terms(ctx: Ctx) -> dict[str, int]:
+    """Every money account's _term now. A change that moves rows into or out of the books without a bank movement takes
+    these before and after (shift_openings). A mirrored book has no opening, so none."""
+    if ctx.book.mode == "mirror":
+        return {}
+    return {str(account["id"]): _term(ctx, account) for account in SK.money_accounts(ctx.c, ctx.book.id)}
+
+
+def opening_figure(ctx: Ctx, money: Any, balance: int) -> int:
+    """The opening that makes the money account's GL line equal the provider's `balance` when the books carry every row
+    the balance holds: the balance less _term. Covered history and ignored rows are in the balance and not in _term, so
+    the opening carries them."""
+    return balance - _term(ctx, money)
+
+
+def _natural_day(ctx: Ctx, money: Any) -> str:
+    """The day before the account's first row the balance holds (covered history counts), or today with none. set_opening
+    caps it before the first raw-totals month."""
+    _, first = SK.settled_total(ctx.c, str(money["id"]), str(money["kind"]))
+    return (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
+
+
+def open_at(ctx: Ctx, money: Any, balance: int) -> str | None:
+    """Make the money account's opening entry say what `balance` implies (opening_figure). Dated the natural day, or the
+    existing entry's day when that is earlier: an opening moves earlier for an earlier row, never later on its own (a
+    later day would repost it on every pass)."""
+    prior = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
+    day = _natural_day(ctx, money)
+    if prior is not None:
+        day = min(day, str(prior["entry_date"]))
+    return set_opening(ctx, money, opening_figure(ctx, money, balance), day)
+
+
 def opening_balance(ctx: Ctx, money_id: str) -> str | None:
-    """After a backfill: the provider's current balance less every settled feed row is what the account held before
-    the first of them, posted as of the day before it (no rows: today). An IO credit line's balance and rows carry
-    the same sign (owed negative), so the liability side comes out the same way. Idempotent per money account; a
-    later backfill that reaches further back adjusts the one entry. Nothing without a balance or a GL line."""
+    """After a backfill: the opening that makes the GL line equal the provider's balance (opening_figure), dated the day
+    before the first settled row (today with none). Idempotent per money account; a later backfill that reaches further
+    back adjusts the one entry. Nothing without a balance or a GL line."""
     money = SK.get(ctx.c, "fin_money_accounts", money_id)
     if money is None or money["balance"] is None or not money["account_id"]:
         return None
-    total, first = SK.settled_total(ctx.c, money_id)
-    day = (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
-    return set_opening(ctx, money, int(money["balance"]) - total, day)
+    return open_at(ctx, money, int(money["balance"]))
+
+
+def _opening_day(ctx: Ctx, day: str) -> str:
+    """An opening balance posts before the first raw-totals month, never inside one: a posting there is refused (§4.1),
+    and the raw totals already carry what happened from that month on."""
+    span = SR.live_span(ctx.c, ctx.book.id)
+    if span is None:
+        return day
+    return min(day, (dates.day(f"{span[0]}-01") - timedelta(days=1)).isoformat())
+
+
+def covered_day(ctx: Ctx, day: str) -> bool:
+    """Whether a settled row dated `day` is covered history (spec §4.1): its month is the latest one holding raw totals
+    or an earlier one. Covered rows post nowhere and still count toward reconciling the bank."""
+    span = SR.live_span(ctx.c, ctx.book.id)
+    return span is not None and day[:7] <= span[1]
+
+
+def _backfilled(ctx: Ctx, money: Any) -> bool:
+    """Whether the money account's connection has finished its backfill (its first opening balance is due then)."""
+    conn = SK.get(ctx.c, "fin_connections", str(money["connection_id"])) if money["connection_id"] else None
+    return conn is not None and bool(SK.loads(conn["settings"]).get("backfilled"))
+
+
+def refresh_opening(ctx: Ctx, money_id: str) -> None:
+    """While the money account's backfill is unfinished, its opening is the balance the pass read less the rows so far
+    (opening_figure), at the end of each pass: a partial backfill's pages are not final, so nothing else is trusted yet.
+    Once the backfill has finished the opening never reads the balance again: it moves by what changed (shift_openings,
+    _before_opening), so a gap the bank has and the feed does not stays a difference for reconciliation. A Stripe
+    opening is the balance its backfill read, moved the same way after that."""
+    money = SK.get(ctx.c, "fin_money_accounts", money_id)
+    if money is None or money["balance"] is None or not money["account_id"] or str(money["kind"]) == "stripe":
+        return
+    if _backfilled(ctx, money) or SK.opening_entry(ctx.c, ctx.book.id, money_id) is None:
+        return
+    open_at(ctx, money, int(money["balance"]))
 
 
 def _before_opening(ctx: Ctx, money: Any, amount: int, day: str) -> None:
-    """A settled row first seen after the opening was posted, dated on or before it: the provider's balance already
-    held it inside the opening, so the opening gives it back (and moves before it), never counting it twice."""
+    """A settled row first seen after the backfill, dated on or before the opening's day: the balance already held it, so
+    the opening gives it back and moves before it. A later row needs nothing: the balance moved with it, and so does
+    the opening's figure. Only a first sighting counts (a pending row that settles moved the balance after the opening)."""
     entry = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
     if entry is None:
         return
     dated = str(entry["entry_date"])
     if day > dated:
         return
-    have = opening_amount(ctx, money, dated)
     earlier = (dates.day(day) - timedelta(days=1)).isoformat()
-    set_opening(ctx, money, have - amount, min(dated, earlier))
+    set_opening(ctx, money, opening_amount(ctx, money, dated) - amount, min(dated, earlier))
+
+
+def shift_openings(ctx: Ctx, before: Mapping[str, int]) -> None:
+    """Move each money account's opening by what a change moved out of (or into) its terms, `before` being opening_terms
+    as it stood before the change: the difference, with no balance read. An opening that did not exist yet is made from
+    the difference once its backfill has finished. Every opening also stays before the first raw-totals month
+    (set_opening caps it)."""
+    for account in SK.money_accounts(ctx.c, ctx.book.id):
+        money_id = str(account["id"])
+        if money_id not in before or not account["account_id"]:
+            continue
+        step = before[money_id] - _term(ctx, account)
+        entry = SK.opening_entry(ctx.c, ctx.book.id, money_id)
+        if entry is None:
+            if step and _backfilled(ctx, account):
+                set_opening(ctx, account, step, _natural_day(ctx, account))
+            continue
+        set_opening(ctx, account, opening_amount(ctx, account, "9999-12-31") + step, str(entry["entry_date"]))
+
+
+def refresh_connection_openings(ctx: Ctx, connection_id: str) -> None:
+    """At the end of a sync pass: each of the connection's money accounts' openings, against the balance the pass read
+    and the rows it took in (read together, so the opening and the feed agree)."""
+    for account in SK.money_accounts(ctx.c, ctx.book.id):
+        if str(account["connection_id"] or "") == connection_id:
+            refresh_opening(ctx, str(account["id"]))
 
 
 # ------------------------------------------------------------------------------------------------ taking in
@@ -288,18 +432,47 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
                   f"v{t.version}")
             return fid
         SK.update(ctx.c, "fin_feed_txns", fid, fields)
-    was_settled = row is not None and not int(row["pending"]) and str(row["provider_status"] or "") not in (
-        *F.VOID, F.REVERSED)
-    if not t.pending and not (t.void or t.reversed) and not was_settled and ctx.book.mode != "mirror":
-        _before_opening(ctx, money, t.amount, t.txn_date)
     _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, card, t)
+    if (row is None and not t.pending and not (t.void or t.reversed) and ctx.book.mode != "mirror"
+            and _backfilled(ctx, money)):
+        # A settled row first seen now: after settling, so its status says whether the books carry it.
+        if str(SK.get(ctx.c, "fin_feed_txns", fid)["status"]) not in ("covered", "ignored"):
+            _before_opening(ctx, money, t.amount, t.txn_date)
     return fid
+
+
+def _txn_of(row: Any) -> F.FeedTxn:
+    """A stored feed row as the provider transaction it came from, to settle it again."""
+    return F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
+                     txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
+                     counterparty=str(row["counterparty"]), description=str(row["description"]),
+                     card_id=str(row["card_id"] or ""), request_id=str(row["request_id"] or ""),
+                     version=int(row["version"]), raw=SK.loads(row["raw"]))
+
+
+def refresh_covered(ctx: Ctx, before: Mapping[str, int]) -> None:
+    """Keep covered history (spec §4.1) in step with the raw-totals months. A settled row without an entry, dated on or
+    before the latest such month, becomes `covered`: out of the review queues, posted nowhere, still counted by
+    reconciliation. A covered row that a reversal uncovers settles now, as if it had just arrived. `before` is
+    opening_terms as the raw-totals change found them: the openings move by what it moved (no bank movement came with it)."""
+    for row in SK.open_feed_rows(ctx.c, ctx.book.id):
+        covered = covered_day(ctx, str(row["txn_date"]))
+        if covered and row["status"] == "new":
+            SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"status": "covered", "updated_at": ctx.at})
+        elif not covered and row["status"] == "covered":
+            SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"status": "new", "updated_at": ctx.at})
+            money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+            card = SK.get(ctx.c, "fin_cards", str(row["card_id"])) if row["card_id"] else None
+            _settle(ctx, SK.get(ctx.c, "fin_feed_txns", str(row["id"])), money, card, _txn_of(row))
+    shift_openings(ctx, before)
 
 
 def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     fid = str(row["id"])
     if ctx.book.mode == "mirror":
         from .mirror import settle_row
+        if not (t.pending or t.void or t.reversed):
+            _canceled_debit(ctx, money, fid, t)     # a mirror's Mercury can still pay: the same ask, then mirror it
         settle_row(ctx, row, money, t)
         return
     program = str(money["kind"]) == "card_program"
@@ -319,6 +492,17 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         if program and card is not None and t.amount < 0:
             _card_hold(ctx, row, card, -t.amount)
         return
+    if covered_day(ctx, t.txn_date):    # covered history (§4.1): no route posts it, Stripe, card or Gateway alike
+        if row["entry_id"]:
+            unpost_row(ctx, row, "its month holds raw totals")
+        if row["hold_id"]:    # a hold made while the row was pending: the row posts nothing, so the hold goes with it
+            budgeting.release(ctx, str(row["hold_id"]))
+            SB.void_settled(ctx.c, str(row["hold_id"]), ctx.at)
+            SK.update(ctx.c, "fin_feed_txns", fid, {"hold_id": None, "updated_at": ctx.at})
+        if str(row["status"]) != "ignored":
+            SK.update(ctx.c, "fin_feed_txns", fid, {"status": "covered", "entry_id": None, "entry_line_id": None,
+                                                     "updated_at": ctx.at})
+        return
     if str(money["kind"]) == "stripe":    # a Stripe row posts once and never changes: stripe_post settles or waits
         from . import stripe_post        # lazy: it posts through this module's helpers
         stripe_post.settle(ctx, row, money, t)
@@ -326,11 +510,13 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     if row["entry_id"]:
         if _unchanged(ctx, row, money):
             return
-        _unpost(ctx, row, "the bank changed this transaction")
+        unpost_row(ctx, row, "the bank changed this transaction")
         row = SK.get(ctx.c, "fin_feed_txns", fid)
     if str(row["status"]) == "ignored":
         return
-    gl = _gl(ctx, money)
+    if _canceled_debit(ctx, money, fid, t):
+        return          # the payment stays canceled and its bill stays open (payment_ended reopened it); nothing pays
+    gl = gl_account(ctx, money)
     pay = SK.payment_by_request(ctx.c, t.request_id) if t.request_id else None
     if pay is None and t.amount < 0:
         pay = SK.direct_payment(ctx.c, t.provider_id) or _marked(ctx, money, t)
@@ -353,10 +539,14 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         # else the card's budget line, tagged with its holder either way.
         # A charge paying an entered bill goes to AP instead (the bill already took the expense); the card's use and
         # hold work the same either way.
+        if t.amount > 0:
+            from . import refunds        # lazy: a refund reverses its original through this module's helpers
+            if refunds.settle(ctx, row, money, t, card):
+                return
         account, tags = card_line(ctx, card)
         found = documents.match_feed(ctx, row, t) if t.amount < 0 else None
-        if isinstance(found, str):      # it may pay a bill past what was looked at: it stays new, a person links it
-            event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+        if isinstance(found, str):      # it may pay a bill past what was looked at, or one of several: a person links it
+            _review_match(ctx, fid, t, found)
             return
         if found is not None:
             lines = [feed_line(documents.control(ctx, "bill").id, -t.amount, {},
@@ -385,9 +575,18 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         if expected == documents.ASK:   # it may pay one of several marked payments: it stays new, a person picks
             event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
         return                      # the bank row of a payment marked paid from this account: linked, posted once
+    if t.amount < 0 and str(money["kind"]) == "bank":
+        from . import topups             # lazy: topups posts through this module's helpers
+        waiting = topups.waiting_for(ctx, money, t)
+        if len(waiting) == 1:            # the Gateway top-up this payment made: the row takes its entry, cash posts once
+            mark_posted(ctx, [fid], waiting[0])
+            return
+        if waiting:                      # several could be it: a person picks
+            event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+            return
     found = documents.match_feed(ctx, row, t)
-    if isinstance(found, str):          # it may pay a document past what was looked at: it stays new, a person links it
-        event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+    if isinstance(found, str):          # it may pay a document past what was looked at, or one of several: a person links it
+        _review_match(ctx, fid, t, found)
         return
     if found is not None:
         kind, doc = found
@@ -396,6 +595,10 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         mark_posted(ctx, [fid], entry)
         documents.feed_paid(ctx, row, kind, doc, entry)
         return
+    if t.amount > 0:                    # after the invoice match above: a money-in row that refunds a money-out row
+        from . import refunds            # lazy: as above
+        if refunds.settle(ctx, row, money, t, None):
+            return
     if posting_rules.post_feed(ctx, row, money, t, gl.id):
         return
     if t.amount < 0:
@@ -404,6 +607,32 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
             entry = post_row(ctx, fid, t, [feed_line(spend.id, -t.amount, {}, t.counterparty)], gl.id, [])
             mark_posted(ctx, [fid], entry)
     event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+
+
+def _canceled(ctx: Ctx, money: Any, t: F.FeedTxn) -> Any:
+    """A canceled payment whose key (`tico:<key>`) this debit shows (in `note` or `externalMemo`), at the same amount
+    from the same account: Mercury sent what Finance had canceled. None when no such payment."""
+    shown = f"{t.note} {t.raw.get('externalMemo') or ''}"
+    for pay in SK.payments_canceled(ctx.c, str(money["id"]), -t.amount):
+        if f"{payments.NOTE}{pay['idempotency_key']}" in shown:
+            return pay
+    return None
+
+
+def _canceled_debit(ctx: Ctx, money: Any, fid: str, t: F.FeedTxn) -> bool:
+    """A debit that carries a canceled payment's key: Mercury sent what Finance had canceled. One Needs-you asks a
+    person; nothing here pays the bill. True when the debit is one (its caller then stops the normal settlement)."""
+    if t.amount >= 0:
+        return False
+    cut = _canceled(ctx, money, t)
+    if cut is None:
+        return False
+    tico.needs_you(ctx.c, payments.admin_person(ctx) or ctx.org.owner,
+                   f"Check a bank debit for canceled payment {cut['id']}",
+                   f"Bank transaction {fid} carries the key of payment {cut['id']}, which Finance canceled: "
+                   "Mercury may have sent it after all. The payment stays canceled and its bill stays open. "
+                   "Check Mercury before anything else.", private=True)
+    return True
 
 
 def _marked(ctx: Ctx, money: Any, t: F.FeedTxn) -> Any:
@@ -448,7 +677,7 @@ def payment_linked(ctx: Ctx, pay: Any) -> None:
     if money is None:
         return
     if row["entry_id"]:
-        _unpost(ctx, row, "its payment was found")
+        unpost_row(ctx, row, "its payment was found")
         row = SK.get(ctx.c, "fin_feed_txns", str(row["id"]))
     t = F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
                   txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
@@ -524,12 +753,15 @@ def _card_hold(ctx: Ctx, row: Any, card: Any, amount: int) -> None:
                                source_id=str(row["id"]), expires_at=until.isoformat() + "T00:00:00.000000Z",
                                target=f"card:{card['id']}")
     if decision.hold_id and decision.hold_id != row["hold_id"]:
-        SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"hold_id": decision.hold_id})
+        # One commitment for the charge: its row, hold and authorization (and the bill it pays, once it settles one).
+        commitment = str(row["commitment_id"] or "") or SL.new_id()
+        SB.set_commitment(ctx.c, decision.hold_id, commitment)
+        SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"hold_id": decision.hold_id, "commitment_id": commitment})
         SK.insert(ctx.c, "fin_card_auths", {"card_id": str(card["id"]), "provider_auth_id": str(row["provider_id"]),
                                             "amount": amount, "currency": ctx.book.base_currency,
                                             "merchant": str(row["counterparty"]), "mode": "synced",
                                             "decision": "approved", "hold_id": decision.hold_id,
-                                            "created_at": ctx.at, "created_by": SYSTEM})
+                                            "commitment_id": commitment, "created_at": ctx.at, "created_by": SYSTEM})
 
 
 def left_of(ctx: Ctx, row: Any) -> int:
@@ -574,15 +806,20 @@ def vendor_lines(ctx: Ctx, lines: Sequence[dict[str, object]]) -> list[dict[str,
 
 
 def post_row(ctx: Ctx, fid: str, t: F.FeedTxn, lines: list[dict[str, object]], gl_id: str, holds: Sequence[str],
-             day: str = "") -> str:
+             day: str = "", memo: str = "") -> str:
     """One entry for a feed row: its other lines, then the money account's own line (`gl_id`), recorded as such
     (L.MONEY_ROLE, kept by reversals): a card's use is read from that line as it was posted, whatever account the
     card program maps to later (store/budgets.card_used). Every revision gets its own source id (`fresh_source`),
-    so a repost is never deduped onto an earlier, reversed entry. `day` overrides the row's own open day."""
+    so a repost is never deduped onto an earlier, reversed entry. `day` overrides the row's own open day; `memo`
+    replaces the counterparty as the entry's memo."""
     source = "card" if t.card else "bank"
-    done = posting.post_entry(ctx.c, {"date": day or open_day(ctx, t.txn_date), "source": source,
+    when = day or open_day(ctx, t.txn_date)
+    memo = memo[:200] if memo else (t.counterparty or t.description)[:200]
+    if when != t.txn_date:      # a late item posts in an open period: its own date stays in the description (spec §4.1)
+        memo = f"{memo[:160]} (dated {t.txn_date})"
+    done = posting.post_entry(ctx.c, {"date": when, "source": source,
                                       "source_id": fresh_source(ctx, source, fid),
-                                      "memo": (t.counterparty or t.description)[:200],
+                                      "memo": memo,
                                       "lines": [*vendor_lines(ctx, lines), feed_line(gl_id, t.amount)]},
                               hold_ids=holds, at=ctx.at, roles={len(lines): L.MONEY_ROLE})
     if not done.get("posted"):
@@ -626,8 +863,11 @@ def _unchanged(ctx: Ctx, row: Any, money: Any) -> bool:
         return False
     gl = str(money["account_id"])
     moved = sum(line.amount for _, line in SL.entry_lines(ctx.c, str(row["entry_id"])) if line.account_id == gl)
-    # A transfer's two sides, or a row linked to a payment marked paid on a bill or invoice, keep their entry's day.
-    shared = len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1 or str(entry["source"]) in L.DOC_SOURCES
+    from .topups import is_top_up     # lazy: topups posts through this module's helpers
+    # A transfer's two sides, a row linked to a payment marked paid on a bill or invoice, or the bank side of a Gateway
+    # top-up keep their entry's day.
+    shared = len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1 or str(entry["source"]) in L.DOC_SOURCES \
+        or is_top_up(entry)
     day, posted = str(row["txn_date"]), str(entry["entry_date"])
     # A row dated in a closed period posted on a later open day (`open_day`), or one paying several documents marked
     # paid posted on its reversals' later day (`documents._post_combined`): that shift is not a change.
@@ -636,7 +876,7 @@ def _unchanged(ctx: Ctx, row: Any, money: Any) -> bool:
     return moved == int(row["amount"]) and (shared or same_day)
 
 
-def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
+def unpost_row(ctx: Ctx, row: Any, memo: str) -> None:
     """Reverse a row's entry (and any reclassification of it, `_reclass`); the other side of a transfer goes back to
     waiting too."""
     entry_id = str(row["entry_id"])
@@ -662,6 +902,13 @@ def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
     documents.feed_gone(ctx, str(row["id"]), [str(e["id"]) for e in [entry, *later] if e is not None])
 
 
+def _set_aside_refund(ctx: Ctx, row: Any) -> None:
+    """A refund row a person moves or ignores no longer reverses its charge where that was posted, so its refund_of goes:
+    the charge's left-to-refund is then right again (refunds.py)."""
+    if row["refund_of"]:
+        SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"refund_of": None, "updated_at": ctx.at})
+
+
 def undo(ctx: Ctx, row: Any) -> None:
     """A row the provider canceled, failed or reversed: its hold is released and its entry reversed (for a card, the
     reversal gives its use back in the period it posts in, as the books do)."""
@@ -669,7 +916,7 @@ def undo(ctx: Ctx, row: Any) -> None:
         budgeting.release(ctx, str(row["hold_id"]))
         SB.void_settled(ctx.c, str(row["hold_id"]), ctx.at)
     if row["entry_id"]:
-        _unpost(ctx, row, "the bank canceled this transaction")
+        unpost_row(ctx, row, "the bank canceled this transaction")
     SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"status": "ignored", "entry_id": None, "entry_line_id": None,
                                                        "updated_at": ctx.at})
 
@@ -694,7 +941,7 @@ def _counterpart(ctx: Ctx, row: Any, money: Any) -> Any:
 def transfer(ctx: Ctx, row: Any, money: Any, other: Any) -> None:
     """One entry for both sides: Dr the account money went to, Cr the one it left."""
     other_money = SK.get(ctx.c, "fin_money_accounts", str(other["money_account_id"]))
-    here, there = _gl(ctx, money), _gl(ctx, other_money)
+    here, there = gl_account(ctx, money), gl_account(ctx, other_money)
     amount = int(row["amount"])
     first = sorted([str(row["id"]), str(other["id"])])
     done = posting.post_entry(ctx.c, {
@@ -729,8 +976,17 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(NOT_FOUND, "no such feed row in your view")
     if row["reconciliation_id"]:
         raise FinanceError(CONFLICT, "that row is reconciled; undo the reconciliation to change it")
+    if str(row["status"]) == "covered" or covered_day(ctx, str(row["txn_date"])):
+        raise FinanceError(CONFLICT, "that row is covered history: its month holds raw totals, so it is not posted "
+                                     "here, and it still counts toward reconciliation")
     if row["entry_id"] and len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1:
         raise FinanceError(CONFLICT, "that row is a transfer between your own accounts")
+    from .topups import is_top_up        # lazy: topups posts through this module's helpers
+    if row["entry_id"] and is_top_up(SL.entry_row(ctx.c, str(row["entry_id"]))):
+        raise FinanceError(CONFLICT, "that row is the bank side of a Gateway top-up; its entry is the top-up's")
+    if SK.refunds_of(ctx.c, str(row["id"])):      # a refund reverses this row's lines where they were posted
+        raise FinanceError(CONFLICT, "that row has a refund posted against it, which reverses its lines on the account "
+                                     "they were posted to; it cannot be moved or ignored")
     amount = int(row["amount"])
     money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
     mirrored = ctx.book.mode == "mirror"
@@ -743,7 +999,10 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 from .mirror import ignore_feed
                 ignore_feed(ctx, row)
             else:
+                before = opening_terms(ctx)
                 undo(ctx, row)
+                shift_openings(ctx, before)     # the books let go of the row with no bank movement: the opening takes it
+            _set_aside_refund(ctx, row)
             return {"feed_id": str(row["id"]), "status": "ignored"}
         return Plan(K.default_gate(ctx.org, who, "categorize"), "Ignore a feed row", ignore,
                     facts={"amount": abs(amount), "counterparty": str(row["counterparty"])})
@@ -752,18 +1011,22 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if money is not None and documents.may_wait(ctx, row, money):
         raise FinanceError(CONFLICT, "that row may be a payment already marked paid that waits for its bank row; "
                                      "link it with feed_match")
+    if documents.several_match(ctx, row):
+        raise FinanceError(CONFLICT, "that row may pay one of several open documents for its amount; link it to the "
+                                     "one it pays first (bill_mark_paid or invoice_record_payment with its feed_id)")
     account = ctx.accounts.get(V.text(p, "account_id", 80))
     if account is None or not account.active:
         raise FinanceError(NOT_FOUND, "no such account")
     tags = shared.check_tags(ctx, posting.with_team(ctx, L.tags(p.get("tags"))))
     if not may_write(ctx, who, account.id, tags):
         raise denied("that line or those tags are outside your view")
-    gl = _gl(ctx, money)
+    gl = gl_account(ctx, money)
     t = F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=amount, txn_date=str(row["txn_date"]),
                   status=F.POSTED, kind=str(row["kind"]), counterparty=str(row["counterparty"]),
                   description=str(row["description"]), card_id=str(row["card_id"] or ""))
 
     def apply(aid: str) -> Result:
+        _set_aside_refund(ctx, row)
         if mirrored:
             from .mirror import write_feed
             return write_feed(ctx, row, account, tags, gl, by=who, action_id=aid)
@@ -771,8 +1034,9 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         taken = provider_fee(row, money)    # a sale's fee is part of its gross, which a payment settles
         if left + taken == 0:
             raise FinanceError(CONFLICT, "that bank row is already applied in full")
+        before = opening_terms(ctx)         # a row that was ignored comes back into the books with no bank movement
         if row["entry_id"]:
-            _unpost(ctx, row, "re-categorized")
+            unpost_row(ctx, row, "re-categorized")
         holds = [str(row["hold_id"])] if row["hold_id"] and amount < 0 else []
         fee = provider_fee_line(ctx, row, money)
         lines = [feed_line(account.id, -(left + taken), tags, t.counterparty)]
@@ -780,6 +1044,7 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             lines.append(fee)
         entry = post_row(ctx, str(row["id"]), replace(t, amount=left), lines, gl.id, holds)
         mark_posted(ctx, [str(row["id"])], entry)
+        shift_openings(ctx, before)
         return {"feed_id": str(row["id"]), "entry_id": entry}
     return Plan(K.default_gate(ctx.org, who, "categorize"),
                 f"Post a feed row to {account.code} {account.name}", apply,
@@ -816,6 +1081,15 @@ def _book_gap(ctx: Ctx, money: Any, end: str, cleared: set[str], statement: int)
     return statement - balance
 
 
+def _raw_on_line(ctx: Ctx, money: Any, after: str | None = None, through: str | None = None) -> int:
+    """What the live raw-totals entries put on this money account's GL line between `after` (exclusive) and `through`
+    (inclusive), counted once against the lowest-id money account on that line (as opening_figure counts it)."""
+    book, gl = ctx.book.id, str(money["account_id"] or "")
+    if not gl or SK.money_on_line(ctx.c, book, gl) != str(money["id"]):
+        return 0
+    return SR.line_movement(ctx.c, book, gl, after=after, through=through)
+
+
 def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Tie a money account to its statement: the statement's end day and balance (from Mercury's statement when it
     has one, else typed), the cleared rows (default: every settled row through the end day not yet cleared), the
@@ -845,14 +1119,20 @@ def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     else:
         ids = sorted(window)
     if last is None:
-        # A first reconciliation opens at the opening-balance entry the backfill posted, unless one is typed.
+        # A first reconciliation opens at the account's set opening balance (spec §4.1: set once when its backfill
+        # finishes, never recomputed from a later balance, so a row the feed drops shows as a difference), plus what the
+        # raw totals put on its GL line. A covered row is already in that opening, so it adds nothing here.
         typed = V.opt_amount(p, "opening_balance")
-        opening = _signed(money, typed) if typed is not None else opening_amount(ctx, money, end)
+        if typed is not None:
+            opening = _signed(money, typed)
+        else:
+            opening = opening_amount(ctx, money, end) + _raw_on_line(ctx, money, through=end)
     else:
         if "opening_balance" in p:
             raise invalid("the opening balance is the last reconciliation's")
-        opening = int(last["cleared_total"])
-    total = opening + sum(int(window[i]["amount"]) for i in ids)
+        # The raw totals posted since the last reconciliation's end are on the books at this end, so they move it too.
+        opening = int(last["cleared_total"]) + _raw_on_line(ctx, money, after=str(last["statement_end"]), through=end)
+    total = opening + sum(int(window[i]["amount"]) for i in ids if str(window[i]["status"]) != "covered")
     difference = _signed(money, shown) - total
     book_gap = _book_gap(ctx, money, end, set(ids), _signed(money, shown))
     waiting, waiting_total = SK.feed_outstanding(ctx.c, str(money["id"]), end)
@@ -985,5 +1265,27 @@ def connection_map(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 (f" ({posted} posted row(s) stay on {old.code} {old.name})" if posted and old else ""), apply)
 
 
-__all__ = ["connection_create", "connection_sync", "connection_disconnect", "connection_map", "ingest", "categorize_feed", "reconcile", "reconcile_undo", "set_balance", "event",
+def connection_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Set the Mercury user a card is issued to when the card names none (`card_user_id`): one of the connection's own
+    users, or empty to clear it. A card never falls back to a guessed user (cards.py `_mercury_user`)."""
+    V.only(p, ("connection_id", "card_user_id"))
+    row = _connection(ctx, who, p)
+    if str(row["status"]) == "disconnected":
+        raise FinanceError(CONFLICT, "that connection is disconnected")
+    user = V.opt_text(p, "card_user_id", 120) or ""
+    if user and user not in {str(u["provider_user_id"]) for u in SK.provider_users_on(ctx.c, str(row["id"]))}:
+        raise invalid("that is not a Mercury user on this connection")
+
+    def apply(aid: str) -> Result:
+        settings = {k: v for k, v in SK.loads(row["settings"]).items() if k != "card_user_id"}
+        if user:
+            settings["card_user_id"] = user
+        SK.update(ctx.c, "fin_connections", str(row["id"]), {"settings": SK.dump(settings), "updated_at": ctx.at})
+        return {"connection_id": str(row["id"]), "card_user_id": user or None}
+    return Plan(K.ALLOW, f"Issue cards on {row['name']} to {user}" if user else
+                f"Clear the card user on {row['name']}", apply)
+
+
+__all__ = ["connection_create", "connection_sync", "connection_disconnect", "connection_map", "connection_settings",
+           "ingest", "categorize_feed", "reconcile", "reconcile_undo", "set_balance", "event",
            "card_line", "undo", "reversal_locked", "new_account", "MATCH_DAYS", "card_used"]

@@ -15,7 +15,8 @@ from typing import Any, Protocol, cast
 from ..records import core as RC
 from ..records import reads as RR
 from ..records import store as RS
-from . import banking, documents, handlers, posting
+from . import banking, books_link, documents, handlers, posting, setup, usage
+from . import closing as CL
 from . import purchasing as PU
 from .context import Ctx, load
 from .core import ap as AP
@@ -53,7 +54,9 @@ REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
            # a purchase order's close and void are not written to the provider yet (its create is)
            "po_close", "po_void",
            # a job's edits are not written to the provider yet (its create is, through RECORD_KINDS)
-           "project_update")
+           "project_update",
+           # a mirrored book's history is the provider's: a sheet of raw totals posts nothing, dry run included
+           "import_raw_totals")
 
 Record = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Location | M.Dimension |
 M.Project
@@ -367,11 +370,32 @@ def _local_account(ctx: Ctx, row: Any, code: str) -> L.Account | None:
     return next((x for x in ctx.accounts.values() if x.code == code), None)
 
 
+# The control subtypes: a provider's one payable and its one receivable are Tico's own (§10: their chart is the source)
+CONTROL_SUBTYPES = ("payable", "receivable")
+
+
+def _twin(c: sqlite3.Connection, ctx: Ctx, cid: str, a: M.ChartAccount) -> L.Account | None:
+    """The Tico account that is their account: a Tico account no provider account is bound to, with the same name and
+    type, else (for a payable or receivable) the same control subtype and type. Lowest code first, so the pick is stable."""
+    free = [x for x in ctx.accounts.values() if SX.ref_for_local(c, cid, "fin_accounts", x.id) is None]
+    name = " ".join(a.name.split()).casefold()
+    same = [x for x in free if " ".join(x.name.split()).casefold() == name and x.type == a.type]
+    if same:
+        return min(same, key=lambda x: (x.code, x.id))
+    if a.subtype in CONTROL_SUBTYPES:
+        control = [x for x in free if x.subtype == a.subtype and x.type == a.type]
+        if control:
+            return min(control, key=lambda x: (x.code, x.id))
+    return None
+
+
 def _account(c: sqlite3.Connection, ctx: Ctx, cid: str, a: M.ChartAccount, at: str) -> None:
     row = SX.ref(c, cid, "fin_accounts", a.ext.key)
     if M.decide(_have(row), a.ext) in (M.SAME, M.OLDER, M.GONE):
         return
     current = _local_account(ctx, row, a.code)
+    if current is None and row is None:
+        current = _twin(c, ctx, cid, a)      # a Tico account of the same kind that is not bound yet: it is theirs
     first = row is None or not str(row["local_id"])     # the first import of this account, before it is bound
     if current is None:
         new = L.Account(id=SL.new_id(), book_id=ctx.book.id, code=a.code, name=a.name, type=a.type,
@@ -379,8 +403,9 @@ def _account(c: sqlite3.Connection, ctx: Ctx, cid: str, a: M.ChartAccount, at: s
         L.check_account(new, ctx.accounts)
         SL.insert_account(c, new, SYSTEM, at)
     else:
-        # The type stays as it was given: an account that may hold lines does not change kind.
-        new = replace(current, code=a.code, name=a.name, subtype=a.subtype, active=a.active)
+        # The type stays as it was given: an account that may hold lines does not change kind. The code stays too: a
+        # system line finds its account by code (2000, 1200, 6900 and the rest), and a provider's number may be none.
+        new = replace(current, code=current.code or a.code, name=a.name, subtype=a.subtype, active=a.active)
         L.check_account(new, ctx.accounts)
         SL.update_account(c, new, at)
     _bind(c, cid, "fin_accounts", new.id, a.ext, at)
@@ -731,6 +756,7 @@ def _restate(c: sqlite3.Connection, ctx: Ctx, day: str, change: str, entry_id: s
     period = SL.period(c, ctx.book.id, day)
     SX.restatement_insert(c, book_id=ctx.book.id, period_id=str(period["id"]), day=day, change=change,
                           entry_id=entry_id, reversal_id=reversal_id, cid=cid, external_id=key, at=at, by=SYSTEM)
+    CL.flag(c, ctx.book.id, day[:7], SYSTEM, at, change)     # the close snapshot carries the flag too (spec 10)
 
 
 def _unsettle_entry(c: sqlite3.Connection, ctx: Ctx, entry_id: str, *, keep_credit: bool = False) -> list[Any]:
@@ -967,11 +993,17 @@ def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str)
     verdict = M.decide(_have(row), d.ext)
     if verdict not in (M.CREATE, M.REPLACE):
         return
-    if d.ext.kind == "Invoice" and d.total == 0:
-        # QuickBooks zeroes a voided invoice rather than deleting it: a zero invoice is one the books void.
+    if d.total == 0 and d.ext.kind in ("Bill", "Invoice"):
+        # QuickBooks zeroes a voided bill or invoice rather than deleting it (its lines go to zero, or are dropped): a zero
+        # document is one the books hold as void (§4.2), never as paid. A void of a document the books hold reverses its
+        # entry; a voided bill first read is taken in as void, with no entry.
         if verdict == M.REPLACE and row is not None and row["local_id"]:
             local = str(row["local_id"])
             _void(c, ctx, cid, table, local, d.ext.key, at)
+            _bind(c, cid, table, local, d.ext, at, status="deleted")
+        elif verdict == M.CREATE and d.ext.kind == "Bill":
+            contact, _ = _party_of(c, cid, d.party)
+            local = SAP.insert(c, table, _doc_row(ctx, "bill", contact, d, 0, "void", at))
             _bind(c, cid, table, local, d.ext, at, status="deleted")
         return
     _currency(ctx, d.currency)
@@ -1978,6 +2010,13 @@ def _link_order_lines(c: sqlite3.Connection, ctx: Ctx, doc_id: str, lines: Seque
         PU.sync_orders(ctx, SYSTEM, orders)
 
 
+def _bill_entry(c: sqlite3.Connection, cid: str, ext: M.Ext) -> str:
+    """The entry a confirmed bill is booked as, "" when the books hold no such bill."""
+    row = SX.ref(c, cid, "fin_bills", ext.key)
+    bill = SAP.get(c, "fin_bills", str(row["local_id"])) if row is not None and row["local_id"] else None
+    return str(bill["entry_id"] or "") if bill is not None else ""
+
+
 def _confirm_void(c: sqlite3.Connection, cid: str, table: str, local: Mapping[str, Any], sent: Sent, now: str) -> None:
     """The provider voided a bill or invoice Tico voided: its entry is reversed, and its ref takes the revision the void
     left, so the change feed's echo of that void is the same record and brings nothing new."""
@@ -2060,6 +2099,9 @@ def _confirm(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any],
             _retire(c, load(c, now), cid, entry, str(local["ext"]), now)
     elif op in ("bill.create", "invoice.create"):
         _confirm_document(c, cid, sent, local, now)
+        if op == "bill.create" and local.get("holds"):
+            documents.take_queued_bill_holds(load(c, now), str(local["holds"]), len(local["lines"]),
+                                             _bill_entry(c, cid, ext) or None)
         if local.get("estimate_id"):
             _claim_estimate(c, cid, sent, local, now)
     elif op in ORDER_TABLES:
@@ -2115,6 +2157,10 @@ def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], p
         SK.update(c, "fin_outbox", oid, {"status": "failed", "attempts": attempts, "claimed_at": None,
                                          "last_error": sent.error[:300], "unknown": int(sent.unknown),
                                          "updated_at": now})
+        if kind == "bill" and not sent.unknown and local.get("holds"):
+            # Refused for good and never booked: the budget its lines held goes back (spec 4.4). An unknown one may still
+            # land, so its holds stay until the provider says which.
+            documents.release_queued_bill_holds(load(c, now), str(local["holds"]), len(local["lines"]))
         if kind in RECORD_KINDS:
             # The local record never changed: the owner sees why the provider refused it.
             tico.needs_you(c, SX.connection_owner(c, cid), f"QuickBooks refused the {RECORD_KINDS[kind][2]} write",
@@ -2165,6 +2211,19 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
                                                        "updated_at": now})
         due = SK.outbox_due(c, now, OUTBOX_MOST, cid)
     problems: list[str] = []
+    # A write for a feed row (a bank, card or Stripe line) goes out only once the books are read up to now: the provider
+    # may hold the entry already (their own bank feed made it after the last change read), and a copy sent would be a
+    # duplicate. A read that fails holds those writes for the next pass.
+    bank = [o for o in due if int(o["attempts"]) == 0 and SK.loads(o["payload"]).get("feed_id")]
+    if bank:
+        read = _changes(store, books, cid, now, waiting=True)
+        if read:
+            problems.append(read)
+            with store.transaction() as c:
+                for o in bank:
+                    _later(c, o, "the provider's changes could not be read before this went out", now)
+            held = {str(o["id"]) for o in bank}
+            due = [o for o in due if str(o["id"]) not in held]
     for listed in due:
         with store.transaction(durable=True) as c:
             if not SK.outbox_claim(c, str(listed["id"]), now):
@@ -2217,22 +2276,82 @@ def reading(c: sqlite3.Connection, cid: str) -> bool:
     return not M.backfill_done(_backfill_state(SX.mirror_state(c, cid)), _entities(c, cid))
 
 
+def _apply_chunked(store: Any, cid: str, records: Sequence[Record], now: str) -> None:
+    """The records applied APPLY_CHUNK at a time, each chunk in its own transaction, so one write never holds the store for
+    a whole page. A failure keeps the chunks already in. The caller moves its cursor only once all are in, so the next pass
+    reads the same records again, and a record already in is found, not written twice."""
+    for start in range(0, len(records), M.APPLY_CHUNK):
+        with store.transaction() as c:
+            apply(c, cid, records[start:start + M.APPLY_CHUNK], now)
+
+
 def _backfill(store: Any, books: Books, cid: str, now: str, size: int) -> str:
-    """One page of the first entity not yet read through (in order: accounts, parties, entries)."""
+    """One page of the first entity not yet read through (in order: accounts, parties, entries). During a full re-read
+    the refs a page's records are marked as found (`_sweep` reads the rest); once every entity is read, the sweep runs."""
     with store.read() as c:
-        state = _backfill_state(SX.mirror_state(c, cid))
+        st = SX.mirror_state(c, cid)
+    state = _backfill_state(st)
     entity = next((e for e in books.entities if M.backfill_next(state, e) is not None), None)
     if entity is None:
-        return ""
+        return _sweep(store, books, cid, now)
     start = M.backfill_next(state, entity) or 1
     read = books.page(entity, start, size)
     if not read.ok:
         return f"backfill {entity} from {start}: {read.error}"
     counted = read.seen if read.seen >= 0 else len(read.records)     # a row no record fits still moves the cursor
+    _apply_chunked(store, cid, read.records, now)
     with store.transaction() as c:
-        apply(c, cid, read.records, now)
-        done = M.backfill_after(_backfill_state(SX.mirror_state(c, cid)), entity, start, counted, size)
+        cur = SX.mirror_state(c, cid)
+        reread = _reread_of(cur)
+        if reread:
+            SX.reread_seen(c, cid, sorted({_ext_of(r).key for r in read.records}), _gen_of(reread))
+        done = M.backfill_after(_backfill_state(cur), entity, start, counted, size)
         SX.set_mirror_state(c, cid, {"backfill": done})
+    return ""
+
+
+def _reread_of(st: Mapping[str, object]) -> dict[str, object]:
+    """The full re-read in progress (its generation, why it began, and the stamp it began at), or {} when none is."""
+    return SX.as_map(st.get("reread"))
+
+
+def _gen_of(state: Mapping[str, object]) -> int:
+    value = state.get("gen")
+    return value if isinstance(value, int) else 0
+
+
+def _start_reread(store: Any, cid: str, now: str, why: str) -> None:
+    """Starts a full re-read of the books: the backfill begins again from each entity's first page, the change feed waits
+    until it is complete, and the cursors stay where they are until then (`_sweep`). `why` is the trigger: the window or
+    the cap."""
+    with store.transaction() as c:
+        gen = _gen_of(SX.mirror_state(c, cid)) + 1
+        SX.set_mirror_state(c, cid, {"gen": gen, "reread": {"gen": gen, "why": why, "started_at": now}, "backfill": {},
+                                     "exact": []})
+
+
+def _sweep(store: Any, books: Books, cid: str, now: str) -> str:
+    """The end of a full re-read, once every entity has been read in full: each held ref of the kinds read that the read
+    did not return is deleted at the provider, through the same delete path as a change, a chunk at a time. Only a
+    complete read gets here, so an incomplete one deletes nothing. When none is left, the cursors move to the stamp the
+    re-read began at, so the change feed picks up from there."""
+    with store.read() as c:
+        reread = _reread_of(SX.mirror_state(c, cid))
+        if not reread:
+            return ""
+        gen = _gen_of(reread)
+        kinds = tuple(getattr(books, "read_kinds", ()))
+        rows = SX.reread_unseen(c, cid, gen, kinds, M.APPLY_CHUNK) if kinds else []
+    if rows:
+        gone = [M.Ext(str(key).partition(":")[0], str(key).partition(":")[2], "", deleted=True) for _, key in rows]
+        _apply_chunked(store, cid, gone, now)
+        with store.transaction() as c:
+            SX.reread_swept(c, [str(row[0]) for row in rows], gen)
+        return ""
+    started = str(reread.get("started_at") or now)   # a re-read begun before the key had its name starts now
+    with store.transaction() as c:
+        SX.set_mirror_state(c, cid, {"cursors": {feed: started for feed in books.feeds}, "changed_at": started,
+                                     "exact": [], "reread": None})
     return ""
 
 
@@ -2253,18 +2372,29 @@ def _changes(store: Any, books: Books, cid: str, now: str, waiting: bool = False
     exact_raw = st.get("exact")
     exact = {str(feed) for feed in cast(list[object], exact_raw)} if isinstance(exact_raw, list) else set[str]()
     due = bool(exact) or any(M.cdc_due(cursors[feed], now, every) for feed in books.feeds)
-    if not M.backfill_done(_backfill_state(st), books.entities) or not (waiting or due):
+    if _reread_of(st) or not M.backfill_done(_backfill_state(st), books.entities) or not (waiting or due):
+        return ""
+    # A provider that keeps changes for a window (QuickBooks: 30 days) is not read from a cursor past it, and an answer
+    # that reached the cap is not complete: either way the books are read in full, and the cursors wait for that read.
+    full = bool(getattr(books, "full_reread", False))
+    if full and any(M.cdc_clamped(cursors[feed], now) for feed in books.feeds):
+        _start_reread(store, cid, now, "window")
         return ""
     read = books.changed({feed: (cursors[feed] or now) if feed in exact else M.cdc_since(cursors[feed], now)
                           for feed in books.feeds})
     if not read.ok:
         return f"changes: {read.error}"
-    with store.transaction() as c:
-        fresh = {_ext_of(r).key for r in read.records}
+    fresh = {_ext_of(r).key for r in read.records}
+    with store.read() as c:
         waiting_records = [M.decode(v) for k, v in _pending(c, cid).items() if k not in fresh]
-        apply(c, cid, [*read.records, *waiting_records], now)
+    _apply_chunked(store, cid, [*read.records, *waiting_records], now)
+    if full and read.through:
+        # The answer reached the cap: what it holds is applied, but the feed is complete only to the full read that follows.
+        _start_reread(store, cid, now, "cap")
+        return ""
+    with store.transaction() as c:
         # A feed the provider cut short is complete only to its `through`, so its next read starts there; the rest are
-        # complete to this read.
+        # complete to this read. The cursors move once every chunk is in.
         cut = dict(read.through)
         stamps = {feed: cut.get(feed, now) for feed in books.feeds}
         SX.set_mirror_state(c, cid, {"cursors": stamps, "changed_at": min(stamps.values(), key=M.parse),
@@ -2306,12 +2436,47 @@ def _export(store: Any, cid: str, now: str, size: int) -> None:
         SX.set_mirror_state(c, cid, {"export": {"until": until, "after": cursor, "done": len(rows) < size}})
 
 
+# The Tico accounts Tico posts to itself: the Gateway credit, the AI and video spend, other expenses, the payments
+# clearing, and the accounts bills and invoices post to (AP and AR).
+# A chart of theirs with no account for one of them gets it created when the chart is read.
+TICO_POSTED = frozenset({usage.CREDIT, setup.AI, setup.VIDEO, banking.OTHER, documents.CLEARING[0],
+                         documents.CONTROL["bill"][0], documents.CONTROL["invoice"][0]})
+
+
+def _chart(store: Any, cid: str, now: str) -> None:
+    """Once their chart is read after a switch (and once only): a Tico account none of theirs matched is created in their
+    chart when it has history or Tico posts to it itself. Any other one goes inactive and is never written out."""
+    with store.read() as c:
+        state = SX.mirror_state(c, cid)
+        if not state.get("export") or state.get("chart") or M.backfill_next(_backfill_state(state), "accounts") is not None:
+            return
+    with store.transaction() as c:
+        ctx = load(c, now)
+        for i, a in enumerate(sorted(ctx.accounts.values(), key=lambda x: (x.code, x.id))):
+            if SX.ref_for_local(c, cid, "fin_accounts", a.id) is not None:
+                continue
+            if a.code in TICO_POSTED or _has_history(c, a.id):
+                body = {"local_id": a.id, "code": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
+                        "active": a.active}
+                _queue(c, cid, "account.create", body, by=SYSTEM, at=M.stamp(now, i),
+                       key=f"export:{cid}:account:{a.id}")
+            elif a.active:
+                SL.update_account(c, replace(a, active=False), now)
+        SX.set_mirror_state(c, cid, {"chart": True})
+
+
+def _has_history(c: sqlite3.Connection, account_id: str) -> bool:
+    return c.execute("SELECT 1 FROM fin_lines WHERE account_id=? LIMIT 1", (account_id,)).fetchone() is not None
+
+
 def sync_once(store: Any, books: Books, cid: str, now: str, *, size: int = M.BACKFILL_SIZE,
               waiting: bool = False, every: int = M.CDC_EVERY) -> list[str]:
-    """One pass over a mirrored connection: a backfill page, the change feed when due (or when a webhook waits), the
-    export page, then the writes out. Provider calls run outside transactions; the outcome is recorded on the connection."""
-    problems = [p for p in (_backfill(store, books, cid, now, size),
-                            _changes(store, books, cid, now, waiting, every)) if p]
+    """One pass over a mirrored connection: a backfill page, the chart's accounts once their chart is read, the change feed
+    when due (or when a webhook waits), the export page, then the writes out. Provider calls run outside transactions; the
+    outcome is recorded on the connection."""
+    backfill = _backfill(store, books, cid, now, size)
+    _chart(store, cid, now)
+    problems = [p for p in (backfill, _changes(store, books, cid, now, waiting, every)) if p]
     _export(store, cid, now, size)
     problems += outbox(store, books, cid, now)
     with store.transaction() as c:
@@ -2322,7 +2487,8 @@ def sync_once(store: Any, books: Books, cid: str, now: str, *, size: int = M.BAC
 # ------------------------------------------------------------------------------------------------ planners
 def mirror_start(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     """Switch a native book to a provider's books. Preview first: what would be written out. Applying it sets the mode;
-    the accounts and parties are queued now and the entries are written out by the passes that follow."""
+    the parties are queued now. Their chart is read first: the accounts are bound to theirs, or created in theirs only
+    when they are needed (`_chart`), and the entries are written out by the passes that follow."""
     V.only(p, ("connection_id",))
     cid = V.text(p, "connection_id", 80)
     if ctx.book.mode != "native":
@@ -2331,20 +2497,11 @@ def mirror_start(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     if row is None or str(row["purpose"]) != "books":
         raise FinanceError(NOT_FOUND, "no books connection with that id")
     parties = SX.contacts(ctx.c, ctx.book.id)
-    counts: dict[str, object] = {"accounts": len(ctx.accounts), "parties": len(parties),
-                                 "entries": SX.entry_count(ctx.c, ctx.book.id)}
+    counts: dict[str, object] = {"parties": len(parties), "entries": SX.entry_count(ctx.c, ctx.book.id)}
 
     def apply_switch(aid: str) -> handlers.Result:
         SL.set_book_mode(ctx.c, ctx.book.id, "mirror", cid)
         queued = 0
-        for i, a in enumerate(sorted(ctx.accounts.values(), key=lambda x: x.code)):
-            if SX.ref_for_local(ctx.c, cid, "fin_accounts", a.id) is not None:
-                continue
-            body = {"local_id": a.id, "code": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
-                    "active": a.active}
-            _queue(ctx.c, cid, "account.create", body, by=who, at=M.stamp(ctx.at, i),
-                   key=f"export:{cid}:account:{a.id}")
-            queued += 1
         for i, row_c in enumerate(parties):
             if SX.ref_for_local(ctx.c, cid, "fin_contacts", str(row_c["id"])) is not None:
                 continue
@@ -2383,6 +2540,7 @@ def mirror_stop(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
         SL.set_setting(ctx.c, f"mirror.snapshot.{cid}", snapshot, by=who, at=ctx.at)
         SL.set_book_mode(ctx.c, ctx.book.id, "native", "")
         SX.disconnect(ctx.c, cid, ctx.at)
+        books_link.drop_trigger(ctx.c, cid, now=ctx.at)     # its calls stop with the switch; the grant goes at the next pass
         return {"connection_id": cid, "mode": "native"}
 
     return handlers.Plan(K.default_gate(ctx.org, who, "mirror_stop"), "Switch the books back to native", apply_stop,
@@ -2469,15 +2627,22 @@ def _create_planner(kind: str) -> handlers.Planner:
             raw, _ = PU.link_bill_lines(ctx, who, str(contact["id"]), raw)
         lines, _ = documents.resolve_lines(ctx, who, kind, contact, raw)
         total = sum(x.amount for x in lines)
+        hold_key = SL.new_id() if kind == "bill" else ""     # keys the bill's holds before the provider gives it an id
         body = {"party": str(contact["id"]), "number": number, "day": day, "due": due or "",
-                "memo": V.opt_text(p, "memo", 500) or "",
+                "memo": V.opt_text(p, "memo", 500) or "", "holds": hold_key,
                 "lines": [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
                            "item_id": x.item_id, "tags": dict(x.tags), "po_line_id": x.po_line_id or None}
                           for x in lines]}
 
         def apply(aid: str) -> handlers.Result:
             oid = _queue(ctx.c, cid, f"{kind}.create", body, by=who, action_id=aid, at=ctx.at)
-            return {"outbox_id": oid, "status": "queued", "total": total}
+            out: handlers.Result = {"outbox_id": oid, "status": "queued", "total": total}
+            if kind == "bill":
+                # Its expense lines hold their budgets while the write is on its way, as a native draft's do (spec 4.4).
+                refused = documents.hold_queued_bill(ctx, hold_key, str(contact["id"]), lines, who)
+                if refused:
+                    out["not_held"] = refused
+            return out
         return handlers.Plan(K.default_gate(ctx.org, who, f"{kind}_create"),
                              f"Send a {documents.money_of(total)} {ctx.book.base_currency} {kind} for {contact['name']}",
                              apply, facts=documents.doc_facts(kind, contact, lines, ctx))
@@ -2531,6 +2696,9 @@ def _payment_planner(kind: str) -> handlers.Planner:
             raise denied(waits)
         if kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None:
             raise FinanceError(CONFLICT, "a payment for this bill is live; it settles the bill when it clears")
+        if kind == "bill" and not ctx.deciding and documents.bill_ask_waiting(ctx, str(doc["id"])):
+            raise FinanceError(CONFLICT, "a payment for this bill is waiting for approval; it settles the bill when "
+                                         "approved")
         ref = SX.ref_for_local(ctx.c, cid, table, str(doc["id"]))
         if ref is None or str(ref["status"]) != "active":
             raise FinanceError(CONFLICT, "that is not in the provider yet")
@@ -2588,7 +2756,8 @@ def _payment_planner(kind: str) -> handlers.Planner:
             oid = _queue(ctx.c, cid, f"payment.{kind}", body, by=who, action_id=aid, at=ctx.at)
             return {f"{kind}_id": str(doc["id"]), "outbox_id": oid, "status": "queued", "amount": amount}
         verb = "paid on" if kind == "bill" else "received on"
-        return handlers.Plan(K.default_gate(ctx.org, who, words),
+        gate = documents.bill_paid_gate(ctx, who, doc, words) if kind == "bill" else K.default_gate(ctx.org, who, words)
+        return handlers.Plan(gate,
                              f"Record {documents.money_of(amount)} {verb} {kind} {doc['number'] or doc['id']}", apply,
                              facts={"amount": amount, "counterparty": str(doc["contact_name"] or "")})
     return planner

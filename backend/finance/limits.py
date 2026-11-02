@@ -48,8 +48,10 @@ class Cutoffs:
         return self._seen[mate]
 
     def _find(self, ctx: Ctx, mate: str) -> Cutoff | None:
-        """The first budget on the teammate's path that is at its limit for them: money set aside for them there is
-        still theirs to spend, exactly as their hold would see it."""
+        """The first budget on the teammate's path whose spend (actuals and holds) has reached its amount. Money set aside
+        in an allocation, the teammate's own or a Gateway key's or another teammate's, is not spend, so it pauses no bot
+        on its own. A new request that no reserve leaves room for is refused where it is placed (runs.hold), by the
+        budget's remaining, which counts reserves (§4.4)."""
         today = dates.day(ctx.today)
         for account in self.lines:
             found = budgeting.leaf(ctx, account, teammate=mate)
@@ -67,9 +69,10 @@ class Cutoffs:
 
 
 def cutoffs(c: sqlite3.Connection, at: str | None = None, line: str = AI) -> Cutoffs:
-    """The `decline` budgets that are at their limit now, read against each teammate's path on `line` (an account
-    code; AI services for usage limits), counting every allocation (each teammate's own come off when their cutoff is
-    read). Cheap when Finance is not set up or no such budget has an amount."""
+    """The `decline` budgets whose spend has reached their amount now, read against each teammate's path on `line` (an
+    account code; AI services for usage limits). Spend is actuals and holds (§4.4): an allocation sets money aside but is
+    not spend, so a Gateway key's allocation reserving the whole budget pauses no bot. Cheap when Finance is not set up or
+    no such budget has an amount."""
     book = SL.book(c)
     if book is None:
         return Cutoffs(ctx=None, cut={}, lines=())
