@@ -124,7 +124,8 @@ def load(wave):
                     cols.add(new)
         for old, per_table in waves[w].scoped.items():
             for t, new in per_table.items():
-                schema[t].discard(old)
+                # A table the map still names may be gone from the fixture (dropped before the renames ran).
+                schema.setdefault(t, set()).discard(old)
                 schema[t].add(new)
         if w == wave:
             break
