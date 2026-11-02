@@ -1141,8 +1141,9 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
 
 
 METRICS = ("cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
-           "ar_overdue", "uncategorized_count", "unreconciled_days")
+           "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases")
 STALE_HOURS = 24            # bank data older than this marks a cash metric stale
+WATCH_LABELS = 10           # the Watch findings a metric names (its count is the whole)
 RUNWAY_MONTHS = 3           # runway divides cash by the average burn of this many full months
 
 
@@ -1199,7 +1200,8 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
     window (this month by default); budget_remaining / budget_pct_used: one budget; ap_due: open bills due within
     `days` (default 7, overdue included); ar_overdue: invoices at least `days` (default 1) late;
     uncategorized_count: settled rows waiting for a category (last 90 days); unreconciled_days: days since the
-    oldest reconciliation of the money accounts the viewer sees."""
+    oldest reconciliation of the money accounts the viewer sees; duplicate_charges, price_increases: how many Watch
+    findings of that kind the posted debits show now, with their first labels."""
     if name not in METRICS:
         raise invalid(f"a metric is {'|'.join(METRICS)}")
     s = _open(c, viewer, at)
@@ -1258,6 +1260,14 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
             worst = gap if worst is None else max(worst, gap)
         data_as_of, stale = _data_as_of(s, money_ids)
         return {**base, "value": worst or 0, "unit": "days", "data_as_of": data_as_of, "stale": stale}
+    if name in ("duplicate_charges", "price_increases"):
+        # The same Watch checks the daily Watch runs (watch_findings), read as a count with the first few labels; plain
+        # code over the viewer's posted debits, no model call.
+        found = (W.duplicate_charges if name == "duplicate_charges" else W.price_increases)(_charges(c, viewer, s.ctx.at))
+        money_ids, _ = tab.feed_scope(s.ctx, s.view)
+        data_as_of, stale = _data_as_of(s, money_ids)
+        return {**base, "value": len(found), "unit": "count", "labels": [str(f["label"])[:160] for f in found[:WATCH_LABELS]],
+                "data_as_of": data_as_of, "stale": stale}
     a, z = _window(start, end, s.ctx)
     if name == "burn":
         return {**base, "value": _net_burn(c, viewer, a, z, at), "unit": "minor", "currency": currency,
@@ -1854,7 +1864,7 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
                     or not payee:
                 continue
             out.append(W.Charge(id=str(row["id"]), payee=payee, amount=-amount,
-                                day=date.fromisoformat(str(row["date"])[:10])))
+                                day=date.fromisoformat(str(row["date"])[:10]), shown=str(row.get("counterparty") or "").strip()))
         cursor = cast(str | None, page.get("next"))
         if not cursor:
             break

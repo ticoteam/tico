@@ -29,7 +29,7 @@ DAY = r"^\d{4}-\d{2}-\d{2}$"
 Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
 Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
 Metric = Literal["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
-                 "ar_overdue", "uncategorized_count", "unreconciled_days"]
+                 "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases"]
 
 
 class FinanceConnectionRequest(Contract):

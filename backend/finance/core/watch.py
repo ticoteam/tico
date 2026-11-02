@@ -25,6 +25,7 @@ class Charge:
     payee: str              # the counterparty, lower-cased: the grouping key
     amount: int             # cents, a positive charge
     day: date
+    shown: str = ""         # the counterparty as the bank names it: what a label says
 
 
 def _money(cents: int) -> str:
@@ -68,7 +69,7 @@ def duplicate_charges(charges: Sequence[Charge]) -> list[dict[str, Any]]:
             if gap <= DUPLICATE_DAYS:
                 found.append({"kind": "duplicate_charge", "key": f"duplicate_charge:{after.id}",
                               "stamp": {"amount": amount, "gap": gap},
-                              "label": f"{payee}: {_money(amount)} charged again {gap} day(s) after"})
+                              "label": f"{after.shown or payee}: {_money(amount)} charged again {gap} day(s) after"})
     return found
 
 
@@ -87,5 +88,5 @@ def price_increases(charges: Sequence[Charge]) -> list[dict[str, Any]]:
                 and last.amount * 100 >= before.amount * (100 + PRICE_RISE_PERCENT)):
             found.append({"kind": "price_increase", "key": f"price_increase:{last.id}",
                           "stamp": {"amount": last.amount},
-                          "label": f"{payee}: {_money(last.amount)} now, {_money(before.amount)} before"})
+                          "label": f"{last.shown or payee}: {_money(last.amount)} now, {_money(before.amount)} before"})
     return found

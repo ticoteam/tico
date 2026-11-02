@@ -10670,7 +10670,9 @@
                 "ap_due",
                 "ar_overdue",
                 "uncategorized_count",
-                "unreconciled_days"
+                "unreconciled_days",
+                "duplicate_charges",
+                "price_increases"
               ],
               "type": "string",
               "title": "Name"

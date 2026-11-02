@@ -6064,7 +6064,7 @@ export type GetFinanceMetricParams = {
   budget_id?: string | null;
   days?: number | null;
   end?: string | null;
-  name: "cash" | "burn" | "runway_months" | "revenue" | "spend" | "budget_remaining" | "budget_pct_used" | "ap_due" | "ar_overdue" | "uncategorized_count" | "unreconciled_days";
+  name: "cash" | "burn" | "runway_months" | "revenue" | "spend" | "budget_remaining" | "budget_pct_used" | "ap_due" | "ar_overdue" | "uncategorized_count" | "unreconciled_days" | "duplicate_charges" | "price_increases";
   start?: string | null;
   team?: string | null;
   teammate?: string | null;

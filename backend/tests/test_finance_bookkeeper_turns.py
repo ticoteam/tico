@@ -322,14 +322,22 @@ def test_watch_turn(api):
     assert not err and queue["counts"]["uncategorized"] == 2, queue
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: books-watch.md names duplicate charges and price increases as Watch checks, "
-                   "to be read with the Finance metric and inbox reads. Neither is a metric or inbox kind "
-                   "(clients/hubtools.py FINANCE_METRICS, FINANCE_INBOX).")
-def test_gap_watch_duplicates_and_price_rises_are_readable(api):
+def test_watch_duplicates_and_price_rises_are_readable(api):
+    """books-watch.md reads the duplicate and price-increase checks as metrics (plain code, no model call): the same two
+    charges of one amount to one payee on one day are one duplicate; price_increases is quiet with only two charges."""
+    store = api.app.state.store
     token = hire(api)
-    for name in ("duplicate_charges", "price_increases"):
-        err, metric = call(api, "hub_finance_metric", {"name": name}, token=token)
-        assert not err, (name, metric)
+    fake = FakeMercury()
+    connect(store, fake)
+    fake.txns["txn-dep"] = dict(MERCURY["txn_deposit"])
+    fake.txns["txn-card-1"] = dict(MERCURY["txn_card_posted"])
+    fake.txns["txn-card-2"] = dict(MERCURY["txn_card_posted"], id="txn-card-2")
+    sync_once(store, fake)
+    err, dupes = call(api, "hub_finance_metric", {"name": "duplicate_charges"}, token=token)
+    assert not err and dupes["unit"] == "count" and dupes["value"] == 1 and "as_of" in dupes, dupes
+    assert "Acme Cloud" in dupes["labels"][0], dupes
+    err, rises = call(api, "hub_finance_metric", {"name": "price_increases"}, token=token)
+    assert not err and rises["unit"] == "count" and rises["value"] == 0 and "as_of" in rises, rises
 
 
 # ----------------------------------------------------------------------------- sales tax (spec 11)
