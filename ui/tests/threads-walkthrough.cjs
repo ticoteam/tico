@@ -172,8 +172,18 @@ const shell = (page, route, waitFor = '#main') => async () => {
 async function messageMenu(page, text, item) {
   const row = page.locator('[data-message]', {hasText: text}).first();
   await row.hover();
-  await row.locator('[data-th-more]').click();
-  await page.locator('.thv-pop [role="menuitem"]', {hasText: item}).click();
+  const more = row.locator('[data-th-more]');
+  await more.click({timeout: 10000}).catch(async () => {
+    const info = await more.evaluate(el => {
+      const r = el.getBoundingClientRect(), hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return JSON.stringify({rect: [r.x, r.y, r.width, r.height].map(Math.round), hit: hit ? hit.tagName + '.' + String(hit.className).slice(0, 60) : 'none'});
+    }).catch(e => 'no element: ' + String(e.message).split('\n')[0]);
+    throw new Error(`message menu button for "${text}" not clicked: ${info}`);
+  });
+  await page.locator('.thv-pop [role="menuitem"]', {hasText: item}).click({timeout: 10000}).catch(async () => {
+    const items = await page.locator('.thv-pop [role="menuitem"]').allInnerTexts().catch(() => []);
+    throw new Error(`menu item "${item}" not clicked; the menu shows ${JSON.stringify(items)}`);
+  });
 }
 
 (async () => {
