@@ -229,9 +229,12 @@ async function restrictPerson(hub) {
     await talk.locator('#bot-thread .thv-composer .p-text').waitFor({timeout: t(15000)});
     assert.equal(await dmCount(), dmsBefore, 'opening the DM tab made no DM');
     await talk.locator('#bot-thread .thv-composer .p-text').fill('First words to the bot.');
+    const rowsBefore = await talk.locator('#dm-list [data-thread]').count();
+    const started = talk.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/threads/dm' && r.request().method() === 'POST', {timeout: t(15000)});
     await talk.locator('#bot-thread .thv-composer .p-send').click();
-    await talk.getByText('First words to the bot.').waitFor({timeout: t(15000)});
+    await started;
     assert.equal(await dmCount(), dmsBefore + 1, 'the first message made the DM');
+    await talk.waitForFunction(n => document.querySelectorAll('#dm-list [data-thread]').length === n, rowsBefore + 1, {timeout: t(15000)});
     await talk.context().close();
 
     // Omar may see Priya but not write to her: no DM button, and the server refuses it too. Dana keeps hers.

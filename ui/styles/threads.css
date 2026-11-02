@@ -181,7 +181,6 @@ a.th-who:hover{text-decoration:underline}
 .thd-dialog .dash-form-foot{flex-wrap:wrap}
 .thd-dialog .dash-form-foot button{flex:none;white-space:nowrap}
 .thd-dialog .dash-form-foot .err:not(:empty){flex:1 1 100%}
-.thd-dialog .dash-form-foot .err:not(:empty)+.spacer{display:none}
 .thd-dialog .dash-form-foot .err a{color:inherit;text-decoration:underline}
 .thd-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
 .thd-list li{display:flex;align-items:center;gap:var(--s2);padding:5px 4px}
