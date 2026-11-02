@@ -7,8 +7,8 @@ EXISTS, every column is added only when missing, and each trigger is dropped and
 text the modules installed last). The SQL is frozen here; a later change to any of it is a new migration.
 
 Order on a new file: hubdb's numbered steps have made conversations and messages, so their thread columns are added
-here; conversations.scope, owner_id and room_key take hubdb's own declarations (it added them after the migrations, and
-now finds them). The five message indexes are built by threads.migrate after its one-time backfill (building them over
+here; conversations.scope, owner_id and room_key take hubdb's own declarations, and the two room indexes on them are
+made here too (hubdb made all of that after the migrations). The five message indexes are built by threads.migrate after its one-time backfill (building them over
 unstamped rows first is slow); here they are made only on a file that has already had that backfill.
 
 A few columns belong to tables made elsewhere: live_meetings (hubdb's numbered steps, so it is there), and
@@ -97,6 +97,11 @@ THREAD_INDEXES = (
     "CREATE INDEX IF NOT EXISTS threads_root ON conversations(root_id)",
     "CREATE INDEX IF NOT EXISTS threads_path ON conversations(path)",
     "CREATE INDEX IF NOT EXISTS threads_recent ON conversations(root_id, last_seq) WHERE archived_at IS NULL",
+    # One open personal room per owner and key, one open shared room per key (hubdb made these after the migrations).
+    "CREATE UNIQUE INDEX IF NOT EXISTS one_active_personal_room "
+    "ON conversations(owner_id,room_key) WHERE scope='personal' AND closed_at IS NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS one_active_shared_room "
+    "ON conversations(room_key) WHERE scope='shared' AND closed_at IS NULL",
 )
 # threads._MESSAGE_INDEXES, word for word: made here only on a file whose backfill already ran (threads.migrate
 # makes them otherwise).

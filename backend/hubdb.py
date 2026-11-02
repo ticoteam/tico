@@ -1279,7 +1279,7 @@ def migrate(conn, adopt_legacy=False):
     from . import migrations
     migrations.apply(conn)
     ensure_market_reads(conn)
-    # conversations.scope, owner_id and room_key (cloud room scopes) are migration 0036's.
+    # conversations.scope, owner_id and room_key (cloud room scopes) and their two room indexes are migration 0036's.
     # Deleted tasks wait here until restored or purged (backend/task_delete.py).
     from .task_delete import ensure as ensure_task_trash
     ensure_task_trash(conn)
@@ -1295,10 +1295,6 @@ def migrate(conn, adopt_legacy=False):
     # Hourly and weekly spend limits, and limits on a group's or the whole team's combined spend (backend/usage_limits.py).
     from .usage_limits import ensure as ensure_usage_limits
     ensure_usage_limits(conn)
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_personal_room "
-                 "ON conversations(owner_id,room_key) WHERE scope='personal' AND closed_at IS NULL")
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_shared_room "
-                 "ON conversations(room_key) WHERE scope='shared' AND closed_at IS NULL")
     # What every bot may do with a type's tasks (TYPE_BOTS); NULL keeps them to the parties.
     add_column(conn, "task_types", "bots", "TEXT")
     # The tasks board columns. The cloud store backfills rank
