@@ -26,7 +26,7 @@
 .cp-address .nav-icon{font-size:16px;width:16px;height:16px;flex:none}
 .cp-look{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s5,20px);margin-top:var(--s3)}
 .cp-look .cp-pick input{height:var(--ctl-sm);font-size:var(--t-sm);color:var(--ink)}
-.cp-look input[type=color]{flex:none;width:var(--ctl-sm);padding:2px;cursor:pointer}
+.cp-look input[type=color]{flex:none;width:var(--ctl-sm);padding:2px;border:1px solid var(--line);border-radius:var(--r-ctl);background:none;cursor:pointer}
 .cp-look input:not([type=color]){width:84px}
 .cp-logo{height:var(--ctl-sm);max-width:96px;object-fit:contain;border-radius:var(--r-ctl)}
 

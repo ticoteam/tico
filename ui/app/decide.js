@@ -778,6 +778,16 @@ function decideToastHide(st, p) {
   st.undo = null;
 }
 function decideClick(st, ev) {
+  // A link into the app leaves the card, so what it opens isn't underneath it. On a phone, closing goes Back first.
+  const inApp = ev.target.closest('a[href^="#/"]');
+  if (inApp) {
+    ev.preventDefault();
+    const to = inApp.getAttribute('href'), backFirst = !!history.state?.needCard;
+    if (backFirst) window.addEventListener('popstate', () => { location.hash = to; }, {once: true});
+    decideStop();
+    if (!backFirst) location.hash = to;
+    return;
+  }
   const b = ev.target.closest('[data-dc]');
   if (!b || b.disabled || st.swiped) return;
   const what = b.dataset.dc;

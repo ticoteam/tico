@@ -206,6 +206,11 @@ function approvalFacts(what, p, it = {}) {
       text == null ? ['Text', 'not included; only a hash of it is in the payload', 'muted', true]
                    : ['Text', shown(text), 'approval-text']];
     named = ['url', 'text', 'content_sha256'];
+    // A Company page edition or stats board: who it's for, and the bookkeeping stays in the exact payload.
+    if (typeof p.url === 'string' && p.url.startsWith('tico:')) {
+      rows.splice(1, 0, ['Audience', shown(p.audience)], ['Period', shown(p.period)]);
+      named.push('audience', 'period', 'audience_id', 'disclosure_revision', 'rules', 'title', 'version', 'edition_id', 'stats', 'kind');
+    }
   } else if (what === 'spend') {
     rows = [['Amount', shown(p.amount)], ['Account', shown(p.account)], ['For', shown(p.what)]];
     named = ['amount', 'account', 'what'];

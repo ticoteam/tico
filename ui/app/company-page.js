@@ -25,7 +25,7 @@ const CP_PRESETS = [['radical', 'Radical'], ['standard', 'Standard'], ['quiet', 
 const CP_CHARTS = [['number', 'Number'], ['line', 'Line'], ['bars', 'Bars']];
 const CP_CADENCE = [['monthly', 'Monthly'], ['quarterly', 'Quarterly']];
 const CP_DUE = [['business_day', 'Business day of the month'], ['days_after_period_end', 'Days after period end']];
-const CP_ACCENT = '#2255aa';    // what the colour input shows until one is chosen; the page itself picks its own default
+const CP_ACCENT = '#1e4fd8';    // the page's own default (render.DEFAULT_ACCENT), shown until one is chosen
 const CP_LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 const CP_RELEASE_FAILED = 'Published, but the page failed to rebuild and is down. The daily refresh tries again.';
 const CP_CHECKS = {leak: 'Leak check', rules: 'Rules', draft: 'Draft'};
@@ -512,7 +512,8 @@ function cpEdNotes(e) {
   else if (a?.state === 'declined') notes.push(`Declined by ${cpApprover(a)}${a.note ? `: ${a.note}` : ''}`);
   else if (a?.state === 'pending' && !cpMine(a)) notes.push(`Waiting on ${cpApprover(a)}`);
   else if (a?.state === 'approved') notes.push(`Approved by ${cpApprover(a)}${a.note ? `: ${a.note}` : ''}. Publish is next.`);
-  if (e.checks_current === false && (e.status === 'ready' || e.status === 'held') && e.last_check) notes.push('Something changed since the last check.');
+  // `checks_current` is false on any held edition, moved or not: only on a ready one does it mean something moved.
+  if (e.checks_current === false && e.status === 'ready') notes.push('Something changed since the last check.');
   if (e.override_note) notes.push(`Override: ${e.override_note}`);
   if (e.retraction_note) notes.push(`Retracted: ${e.retraction_note}`);
   return notes.map(n => `<p class="cp-note">${esc(n)}</p>`).join('');
@@ -829,7 +830,7 @@ function cpPreset(audId, name) {
 function cpBoardRow(x, i, n) {
   const up = i > 0 ? cpBtn(`data-cp-stat-move="${esc(x.id)}" data-dir="-1" aria-label="Move ${esc(x.label)} up"`, '↑', 'ghost small cp-icon') : '<span class="cp-icon-gap"></span>';
   const down = i < n - 1 ? cpBtn(`data-cp-stat-move="${esc(x.id)}" data-dir="1" aria-label="Move ${esc(x.label)} down"`, '↓', 'ghost small cp-icon') : '<span class="cp-icon-gap"></span>';
-  return `<li class="cp-board-row" data-cp-stat="${esc(x.id)}"><span class="cp-board-l">${esc(x.label || x.ref_id)}</span><select data-cp-stat-chart="${esc(x.id)}" aria-label="Chart, ${esc(x.label || '')}">${cpOptions(CP_CHARTS, x.chart || 'number')}</select>${up}${down}${cpBtn(`data-cp-stat-remove="${esc(x.id)}" aria-label="Remove ${esc(x.label || '')}"`, '✕', 'ghost small cp-icon')}</li>`;
+  return `<li class="cp-board-row" data-cp-stat="${esc(x.id)}"><span class="cp-board-l">${esc(x.label || x.ref_id)}${x.source_kind === 'finance_line' ? ' <span class="muted cp-small">P&amp;L</span>' : ''}</span><select data-cp-stat-chart="${esc(x.id)}" aria-label="Chart, ${esc(x.label || '')}">${cpOptions(CP_CHARTS, x.chart || 'number')}</select>${up}${down}${cpBtn(`data-cp-stat-remove="${esc(x.id)}" aria-label="Remove ${esc(x.label || '')}"`, '✕', 'ghost small cp-icon')}</li>`;
 }
 function cpTileChart(stat) {
   const values = (stat.series || []).map(p => p.value).filter(v => v != null).map(Number);
@@ -860,7 +861,7 @@ function cpStats() {
   if (!CP.stats.length) return cpSection('stats', '', cpEmpty('No stats chosen', add));
   const n = CP.stats.length, id = CP.pick.stats, p = CP.projection[id];
   const held = cpList(p?.held, 'held'), absent = cpList(p?.absent, 'absent'), tiles = cpList(p?.stats, 'stats');
-  const whyList = (title, rows) => rows.length ? `<h4 class="label cp-h">${title}</h4><ul class="cp-held">${rows.map(x => `<li data-cp-held="${esc(x.id)}"><b>${esc(x.label)}</b><span>${esc(x.reason)}</span></li>`).join('')}</ul>` : '';
+  const whyList = (title, rows) => rows.length ? `<h4 class="label cp-h">${title}</h4><ul class="cp-held">${rows.map(x => `<li data-cp-held="${esc(x.id)}"><b>${esc(x.label)}${(CP.stats || []).find(b => b.id === x.id)?.source_kind === 'finance_line' ? ' · P&amp;L' : ''}</b><span>${esc(x.reason)}</span></li>`).join('')}</ul>` : '';
   const projection = !id ? '<p class="muted cp-small">Add an audience first</p>' : `<div class="cp-proj-bar"><label class="cp-pick">Audience<select data-cp-pick="stats">${cpAudOptions(auds, id)}</select></label><span class="spacer"></span>${cpBoardApproval(id, p)}</div>
     ${tiles.length ? `<div class="cp-tiles">${tiles.map(cpTile).join('')}</div>` : `<p class="muted cp-small">Nothing shows to ${esc(cpAudName(id))}</p>`}
     ${whyList('Held', held)}${whyList('Not shown', absent)}`;
