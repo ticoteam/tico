@@ -68,7 +68,7 @@ def mailbox(c: Any) -> str:
         can: list[Any] = cast(list[Any], entry.get("can") or [])
         if SEND not in can:
             continue
-        box = str(tool.get("identity") or "").strip().lower()
+        box = str(entry.get("identity") or "").strip().lower()
         if "@" in box:
             return box
     return ""
