@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from backend import hook_relay
-from backend.finance import books_link, books_sync, mirror
+from backend.finance import books_link, books_sync, documents, mirror
 from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import mirror as M
@@ -303,12 +303,66 @@ def test_switching_previews_first_and_a_mirrored_book_refuses_what_the_provider_
     cid = _connection(books)
     with books.transaction() as c:
         preview = act(c, OWNER, "mirror_start", {"connection_id": cid}, dry_run=True)
-        assert preview.status == "committed" and preview.impact["accounts"] > 0
+        assert preview.status == "committed" and "accounts" not in preview.impact   # no count implies new accounts
         assert SL.book(c).mode == "native"                                        # a preview changes nothing
         assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
         assert SL.book(c).mode == "mirror"
         refused = act(c, OWNER, "contact_create", {"name": "Acme Vendor", "kind": "vendor"})
         assert (refused.status, refused.code) == ("denied", NOT_AVAILABLE)
+
+
+def _their_chart() -> FakeBooks:
+    """Their chart: payables and receivables with no numbers, and a software account with another number."""
+    fake = FakeBooks()
+    fake.records["accounts"] = [
+        M.ChartAccount(M.Ext("Account", "13", "1"), "", "Accounts Payable", "liability", "payable"),
+        M.ChartAccount(M.Ext("Account", "12", "1"), "1210", "Accounts Receivable", "asset", "receivable"),
+        acct(2, "6120", "Software")]
+    return fake
+
+
+def test_a_switch_binds_tico_accounts_to_their_matching_accounts_and_creates_no_twin_beside_them(books):
+    fake = _their_chart()
+    cid = _connection(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_accounts").fetchone()[0] == 13          # the default chart, no twins
+        assert _local(c, "Account:13", "fin_accounts") == account(c, "2000")               # payable by subtype
+        assert _local(c, "Account:12", "fin_accounts") == account(c, "1200")               # receivable by subtype
+        assert _local(c, "Account:2", "fin_accounts") == account(c, "6100")                # software by name and type
+        assert c.execute("SELECT code FROM fin_accounts WHERE id=?", (account(c, "6100"),)).fetchone()[0] == "6100"
+        bank = c.execute("SELECT active FROM fin_accounts WHERE code='1000'").fetchone()[0]
+    created = [body["name"] for op, body, _ in fake.sent if op == "account.create"]
+    assert not set(created) & {"Accounts Payable", "Accounts Receivable", "Software"}     # nothing beside theirs
+    assert "Gateway credit" in created                                                    # Tico posts to it itself
+    assert "Bank" not in created and bank == 0                                            # no history: inactive, not sent
+
+
+def test_no_account_goes_to_the_provider_before_their_chart_is_read(books):
+    fake = _their_chart()
+    fake.fail.add(("accounts", 1))                                                        # the chart's first page fails
+    cid = _connection(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
+    _drain(books, fake, cid, passes=1)
+    assert [op for op, _, _ in fake.sent if op == "account.create"] == []
+    assert _drain(books, fake, cid) == []
+    assert "Gateway credit" in [body["name"] for op, body, _ in fake.sent if op == "account.create"]
+
+
+def test_a_bill_is_payable_on_the_provider_account_bound_to_tico_payable(books):
+    fake = _their_chart()
+    fake.records["accounts"].append(M.ChartAccount(M.Ext("Account", "33", "1"), "", "Accounts Payable - Old",
+                                                   "liability", "payable"))
+    cid = _connection(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        ctx = load(c, AT)
+        assert documents.control(ctx, "bill").id == _local(c, "Account:13", "fin_accounts")
 
 
 def test_a_mode_switch_keeps_an_unclear_row_from_paying_a_provider_bill(books):

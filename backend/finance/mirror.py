@@ -15,7 +15,7 @@ from typing import Any, Protocol, cast
 from ..records import core as RC
 from ..records import reads as RR
 from ..records import store as RS
-from . import banking, books_link, documents, handlers, posting
+from . import banking, books_link, documents, handlers, posting, setup, usage
 from . import closing as CL
 from . import purchasing as PU
 from .context import Ctx, load
@@ -368,11 +368,32 @@ def _local_account(ctx: Ctx, row: Any, code: str) -> L.Account | None:
     return next((x for x in ctx.accounts.values() if x.code == code), None)
 
 
+# The control subtypes: a provider's one payable and its one receivable are Tico's own (§10: their chart is the source)
+CONTROL_SUBTYPES = ("payable", "receivable")
+
+
+def _twin(c: sqlite3.Connection, ctx: Ctx, cid: str, a: M.ChartAccount) -> L.Account | None:
+    """The Tico account that is their account: a Tico account no provider account is bound to, with the same name and
+    type, else (for a payable or receivable) the same control subtype and type. Lowest code first, so the pick is stable."""
+    free = [x for x in ctx.accounts.values() if SX.ref_for_local(c, cid, "fin_accounts", x.id) is None]
+    name = " ".join(a.name.split()).casefold()
+    same = [x for x in free if " ".join(x.name.split()).casefold() == name and x.type == a.type]
+    if same:
+        return min(same, key=lambda x: (x.code, x.id))
+    if a.subtype in CONTROL_SUBTYPES:
+        control = [x for x in free if x.subtype == a.subtype and x.type == a.type]
+        if control:
+            return min(control, key=lambda x: (x.code, x.id))
+    return None
+
+
 def _account(c: sqlite3.Connection, ctx: Ctx, cid: str, a: M.ChartAccount, at: str) -> None:
     row = SX.ref(c, cid, "fin_accounts", a.ext.key)
     if M.decide(_have(row), a.ext) in (M.SAME, M.OLDER, M.GONE):
         return
     current = _local_account(ctx, row, a.code)
+    if current is None and row is None:
+        current = _twin(c, ctx, cid, a)      # a Tico account of the same kind that is not bound yet: it is theirs
     first = row is None or not str(row["local_id"])     # the first import of this account, before it is bound
     if current is None:
         new = L.Account(id=SL.new_id(), book_id=ctx.book.id, code=a.code, name=a.name, type=a.type,
@@ -380,8 +401,9 @@ def _account(c: sqlite3.Connection, ctx: Ctx, cid: str, a: M.ChartAccount, at: s
         L.check_account(new, ctx.accounts)
         SL.insert_account(c, new, SYSTEM, at)
     else:
-        # The type stays as it was given: an account that may hold lines does not change kind.
-        new = replace(current, code=a.code, name=a.name, subtype=a.subtype, active=a.active)
+        # The type stays as it was given: an account that may hold lines does not change kind. The code stays too: a
+        # system line finds its account by code (2000, 1200, 6900 and the rest), and a provider's number may be none.
+        new = replace(current, code=current.code or a.code, name=a.name, subtype=a.subtype, active=a.active)
         L.check_account(new, ctx.accounts)
         SL.update_account(c, new, at)
     _bind(c, cid, "fin_accounts", new.id, a.ext, at)
@@ -2337,12 +2359,45 @@ def _export(store: Any, cid: str, now: str, size: int) -> None:
         SX.set_mirror_state(c, cid, {"export": {"until": until, "after": cursor, "done": len(rows) < size}})
 
 
+# The Tico accounts Tico posts to itself: the Gateway credit, the AI and video spend, other expenses, the payments clearing.
+# A chart of theirs with no account for one of them gets it created when the chart is read.
+TICO_POSTED = frozenset({usage.CREDIT, setup.AI, setup.VIDEO, banking.OTHER, documents.CLEARING[0]})
+
+
+def _chart(store: Any, cid: str, now: str) -> None:
+    """Once their chart is read after a switch (and once only): a Tico account none of theirs matched is created in their
+    chart when it has history or Tico posts to it itself. Any other one goes inactive and is never written out."""
+    with store.read() as c:
+        state = SX.mirror_state(c, cid)
+        if not state.get("export") or state.get("chart") or M.backfill_next(_backfill_state(state), "accounts") is not None:
+            return
+    with store.transaction() as c:
+        ctx = load(c, now)
+        for i, a in enumerate(sorted(ctx.accounts.values(), key=lambda x: (x.code, x.id))):
+            if SX.ref_for_local(c, cid, "fin_accounts", a.id) is not None:
+                continue
+            if a.code in TICO_POSTED or _has_history(c, a.id):
+                body = {"local_id": a.id, "code": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
+                        "active": a.active}
+                _queue(c, cid, "account.create", body, by=SYSTEM, at=M.stamp(now, i),
+                       key=f"export:{cid}:account:{a.id}")
+            elif a.active:
+                SL.update_account(c, replace(a, active=False), now)
+        SX.set_mirror_state(c, cid, {"chart": True})
+
+
+def _has_history(c: sqlite3.Connection, account_id: str) -> bool:
+    return c.execute("SELECT 1 FROM fin_lines WHERE account_id=? LIMIT 1", (account_id,)).fetchone() is not None
+
+
 def sync_once(store: Any, books: Books, cid: str, now: str, *, size: int = M.BACKFILL_SIZE,
               waiting: bool = False, every: int = M.CDC_EVERY) -> list[str]:
-    """One pass over a mirrored connection: a backfill page, the change feed when due (or when a webhook waits), the
-    export page, then the writes out. Provider calls run outside transactions; the outcome is recorded on the connection."""
-    problems = [p for p in (_backfill(store, books, cid, now, size),
-                            _changes(store, books, cid, now, waiting, every)) if p]
+    """One pass over a mirrored connection: a backfill page, the chart's accounts once their chart is read, the change feed
+    when due (or when a webhook waits), the export page, then the writes out. Provider calls run outside transactions; the
+    outcome is recorded on the connection."""
+    backfill = _backfill(store, books, cid, now, size)
+    _chart(store, cid, now)
+    problems = [p for p in (backfill, _changes(store, books, cid, now, waiting, every)) if p]
     _export(store, cid, now, size)
     problems += outbox(store, books, cid, now)
     with store.transaction() as c:
@@ -2353,7 +2408,8 @@ def sync_once(store: Any, books: Books, cid: str, now: str, *, size: int = M.BAC
 # ------------------------------------------------------------------------------------------------ planners
 def mirror_start(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     """Switch a native book to a provider's books. Preview first: what would be written out. Applying it sets the mode;
-    the accounts and parties are queued now and the entries are written out by the passes that follow."""
+    the parties are queued now. Their chart is read first: the accounts are bound to theirs, or created in theirs only
+    when they are needed (`_chart`), and the entries are written out by the passes that follow."""
     V.only(p, ("connection_id",))
     cid = V.text(p, "connection_id", 80)
     if ctx.book.mode != "native":
@@ -2362,20 +2418,11 @@ def mirror_start(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     if row is None or str(row["purpose"]) != "books":
         raise FinanceError(NOT_FOUND, "no books connection with that id")
     parties = SX.contacts(ctx.c, ctx.book.id)
-    counts: dict[str, object] = {"accounts": len(ctx.accounts), "parties": len(parties),
-                                 "entries": SX.entry_count(ctx.c, ctx.book.id)}
+    counts: dict[str, object] = {"parties": len(parties), "entries": SX.entry_count(ctx.c, ctx.book.id)}
 
     def apply_switch(aid: str) -> handlers.Result:
         SL.set_book_mode(ctx.c, ctx.book.id, "mirror", cid)
         queued = 0
-        for i, a in enumerate(sorted(ctx.accounts.values(), key=lambda x: x.code)):
-            if SX.ref_for_local(ctx.c, cid, "fin_accounts", a.id) is not None:
-                continue
-            body = {"local_id": a.id, "code": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
-                    "active": a.active}
-            _queue(ctx.c, cid, "account.create", body, by=who, at=M.stamp(ctx.at, i),
-                   key=f"export:{cid}:account:{a.id}")
-            queued += 1
         for i, row_c in enumerate(parties):
             if SX.ref_for_local(ctx.c, cid, "fin_contacts", str(row_c["id"])) is not None:
                 continue
