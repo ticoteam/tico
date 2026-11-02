@@ -216,7 +216,7 @@ def _lens_name(p):
     return found["name"] if found else None
 
 
-def _ask(item, manager=strategy_bot.NAME):
+def _ask(conn, item, manager=strategy_bot.NAME):
     """The task's title and body: the ask first, in plain words. `manager` is the bot's name
     (backend/strategy_bot.py)."""
     name, goal = item.get("kpi_name") or "", item.get("goal_title") or ""
@@ -248,7 +248,7 @@ def _ask(item, manager=strategy_bot.NAME):
         return title, body
     p = item["proposal"]
     if p["kind"] in GOAL_KINDS:
-        return _goal_ask(item, manager)
+        return _goal_ask(conn, item, manager)
     title = {"strategy_draft": "Decide a suggested change to your strategy",
              "brand_draft": "Decide a suggested change to your brand",
              "gtm_draft": "Decide a suggested change to your go-to-market"}.get(p["kind"], "Confirm or reject a goal proposal")
@@ -267,7 +267,7 @@ def _ask(item, manager=strategy_bot.NAME):
         lens = _lens_name(p)
         if lens:
             title += f" from the {lens} lens"
-        body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it"
+        body = (f"{title}. {H.actor_name(conn, p['proposed_by'])} proposed it"
                 + (" from this week's market briefing" if (p.get("payload") or {}).get("source") == "briefing" else "")
                 + (f" because {p['reason'].rstrip('.')}" if p.get("reason") and not lens else "")
                 + f": {_change(p, name)}. Add to draft writes it to your draft; publishing stays your click on the "
@@ -275,7 +275,7 @@ def _ask(item, manager=strategy_bot.NAME):
                   f"page. {closes}it is decided.")
         return title, body
     said = f" because {p['reason'].rstrip('.')}" if p.get("reason") else ""
-    body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it{said}: {_change(p, name)}. Confirm or reject it "
+    body = (f"{title}. {H.actor_name(conn, p['proposed_by'])} proposed it{said}: {_change(p, name)}. Confirm or reject it "
             f"under Needs you on the Goals page. {closes}it is decided.")
     return title, body
 
@@ -285,7 +285,7 @@ GOAL_KINDS = ("goal_kpi", "kpi_target", "kpi_definition", "goal_wording", "flag"
 OLD_WORDS = "Confirm or reject "
 
 
-def _goal_ask(item, manager):
+def _goal_ask(conn, item, manager):
     p, payload = item["proposal"], item["proposal"].get("payload") or {}
     name, goal = item.get("kpi_name") or "", item.get("goal_title") or ""
     measure = (payload.get("kpi") or {}).get("name") or item.get("measure_name")
@@ -296,7 +296,7 @@ def _goal_ask(item, manager):
              "flag": f"The {manager} noticed something on {goal}"}[p["kind"]]
     said = f" because {p['reason'].rstrip('.')}" if p.get("reason") else ""
     change = _change(p, measure or "a measure")
-    body = (f"{title.rstrip('?')}. {H.actor_id(p['proposed_by'])} proposed it{said}: {change}. "
+    body = (f"{title.rstrip('?')}. {H.actor_name(conn, p['proposed_by'])} proposed it{said}: {change}. "
             f"Decide it under Needs you on the Goals page.")
     return title, body
 
@@ -306,7 +306,7 @@ def _reword(conn, task, item):
     longer starts with them."""
     if not str(task["title"]).startswith(OLD_WORDS):
         return
-    title, body = _ask(item, strategy_bot.name(conn))
+    title, body = _ask(conn, item, strategy_bot.name(conn))
     if H.TITLE_LINT == "refuse" and H.lint_title(title):
         return
     with isolated(conn, "goal_ask_reword", task["id"]):
@@ -316,7 +316,7 @@ def _reword(conn, task, item):
 
 def _relist(conn, task, item):
     """The bundled Why ask lists the goals waiting now: one joined or was settled since it was filed."""
-    body = _ask(item, strategy_bot.name(conn))[1]
+    body = _ask(conn, item, strategy_bot.name(conn))[1]
     if task["body"] != body:
         with isolated(conn, "goal_ask_relist", task["id"]):
             H.task_update(conn, G.AUTO_ACTOR, task["id"], body=body, quiet=True)
@@ -340,7 +340,7 @@ def _resolved(conn, kind, ref):
         if row["status"] == "rejected":
             return f"Resolved: {row['decision_note'] or 'rejected; nothing changed'}."
     if row and row["status"] != "pending":
-        return f"Resolved: the proposal was {row['status']} by {H.actor_id(row['decided_by'] or '')}.".replace(" by .", ".")
+        return f"Resolved: the proposal was {row['status']} by {H.actor_name(conn, row['decided_by'] or '')}.".replace(" by .", ".")
     return "Resolved: nothing is waiting on you here any more."
 
 
@@ -401,7 +401,7 @@ def sync(conn, owner_id, at=None, reads=None):
                 if again:
                     note = f"Still needed: {want[key].get('reason') or 'nothing has changed yet'}. Asked again in a new task."
                 elif moved.get(key[:2]):
-                    note = f"Now asked of {H.actor_id(moved[key[:2]])}, who owns it now."
+                    note = f"Now asked of {H.actor_name(conn, moved[key[:2]])}, who owns it now."
                 else:
                     note = _resolved(conn, row["kind"], row["ref"])
                 H.task_close(conn, G.AUTO_ACTOR, task["id"], note=note, quiet=True)
@@ -416,7 +416,7 @@ def sync(conn, owner_id, at=None, reads=None):
         if not rush and not has_room(item["owner"]):
             continue        # the next day's room, most important first (ORDER)
         with isolated(conn, "goal_ask_file", ":".join(key)):
-            title, body = _ask(item, strategy_bot.name(conn))
+            title, body = _ask(conn, item, strategy_bot.name(conn))
             if H.TITLE_LINT == "refuse" and H.lint_title(title):
                 # A KPI name the title lint refuses would be refused, and counted against the Strategy Bot, every hour.
                 log.warning("Not asking %s: the title lint refuses its KPI's name", item["owner"])
@@ -452,6 +452,6 @@ def for_person(conn, actor, items):
         view = {k: v for k, v in item.items() if k not in ("owner", "measure_name", "private")}
         if task:
             view["task"] = {"id": task["id"], "title": task["title"], "status": task["status"]}
-        title, body = _ask(item, strategy_bot.name(conn))
+        title, body = _ask(conn, item, strategy_bot.name(conn))
         out.append(needs_shape.goal_item(view, title, body, task["created_at"] if task else None))
     return out

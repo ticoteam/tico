@@ -117,7 +117,7 @@ def _set_roles(conn, actor, task_id, roles, mover, note, checked):
             if not who:
                 H.refuse(conn, actor, "reach", f"{person} is not a bot or a person on the roster")
             if H.task_private(conn, row) and not H.task_private_readable(conn, who, row):
-                H.refuse(conn, actor, "private", f"{H.actor_id(who)} cannot read this private task")
+                H.refuse(conn, actor, "private", f"{H.actor_name(conn, who)} cannot read this private task")
             if who not in resolved:
                 resolved.append(who)
         before = have.get(role, [])

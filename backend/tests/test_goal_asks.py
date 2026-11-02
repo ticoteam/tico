@@ -181,3 +181,17 @@ def test_at_passive_nobody_is_asked_anything_and_what_was_asked_still_closes(api
     assert sync(api)["created"] == []                                            # nothing new at Passive
     log(api, kpi["id"], 100, token="ben-test", period_end=H.now())
     assert red["id"] in {t["id"] for t in manager_tasks(api, "closed")}         # resolved: it still closes
+
+
+def test_a_bots_id_never_reaches_the_text_people_read(api):
+    """A bot made since ids has a UUID for an id: an ask, a resolved note and a reopen hint name it, not that."""
+    bot_id = "0192f0aa-1111-7000-8000-000000000001"
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,'acme-planner','Acme Planner','active')", (bot_id,))
+        item = {"kind": "proposal", "goal_title": "Grow", "proposal": {
+            "kind": "goal_wording", "proposed_by": "bot:" + bot_id, "reason": "", "payload": {"title": "Grow more"}}}
+        _, body = GA._ask(c, item)
+        hint = H.task_reopen_hint(c, "bot:ops", {"id": "t1", "status": "closed", "closed_by_id": "bot:" + bot_id,
+                                                 "requester_id": "bot:" + bot_id, "owner_id": "bot:ops"})
+    assert "Acme Planner proposed it" in body and bot_id not in body
+    assert "ask Acme Planner to reopen it" in hint and bot_id not in hint

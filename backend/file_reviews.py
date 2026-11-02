@@ -52,7 +52,7 @@ def resolve(c, auth, blobs, who, person, items):
             raise Problem("validation", f"{row['id']}@{number} is under review twice", 422)
         seen.add((row["id"], number))
         if not file_visible(c, auth, reader, row, {}):
-            raise Problem("privacy", f"{H.actor_id(person)} cannot open {row['id']}, so they could not review it: "
+            raise Problem("privacy", f"{H.actor_name(c, person)} cannot open {row['id']}, so they could not review it: "
                           "publish it where they can read it", 403)
         mime = (v["mime"] or "").split(";", 1)[0].strip().lower()
         kind = kind_of(mime, v["size"], _head(blobs, v["digest"]) if blobs else b"")

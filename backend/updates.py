@@ -468,7 +468,7 @@ def request_text(c, bot, kind, day, redo=False):
         facts = [
             "", f"Finished {'that week' if redo else 'this week'}:", line(done, lambda r: r["title"]),
             "Open:", line(open_, lambda r: f"{r['title']} ({r['status']})"),
-            "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_id(r['owner_id'])})"),
+            "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
             "Your goals:", line(goals, lambda r: r["title"]),
             "Your goal KPIs (Tico puts these on the KPI slide):",
             line(tracked, lambda k: f"{k['name']}: {k['value'] if k['value'] is not None else 'no data'}"
@@ -489,7 +489,7 @@ def request_text(c, bot, kind, day, redo=False):
         facts = [
             "", f"Finished {'that day' if redo else 'since your last update'}:", line(done, lambda r: r["title"]),
             "Open:", line(open_, lambda r: f"{r['title']} ({r['status']})"),
-            "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_id(r['owner_id'])})"),
+            "Waiting on a person:", line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
             "Your goals:", line(goals, lambda r: r["title"]),
         ]
     team, missing = team_updates(c, bot, kind, day)

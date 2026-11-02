@@ -360,7 +360,7 @@ def _mover(conn, actor, mover):
 def _need_mover(conn, actor, what):
     H = _H()
     H.refuse(conn, actor, "identity", f"{what} on a task is changed by a person on the "
-                                      f"{', '.join(H.MOVER_TEAMS)} teams, not by {H.actor_id(actor)}")
+                                      f"{', '.join(H.MOVER_TEAMS)} teams, not by {H.actor_name(conn, actor)}")
 
 
 def _task(conn, actor, task_id):

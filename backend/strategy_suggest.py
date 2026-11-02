@@ -278,7 +278,7 @@ def result_text(c, proposal):
         return None
     done = [describe(c, x["action"]) for x in result["done"]]
     left = [f"{describe(c, x['action'])}: {x['why']}" for x in result["left"]]
-    text = f"Approved by {H.actor_id(proposal['decided_by'] or '')}; option {result['option'] + 1} applied by the " \
+    text = f"Approved by {H.actor_name(c, proposal['decided_by'] or '')}; option {result['option'] + 1} applied by the " \
            f"{strategy_bot.name(c)}."
     if done:
         text += " Done: " + "; ".join(done) + "."

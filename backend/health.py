@@ -1850,7 +1850,7 @@ def view(c, who, settings, auth, github, config):
                     minutes = int(max(0, (datetime.now(timezone.utc) - H.parse_ts(since)).total_seconds()) // 60)
                     return f'{minutes} min' if minutes < 120 else f'{minutes // 60} h'
                 checks.append(_check('worktree_waits', 'Waiting for a worktree', 'info', '; '.join(
-                    f"{H.actor_id(w['owner'])}: {w['repo']}, {'setting up' if w['state'] == 'reserved' else 'no room'} "
+                    f"{H.actor_name(c, w['owner'])}: {w['repo']}, {'setting up' if w['state'] == 'reserved' else 'no room'} "
                     f"for {age(w['created_at'])} ({w['reason']})" for w in waits[:3])
                     + ('.' if len(waits) <= 3 else f'; and {len(waits) - 3} more.'), [_fix('Open tasks', '#/tasks')]))
             # What freed a place lately, and why (backend/worktrees.py released_event): finished work releasing its

@@ -3007,7 +3007,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
             # questions. A done task still asks its requester to accept what it delivered, with structured questions.
             if ended and ended["status"] in TASK_ENDED and not (ended["status"] == "done" and refs.get("questions")
                                                                and target == ended["requester_id"]):
-                refuse(conn, actor, "lint", f"task {ended['id']} is {ended['status']}; {task_reopen_hint(actor, ended)}")
+                refuse(conn, actor, "lint", f"task {ended['id']} is {ended['status']}; {task_reopen_hint(conn, actor, ended)}")
 
     # rules 4 and 7: what a person has to read
     if is_bot(actor) and is_human(target) and kind in ("say", "notice"):
@@ -4043,11 +4043,11 @@ def type_delete(conn, actor, type_id, mover=None):
     return row
 
 
-def task_reopen_hint(actor, row):
+def task_reopen_hint(conn, actor, row):
     """Name a next move the caller is allowed to make; closure retains its own authority."""
     closer = row.get('closed_by_id') or row['requester_id']
     if row['status'] == 'closed' and is_bot(actor) and (actor != row['requester_id'] or is_human(closer)):
-        return f"ask {actor_id(closer)} to reopen it, or file a new task"
+        return f"ask {actor_name(conn, closer)} to reopen it, or file a new task"
     if actor == row['owner_id'] or is_human(actor) or (actor == row['requester_id'] and row['status'] == 'closed'):
         return f"reopen it with `hub task update {row['id']} --status doing`, or file a new task"
     return "ask the owner to reopen it with " + f"`hub task update {row['id']} --status doing`, or file a new task"
@@ -6280,7 +6280,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
           quiet_bots=next_run or quiet_notice, quiet=next_run or quiet_notice, trigger=trigger, source=trigger_source)
     if parent and is_bot(parent["owner_id"]) and is_human(target):
         # A bot's task now waits on a person: one line in the bot's main chat.
-        task_report(conn, task(conn, parent["id"]), "blocked", f"Waiting on {actor_id(target)}: {title}")
+        task_report(conn, task(conn, parent["id"]), "blocked", f"Waiting on {actor_name(conn, target)}: {title}")
     _recount(conn, target)
     _recount(conn, actor)
     made = task(conn, row["id"])
@@ -6428,7 +6428,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         # A closed task's closer reopens it, so an outsider's hint names the closer.
         refuse(conn, actor, "identity",
                f"{task_id} is changed by its owner, requester, their managers, delegates or task movers; " + (
-                   f"ask {actor_id(row.get('closed_by_id') or row['requester_id'])} to reopen it, or file a new task"
+                   f"ask {actor_name(conn, row.get('closed_by_id') or row['requester_id'])} to reopen it, or file a new task"
                    if row['status'] == 'closed' else "ask the owner to set doing or open, or file a new task"))
     type_id = row.get("type_id") or GENERAL_TYPE
     queue_return = (requested_status == 'open' and step is None and actor == row['owner_id']
@@ -6520,7 +6520,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             and (status is not None and status != "closed" or note is not None and note != row.get("note")
                  or owner is not None)):
         refuse(conn, actor, "close",
-               f"{actor_name(conn, closer)} closed this task, so it stays closed; {task_reopen_hint(actor, row)}; "
+               f"{actor_name(conn, closer)} closed this task, so it stays closed; {task_reopen_hint(conn, actor, row)}; "
                "add anything new as a comment (hub task comment)")
     if (row["status"] == "closed" and is_human(actor) and status is not None and status != "closed" and not mover
             and not _task_close_party(conn, actor, row)):
@@ -6929,7 +6929,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             task_report(conn, after, after["status"], note if note is not None else after.get("note") or after.get("checkpoint"))
         elif (after["status"] == "waiting" and after.get("waiting_on") and is_human(after["waiting_on"])
               and (row["status"] != "waiting" or row.get("waiting_on") != after["waiting_on"])):
-            task_report(conn, after, "blocked", f"Waiting on {actor_id(after['waiting_on'])}"
+            task_report(conn, after, "blocked", f"Waiting on {actor_name(conn, after['waiting_on'])}"
                         + (f": {after['note']}" if after.get("note") else ""))
     if after.get("step_id") != row.get("step_id") and not closing_step:
         # A check step with a pool files its check for the current head, as Tico (backend/check_pools.py).
@@ -7148,7 +7148,7 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
         # A private task with no person on it can take one, its guest, when its owning bot waits on them.
         if private is not None or not bot_only(row) and not row.get("guest"):
             refuse(conn, actor, "private",
-                   f"This task is private and {actor_id(person)} cannot read it: file a task for them instead")
+                   f"This task is private and {actor_name(conn, person)} cannot read it: file a task for them instead")
         refusal = task_reach_refusal(conn, actor, row, person)
         if refusal:
             refuse(conn, actor, "private", refusal)
@@ -8470,7 +8470,7 @@ def task_run_now(conn, actor, task_id):
     if not is_bot(row["owner_id"]):
         refuse(conn, actor, "run-now", "only a bot's task runs; a person does it themselves")
     if row["status"] not in ACTIVE_STATUSES:
-        refuse(conn, actor, "run-now", f"the task is {row['status']}; {task_reopen_hint(actor, row)}")
+        refuse(conn, actor, "run-now", f"the task is {row['status']}; {task_reopen_hint(conn, actor, row)}")
     if why := setup_hold(conn, row["owner_id"]):
         raise Refused("run-now", why)       # not a refused write: nothing to count against the caller
     if row.get("next_run"):
@@ -8735,7 +8735,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, 
         row = task(conn, task_id)
         if row and row["status"] in TASK_ENDED:
             # It would only be withdrawn: nothing acts on an ended task's approvals.
-            refuse(conn, actor, "lint", f"task {task_id} is {row['status']}; {task_reopen_hint(actor, row)}")
+            refuse(conn, actor, "lint", f"task {task_id} is {row['status']}; {task_reopen_hint(conn, actor, row)}")
         if row and is_human(row["owner_id"]):
             owner = row["owner_id"]
     if kind == "support" and is_human(actor):
@@ -9951,7 +9951,7 @@ def task_origin(conn, row):
             continue
         candidates.add(actor)
         detail = (_json(refusal["detail"], {}) or {}).get("detail", "")
-        body = (f"{actor_id(actor)} tried a write that touches something you care about and it was "
+        body = (f"{actor_name(conn, actor)} tried a write that touches something you care about and it was "
                 f"turned down: {_clip(detail)}. Tell me whether that is a mistake to fix or a "
                 f"limit to keep.")
         if row.get("body") == body:

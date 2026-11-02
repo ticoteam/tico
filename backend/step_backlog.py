@@ -123,7 +123,7 @@ def sweep(c, at=None):
                     H.actor_id(row["owner_id"] or "") or "nobody", 0) + 1
             spread = ", ".join(f"{who} {n}" for who, n in sorted(by_owner.items(), key=lambda x: -x[1])[:6])
             text = (f"Backlog: {len(waiting)} tickets wait at {step['name']}"
-                    + (f" for {H.actor_id(owner)}" if owner else "") + f" (over {rule['over']}; {spread}). "
+                    + (f" for {H.actor_name(c, owner)}" if owner else "") + f" (over {rule['over']}; {spread}). "
                     "Spread them to other owners, reprioritise or close some, or raise the step's backlog limit.")
             for who in _targets(c, rule, first, owner or ""):
                 if H._wake(c, first, who, text, {"wake": "blocker", "step_backlog": True}, trigger="stall_check"):

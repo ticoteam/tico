@@ -158,7 +158,7 @@ def _row(c, row, start, at, parked, timed=None):
         if to and _seen_by(c, row, to, at):
             return landed   # the manager has just been at it: a later sweep tells them if it stays late
         hours = int(_hours(at, start))
-        sent = (H._wake(c, row, to, f"Late: {name} has been at {step} for {hours} h (owner {H.actor_id(owner)}). "
+        sent = (H._wake(c, row, to, f"Late: {name} has been at {step} for {hours} h (owner {H.actor_name(c, owner)}). "
                       "Unblock it, reroute it to another builder, or tell the owner what it waits on.",
                       {"wake": "blocker", "step_late": True}, trigger="stall_check") if to else None)
         if sent is None:

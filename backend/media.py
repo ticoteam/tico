@@ -541,8 +541,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         lifecycle.refuse_send(c, who, None, what="task questions")
         return person, parent
 
-    def question_unreadable(person):
-        return Problem("privacy", f"{H.actor_id(person)} cannot read this task, so they could not answer it: "
+    def question_unreadable(c, person):
+        return Problem("privacy", f"{H.actor_name(c, person)} cannot read this task, so they could not answer it: "
                        "ask someone who can read your work and its parent task", 403)
 
     def question_private(c, who, body, parent):
@@ -556,13 +556,13 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         (task_privacy.guest_for); returned for the write to make."""
         guest = privacy.guest_for(c, who, person, parent) if private else None
         if private and not privacy.question_party(c, who, person, parent, guest):
-            raise question_unreadable(person)
+            raise question_unreadable(c, person)
         try:
             auth.task_row(c, auth.identity_for_actor(c, person),
                           {"id": "", "owner_id": who.actor, "requester_id": person if private else who.actor,
                            "private": int(private)})
         except Problem as exc:
-            raise question_unreadable(person) from exc
+            raise question_unreadable(c, person) from exc
         return guest
 
     def question_text(body, review_text=""):
@@ -673,7 +673,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         try:
             auth.task_row(c, auth.identity_for_actor(c, person), H.task(c, tid))
         except Problem as exc:
-            raise question_unreadable(person) from exc
+            raise question_unreadable(c, person) from exc
         picks, shown = options, asked
         if review:
             picks = file_reviews.options(review, attachments, body.pick, body.options)
