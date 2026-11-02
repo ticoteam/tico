@@ -313,6 +313,18 @@ async function restrictPerson(hub) {
         return {inside: r.top >= 0 && r.bottom <= innerHeight, top: b.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))};
       });
       assert.deepEqual(save, {inside: true, top: true}, `${tag}: Save can be reached`);
+
+      // On the bot's own page the same editor opens in place: there the page scrolls, and Save still comes clear of the bottom nav.
+      await page.goto(hub.url + `/#/bot/${BOT}/settings`);
+      await page.locator('#bot-access-card [data-edit-access]').first().click();
+      await page.locator('#access-editor.bot-settings-panel [name="preset"][value="custom"]').check();
+      const inPlace = await page.evaluate(() => {
+        const b = document.querySelector('#access-editor.bot-settings-panel [type=submit]');
+        b.scrollIntoView({block: 'center'});
+        const r = b.getBoundingClientRect();
+        return {inside: r.top >= 0 && r.bottom <= innerHeight, top: b.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))};
+      });
+      assert.deepEqual(inPlace, {inside: true, top: true}, `${tag}: Save can be reached on the bot's page`);
       await page.context().close();
     }
     console.log('threads-real-hub: ok');
