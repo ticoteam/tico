@@ -282,13 +282,36 @@ def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_a
         {"gl": gl_account_id, "book": book_id, "through": through, "money": money_account_id}).fetchall()
 
 
-def settled_total(c: sqlite3.Connection, money_account_id: str) -> tuple[int, str]:
-    """What the provider's current balance holds of this account's feed: the total of its settled rows (a cancelled,
-    failed, blocked or reversed one moved nothing) and the earliest such row's day ("" with none)."""
-    row = c.execute("SELECT COALESCE(SUM(amount), 0), COALESCE(MIN(txn_date), '') FROM fin_feed_txns WHERE "
-                    "money_account_id=? AND pending=0 AND COALESCE(provider_status, '') NOT IN "
-                    "('cancelled','failed','blocked','reversed')", (money_account_id,)).fetchone()
+def holding(kind: str) -> str:
+    """The rows a provider's balance holds, as SQL. A Stripe balance holds every balance transaction, pending ones too.
+    A bank or card balance holds the settled rows that moved: a pending hold, or a row a provider cancelled, failed,
+    blocked or reversed, moved nothing."""
+    if kind == "stripe":
+        return "1=1"
+    return "pending=0 AND COALESCE(provider_status, '') NOT IN ('cancelled','failed','blocked','reversed')"
+
+
+def settled_total(c: sqlite3.Connection, money_account_id: str, kind: str = "") -> tuple[int, str]:
+    """What the provider's current balance holds of this account's feed (holding): the total of those rows, and the
+    earliest one's day ("" with none)."""
+    row = c.execute(f"SELECT COALESCE(SUM(amount), 0), COALESCE(MIN(txn_date), '') FROM fin_feed_txns WHERE "
+                    f"money_account_id=? AND {holding(kind)}", (money_account_id,)).fetchone()
     return int(row[0]), str(row[1])
+
+
+def uncovered_total(c: sqlite3.Connection, money_account_id: str, kind: str = "") -> int:
+    """The total of the rows the balance holds that are not covered history (spec §4.1): the rows whose effect the books
+    hold, or will once they post. Covered history is in the opening balance instead."""
+    row = c.execute(f"SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=? AND "
+                    f"{holding(kind)} AND status<>'covered'", (money_account_id,)).fetchone()
+    return int(row[0])
+
+
+def money_on_line(c: sqlite3.Connection, book_id: str, account_id: str) -> str:
+    """The lowest-id money account on one GL line ("" with none): the one that counts the line's raw-totals movement."""
+    row = c.execute("SELECT MIN(id) FROM fin_money_accounts WHERE book_id=? AND account_id=?",
+                    (book_id, account_id)).fetchone()
+    return str(row[0] or "")
 
 
 def opening_entry(c: sqlite3.Connection, book_id: str, money_account_id: str) -> Any:
@@ -974,11 +997,6 @@ def recipient_paid(c: sqlite3.Connection, recipient_id: str) -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ Stripe
-def feed_total(c: sqlite3.Connection, money_account_id: str) -> int:
-    """What a money account's feed rows add up to: a Stripe balance's nets, every row taken in so far."""
-    row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=?",
-                    (money_account_id,)).fetchone()
-    return int(row[0])
 
 
 def stripe_source(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], link: str) -> Any:

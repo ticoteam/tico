@@ -216,6 +216,7 @@ def test_an_authorization_holds_settles_in_place_posts_once_and_the_io_bill_clea
         assert _card_holds(c) == [(4_250, "held")]                   # an authorization is a hold, not spend
     # Mercury posts it for a little more: a webhook delivery (deduped on its event id) brings version 2.
     fake.txns["txn-card-1"] = dict(MERCURY["txn_card_posted"])
+    fake.balances["credit-io"] = -45.0              # the owed balance moves with the spend (owed negative)
     with books.transaction() as c:
         assert sync.delivery(c, None, MERCURY["event_txn_updated"], LATER) is True
         assert sync.delivery(c, None, MERCURY["event_txn_updated"], LATER) is False        # a replay is kept once
@@ -238,6 +239,8 @@ def test_an_authorization_holds_settles_in_place_posts_once_and_the_io_bill_clea
     # The IO bill: checking pays the card; both sides become one transfer and the liability is cleared.
     _arrives(fake, MERCURY["txn_card_bill_bank"], 1, "evt-bill-bank")
     _arrives(fake, MERCURY["txn_card_bill_io"], 1, "evt-bill-io")
+    fake.balances["acct-chk"] = 125_205.5          # both balances move with the bill: checking pays 45.00, IO clears
+    fake.balances["credit-io"] = 0
     sync_once(books, fake, "2026-10-17T12:30:00.000000Z")
     with books.read() as c:
         assert _entries(c, "card") == 1
@@ -571,6 +574,7 @@ def test_a_closed_month_correction_reconciles_that_month_at_the_new_amount(books
     sync_once(books, fake)
     with books.transaction() as c:
         assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    fake.balances["acct-chk"] = -120.0             # Mercury's balance moves with the correction
     _arrives(fake, {**raw, "amount": -120.0}, 2, "evt-sep-2")
     sync_once(books, fake, LATER)
     with books.transaction() as c:

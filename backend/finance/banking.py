@@ -220,7 +220,9 @@ def set_opening(ctx: Ctx, money: Any, amount: int, day: str) -> str | None:
     if amount == 0:
         return None
     mid = str(money["id"])
-    source_id = f"opening:{mid}" if prior is None else f"opening:{mid}:{ctx.at}"
+    # Each repost is a new source id (fresh_source): a repost under the same timestamp as an earlier reversed entry
+    # would otherwise be deduplicated onto it, and the opening would not post at all.
+    source_id = fresh_source(ctx, "sync", f"opening:{mid}")
     done = posting.post_entry(ctx.c, {"date": open_day(ctx, day), "source": "sync", "source_id": source_id,
                                       "memo": f"Opening balance: {money['name']}"[:200],
                                       "lines": [feed_line(gl.id, amount), feed_line(_opening_line(ctx).id, -amount)]},
@@ -228,17 +230,42 @@ def set_opening(ctx: Ctx, money: Any, amount: int, day: str) -> str | None:
     return str(done["entry_id"])
 
 
+def opening_figure(ctx: Ctx, money: Any, balance: int) -> int:
+    """The opening that makes the money account's GL line equal the provider's `balance`: the balance less every settled
+    row that is not covered history (the books hold a row's effect, or will once it posts), less what live raw totals
+    put on the GL line. Covered history needs no term: its effect is already in the balance, so the opening carries it.
+    The line's raw movement counts once, against the lowest-id money account on that line."""
+    book, gl = ctx.book.id, str(money["account_id"])
+    moved = SR.line_movement(ctx.c, book, gl) if SK.money_on_line(ctx.c, book, gl) == str(money["id"]) else 0
+    return balance - SK.uncovered_total(ctx.c, str(money["id"]), str(money["kind"])) - moved
+
+
+def _natural_day(ctx: Ctx, money: Any) -> str:
+    """The day before the account's first row the balance holds (covered history counts), or today with none. set_opening
+    caps it before the first raw-totals month."""
+    _, first = SK.settled_total(ctx.c, str(money["id"]), str(money["kind"]))
+    return (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
+
+
+def open_at(ctx: Ctx, money: Any, balance: int) -> str | None:
+    """Make the money account's opening entry say what `balance` implies (opening_figure). Dated the natural day, or the
+    existing entry's day when that is earlier: an opening moves earlier for an earlier row, never later on its own (a
+    later day would repost it on every pass)."""
+    prior = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
+    day = _natural_day(ctx, money)
+    if prior is not None:
+        day = min(day, str(prior["entry_date"]))
+    return set_opening(ctx, money, opening_figure(ctx, money, balance), day)
+
+
 def opening_balance(ctx: Ctx, money_id: str) -> str | None:
-    """After a backfill: the provider's current balance less every settled feed row is what the account held before
-    the first of them, posted as of the day before it (no rows: today). An IO credit line's balance and rows carry
-    the same sign (owed negative), so the liability side comes out the same way. Idempotent per money account; a
-    later backfill that reaches further back adjusts the one entry. Nothing without a balance or a GL line."""
+    """After a backfill: the opening that makes the GL line equal the provider's balance (opening_figure), dated the day
+    before the first settled row (today with none). Idempotent per money account; a later backfill that reaches further
+    back adjusts the one entry. Nothing without a balance or a GL line."""
     money = SK.get(ctx.c, "fin_money_accounts", money_id)
     if money is None or money["balance"] is None or not money["account_id"]:
         return None
-    total, first = SK.settled_total(ctx.c, money_id)
-    day = (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
-    return set_opening(ctx, money, int(money["balance"]) - total, day)
+    return open_at(ctx, money, int(money["balance"]))
 
 
 def _opening_day(ctx: Ctx, day: str) -> str:
@@ -257,18 +284,48 @@ def covered_day(ctx: Ctx, day: str) -> bool:
     return span is not None and day[:7] <= span[1]
 
 
+def _backfilled(ctx: Ctx, money: Any) -> bool:
+    """Whether the money account's connection has finished its backfill (its first opening balance is due then)."""
+    conn = SK.get(ctx.c, "fin_connections", str(money["connection_id"])) if money["connection_id"] else None
+    return conn is not None and bool(SK.loads(conn["settings_json"]).get("backfilled"))
+
+
+def refresh_opening(ctx: Ctx, money_id: str) -> None:
+    """Recompute the money account's opening from the balance it holds now, its settled rows and the raw totals, so the
+    GL line is the balance. Used where the rows and the balance were read together: the end of a sync pass, and a raw
+    totals month that posts or reverses (covered history moves). An opening the backfill has not made yet is not made
+    here (the backfill makes the first one). Unchanged: nothing."""
+    money = SK.get(ctx.c, "fin_money_accounts", money_id)
+    if money is None or money["balance"] is None or not money["account_id"] or str(money["kind"]) == "stripe":
+        return    # a Stripe opening is the balance its backfill read, with the rows it took in: not recomputed later
+    if SK.opening_entry(ctx.c, ctx.book.id, money_id) is None and not _backfilled(ctx, money):
+        return
+    open_at(ctx, money, int(money["balance"]))
+
+
 def _before_opening(ctx: Ctx, money: Any, amount: int, day: str) -> None:
-    """A settled row first seen after the opening was posted, dated on or before it: the provider's balance already
-    held it inside the opening, so the opening gives it back (and moves before it), never counting it twice."""
+    """A settled row first seen dated on or before the opening's day: the balance already held it inside the opening, so
+    the opening gives it back and moves before it. A later row needs nothing: it posts on top of the opening. A Stripe
+    opening moves by the row's amount (its balance is not read again here)."""
     entry = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
     if entry is None:
         return
     dated = str(entry["entry_date"])
     if day > dated:
         return
-    have = opening_amount(ctx, money, dated)
-    earlier = (dates.day(day) - timedelta(days=1)).isoformat()
-    set_opening(ctx, money, have - amount, min(dated, earlier))
+    if str(money["kind"]) == "stripe":
+        earlier = (dates.day(day) - timedelta(days=1)).isoformat()
+        set_opening(ctx, money, opening_amount(ctx, money, dated) - amount, min(dated, earlier))
+        return
+    refresh_opening(ctx, str(money["id"]))
+
+
+def refresh_connection_openings(ctx: Ctx, connection_id: str) -> None:
+    """At the end of a sync pass: each of the connection's money accounts' openings, against the balance the pass read
+    and the rows it took in (read together, so the opening and the feed agree)."""
+    for account in SK.money_accounts(ctx.c, ctx.book.id):
+        if str(account["connection_id"] or "") == connection_id:
+            refresh_opening(ctx, str(account["id"]))
 
 
 # ------------------------------------------------------------------------------------------------ taking in
@@ -308,9 +365,9 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
         SK.update(ctx.c, "fin_feed_txns", fid, fields)
     was_settled = row is not None and not int(row["pending"]) and str(row["provider_status"] or "") not in (
         *F.VOID, F.REVERSED)
-    if not t.pending and not (t.void or t.reversed) and not was_settled and ctx.book.mode != "mirror":
-        _before_opening(ctx, money, t.amount, t.txn_date)
     _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, card, t)
+    if not t.pending and not (t.void or t.reversed) and not was_settled and ctx.book.mode != "mirror":
+        _before_opening(ctx, money, t.amount, t.txn_date)    # after settling: the row's status is final, so the figure is too
     return fid
 
 
@@ -336,6 +393,8 @@ def refresh_covered(ctx: Ctx) -> None:
             money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
             card = SK.get(ctx.c, "fin_cards", str(row["card_id"])) if row["card_id"] else None
             _settle(ctx, SK.get(ctx.c, "fin_feed_txns", str(row["id"])), money, card, _txn_of(row))
+    for account in SK.money_accounts(ctx.c, ctx.book.id):    # covered rows and the raw movement moved the openings
+        refresh_opening(ctx, str(account["id"]))
 
 
 def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
@@ -868,6 +927,13 @@ def _book_gap(ctx: Ctx, money: Any, end: str, cleared: set[str], statement: int)
     return statement - balance
 
 
+def _bank_opening(ctx: Ctx, money: Any) -> int:
+    """The bank's balance before the account's first settled row: the provider's balance less every settled row, covered
+    history included. A first reconciliation clears from here, so its cleared total is the bank's own."""
+    total, _ = SK.settled_total(ctx.c, str(money["id"]), str(money["kind"]))
+    return int(money["balance"]) - total
+
+
 def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Tie a money account to its statement: the statement's end day and balance (from Mercury's statement when it
     has one, else typed), the cleared rows (default: every settled row through the end day not yet cleared), the
@@ -897,9 +963,14 @@ def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     else:
         ids = sorted(window)
     if last is None:
-        # A first reconciliation opens at the opening-balance entry the backfill posted, unless one is typed.
+        # A first reconciliation opens at the bank's balance before its first settled row, unless one is typed.
         typed = V.opt_amount(p, "opening_balance")
-        opening = _signed(money, typed) if typed is not None else opening_amount(ctx, money, end)
+        if typed is not None:
+            opening = _signed(money, typed)
+        elif money["balance"] is not None:
+            opening = _bank_opening(ctx, money)
+        else:
+            opening = opening_amount(ctx, money, end)
     else:
         if "opening_balance" in p:
             raise invalid("the opening balance is the last reconciliation's")

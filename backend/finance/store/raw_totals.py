@@ -86,3 +86,13 @@ def live_span(c: sqlite3.Connection, book_id: str) -> tuple[str, str] | None:
                     "book_id=? AND source='import' AND status='posted' AND reverses_id IS NULL AND "
                     "source_id>='raw_totals:' AND source_id<'raw_totals;'", (book_id,)).fetchone()
     return (str(row[0]), str(row[1])) if row is not None and row[1] else None
+
+
+def line_movement(c: sqlite3.Connection, book_id: str, account_id: str) -> int:
+    """What the live raw-totals entries put on one account's GL line: the cash line of the months a sheet holds (§4.1).
+    Reversed originals and the reversals themselves are left out."""
+    row = c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id WHERE "
+                    "e.book_id=? AND e.source='import' AND e.status='posted' AND e.reverses_id IS NULL AND "
+                    "e.source_id>='raw_totals:' AND e.source_id<'raw_totals;' AND l.account_id=?",
+                    (book_id, account_id)).fetchone()
+    return int(row[0])

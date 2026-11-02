@@ -336,3 +336,98 @@ def test_reversing_the_months_a_covered_row_sits_behind_lets_it_post_once(books)
         status, entry = _feed_state(c)
         assert status == "posted" and entry is not None, (status, entry)
         assert c.execute("SELECT count(*) FROM fin_entries WHERE source='bank' AND status='posted'").fetchone()[0] == 1
+
+
+# The same history as a sheet with no cash line: its months post against Opening balance equity alone.
+PL_MAPPING = {"Software subscriptions": "6100", "Sales revenue": "4000"}
+PL_CSV = ("month,line,amount,team\n2026-01,Sales revenue,250000,sales\n2026-03,Software subscriptions,30000,web\n"
+          "2026-03,Sales revenue,40000,sales\n")
+SHEETS = {"cash": (MAPPING, CSV), "pl": (PL_MAPPING, PL_CSV)}
+
+
+def _bank_gl(c) -> tuple[int, int]:
+    """The checking account's GL line through the day, and the provider's balance the books hold for it."""
+    line = next(r["balance"] for r in FR.balance_sheet(c, OWNER, at=AT)["assets"] if r["code"] == "1000")
+    held = c.execute("SELECT balance FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0]
+    return int(line), int(held)
+
+
+@pytest.mark.parametrize("sheet", ["cash", "pl"])
+def test_the_bank_line_is_the_providers_balance_across_covered_history(books, sheet):
+    """§4.1 opening: a row before the first raw-totals month and one inside the sheet are covered history, an uncovered
+    row after it posts, and the opening balance makes the bank's GL line the provider's balance, with or without a cash
+    line in the sheet."""
+    mapping, csv = SHEETS[sheet]
+    fake = FakeMercury()
+    fake.txns["txn-dec"] = _feed("txn-dec", -1_000.0, "2025-12-15")
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500.0, "2026-02-10")
+    fake.txns["txn-apr"] = _feed("txn-apr", -400.0, "2026-04-05")
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", _body(mapping, csv=csv)).status == "committed"
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        line, held = _bank_gl(c)
+        assert line == held, (line, held)
+        assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE status='covered'").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("sheet", ["cash", "pl"])
+def test_a_backfill_that_starts_inside_the_sheet_still_ties_the_bank_line(books, sheet):
+    """§4.1 opening: the feed begins in the middle of the sheet, so the opening sits before the first raw-totals month,
+    not before the first row, and the bank line still equals the provider's balance."""
+    mapping, csv = SHEETS[sheet]
+    fake = FakeMercury()
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500.0, "2026-02-10")
+    fake.txns["txn-apr"] = _feed("txn-apr", -400.0, "2026-04-05")
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", _body(mapping, csv=csv)).status == "committed"
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        line, held = _bank_gl(c)
+        assert line == held, (line, held)
+
+
+def test_reversing_sheet_months_moves_the_bank_line_and_lets_the_covered_row_post(books):
+    """§4.1 opening: reversing the latest month moves the raw movement out of the bank line and keeps it equal to the
+    provider's balance; reversing the month behind a covered row lets that row settle, and the line still ties."""
+    fake = FakeMercury()
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500.0, "2026-02-10")
+    fake.txns["txn-apr"] = _feed("txn-apr", -400.0, "2026-04-05")
+    with books.transaction() as c:
+        r = act(c, OWNER, "import_raw_totals", _body())
+        assert r.status == "committed", r.reason
+        months = {m["month"]: m["entry_id"] for m in r.result["months"]}
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "journal", {"reverses": months["2026-03"]}).status == "committed"
+        line, held = _bank_gl(c)
+        assert line == held, (line, held)
+        assert act(c, OWNER, "journal", {"reverses": months["2026-02"]}).status == "committed"
+        assert _feed_state(c)[0] == "posted"
+        line, held = _bank_gl(c)
+        assert line == held, (line, held)
+
+
+def test_the_first_reconcile_to_the_latest_raw_month_end_is_done_with_no_difference(books):
+    """§4.1 opening: the first reconciliation starts from the bank's own balance before its first row, covered history
+    included, so reconciling to the sheet's last month-end (before the uncovered row) is done with no difference, and
+    the books agree with the statement."""
+    fake = FakeMercury()
+    fake.txns["txn-dec"] = _feed("txn-dec", -1_000.0, "2025-12-15")
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500.0, "2026-02-10")
+    fake.txns["txn-apr"] = _feed("txn-apr", -400.0, "2026-04-05")
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", _body()).status == "committed"
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        line, held = _bank_gl(c)
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        # The bank's balance on 31 March: today's less the 5 April row (-400.00, 40,000 in cents).
+        done = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-03-31",
+                                           "statement_balance": held + 40_000})
+        assert (done.result["status"], done.result["difference"], done.result["book_difference"]) == ("done", 0, 0)
+        assert line == held, (line, held)

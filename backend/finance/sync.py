@@ -216,6 +216,8 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     problems += pay(store, provider, now, cid)
     if due:
         problems += statements(store, provider, cid, now)
+        with store.transaction() as c:      # the balance this pass read and every row it took in (inbox too) agree now
+            banking.refresh_connection_openings(load(c, now), cid)
     with store.transaction() as c:
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now}
         if due:
