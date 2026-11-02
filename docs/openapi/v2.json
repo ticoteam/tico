@@ -19352,7 +19352,7 @@
     },
     "/api/v2/memory-tidy/cards/{ident}/decide": {
       "post": {
-        "summary": "Discard an open card without repository changes. Keep returns 409 until its separate implementation is available.",
+        "summary": "Discard an open card without repository changes, or queue deterministic Keep on its capable assigned computer. Failed re-checks leave the card open.",
         "operationId": "decideMemoryTidyCard",
         "parameters": [
           {
@@ -47908,6 +47908,9 @@
             "type": "string"
           },
           "keep_available": {
+            "type": "boolean"
+          },
+          "keep_pending": {
             "type": "boolean"
           }
         },

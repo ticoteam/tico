@@ -774,6 +774,7 @@ impl Runner {
         tokio::spawn(self.events.clone().run(self.client.clone()));
         tokio::spawn(crate::perf::run_loop(self.clone()));
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
+        tokio::spawn(crate::memory_tidy_keep::run_loop(self.clone()));
         tokio::spawn(crate::appdriver::run_loop(self.clone()));
         let mut clock = Clock {
             polled: HashMap::new(),
