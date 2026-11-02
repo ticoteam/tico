@@ -647,3 +647,15 @@ def test_a_quickbooks_payroll_liability_that_wages_pass_through_is_marked_payrol
     assert Q.account_record({**base, "AccountSubType": "PayrollClearing"}).payroll is True
     assert Q.account_record({**base, "AccountSubType": "PayrollTaxPayable"}).payroll is True
     assert Q.account_record({**base, "AccountSubType": "OtherCurrentLiabilities"}).payroll is False
+
+
+def test_a_lookup_by_name_reads_inactive_records_too_so_a_retry_does_not_make_a_second_account():
+    wire = Wire(QC.Reply(200, {"QueryResponse": {}}))
+    assert _client(wire).find("account.create", {"name": "Checking"}, "account:checking") is None
+    assert "Active IN (true,false)" in urllib.parse.unquote_plus(wire.sent[0][1])
+
+
+def test_a_bad_debt_item_that_is_inactive_is_found_and_not_made_a_second_time():
+    wire = Wire(QC.Reply(200, {"QueryResponse": {}}), QC.Reply(200, {"Item": {"Id": "99", "SyncToken": "0"}}))
+    assert _client(wire)._write_off_item("Account:12", "creditmemo:key") == "99"
+    assert "Active IN (true,false)" in urllib.parse.unquote_plus(wire.sent[0][1])

@@ -288,7 +288,8 @@ class QuickBooks:
         key, so a retry does not make a second). One that sells to another account is refused, since the write-off
         would post there."""
         account = account_key.partition(":")[2]
-        found = self._call("GET", "query", query={"query": f"SELECT * FROM Item WHERE Name = '{Q.WRITE_OFF_ITEM}'"})
+        found = self._call("GET", "query", query={
+            "query": f"SELECT * FROM Item WHERE Active IN (true,false) AND Name = '{Q.WRITE_OFF_ITEM}'"})
         if found.status == 0:
             return Sent(False, error="QuickBooks did not answer")
         if found.status != 200:
@@ -330,7 +331,10 @@ class QuickBooks:
             where, mark = f"{field} = '{_quote(body['name'])}'" + (" AND Job = true" if op == "project.create" else ""), ""
         else:
             return None
-        reply = self._call("GET", "query", query={"query": f"SELECT * FROM {entity} WHERE {where} MAXRESULTS 1000"})
+        # An inactive record is found too: a retry that does not see it would create a second one under the same name.
+        active = "Active IN (true,false) AND " if entity in Q.ACTIVE_FILTERED else ""
+        reply = self._call("GET", "query", query={
+            "query": f"SELECT * FROM {entity} WHERE {active}{where} MAXRESULTS 1000"})
         if reply.status in (0, 429) or reply.status >= 500:
             return Sent(False, error="QuickBooks did not answer the lookup")
         if reply.status != 200:
