@@ -1798,10 +1798,12 @@ SCHEMAS.update({
                               "approval_to": "n", "rule_id": "n", "created_at": "s"})),
         "settlement_count": "i", "settlements_more": "b", "attachment_count": "i", "attachments_more": "b",
         "terms_days": {"type": ["integer", "null"]}, "purchase_order_id": {"type": ["string", "null"]},
+        "book_mode": {"type": "string", "enum": ["native", "mirror"]},
         "schedule": {"type": ["object", "null"]}, "view_version": "i"},
         required=["lines", "settlements", "attachments", "actions"])]},
     "FinanceContacts": obj({"contacts": items(_FINANCE_CONTACT), "next_cursor": "n", "view_version": "i"}),
-    "FinanceContact": obj({"contact": _FINANCE_CONTACT, "view_version": "i", "files": items(_RECORD_FILE)}),
+    "FinanceContact": obj({"contact": {**_FINANCE_CONTACT, "properties": {**_FINANCE_CONTACT["properties"], **obj(_FRESHNESS)["properties"]}},
+                           "view_version": "i", "files": items(_RECORD_FILE)}),
     "FinanceInbox": obj({"items": items(obj({"kind": {"type": "string", "enum": [
         "uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
         "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),

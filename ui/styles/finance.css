@@ -267,3 +267,10 @@ th .fin-tag{display:block;width:max-content;margin:2px 0 0 auto}
 @media (max-width:640px){
   .fin-doc-t .fin-wide{display:none}
 }
+
+/* A contact's panel: its linked files, and a provider's copy that may be behind. */
+.fin-rec-file{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:26px;font-size:var(--t-sm)}
+.fin-rec-file a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fin-stale{margin:6px 0 0;color:var(--wait-ink);font-size:var(--t-sm)}
+.fin-dlg .ru-pick[aria-selected=true]{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.fin-dlg .ru-picks{margin-top:8px}

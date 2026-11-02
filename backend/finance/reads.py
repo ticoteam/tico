@@ -2244,8 +2244,12 @@ bills = tab_ap.bills
 invoices = tab_ap.invoices
 contacts = tab_ap.contacts
 def contact(c: sqlite3.Connection, viewer: str, contact_id: str, at: str | None = None) -> Row:
-    """One vendor or customer (tab_ap.contact), with the Library files its record links that the viewer may read."""
-    return {**tab_ap.contact(c, viewer, contact_id, at), "files": RFILES.visible(c, viewer, "fin_contacts", contact_id)}
+    """One vendor or customer (tab_ap.contact), with how fresh its copy is and the Library files its record links that
+    the viewer may read."""
+    out = tab_ap.contact(c, viewer, contact_id, at)
+    sync = SM.record_syncs(c, "fin_contacts", [contact_id]).get(contact_id)
+    return {**out, "contact": {**cast(Row, out["contact"]), **_freshness(load(c, at), sync)},
+            "files": RFILES.visible(c, viewer, "fin_contacts", contact_id)}
 bill = tab_ap.bill
 invoice = tab_ap.invoice
 chart = tab_ap.chart

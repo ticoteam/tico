@@ -42549,6 +42549,18 @@
               },
               "created_at": {
                 "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "as_of": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "stale": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -42902,6 +42914,13 @@
                 "type": [
                   "string",
                   "null"
+                ]
+              },
+              "book_mode": {
+                "type": "string",
+                "enum": [
+                  "native",
+                  "mirror"
                 ]
               },
               "schedule": {

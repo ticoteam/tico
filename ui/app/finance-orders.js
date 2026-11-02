@@ -119,6 +119,9 @@ function finOrdRail(d, full) {
     if (d.lines?.length) parts.push(`<h3 class="fin-h">Lines</h3>${d.lines.map(l => finKv(name(l), po && l.billed ? `${finCents(l.billed)} of ${finCents(l.amount)}` : finCents(l.amount))).join('')}`);
     if (d.bills?.length) parts.push(`<h3 class="fin-h">Bills</h3>${d.bills.map(b => finKv(`${b.number || 'Bill'} · ${finDayLabel(b.date)}${b.vendor && b.vendor !== d.contact?.name ? ' · ' + b.vendor : ''}`,
       `<a class="fin-link" href="${esc(finHref('/payables', {doc: b.id}))}">${finCents(b.on_order)}</a>`)).join('')}`);
+    // Linked, not billed: these count toward no line and not toward Billed above.
+    if (d.linked_bills?.length) parts.push(`<h3 class="fin-h">Linked bills</h3>${d.linked_bills.map(b => finKv([b.number || 'Bill', b.vendor].filter(Boolean).join(' · ') + ` · ${b.status[0].toUpperCase()}${b.status.slice(1)}`,
+      `<a class="fin-link" href="${esc(finHref('/payables', {doc: b.id}))}">${finCents(b.total)}</a>`)).join('')}`);
     const asked = finOrdAsked(d);
     if (asked) parts.push(finKv('Approval', esc(finAskText(asked.approval_to))));
     parts.push(finOrdActsHtml(d));

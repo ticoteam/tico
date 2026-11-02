@@ -312,6 +312,7 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
     if kind == "bill":
         out["schedule"] = SK.loads(r["schedule_json"]) or None
         out["purchase_order_id"] = order_in_view(c, viewer, ctx, r["purchase_order_id"])
+        out["book_mode"] = ctx.book.mode    # a mirrored book refuses bill_update, so a panel offers no change there
     out["view_version"] = view.version
     return out
 
