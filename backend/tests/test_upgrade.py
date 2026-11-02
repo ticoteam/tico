@@ -137,3 +137,6 @@ def test_the_journey_seeds_an_install_whose_starter_bot_has_its_own_id(tmp_path)
         assert {r[0] for r in c.execute("SELECT slug FROM bots")} >= {"coo", "cmo", "seo"}
         assert c.execute("SELECT count(*) FROM messages WHERE conversation_id='c1'").fetchone()[0] == 2
         assert c.execute("SELECT count(*) FROM tasks WHERE id IN ('t1','t2','t3')").fetchone()[0] == 3
+        # the seeded rows name the install's bot, so the jobs its messages queue point at a bot that exists
+        assert {r[0] for r in c.execute("SELECT owner_id FROM tasks WHERE id IN ('t1','t2','t3')")} == {f"bot:{own}"}
+        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
