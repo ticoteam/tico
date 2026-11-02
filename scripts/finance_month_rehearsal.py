@@ -541,9 +541,13 @@ def until(ctx: Context, fn, seconds: float):
 
 
 def owner_decides(ctx: Context, step: str, out: dict, what: str) -> None:
-    """When Tico asks for the owner's approval, the owner gives it (over HTTP the owner is the only signed-in person)."""
+    """When Tico asks for the owner's approval, the owner gives it (over HTTP the owner is the only signed-in person).
+    When the owner is the requester, the owner is the approver (actions._approver): nothing is asked, the action is
+    committed, and that is checked rather than skipped."""
     aid = approval_of(out)
     if not aid:
+        ctx.check(step, f"{what} needed no ask: the requester is the owner, who is the approver",
+                  committed(out) and not approval_of(out), describe(out))
         return
     st, answer = ctx.api.request("POST", f"approvals/{aid}", {"decision": "approved", "note": "rehearsal"})
     ctx.check(step, f"the owner approves {what}", st == 200, f"HTTP {st} {str(answer)[:160]}")
@@ -860,12 +864,15 @@ def run_step7(ctx: Context) -> None:
         pay = api.act("payment_create", {"recipient_id": ctx.state["recipient_id"], "amount": 10000,
                                          "money_account_id": bank_id(api, "Acme Checking"), "memo": memo,
                                          "account_id": ids.get(line, ""), "mode": "approval_queue"})
-        ctx.check(step, f"a $100.00 payment on {line} is queued for approval", committed(pay), describe(pay))
+        ctx.check(step, f"a $100.00 payment on {line} from the owner is committed, past the {label}",
+                  committed(pay), describe(pay))
         owner_decides(ctx, step, pay, f"the $100.00 payment on {line}")
+        wait_status(ctx, memo, {"awaiting_bank_approval"}, 120)     # the send is a background tick: wait for its state
         row = next((d for d in walk(api.get("finance/payments", limit=200)) if "status" in d and memo in json.dumps(d)), {})
         held_for = str(row.get("last_error") or row.get("reason") or "")
-        ctx.check(step, f"at {at_limit} the over-budget payment waits (queued), not sent, and names {label}",
-                  row.get("status") == "queued" and label in held_for,
+        ctx.check(step, f"at {at_limit} the owner's over-budget payment goes to Mercury's approval queue "
+                        f"(awaiting_bank_approval), with no ask first",
+                  row.get("status") == "awaiting_bank_approval" and not approval_of(pay),
                   f"status {row.get('status')}, reason {held_for[:160]}")
     ctx.gap(step, "AI services Gateway meter and the AI-services cutoff",
             "the meter is read and sent by HQ's gateway_sync.py only; the demo's finance tick runs drain_events and "
