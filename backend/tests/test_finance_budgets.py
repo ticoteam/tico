@@ -579,6 +579,18 @@ def test_a_rule_test_never_reads_the_fingerprint_of_a_hidden_raise(books):
         assert probe.impact["test"]["changed_count"] == 0
 
 
+def test_a_finance_admin_who_tests_a_rule_checks_only_its_own_actions(books):
+    """finance.admin adds no view (§7.4, §7.5): a rule test it runs covers its own actions, not the owner's."""
+    with books.transaction() as c:
+        assert act(c, OWNER, "budget_create", {"name": "Web", "account_id": account(c, "6100"),
+                                               "amount": 1_000}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
+        probe = {"when": {"kind": "budget_create"}, "outcome": {"outcome": "deny"}}
+        owner = act(c, OWNER, "rule_test", probe, dry_run=True).impact["test"]
+        admin = act(c, "human:fay", "rule_test", probe, dry_run=True).impact["test"]
+        assert owner["checked"] >= 1 and owner["changed_count"] >= 1
+        assert admin["checked"] == 0 and admin["changed_count"] == 0
+
 def test_a_set_aside_adds_only_the_part_its_target_does_not_already_hold(books):
     """A live 4,000 hold for a Gateway key already counts against a 10,000 budget, so setting that key aside at 7,000 adds
     3,000 to the reserve (4,000 held and 3,000 unspent), not the whole 7,000. Totals up to 10,000 fit; 10,001 does not."""
