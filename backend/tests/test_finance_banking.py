@@ -874,3 +874,28 @@ def test_a_response_cut_short_and_an_amount_too_big_to_send_exactly_answer_unrea
     sent = []
     assert Mercury("tok", opener=lambda r, *, timeout: sent.append(r)).request_send_money(
         "acct", {"amount": Decimal("1e13")}) == Answer(None, {}) and not sent
+
+
+def test_a_person_ignored_row_is_carried_by_the_opening_so_the_bank_line_is_the_balance(books):
+    """Phase 2 #4 (§4.1 opening): a settled credit nobody has posted counts toward the opening, since it will post, so the
+    bank line is short of the balance by that credit until it does. Ignoring it posts nothing: the books let go of it, the
+    opening takes it, the bank line equals the balance, and the opening keeps its day (the first row the balance holds)."""
+    fake = FakeMercury()
+    fake.txns["txn-x"] = _txn("txn-x", "acct-chk", 1500.0, "wireFee", day="2026-02-10")
+    fake.balances["acct-chk"] = -500.0                  # the bank holds -500.00 after the +1,500.00 credit
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        fid, status = c.execute("SELECT id, status FROM fin_feed_txns WHERE provider_id='txn-x'").fetchone()
+        assert status == "new", status
+        assert ("2026-02-09", "1000", -200_000) in _opening(c)
+        assert _checking(c) == -200_000                 # the credit is not posted yet: the line is short of the balance
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "ignore": True}).status == "committed"
+        assert ("2026-02-09", "1000", -50_000) in _opening(c)
+        assert _checking(c) == -50_000
+        held = c.execute("SELECT balance FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0]
+        assert _checking(c) == held
+
+
+def _checking(c) -> int:
+    return next(r["balance"] for r in FR.balance_sheet(c, OWNER, at=AT)["assets"] if r["code"] == "1000")

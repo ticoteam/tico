@@ -50,9 +50,10 @@ ITEMIZED = ("bank", "card", "bill", "invoice", "payment", "usage", "sync")
 def itemized_in(c: sqlite3.Connection, book_id: str, start: str, end: str) -> Any:
     """A standing entry of itemized transactions dated from start to end, if there is one."""
     marks = ",".join("?" * len(ITEMIZED))
+    # An opening balance is sync-sourced but is not an itemized transaction: it moves before the first raw-totals month.
     return c.execute(f"SELECT id, source FROM fin_entries WHERE book_id=? AND source IN ({marks}) AND status='posted' "
-                     "AND reverses_id IS NULL AND entry_date>=? AND entry_date<=? ORDER BY entry_date, id LIMIT 1",
-                     (book_id, *ITEMIZED, start, end)).fetchone()
+                     "AND reverses_id IS NULL AND entry_date>=? AND entry_date<=? AND source_id NOT LIKE 'opening:%' "
+                     "ORDER BY entry_date, id LIMIT 1", (book_id, *ITEMIZED, start, end)).fetchone()
 
 
 def posted_feed_in(c: sqlite3.Connection, book_id: str, start: str, end: str) -> Any:

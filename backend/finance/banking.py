@@ -230,14 +230,28 @@ def set_opening(ctx: Ctx, money: Any, amount: int, day: str) -> str | None:
     return str(done["entry_id"])
 
 
+def _term(ctx: Ctx, money: Any) -> int:
+    """What the opening nets out of the balance: the settled rows the books carry (uncovered_total: not covered history,
+    not ignored, unposted rows included, since they will post), plus what live raw totals put on the money account's GL
+    line. The line's raw movement counts once, against the lowest-id money account on that line."""
+    book, gl = ctx.book.id, str(money["account_id"] or "")
+    moved = SR.line_movement(ctx.c, book, gl) if gl and SK.money_on_line(ctx.c, book, gl) == str(money["id"]) else 0
+    return SK.uncovered_total(ctx.c, str(money["id"]), str(money["kind"])) + moved
+
+
+def opening_terms(ctx: Ctx) -> dict[str, int]:
+    """Every money account's _term now. A change that moves rows into or out of the books without a bank movement takes
+    these before and after (shift_openings). A mirrored book has no opening, so none."""
+    if ctx.book.mode == "mirror":
+        return {}
+    return {str(account["id"]): _term(ctx, account) for account in SK.money_accounts(ctx.c, ctx.book.id)}
+
+
 def opening_figure(ctx: Ctx, money: Any, balance: int) -> int:
-    """The opening that makes the money account's GL line equal the provider's `balance`: the balance less every settled
-    row that is not covered history (the books hold a row's effect, or will once it posts), less what live raw totals
-    put on the GL line. Covered history needs no term: its effect is already in the balance, so the opening carries it.
-    The line's raw movement counts once, against the lowest-id money account on that line."""
-    book, gl = ctx.book.id, str(money["account_id"])
-    moved = SR.line_movement(ctx.c, book, gl) if SK.money_on_line(ctx.c, book, gl) == str(money["id"]) else 0
-    return balance - SK.uncovered_total(ctx.c, str(money["id"]), str(money["kind"])) - moved
+    """The opening that makes the money account's GL line equal the provider's `balance` when the books carry every row
+    the balance holds: the balance less _term. Covered history and ignored rows are in the balance and not in _term, so
+    the opening carries them."""
+    return balance - _term(ctx, money)
 
 
 def _natural_day(ctx: Ctx, money: Any) -> str:
@@ -291,33 +305,49 @@ def _backfilled(ctx: Ctx, money: Any) -> bool:
 
 
 def refresh_opening(ctx: Ctx, money_id: str) -> None:
-    """Recompute the money account's opening from the balance it holds now, its settled rows and the raw totals, so the
-    GL line is the balance. Used where the rows and the balance were read together: the end of a sync pass, and a raw
-    totals month that posts or reverses (covered history moves). An opening the backfill has not made yet is not made
-    here (the backfill makes the first one). Unchanged: nothing."""
+    """While the money account's backfill is unfinished, its opening is the balance the pass read less the rows so far
+    (opening_figure), at the end of each pass: a partial backfill's pages are not final, so nothing else is trusted yet.
+    Once the backfill has finished the opening never reads the balance again: it moves by what changed (shift_openings,
+    _before_opening), so a gap the bank has and the feed does not stays a difference for reconciliation. A Stripe
+    opening is the balance its backfill read, moved the same way after that."""
     money = SK.get(ctx.c, "fin_money_accounts", money_id)
     if money is None or money["balance"] is None or not money["account_id"] or str(money["kind"]) == "stripe":
-        return    # a Stripe opening is the balance its backfill read, with the rows it took in: not recomputed later
-    if SK.opening_entry(ctx.c, ctx.book.id, money_id) is None and not _backfilled(ctx, money):
+        return
+    if _backfilled(ctx, money) or SK.opening_entry(ctx.c, ctx.book.id, money_id) is None:
         return
     open_at(ctx, money, int(money["balance"]))
 
 
 def _before_opening(ctx: Ctx, money: Any, amount: int, day: str) -> None:
-    """A settled row first seen dated on or before the opening's day: the balance already held it inside the opening, so
-    the opening gives it back and moves before it. A later row needs nothing: it posts on top of the opening. A Stripe
-    opening moves by the row's amount (its balance is not read again here)."""
+    """A settled row first seen after the backfill, dated on or before the opening's day: the balance already held it, so
+    the opening gives it back and moves before it. A later row needs nothing: the balance moved with it, and so does
+    the opening's figure. Only a first sighting counts (a pending row that settles moved the balance after the opening)."""
     entry = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
     if entry is None:
         return
     dated = str(entry["entry_date"])
     if day > dated:
         return
-    if str(money["kind"]) == "stripe":
-        earlier = (dates.day(day) - timedelta(days=1)).isoformat()
-        set_opening(ctx, money, opening_amount(ctx, money, dated) - amount, min(dated, earlier))
-        return
-    refresh_opening(ctx, str(money["id"]))
+    earlier = (dates.day(day) - timedelta(days=1)).isoformat()
+    set_opening(ctx, money, opening_amount(ctx, money, dated) - amount, min(dated, earlier))
+
+
+def shift_openings(ctx: Ctx, before: Mapping[str, int]) -> None:
+    """Move each money account's opening by what a change moved out of (or into) its terms, `before` being opening_terms
+    as it stood before the change: the difference, with no balance read. An opening that did not exist yet is made from
+    the difference once its backfill has finished. Every opening also stays before the first raw-totals month
+    (set_opening caps it)."""
+    for account in SK.money_accounts(ctx.c, ctx.book.id):
+        money_id = str(account["id"])
+        if money_id not in before or not account["account_id"]:
+            continue
+        step = before[money_id] - _term(ctx, account)
+        entry = SK.opening_entry(ctx.c, ctx.book.id, money_id)
+        if entry is None:
+            if step and _backfilled(ctx, account):
+                set_opening(ctx, account, step, _natural_day(ctx, account))
+            continue
+        set_opening(ctx, account, opening_amount(ctx, account, "9999-12-31") + step, str(entry["entry_date"]))
 
 
 def refresh_connection_openings(ctx: Ctx, connection_id: str) -> None:
@@ -363,11 +393,12 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
                   f"v{t.version}")
             return fid
         SK.update(ctx.c, "fin_feed_txns", fid, fields)
-    was_settled = row is not None and not int(row["pending"]) and str(row["provider_status"] or "") not in (
-        *F.VOID, F.REVERSED)
     _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, card, t)
-    if not t.pending and not (t.void or t.reversed) and not was_settled and ctx.book.mode != "mirror":
-        _before_opening(ctx, money, t.amount, t.txn_date)    # after settling: the row's status is final, so the figure is too
+    if (row is None and not t.pending and not (t.void or t.reversed) and ctx.book.mode != "mirror"
+            and _backfilled(ctx, money)):
+        # A settled row first seen now: after settling, so its status says whether the books carry it.
+        if str(SK.get(ctx.c, "fin_feed_txns", fid)["status"]) not in ("covered", "ignored"):
+            _before_opening(ctx, money, t.amount, t.txn_date)
     return fid
 
 
@@ -380,10 +411,11 @@ def _txn_of(row: Any) -> F.FeedTxn:
                      version=int(row["version"]), raw=SK.loads(row["raw_json"]))
 
 
-def refresh_covered(ctx: Ctx) -> None:
+def refresh_covered(ctx: Ctx, before: Mapping[str, int]) -> None:
     """Keep covered history (spec §4.1) in step with the raw-totals months. A settled row without an entry, dated on or
     before the latest such month, becomes `covered`: out of the review queues, posted nowhere, still counted by
-    reconciliation. A covered row that a reversal uncovers settles now, as if it had just arrived."""
+    reconciliation. A covered row that a reversal uncovers settles now, as if it had just arrived. `before` is
+    opening_terms as the raw-totals change found them: the openings move by what it moved (no bank movement came with it)."""
     for row in SK.open_feed_rows(ctx.c, ctx.book.id):
         covered = covered_day(ctx, str(row["txn_date"]))
         if covered and row["status"] == "new":
@@ -393,8 +425,7 @@ def refresh_covered(ctx: Ctx) -> None:
             money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
             card = SK.get(ctx.c, "fin_cards", str(row["card_id"])) if row["card_id"] else None
             _settle(ctx, SK.get(ctx.c, "fin_feed_txns", str(row["id"])), money, card, _txn_of(row))
-    for account in SK.money_accounts(ctx.c, ctx.book.id):    # covered rows and the raw movement moved the openings
-        refresh_opening(ctx, str(account["id"]))
+    shift_openings(ctx, before)
 
 
 def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
@@ -858,7 +889,9 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 from .mirror import ignore_feed
                 ignore_feed(ctx, row)
             else:
+                before = opening_terms(ctx)
                 undo(ctx, row)
+                shift_openings(ctx, before)     # the books let go of the row with no bank movement: the opening takes it
             return {"feed_id": str(row["id"]), "status": "ignored"}
         return Plan(K.default_gate(ctx.org, who, "categorize"), "Ignore a feed row", ignore,
                     facts={"amount": abs(amount), "counterparty": str(row["counterparty"])})
@@ -886,6 +919,7 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         taken = provider_fee(row, money)    # a sale's fee is part of its gross, which a payment settles
         if left + taken == 0:
             raise FinanceError(CONFLICT, "that bank row is already applied in full")
+        before = opening_terms(ctx)         # a row that was ignored comes back into the books with no bank movement
         if row["entry_id"]:
             _unpost(ctx, row, "re-categorized")
         holds = [str(row["hold_id"])] if row["hold_id"] and amount < 0 else []
@@ -895,6 +929,7 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             lines.append(fee)
         entry = post_row(ctx, str(row["id"]), replace(t, amount=left), lines, gl.id, holds)
         mark_posted(ctx, [str(row["id"])], entry)
+        shift_openings(ctx, before)
         return {"feed_id": str(row["id"]), "entry_id": entry}
     return Plan(K.default_gate(ctx.org, who, "categorize"),
                 f"Post a feed row to {account.code} {account.name}", apply,

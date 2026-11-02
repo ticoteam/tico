@@ -502,3 +502,59 @@ def test_migration_78_widens_the_feed_status_keeps_its_rows_and_runs_twice(books
         SCH.covered_history(c)
         assert state() == rows and sql() == table
         assert triggers() == before_triggers
+
+
+def _opening_entry(c) -> tuple[str, str, int]:
+    """The live opening balance entry on the checking line: (entry id, day, amount on that line)."""
+    row = c.execute("SELECT e.id, e.entry_date, l.amount FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
+                    "JOIN fin_accounts a ON a.id=l.account_id WHERE e.source='sync' AND e.source_id LIKE 'opening:%' "
+                    "AND e.status='posted' AND e.reverses_id IS NULL AND a.code='1000'").fetchone()
+    return str(row[0]), str(row[1]), int(row[2])
+
+
+PASSES = [f"2026-10-15T{h:02d}:30:00.000000Z" for h in (13, 14, 15)]
+
+
+def test_a_row_the_feed_never_sees_is_a_difference_the_opening_does_not_absorb(books):
+    """Phase 2 #1 (§4.1 opening): once the backfill has finished the opening moves only by what changed in the books,
+    never by a fresh balance read. The bank holds a row the feed never sends: later passes leave the opening where it
+    was, the bank line stays short of the statement, and reconciliation reports that difference."""
+    fake = FakeMercury()
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500, "2026-02-10")
+    fake.balances["acct-chk"] = -500
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        opening = _opening_entry(c)
+        assert opening[1:] == ("2026-02-09", 100_000), opening
+        assert _bank_gl(c) == (-50_000, -50_000)
+    fake.balances["acct-chk"] = -800                    # 300.00 the bank holds that the feed never sends
+    for at in PASSES:
+        sync_once(books, fake, at)
+    with books.transaction() as c:
+        assert _opening_entry(c) == opening
+        assert _bank_gl(c) == (-50_000, -80_000)
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        made = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
+                                           "statement_balance": -80_000})
+        assert made.status == "committed", made.reason
+        assert made.result["book_difference"] == -30_000, made.result     # 300.00 short of the statement
+        assert made.result["status"] == "open"
+
+
+def test_an_opening_does_not_block_a_sheet_that_reaches_back_past_it(books):
+    """Phase 2 #3 (§4.1 opening): connect first, so the opening exists before any import. The sheet's first month is
+    before the opening's day, so the import moves the opening back before that month instead of being blocked by it,
+    and the bank line still equals the provider's balance."""
+    fake = FakeMercury()
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500, "2026-02-10")
+    fake.balances["acct-chk"] = -500
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert _opening_entry(c)[1] == "2026-02-09"
+    with books.transaction() as c:
+        r = act(c, OWNER, "import_raw_totals", _body(PL_MAPPING, csv=PL_CSV))
+        assert r.status == "committed", r.reason
+        assert _bank_gl(c) == (-50_000, -50_000)
+        assert _opening_entry(c)[1] == "2025-12-31"

@@ -53,7 +53,9 @@ REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
            # a purchase order's close and void are not written to the provider yet (its create is)
            "po_close", "po_void",
            # a job's edits are not written to the provider yet (its create is, through RECORD_KINDS)
-           "project_update")
+           "project_update",
+           # a mirrored book's history is the provider's: a sheet of raw totals posts nothing, dry run included
+           "import_raw_totals")
 
 Record = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Location | M.Dimension |
 M.Project

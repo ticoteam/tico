@@ -111,14 +111,16 @@ def reverse(ctx: Ctx, entry_id: str, *, day: str | None, memo: str, by: str, act
     when = day or str(row["entry_date"])
     if SL.closed_on(ctx.c, ctx.book.id, when):
         raise FinanceError(PERIOD_CLOSED, f"the period holding {when} is closed; reverse on an open date")
+    from .banking import opening_terms, refresh_covered    # lazy: banking imports this module
+    raw_month = str(row["source"]) == "import" and str(row["source_id"]).startswith("raw_totals:")
+    before = opening_terms(ctx) if raw_month else {}    # the openings' terms before this month uncovers rows and moves its line
     e = L.Entry(book_id=ctx.book.id, entry_date=when, memo=memo or f"Reverses {entry_id}", source=str(row["source"]),
                 source_id=str(row["source_id"]), lines=L.reversal(lines), basis=str(row["basis"] or "both"))
     rid, _ = post(ctx, e, by=by, action_id=action_id, reverses_id=entry_id, reversing=True)
     if SL.mark_reversed(ctx.c, entry_id) != 1:
         raise FinanceError(CONFLICT, "that entry is already reversed")
-    if str(row["source"]) == "import" and str(row["source_id"]).startswith("raw_totals:"):
-        from .banking import refresh_covered    # a reversed raw-totals month uncovers the feed rows behind it (§4.1)
-        refresh_covered(ctx)
+    if raw_month:
+        refresh_covered(ctx, before)    # a reversed raw-totals month uncovers the feed rows behind it (§4.1)
     return rid
 
 

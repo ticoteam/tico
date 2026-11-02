@@ -300,10 +300,10 @@ def settled_total(c: sqlite3.Connection, money_account_id: str, kind: str = "") 
 
 
 def uncovered_total(c: sqlite3.Connection, money_account_id: str, kind: str = "") -> int:
-    """The total of the rows the balance holds that are not covered history (spec §4.1): the rows whose effect the books
-    hold, or will once they post. Covered history is in the opening balance instead."""
+    """The total of the rows the balance holds that the books carry (spec §4.1): the rows whose effect they hold, or will
+    once they post. Covered history and a row a person ignored (it never posts) are left out: the opening carries them."""
     row = c.execute(f"SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=? AND "
-                    f"{holding(kind)} AND status<>'covered'", (money_account_id,)).fetchone()
+                    f"{holding(kind)} AND status NOT IN ('covered','ignored')", (money_account_id,)).fetchone()
     return int(row[0])
 
 

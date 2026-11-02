@@ -11,7 +11,7 @@ from .core import ledger as L
 from .core import money as M
 from .core import raw_totals as RT
 from .core import validate as V
-from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, PERIOD_CLOSED, FinanceError, denied, invalid
+from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, denied, invalid
 from .handlers import Plan, Result, may_write
 from .posting import post
 from .store import ledger as SL
@@ -111,9 +111,6 @@ def _again(row: Any) -> Plan:
 
 
 def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    if ctx.book.mode == "mirror":    # a mirrored book's history is the provider's: nothing posts from a sheet, dry run too
-        raise FinanceError(NOT_AVAILABLE, "import_raw_totals is not available while the books are a provider's "
-                                          "(mirror mode)")
     V.only(p, ("csv", "basis", "mapping", "source_name"))
     sheet = RT.parse(V.text(p, "csv", RT.MAX_BYTES), V.choice(p, "basis", RT.BASES))
     by_key = _mapping(ctx, p.get("mapping"))
@@ -150,6 +147,8 @@ def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                               for code, total in list(totals.items())[:SHOWN]]
 
     def apply(aid: str) -> Result:
+        from .banking import opening_terms, refresh_covered    # lazy: banking imports posting, which imports this module
+        before = opening_terms(ctx)     # the openings' terms as the books stood: the months posted here move them
         batch = SL.new_id()
         posted: list[object] = []
         for month, lines in months.items():
@@ -160,8 +159,7 @@ def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         SR.insert(ctx.c, {"id": batch, "book_id": ctx.book.id, "content_hash": sheet.digest, "basis": sheet.basis,
                           "source_name": source, "periods": len(months), "row_count": len(sheet.rows),
                           "gross": gross, "action_id": aid, "created_at": ctx.at, "created_by": who})
-        from .banking import refresh_covered    # the months just posted cover the feed rows dated on or before them
-        refresh_covered(ctx)
+        refresh_covered(ctx, before)    # the months just posted cover the feed rows dated on or before them
         return {"batch_id": batch, "basis": sheet.basis, "months": posted}
 
     return Plan(gate=K.default_gate(ctx.org, who, "import_raw_totals"), apply=apply,
