@@ -18,7 +18,7 @@ import sqlite3
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from .. import due_date_flow as FLOW
 from ..records import csvimport as CI
@@ -221,7 +221,7 @@ def natural_key(record_type: str, payload: Mapping[str, object]) -> str:
     """The key two rows share when they are the same record: an address, a SKU or a serial; "" when there is none."""
     if record_type == "locations":
         address = payload.get("address")
-        return CI.address_key(address) if isinstance(address, dict) else ""
+        return CI.address_key(cast(Mapping[str, str], address)) if isinstance(address, dict) else ""
     if record_type == "items":
         return CI.match_key(str(payload.get("sku") or ""))
     if record_type == "equipment":

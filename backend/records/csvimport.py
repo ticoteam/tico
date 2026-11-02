@@ -79,7 +79,7 @@ def read(text: str, columns: Sequence[str], required: Sequence[str]) -> tuple[li
                 continue
             if len(rows) == MAX_ROWS:
                 raise FileRefused("too_large", f"The file has more than {MAX_ROWS:,} rows: split it into smaller files")
-            problems = []
+            problems: list[str] = []
             cells = {name: "" for name in columns}
             for name, i in where.items():
                 value = raw[i].strip() if i < len(raw) else ""

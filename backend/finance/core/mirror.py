@@ -316,7 +316,8 @@ def class_refs(tags: Mapping[str, str], mapping: Mapping[str, Mapping[str, str]]
 
 
 # ------------------------------------------------------------------------------------------------ parked records
-Record = ChartAccount | Party | Journal | Document | Settlement | Item | Location | Dimension | Project | Ext | Refused
+Record = (ChartAccount | Party | Journal | Document | Settlement | Item | Location | Dimension | Project | Order | Ext
+          | Refused)
 
 
 def encode(r: Record) -> dict[str, Any]:
