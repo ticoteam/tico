@@ -144,6 +144,11 @@ class QuickBooks:
 
     entities: tuple[str, ...] = tuple(Q.PAGES)
     feeds: tuple[str, ...] = Q.ENTITIES
+    # A change feed the window or the cap cut short is not trusted: the books are read in full, and a record not returned
+    # by that read is deleted at the provider (mirror._sweep). The kinds a full read covers are the only ones swept; a
+    # job (a Customer read as a Project) is a project.
+    full_reread: bool = True
+    read_kinds: tuple[str, ...] = (*Q.ENTITIES, "Project")
 
     def __init__(self, realm: str, tokens: Callable[[bool], str], *, base: str | None = None,
                  transport: Transport | None = None, sleep: Callable[[float], None] = time.sleep) -> None:

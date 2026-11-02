@@ -280,6 +280,16 @@ def cdc_since(cursor: str | None, now: str) -> str:
     return max(base, floor).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def cdc_clamped(cursor: str | None, now: str) -> bool:
+    """Whether a feed's cursor is older than the provider keeps changes for (the window, with its one-day margin): a read
+    from it would start at the floor, so the changes between the cursor and the floor are gone and the books are read in
+    full instead. A feed never read has no cursor and is not clamped."""
+    if not cursor:
+        return False
+    floor = parse(now) - timedelta(days=CDC_DAYS) + CDC_FLOOR_MARGIN
+    return parse(cursor) - timedelta(seconds=CDC_OVERLAP) < floor
+
+
 def cdc_due(cursor: str | None, now: str, every: int = CDC_EVERY) -> bool:
     """Whether the change feed is due: never read, or last read `every` seconds ago or more."""
     return cursor is None or (parse(now) - parse(cursor)).total_seconds() >= every

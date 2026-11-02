@@ -529,6 +529,8 @@ ADDED = (
     # phase 4: the mirror's external refs (kind, revision, status) on installs made before them (migration 68)
     ("fin_external_refs", "kind", "TEXT NOT NULL DEFAULT ''"), ("fin_external_refs", "revision", "TEXT NOT NULL DEFAULT ''"),
     ("fin_external_refs", "status", "TEXT NOT NULL DEFAULT 'active'"), ("fin_external_refs", "updated_at", "TEXT"),
+    # the generation of a full re-read that the books returned the ref in (migration 78); negative once swept in it
+    ("fin_external_refs", "seen_gen", "INTEGER"),
     # the provider's id for a journal or credit memo line, so its tags follow the line across a revision
     ("fin_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
@@ -767,6 +769,12 @@ def tax(c: sqlite3.Connection) -> None:
 def purchasing(c: sqlite3.Connection) -> None:
     """Cloud migration 77: purchase orders and estimates, and the bill line an order line is billed on. Idempotent:
     `create` makes whatever is missing."""
+    create(c)
+
+
+def reread(c: sqlite3.Connection) -> None:
+    """Cloud migration 78: fin_external_refs.seen_gen, which a full re-read of a provider's books marks the refs the books
+    return in it. Idempotent: `create` makes whatever is missing."""
     create(c)
 
 

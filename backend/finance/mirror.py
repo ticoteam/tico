@@ -2284,12 +2284,14 @@ def _apply_chunked(store: Any, cid: str, records: Sequence[Record], now: str) ->
 
 
 def _backfill(store: Any, books: Books, cid: str, now: str, size: int) -> str:
-    """One page of the first entity not yet read through (in order: accounts, parties, entries)."""
+    """One page of the first entity not yet read through (in order: accounts, parties, entries). During a full re-read
+    the refs a page's records are marked as found (`_sweep` reads the rest); once every entity is read, the sweep runs."""
     with store.read() as c:
-        state = _backfill_state(SX.mirror_state(c, cid))
+        st = SX.mirror_state(c, cid)
+    state = _backfill_state(st)
     entity = next((e for e in books.entities if M.backfill_next(state, e) is not None), None)
     if entity is None:
-        return ""
+        return _sweep(store, books, cid, now)
     start = M.backfill_next(state, entity) or 1
     read = books.page(entity, start, size)
     if not read.ok:
@@ -2297,8 +2299,57 @@ def _backfill(store: Any, books: Books, cid: str, now: str, size: int) -> str:
     counted = read.seen if read.seen >= 0 else len(read.records)     # a row no record fits still moves the cursor
     _apply_chunked(store, cid, read.records, now)
     with store.transaction() as c:
-        done = M.backfill_after(_backfill_state(SX.mirror_state(c, cid)), entity, start, counted, size)
+        cur = SX.mirror_state(c, cid)
+        reread = _reread_of(cur)
+        if reread:
+            SX.reread_seen(c, cid, sorted({_ext_of(r).key for r in read.records}), _gen_of(reread))
+        done = M.backfill_after(_backfill_state(cur), entity, start, counted, size)
         SX.set_mirror_state(c, cid, {"backfill": done})
+    return ""
+
+
+def _reread_of(st: Mapping[str, object]) -> dict[str, object]:
+    """The full re-read in progress (its generation, why it began, and the stamp it began at), or {} when none is."""
+    return SX.as_map(st.get("reread"))
+
+
+def _gen_of(state: Mapping[str, object]) -> int:
+    value = state.get("gen")
+    return value if isinstance(value, int) else 0
+
+
+def _start_reread(store: Any, cid: str, now: str, why: str) -> None:
+    """Starts a full re-read of the books: the backfill begins again from each entity's first page, the change feed waits
+    until it is complete, and the cursors stay where they are until then (`_sweep`). `why` is the trigger: the window or
+    the cap."""
+    with store.transaction() as c:
+        gen = _gen_of(SX.mirror_state(c, cid)) + 1
+        SX.set_mirror_state(c, cid, {"gen": gen, "reread": {"gen": gen, "why": why, "started": now}, "backfill": {},
+                                     "exact": []})
+
+
+def _sweep(store: Any, books: Books, cid: str, now: str) -> str:
+    """The end of a full re-read, once every entity has been read in full: each held ref of the kinds read that the read
+    did not return is deleted at the provider, through the same delete path as a change, a chunk at a time. Only a
+    complete read gets here, so an incomplete one deletes nothing. When none is left, the cursors move to the stamp the
+    re-read began at, so the change feed picks up from there."""
+    with store.read() as c:
+        reread = _reread_of(SX.mirror_state(c, cid))
+        if not reread:
+            return ""
+        gen = _gen_of(reread)
+        kinds = tuple(getattr(books, "read_kinds", ()))
+        rows = SX.reread_unseen(c, cid, gen, kinds, M.APPLY_CHUNK) if kinds else []
+    if rows:
+        gone = [M.Ext(str(key).partition(":")[0], str(key).partition(":")[2], "", deleted=True) for _, key in rows]
+        _apply_chunked(store, cid, gone, now)
+        with store.transaction() as c:
+            SX.reread_swept(c, [str(row[0]) for row in rows], gen)
+        return ""
+    started = str(reread["started"])
+    with store.transaction() as c:
+        SX.set_mirror_state(c, cid, {"cursors": {feed: started for feed in books.feeds}, "changed_at": started,
+                                     "exact": [], "reread": None})
     return ""
 
 
@@ -2319,7 +2370,13 @@ def _changes(store: Any, books: Books, cid: str, now: str, waiting: bool = False
     exact_raw = st.get("exact")
     exact = {str(feed) for feed in cast(list[object], exact_raw)} if isinstance(exact_raw, list) else set[str]()
     due = bool(exact) or any(M.cdc_due(cursors[feed], now, every) for feed in books.feeds)
-    if not M.backfill_done(_backfill_state(st), books.entities) or not (waiting or due):
+    if _reread_of(st) or not M.backfill_done(_backfill_state(st), books.entities) or not (waiting or due):
+        return ""
+    # A provider that keeps changes for a window (QuickBooks: 30 days) is not read from a cursor past it, and an answer
+    # that reached the cap is not complete: either way the books are read in full, and the cursors wait for that read.
+    full = bool(getattr(books, "full_reread", False))
+    if full and any(M.cdc_clamped(cursors[feed], now) for feed in books.feeds):
+        _start_reread(store, cid, now, "window")
         return ""
     read = books.changed({feed: (cursors[feed] or now) if feed in exact else M.cdc_since(cursors[feed], now)
                           for feed in books.feeds})
@@ -2329,6 +2386,10 @@ def _changes(store: Any, books: Books, cid: str, now: str, waiting: bool = False
     with store.read() as c:
         waiting_records = [M.decode(v) for k, v in _pending(c, cid).items() if k not in fresh]
     _apply_chunked(store, cid, [*read.records, *waiting_records], now)
+    if full and read.through:
+        # The answer reached the cap: what it holds is applied, but the feed is complete only to the full read that follows.
+        _start_reread(store, cid, now, "cap")
+        return ""
     with store.transaction() as c:
         # A feed the provider cut short is complete only to its `through`, so its next read starts there; the rest are
         # complete to this read. The cursors move once every chunk is in.
