@@ -1,7 +1,7 @@
 """Trusted Computer config survives maintenance without repository programs."""
 import os
 import subprocess
-from runner import safe_git
+from runner_support import safe_git
 
 
 def test_system_and_global_settings_are_kept_without_includes(tmp_path, monkeypatch):
@@ -65,7 +65,7 @@ def test_a_mirror_another_user_owns_is_cloned_and_fetched_with_the_trust_file(tm
     clone = tmp_path / 'clone'
     done = subprocess.run([*local, 'clone', '-q', mirror.as_uri(), str(clone)], env=trusted, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
-    # The checkout itself is trusted on the command line, as runner/repositories.py does: git checks it in-process.
+    # The checkout itself is trusted on the command line, as runner_support/repositories.py does: git checks it in-process.
     done = subprocess.run([*local, '-c', 'safe.directory=' + str(clone), '-C', str(clone), 'fetch', '-q', '--', mirror.as_uri(), '+refs/heads/main:refs/remotes/origin/main'],
                           env=trusted, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr

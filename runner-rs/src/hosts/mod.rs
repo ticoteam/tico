@@ -793,13 +793,13 @@ impl Host {
 
 #[cfg(test)]
 pub mod fixtures {
-    //! runner/tests/fixtures/<harness>/*.jsonl, replayed here.
+    //! runner-rs/tests/fixtures/<harness>/*.jsonl, replayed here.
     use std::path::PathBuf;
 
     use serde_json::Value;
 
     pub fn dir(harness: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures").join(harness)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(harness)
     }
 
     /// (fixture path, the events the Python host makes of it), for every fixture of `harness`.

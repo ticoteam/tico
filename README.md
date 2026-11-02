@@ -255,7 +255,7 @@ server's variable file; real hostnames, buckets, ARNs and humans live outside th
 |---|---|
 | `backend/` | The server: API, authorization, write layer, scheduler, backups, settings admin (FastAPI, SQLite) |
 | `runner-rs/` | The local runner (`tico-runner`): enrollment, readiness, leases, runs, subscription profiles, updates, and one host per model CLI in `runner-rs/src/hosts/` |
-| `runner/` | The runner's Python helpers: the `python -m runner run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
+| `runner_support/` | The runner's Python helpers: the `python -m runner_support run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
 | `clients/` | What bots and owners call: the `hub` CLI, the HTTP client, preflight, routine validation, team documents, and `environments.py` |
 | `ui/`, `app/` | The web interface and its browser tests; the Tauri desktop shell (Rust) |
 | `setup/` | `tico setup`, the guided Docker install of the server and of Linux runners |
@@ -319,7 +319,7 @@ Browser checks need `npm ci` and a Playwright browser (`npx playwright install c
 dependency: `marked` and the icon font are vendored in `ui/vendor/` with their licenses.
 
 The live checkout on an owner's Mac is what the runner executes: the launchd jobs run
-`python -m runner` with that directory as the working directory, and the bot job execs the Rust runner built
+`python -m runner_support` with that directory as the working directory, and the bot job execs the Rust runner built
 from that tree (rebuilt on restart when `runner-rs/` changed). A pull without a restart leaves the old code
 running (`scripts/tico status` says so explicitly). Do development in a git worktree, never in the live checkout, and use
 `scripts/tico update`, which pulls and restarts after waiting for runs in flight.

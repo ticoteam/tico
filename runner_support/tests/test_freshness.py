@@ -1,8 +1,8 @@
 """A helper job exits, with status 0 for the supervisor to restart it, when the checkout's revision changes."""
 import threading
 
-from runner import freshness
-from runner.importers import service as importers_service
+from runner_support import freshness
+from runner_support.importers import service as importers_service
 
 
 def watch(heads, supervised=True, lines=None):

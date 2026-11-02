@@ -1,4 +1,4 @@
-//! Base clones for this computer (runner/repositories.py): a supervisor-owned bare mirror of each repository
+//! Base clones for this computer (runner_support/repositories.py): a supervisor-owned bare mirror of each repository
 //! the server lists (`<state>/mirrors/<owner>__<repo>.git`), a base clone made from it in `<projects>/repos/`
 //! marked `.git/tico-managed`, their state in `<state>/repositories.json` (the Python file, read and written
 //! the same way), and the heartbeat's `repositories` rows. Task worktrees are made from the base clones.

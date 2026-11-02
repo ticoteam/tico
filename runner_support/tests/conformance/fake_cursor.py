@@ -1,8 +1,8 @@
-"""A stand-in for Cursor's `cursor-agent`, for the runner conformance suite (runner/tests/test_conformance.py).
+"""A stand-in for Cursor's `cursor-agent`, for the runner conformance suite (runner_support/tests/test_conformance.py).
 
 `--version` answers as 2026.09.28; `status` says it is logged in; `create-chat` prints a new chat id. `-p
 --output-format stream-json` reads the prompt from stdin and writes the lines runner-rs/src/hosts/cursor.rs reads
-(runner/tests/fixtures/cursor/turn.jsonl): `system init`, an `assistant` message, and a `result` with its usage.
+(runner-rs/tests/fixtures/cursor/turn.jsonl): `system init`, an `assistant` message, and a `result` with its usage.
 Every turn is appended to $FAKE_LOG as one JSON line (argv, the prompt, the granted variables). A prompt
 containing HANG writes one assistant message and then waits, once per $FAKE_LOG, until its parent goes away."""
 import json

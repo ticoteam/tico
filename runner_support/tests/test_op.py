@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import MagicMock
 
-from runner import op
+from runner_support import op
 
 
 class OnePassword(unittest.TestCase):

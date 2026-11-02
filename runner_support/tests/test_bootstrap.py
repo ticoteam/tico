@@ -1,5 +1,5 @@
-"""First run: the runner sets the two bootstrap bots up from the catalog (`python -m runner catalog`,
-runner/catalog_job.py).
+"""First run: the runner sets the two bootstrap bots up from the catalog (`python -m runner_support catalog`,
+runner_support/catalog_job.py).
 
 No CLI and no network: the cloud is a fake client, and the catalog is a temporary directory.
 """
@@ -72,7 +72,7 @@ def entry(bot, template=None, runner_id="r1", **config):
 def test_the_catalog_job_sets_a_bot_up_and_answers_on_stdout(tmp_path, monkeypatch):
     import io
     import json
-    from runner import catalog_job
+    from runner_support import catalog_job
     monkeypatch.setenv("TICO_CATALOG_DIR", str(catalog(tmp_path / "catalog")))
     projects = tmp_path / "Companies/Acme"
     projects.mkdir(parents=True)

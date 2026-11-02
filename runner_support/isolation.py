@@ -9,7 +9,7 @@ CLI of a turn, the login relay, `git` in a bot's checkout, any model CLI the run
 the group, so the workspace, the secrets the turns need and the model logins (all in HOME) work for both
 users, and an older image can still run on the same volume. A turn gets its attempt token and the
 environment the runner already passes, and asks for its GitHub token over a socket
-(runner/credential_socket.py).
+(runner_support/credential_socket.py).
 
 It stays off wherever TICO_RUNNER_BOT_UID is unset: a Mac runner is a trust group of one user
 (SECURITY.md), and so is an image started the way it was before this. Bots still share the `bot` user.

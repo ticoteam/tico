@@ -1,7 +1,7 @@
 """A bot's GitHub token, from the supervisor, without the runner's registration.
 
 git's credential helper runs inside a turn, as the turn's user, which must not be able to read
-runner.json (runner/isolation.py). So the supervisor listens on a Unix socket and the helper
+runner.json (runner_support/isolation.py). So the supervisor listens on a Unix socket and the helper
 asks it: it sends the turn's attempt token, and gets a GitHub token for the bot that attempt
 belongs to, minted with the runner's registration. The socket has no other question: it cannot
 name a bot, so an attempt never gets another bot's token, an attempt that has ended gets nothing,
@@ -10,7 +10,7 @@ and the runner's own token never crosses it.
 One JSON line each way: {"token": "<attempt token>", "repository": "owner/repo", "purpose": "git"}
 (repository and purpose optional) then {"token": "<github token>"} or {"error": "..."}.
 
-The same socket serves an inbox bot's mail access (runner/mail_key.py holds the Google key, which
+The same socket serves an inbox bot's mail access (runner_support/mail_key.py holds the Google key, which
 bots cannot read): {"token": "<attempt token>", "mail": {"service": "gmail", "mailbox": "ana@..."}}
 answers {"token": "<Gmail access token>", "expiry": "...", "scopes": [...]} (scopes only for a person's own connected
 Google account, connectors/mail/oauth.py, so the turn refuses a write it did not grant). The hub named the mailboxes this attempt's

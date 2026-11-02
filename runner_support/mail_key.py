@@ -2,10 +2,10 @@
 
 The service-account key acts as any mailbox in the company. Every bot on a computer runs as the
 same user, so a key in workspace/secrets is one prompt injection away from all of them. When the
-two-user layout is on (runner/isolation.py) the supervisor keeps the key in its own state directory
+two-user layout is on (runner_support/isolation.py) the supervisor keeps the key in its own state directory
 (owned by ticorun, 0600, closed to the bot user), the connectors job reads it there, and an inbox
 bot's turn asks the supervisor, over the credential socket, for a short-lived token for one mailbox
-(runner/credential_socket.py). Without the layout (a Mac, or Docker started the old way) the key
+(runner_support/credential_socket.py). Without the layout (a Mac, or Docker started the old way) the key
 stays where it was and bots can read it: `exposed` says so, and Settings > Health shows a warning.
 """
 import json

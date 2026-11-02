@@ -6,7 +6,7 @@
 Runs the real CLI, passes stdin and stdout through line by line, and appends what crosses the process boundary
 to <log>, in the order seen: a `spawn` entry, each line the runner wrote (`out`) and the CLI wrote (`in`),
 `close` when the runner closed stdin, `signal` when it sent SIGTERM (passed on to the CLI), and `exit` with the
-return code and stderr. Probes (`--version`, `--help`) run straight through, unrecorded. See runner/tests/fixtures/REPLAY.md.
+return code and stderr. Probes (`--version`, `--help`) run straight through, unrecorded. See runner-rs/tests/fixtures/REPLAY.md.
 """
 
 import json

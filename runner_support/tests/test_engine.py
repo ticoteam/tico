@@ -1,4 +1,4 @@
-"""The `python -m runner run` shim (runner/engine.py): exec a current Rust runner, download one, or exit 75."""
+"""The `python -m runner_support run` shim (runner_support/engine.py): exec a current Rust runner, download one, or exit 75."""
 
 import gzip
 import hashlib
@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from runner import engine
-from runner.version import RUNNER_VERSION
+from runner_support import engine
+from runner_support.version import RUNNER_VERSION
 
 
 def fake_binary(path, version, build_id):

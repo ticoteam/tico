@@ -1,7 +1,7 @@
-"""A stand-in for Meta's `muse` CLI (Muse Code), for the runner conformance suite (runner/tests/test_conformance.py).
+"""A stand-in for Meta's `muse` CLI (Muse Code), for the runner conformance suite (runner_support/tests/test_conformance.py).
 
 `--version` answers as Muse Code 1.4.7 does; `exec --json` reads `--prompt-file` and writes the JSONL events
-runner-rs/src/hosts/musecode.rs reads (the shapes recorded in runner/tests/fixtures/musecode/echo.jsonl): two text
+runner-rs/src/hosts/musecode.rs reads (the shapes recorded in runner-rs/tests/fixtures/musecode/echo.jsonl): two text
 deltas, one model completion's usage and a completed terminal with the final text. Like the real CLI, a turn with
 `--session-id` first makes that session's folder under $XDG_DATA_HOME/muse/sessions (~/.local/share without it)
 and fails at once when it cannot. Every call is appended to

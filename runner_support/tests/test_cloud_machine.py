@@ -1,5 +1,5 @@
 """The base image step and the enroll-at-boot step of a cloud machine, a bot's own or the shared one
-(runner/cloud_machine.py)."""
+(runner_support/cloud_machine.py)."""
 import json
 import os
 import shutil
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from runner import cloud_machine as cm
+from runner_support import cloud_machine as cm
 
 CODE = "Zq3-abcdefghijklmnopqrstuvwxyz0123456789_AB"
 HUB = "https://acme.example"
@@ -24,7 +24,7 @@ class Fake:
     def __call__(self, command, **kw):
         self.calls.append(command)
         out, code = "", 0
-        if "path" in command and "runner.engine" in command:
+        if "path" in command and "runner_support.engine" in command:
             out = "/home/user/tico/runtime/bin/tico-runner\n"
         elif "enroll" in command:
             code_file = Path(command[command.index("--code-file") + 1])
@@ -269,9 +269,9 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
     assert "user ALL=(ALL) NOPASSWD:ALL" in sudoers.read_text() and oct(sudoers.stat().st_mode & 0o777) == "0o440"
     assert ["loginctl", "enable-linger", "user"] in fake.calls
     assert fake.named("visudo") and ["systemctl", "enable", cm.UNIT] in fake.calls
-    assert [c for c in fake.calls if "runner.engine" in c and "prepare" in c]
+    assert [c for c in fake.calls if "runner_support.engine" in c and "prepare" in c]
     unit = (tmp_path / "units" / cm.UNIT).read_text()
-    assert "-m runner.cloud_machine boot" in unit and "Restart=on-failure" in unit and "WantedBy=multi-user.target" in unit
+    assert "-m runner_support.cloud_machine boot" in unit and "Restart=on-failure" in unit and "WantedBy=multi-user.target" in unit
     marker = json.loads(cm.marker_path(machine.etc).read_text())
     assert marker == {"user": "user", "root": str(m.root), "release": "0.5.7"}
 

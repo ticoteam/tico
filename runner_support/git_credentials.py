@@ -3,7 +3,7 @@
 The hub mints an installation token that lasts an hour, and a turn can run longer, so git does not
 keep one: its credential helper is this module, which asks the hub on every credential request and
 can reuse a still-valid cached token: from the hub with the runner's own registration, or, where bot code
-cannot read that file (runner/isolation.py), from the supervisor's socket with the turn's attempt token. The helper is configured through
+cannot read that file (runner_support/isolation.py), from the supervisor's socket with the turn's attempt token. The helper is configured through
 environment variables (no file, no askpass script on disk) and the token is only ever printed to
 git. `gh` selects a token for its repository through a turn-local command wrapper. With no App
 connected, the turn keeps the machine’s git access. App token failures disable that fallback.
@@ -122,7 +122,7 @@ def fresh_helper(config_path, bot, socket_path=None):
     with the runner's registration, or from the supervisor's socket when there is one."""
     where = ("--socket", str(socket_path)) if socket_path else (("--config", str(config_path)) if config_path else ())
     run = " ".join(shlex.quote(part) for part in (
-        sys.executable, "-m", "runner.git_credentials", *where, "--bot", bot))
+        sys.executable, "-m", "runner_support.git_credentials", *where, "--bot", bot))
     return f"!f() {{ [ \"$1\" = get ] || exit 0; cd {shlex.quote(str(ROOT))} && exec {run}; }}; f"
 
 
@@ -199,10 +199,10 @@ def apply(env, client, bot, config_path=None, socket_path=None):
             env["TICO_GITHUB_BOT"] = bot
             if config_path and not socket_path:
                 env["TICO_GITHUB_CONFIG"] = str(config_path)
-            env["PATH"] = str(ROOT / "runner" / "credential_bin") + os.pathsep + env.get("PATH", os.environ.get("PATH", os.defpath))
+            env["PATH"] = str(ROOT / "runner_support" / "credential_bin") + os.pathsep + env.get("PATH", os.environ.get("PATH", os.defpath))
             env[TURN_PATH_KEY] = env["PATH"]
             if sys.platform == "darwin":
-                startup = str(ROOT / "runner" / "shell_init")
+                startup = str(ROOT / "runner_support" / "shell_init")
                 env["TICO_TURN_BASH_ENV"] = env.get("BASH_ENV", "")
                 env["TICO_TURN_ZDOTDIR"] = env.get("ZDOTDIR") or env.get("HOME") or str(Path.home())
                 env["BASH_ENV"] = str(Path(startup) / "bash-env")

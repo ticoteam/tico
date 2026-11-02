@@ -7,7 +7,7 @@ from unittest import mock
 
 import pytest
 
-from runner import credential_socket as C, git_credentials as G, isolation
+from runner_support import credential_socket as C, git_credentials as G, isolation
 
 
 @pytest.fixture(autouse=True)
@@ -172,7 +172,7 @@ def test_git_token_purpose_fallback_does_not_hide_other_422_errors(monkeypatch):
 
 
 def test_refreshed_tokens_join_attempt_redactor_and_are_released(channel):
-    from runner.redact import Redactor, MASK
+    from runner_support.redact import Redactor, MASK
     channel.register('attempt-a', 'alpha')
     # Publishing can ask for a token before the turn redactor has been built.
     first = C.request(channel.path, 'attempt-a')

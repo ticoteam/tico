@@ -1,4 +1,4 @@
-"""A stand-in for the Gemini CLI, for the runner conformance suite (runner/tests/test_conformance.py).
+"""A stand-in for the Gemini CLI, for the runner conformance suite (runner_support/tests/test_conformance.py).
 
 `--version` answers as Gemini CLI 0.40.0. `-p ""` reads the prompt from stdin and speaks stream-json the way
 runner-rs/src/hosts/gemini.rs reads it: `init`, assistant text deltas, then a `result` with stats for the model asked

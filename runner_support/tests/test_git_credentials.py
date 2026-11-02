@@ -4,7 +4,7 @@ import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from runner import git_credentials as G
+from runner_support import git_credentials as G
 
 import pytest
 
@@ -199,7 +199,7 @@ def test_gh_placeholders_and_text_urls_select_checkout_origin(tmp_path, monkeypa
 
 
 def test_each_granted_token_is_redacted_after_apply():
-    from runner import redact
+    from runner_support import redact
     grants = {'configured': True, 'token': 'ghs_write_secret', 'tokens': [
         {'token': 'ghs_write_secret', 'repositories': ['Acme/product']},
         {'token': 'ghs_read_secret', 'repositories': ['Acme/docs']}]}
@@ -244,7 +244,7 @@ def test_app_token_wins_in_the_org_and_a_stored_gh_token_serves_only_other_owner
     """A stale GH_TOKEN credential granted to the bot never shadows the App inside the connected organization."""
     import os
     import shutil
-    from runner import redact
+    from runner_support import redact
     gh = tmp_path / "gh"
     gh.write_text("#!/bin/sh\nprintf '%s' \"$GH_TOKEN\"\n")
     gh.chmod(0o755)
@@ -305,7 +305,7 @@ def test_mac_login_shells_keep_the_wrapper_and_refresh_after_the_starting_token_
             before = hub.count
             result = subprocess.run([shell, *flags, command], env=env, cwd=home,
                                     capture_output=True, text=True, timeout=HANG)
-            wrapper = str(G.ROOT / "runner" / "credential_bin" / "gh")
+            wrapper = str(G.ROOT / "runner_support" / "credential_bin" / "gh")
             assert result.returncode == 0, result.stderr
             assert result.stdout.splitlines() == [wrapper, f"ghs_fresh{before + 1}",
                                                    wrapper, f"ghs_fresh{before + 2}", "kept"]

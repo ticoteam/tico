@@ -3,7 +3,7 @@
 `scripts/tico install` gives a Mac launchd jobs with KeepAlive; on Linux it writes these units instead, under
 `~/.config/systemd/user`, each with `Restart=always`. Nothing here needs root. The unit carries two variables the
 runner reads: `TICO_SUPERVISED=1` (something starts it again, so it may exit to update) and `TICO_SYSTEMD_UNIT`
-(its own unit name), which `runner/release_update.py` uses to restart the runner and the helper jobs through
+(its own unit name), which `runner_support/release_update.py` uses to restart the runner and the helper jobs through
 `systemctl --user restart`.
 
 Every function is pure or takes the command runner as an argument, so the tests never start systemd.
@@ -51,7 +51,7 @@ def render(kind, *, python, config, root, log, path, env_slug="", home="", user=
         exec_line = " ".join(quote(x) for x in (python, "-m", "backend.server", "--host",
                                                "127.0.0.1", "--port", port))
     elif kind in COMMANDS:
-        exec_line = " ".join(quote(x) for x in (python, "-m", "runner", "--config", config, COMMANDS[kind]))
+        exec_line = " ".join(quote(x) for x in (python, "-m", "runner_support", "--config", config, COMMANDS[kind]))
     else:
         raise ValueError(f"unknown job {kind!r}")
     lines = ["[Unit]", f"Description={DESCRIPTIONS[kind]}" + (f" ({env_slug})" if env_slug else ""),
@@ -112,7 +112,7 @@ def is_installed(unit, unit_dir=None):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="python -m runner.systemd_units")
+    parser = argparse.ArgumentParser(prog="python -m runner_support.systemd_units")
     sub = parser.add_subparsers(dest="cmd", required=True)
     w = sub.add_parser("write", help="write one unit file and print its path")
     w.add_argument("kind", choices=KINDS + ("api",))

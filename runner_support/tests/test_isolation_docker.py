@@ -2,11 +2,11 @@
 
 Needs Docker and a built runner image; skipped otherwise:
     docker build --target runner -t tico-runner:local .
-    TICO_RUNNER_TEST_IMAGE=tico-runner:local pytest runner/tests/test_isolation_docker.py
+    TICO_RUNNER_TEST_IMAGE=tico-runner:local pytest runner_support/tests/test_isolation_docker.py
 
 It starts the image the way docker/runner.compose.yaml does (root, five capabilities) on a volume laid
 out the way an older image left it (everything owned by 10002), so the one-time migration runs too.
-Inside, runner/tests/isolation/turn_side.py plays the supervisor and drops a turn to the bot user. Then
+Inside, runner_support/tests/isolation/turn_side.py plays the supervisor and drops a turn to the bot user. Then
 the volume is used the way an older image (no capabilities, only uid 10002) would after a rolled-back
 update: it must still read its registration and state and run a harness, and `bot` must still not.
 """
@@ -197,7 +197,7 @@ def test_the_bot_user_clones_and_fetches_the_mirror_the_supervisor_owns(volume):
 # executable. So they test what an image ships, and pointing TICO_RUNNER_TEST_IMAGE at an older release shows
 # whether that release had the defect.
 
-HARNESSES = Path(__file__).resolve().parents[1] / "harnesses"
+HARNESSES = Path(__file__).resolve().parents[2] / "runner-rs" / "harnesses"
 ROOT = Path(__file__).resolve().parents[2]
 WAIT_SECONDS = 300
 

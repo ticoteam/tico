@@ -17,10 +17,10 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from backend.imports import MeetingImport
 from clients.tico import APIError
-from runner.importers import REGISTRY, google_meet, granola, zoom
-from runner.importers.base import ProviderError
-from runner.importers.service import ImporterService
-from runner.state import State
+from runner_support.importers import REGISTRY, google_meet, granola, zoom
+from runner_support.importers.base import ProviderError
+from runner_support.importers.service import ImporterService
+from runner_support.state import State
 
 NOW = datetime(2026, 9, 28, 20, 0, tzinfo=timezone.utc)
 OWNER = "ana@acme.example"

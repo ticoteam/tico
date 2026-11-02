@@ -384,7 +384,7 @@ pub fn remove_profile(config: &Config, name: &str) -> Result<bool, String> {
     }
 }
 
-/// The `profile` subcommand: add, list (runner/__main__.py profile_command). Writes runner.json the
+/// The `profile` subcommand: add, list (runner_support/__main__.py profile_command). Writes runner.json the
 /// way Python does: every key kept, two-space indent.
 pub fn command(config: &mut Config, action: &str, name: Option<&str>, share_operator: bool) -> Result<String, String> {
     match action {

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from runner import systemd_units as su
+from runner_support import systemd_units as su
 
 ROOT = Path(__file__).resolve().parents[2]
 KW = dict(python="/srv/tico/runtime/runner-venv/bin/python", config="/home/ana/.config/tico/runner.json", root="/srv/tico",

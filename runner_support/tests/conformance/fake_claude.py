@@ -1,4 +1,4 @@
-"""A stand-in for the `claude` CLI, for the runner conformance suite (runner/tests/test_conformance.py).
+"""A stand-in for the `claude` CLI, for the runner conformance suite (runner_support/tests/test_conformance.py).
 
 `--version`, `--help` and `auth status --json` answer as Claude Code 2.1.296 does; `-p` speaks stream-json the way
 runner-rs/src/hosts/claude.rs reads it: each user message is replayed, then a text delta, the assistant message and a
@@ -9,7 +9,7 @@ streams one delta and then waits, once per $FAKE_LOG, until its parent goes away
 after $FAKE_SLOW seconds (2), so a steer written meanwhile is read (replayed) and answered after it, in the same
 process, as Claude Code does. RECALL answers with the code word only when the prompt itself holds it ("code word is X"),
 as a model with no other memory of the conversation would. With $FAKE_CLAUDE_LIMIT set, every turn ends at the session
-limit as Claude Code's does (runner/tests/fixtures/claude/session-limit.jsonl): a rejected `rate_limit_event`, the
+limit as Claude Code's does (runner-rs/tests/fixtures/claude/session-limit.jsonl): a rejected `rate_limit_event`, the
 synthetic `rate_limit` message and an error `result`, having used no tokens (or some, when $FAKE_LIMIT_SPENDS names
 claude)."""
 import json

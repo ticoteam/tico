@@ -1,5 +1,5 @@
 """Built-in bots from the catalog, for the Rust runner (runner-rs/src/product_files.rs), which ships no templates:
-`python -m runner --config <path> catalog` reads one JSON request on stdin and prints one JSON answer on stdout.
+`python -m runner_support --config <path> catalog` reads one JSON request on stdin and prints one JSON answer on stdout.
 
     {"bots": [{"bot": "botops", "entry": {...assignment row...}, "path": "...", "action": "bootstrap" | "refresh"}]}
 
@@ -31,7 +31,7 @@ FETCH_RETRY_S = 120         # how long a repository that could not be cloned is 
 
 
 class BotSetup:
-    """The built-in bot set-up a computer does itself (`python -m runner catalog`, for the Rust runner). Needs `config`,
+    """The built-in bot set-up a computer does itself (`python -m runner_support catalog`, for the Rust runner). Needs `config`,
     `client` and, for github_access without an entry, `assignments_seen`."""
     # This installation's names, read from the server on the first turn. A class default so a Runner built
     # with __new__ (`doctor`, tests) has one as well.
@@ -187,7 +187,7 @@ class BotSetup:
 
     def refresh_from_template(self, bot, config, path):
         """The product files of a built-in bot's template that changed, written and committed in `path` (also
-        `python -m runner catalog`, for the Rust runner). A failure is a log line and an empty list."""
+        `python -m runner_support catalog`, for the Rust runner). A failure is a log line and an empty list."""
         try:
             from clients import catalog
             template = self.bootstrap_template(bot, config, {row["template"]: row for row in catalog.cards()})

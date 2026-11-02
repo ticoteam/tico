@@ -1,4 +1,4 @@
-"""A granted secret never leaves the runner's Python helpers as text (runner/redact.py)."""
+"""A granted secret never leaves the runner's Python helpers as text (runner_support/redact.py)."""
 import base64
 import subprocess
 import unittest
@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 import pytest
 
-from runner import redact
+from runner_support import redact
 
 SECRET = "jira-token/ABC def+123=="
 TAIL = "AtlassianApiToken12345"
@@ -57,7 +57,7 @@ if __name__ == "__main__":
 
 def test_scrubbing_never_runs_checkout_programs_or_writes_through_symlinks(tmp_path, monkeypatch):
     from unittest import mock
-    from runner import isolation
+    from runner_support import isolation
     repo = tmp_path / 'repo'
     repo.mkdir()
     def git(*args):
