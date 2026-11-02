@@ -98,11 +98,13 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    **Your company's plans or API keys**, untick its providers and press **Skip for now**. Bots need a provider
    to run; until then each bot says "Add an AI provider", and **Settings > Models** adds it.
    With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (department, level, Fast, version).
+   With no provider yet, the Bets step needs one bet and one line under **What we won't do**; any short sentence works.
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** The four built-in bots are created automatically. Each other role you picked waits as a Recruiting seat;
+4. **Create my team.** Seven built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Bot, Task Manager,
+   Bookkeeper and Counsel. Each other role you picked waits as a Recruiting seat;
    recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to each model subscription you chose:
    Claude Code and Codex (ChatGPT through Codex). One signed-in model is enough for the first result; Health lists the others
@@ -131,7 +133,9 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
    With no spending limit set (the default) there is no cap. A bot that reaches an hourly, daily, weekly or monthly limit (its own, its group's or the team's) takes no new work
    ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
    Runs on a ChatGPT or Claude sign-in count toward a limit too, unless you turn off **Count subscription runs**.
-2. **Set up Content Marketer.** Open its page and press **Set up**. Paste the [sample answers](#sample-answers-for-content-marketer)
+2. **Hire Content Marketer.** Hire Head of Marketing first, then Content Marketer (or untick Head of Marketing in Finish setup):
+   on the team chart, open each seat and press **Hire** on its template. Hiring Content Marketer first fails with "Reports-to bot
+   was not found". On Content Marketer's page, press **Start onboarding**. Paste the [sample answers](#sample-answers-for-content-marketer)
    and answer anything else it asks. It posts a first draft in the same DM, labelled "First draft, not yet reviewed".
    Outbound sending stays off until you turn it on for that bot.
 3. **Give it one task.** On **Tasks > New task**, assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
