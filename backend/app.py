@@ -2229,7 +2229,9 @@ def create_app(settings=None):
         who = request.state.identity
         owner_only(who, "invites the people from setup")
         # Not `mutate`: the invite binding below is this request's record under the same key. add_invitee answers the
-        # same roster row again when the person is already added, so a repeat needs no stored answer.
+        # same roster row again when the person is already added, so a repeat needs no stored answer. The key is
+        # checked first: a request without one writes nothing, as `mutate` refused it before its work.
+        invites.request_key(request)
         row = store.write(who, lambda c: company_import.add_invitee(onboarding, c, who, key, body.email))
         sent = invites.once(store, auth, settings, who, request, body, row)
         with store.transaction() as c:                  # not a second `mutate`: one request has one idempotency key

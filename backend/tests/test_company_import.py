@@ -173,6 +173,13 @@ def invited_from_setup(api, finance):
     reports to her. This install signs in another way, so no invite email can go: the owner is told so, plainly."""
     invite = lambda key, email: api.post("/api/v2/onboarding/company/people/%s/invite" % key, json={"email": email},
                                          headers=signed_in())
+    # Without an Idempotency-Key the request is refused before anyone is put on the roster.
+    unkeyed = {k: v for k, v in signed_in().items() if k.lower() != "idempotency-key"}
+    keyless = api.post("/api/v2/onboarding/company/people/ana/invite", json={"email": "ana@acme.example"},
+                       headers=unkeyed)
+    assert keyless.status_code == 422 and keyless.json()["error"]["code"] == "idempotency_key", keyless.text
+    assert not [p for p in api.get("/api/people", headers=signed_in()).json()["people"]
+                if p["email"] == "ana@acme.example"]
     refused = invite("ana", "ana@acme.example")
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "invite_unavailable"
     assert "Tell Ana to sign in at" in refused.json()["error"]["detail"]
