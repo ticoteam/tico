@@ -13,7 +13,7 @@ from backend.finance import reads as FR
 from backend.finance.core import feeds as F
 from backend.finance.store import ledger as SL
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
+    ACME_ADDRESS, AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
 from backend.tests.test_finance_payments import HOURS, _checking, _payee
 
 PLAIN = "human:eve"          # a web teammate with no grants or rights
@@ -81,6 +81,12 @@ def test_every_new_read_answers_on_empty_books_and_refuses_what_the_viewer_canno
         assert FA.help("bill_create")["fields"][0]["name"] == "vendor_id"
         codes = {a["number"] for a in FR.chart(c, OWNER, for_="bill")["accounts"]}
         assert "6100" in codes and "2000" not in codes and "4000" not in codes
+        # A bill line never posts to a bank account, Gateway credit or a group of lines; other assets it may.
+        assert not {"1000", "1100", "5000", "6000"} & codes
+        act(c, OWNER, "account_create", {"code": "1500", "name": "Equipment", "type": "asset"})
+        codes = {a["number"] for a in FR.chart(c, OWNER, for_="bill")["accounts"]}
+        assert "1500" in codes
+        assert "1000" in {a["number"] for a in FR.chart(c, OWNER, for_="journal")["accounts"]}
     with books.transaction() as c:
         FA.set_bills_email(c, "bills@acme.example")
         assert FR.bills(c, OWNER)["bills_email"] == "bills@acme.example"
@@ -130,7 +136,8 @@ def _scheduled_today(c, ask=False) -> str:
     else:
         assert act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"}).status == "committed"
     added = act(c, OWNER, "recipient_add", {"name": "Acme Supplies", "method": "ach",
-                                            "account_number": "000099998888", "routing_number": "000000000"})
+                                            "account_number": "000099998888", "routing_number": "000000000",
+                                            "address": ACME_ADDRESS})
     assert added.status == "committed", added
     bid = _bill(c, _vendor(c, recipient_id=str(added.result["recipient_id"])),
                 [{"account_id": account(c, "6100"), "amount": 50_000}], due_date="2026-10-20")
@@ -195,7 +202,7 @@ def test_a_payment_rejected_in_mercury_leaves_the_bill_unpaid_and_says_so(books)
     with books.transaction() as c:
         bill = FR.bill(c, OWNER, bid)
         assert (bill["status"], bill["remaining"], bill["pay_on"]) == ("open", 50_000, None)
-        assert (bill["payment"]["status"], bill["payment"]["error"]) == ("cancelled", "rejected in Mercury")
+        assert (bill["payment"]["status"], bill["payment"]["error"]) == ("canceled", "rejected in Mercury")
         assert _balance(c, "2000") == -50_000
         assert c.execute("SELECT status FROM fin_holds WHERE source='payment'").fetchall() == []
         again = act(c, OWNER, "bill_schedule", {"bill_id": bid, "pay_on": "2026-10-16", "money_account_id": _checking(c)})
@@ -244,7 +251,7 @@ def test_a_scheduled_payment_denied_withdrawn_or_expired_reopens_the_bill_and_sa
         reopened(c, bid, "withdrawn")
         reschedule(c, bid)
         third = asked(c, bid)
-        c.execute("UPDATE approvals SET created='2026-09-01T00:00:00.000000Z' WHERE id=?", (third.approval_id,))
+        c.execute("UPDATE approvals SET created_at='2026-09-01T00:00:00.000000Z' WHERE id=?", (third.approval_id,))
         H.approval_withdraw(c, str(third.approval_id), "No decision in 14 days.")
         assert [r.status for r in FA.approvals_sweep(c, AT)] == ["expired"]
         reopened(c, bid, "expired")
@@ -283,7 +290,7 @@ def test_a_feed_row_pays_bills_in_parts_and_together_and_never_posts_expense_twi
     with books.transaction() as c:
         vendor = _vendor(c)
         one = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 30_000}], number="B-1")
-        two = _bill(c, vendor, [{"account_id": account(c, "6000"), "amount": 20_000}], number="B-2")
+        two = _bill(c, vendor, [{"account_id": account(c, "6900"), "amount": 20_000}], number="B-2")
         three = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 12_345}], number="B-3")
         for b in (one, two, three):
             assert act(c, OWNER, "bill_approve", {"bill_id": b}).status == "committed"
@@ -299,9 +306,9 @@ def test_a_feed_row_pays_bills_in_parts_and_together_and_never_posts_expense_twi
         assert act(c, OWNER, "bill_mark_paid", {"bill_id": two, "feed_id": fid}).code == "invalid"   # used up
         assert act(c, OWNER, "bill_mark_paid", {"bill_id": two, "account_id": account(c, "1000"),
                                                 "amount": 10_001}).code == "invalid"                # overpaid
-        assert (_balance(c, "6100"), _balance(c, "6000"), _balance(c, "6900")) == (42_345, 20_000, 0)
+        assert (_balance(c, "6100"), _balance(c, "6900")) == (42_345, 20_000)
         assert _balance(c, "2000") == -10_000                                    # bill two's unpaid half
-        assert _pnl(c, "cash") == {"6100": 42_345, "6000": 10_000}
+        assert _pnl(c, "cash") == {"6100": 42_345, "6900": 10_000}
         # The bank cancels the combined row: what it paid is owed again, in the books and the cash view.
         _ingest(c, {**_txn("txn-both", -400.0, who="Acme Supplies Ltd"), "status": "cancelled"}, LATER)
         assert FR.bill(c, OWNER, one)["status"] == "open" and FR.bill(c, OWNER, two)["remaining"] == 20_000
@@ -309,11 +316,37 @@ def test_a_feed_row_pays_bills_in_parts_and_together_and_never_posts_expense_twi
         assert _balance(c, "2000") == -50_000
 
 
+def test_a_feed_row_that_could_pay_two_open_bills_never_posts_and_names_both_for_review(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        one = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 12_345}], number="B-1")
+        two = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 12_345}], number="B-2")
+        for b in (one, two):
+            assert act(c, OWNER, "bill_approve", {"bill_id": b}).status == "committed"
+        fid = _ingest(c, _txn("txn-twin", -123.45))
+        # Either bill may be the one this row pays: nothing posts, so no second expense, and both bills stay open.
+        assert _balance(c, "6900") == 0
+        assert _balance(c, "6100") == 24_690
+        assert FR.bill(c, OWNER, one)["status"] == "open" and FR.bill(c, OWNER, two)["status"] == "open"
+        assert tuple(c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()) == ("new", None)
+        [(raw,)] = c.execute("SELECT payload FROM fin_events WHERE name='finance.feed.needs_category' "
+                             "AND subject=?", (fid,)).fetchall()
+        assert sorted(json.loads(raw)["candidates"]) == sorted([one, two])
+        [listed] = [x for x in FR.inbox(c, OWNER, kind="uncategorized")["items"] if x["feed_id"] == fid]
+        assert sorted(x["id"] for x in listed["candidates"]) == sorted([one, two])
+        # Categorizing it by hand would expense it a second time, so it is refused until a bill takes it.
+        refused = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100")})
+        assert refused.code == "conflict", refused
+        assert _balance(c, "6900") == 0
+
+
 def test_cash_and_accrual_agree_exactly_once_documents_are_paid_and_partials_recognize_what_was_paid(books):
     rng = random.Random(7)
     with books.transaction() as c:
         vendor = _vendor(c)
-        lines = [account(c, code) for code in ("6000", "6100", "5000")]
+        lines = [account(c, code) for code in ("6900", "6100")]
         paid_total = 0
         for n in range(12):
             parts = [{"account_id": rng.choice(lines), "amount": rng.randint(1, 99_999)} for _ in range(rng.randint(1, 4))]
@@ -415,6 +448,25 @@ def test_posting_rules_need_passing_examples_run_by_priority_and_ask_raises_need
         assert act(c, "bot:coder", "rule_create", web).status == "needs_approval"
 
 
+def test_a_bill_line_naming_an_item_keeps_the_item_when_a_posting_rule_supplies_its_account(books):
+    with books.transaction() as c:
+        vendor = str(act(c, OWNER, "contact_create", {"name": "ACME PARTS", "kind": "vendor"}).result["contact_id"])
+        item = str(act(c, OWNER, "item_create", {"name": "Field visit", "kind": "service",
+                                                  "income_account_id": account(c, "4000")}).result["item_id"])
+        rule = {"kind": "posting", "name": "Parts", "when": {"counterparty": {"matches": "ACME PARTS"}},
+                "outcome": {"outcome": "post", "account_id": account(c, "6100")},
+                "examples": [{"input": {"counterparty": "ACME PARTS"}, "expect": "post"},
+                             {"input": {"counterparty": "Other"}, "expect": "none"}]}
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+        made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "number": "B-9", "bill_date": "2026-10-05",
+                                              "due_date": "2026-11-05",
+                                              "lines": [{"item_id": item, "amount": 5000, "description": "visit"}]})
+        assert made.status == "committed", made
+        lines = c.execute("SELECT account_id, item_id, amount FROM fin_bill_lines WHERE bill_id=?",
+                          (made.result["bill_id"],)).fetchall()
+        assert [(str(r[0]), str(r[1]), int(r[2])) for r in lines] == [(account(c, "6100"), item, 5000)]
+
+
 def test_defaults_are_seeded_once_stay_as_edited_and_guard_bots(books):
     with books.transaction() as c:
         ids = [str(r[0]) for r in c.execute("SELECT id FROM fin_rules WHERE id LIKE 'rule:bot-%' ORDER BY id")]
@@ -426,10 +478,10 @@ def test_defaults_are_seeded_once_stay_as_edited_and_guard_bots(books):
                    ).status == "committed"
         FA.setup(c, OWNER, LATER)
         assert c.execute("SELECT count(*) FROM fin_rules WHERE id LIKE 'rule:bot-%'").fetchone()[0] == 4
-        assert "1000000" in c.execute("SELECT when_json FROM fin_rules WHERE id='rule:bot-books-over-5000'"
+        assert "1000000" in c.execute("SELECT condition FROM fin_rules WHERE id='rule:bot-books-over-5000'"
                                       ).fetchone()[0]
         assert FA.grant_defaults(c, "bot:coder", at=AT) == ["finance.book", "finance.ap", "finance.ar", "finance.pay",
-                                                            "finance.cards"]
+                                                            "finance.cards", "finance.rules"]
         assert FA.grant_defaults(c, "bot:coder", at=AT) == []
         entry = {"date": "2026-10-10", "lines": [{"account_id": account(c, "6100"), "amount": 900_000,
                                                   "tags": {"team": "web"}},
@@ -668,11 +720,10 @@ def test_vendor_keys_fold_names_aliases_keep_history_and_inactive_contacts_captu
         assert labels["GitHub"] == 800 and labels["Globex"] == 2_000    # the newest row's text; the alias's contact
 
 
-def test_phase_one_vendor_names_still_count_after_migration_66_and_keys_are_whole_and_never_contact_ids(books):
-    """Codex review: phase 1 posted vendor names as written; migration 66 records them (fin_vendor_legacy), so a
-    budget on the name, then the contact that takes it, still count those lines, and the name labels its key. A key is
-    folded whole (two long names never meet by truncation) and folding it again changes nothing. A contact's id is
-    never another vendor's name, and a stored contact id never goes by an alias."""
+def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books):
+    """Phase 2 keys a vendor name a budget kept as phase 1 wrote it, and the budget counts lines under that key. A key is
+    folded whole (two long names never meet by truncation) and folding it again changes nothing. A contact's id is never
+    another vendor's name, and a stored contact id never goes by an alias."""
     from backend.finance import budgeting
     from backend.finance.core.ledger import name_key
     from backend.finance.store import budgets as SB
@@ -689,21 +740,14 @@ def test_phase_one_vendor_names_still_count_after_migration_66_and_keys_are_whol
                                                        "parent_id": root.result["budget_id"]}).result["budget_id"])
 
         bid = budget("Acme", line, "acme cloud")
-        spend(c, "6100", 10_000, vendor="ACME CLOUD")
-        # As phase 1 left it: the line, its rollups and the budget under the name as written, no label.
-        c.execute("DROP TRIGGER fin_lines_no_update")
-        c.execute("UPDATE fin_lines SET contact_id='ACME CLOUD' WHERE contact_id='acme cloud'")
-        for table in ("fin_rollups", "fin_cash_rollups"):
-            c.execute(f"UPDATE {table} SET vendor='ACME CLOUD' WHERE vendor='acme cloud'")
+        spend(c, "6100", 10_000, vendor="acme cloud")
+        # As phase 1 left the budget: its vendor under the name as written, no label.
         c.execute("UPDATE fin_budgets SET vendor='ACME CLOUD' WHERE id=?", (bid,))
         c.execute("DELETE FROM fin_vendor_labels")
         schema.create(c)
-        assert budgeting.budget_state(c, bid, AT).actual == 0                 # what the upgrade would lose
         schema.phase2(c)
         assert c.execute("SELECT vendor FROM fin_budgets WHERE id=?", (bid,)).fetchone()[0] == "acme cloud"
         assert budgeting.budget_state(c, bid, AT).actual == 10_000
-        rows = FR.spend_by(c, OWNER, "vendor", "2026-10-01", "2026-10-31", account_id=line)["rows"]
-        assert [(r["label"], r["amount"]) for r in rows] == [("ACME CLOUD", 10_000)]
         vendor = _vendor(c, "Acme Cloud")
         assert budgeting.budget_state(c, bid, AT).actual == 10_000             # through the contact's alias too
         held = budget("Acme Co", misc, vendor)
@@ -713,6 +757,28 @@ def test_phase_one_vendor_names_still_count_after_migration_66_and_keys_are_whol
         other = _vendor(c, "Globex")
         c.execute("INSERT INTO fin_vendor_aliases VALUES(?,?,?,?)", (book, vendor, other, AT))   # as if it got in
         assert SB.budgets(c, book)[held].vendor == vendor
+
+
+def test_the_upgrade_drops_fin_vendor_legacy_and_vendor_keys_still_follow_aliases(books):
+    """Migration 0005 removes fin_vendor_legacy from an install that has it; a vendor's keys still come from its contact's
+    id and its names (vendor_keys reads no legacy table)."""
+    from backend.finance.store import ap as SAP
+    from backend.finance.store import schema
+    with books.transaction() as c:
+        book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
+        vendor = _vendor(c, "Acme Supplies")
+        SAP.alias_add(c, book, "acme supplies co", vendor, AT)
+        c.execute("DELETE FROM schema_migrations WHERE version>='0005' AND version NOT LIKE 'legacy_%'")
+        c.execute("CREATE TABLE fin_vendor_legacy (book_id TEXT NOT NULL, raw TEXT NOT NULL, name_key TEXT NOT NULL, "
+                  "PRIMARY KEY (book_id, raw))")
+        c.execute("INSERT INTO fin_vendor_legacy VALUES(?, 'ACME SUPPLIES CO', 'acme supplies co')", (book,))
+    books.initialize(seed_market=False)
+    with books.read() as c:
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_vendor_legacy'").fetchone()
+        assert c.execute("SELECT 1 FROM schema_migrations WHERE version='0005_drop_fin_vendor_legacy'").fetchone()
+        assert "fin_vendor_legacy" not in schema.table_names()
+        keys = SAP.vendor_keys(c, book, vendor)
+        assert keys[0] == vendor and "acme supplies co" in keys and "ACME SUPPLIES CO" not in keys
 
 
 def test_a_long_vendor_name_whose_key_folds_longer_still_reclassifies_and_settles(books):
@@ -910,7 +976,7 @@ def test_sync_now_polls_payments_waiting_on_the_bank_so_a_rejection_lands_at_onc
         assert act(c, OWNER, "connection_sync", {"connection_id": cid}, at=soon).status == "committed"
     sync_once(books, fake, soon)
     with books.read() as c:
-        assert status(c) == "cancelled"
+        assert status(c) == "canceled"
 
 
 def test_padded_ids_are_stored_trimmed_so_a_reschedule_still_withdraws_the_ask(books):
@@ -929,7 +995,7 @@ def test_padded_ids_are_stored_trimmed_so_a_reschedule_still_withdraws_the_ask(b
         assert FA.action(c, ask.action_id).status == "withdrawn"
 
         def stored(aid):
-            return json.loads(c.execute("SELECT payload_json FROM fin_actions WHERE id=?", (aid,)).fetchone()[0])
+            return json.loads(c.execute("SELECT payload FROM fin_actions WHERE id=?", (aid,)).fetchone()[0])
         assert (stored(ask.action_id)["obligation"], stored(ask.action_id)["recipient_id"]) == (f"bill:{bid}", rid)
         assert stored(moved.action_id)["bill_id"] == bid
         assert FR.bill(c, OWNER, bid)["status"] == "scheduled"
@@ -943,8 +1009,8 @@ def test_a_request_stored_with_padded_ids_before_trimming_still_replays(books):
         first = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10",
                                               "lines": [{"account_id": account(c, "6100"), "amount": 1_000}]}, key="old")
         assert first.status == "committed", first
-        row = json.loads(c.execute("SELECT payload_json FROM fin_actions WHERE id=?", (first.action_id,)).fetchone()[0])
-        c.execute("UPDATE fin_actions SET payload_json=? WHERE id=?",
+        row = json.loads(c.execute("SELECT payload FROM fin_actions WHERE id=?", (first.action_id,)).fetchone()[0])
+        c.execute("UPDATE fin_actions SET payload=? WHERE id=?",
                   (json.dumps({**row, "vendor_id": f" {vendor} "}, sort_keys=True), first.action_id))
         for sent in (f" {vendor} ", vendor):
             again = act(c, OWNER, "bill_create", {"vendor_id": sent, "bill_date": "2026-10-10",
@@ -1018,3 +1084,145 @@ def test_an_explicit_zero_pays_nothing_of_a_bill(books):
             got = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "account_id": account(c, "1000"), "amount": amount})
             assert (got.status, got.code) == ("failed", "invalid"), got
         assert _settled(c, "fin_bills", bid) == before
+
+
+def test_a_voided_document_reverses_on_its_own_date_and_a_closed_date_rolls_to_the_open_period(books):
+    """§4.1: a void reverses on the document's own date. Only a date in a closed period moves to the current open one
+    (AT is 2026-10-15), so a September bill's and invoice's reversals stay in September and an August bill's rolls."""
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        bill = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 5_000}], day="2026-09-10")
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+        customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
+        inv = str(act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-09-12", "lines": [
+            {"account_id": account(c, "4000"), "amount": 7_000}]}).result["invoice_id"])
+        assert act(c, OWNER, "invoice_send", {"invoice_id": inv}).status == "committed"
+        assert act(c, OWNER, "bill_void", {"bill_id": bill}).status == "committed"
+        assert act(c, OWNER, "invoice_void", {"invoice_id": inv}).status == "committed"
+        assert [r[0] for r in c.execute("SELECT entry_date FROM fin_entries WHERE memo LIKE 'Void %' "
+                                        "ORDER BY entry_date").fetchall()] == ["2026-09-10", "2026-09-12"]
+        august = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 3_000}], day="2026-08-10")
+        assert act(c, OWNER, "bill_approve", {"bill_id": august}).status == "committed"
+        assert act(c, OWNER, "close_period", {"month": "2026-08"}).status == "committed"
+        assert act(c, OWNER, "bill_void", {"bill_id": august}).status == "committed"
+        assert [r[0] for r in c.execute("SELECT entry_date FROM fin_entries WHERE memo LIKE 'Void bill %' AND "
+                                        "entry_date>'2026-09-30' ORDER BY entry_date").fetchall()] == ["2026-10-15"]
+
+
+DEC_15 = "2026-12-15T12:00:00.000000Z"      # November and December have come
+YEAR_END = "2027-10-15T12:00:00.000000Z"    # a twelve-month prepaid starting in November 2026 has all come
+
+
+def test_a_prepaid_line_expenses_a_month_at_a_time_and_each_month_posts_once(books):
+    """A $1,800 prepaid over twelve months from November counts $150 of expense a month. It sits in prepaid expenses
+    until its months come due; each month posts once in its own month; cash waits for the bill's payment."""
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 180_000,
+                                     "prepaid": {"start": "2026-11", "months": 12}}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert (_balance(c, "1150"), _balance(c, "6100"), _balance(c, "2000")) == (180_000, 0, -180_000)
+        assert FA.amortize_prepaids(c, DEC_15) == 2
+        assert FA.amortize_prepaids(c, DEC_15) == 0
+        assert _pnl(c, "accrual", "2026-11-01", "2026-11-30") == {"6100": 15_000}
+        assert _pnl(c, "cash", "2026-11-01", "2026-11-30") == {}
+        assert (_balance(c, "1150"), _balance(c, "6100")) == (150_000, 30_000)
+        assert FA.amortize_prepaids(c, YEAR_END) == 10
+        assert (_balance(c, "1150"), _balance(c, "6100")) == (0, 180_000)
+        assert act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "account_id": account(c, "1000")}).status == "committed"
+        assert _pnl(c, "cash", "2026-10-01", "2026-10-31") == {"6100": 180_000}     # the whole bill, as paid
+
+
+def test_a_month_not_run_is_expensed_later_in_its_own_month(books):
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 30_000,
+                                     "prepaid": {"start": "2026-10", "months": 3}}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert FA.amortize_prepaids(c, AT) == 1
+        assert FA.amortize_prepaids(c, DEC_15) == 2
+        assert _pnl(c, "accrual", "2026-11-01", "2026-11-30") == {"6100": 10_000}
+        assert _pnl(c, "accrual", "2026-12-01", "2026-12-31") == {"6100": 10_000}
+        assert _balance(c, "1150") == 0
+
+
+def test_voiding_a_prepaid_bill_reverses_the_months_it_expensed(books):
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 180_000,
+                                     "prepaid": {"start": "2026-10", "months": 12}}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert FA.amortize_prepaids(c, DEC_15) == 3
+        assert act(c, OWNER, "bill_void", {"bill_id": bid, "reason": "entered twice"}).status == "committed"
+        assert (_balance(c, "6100"), _balance(c, "1150"), _balance(c, "2000")) == (0, 0, 0)
+        assert FA.amortize_prepaids(c, YEAR_END) == 0
+
+
+def test_a_prepaid_line_is_an_expense_with_a_cent_a_month(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 1_200,
+                           "prepaid": {"start": "2026-10", "months": 12}}])
+        for line in ({"account_id": account(c, "1000"), "amount": 1_200, "prepaid": {"start": "2026-10", "months": 12}},
+                     {"account_id": account(c, "6100"), "amount": 5, "prepaid": {"start": "2026-10", "months": 12}}):
+            got = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10", "lines": [line]})
+            assert (got.status, got.code) == ("failed", "invalid"), got
+
+
+def test_a_bill_or_invoice_dated_in_a_closed_month_names_its_own_date_in_the_memo(books):
+    """Spec §4.1: a late document posts in the open period, and its entry names the document's own date, as a late
+    bank row does."""
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 5_000}], day="2026-09-20")
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        customer = str(act(c, OWNER, "contact_create", {"name": "Globex", "kind": "customer"}).result["contact_id"])
+        made = act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-09-21",
+                                                 "lines": [{"account_id": account(c, "4000"), "amount": 7_000}]})
+        assert made.status == "committed", made
+        iid = str(made.result["invoice_id"])
+        assert act(c, OWNER, "invoice_send", {"invoice_id": iid}).status == "committed"
+        rows = {str(r[0]): (str(r[1]), str(r[2])) for r in c.execute(
+            "SELECT source_id, entry_date, memo FROM fin_entries WHERE source_id IN (?, ?)", (bid, iid))}
+        assert rows[bid][0] == AT[:10] and rows[bid][1].endswith("(dated 2026-09-20)"), rows
+        assert rows[iid][0] == AT[:10] and rows[iid][1].endswith("(dated 2026-09-21)"), rows
+
+
+def test_a_bill_line_cannot_post_to_a_bank_a_receivable_a_prepaid_balance_or_a_group_account(books):
+    """A bill's lines are expenses: a bank, receivable, prepaid or group account is refused, with the reason."""
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        for code in ("1000", "1100", "1200", "6000"):
+            got = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10",
+                                                 "lines": [{"account_id": account(c, code), "amount": 5_000}]})
+            assert (got.status, got.code) == ("failed", "invalid"), (code, got)
+        _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 5_000}])
+
+
+def test_marked_paid_from_a_disconnected_checking_account_goes_through_clearing_and_waits_for_no_bank_row(books):
+    """Spec §4.2: marked paid with no connected account, a document goes through the clearing account the feed never
+    touches. A disconnected account keeps its connection id, so it must not wait for a bank row that will not come."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+        assert act(c, OWNER, "connection_disconnect", {"connection_id": cid}).status == "committed"
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 5_000}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        done = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": _checking(c)})
+        assert done.status == "committed" and done.result["from"] == "account", done
+        assert _balance(c, "1050") == -5_000
+
+
+def test_marked_paid_from_a_checking_account_never_connected_goes_through_clearing(books):
+    """Spec §4.3: marked paid with no connected account, a payment goes through clearing, as it does for a disconnected
+    one. A never-connected account has no bank row coming either, so its own line is not credited."""
+    with books.transaction() as c:
+        money = SL.new_id()
+        c.execute("INSERT INTO fin_money_accounts(id, book_id, kind, name, provider, account_id, created_at, created_by) "
+                  "VALUES(?,?,?,?,?,?,?,?)", (money, SL.book(c).id, "bank", "Checking", "mercury",  # type: ignore[union-attr]
+                                             account(c, "1000"), AT, OWNER))
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 5_000}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        cash = _balance(c, "1000")
+        done = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": money})
+        assert done.status == "committed" and done.result["from"] == "account", done
+        assert (_balance(c, "1050"), _balance(c, "1000") - cash) == (-5_000, 0)

@@ -16,7 +16,8 @@ from backend.tests.test_api import headers
 from backend.tests.test_hook_relay import hq, service  # noqa: F401
 from backend.tests.test_mcp import call
 
-SYSTEM = "hr_00000000000000a1"
+SYSTEM = "hr_00000000000000a1"        # the install's `_tico` system relay
+MAIL = "hr_00000000000000a2"          # the install's `_mail` system relay: HQ makes one per trigger, not one shared relay
 
 
 class Mail:
@@ -77,8 +78,9 @@ def mail(api, hq, monkeypatch):
     monkeypatch.setattr(svc, "drain", lambda: 0)       # the app's own loop stays out; tests drain by hand
     svc.reader, svc.engine = Reader(), Decide()
     hq.relays[SYSTEM] = {"id": SYSTEM, "trigger_id": "_tico", "key": "hq", "system": True}
+    hq.relays[MAIL] = {"id": MAIL, "trigger_id": "_mail", "key": "hq", "system": True}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','finance-lead') WHERE bot='finance'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','finance-lead') WHERE bot='finance'")
     return fake
 
 
@@ -97,7 +99,7 @@ def letter(api, ident, kind, decided=None, deadline=None, summary=None):
     svc.engine.answers[summary] = decided or (kind, 0.95)
 
 
-def deliver(hq, ident, relay=SYSTEM, seq=None, checks=False):
+def deliver(hq, ident, relay=MAIL, seq=None, checks=False):
     body = json.dumps({"item_id": ident, "box": "DE-1", "state": "DE", "num_pages": 2,
                        "received_at": "2026-10-30T09:00:00Z", "flags": {"containsChecks": checks}}).encode()
     hq.queue.append({"hq_seq": seq or len(hq.queue) + 1, "relay_id": relay, "trigger_id": "_mail",
@@ -135,7 +137,7 @@ def test_a_letter_is_kept_once_and_legal_mail_asks_the_owner_with_its_deadline(a
     row = items(api)["101"]
     assert (row["status"], row["kind"], row["deadline"]) == ("filed", "legal", "2026-11-20")
     made = task(api, row["task_id"])
-    assert made["owner"] == "human:ana" and made["due"] == "2026-11-20"
+    assert made["owner_id"] == "human:ana" and made["due_at"] == "2026-11-20"
     assert "A summons from the county court" in made["body"] and "2026-11-20" in made["body"]
     assert "/api/v2/files/" + row["blob_id"] in made["body"]
     with api.app.state.store.read() as c:
@@ -177,7 +179,7 @@ def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
         if owner is None:
             assert (row["status"], row["task_id"], row["kind"]) == ("archived", None, "junk") and row["blob_id"]
         else:
-            assert row["status"] == "filed" and task(api, row["task_id"])["owner"] == owner, (ident, row)
+            assert row["status"] == "filed" and task(api, row["task_id"])["owner_id"] == owner, (ident, row)
     assert got["204"]["kind"] == "check" and task(api, got["204"]["task_id"])["title"].startswith("Check received: ")
     assert got["208"]["kind"] == "legal"
     # Bills, statements and tax letters are private like legal mail and checks; only `other` is the company's to read.
@@ -190,12 +192,12 @@ def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
     assert all("wire money" not in json.dumps(state["letter"]["summary"]) for state in api.app.state.postal_mail.engine.calls)
     # Without a Finance bot a bill goes to the owner.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_remove(config_json,'$.template') WHERE bot='finance'")
+        c.execute("UPDATE bot_config SET config=json_remove(config,'$.template') WHERE bot='finance'")
     letter(api, "210", "bill")
     deliver(hq, "210")
     service(api).tick()
     drain(api)
-    assert task(api, items(api)["210"]["task_id"])["owner"] == "human:ana"
+    assert task(api, items(api)["210"]["task_id"])["owner_id"] == "human:ana"
 
 
 def test_a_check_is_the_owners_whatever_decide_says(api, hq, mail):
@@ -210,7 +212,7 @@ def test_a_check_is_the_owners_whatever_decide_says(api, hq, mail):
     for ident in ("401", "402"):
         row = got[ident]
         made = task(api, row["task_id"])
-        assert (row["kind"], row["status"], made["owner"]) == ("check", "filed", "human:ana"), ident
+        assert (row["kind"], row["status"], made["owner_id"]) == ("check", "filed", "human:ana"), ident
         assert made["title"].startswith("Check received: ") and "Tico doesn't deposit checks." in made["body"], ident
         get(api, "postal/items/" + row["id"], "ben-test", expected=404)          # private: not even an admin
     assert get(api, "postal/items/" + got["401"]["id"])["item"]["contains_checks"] is True
@@ -259,7 +261,7 @@ def test_a_failed_letter_is_marked_and_retried_without_a_second_task(api, hq, ma
     mail.down.clear()
     api.app.state.postal_mail.reader.fail.add("301")      # fetched now, but the reading fails
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE mail_items SET next_try=NULL")
+        c.execute("UPDATE mail_items SET next_try_at=NULL")
     drain(api)
     assert (items(api)["301"]["status"], items(api)["301"]["error"]) == ("failed", "read_unavailable")
 
@@ -273,7 +275,7 @@ def test_a_failed_letter_is_marked_and_retried_without_a_second_task(api, hq, ma
     drain(api)
     drain(api)
     row = items(api)["301"]
-    assert row["status"] == "filed" and task(api, row["task_id"])["owner"] == "bot:finance"
+    assert row["status"] == "filed" and task(api, row["task_id"])["owner_id"] == "bot:finance"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Bill by mail:%'").fetchone()[0] == 1
 
@@ -314,7 +316,7 @@ def test_a_scan_emailed_to_the_intake_inbox_becomes_a_letter(api, hq, mail, monk
     svc.engine.answers["Water bill"] = ("bill", 0.9)
     drain(api)
     row = items(api)["msg_1:" + digest[:16]]
-    assert row["status"] == "filed" and task(api, row["task_id"])["owner"] == "bot:finance"
+    assert row["status"] == "filed" and task(api, row["task_id"])["owner_id"] == "bot:finance"
     assert ("GET", f"/v1/inbound/messages/msg_1/attachments/{digest}") in mail.calls
 
 
@@ -333,8 +335,8 @@ def test_reads_stop_at_the_daily_cap_and_wait_without_using_an_attempt(api, hq, 
     drain(api)
     assert items(api)[late]["status"] == "new"                           # waits its hour
     with api.app.state.store.transaction() as c:                          # a day later
-        c.execute("UPDATE mail_reads SET at=?", (H.shift(H.now(), days=-2),))
-        c.execute("UPDATE mail_items SET next_try=NULL")
+        c.execute("UPDATE mail_reads SET read_at=?", (H.shift(H.now(), days=-2),))
+        c.execute("UPDATE mail_items SET next_try_at=NULL")
     drain(api)
     assert items(api)[late]["status"] == "filed"
 
@@ -349,11 +351,95 @@ def test_each_retry_of_a_letter_counts_against_the_daily_cap(api, hq, mail, monk
     svc.reader.fail.add("411")
     svc.process(items(api)["411"]["id"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE mail_items SET next_try=NULL")
+        c.execute("UPDATE mail_items SET next_try_at=NULL")
     svc.process(items(api)["411"]["id"])                 # the retry is a second read of the one letter
     assert items(api)["411"]["attempts"] == 2
     svc.process(items(api)["412"]["id"])
     assert (items(api)["412"]["status"], items(api)["412"]["error"]) == ("new", "daily_cap")
+
+
+def test_a_letter_whose_reads_failed_at_the_cap_is_not_read_again(api, hq, mail, monkeypatch):
+    monkeypatch.setattr(P, "READS_PER_DAY", 2)
+    letter(api, "421", "other")
+    deliver(hq, "421")
+    service(api).tick()
+    svc = api.app.state.postal_mail
+    reader, reads = svc.reader, []
+
+    def counting(data, mime, name):
+        reads.append(name)
+        return reader(data, mime, name)
+    svc.reader = counting
+    reader.fail.add("421")
+    ident = items(api)["421"]["id"]
+
+    def pdf_fetches():
+        return sum(1 for _, path in mail.calls if path.endswith("/421/pdf"))
+
+    def not_due():
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE mail_items SET next_try_at=NULL")
+    svc.process(ident)                                    # read 1 of the cap: fails
+    not_due()
+    svc.process(ident)                                    # read 2 of the cap: fails too
+    not_due()
+    assert (items(api)["421"]["attempts"], items(api)["421"]["error"]) == (2, "read_unavailable")
+    fetched, read_so_far = pdf_fetches(), len(reads)
+    with api.app.state.store.read() as c:
+        admitted = c.execute("SELECT count(*) FROM mail_reads WHERE item_id=?", (ident,)).fetchone()[0]
+    assert (fetched, read_so_far, admitted) == (2, 2, 2)
+
+    svc.process(ident)                                    # a third try of the same letter: refused at the cap
+    after = items(api)["421"]
+    assert (after["status"], after["attempts"], after["error"]) == ("failed", 2, "daily_cap")
+    assert (pdf_fetches(), len(reads)) == (fetched, read_so_far)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM mail_reads WHERE item_id=?", (ident,)).fetchone()[0] == admitted
+
+
+def test_a_filing_that_rolls_back_keeps_its_read_on_the_cap_and_leaves_nothing_behind(api, hq, mail, monkeypatch):
+    monkeypatch.setattr(P, "READS_PER_DAY", 2)
+    letter(api, "441", "bill")
+    letter(api, "442", "other")
+    deliver(hq, "441")
+    deliver(hq, "442")
+    service(api).tick()
+    svc = api.app.state.postal_mail
+    files, real_attach, broken = api.app.state.files, api.app.state.files.attach_task, []
+
+    def attach_once(*args, **kwargs):                     # the task and its blob are written, then filing fails
+        if not broken:
+            broken.append(True)
+            raise RuntimeError("disk full")
+        return real_attach(*args, **kwargs)
+    monkeypatch.setattr(files, "attach_task", attach_once)
+
+    def counts():
+        with api.app.state.store.read() as c:
+            return tuple(c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                         for table in ("tasks", "blobs", "task_assets"))
+    before = counts()
+    ident = items(api)["441"]["id"]
+    svc.process(ident)                                    # read 1 of the cap: read, then the filing rolls back
+    row = items(api)["441"]
+    assert (row["status"], row["attempts"], row["error"]) == ("failed", 1, "file_failed:RuntimeError")
+    assert (row["task_id"], row["file_id"]) == (None, None)
+    assert counts() == before                             # no task, blob or attachment left from the rolled-back try
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Bill by mail:%'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM mail_reads WHERE item_id=?", (ident,)).fetchone()[0] == 1
+
+    with api.app.state.store.transaction() as c:          # the retry is a second read and counts too
+        c.execute("UPDATE mail_items SET next_try_at=NULL")
+    post(api, "postal/items/" + row["id"] + "/retry", {})
+    svc.process(ident)
+    row = items(api)["441"]
+    assert row["status"] == "filed" and task(api, row["task_id"])["owner_id"] == "bot:finance"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM mail_reads WHERE item_id=?", (ident,)).fetchone()[0] == 2
+        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Bill by mail:%'").fetchone()[0] == 1
+    svc.process(items(api)["442"]["id"])                  # the two reads of the day are used up by 441
+    assert (items(api)["442"]["status"], items(api)["442"]["error"]) == ("new", "daily_cap")
 
 
 def test_an_upgrade_keeps_the_days_reads_against_the_cap(api, hq, mail, monkeypatch):
@@ -437,7 +523,7 @@ def test_a_bill_deleted_before_the_backfill_comes_back_private(api, hq, mail):
         c.execute("UPDATE tasks SET private=0, visibility='public'")
         assert task_delete.delete_tasks(c, [task_id], apply=True, actor=H.KEEPER, keep_work=True)["applied"]
         for each in (moved, shredded):                    # moved under another task since; one of them deleted too
-            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'parent',?)",
+            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'parent',?)",
                       (each, other, H.now()))
         assert task_delete.delete_tasks(c, [shredded], apply=True, actor=H.KEEPER, keep_work=True)["applied"]
         c.execute("DELETE FROM mail_private_backfill")

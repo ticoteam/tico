@@ -4,7 +4,7 @@
 //    with the account, and combines with the Recent sort; a bot page for someone who may only see or write
 //    to it shows no activity.
 //  - roles: Settings > Bots lists who owns each bot and saves co-owners as a diff with Save bot; Settings > Computers has an
-//    admin-only "Accepts members' bots" toggle; a Confirm card BotOps left in a person's chat renders, and
+//    admin-only "Accepts members' bots" toggle; a Confirm card BotOps left in a person's Assistant chat renders, and
 //    only their click confirms it.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -12,6 +12,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
 async function access(browser) {
@@ -19,7 +21,7 @@ async function access(browser) {
   const EVERYONE = {everyone: true, people: [], teams: [], bots: []};
   const ME = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true};
   const bot = (name, display_name, extra = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
-    state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], operator: 'ana', revision: 1, ...extra});
+    state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], owner_id: 'ana', revision: 1, ...extra});
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
   const errors = [], puts = [], saved = [];
   let serverMine = null;
@@ -35,6 +37,7 @@ async function access(browser) {
     bot('intake', 'Intake', {my_access: {see: true, read: false, write: true}, description: 'Takes requests.', reports_to: 'human:ben'}),
     bot('sales', 'Sales', {my_access: {see: true, read: false, write: false}, description: 'Runs the pipeline.', can_chat: false}),
   ];
+  const intakeThreads = threadsFake({bot: 'intake'});
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -69,7 +72,8 @@ async function access(browser) {
       return json({key: 'org.mine', value: serverMine});
     }
     if (p === '/api/v2/tasks') return json({tasks: []});
-    if (p === '/api/v2/conversations') return json({conversations: []});
+    const answer = intakeThreads(p, url, method);
+    if (answer !== undefined) return json(answer);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -198,13 +202,12 @@ async function access(browser) {
   await page.goto('https://tico-ui.test/#/bot/intake');
   await page.waitForFunction(() => S.route === '#/bot/intake');   // a page change draws a frame later (its fade)
   await page.locator('#btabs').waitFor({state: 'attached'});
-  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['chat', 'tasks', 'info']);
+  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['dm', 'tasks', 'info']);
   await page.locator('#bot-tasks .rail-head').waitFor({state: 'attached'});
   assert.equal(await page.locator('#bot-tasks-board, #bot-sidebar-edit').count(), 0, 'no board or edit icon without read access');
   assert.equal(await page.locator('#bot-goal').count(), 0, 'no goal, no activity');
   assert.equal(await page.locator('#bot-files, #bot-history, #sess-card, #bot-updates-card').count(), 0);
-  assert.match(await page.locator('.bot-request-head').innerText(), /Send a request/);
-  await page.locator('#chat-composer .p-text').waitFor();
+  await page.locator('#bot-thread .thv-composer .p-text').waitFor();
   await page.evaluate(() => { location.hash = '#/bot/intake/more'; });
   await page.locator('#pane-more').waitFor();
   const about = page.locator('#pane-more');
@@ -215,7 +218,7 @@ async function access(browser) {
   await page.goto('https://tico-ui.test/#/bot/sales');
   await page.waitForFunction(() => S.route === '#/bot/sales');
   await page.locator('#btabs').waitFor({state: 'attached'});
-  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['info'], 'see only: no chat, no tasks');
+  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['info'], 'see only: no DM, no tasks');
   assert.match(await page.locator('#pane-more').innerText(), /See it only/);
   assert.deepEqual(errors, []);
   console.log('PASS: Access column and editor presets, the org filter beside Recent, and bot pages that show no activity to someone who cannot read.');
@@ -227,16 +230,20 @@ async function roles(browser) {
   bot_admin: true, can_create_bots: true, can_add_people: true};
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
   const errors = [], posts = [];
-  let action = {id: 'act1', owner: 'human:ana', status: 'pending', proposer: 'botops', proposed_via: 'botops',
+  let action = {id: 'act1', owner_id: 'human:ana', status: 'pending', proposer: 'botops', proposed_via: 'botops',
     description: 'Add Sean (sean@example.test) to the roster, and let them sign in', summary: 'Add Sean (sean@example.test) to the roster',
     method: 'POST', path: '/api/v2/access/humans', body: {name: 'Sean', email: 'sean@example.test'}, diff: []};
   let accepts = false;
   // The runner keeps a limit of 2, as one that cannot take a raised Turns at once setting does.
   let turnsAtOnce = null, holdTurns = false, heldTurns = null;
   const bot = (name, display_name, extra = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
-    state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], operator: 'ana', revision: 1,
+    state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], owner_id: 'ana', revision: 1,
     can_manage: true, ...extra});
-  const conv = {id: 'botops-chat', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']};
+  const chatSnapshot = {messages: [
+    {id: 'm1', conversation_id: 'botops-chat', sender_id: 'human:ana', recipient_id: 'bot:botops', kind: 'say', body: 'Add sean@example.test please',
+     created_at: new Date().toISOString(), refs: {}},
+    {id: 'm2', conversation_id: 'botops-chat', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Needs your OK: Add Sean (sean@example.test) to the roster',
+     created_at: new Date().toISOString(), refs: {assistant: true, action: 'act1'}}], execution: null, has_more: false, next_before: null};
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -249,19 +256,19 @@ async function roles(browser) {
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana', org_parent: ''}, {id: 'ben', name: 'Ben Cole', org_parent: ''},
       {id: 'cara', name: 'Cara Diaz', org_parent: ''}], org_groups: []});
     if (p === '/api/employees') return json([
-      bot('jira-manager', 'Jira Manager', {operator: 'cara', bot_owners: [{id: 'cara', name: 'Cara Diaz'}], access_policy: null}),
+      bot('jira-manager', 'Jira Manager', {owner_id: 'cara', bot_owners: [{id: 'cara', name: 'Cara Diaz'}], access_policy: null}),
       bot('botops', 'BotOps'),
       // Synced Grok Bots: Ana's own, and Cara's, already delivered through the app on Cara's Mac.
       bot('groky', 'Grok Groky', {harness: 'grokbot', app_delivery_app: 'grok', agent: {harness: 'grokbot', synced: true, credential: true, profile: 'Groky'}}),
-      bot('cara-grok', 'Grok Scout', {operator: 'cara', harness: 'grokbot', app_delivery_app: 'grok', agent: {harness: 'grokbot', synced: true, credential: true},
+      bot('cara-grok', 'Grok Scout', {owner_id: 'cara', harness: 'grokbot', app_delivery_app: 'grok', agent: {harness: 'grokbot', synced: true, credential: true},
         app_delivery: {computer: 'r9', app: 'grok', app_label: 'Grok', computer_label: 'Cara Mac', active: true}})]);
     if (p === '/api/issues') return json([]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
-    if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Shared Mac', operator: 'ana', last_seen: new Date().toISOString(),
+    if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Shared Mac', owner_id: 'ana', last_seen_at: new Date().toISOString(),
       platform: 'darwin', bots: [], readiness: {}, accepts_member_bots: accepts, turns_at_once: turnsAtOnce,
       turn_limit: 2, capacity: 2},
-      {id: 'r2', label: 'Acme Mac', operator: 'ana', last_seen: new Date().toISOString(), platform: 'darwin', bots: [],
+      {id: 'r2', label: 'Acme Mac', owner_id: 'ana', last_seen_at: new Date().toISOString(), platform: 'darwin', bots: [],
        readiness: {appdriver: {trusted: true, apps: {grok: {installed: true, signed_in: true, background_ok: true, ready: true, state: 'ready'}}}}}],
       agents: [], services: []});
     if (p.match(/^\/api\/v2\/bots\/[^/]+\/definition$/) && method === 'POST') { posts.push(['definition', request.postDataJSON()]); return json({}); }
@@ -283,12 +290,8 @@ async function roles(browser) {
       posts.push(['confirm', request.postDataJSON()]); action = {...action, status: 'done'}; return json({action});
     }
     if (p === '/api/v2/tasks') return json({tasks: []});
-    if (p === '/api/v2/conversations') return json({conversations: [conv]});
-    if (p.endsWith('/snapshot') || p.endsWith('/messages')) return json({conversation: conv, messages: [
-      {id: 'm1', conversation_id: conv.id, from_actor: 'human:ana', to_actor: 'bot:botops', kind: 'say', body: 'Add sean@example.test please',
-       created: new Date().toISOString(), refs: {}},
-      {id: 'm2', conversation_id: conv.id, from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Needs your OK: Add Sean (sean@example.test) to the roster',
-       created: new Date().toISOString(), refs: {assistant: true, action: 'act1'}}], execution: null, has_more: false, next_before: null});
+    if (p === '/api/v2/assistant' && method === 'GET') return json(assistantView('botops-chat', chatSnapshot));
+    if (p.endsWith('/snapshot') || p.endsWith('/messages')) return json(chatSnapshot);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -350,6 +353,8 @@ async function roles(browser) {
   assert.equal(await box.isChecked(), false);
   await box.check();
   await page.waitForFunction(() => document.querySelector('[data-member-bots=r1]')?.checked === true);
+  // The box is checked before its POST reaches the route handler: wait for the POST, as the saves above do.
+  for (let i = 0; i < 100 && !posts.length; i++) await page.waitForTimeout(50);
   assert.deepEqual(posts.shift(), ['member-bots', {accepts: true}]);
 
   // ---- Turns at once on that computer: empty is automatic, the runner's own count; a raised setting says the limit
@@ -397,8 +402,8 @@ async function roles(browser) {
     'the change made during the save is sent after it, and not with it');
   await page.waitForFunction(() => document.querySelector('[data-turns-at-once=r1]')?.value === '5');
 
-  // ---- BotOps' chat: a Confirm card, and nothing happens until the person clicks it
-  await page.goto('https://tico-ui.test/#/bot/botops');
+  // ---- BotOps' Confirm card, in the Assistant's chat, and nothing happens until the person clicks it
+  await page.goto('https://tico-ui.test/#/assistant');
   const card = page.locator('.asst-card[data-action=act1]');
   await card.waitFor();
   assert.match(await card.innerText(), /Add Sean \(sean@example\.test\) to the roster/);

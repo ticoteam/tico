@@ -100,7 +100,7 @@ def wait(run):
 
 def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
     """Run `command` on a fresh VM against the pushed `ref` (HEAD) and wait for it: (exit code, the run's log folder).
-    The code is None when the VM never ran the command to the end (setup failed, cancelled, timed out, or the Spot
+    The code is None when the VM never ran the command to the end (setup failed, canceled, timed out, or the Spot
     VM was reclaimed). `echo` prints the command's last lines here, as `remote.py` itself does."""
     ref = git('rev-parse', ref or 'HEAD')
     if not git('branch', '-r', '--contains', ref):

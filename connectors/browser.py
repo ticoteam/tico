@@ -82,8 +82,12 @@ SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 def load_manifest(slug):
     if not SLUG.fullmatch(slug or ""):                  # a slug is one folder name: never a path out of PROJECTS
         raise Refused(f"{slug!r} is not a bot slug")
-    folder = next((PROJECTS / (prefix + slug) for prefix in ("bot-", "emp-") if (PROJECTS / (prefix + slug)).exists()),
-                  PROJECTS / ("bot-" + slug))           # bot-<slug>, else an older emp-<slug> (this repeats clients/manifest.py)
+    own = os.environ.get("HUB_BOT_FOLDER") or ""
+    if own and SLUG.fullmatch(own) and slug.lower() == (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip().lower():
+        folder = PROJECTS / own                         # this run's own bot: the folder the runner names (a rename keeps it)
+    else:
+        folder = next((PROJECTS / (prefix + slug) for prefix in ("bot-", "emp-") if (PROJECTS / (prefix + slug)).exists()),
+                      PROJECTS / ("bot-" + slug))       # bot-<slug>, else an older emp-<slug> (this repeats clients/manifest.py)
     p = next((folder / name for name in ("bot.yaml", "employee.yaml") if (folder / name).is_file()), folder / "bot.yaml")
     if yaml is None:
         raise Failed("PyYAML is not installed")
@@ -104,7 +108,7 @@ def check_social(slug, sites=(), text=""):
     named = social(list(sites) + URLS.findall(text or "") + bare)
     if named:
         raise Refused(f"{slug} may not use the owner's social sessions ({', '.join(named)}); only {SESSION_OWNER} reads them.",
-                      "Read what Listening saved from your hub inbox (hub intake list), or open a task on "
+                      "Read what Listening saved from your hub inbox (hub listening item list), or open a task on "
                       "listening for a lookup.")
 
 

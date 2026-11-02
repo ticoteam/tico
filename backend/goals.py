@@ -40,10 +40,10 @@ SOURCES = ("measured", "estimate")        # legacy names of a reading's quality;
 # Strategy Bot's bot-task changes to get a red or stalled goal back on track, at level 2 (backend/strategy_suggest.py).
 # strategy_draft: a change to the team's strategy draft and its bets, from any bot, the owner's to confirm.
 # strategy_realign: the goals of bets a publish retired or rewrote, filed by Tico for the owner (backend/strategy.py).
-# brand_draft, gtm_draft: sections for the brand or GTM draft from any bot, an admin's to confirm (backend/brand_gtm.py).
+# brand_draft: sections for the brand draft from any bot, an admin's to confirm (backend/brand.py).
 PROPOSALS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery",
-             "strategy_draft", "strategy_realign", "brand_draft", "gtm_draft")
-FLAGS = ("vague", "duplicate", "unmeasured")
+             "strategy_draft", "strategy_realign", "brand_draft")
+FLAGS = ("vague", "duplicate")
 
 
 # ----------------------------------------------------------------------------- reads
@@ -55,7 +55,7 @@ def goals(conn, owner=None, parent_id=None, status=None, live_only=False):
     """Goals, filtered. `status` is one status or a tuple; `live_only` leaves out done and dropped."""
     where, args = [], []
     if owner:
-        where.append("owner=?")
+        where.append("owner_id=?")
         args.append(owner)
     if parent_id is not None:
         where.append("parent_id IS NULL" if parent_id == "" else "parent_id=?")
@@ -68,7 +68,7 @@ def goals(conn, owner=None, parent_id=None, status=None, live_only=False):
     if live_only:
         where.append("(status IS NULL OR status NOT IN ('done','dropped'))")
     sql = "SELECT * FROM goals" + (" WHERE " + " AND ".join(where) if where else "")
-    return H._rows(conn.execute(sql + " ORDER BY owner, rank, created", args))
+    return H._rows(conn.execute(sql + " ORDER BY owner_id, rank, created_at", args))
 
 
 def chain(conn, goal_id):
@@ -83,11 +83,11 @@ def chain(conn, goal_id):
 
 
 def children(conn, goal_id):
-    return H._rows(conn.execute("SELECT * FROM goals WHERE parent_id=? ORDER BY owner, rank, created", (goal_id,)))
+    return H._rows(conn.execute("SELECT * FROM goals WHERE parent_id=? ORDER BY owner_id, rank, created_at", (goal_id,)))
 
 
 def history(conn, goal_id):
-    return H._rows(conn.execute("SELECT * FROM goal_events WHERE goal_id=? ORDER BY ts", (goal_id,)))
+    return H._rows(conn.execute("SELECT * FROM goal_events WHERE goal_id=? ORDER BY created_at", (goal_id,)))
 
 
 def kpis(conn, goal_id):
@@ -104,13 +104,13 @@ def readings(conn, kpi_id, limit=500):
 
 
 def tasks_of(conn, goal_id, visible="coalesce(private,1)=0"):
-    return H._rows(conn.execute("SELECT id,title,owner,requester,status,updated FROM tasks WHERE goal_id=? "
-                                "AND (" + visible + ") ORDER BY status, updated DESC", (goal_id,)))
+    return H._rows(conn.execute("SELECT id,title,owner_id,requester_id,status,updated_at FROM tasks WHERE goal_id=? "
+                                "AND (" + visible + ") ORDER BY status, updated_at DESC", (goal_id,)))
 
 
 def checkins(conn, goal_id, limit=50):
     """The owner's own words about how it is going, newest first."""
-    return H._rows(conn.execute("SELECT * FROM goal_checkins WHERE goal_id=? ORDER BY ts DESC LIMIT ?",
+    return H._rows(conn.execute("SELECT * FROM goal_checkins WHERE goal_id=? ORDER BY created_at DESC LIMIT ?",
                                 (goal_id, limit)))
 
 
@@ -131,8 +131,8 @@ def proposals(conn, status="pending", goal_id=None, kpi_id=None):
 
 def _proposal_view(row, conn=None):
     if row:
-        row["payload"] = H._json(row.pop("payload_json"), {}) or {}
-        row["result"] = H._json(row.pop("result_json"), None)
+        row["payload"] = H._json(row.pop("payload"), {}) or {}
+        row["result"] = H._json(row.pop("result"), None)
         if conn is not None and row["kind"] in ("strategy_draft", "strategy_realign"):
             from . import strategy
             strategy.card_view(conn, row)
@@ -223,7 +223,7 @@ def reports_of(actor, roster, entries, archived=(), bare_people=False):
 
 # ----------------------------------------------------------------------------- writes
 def _event(conn, goal_id, actor, field, old, new, note="", status_by=None, status_source=None, ts=None):
-    conn.execute("INSERT INTO goal_events (id, goal_id, ts, actor, field, old, new, note, status_by, status_source) "
+    conn.execute("INSERT INTO goal_events (id, goal_id, created_at, actor, field, old, new, note, status_by, status_source) "
                  "VALUES (?,?,?,?,?,?,?,?,?,?)",
                  (H.new_id(), goal_id, ts or H.now(), actor, field,
                   None if old is None else str(old), None if new is None else str(new), note or "",
@@ -231,7 +231,7 @@ def _event(conn, goal_id, actor, field, old, new, note="", status_by=None, statu
 
 
 def _next_rank(conn, owner, top=False):
-    row = conn.execute("SELECT min(rank), max(rank) FROM goals WHERE owner=? AND rank IS NOT NULL", (owner,)).fetchone()
+    row = conn.execute("SELECT min(rank), max(rank) FROM goals WHERE owner_id=? AND rank IS NOT NULL", (owner,)).fetchone()
     lowest, highest = row[0], row[1]
     if top:
         return (lowest - 1) if lowest is not None else 0
@@ -260,12 +260,12 @@ def create(conn, actor, title, owner, parent_id=None, body="", top=False, bet_id
         H.refuse(conn, actor, "kind", "a company goal does not support another goal")
     bet_id = _bet(conn, actor, bet_id) if bet_id else None
     ts = H.now()
-    row = {"id": H.new_id(), "title": title, "owner": owner, "parent_id": parent_id or None,
-           "body": str(body or ""), "rank": _next_rank(conn, owner, top), "created": ts,
-           "created_by": actor, "updated": ts, "bet_id": bet_id}
-    conn.execute("INSERT INTO goals (id, title, owner, parent_id, body, status, status_note, rank, created, "
-                 "created_by, updated, bet_id) VALUES (:id, :title, :owner, :parent_id, :body, NULL, '', :rank, "
-                 ":created, :created_by, :updated, :bet_id)", row)
+    row = {"id": H.new_id(), "title": title, "owner_id": owner, "parent_id": parent_id or None,
+           "body": str(body or ""), "rank": _next_rank(conn, owner, top), "created_at": ts,
+           "created_by_id": actor, "updated_at": ts, "bet_id": bet_id}
+    conn.execute("INSERT INTO goals (id, title, owner_id, parent_id, body, status, status_note, rank, created_at, "
+                 "created_by_id, updated_at, bet_id) VALUES (:id, :title, :owner_id, :parent_id, :body, NULL, '', :rank, "
+                 ":created_at, :created_by_id, :updated_at, :bet_id)", row)
     _event(conn, row["id"], actor, "created", None, title)
     if bet_id:
         _event(conn, row["id"], actor, "bet_id", None, bet_id)
@@ -285,17 +285,17 @@ def set_status(conn, actor, goal_id, status, note=""):
     if status in COLOURS and not note:
         H.refuse(conn, actor, "lint", "say in one sentence why it is " + status)
     ts = H.now()
-    conn.execute("UPDATE goals SET status=?, status_note=?, status_by=?, status_at=?, status_source='person', "
-                 "suggest_status=NULL, suggest_note=NULL, suggest_at=NULL, updated=?, "
+    conn.execute("UPDATE goals SET status=?, status_note=?, status_by_id=?, status_at=?, status_source='person', "
+                 "suggest_status=NULL, suggest_note=NULL, suggest_at=NULL, updated_at=?, "
                  "rank=CASE WHEN ? IN ('done','dropped') THEN NULL WHEN rank IS NULL THEN ? ELSE rank END "
-                 "WHERE id=?", (status, note, actor, ts, ts, status, _next_rank(conn, row["owner"]), goal_id))
+                 "WHERE id=?", (status, note, actor, ts, ts, status, _next_rank(conn, row["owner_id"]), goal_id))
     # The event's time is the colour's `status_at`, which Undo on "Goal removed" puts back (`_before_drop`).
     _event(conn, goal_id, actor, "status", row["status"], status, note, status_by=actor, status_source="person", ts=ts)
     H.event(conn, actor, "goal.status", goal_id, {"status": status})
     if status == "dropped":
         # Nothing is deleted: the children move up to the goal this one served.
         for child in children(conn, goal_id):
-            conn.execute("UPDATE goals SET parent_id=?, updated=? WHERE id=?", (row["parent_id"], ts, child["id"]))
+            conn.execute("UPDATE goals SET parent_id=?, updated_at=? WHERE id=?", (row["parent_id"], ts, child["id"]))
             _event(conn, child["id"], actor, "parent_id", goal_id, row["parent_id"], f"{row['title']} was dropped")
     return goal(conn, goal_id)
 
@@ -304,7 +304,7 @@ def _before_finish(conn, goal_id):
     """The status a done or dropped goal had while it was live: its last change from a live status (or none) to done
     or dropped. None when it had no colour yet."""
     row = conn.execute("SELECT old FROM goal_events WHERE goal_id=? AND field='status' AND new IN ('done','dropped') "
-                       "AND (old IS NULL OR old NOT IN ('done','dropped')) ORDER BY ts DESC, rowid DESC LIMIT 1",
+                       "AND (old IS NULL OR old NOT IN ('done','dropped')) ORDER BY created_at DESC, rowid DESC LIMIT 1",
                        (goal_id,)).fetchone()
     return row[0] if row else None
 
@@ -314,17 +314,17 @@ def _before_drop(conn, goal_id):
     history so Undo puts back what was there, not what a page says was there. A reopen's own `status` event carries
     its reason, so the colour it gave is read from the `status_restore` row it writes beside it. None when the colour
     was automatic or there was none (a proposal)."""
-    drop = conn.execute("SELECT ts, rowid FROM goal_events WHERE goal_id=? AND field='status' AND new='dropped' "
-                        "ORDER BY ts DESC, rowid DESC LIMIT 1", (goal_id,)).fetchone()
+    drop = conn.execute("SELECT created_at, rowid FROM goal_events WHERE goal_id=? AND field='status' AND new='dropped' "
+                        "ORDER BY created_at DESC, rowid DESC LIMIT 1", (goal_id,)).fetchone()
     if not drop:
         return None
-    prior = conn.execute("SELECT field, old, new, note, status_by, status_source, ts FROM goal_events WHERE goal_id=? "
+    prior = conn.execute("SELECT field, old, new, note, status_by, status_source, created_at FROM goal_events WHERE goal_id=? "
                          "AND field IN ('status','status_source','status_restore') "
-                         "AND (ts < ? OR (ts = ? AND rowid < ?)) ORDER BY ts DESC, rowid DESC LIMIT 1",
+                         "AND (created_at < ? OR (created_at = ? AND rowid < ?)) ORDER BY created_at DESC, rowid DESC LIMIT 1",
                          (goal_id, drop[0], drop[0], drop[1])).fetchone()
     if not prior or prior["field"] == "status_source" or prior["status_source"] != "person" or prior["new"] not in COLOURS:
         return None
-    return prior["new"], prior["note"], prior["status_by"], prior["old"] if prior["field"] == "status_restore" else prior["ts"]
+    return prior["new"], prior["note"], prior["status_by"], prior["old"] if prior["field"] == "status_restore" else prior["created_at"]
 
 
 def reopen(conn, actor, goal_id, status=None, note="", undo=False):
@@ -339,7 +339,7 @@ def reopen(conn, actor, goal_id, status=None, note="", undo=False):
         H.refuse(conn, actor, "not-found", f"no goal {goal_id}")
     if row["status"] not in ("done", "dropped"):
         H.refuse(conn, actor, "kind", "only a done or dropped goal is reopened")
-    ts, rank = H.now(), _next_rank(conn, row["owner"])
+    ts, rank = H.now(), _next_rank(conn, row["owner_id"])
     if undo:
         if row["status"] != "dropped":
             H.refuse(conn, actor, "kind", "Undo brings back a removed goal; a done goal is reopened with a reason")
@@ -360,8 +360,8 @@ def reopen(conn, actor, goal_id, status=None, note="", undo=False):
         else:
             new, source, said = status, "person", note
         by, at, why = actor, ts, "Reopened: " + note
-    conn.execute("UPDATE goals SET status=?, status_note=?, status_by=?, status_at=?, status_source=?, "
-                 "suggest_status=NULL, suggest_note=NULL, suggest_at=NULL, updated=?, rank=? WHERE id=?",
+    conn.execute("UPDATE goals SET status=?, status_note=?, status_by_id=?, status_at=?, status_source=?, "
+                 "suggest_status=NULL, suggest_note=NULL, suggest_at=NULL, updated_at=?, rank=? WHERE id=?",
                  (new, said, by, at, source, ts, rank, goal_id))
     _event(conn, goal_id, actor, "status", row["status"], new, why, status_by=by, status_source=source, ts=ts)
     _event(conn, goal_id, actor, "status_restore", at, new, said, status_by=by, status_source=source, ts=ts)
@@ -400,14 +400,14 @@ def update(conn, actor, goal_id, title=None, body=None, parent_id=None, owner=No
                 H.refuse(conn, actor, "not-found", f"no goal {new_parent}")
             if goal_id in {g["id"] for g in chain(conn, new_parent)}:
                 H.refuse(conn, actor, "kind", "a goal cannot serve one of its own children")
-        if new_parent and (owner or row["owner"]) == COMPANY:
+        if new_parent and (owner or row["owner_id"]) == COMPANY:
             H.refuse(conn, actor, "kind", "a company goal does not support another goal")
         sets.append("parent_id=:parent_id")
         args["parent_id"] = new_parent
         _event(conn, goal_id, actor, "parent_id", row["parent_id"], new_parent)
-    if owner is not None and owner != row["owner"]:
-        sets.append("owner=:owner")
-        args["owner"] = owner
+    if owner is not None and owner != row["owner_id"]:
+        sets.append("owner_id=:owner_id")
+        args["owner_id"] = owner
         if owner == COMPANY and (row["parent_id"] or args.get("parent_id")):
             # A company goal supports nothing.
             if "parent_id=:parent_id" not in sets:
@@ -416,10 +416,10 @@ def update(conn, actor, goal_id, title=None, body=None, parent_id=None, owner=No
             args["parent_id"] = None
         sets.append("rank=:rank")
         args["rank"] = _next_rank(conn, owner)
-        _event(conn, goal_id, actor, "owner", row["owner"], owner)
+        _event(conn, goal_id, actor, "owner", row["owner_id"], owner)
     if rank is not None or top:
         sets.append("rank=:rank")
-        args["rank"] = _next_rank(conn, args.get("owner") or row["owner"], top=True) if top else int(rank)
+        args["rank"] = _next_rank(conn, args.get("owner_id") or row["owner_id"], top=True) if top else int(rank)
         _event(conn, goal_id, actor, "rank", row["rank"], args["rank"])
     if bet_id is not None and (bet_id or None) != row.get("bet_id"):
         sets.append("bet_id=:bet_id")
@@ -427,8 +427,8 @@ def update(conn, actor, goal_id, title=None, body=None, parent_id=None, owner=No
         _event(conn, goal_id, actor, "bet_id", row.get("bet_id"), args["bet_id"])
     if not sets:
         return row
-    args["id"], args["updated"] = goal_id, H.now()
-    conn.execute(f"UPDATE goals SET {', '.join(sets)}, updated=:updated WHERE id=:id", args)
+    args["id"], args["updated_at"] = goal_id, H.now()
+    conn.execute(f"UPDATE goals SET {', '.join(sets)}, updated_at=:updated_at WHERE id=:id", args)
     H.event(conn, actor, "goal.update", goal_id, {k: v for k, v in args.items() if k not in ("id", "body")})
     return goal(conn, goal_id)
 
@@ -438,7 +438,7 @@ def reads_due(conn, actor, goal_ids, every=600):
     goals many times an hour; the read path writes only when one is due."""
     since = H.shift(H.now(), seconds=-every)
     return [r[0] for part in H.chunks(sorted(set(goal_ids))) for r in conn.execute(
-        "SELECT id FROM goals WHERE id IN (%s) AND (last_read_by IS NOT ? OR last_read_at IS NULL OR last_read_at<?)"
+        "SELECT id FROM goals WHERE id IN (%s) AND (last_read_by_id IS NOT ? OR last_read_at IS NULL OR last_read_at<?)"
         % ",".join("?" * len(part)), (*part, actor, since))]
 
 
@@ -446,7 +446,7 @@ def mark_read(conn, actor, goal_ids):
     """`hub goal list` and `hub goal show` from a bot: the signal that the mandate was read."""
     ts = H.now()
     for gid in goal_ids:
-        conn.execute("UPDATE goals SET last_read_at=?, last_read_by=? WHERE id=?", (ts, actor, gid))
+        conn.execute("UPDATE goals SET last_read_at=?, last_read_by_id=? WHERE id=?", (ts, actor, gid))
 
 
 # ----------------------------------------------------------------------------- KPIs on goals
@@ -590,12 +590,12 @@ def _age(then, at):
 def _from_owner(conn, row, at):
     """A goal with no KPI to judge it by is coloured by its owner's check-in, then by its tasks."""
     since = H.shift(H.now(), days=-CHECKIN_DAYS)
-    said = H._one(conn, "SELECT * FROM goal_checkins WHERE goal_id=? AND signal IS NOT NULL AND ts>? "
-                        "ORDER BY ts DESC LIMIT 1", (row["id"], since))
+    said = H._one(conn, "SELECT * FROM goal_checkins WHERE goal_id=? AND signal IS NOT NULL AND created_at>? "
+                        "ORDER BY created_at DESC LIMIT 1", (row["id"], since))
     if said:
         return {"status": SIGNAL_COLOUR[said["signal"]], "basis": "checkin",
-                "reason": f"Check-in {_age(said['ts'], at)} ago: {said['signal'].replace('_', ' ')}"}
-    tasks = conn.execute("SELECT status, done_at, closed_at, updated FROM tasks WHERE goal_id=? "
+                "reason": f"Check-in {_age(said['created_at'], at)} ago: {said['signal'].replace('_', ' ')}"}
+    tasks = conn.execute("SELECT status, done_at, closed_at, updated_at FROM tasks WHERE goal_id=? "
                          "AND status!='declined' AND coalesce(private,1)=0",
                          (row["id"],)).fetchall()
     if not tasks:
@@ -608,9 +608,9 @@ def _from_owner(conn, row, at):
     if latest and (at - H.parse_ts(latest).astimezone(timezone.utc)).days < TASK_DAYS:
         return {"status": "green", "basis": "tasks",
                 "reason": f"{len(finished)} of {len(tasks)} tasks done, latest {_age(latest, at)} ago"}
-    created = H.parse_ts(row["created"])
+    created = H.parse_ts(row["created_at"])
     if created and (at - created.astimezone(timezone.utc)).days >= TASK_DAYS:
-        moved = max(t["updated"] or "" for t in waiting)
+        moved = max(t["updated_at"] or "" for t in waiting)
         if moved and (at - H.parse_ts(moved).astimezone(timezone.utc)).days >= 30:
             return {"status": "red", "basis": "tasks", "reason": "Nothing has moved in 30 days"}
         return {"status": "yellow", "basis": "tasks", "reason": f"No task done in {TASK_DAYS} days ({len(waiting)} open)"}
@@ -664,14 +664,14 @@ def apply_auto(conn, goal_id, at=None):
     if row["status"] is None and result["status"] == "gray":
         return None                                   # nothing to say yet: it stays unscored
     changed = result["status"] != row["status"]
-    if not changed and result["reason"] == row["status_note"] and row["status_by"] == AUTO_ACTOR:
+    if not changed and result["reason"] == row["status_note"] and row["status_by_id"] == AUTO_ACTOR:
         return None
-    conn.execute("UPDATE goals SET status=?, status_note=?, status_by=?, status_source='auto', "
-                 "status_at=CASE WHEN ? THEN ? ELSE status_at END, updated=CASE WHEN ? THEN ? ELSE updated END, "
+    conn.execute("UPDATE goals SET status=?, status_note=?, status_by_id=?, status_source='auto', "
+                 "status_at=CASE WHEN ? THEN ? ELSE status_at END, updated_at=CASE WHEN ? THEN ? ELSE updated_at END, "
                  "suggest_status=NULL, suggest_note=NULL, suggest_at=NULL, "
                  "rank=CASE WHEN rank IS NULL THEN ? ELSE rank END WHERE id=?",
                  (result["status"], result["reason"], AUTO_ACTOR, changed, ts, changed, ts,
-                  _next_rank(conn, row["owner"]), goal_id))
+                  _next_rank(conn, row["owner_id"]), goal_id))
     if changed:
         _event(conn, goal_id, AUTO_ACTOR, "status", row["status"], result["status"], result["reason"],
                status_by=AUTO_ACTOR, status_source="auto")
@@ -706,7 +706,7 @@ def hand_back(conn, actor, goal_id):
         H.refuse(conn, actor, "kind", "only a colour a person set can be handed back; this one is already automatic"
                  if row["status_source"] != "person" else "a done or dropped goal is not handed back: set a colour first")
     conn.execute("UPDATE goals SET status_source='auto', suggest_status=NULL, suggest_note=NULL, suggest_at=NULL, "
-                 "updated=? WHERE id=?", (H.now(), goal_id))
+                 "updated_at=? WHERE id=?", (H.now(), goal_id))
     _event(conn, goal_id, actor, "status_source", "person", "auto", "Let " + strategy_bot.name(conn) + " set it",
            status_by=actor, status_source="auto")
     H.event(conn, actor, "goal.hand_back", goal_id, {})
@@ -714,9 +714,9 @@ def hand_back(conn, actor, goal_id):
     return goal(conn, goal_id)
 
 
-def checkin_add(conn, actor, goal_id, body, signal=None, source_actor=None, kpi_id=None):
+def checkin_add(conn, actor, goal_id, body, signal=None, sender_id=None, kpi_id=None):
     """The owner's own answer about how a goal is going, in their words: interpretation, kept apart from
-    the readings (facts). `source_actor` is whose answer it is when someone records it for them."""
+    the readings (facts). `sender_id` is whose answer it is when someone records it for them."""
     H._writer(conn, actor)
     if not goal(conn, goal_id):
         H.refuse(conn, actor, "not-found", f"no goal {goal_id}")
@@ -727,10 +727,10 @@ def checkin_add(conn, actor, goal_id, body, signal=None, source_actor=None, kpi_
         H.refuse(conn, actor, "kind", f"a signal is {'|'.join(SIGNALS)}, not {signal}")
     if kpi_id and not kpi(conn, kpi_id):
         H.refuse(conn, actor, "not-found", f"no kpi {kpi_id}")
-    row = {"id": H.new_id(), "goal_id": goal_id, "kpi_id": kpi_id or None, "ts": H.now(), "author": actor,
-           "source_actor": source_actor or actor, "body": body[:4000], "signal": signal or None}
-    conn.execute("INSERT INTO goal_checkins (id, goal_id, kpi_id, ts, author, source_actor, body, signal) VALUES "
-                 "(:id, :goal_id, :kpi_id, :ts, :author, :source_actor, :body, :signal)", row)
+    row = {"id": H.new_id(), "goal_id": goal_id, "kpi_id": kpi_id or None, "created_at": H.now(), "author": actor,
+           "sender_id": sender_id or actor, "body": body[:4000], "signal": signal or None}
+    conn.execute("INSERT INTO goal_checkins (id, goal_id, kpi_id, created_at, author, sender_id, body, signal) VALUES "
+                 "(:id, :goal_id, :kpi_id, :created_at, :author, :sender_id, :body, :signal)", row)
     _event(conn, goal_id, actor, "checkin", None, signal, body[:300])
     H.event(conn, actor, "goal.checkin", goal_id, {"signal": signal})
     apply_auto(conn, goal_id)
@@ -742,9 +742,9 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
     """What is wrong with a proposal's payload, in a sentence, or None."""
     if kind in ("goal_wording", "goal_kpi", "flag", "goal_why", "recovery") and not goal(conn, goal_id):
         return "name the goal this is about"
-    if kind in ("brand_draft", "gtm_draft") and (goal_id or kpi_id):
+    if kind == "brand_draft" and (goal_id or kpi_id):
         # A draft page proposal carries unpublished words: never filed under a goal or KPI members read.
-        return "a brand or GTM draft proposal is about the page, not a goal or KPI: leave goal_id and kpi_id out"
+        return "a brand draft proposal is about the page, not a goal or KPI: leave goal_id and kpi_id out"
     if kind in ("kpi_definition", "kpi_target") and (not kpi_id or not kpi(conn, kpi_id)
                                                       or (kind == "kpi_definition" and K.auto(kpi_id))):
         return "name a KPI this is about (a KPI Tico computes itself has no definition to change)"
@@ -796,9 +796,9 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
         elif kind == "strategy_realign":
             from . import strategy
             return strategy.realign_error(conn, payload)
-        elif kind in ("brand_draft", "gtm_draft"):
-            from . import brand_gtm
-            return brand_gtm.proposal_error(conn, brand_gtm.kind_of_proposal(kind), payload)
+        elif kind == "brand_draft":
+            from . import brand
+            return brand.proposal_error(conn, payload)
     except ValueError as exc:
         return str(exc)
     return None
@@ -815,7 +815,7 @@ def card(conn, p, hidden, editor):
     (backend/goal_routes.py hidden_owners); nothing of theirs is read in, not a reused measure's unit either.
     `editor`: the reader edits the strategy, so reads unpublished bets; anyone else reads the published ones."""
     pl, kind = p.get("payload") or {}, p["kind"]
-    seen = lambda record: record if record and record["owner"] not in hidden else None
+    seen = lambda record: record if record and record["owner_id"] not in hidden else None
     row = seen(goal(conn, p["goal_id"]) if p.get("goal_id") else None)
     record = seen(kpi(conn, p["kpi_id"]) if p.get("kpi_id") else None)
     out = {"goal_title": row and row["title"], "kpi_name": record and record["name"]}
@@ -880,7 +880,7 @@ def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason="
         H.refuse(conn, actor, "lint", error)
     body = H._dump(payload)
     same = H._one(conn, "SELECT id FROM goal_proposals WHERE status='pending' AND kind=? AND coalesce(goal_id,'')=? "
-                        "AND coalesce(kpi_id,'')=? AND payload_json=?", (kind, goal_id or "", kpi_id or "", body))
+                        "AND coalesce(kpi_id,'')=? AND payload=?", (kind, goal_id or "", kpi_id or "", body))
     if same:
         return proposal(conn, same["id"])
     if kind == "goal_why":
@@ -889,10 +889,10 @@ def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason="
         # words they did not (decide refuses the replaced one).
         conn.execute("UPDATE goal_proposals SET status='rejected', decided_by=?, decided_at=?, decision_note=? "
                      "WHERE status='pending' AND kind='goal_why' AND goal_id=?", (actor, H.now(), WHY_REPLACED, goal_id))
-    row = {"id": H.new_id(), "kind": kind, "goal_id": goal_id or None, "kpi_id": kpi_id or None, "payload_json": body,
+    row = {"id": H.new_id(), "kind": kind, "goal_id": goal_id or None, "kpi_id": kpi_id or None, "payload": body,
            "reason": str(reason or "").strip()[:1000], "proposed_by": actor, "proposed_at": H.now()}
-    conn.execute("INSERT INTO goal_proposals (id, kind, goal_id, kpi_id, payload_json, reason, proposed_by, proposed_at) "
-                 "VALUES (:id, :kind, :goal_id, :kpi_id, :payload_json, :reason, :proposed_by, :proposed_at)", row)
+    conn.execute("INSERT INTO goal_proposals (id, kind, goal_id, kpi_id, payload, reason, proposed_by, proposed_at) "
+                 "VALUES (:id, :kind, :goal_id, :kpi_id, :payload, :reason, :proposed_by, :proposed_at)", row)
     if goal_id:
         _event(conn, goal_id, actor, "proposal", None, kind, row["reason"])
     H.event(conn, actor, "goal.propose", row["id"], {"kind": kind, "goal_id": goal_id, "kpi_id": kpi_id})
@@ -961,7 +961,7 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
             else:
                 owner = payload.get("owner")
                 owner = (COMPANY if owner == COMPANY else H.resolve_actor(conn, owner)) if owner else None
-                made = kpi_create(conn, actor, owner or (goal(conn, goal_id) or {}).get("owner"),
+                made = kpi_create(conn, actor, owner or (goal(conn, goal_id) or {}).get("owner_id"),
                                   payload["kpi"], goal_id=goal_id, target=target)
                 result = {"kpi_id": made["id"]}
         elif row["kind"] == "goal_why":
@@ -985,11 +985,11 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
         elif row["kind"] == "strategy_realign":
             from . import strategy
             result = strategy.apply_realign(conn, actor, payload, moves)
-        elif row["kind"] in ("brand_draft", "gtm_draft"):
+        elif row["kind"] == "brand_draft":
             # Merged into the draft as the admin who confirmed it. Never published.
-            from . import brand_gtm
-            result = brand_gtm.apply_proposal(conn, brand_gtm.kind_of_proposal(row["kind"]), actor, payload)
-    conn.execute("UPDATE goal_proposals SET status=?, decided_by=?, decided_at=?, decision_note=?, result_json=? "
+            from . import brand
+            result = brand.apply_proposal(conn, actor, payload)
+    conn.execute("UPDATE goal_proposals SET status=?, decided_by=?, decided_at=?, decision_note=?, result=? "
                  "WHERE id=?", ("confirmed" if decision == "confirm" else "rejected", actor, H.now(),
                                 str(note or "").strip()[:1000], H._dump(result) if result else None, proposal_id))
     if row["goal_id"]:
@@ -1050,8 +1050,8 @@ def seed(conn, document, resolve):
             continue
         ts = H.now()
         stated = entry.get("status") if entry.get("status") in STATUSES else None
-        conn.execute("INSERT INTO goals (id, title, owner, parent_id, body, status, status_note, status_by, "
-                     "status_at, status_source, rank, created, created_by, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        conn.execute("INSERT INTO goals (id, title, owner_id, parent_id, body, status, status_note, status_by_id, "
+                     "status_at, status_source, rank, created_at, created_by_id, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                      (gid, str(entry.get("title") or gid).strip(), owner, parent, str(entry.get("body") or ""),
                       stated, str(entry.get("status_note") or ""), H.KEEPER if stated else None,
                       ts if stated else None, "person" if stated else None, _next_rank(conn, owner), ts, H.KEEPER, ts))

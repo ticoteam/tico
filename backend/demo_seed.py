@@ -271,11 +271,11 @@ class Builder:
             self.at(days=3.8)
             market.update_entity(c, market.CURATOR, "company/northwind",
                                  summary="A large suite vendor with a self-serve tool. Cheapest starter plan: $29, down from $39.",
-                                 evidence_ids=["ev-northwind-pricing"], last_verified=self.ago(days=3.8).date().isoformat())
+                                 evidence_ids=["ev-northwind-pricing"], last_verified_at=self.ago(days=3.8).date().isoformat())
             self.at(days=3.0)
             market.update_entity(c, market.CURATOR, "company/brightline",
                                  summary="A venture-backed competitor. Launched a mobile app for studios last month.",
-                                 evidence_ids=["ev-brightline-app"], last_verified=self.ago(days=3.0).date().isoformat())
+                                 evidence_ids=["ev-brightline-app"], last_verified_at=self.ago(days=3.0).date().isoformat())
             for index, (actor, kind, about, claim, url, quote, confidence) in enumerate(D.INSIGHTS):
                 self.at(days=1.4 - index * 0.3)
                 market.report(c, actor, kind=kind, about=about, claim=claim, source_url=url, quote=quote,
@@ -289,7 +289,7 @@ class Builder:
             c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('market-context',?)", (encode({
                 "sells": D.ANSWERS["what_we_do"], "customers": "Small studios with a few client projects",
                 "competitors": "Northwind, Brightline, Pricewise, Harborly, Fernwood, Doorlark",
-                "channels": "r/projectmanagement", "updated": H.now(), "updated_by": "human:ana"}),))
+                "channels": "r/projectmanagement", "updated_at": H.now(), "updated_by": "human:ana"}),))
         self.write(work)
 
     def routines(self):
@@ -302,7 +302,7 @@ class Builder:
             # The Librarian's market routines were made with the wall clock; every routine is next due after `now`.
             for row in c.execute("SELECT s.id,s.cron,coalesce(sc.timezone,'America/Los_Angeles') zone FROM schedules s "
                                  "LEFT JOIN schedule_config sc ON sc.schedule_id=s.id WHERE s.event_name IS NULL AND s.cron<>''").fetchall():
-                c.execute("UPDATE schedules SET next_due=?,updated_at=? WHERE id=?",
+                c.execute("UPDATE schedules SET next_due_at=?,updated_at=? WHERE id=?",
                           (stamp(next_due(row["cron"], self.now, row["zone"])), stamp(self.now), row["id"]))
             c.execute("UPDATE schedules SET updated_at=? WHERE event_name IS NOT NULL", (stamp(self.now),))
         self.write(work)
@@ -348,7 +348,7 @@ class Builder:
                 if sender.startswith("human:"):
                     last = self.call("POST", f"chat/{bot}", {"text": text}, token=TOKENS[sender])["message"]
                 else:
-                    last = self.write(lambda c: hubdb.say(c, sender, last["from_actor"], text,
+                    last = self.write(lambda c: hubdb.say(c, sender, last["sender_id"], text,
                                                           conversation_id=last["conversation_id"], in_reply_to=last["id"]))
 
     def meetings(self):
@@ -371,7 +371,7 @@ class Builder:
             for text in entry.get("push", ()):
                 self.call("POST", f"/api/meetings/{result['id']}/items/{items[text]}/push", {"force": True})
             if entry.get("send_to"):
-                sent = self.call("POST", f"/api/meetings/{result['id']}/send", {"slug": entry["send_to"]})
+                sent = self.call("POST", f"/api/meetings/{result['id']}/send", {"bot_id": entry["send_to"]})
                 if entry.get("send_status") and sent.get("task"):
                     self.write(lambda c: hubdb.task_update(c, "bot:" + entry["send_to"], sent["task"], status=entry["send_status"],
                                                            note="Reading the call for follow-ups."))
@@ -446,9 +446,9 @@ class Builder:
                 if task:
                     hubdb.task_update(c, "bot:" + bot, task["id"], status="done", note=summary)
                     c.execute("INSERT INTO schedule_occurrences VALUES(?,?,?,'completed')",
-                              (routine["id"], turn["started"], task["id"]))
-                    c.execute("UPDATE schedules SET last_fired=max(coalesce(last_fired,''),?) WHERE id=?",
-                              (turn["started"], routine["id"]))
+                              (routine["id"], turn["started_at"], task["id"]))
+                    c.execute("UPDATE schedules SET last_fired_at=max(coalesce(last_fired_at,''),?) WHERE id=?",
+                              (turn["started_at"], routine["id"]))
                 hubdb.status_result(c, hubdb.KEEPER, bot, last_result=summary, last_turn_at=H.now())
             # A change's reason is written on the row it closes, so each step's why goes in with the next one.
             why = ""
@@ -486,14 +486,14 @@ class Builder:
             timestamp = str(int(self.ago(hours=1).timestamp())) + ".000001"
             for index, text in enumerate(["A customer needs the CSV export steps.", "Draft reply: Open Projects > Export > CSV."]):
                 ts = str(int(self.ago(hours=1 - index / 4).timestamp())) + ".000001"
-                c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,text,received,state,author,author_name,updated) "
+                c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,text,received_at,state,author,author_name,updated_at) "
                           "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                           (f"demo-slack-{index}", "TDEMOTEAM1", "CDEMOTEAM1", "channel", timestamp, ts,
                            "UDEMOTEAM1", "message", text, H.now(), "stored", "human" if index == 0 else "bot", "Sam" if index == 0 else "Support", H.now()))
             conv = H.open_conversation(c, H.KEEPER, [H.KEEPER, "bot:support"], kind="chat", subject="Slack support", scope="direct")
             message = H.feed(c, "bot:support", "Review the support channel's CSV export thread.", conv)
-            c.execute("INSERT INTO slack_threads VALUES(?,?,?,?,?,?)", ("CDEMOTEAM1", timestamp, "support", conv["id"], H.now(), H.now()))
-            c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) VALUES(?,?,?,?,?,?)", ("CDEMOTEAM1", timestamp, "support", conv["id"], H.now(), H.now()))
+            c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                       (message["id"], "CDEMOTEAM1", timestamp, "support", "Draft: Open Projects > Export > CSV.", "ready", H.now(), H.now()))
             c.execute("INSERT INTO slack_reads VALUES(?,?,?,?,?)", ("CDEMOTEAM1", "support", timestamp, H.now(), 1))
         self.write(work)
@@ -522,7 +522,7 @@ class Builder:
     def finish(self):
         """Nothing is left waiting for a bot: every message reads as delivered and no job is queued."""
         def work(c):
-            c.execute("UPDATE messages SET delivered_at=created WHERE delivered_at IS NULL AND to_actor LIKE 'bot:%'")
+            c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND recipient_id LIKE 'bot:%'")
             c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running','input')")
             c.execute("DELETE FROM update_queue")
         self.write(work)

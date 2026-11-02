@@ -27,8 +27,8 @@ def waiting(c: sqlite3.Connection, kinds: Sequence[str]) -> list[Any]:
 def insert(c: sqlite3.Connection, *, action_id: str, kind: str, payload: Mapping[str, object], actor: str,
            on_behalf_of: str, rule_id: str, key: str, rules: Sequence[Mapping[str, object]], status: str,
            result: Mapping[str, object], code: str, reason: str, by: str, at: str) -> None:
-    c.execute("INSERT INTO fin_actions(id, kind, payload_json, actor, on_behalf_of, rule_id, idempotency_key, "
-              "rule_results_json, status, result_json, code, reason, created_at, created_by, updated_at) "
+    c.execute("INSERT INTO fin_actions(id, kind, payload, actor, on_behalf_of, rule_id, idempotency_key, "
+              "rule_results, status, result, code, reason, created_at, created_by, updated_at) "
               "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
               (action_id, kind, _dump(payload), actor, on_behalf_of, rule_id, key, _dump(list(rules)), status,
                _dump(result), code, reason, at, by, at))
@@ -36,17 +36,21 @@ def insert(c: sqlite3.Connection, *, action_id: str, kind: str, payload: Mapping
 
 def finish(c: sqlite3.Connection, action_id: str, *, status: str, result: Mapping[str, object], code: str,
            reason: str, at: str) -> None:
-    c.execute("UPDATE fin_actions SET status=?, result_json=?, code=?, reason=?, updated_at=? WHERE id=?",
+    c.execute("UPDATE fin_actions SET status=?, result=?, code=?, reason=?, updated_at=? WHERE id=?",
               (status, _dump(result), code, reason, at, action_id))
 
 
 def asked(c: sqlite3.Connection, action_id: str, *, approval_id: str, approval_hash: str, requester: str, to: str,
-          rule_id: str, payload: Mapping[str, object], at: str) -> None:
+          rule_id: str, payload: Mapping[str, object], at: str,
+          rules: Sequence[Mapping[str, object]] | None = None) -> None:
     """The approval an action waits on: its id, the hash of the payload it was asked for, who asked and who decides. The
-    stored payload becomes that one, so the decision checks the payload that was asked."""
+    stored payload becomes that one, so the decision checks the payload that was asked. `rules`, when given, replaces
+    the rules the action records: every rule its approval names (a re-ask after the rules changed)."""
     c.execute("UPDATE fin_actions SET status='needs_approval', approval_id=?, approval_hash=?, approval_by=?, "
-              "approval_to=?, rule_id=?, payload_json=?, updated_at=? WHERE id=?",
+              "approval_to=?, rule_id=?, payload=?, updated_at=? WHERE id=?",
               (approval_id, approval_hash, requester, to, rule_id, _dump(payload), at, action_id))
+    if rules is not None:
+        c.execute("UPDATE fin_actions SET rule_results=? WHERE id=?", (_dump(list(rules)), action_id))
 
 
 def settled_waits(c: sqlite3.Connection, most: int) -> list[str]:
@@ -64,3 +68,9 @@ def _dump(value: object) -> str:
 def drop_waiting(c: sqlite3.Connection) -> int:
     """Delete every action still waiting on its approval (a dev copy's scrub). How many went."""
     return c.execute("DELETE FROM fin_actions WHERE status='needs_approval'").rowcount
+
+
+def empty_tables(c: sqlite3.Connection, tables: Sequence[str]) -> dict[str, int]:
+    """Delete every row of each table, in the order given (a row goes after the rows that point at it). A dev copy's
+    scrub. {table: rows removed}."""
+    return {table: c.execute(f"DELETE FROM {table}").rowcount for table in tables}

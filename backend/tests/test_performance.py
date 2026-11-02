@@ -34,7 +34,7 @@ def test_on_by_default_everyone_reads_it_and_only_the_operator_or_an_admin_switc
         seen = get(api, f"computers/{rid}/performance?hours=1", token=token)
         assert seen["performance"] == "on" and seen["points"] and seen["points"][0][1] == 20.0
         assert seen["scope"] == "container_cpu"
-        assert [x["attempt"] for x in seen["runs"]] == [attempt["id"]]    # the server's own record of what ran
+        assert [x["id"] for x in seen["runs"]] == [attempt["id"]]    # the server's own record of what ran
     post(api, f"computers/{rid}/performance", {"mode": "off"}, token="cara-test", expected=403)
     post(api, f"computers/{rid}/performance", {"mode": "off"}, token="ops-bot", expected=403)
     assert post(api, f"computers/{rid}/performance", {"mode": "off"}) == {"performance": "off"}
@@ -57,26 +57,26 @@ def test_ten_loaded_minutes_record_an_overload_that_names_what_ran_and_health_sh
     rid = r["runner_id"]
     start = (int(time.time()) // 60 - 12) * 60
     with api.app.state.store.transaction() as c:                # the turn began before the load did
-        c.execute("UPDATE attempts SET created=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
+        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
     busy = [sample(start + 60 * i, cpu=97.0, procs=[("cargo", 400.0), ("claude", 50.0)]) for i in range(10)]
     post(api, "runners/performance", {"samples": busy[:9]}, token=r["token"])
     assert get(api, f"computers/{rid}/performance?hours=1")["overloads"] == []          # nine minutes are not ten
     post(api, "runners/performance", {"samples": busy[9:]}, token=r["token"])
     seen = get(api, f"computers/{rid}/performance?hours=1")
     (o,) = seen["overloads"]
-    assert o["reasons"] == ["cpu"] and o["ended"] is None and o["bots"][0]["bot"] == "ops"
+    assert o["reasons"] == ["cpu"] and o["ended_at"] is None and o["bots"][0]["bot"] == "ops"
     assert o["procs"][0]["name"] == "cargo"
     assert seen["summary"].startswith("Overloaded once") and "cargo" in seen["summary"]
     check = next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)
     assert check["status"] == "warn" and "overloaded now" in check["summary"]
     post(api, "runners/performance", {"samples": [sample(start + 600, cpu=85.0)]}, token=r["token"])   # a calm minute ends it
-    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended"] == start + 600
+    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended_at"] == start + 600
     # ... until the rest of that minute arrives loaded (85% then 97%): the same overload carries on, not a second one.
     post(api, "runners/performance", {"samples": [sample(start + 630, cpu=97.0)]}, token=r["token"])
     (o,) = get(api, f"computers/{rid}/performance?hours=1")["overloads"]
-    assert (o["started"], o["ended"], o["last"]) == (start, None, start + 600)
+    assert (o["started_at"], o["ended_at"], o["last_seen_at"]) == (start, None, start + 600)
     post(api, "runners/performance", {"samples": [sample(start + 660)]}, token=r["token"])
-    assert [x["ended"] for x in get(api, f"computers/{rid}/performance?hours=1")["overloads"]] == [start + 660]
+    assert [x["ended_at"] for x in get(api, f"computers/{rid}/performance?hours=1")["overloads"]] == [start + 660]
 
 
 def test_minutes_roll_into_ten_minute_points_after_two_days_and_everything_goes_after_fourteen(api):
@@ -90,7 +90,7 @@ def test_minutes_roll_into_ten_minute_points_after_two_days_and_everything_goes_
         P.ingest(c, rid, [P_sample(now - 15 * 86400)], now=now - 15 * 86400)
     P.sweep(store, now)
     with store.read() as c:
-        rows = [tuple(x) for x in c.execute("SELECT span,ts,n,cpu,cpu_max FROM perf_points WHERE runner_id=?", (rid,))]
+        rows = [tuple(x) for x in c.execute("SELECT span,created_at,n,cpu,cpu_max FROM perf_points WHERE runner_id=?", (rid,))]
         procs = [tuple(x) for x in c.execute("SELECT span,key,n FROM perf_usage WHERE runner_id=?", (rid,))]
     assert rows == [(600, old // 600 * 600, 4, 25.0, 40.0)]
     assert procs == [(600, "git", 4)]
@@ -108,7 +108,7 @@ def test_a_support_attachment_carries_the_window_with_computers_and_bots_relabel
     r, _, attempt = setup_attempt(api)
     now = int(time.time())
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET created=? WHERE id=?", (P._iso(now - 3600), attempt["id"]))
+        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (P._iso(now - 3600), attempt["id"]))
         P.ingest(c, r["runner_id"], [P_sample(now - 60), P_sample(now)], now=now)
     with api.app.state.store.read() as c:
         section = D._performance(c, 24)
@@ -128,16 +128,18 @@ def test_a_bot_the_reader_may_not_see_is_unnamed_in_turns_overloads_and_the_summ
     set_access(api, see={"teams": ["legal", "sales"]}, read={"teams": ["legal"]}, write={"teams": ["legal"]})
     start = (int(time.time()) // 60 - 12) * 60
     with api.app.state.store.transaction() as c:               # the Legal bot's turn ran on this computer
-        c.execute("UPDATE attempts SET bot=replace(bot,'ops','counsel'),created=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
-        c.execute("INSERT OR REPLACE INTO turns(id,bot,model) VALUES(?,'bot:counsel','legal-model-x')", (attempt["id"],))
+        counsel = H.resolve_bot(c, "counsel")["id"]
+        c.execute("UPDATE attempts SET bot_id=?,created_at=? WHERE id=?", (counsel, P._iso(start - 60), attempt["id"]))
+        c.execute("INSERT OR REPLACE INTO turns(id,bot,model) VALUES(?,?,'legal-model-x')",
+                  (attempt["id"], "bot:" + counsel))
     post(api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"])
     cara = get(api, f"computers/{rid}/performance?hours=1", token="cara-test")
-    assert cara["runs"][0]["bot"] == "counsel" and cara["runs"][0]["attempt"] == attempt["id"]
+    assert cara["runs"][0]["bot"] == "counsel" and cara["runs"][0]["id"] == attempt["id"]
     assert cara["overloads"][0]["bots"][0]["bot"] == "counsel" and "counsel" in cara["summary"]
     dee = get(api, f"computers/{rid}/performance?hours=1", token=tokens["dee"])     # Sales sees the bot, cannot read it
-    assert dee["runs"][0] == dee["runs"][0] | {"bot": "counsel", "model": "legal-model-x", "attempt": None}
+    assert dee["runs"][0] == dee["runs"][0] | {"bot": "counsel", "model": "legal-model-x", "id": None}
     seen = get(api, f"computers/{rid}/performance?hours=1", token=tokens["stranger"])
-    assert seen["runs"][0] == seen["runs"][0] | {"bot": "", "model": "", "attempt": None}
+    assert seen["runs"][0] == seen["runs"][0] | {"bot": "", "model": "", "id": None}
     assert seen["busiest"]["bots"] == [{"bot": "", "model": "", "runs": 1}]
     assert seen["overloads"][0]["bots"] == [{"bot": "", "model": "", "runs": 1}]
     assert "counsel" not in str(seen) and "legal-model-x" not in str(seen) and "another bot" in seen["summary"]
@@ -155,17 +157,17 @@ def test_a_fast_clock_or_a_backlog_still_judges_every_minute(api):
     post(api, "runners/performance", {"samples": [sample(now + 3 * 3600)]}, token=r["token"])
     start = now + 60
     with api.app.state.store.transaction() as c:
-        assert c.execute("SELECT max(ts) FROM perf_points WHERE runner_id=?", (rid,)).fetchone()[0] <= time.time()
+        assert c.execute("SELECT max(created_at) FROM perf_points WHERE runner_id=?", (rid,)).fetchone()[0] <= time.time()
         P.ingest(c, rid, [P_sample(start + 60 * i, cpu=97.0) for i in range(10)], now=start + 600)
         # A late minute from inside the overload changes nothing, open or ended.
         P.ingest(c, rid, [P_sample(start + 300, cpu=97.0)], now=start + 600)
-        assert c.execute("SELECT last FROM perf_overloads WHERE runner_id=?", (rid,)).fetchone()[0] == start + 540
+        assert c.execute("SELECT last_seen_at FROM perf_overloads WHERE runner_id=?", (rid,)).fetchone()[0] == start + 540
         # A backlog: two calm minutes then a loaded one, in one batch. The calm minute ends the overload.
         P.ingest(c, rid, [P_sample(start + 600, cpu=10.0), P_sample(start + 660, cpu=10.0), P_sample(start + 720, cpu=97.0)],
                  now=start + 720)
         P.ingest(c, rid, [P_sample(start + 540, cpu=97.0)], now=start + 720)
-        rows = [dict(x) for x in c.execute("SELECT started,ended FROM perf_overloads WHERE runner_id=?", (rid,))]
-    assert rows == [{"started": start, "ended": start + 600}]
+        rows = [dict(x) for x in c.execute("SELECT started_at,ended_at FROM perf_overloads WHERE runner_id=?", (rid,))]
+    assert rows == [{"started_at": start, "ended_at": start + 600}]
 
 
 def test_turning_it_off_ends_an_open_overload(api):
@@ -173,9 +175,9 @@ def test_turning_it_off_ends_an_open_overload(api):
     rid = r["runner_id"]
     start = (int(time.time()) // 60 - 11) * 60
     post(api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"])
-    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended"] is None
+    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended_at"] is None
     post(api, f"computers/{rid}/performance", {"mode": "off"})
-    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended"] == start + 600
+    assert get(api, f"computers/{rid}/performance?hours=1")["overloads"][0]["ended_at"] == start + 600
     assert not any(x["id"] == "performance:" + rid and "overloaded now" in x["summary"] for x in get(api, "health")["checks"])
 
 
@@ -221,15 +223,15 @@ def test_an_open_overload_reads_only_the_turns_of_its_window_however_long_the_co
     r, _, attempt = setup_attempt(api)
     rid, store = r["runner_id"], api.app.state.store
     start = (int(time.time()) // 60 - 12) * 60
-    columns = "id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,started,finished"
+    columns = "id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,started_at,finished_at"
 
     def turn(c, n, began, ended, state="completed"):
-        c.execute(f"INSERT INTO attempts({columns},lane) SELECT ?,job_id,bot,runner_id,generation,?,?,lease_until,?,?,?,? "
+        c.execute(f"INSERT INTO attempts({columns},lane) SELECT ?,job_id,bot_id,runner_id,generation,?,?,lease_until,?,?,?,? "
                   "FROM attempts WHERE id=?", (f"old-{n}", f"tok-{n}", state, P._iso(began), P._iso(began),
                                                 ended and P._iso(ended), f"lane-{n}", attempt["id"]))
 
     with store.transaction() as c:
-        c.execute("UPDATE attempts SET created=?,started=? WHERE id=?", (P._iso(start - 60), P._iso(start - 60), attempt["id"]))
+        c.execute("UPDATE attempts SET created_at=?,started_at=? WHERE id=?", (P._iso(start - 60), P._iso(start - 60), attempt["id"]))
         turn(c, "before", start - 7200, start - 3600)            # finished before the window: not named
         turn(c, "during", start - 600, start + 120)              # overlaps it
         turn(c, "after", start + 3600, start + 4000)             # began after it
@@ -245,7 +247,7 @@ def test_an_open_overload_reads_only_the_turns_of_its_window_however_long_the_co
             c.execute("DELETE FROM attempts WHERE id LIKE 'hist-%'")
             for n in range(history):
                 began = start - 30 * 86400 + n * 60
-                c.execute(f"INSERT INTO attempts({columns}) SELECT ?,job_id,bot,runner_id,generation,?,'completed',"
+                c.execute(f"INSERT INTO attempts({columns}) SELECT ?,job_id,bot_id,runner_id,generation,?,'completed',"
                           "lease_until,?,?,? FROM attempts WHERE id=?",
                           (f"hist-{n}", f"htok-{n}", P._iso(began), P._iso(began), P._iso(began + 30), attempt["id"]))
         steps = [0]
@@ -265,7 +267,7 @@ def test_an_open_overload_reads_only_the_turns_of_its_window_however_long_the_co
     assert many < few * 2 + 50, (few, many)        # before the fix: 50 times as many (8 and 404)
     with store.read() as c:
         plan = " ".join(row[3] for row in c.execute(
-            "EXPLAIN QUERY PLAN SELECT rowid FROM attempts WHERE runner_id=? AND finished>=?", (rid, P._iso(start))))
+            "EXPLAIN QUERY PLAN SELECT rowid FROM attempts WHERE runner_id=? AND finished_at>=?", (rid, P._iso(start))))
     assert "attempts_runner_finished" in plan
 
 
@@ -296,7 +298,7 @@ def test_one_tasks_history_of_one_field_reads_by_task(api):
     with api.app.state.store.read() as c:
         for sql in ("SELECT coalesce(max(rowid),0) FROM task_events WHERE task_id=? AND field='status' "
                     "AND old IN ('done','closed','declined') AND new NOT IN ('done','closed','declined')",
-                    "SELECT * FROM task_events WHERE task_id=? AND field='owner' ORDER BY ts DESC, rowid DESC LIMIT 1"):
+                    "SELECT * FROM task_events WHERE task_id=? AND field='owner' ORDER BY created_at DESC, rowid DESC LIMIT 1"):
             plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, ("t",)))
             assert "task_events_task_field" in plan, plan
 

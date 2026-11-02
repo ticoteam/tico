@@ -10,7 +10,10 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
+from .. import hubdb as H
+from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
+from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
 from . import closing as CL
 from . import context as _context
 from .store import usage as SU
@@ -23,7 +26,7 @@ from .core import projections as PJ
 from .core import view as VW
 from .core import watch as W
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
-from .core.ledger import PNL_TYPES, descendants, pnl_section
+from .core.ledger import PNL_TYPES, Account, descendants, pnl_section
 from .tax import form_1099_csv as form_1099_csv
 from .tax import form_1099_report as form_1099_report
 from .tax import sales_tax_csv as sales_tax_csv
@@ -35,10 +38,18 @@ from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import ap as SAP
+from .store import catalog as SC
 from .store import raw_totals as SR
+from .store import tico as ST
 
 UNATTRIBUTED = "Unattributed"
-GROUPS = ("department", "team", "teammate", "bot", "person", "vendor", "account")
+# Reserved row keys. Every real key is stripped (V.opt_text, L.name_key, SAP.vendor_key), so none starts with a space:
+# a vendor named Other or Unattributed is its own row, never one of these.
+OTHER = " other"                  # the folded "Other · n" row
+NONE = " unattributed"            # the group with no vendor, team or teammate (No vendor / Unattributed)
+NO_TEAM = "no_team"                # a teammate's spend with no team on it: the No team group, not Unattributed
+LOCATED = ("location", "class", "project", "location_class", "location_project", "class_project")
+GROUPS = ("department", "team", "teammate", "bot", "person", "vendor", "account", *LOCATED)
 MAX_TOP = 200
 Row = dict[str, object]
 
@@ -85,9 +96,26 @@ def _cells(s: _Seen, a: date, z: date, account_ids: Iterable[str] | None = None,
             account = s.ctx.accounts.get(r["account_id"])
             if account is None or not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}):
                 continue
+            location, klass, project = _located(str(r["tagset"]))
             out.append(VW.Cell(account_id=r["account_id"], day=r["day"], team=r["team"], teammate=r["teammate"],
-                               vendor=_vendor(s, vendors, str(r["vendor"])), amount=int(r["amount"])))
+                               vendor=_vendor(s, vendors, str(r["vendor"])), amount=int(r["amount"]),
+                               location=location, class_id=klass, project=project))
     return _without_settled(s, vendors, out, tab.settled_lines(s.ctx, s.view, a, z, plain, basis))
+
+
+_Key = tuple[str, str, str, str, str, str, str, str]
+
+
+def _located(tagset: str) -> tuple[str, str, str]:
+    """A rollup row's location, class and project values, read from its tag set (core/ledger.tagset writes
+    kind=value)."""
+    got = dict(part.split("=", 1) for part in tagset.split("|") if "=" in part)
+    return got.get("location", ""), got.get("class", ""), got.get("project", "")
+
+
+def _cell_key(cell: VW.Cell) -> _Key:
+    return (cell.account_id, cell.day, cell.team, cell.teammate, cell.vendor, cell.location, cell.class_id,
+    cell.project)
 
 
 def _without_settled(s: _Seen, vendors: dict[str, str], cells: list[VW.Cell], lines: list[Any]) -> list[VW.Cell]:
@@ -97,29 +125,32 @@ def _without_settled(s: _Seen, vendors: dict[str, str], cells: list[VW.Cell], li
     if not lines:
         return cells
     tags = SL.line_tags(s.ctx.c, [str(r["id"]) for r in lines])
-    removed: dict[tuple[str, str, str, str, str], int] = {}
+    removed: dict[_Key, int] = {}
     for r in lines:
         account = s.ctx.accounts.get(r["account_id"])
         mine = tags.get(str(r["id"]), {})
         team, teammate = mine.get("team", ""), mine.get("teammate", "")
         if account is None or not s.view.sees(account, {"team": team, "teammate": teammate}):
             continue
-        key = (str(r["account_id"]), str(r["entry_date"]), team, teammate,
-               _vendor(s, vendors, str(r["contact_id"] or "")))
+        key: _Key = (str(r["account_id"]), str(r["entry_date"]), team, teammate,
+                     _vendor(s, vendors, str(r["contact_id"] or "")), mine.get("location", ""),
+                     mine.get("class", ""), mine.get("project", ""))
         removed[key] = removed.get(key, 0) + int(r["amount"])
     if not removed:
         return cells
     kept: list[VW.Cell] = []
-    left: dict[tuple[str, str, str, str, str], int] = {}
+    left: dict[_Key, int] = {}
     for cell in cells:
-        key = (cell.account_id, cell.day, cell.team, cell.teammate, cell.vendor)
+        key = _cell_key(cell)
         if key in removed:
             left[key] = left.get(key, 0) + cell.amount
         else:
             kept.append(cell)
-    for (account_id, day, team, teammate, vendor), amount in removed.items():
+    for key, amount in removed.items():
+        account_id, day, team, teammate, vendor, location, klass, project = key
         kept.append(VW.Cell(account_id=account_id, day=day, team=team, teammate=teammate, vendor=vendor,
-                            amount=left.get((account_id, day, team, teammate, vendor), 0) - amount, linked=True))
+                            amount=left.get(key, 0) - amount, linked=True, location=location, class_id=klass,
+                            project=project))
     return kept
 
 
@@ -141,7 +172,7 @@ def _cap(rows: list[Row], top_n: int) -> list[Row]:
     if len(rows) <= top_n:
         return rows
     rest = rows[top_n:]
-    return rows[:top_n] + [{"key": "other", "label": f"Other · {len(rest)}", "amount":
+    return rows[:top_n] + [{"key": OTHER, "label": f"Other · {len(rest)}", "amount":
                             sum(int(str(r["amount"])) for r in rest), "count": len(rest)}]
 
 
@@ -163,7 +194,7 @@ def _fold_pnl(out: Row, top_n: int) -> Row:
         for r in rest:
             for n, v in enumerate(cast(list[int], r["actual"] or [])):
                 actual[n] += v
-        shown.append({"key": "other", "label": f"Other · {len(rest)}", "type": type_, "account_id": None,
+        shown.append({"key": OTHER, "label": f"Other · {len(rest)}", "type": type_, "account_id": None,
                       "section": None, "private": False, "actual": actual, "total": sum(actual), "budget": None,
                       "projection": None, "count": len(rest)})
     return {**out, "rows": shown, "rows_total": len(rows)}
@@ -234,7 +265,10 @@ class _Filter:
 
 def _org_filter(s: _Seen, teams: Iterable[str], teammates: Iterable[str], who: str, unattributed: bool) -> _Filter:
     picked_teams = tuple(dict.fromkeys(t for t in teams if t))
-    picked_mates = tuple(dict.fromkeys(m for m in teammates if m))
+    mates: list[str] = []
+    for m in teammates:
+        mates.append(str(H.resolve_actor(s.ctx.c, m) or m) if m and m.startswith("bot:") else m)
+    picked_mates = tuple(dict.fromkeys(m for m in mates if m))
     if who not in WHO:
         raise invalid(f"who is {'|'.join(WHO)}")
     for t in picked_teams:
@@ -311,12 +345,18 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
             if cell.teammate:
                 spent[cell.teammate] = spent.get(cell.teammate, 0) + cell.amount
     budget: dict[str, list[int | None]] = {}
+    budget_to_date: dict[str, list[int | None]] = {}   # the current bucket's budget up to today; None elsewhere (§4.4)
     tops = _filter_budgets(s, f)
     versions = SB.versions(c, [b.id for b in tops], made_by)
     for b in tops:
         cols = [B.in_window(b, versions[b.id], bucket, fy) for bucket in buckets]
         row = budget.setdefault(b.account_id, [None] * len(buckets))
         budget[b.account_id] = [x if y is None else (y if x is None else x + y) for x, y in zip(row, cols, strict=False)]
+        to_date = [B.in_window(b, versions[b.id], (p, min(q, today)), fy) if _column_state(p, q, today) == "current"
+                   else None for p, q in buckets]
+        row = budget_to_date.setdefault(b.account_id, [None] * len(buckets))
+        budget_to_date[b.account_id] = [x if y is None else (y if x is None else x + y)
+                                        for x, y in zip(row, to_date, strict=False)]
     projection: dict[str, list[int]] = {}
     methods: dict[str, set[str]] = {}
     if buckets:
@@ -367,6 +407,7 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                      # "Payroll (private)" with no amount (§7.5): its budget is withheld too, since a narrow
                      # filter's payroll budget can be one person's planned pay.
                      "budget": None if hidden else budget.get(account_id),
+                     "budget_to_date": None if hidden else budget_to_date.get(account_id),
                      "projection": None if hidden else projection.get(account_id),
                      "projection_method": None if hidden else _method(methods.get(account_id))})
     if view == "expenses":
@@ -385,6 +426,46 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
     if view == "expenses":
         out["teammates"] = _side_panel(s, spent, tops, versions, a, z, f)
     return out
+
+
+def pnl_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = None, end: str | None = None, *,
+           basis: str | None = None, top_n: int = 20, at: str | None = None) -> Row:
+    """The P&L over a window split by location, class, project or a pair of them (`by`): income, expense and net per
+    group.
+    Lines with none of those tags form the Unattributed group. The totals are summed on their own, so the groups adding
+    up to them is a check, not a restatement."""
+    if by not in LOCATED:
+        raise invalid(f"by is {'|'.join(LOCATED)}")
+    if basis not in (None, "cash", "accrual"):
+        raise invalid("basis is cash|accrual")
+    s = _open(c, viewer, at)
+    a, z = _window(start, end, s.ctx)
+    s, snap = _closed(s, viewer, a, z)
+    basis = basis or s.ctx.book.basis
+    ids = [x.id for x in s.ctx.accounts.values() if x.type in PNL_TYPES and s.view.sees_account(x)]
+    sup = _suppress(s, _cells(s, a, z, ids, basis), False, a, z)
+    groups: dict[str, list[int]] = {}
+    totals = [0, 0]                                    # income, expense
+    for cell in sup.cells:
+        account = s.ctx.accounts.get(cell.account_id)
+        if account is None or account.type not in PNL_TYPES or cell.account_id in sup.hidden:
+            continue
+        income = account.type == "income"
+        value = -cell.amount if income else cell.amount    # income is posted as credits
+        groups.setdefault(_located_key(cell, by), [0, 0])[0 if income else 1] += value
+        totals[0 if income else 1] += value
+    named = _located_names(s.ctx.c, by)
+    rows: list[Row] = [{"key": k or "unattributed", "label": _located_label(named, by, k), "income": v[0],
+                        "expense": v[1], "net": v[0] - v[1]} for k, v in groups.items()]
+    rows.sort(key=lambda r: (-abs(cast(int, r["net"])), str(r["label"])))
+    top = max(1, min(int(top_n), MAX_TOP))
+    if len(rows) > top:
+        rest = rows[top:]
+        rows = [*rows[:top], {"key": "other", "label": f"Other · {len(rest)}", "count": len(rest),
+                              **{f: sum(cast(int, r[f]) for r in rest) for f in ("income", "expense", "net")}}]
+    return {"by": by, "start": a.isoformat(), "end": z.isoformat(), "basis": basis, "rows": rows,
+            "income": totals[0], "expense": totals[1], "net": totals[0] - totals[1], "excluded": sup.excluded,
+            "snapshot": snap, "view_version": s.view.version}
 
 
 def _closed(s: _Seen, viewer: str, a: date, z: date) -> tuple[_Seen, Row | None]:
@@ -431,10 +512,11 @@ def _covered(scopes: Sequence[tuple[str, str]], team: str, teammate: str) -> boo
 
 
 def _with_spend(s: _Seen, rows: list[Row]) -> list[Row]:
-    """Rows with spend in the filter, a budget or a projection, and the lines above them."""
+    """Rows with actual spend in the filter, and the lines above them. A budget or a projection alone does not keep a
+    line (spec §12: lines with no spend in the filter are hidden); private rows stay."""
     keep: set[str] = set()
     for r in rows:
-        if r["private"] or any(r.get(k) and any(cast(list[object], r[k])) for k in ("actual", "budget", "projection")):
+        if r["private"] or (r.get("actual") and any(cast(list[object], r["actual"]))):
             at = str(r["account_id"])
             while at and at not in keep:
                 keep.add(at)
@@ -463,12 +545,41 @@ def _side_panel(s: _Seen, spent: Mapping[str, int], tops: list[B.Budget], versio
 
 
 # ------------------------------------------------------------------------------------------------ expenses
+def _located_key(cell: VW.Cell, by: str) -> str:
+    """The group a cell falls in by location, class, project or a pair: its values joined with | ("x|" when only one is
+    set), "" when it has none of them."""
+    values = [{"location": cell.location, "class": cell.class_id, "project": cell.project}[kind] for kind in
+    by.split("_")]
+    return "|".join(values) if any(values) else ""
+
+
+def _located_names(c: sqlite3.Connection, by: str) -> dict[str, dict[str, str]]:
+    """Each location, class or project's name by id, for the kinds a group names (history keeps names of inactive
+    ones)."""
+    names: dict[str, dict[str, str]] = {}
+    for kind in by.split("_"):
+        names[kind] = RR.names(c, "locations") if kind == "location" else \
+            RR.names(c, "projects") if kind == "project" else SC.class_names(c)
+    return names
+
+
+def _located_label(names: Mapping[str, Mapping[str, str]], by: str, key: str) -> str:
+    if not key:
+        return UNATTRIBUTED
+    parts = key.split("|") if "_" in by else [key]
+    return " · ".join(names[kind].get(value, value) if value else UNATTRIBUTED
+                      for kind, value in zip(by.split("_"), parts, strict=True))
+
+
 def _key(s: _Seen, cell: VW.Cell, by: str) -> str | None:
-    """The group a cell falls in; "" is Unattributed; None leaves it out (a person's line in a by-bot read)."""
-    if by == "department":
-        return s.ctx.org.department(cell.team) if cell.team else ""
-    if by == "team":
-        return cell.team
+    """The group a cell falls in; "" is Unattributed (no team and no teammate); NO_TEAM is a teammate's spend with no
+    team; None leaves it out (a person's line in a by-bot read)."""
+    if by in LOCATED:
+        return _located_key(cell, by)
+    if by in ("department", "team"):
+        if not cell.team:
+            return NO_TEAM if cell.teammate else ""
+        return s.ctx.org.department(cell.team) if by == "department" else cell.team
     if by == "teammate":
         return cell.teammate
     if by == "bot":
@@ -482,6 +593,9 @@ def _key(s: _Seen, cell: VW.Cell, by: str) -> str | None:
 
 def _labels(s: _Seen, keys: Iterable[str], by: str) -> dict[str, str]:
     """Each group's label; a vendor group's from tab_ap.vendor_labels (a contact's name, never its id)."""
+    if by in LOCATED:
+        named = _located_names(s.ctx.c, by)
+        return {k: _located_label(named, by, k) for k in keys}
     names = tab_ap.vendor_labels(s.ctx, s.view, keys) if by == "vendor" else {}
     return {k: names.get(k, k) if by == "vendor" and k else _label(s, k, by) for k in keys}
 
@@ -490,6 +604,8 @@ def _label(s: _Seen, key: str, by: str) -> str:
     if not key:
         return UNATTRIBUTED if by != "vendor" else "No vendor"
     if by in ("department", "team"):
+        if key == NO_TEAM:
+            return "No team"
         team = s.ctx.org.teams.get(key)
         return team.name if team else key
     if by == "account":
@@ -514,6 +630,7 @@ def _grouped(s: _Seen, a: date, z: date, by: str, account_id: str | None, team: 
     if below is not None:
         cells = [x for x in cells if x.team in below]
     if teammate:
+        teammate = str(H.resolve_actor(s.ctx.c, teammate) or teammate) if teammate.startswith("bot:") else teammate
         cells = [x for x in cells if x.teammate == teammate]
     department_wide = not teammate and (not team or s.ctx.org.department(team) == team)
     narrow = by not in ("department", "account") or not department_wide
@@ -526,7 +643,7 @@ def _grouped(s: _Seen, a: date, z: date, by: str, account_id: str | None, team: 
             continue
         sums[key] = sums.get(key, 0) + cell.amount
     labels = _labels(s, sums, by)
-    rows: list[Row] = [{"key": k or "unattributed", "label": labels[k], "amount": v} for k, v in sums.items()]
+    rows: list[Row] = [{"key": k or NONE, "label": labels[k], "amount": v} for k, v in sums.items()]
     return {"by": by, "start": a.isoformat(), "end": z.isoformat(), "rows": _cap(rows, top_n),
             "total": sum(sums.values()), "excluded": sup.excluded, "hidden": _hidden_labels(s, sup.hidden),
             "view_version": s.view.version}
@@ -535,8 +652,9 @@ def _grouped(s: _Seen, a: date, z: date, by: str, account_id: str | None, team: 
 def expenses(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None,
              by: str = "department", *, account_id: str | None = None, team: str | None = None,
              teammate: str | None = None, top_n: int = 20, at: str | None = None) -> Row:
-    """Expenses grouped by department, team, teammate, bot, person, vendor or line. Unattributed (no team or teammate)
-    shows only to viewers who see company-wide expenses."""
+    """Expenses grouped by department, team, teammate, bot, person, vendor, line, location, class, project or a pair of
+    those (location_project and so on). Unattributed (no team or teammate) shows only to viewers who see company-wide
+    expenses; a located group's Unattributed is the lines with none of those tags."""
     s = _open(c, viewer, at)
     a, z = _window(start, end, s.ctx)
     return _grouped(s, a, z, by, account_id, team, teammate, top_n)
@@ -551,16 +669,51 @@ def spend_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = No
 
 
 # ------------------------------------------------------------------------------------------------ one line
-def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
-    """The line's projection for the month after this one, as far as the viewer sees it and within the org filter
-    (projections are by line, team and teammate; there are none by vendor). Each team and teammate with no stored
-    projection for that month gets its own default from posted history. None on a private line without its detail."""
+_RowKey = tuple[str, str, str, str]        # a breakdown row's history: line, vendor, team, teammate
+
+
+def _largest_remainder(amount: int, weights: Mapping[_RowKey, int]) -> dict[_RowKey, int]:
+    """`amount` split over positive weights to the cent: each key's floor share, then the cents left one each to the
+    largest remainders, ties to the smallest key (never the order the keys came in)."""
+    total = sum(weights.values())
+    parts = {k: amount * w // total for k, w in weights.items()}
+    left = amount - sum(parts.values())                 # 0 <= left < len(weights): floors only fall short
+    for k in sorted(weights, key=lambda k: (-(amount * weights[k] % total), k))[:left]:
+        parts[k] += 1
+    return parts
+
+
+@dataclass(frozen=True)
+class _Atom:
+    """One piece of next month's projection: a saved projection's scope, or a default for a team and teammate (or the
+    whole line, `whole`, when nothing is saved on it)."""
+    account_id: str
+    team: str
+    teammate: str
+    amount: int
+    method: str
+    whole: bool = False
+    saved: bool = False
+
+    def covers(self, cell: VW.Cell) -> bool:
+        if cell.account_id != self.account_id:
+            return False
+        if self.whole:
+            return True
+        if self.saved:                      # a saved projection covers its scope (`_covered`)
+            return _covered([(self.team, self.teammate)], cell.team or "", cell.teammate or "")
+        return (cell.team or "", cell.teammate or "") == (self.team, self.teammate)
+
+
+def _next_atoms(s: _Seen, ids: Sequence[str], f: _Filter | None) -> tuple[date, list[_Atom]] | None:
+    """Next month and the pieces its projection adds up from (the saved projections the viewer sees within the filter,
+    then a default for each scope none covers); None on a private line without its detail. The line's projection and
+    its breakdown both sum these, so they agree to the cent."""
     nxt = dates.month_end(dates.day(s.ctx.today)) + timedelta(days=1)
     month = nxt.isoformat()[:7]
     if any(i in s.private and i not in s.view.full_detail for i in ids):
-        return {"month": month, "projection": None, "projection_method": None}
-    total, found = 0, False
-    methods: set[str] = set()
+        return None
+    atoms: list[_Atom] = []
     stored: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for r in SB.projections(s.ctx.c, s.ctx.book.id, month, month):
         account = s.ctx.accounts.get(r["account_id"])
@@ -568,15 +721,92 @@ def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
                 not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}) or \
                 (f is not None and f.any and not f.keeps(str(r["team"] or ""), str(r["teammate"] or ""))):
             continue
-        stored.setdefault((account.id, month), []).append((str(r["team"] or ""), str(r["teammate"] or "")))
-        methods.add(str(r["method"]))
-        total, found = total + int(r["amount"]), True
+        team, mate = str(r["team"] or ""), str(r["teammate"] or "")
+        stored.setdefault((account.id, month), []).append((team, mate))
+        atoms.append(_Atom(account.id, team, mate, int(r["amount"]), str(r["method"]), saved=True))
     for (account_id, _, team, teammate), (amount, method) in _defaults(s, ids, [nxt], "accrual", f, stored).items():
-        if _covered(stored.get((account_id, month), []), team, teammate):
+        scopes = stored.get((account_id, month), [])
+        if _covered(scopes, team, teammate):
             continue
-        methods.add(method)
-        total, found = total + amount, True
-    return {"month": month, "projection": total if found else None, "projection_method": _method(methods)}
+        atoms.append(_Atom(account_id, team, teammate, amount, method, whole=not scopes))
+    return nxt, atoms
+
+
+def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
+    """The line's projection for the month after this one, as far as the viewer sees it and within the org filter
+    (projections are by line, team and teammate; there are none by vendor). Each team and teammate with no stored
+    projection for that month gets its own default from posted history. None on a private line without its detail."""
+    got = _next_atoms(s, ids, f)
+    if got is None:
+        nxt = dates.month_end(dates.day(s.ctx.today)) + timedelta(days=1)
+        return {"month": nxt.isoformat()[:7], "projection": None, "projection_method": None}
+    nxt, atoms = got
+    return {"month": nxt.isoformat()[:7], "projection": sum(a.amount for a in atoms) if atoms else None,
+            "projection_method": _method({a.method for a in atoms})}
+
+
+def _next_by(s: _Seen, ids: Sequence[str], f: _Filter, vendor: str | None) -> dict[str, dict[str, int]]:
+    """Next month's projection for each vendor, team and teammate of a line (`by` -> key -> amount), split as the
+    drill-down's rows are (`_key`, NONE for none). It shares out the same pieces as the line's projection
+    (`_next_atoms`: saved projections, §4.4, and each line's own default method), so each column adds up to it: a
+    piece goes over the vendor / team / teammate rows of the history it covers, weighted by each row's own default,
+    equally when none has one, and to the piece's own team and teammate (Unattributed or No team) when it covers no
+    history. Amounts are split with the remainder of the rounding on the largest share, never lost. `vendor` keeps
+    that vendor's share. Empty on a private line without its detail."""
+    got = _next_atoms(s, ids, f) if ids else None
+    if got is None:
+        return {}
+    nxt, atoms = got
+    today = dates.day(s.ctx.today)
+    cur = today.replace(day=1)
+    first = dates.add_months(cur, -PJ.TREND_MONTHS)
+    recent_from = today - timedelta(days=PJ.RATE_DAYS - 1)
+    days = dates.days(nxt, dates.month_end(nxt))
+    lines = sorted({a.account_id for a in atoms})
+    cells = _cells(s, first, today, lines, "accrual")
+    if f.any:
+        cells = [x for x in cells if f.keeps(x.team, x.teammate)]
+    sup = _suppress(s, cells, f.narrow(s.ctx.org), first, today)
+    shown = [x for x in sup.cells if x.account_id not in sup.hidden]
+    monthly: dict[_RowKey, list[int]] = {}
+    recent: dict[_RowKey, int] = {}
+    for cell in shown:
+        k = (cell.account_id, cell.vendor or "", cell.team or "", cell.teammate or "")
+        amount = (-1 if s.ctx.accounts[cell.account_id].type == "income" else 1) * cell.amount
+        day = dates.day(cell.day)
+        monthly.setdefault(k, [0] * PJ.TREND_MONTHS)
+        recent[k] = recent.get(k, 0) + (amount if day >= recent_from else 0)
+        if day < cur:
+            monthly[k][(day.year - first.year) * 12 + day.month - first.month] += amount
+    def weight(k: _RowKey) -> int:
+        account = s.ctx.accounts[k[0]]
+        return PJ.estimate(PJ.default_method(account.type, account.subtype), monthly[k], recent[k], days, 2) or 0
+
+    out: dict[str, dict[str, int]] = {"vendor": {}, "team": {}, "teammate": {}}
+    for atom in atoms:
+        mine = sorted({(x.account_id, x.vendor or "", x.team or "", x.teammate or "") for x in shown if atom.covers(x)})
+        weights = {k: max(0, weight(k)) for k in mine}
+        if not any(weights.values()):
+            weights = dict.fromkeys(mine, 1)
+        if not weights:
+            weights = {(atom.account_id, "", atom.team, atom.teammate): 1}
+        parts = _largest_remainder(atom.amount, weights)
+        for (i, v, team, mate), amount in parts.items():
+            if vendor is not None and v != vendor:
+                continue
+            cell = VW.Cell(account_id=i, day="", team=team, teammate=mate, vendor=v, amount=0)
+            for by in out:
+                key = _key(s, cell, by) or NONE
+                out[by][key] = out[by].get(key, 0) + amount
+    return out
+
+
+def _next_labels(s: _Seen, keys: Iterable[str], by: str) -> dict[str, str]:
+    """Each next_by key's label, as the breakdown rows have them (NONE is the group with none), so a row
+    that only has a projection is named too."""
+    raw = {k: "" if k == NONE else k for k in keys}
+    labels = _labels(s, set(raw.values()), by)
+    return {k: labels[r] for k, r in raw.items()}
 
 
 def _months(a: date, z: date) -> list[date]:
@@ -689,7 +919,8 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
                 who: str = "both", unattributed: bool = False) -> Row:
     """One line's spend by vendor, team and teammate, and its entries. With `vendor` ("" for lines with none) every
     breakdown, the entries and how they were paid are that vendor's; `teams`, `teammates`, `who` and `unattributed`
-    filter it as the P&L's expenses view does. `next_month` is the line's projection (within the org filter).
+    filter it as the P&L's expenses view does. `next_month` is the line's projection (within the org filter), and
+    `next_by` each vendor's, team's and teammate's default for that month.
 
     Private totals come only from whole cohorts: a vendor filter is always narrow (so a payroll cell is never rebuilt
     from a caller-picked subset and recovered by subtraction), and an org filter is narrow as the P&L's is."""
@@ -735,13 +966,15 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
     sees_vendor = (account_id not in whole_hidden and bool(whole_cells)) or s.view.payables or s.view.everything
     if contact is not None and (str(contact["book_id"]) != s.ctx.book.id or not sees_vendor):
         contact = None
+    next_by = _next_by(s, now_ids, f, vendor)
     out: Row = {"account": {"id": account.id, "code": account.code, "name": account.name, "type": account.type},
                 "start": a.isoformat(), "end": z.isoformat(), "view_version": s.view.version,
                 "total": None if account_id in whole_hidden else sum(x.amount for x in whole_cells),
                 "excluded": excluded, "hidden": _hidden_labels(s, hidden),
                 "vendor": vendor, "filter": {"teams": list(f.teams), "teammates": list(f.teammates), "who": f.who,
                                              "unattributed": f.unattributed},
-                "next_month": _next_month(s, now_ids, f),
+                "next_month": _next_month(s, now_ids, f), "next_by": next_by,
+                "next_labels": {by: _next_labels(s, keys, by) for by, keys in next_by.items()},
                 "seats": contact["seats"] if contact is not None else None,
                 "renewal_on": (contact["renewal_on"] or None) if contact is not None else None}
     for by in ("vendor", "team", "teammate"):
@@ -752,7 +985,7 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
                 continue
             sums[key] = sums.get(key, 0) + cell.amount
         labels = _labels(s, sums, by)
-        out["by_" + by] = _cap([{"key": k or "unattributed", "label": labels[k], "amount": v}
+        out["by_" + by] = _cap([{"key": k or NONE, "label": labels[k], "amount": v}
                                 for k, v in sums.items()], top_n)
     entries: list[Row] = []
     more = False
@@ -865,13 +1098,14 @@ def budgets(c: sqlite3.Connection, viewer: str, *, include_inactive: bool = Fals
     day = dates.day(on) if on else dates.day(s.ctx.today)
     seen = _visible(s, include_inactive)
     most = max(1, min(int(limit), 500))
+    carded = SK.budgets_with_cards(c, [b.id for b in seen[:most]])
     rows: list[Row] = []
     netted = False
     for b in seen[:most]:
         st = budgeting.state(s.ctx, b.id, day, read=budgeting.Netted(s.view))
         state_row = _state_row(s, b, st)
         netted = netted or bool(state_row["excluded"])
-        rows.append({**_budget_row(b), "state": state_row})
+        rows.append({**_budget_row(b), "state": state_row, "card_limits": b.id in carded})
     return {"budgets": rows, "more": len(seen) > most, "on": day.isoformat(), "view_version": s.view.version,
             "excluded": netted}
 
@@ -921,9 +1155,24 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
 
 
 METRICS = ("cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
-           "ar_overdue", "uncategorized_count", "unreconciled_days")
+           "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases")
 STALE_HOURS = 24            # bank data older than this marks a cash metric stale
+WATCH_LABELS = 10           # the Watch findings a metric names (its count is the whole)
 RUNWAY_MONTHS = 3           # runway divides cash by the average burn of this many full months
+
+
+def _worst_gap(s: _Seen, money_ids: Sequence[str]) -> int | None:
+    """Days since the oldest reconciliation among these money accounts; None when none has a feed yet."""
+    today = dates.day(s.ctx.today)
+    worst: int | None = None
+    for m in money_ids:
+        through = SK.locked_through(s.ctx.c, m)
+        first = SK.first_feed_day(s.ctx.c, m)
+        if not first:
+            continue
+        gap = max(0, (today - dates.day(through)).days) if through else (today - dates.day(first)).days
+        worst = gap if worst is None else max(worst, gap)
+    return worst
 
 
 def _data_as_of(s: _Seen, money_ids: Sequence[str]) -> tuple[str | None, bool]:
@@ -942,10 +1191,12 @@ def _data_as_of(s: _Seen, money_ids: Sequence[str]) -> tuple[str | None, bool]:
     return oldest, age > timedelta(hours=STALE_HOURS)
 
 
-def _cash(s: _Seen) -> tuple[int, list[Row], list[str]]:
-    """Cash on the books in the money accounts that hold cash (bank, Stripe) the viewer sees, total and per account."""
+def _cash(s: _Seen, money_id: str | None = None) -> tuple[int, list[Row], list[str]]:
+    """Cash on the books in the money accounts that hold cash (bank, Stripe) the viewer sees, total and per account;
+    one money account when `money_id` is given."""
     rows = [r for r in SK.money_accounts(s.ctx.c, s.ctx.book.id)
-            if r["holds_cash"] and r["account_id"] and tab.sees_money_account(s.ctx, s.view, r)]
+            if r["holds_cash"] and r["account_id"] and tab.sees_money_account(s.ctx, s.view, r)
+            and (money_id is None or str(r["id"]) == money_id)]
     sums = SK.balances(s.ctx.c, s.ctx.book.id, s.ctx.today, sorted({str(r["account_id"]) for r in rows}))
     per: list[Row] = [{"money_account_id": str(r["id"]), "name": str(r["name"]), "balance": sums.get(str(r["account_id"]), 0),
             "provider_balance": r["balance"], "balance_as_of": r["balance_as_of"]} for r in rows]
@@ -953,11 +1204,12 @@ def _cash(s: _Seen) -> tuple[int, list[Row], list[str]]:
     return sum(sums.get(g, 0) for g in by_gl), per, [str(r["id"]) for r in rows]
 
 
-def _net_burn(c: sqlite3.Connection, viewer: str, a: date, z: date, at: str | None) -> int:
+def _net_burn(c: sqlite3.Connection, viewer: str, a: date, z: date, at: str | None) -> tuple[int, bool]:
     """Cash burn over a window: cash-basis expenses minus cash-basis income the viewer sees (financing, being on the
-    balance sheet, never counts)."""
+    balance sheet, never counts), and whether private lines (payroll) were left out of it."""
     found = pnl(c, viewer, a.isoformat(), z.isoformat(), "year", "cash", at)
-    return sum(cast(list[int], found["expense"])) - sum(cast(list[int], found["income"]))
+    burn = sum(cast(list[int], found["expense"])) - sum(cast(list[int], found["income"]))
+    return burn, bool(found["excluded"])
 
 
 def _full_months(today: date, n: int) -> tuple[date, date]:
@@ -974,12 +1226,14 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
            teammate: str | None = None, days: int | None = None, at: str | None = None) -> Row:
     """One number for a card, a goal or a bot (§7.2), cut to the viewer like every read, with `as_of` (when it was
     worked out) and, for numbers resting on bank data, `data_as_of` and `stale`. cash: the books' balance of the cash
-    accounts the viewer sees (per account in `accounts`); burn: cash out minus cash in this month (or the window);
-    runway_months: cash over the average burn of the last 3 full months (null when nothing burns); revenue, spend: the
+    accounts the viewer sees (per account in `accounts`, or the one money account `account_id` names); burn: cash out minus cash in this month (or the window);
+    runway_months: cash over the average burn of the last 3 full months (null when nothing burns, or when the viewer sees
+    a slice rather than company expenses: `scoped`); burn and runway say `excluded` when payroll was left out; revenue, spend: the
     window (this month by default); budget_remaining / budget_pct_used: one budget; ap_due: open bills due within
     `days` (default 7, overdue included); ar_overdue: invoices at least `days` (default 1) late;
     uncategorized_count: settled rows waiting for a category (last 90 days); unreconciled_days: days since the
-    oldest reconciliation of the money accounts the viewer sees."""
+    oldest reconciliation of the money accounts the viewer sees; duplicate_charges, price_increases: how many Watch
+    findings of that kind the posted debits show now, with their first labels."""
     if name not in METRICS:
         raise invalid(f"a metric is {'|'.join(METRICS)}")
     s = _open(c, viewer, at)
@@ -998,17 +1252,21 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
     if name in ("cash", "runway_months"):
         if not (s.view.everything or s.view.balance_sheet or s.view.bs_lines):
             raise denied("cash is on the balance sheet, the owner's unless granted")
-        total, per, money_ids = _cash(s)
+        cut = account_id if name == "cash" else None
+        total, per, money_ids = _cash(s, cut)
+        if cut and not per:
+            raise FinanceError(NOT_FOUND, "no such money account")
         data_as_of, stale = _data_as_of(s, money_ids)
         base.update({"data_as_of": data_as_of, "stale": stale})
         if name == "cash":
             return {**base, "value": total, "unit": "minor", "currency": currency, "accounts": per}
         a, z = _full_months(today, RUNWAY_MONTHS)
-        burn = _net_burn(c, viewer, a, z, at)
+        burn, excluded = _net_burn(c, viewer, a, z, at)
+        scoped = not s.view.company_expenses()    # company cash over a slice's burn is no company runway
         monthly = Decimal(burn) / RUNWAY_MONTHS
-        value = None if monthly <= 0 else str((Decimal(total) / monthly).quantize(Decimal("0.1")))
+        value = None if monthly <= 0 or scoped else str((Decimal(total) / monthly).quantize(Decimal("0.1")))
         return {**base, "value": value, "unit": "months", "cash": total, "monthly_burn": int(monthly),
-                "start": a.isoformat(), "end": z.isoformat()}
+                "start": a.isoformat(), "end": z.isoformat(), "excluded": excluded, "scoped": scoped}
     if name in ("ap_due", "ar_overdue"):
         kind = "bill" if name == "ap_due" else "invoice"
         if not tab_ap.sees_side(s.ctx, s.view, kind):
@@ -1028,20 +1286,21 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
         return {**base, "value": len(rows), "more": more, "unit": "count", "data_as_of": data_as_of, "stale": stale}
     if name == "unreconciled_days":
         money_ids, _ = tab.feed_scope(s.ctx, s.view)
-        worst: int | None = None
-        for m in money_ids:
-            through = SK.locked_through(c, m)
-            first = SK.first_feed_day(c, m)
-            if not first:
-                continue
-            gap = max(0, (today - dates.day(through)).days) if through else (today - dates.day(first)).days
-            worst = gap if worst is None else max(worst, gap)
         data_as_of, stale = _data_as_of(s, money_ids)
-        return {**base, "value": worst or 0, "unit": "days", "data_as_of": data_as_of, "stale": stale}
+        return {**base, "value": _worst_gap(s, money_ids) or 0, "unit": "days", "data_as_of": data_as_of, "stale": stale}
+    if name in ("duplicate_charges", "price_increases"):
+        # The same Watch checks the daily Watch runs (watch_findings), read as a count with the first few labels; plain
+        # code over the viewer's posted debits, no model call.
+        found = (W.duplicate_charges if name == "duplicate_charges" else W.price_increases)(_charges(c, viewer, s.ctx.at))
+        money_ids, _ = tab.feed_scope(s.ctx, s.view)
+        data_as_of, stale = _data_as_of(s, money_ids)
+        return {**base, "value": len(found), "unit": "count", "labels": [str(f["label"])[:160] for f in found[:WATCH_LABELS]],
+                "data_as_of": data_as_of, "stale": stale}
     a, z = _window(start, end, s.ctx)
     if name == "burn":
-        return {**base, "value": _net_burn(c, viewer, a, z, at), "unit": "minor", "currency": currency,
-                "start": a.isoformat(), "end": z.isoformat()}
+        burn, excluded = _net_burn(c, viewer, a, z, at)
+        return {**base, "value": burn, "unit": "minor", "currency": currency, "start": a.isoformat(),
+                "end": z.isoformat(), "excluded": excluded, "scoped": not s.view.company_expenses()}
     if name == "revenue":
         found = pnl(c, viewer, a.isoformat(), z.isoformat(), "year", "accrual", at)
         return {**base, "value": sum(cast(list[int], found["income"])), "unit": "minor", "currency": currency,
@@ -1065,7 +1324,7 @@ def _uncategorized(s: _Seen, a: date, z: date, most: int, skip: int = 0) -> tupl
 
 
 # ------------------------------------------------------------------------------------------------ reports
-REPORTS = ("pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by")
+REPORTS = ("pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by")
 
 
 def _prior(a: date, z: date) -> tuple[date, date]:
@@ -1095,7 +1354,7 @@ def _aging_report(c: sqlite3.Connection, viewer: str, kind: str, top_n: int, at:
     shown = ranked[:top_n]
     if len(ranked) > top_n:
         rest = ranked[top_n:]
-        shown.append({"key": "other", "label": f"Other · {len(rest)}",
+        shown.append({"key": OTHER, "label": f"Other · {len(rest)}",
                       **{b: sum(cast(int, x[b]) for x in rest) for b in AP.AGING},
                       "total": sum(cast(int, x["total"]) for x in rest)})
     return {"as_of": today.isoformat(), "buckets": list(AP.AGING), "rows": shown, "totals": totals,
@@ -1133,10 +1392,13 @@ def _cash_flow(c: sqlite3.Connection, viewer: str, a: date, z: date, period: str
 
 def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None = None, end: str | None = None,
            period: str = "month", basis: str | None = None, compare: str | None = None, top_n: int = 20,
-           by: str = "vendor", at: str | None = None) -> Row:
+           by: str | None = None, at: str | None = None) -> Row:
     """One report (§7.1): pnl (accrual or cash), balance_sheet (as of `end`), cash_flow, budget_vs_actual, ap_aging,
-    ar_aging or spend_by (`by` department|team|teammate|bot|person|vendor|account). `compare=prior` adds the window
-    before it. Payloads are capped: `top_n` rows and one "Other · n"."""
+    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair) or
+    pnl_by
+    (`by` location|class|project or a pair). `compare=prior` adds the window before it. Payloads are capped: `top_n`
+    rows
+    and one "Other · n"."""
     if kind not in REPORTS:
         raise invalid(f"a report is {'|'.join(REPORTS)}")
     if compare not in (None, "", "prior"):
@@ -1152,11 +1414,13 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
     def one(p: date, q: date) -> Row:
         if kind == "pnl":
             return _fold_pnl(pnl(c, viewer, p.isoformat(), q.isoformat(), period, basis or ctx.book.basis, at), top)
+        if kind == "pnl_by":
+            return pnl_by(c, viewer, by or "location", p.isoformat(), q.isoformat(), basis=basis, top_n=top, at=at)
         if kind == "cash_flow":
             return _cash_flow(c, viewer, p, q, period, at)
         if kind == "budget_vs_actual":
             return budget_vs_actual(c, viewer, p.isoformat(), q.isoformat(), period, limit=top, at=at)
-        return spend_by(c, viewer, by, p.isoformat(), q.isoformat(), top_n=top, at=at)
+        return spend_by(c, viewer, by or "vendor", p.isoformat(), q.isoformat(), top_n=top, at=at)
     out: Row = {"kind": kind, **one(a, z)}
     if compare == "prior":
         p, q = _prior(a, z)
@@ -1165,7 +1429,10 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 
 
 # ------------------------------------------------------------------------------------------------ search
-SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card")
+SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project", "po",
+              "estimate")
+NAMED_ONLY_KINDS = ("account",)     # searched when named (the chart a bot codes lines to), not in the first few of each
+RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
 
@@ -1194,16 +1461,117 @@ def _search_rules(ctx: Ctx, viewer: str, q: str, filters: Mapping[str, object], 
         (str(page[-1]["id"]) if len(rows) > most else None)
 
 
+def _search_accounts(ctx: Ctx, viewer: str, q: str, most: int, cursor: str | None) -> tuple[list[Row], str | None]:
+    """The active accounts the viewer may post to, matched by code or name, in code order: the same lines the bill,
+    invoice and journal forms list (tab_ap.chart), so a bot can find the account id of a line. Paged by (code, id)."""
+    held = ctx.rights(viewer)
+    if not any(R.has(ctx.org, viewer, r, held) for r in (R.BOOK, R.AP, R.AR)):
+        raise denied("the chart is for teammates who write to the books")
+    view = ctx.view(viewer)
+    parts = tab.decode_cursor(cursor) or []
+    after = (parts[0], parts[1]) if len(parts) == 2 else ("", "")
+    found = [a for a in sorted(ctx.accounts.values(), key=lambda x: (x.code, x.id))
+             if a.active and (view.everything or view.sees_account(a)) and (a.code, a.id) > after
+             and (not q or q.lower() in f"{a.code} {a.name}".lower())]
+    page = found[:most]
+    nxt = tab.encode_cursor([page[-1].code, page[-1].id]) if len(found) > most and page else None
+    return [{"kind": "account", "id": a.id, "code": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
+             "label": f"{a.code} {a.name}"} for a in page], nxt
+
+
+def _record_row(kind: str, r: Any) -> Row:
+    """A record as a search result: its name is the label, and its own type keeps its own field."""
+    row: Row = {"kind": kind, "id": str(r["id"]), "label": str(r["name"]), "archived_at": r["archived_at"]}
+    if kind == "item":
+        row["item_kind"] = str(r["kind"])
+        row["sku"] = str(r["sku"])
+    elif kind == "location":
+        row["location_kind"] = str(r["kind"])
+    else:
+        row["status"] = str(r["status"])
+    return row
+
+
+RECORD_TABLE = {"location": "locations", "item": "items", "project": "projects"}
+RECORD_PLURAL = {"location": "locations", "item": "items", "project": "projects"}
+
+
+ITEM_ACCOUNTS = ("income_account_id", "expense_account_id", "asset_account_id")
+
+
+def _in_view_or_refuse(view: VW.View) -> None:
+    """Records are for viewers with a finance view at all, as the other reads are."""
+    if not view.sees_anything():
+        raise denied("records are not in your view")
+
+
+def _account_shown(view: VW.View, accounts: Mapping[str, Account], account_id: object) -> bool:
+    """Whether a record's account may show: an unset one always (it reveals nothing), a set one when the viewer sees
+    that account."""
+    if not account_id:
+        return True
+    account = accounts.get(str(account_id))
+    return account is not None and view.sees_account(account)
+
+
+def _record_out(kind: str, r: Any, accounts: Mapping[str, Account], view: VW.View) -> Row:
+    """A record as the records API shows it. An item's accounts show to the viewers who see them, and its price shows
+    to the viewers who see its income account: the price is what that account books."""
+    out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"]}
+    if kind == "location":
+        out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"))
+    elif kind == "item":
+        out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), currency=str(r["currency"]))
+        if _account_shown(view, accounts, r["income_account_id"]):
+            out["price"] = r["price"]
+        out.update({key: r[key] for key in ITEM_ACCOUNTS if _account_shown(view, accounts, r[key])})
+    else:
+        out.update(customer_id=r["customer_id"], status=str(r["status"]))
+    return out
+
+
+def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archived: str = "hide",
+            cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
+    """Locations, items or projects by name (an item also by sku), past `cursor`. `archived` is hide, only or all.
+    A viewer with no finance view is refused; an item's accounts and price are cut to what the viewer sees."""
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    _in_view_or_refuse(view)
+    parts = tab.decode_cursor(cursor)
+    after = (parts[0], parts[1]) if len(parts) == 2 else None
+    active = {"hide": True, "only": False, "all": None}[archived]
+    most = tab.page_size(limit)
+    rows = RR.search(c, RECORD_TABLE[kind], (q or "").strip()[:100], active=active, after=after, most=most + 1)
+    shown = rows[:most]
+    nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
+    return {RECORD_PLURAL[kind]: [_record_out(kind, r, ctx.accounts, view) for r in shown], "next_cursor": nxt}
+
+
+def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at: str | None = None) -> Row:
+    """One location, item or project, archived or not, by its id or an id it was merged under."""
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    _in_view_or_refuse(view)
+    row = RR.get(c, RECORD_TABLE[kind], record_id)
+    if row is None:
+        raise FinanceError(NOT_FOUND, f"no such {kind}")
+    return {kind: _record_out(kind, row, ctx.accounts, view)}
+
+
 def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
            filters: Mapping[str, object] | None = None, limit: int = 50, cursor: str | None = None,
            at: str | None = None) -> Row:
-    """Search entries' lines, feed rows, bills, invoices, contacts, rules and cards (§7.1) the viewer may see. With a
-    `kind` it pages (`next_cursor`); without one it returns the first few of each kind it can show. Filters per kind:
-    entry/feed: account_id, money_account_id, status (feed), start, end; bill/invoice: status, contact_id, start, end,
-    aging; contact: kind, active; rule: kind (gate|posting); card: status, vendor (the cards saved on that vendor, so
-    `vendor` answers "which of my cards works at X")."""
-    if kind is not None and kind not in SEARCH_KINDS:
-        raise invalid(f"kind is {'|'.join(SEARCH_KINDS)}")
+    """Search entries' lines, feed rows, bills, invoices, contacts, rules, cards (§7.1) and items, locations and
+    projects
+    the viewer may see (records carry no amounts). With a `kind` it pages (`next_cursor`); without one it returns the
+    first few of each kind it can show. Filters per kind: entry/feed: account_id, money_account_id, status (feed),
+    start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
+    card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
+    po/estimate: status, contact_id, and a search over number, memo and contact name;
+    item/location/project: active (1 keeps only active records); account (named only): a search over code and name,
+    the active accounts the forms list, in code order."""
+    if kind is not None and kind not in (*SEARCH_KINDS, *NAMED_ONLY_KINDS):
+        raise invalid(f"kind is {'|'.join((*SEARCH_KINDS, *NAMED_ONLY_KINDS))}")
     if cursor and kind is None:
         raise invalid("a cursor pages one kind; name it")
     f = filters or {}
@@ -1224,6 +1592,18 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 results += [{**r, "label": str(r.get("counterparty") or r.get("description") or r.get("account") or "")}
                             for r in rows]
                 nxt = cast(str | None, found["next"])
+            elif k == "po":
+                listed = orders(c, viewer, status=_filter(f, "status"), vendor_id=_filter(f, "contact_id"),
+                                q=text, cursor=cursor, limit=most, at=at)
+                results += [cast(Row, {**r, "label": f"{cast(Mapping[str, object], r['contact'])['name']} "
+                                                     f"{r['number']}"}) for r in listed["orders"]]
+                nxt = cast(str | None, listed["next_cursor"])
+            elif k == "estimate":
+                listed = estimates(c, viewer, status=_filter(f, "status"), customer_id=_filter(f, "contact_id"),
+                                   q=text, cursor=cursor, limit=most, at=at)
+                results += [cast(Row, {**r, "label": f"{cast(Mapping[str, object], r['contact'])['name']} "
+                                                     f"{r['number']}"}) for r in listed["estimates"]]
+                nxt = cast(str | None, listed["next_cursor"])
             elif k in ("bill", "invoice"):
                 if not tab_ap.sees_side(ctx, view, k):
                     continue
@@ -1248,6 +1628,19 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 results += [{**r, "label": f"{r['nickname'] or r['holder']} ••{r['last4'] or ''}".strip()}
                             for r in cast(list[Row], found["cards"])]
                 nxt = cast(str | None, found["next"])
+            elif k == "account":
+                listed_accounts, nxt = _search_accounts(ctx, viewer, text, most, cursor)
+                results += listed_accounts
+            elif k in RECORD_KINDS:
+                _in_view_or_refuse(view)
+                parts = tab.decode_cursor(cursor)
+                active = _filter(f, "active")
+                rows = RR.search(c, RECORD_KINDS[k], text, active=None if active is None else
+                                 active in ("1", "true", "True"), after=(parts[0], parts[1]) if len(parts) == 2
+                                 else None, most=most)
+                results += [_record_row(k, r) for r in rows]
+                nxt = tab.encode_cursor([str(rows[-1]["name"]), str(rows[-1]["id"])]) \
+                    if rows and len(rows) == most else None
             else:
                 rows, after = _search_rules(ctx, viewer, text, f, most, (tab.decode_cursor(cursor) or [""])[0])
                 results += rows
@@ -1262,9 +1655,10 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
 
 # ------------------------------------------------------------------------------------------------ inbox
 INBOX_KINDS = ("uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due",
-               "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready")
+               "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready", "unreconciled", "bill_email")
 INBOX_EACH = 200            # items one kind contributes before its count says "more"
 RECEIPT_DAYS = 90
+STATEMENT_DAYS = 35         # a money account reconciled longer ago than a statement month is an unreconciled item
 
 
 def _money(amount: int) -> str:
@@ -1275,7 +1669,8 @@ def inbox(c: sqlite3.Connection, viewer: str, *, limit: int = 50, cursor: str | 
           at: str | None = None) -> Row:
     """The viewer's Finance work queue (§7.1): uncategorized rows, bills to enter (drafts, e.g. from the bills
     address), unmatched and missing receipts, bills due within a week, overdue invoices, budgets near their limit,
-    failed syncs and months ready to close. Each item has its ids and a short label; `counts` covers every kind
+    failed syncs, months ready to close, books not reconciled for over a month, and emailed bills Finance did not take
+    (bill_email). Each item has its ids and a short label; `counts` covers every kind
     (`more` when a kind has over 200). With `kind`, that kind alone, paged from its own query past the 200 (to
     INBOX_DEEP), so a reader that follows `next_cursor` reaches every item."""
     s = _open(c, viewer, at)
@@ -1328,9 +1723,11 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
     held = ctx.rights(s.view.viewer)
     cut = set(tab.private_cut(ctx, view))
     if kind == "uncategorized":
+        from .documents import review_candidates     # lazy: keeps the module import order as it was
         rows, over = _uncategorized(s, today - timedelta(days=RECEIPT_DAYS), today, n, skip)
         return [{"id": str(r["id"]), "feed_id": str(r["id"]), "date": str(r["txn_date"]),
                  "amount": int(r["amount"]), "entry_id": r["entry_id"], "status": str(r["status"]),
+                 "candidates": review_candidates(ctx, view.viewer, r),
                  "label": f"{r['counterparty'] or r['description'] or 'Row'} · {_money(int(r['amount']))}"}
                 for r in rows], over
     if kind == "bill_to_enter":
@@ -1382,12 +1779,30 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
                              "excluded": st["excluded"], "label": f"{b.name} · {st['pct'] or '?'}% used"})
         return near[skip:skip + n], len(near) > skip + n
     if kind == "sync_failed":
-        if not (view.everything or view.sources or R.is_admin(ctx.org, s.view.viewer, held)):
+        if not (view.everything or view.sources):
             return None
         failed: list[Row] = [{"id": str(x["id"]), "connection_id": str(x["id"]), "date": str(x["updated_at"] or "")[:10],
                    "label": f"{x['name'] or x['provider']}: {str(x['last_error'] or 'sync failed')[:120]}"}
                   for x in SK.connections(c) if str(x["status"]) == "error"]
         return failed[skip:skip + n], len(failed) > skip + n
+    if kind == "unreconciled":
+        if not R.has(ctx.org, s.view.viewer, R.BOOK, held):
+            return None
+        money_ids, _ = tab.feed_scope(ctx, view)
+        days = _worst_gap(s, money_ids)
+        late: list[Row] = ([{"id": "books", "days": days, "label": f"{days} days since the books were reconciled"}]
+                           if days is not None and days > STATEMENT_DAYS else [])
+        return late[skip:skip + n], len(late) > skip + n
+    if kind == "bill_email":                 # a bill to enter (bill_create needs AP): by the right, and a view of bills
+        if not R.has(ctx.org, s.view.viewer, R.AP, held) or not tab_ap.sees_side(ctx, view, "bill"):
+            return None
+        from .. import bills_address       # the emailed bills keep their own rows, outside the fin_ tables
+        emailed = bills_address.for_bookkeeper(c, skip + n + 1)
+        return [{"id": str(r["id"]), "file_id": str(r["file_id"] or ""), "date": str(r["received_at"] or "")[:10],
+                 "status": str(r["state"]) + str(r["code"] or ""),
+                 "label": (f"{r['sender'] or 'Unknown sender'}: {r['subject'] or r['name']}"[:160]
+                           + (f" (file {r['file_id']})" if r["file_id"] else ""))}
+                for r in emailed[skip:skip + n]], len(emailed) > skip + n
     if not R.has(ctx.org, s.view.viewer, R.BOOK, held):      # period_ready
         return None
     ready: list[Row] = [{"id": p, "month": p, "label": f"{p} is ready to close"} for p in _closable(c, ctx)
@@ -1405,8 +1820,12 @@ def _closable(c: sqlite3.Connection, ctx: Ctx) -> list[str]:
     return out
 
 
-def _checklist(s: _Seen, month: str) -> Row:
-    """What stands between a month and its close, for whoever does the books."""
+SUSPENSE_ALL = 10**12       # a limit past any month's rows: suspense is counted whole, never a page of it
+
+
+def _checklist(s: _Seen, month: str, top_n: int = 20) -> Row:
+    """What stands between a month and its close, for whoever does the books. The money accounts still behind are
+    listed up to `top_n`, and the rest fold into one "Other · n" row; `count` is always the whole number."""
     ctx = s.ctx
     first = dates.month(month)
     last = dates.month_end(first)
@@ -1418,13 +1837,22 @@ def _checklist(s: _Seen, month: str) -> Row:
     behind = [{"money_account_id": str(m["id"]), "name": str(m["name"]),
                "locked_through": SK.locked_through(ctx.c, str(m["id"])) or None} for m in live
               if (SK.locked_through(ctx.c, str(m["id"])) or "") < last.isoformat()]
-    rows, more = _uncategorized(s, first, last, INBOX_EACH)
+    top = max(1, min(int(top_n), MAX_TOP))
+    folded = behind[top:]
+    listed = behind[:top] + ([{"key": OTHER, "label": f"Other · {len(folded)}", "count": len(folded),
+                               "money_account_id": None, "name": f"Other · {len(folded)}", "locked_through": None}]
+                             if folded else [])
+    # Suspense (spec §11): every settled row of the month still waiting for a category blocks the close, so the count and
+    # the close decision read the whole month, not a page of it. Lines on Other expenses are shown with their count and
+    # do not.
+    rows, more = _uncategorized(s, first, last, SUSPENSE_ALL)
+    waiting = [r for r in rows if str(r["status"]) == "new"]
     accrual = ctx.book.basis == "accrual"
     checks: list[Row] = [
-        {"key": "reconciled", "ok": not behind, "count": len(behind), "accounts": behind,
+        {"key": "reconciled", "ok": not behind, "count": len(behind), "accounts": listed,
          "label": "Every money account reconciled through month end"},
-        {"key": "uncategorized", "ok": not rows, "count": len(rows), "more": more,
-         "label": "Nothing left in Other expenses or uncategorized"}]
+        {"key": "suspense", "ok": not waiting, "count": len(waiting), "more": more, "other": len(rows) - len(waiting),
+         "label": "Review suspense"}]
     # Company-wide counts only for whoever sees them: unmatched receipts with the whole books, draft bills with
     # payables (and only the drafts the viewer sees whole).
     if s.view.everything:
@@ -1441,13 +1869,17 @@ def _checklist(s: _Seen, month: str) -> Row:
          "Cash basis: no accruals to review", "note": True},
         {"key": "budget_vs_actual", "ok": True, "label": "Write the budget vs actual note", "note": True}]
     checks += notes
-    # A month no money account had a feed for has nothing to reconcile, so it is never "ready" on its own.
-    ready = status == "open" and last < dates.day(ctx.today) and bool(live) and not behind and not rows
-    return {"month": month, "start": first.isoformat(), "end": last.isoformat(), "status": status, "ready": ready,
-            "checks": checks}
+    # `closable` is what close_period needs: an ended open month, reconciled through its end, nothing waiting for a
+    # category. `ready` (what finance.period.ready fires on) also needs a money account with a feed: a month no money
+    # account had a feed for has nothing to reconcile, so it is never "ready" on its own.
+    ended = last < dates.day(ctx.today)
+    closable = status == "open" and ended and not behind and not waiting
+    return {"month": month, "start": first.isoformat(), "end": last.isoformat(), "status": status,
+            "ready": closable and bool(live), "closable": closable, "ended": ended, "checks": checks}
 
 
-def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | None = None) -> Row:
+def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | None = None, *,
+                    top_n: int = 20) -> Row:
     """A month's close checklist (§10): reconciled through month end, nothing uncategorized, receipts matched, draft
     bills entered, and notes for accruals and budget vs actual. `ready` is what finance.period.ready fires on (the
     first two, on an open month that has ended). For teammates with finance.book, cut to their view: only the money
@@ -1455,7 +1887,7 @@ def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | N
     s = _open(c, viewer, at)
     if not R.has(s.ctx.org, viewer, R.BOOK, s.ctx.rights(viewer)):
         raise denied("the close is for teammates who do the books")
-    return {**_checklist(s, dates.month(period).isoformat()[:7]), "view_version": s.view.version}
+    return {**_checklist(s, dates.month(period).isoformat()[:7], top_n), "view_version": s.view.version}
 
 
 def ready_months(c: sqlite3.Connection, at: str | None = None) -> list[str]:
@@ -1465,6 +1897,24 @@ def ready_months(c: sqlite3.Connection, at: str | None = None) -> list[str]:
         return []
     s = _Seen(ctx=ctx, view=ctx.view(ctx.org.owner), private=SA.private_lines(c))
     return [p for p in _closable(c, ctx) if _checklist(s, p)["ready"]]
+
+
+def close_blockers(ctx: Ctx, month: str, who: str) -> list[str]:
+    """What still keeps an open month from closing (spec §11), for everyone: the checklist's blocking items, read with the
+    owner's view so every actor gets the same answer. Empty when the month can close."""
+    s = _Seen(ctx=ctx, view=ctx.view(ctx.org.owner or who), private=SA.private_lines(ctx.c))
+    row = _checklist(s, month)
+    if row["closable"]:
+        return []
+    why = [] if row["ended"] else [f"{month} has not ended"]
+    for check in cast(list[dict[str, Any]], row["checks"]):
+        if check["ok"]:
+            continue
+        if check["key"] == "reconciled":
+            why.append(f"{check['count']} money account(s) not reconciled through {row['end']}")
+        elif check["key"] == "suspense":
+            why.append(f"{check['count']}{'+' if check['more'] else ''} settled row(s) still waiting for a category")
+    return why or [f"{month} is not ready to close"]
 
 
 def company_cash(c: sqlite3.Connection, at: str | None = None) -> int | None:
@@ -1488,7 +1938,7 @@ def transactions(c: sqlite3.Connection, viewer: str, *, teams: Iterable[str] = (
 
 
 # ------------------------------------------------------------------------------------------------ watch
-WATCH_HISTORY_DAYS = 120       # posted debits read for duplicate charges and price increases
+WATCH_HISTORY_DAYS = 120       # posted debits read for duplicate charges, price increases and unused subscriptions
 WATCH_PAGES = 10              # pages of 200 read per check of the debits
 
 
@@ -1523,7 +1973,8 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
                     or not payee:
                 continue
             out.append(W.Charge(id=str(row["id"]), payee=payee, amount=-amount,
-                                day=date.fromisoformat(str(row["date"])[:10])))
+                                day=date.fromisoformat(str(row["date"])[:10]),
+                                shown=str(row.get("counterparty") or "").strip(), card=str(row.get("card_id") or "")))
         cursor = cast(str | None, page.get("next"))
         if not cursor:
             break
@@ -1532,7 +1983,8 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
 
 def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str, Any]]:
     """Every Watch check's findings now: runway, unusual spend per payee over the last four months, and the posted
-    debits read for duplicate charges and price increases. Every read goes through the viewer's view."""
+    debits read for duplicate charges, price increases and unused subscriptions (the cards an archived or idle bot holds
+    come from the hub's bot facts). Every read goes through the viewer's view."""
     today = date.fromisoformat(at[:10])
     found: list[dict[str, Any]] = []
     figures: Row = {}
@@ -1553,12 +2005,13 @@ def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str
             pass
         for row in rows:
             payee = str(row.get("label") or "")
-            if not payee or row.get("key") in ("", "unattributed"):
+            if not payee or row.get("key") in ("", NONE):
                 continue
             series.setdefault(payee, [0] * len(months))[index] += int(cast(int, row.get("amount") or 0))
     found += W.unusual_spend(series, months[-1][0])
     charges = _charges(c, viewer, at)
     found += W.duplicate_charges(charges) + W.price_increases(charges)
+    found += W.unused_subscriptions(charges, ST.idle_bot_cards(c, at, W.UNUSED_IDLE_DAYS), today)
     return found
 
 
@@ -1579,6 +2032,7 @@ def view_version(c: sqlite3.Connection) -> int:
 balance_sheet = tab.balance_sheet
 cards = tab.cards
 sources = tab.sources
+gateway_connected = ST.gateway_connected       # whether Sources shows the Gateway with no entries yet
 access = tab.access
 view_as = tab.view_as
 # Money out and controls (finance/tab_money.py).
@@ -1673,11 +2127,11 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str, at: str | Non
         return None
     ctx = load(c, at)
     try:
-        payload = cast(Mapping[str, object], json.loads(str(row["payload_json"] or "{}")))
+        payload = cast(Mapping[str, object], json.loads(str(row["payload"] or "{}")))
     except ValueError:
         payload = dict[str, object]()
     try:
-        result = cast(Mapping[str, Any], json.loads(str(row["result_json"] or "{}")))
+        result = cast(Mapping[str, Any], json.loads(str(row["result"] or "{}")))
     except ValueError:
         result = dict[str, Any]()
     covers = True if ctx.view(viewer).everything else _covers(ctx, viewer, payload)
@@ -1690,3 +2144,49 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str, at: str | Non
             "code": str(row["code"] or ""), "reason": named_reason(ctx, viewer, str(row["reason"] or ""), result, decider=approver) if shown else "",
             "approval_id": str(row["approval_id"] or "") or None, "approver": str(row["approval_to"] or "") or None,
             "rule": str(row["rule_id"] or "")}
+
+
+# ------------------------------------------------------------------------------------------- the Company page's reads
+# What the Company page's stats read from the books. The page's own check decides what a reader may see; these only say
+# what the books hold, so none of them applies a viewer's view.
+
+@dataclass(frozen=True)
+class BookView:
+    viewer: str                        # the owner who reads the books for the page ("" when there is none)
+    accounts: Mapping[str, Account]
+    private: frozenset[str]            # private lines: never on a page, whatever the grid says
+    currency: str
+    exponent: int                      # minor units of the currency
+
+
+def book_view(c: sqlite3.Connection, at: str) -> BookView:
+    """The books as a Company page reads them at `at`. Raises FinanceError when Finance isn't set up."""
+    ctx = load(c, at)
+    return BookView(viewer=_context.owner(c), accounts=ctx.accounts, private=frozenset(SA.private_lines(c)),
+                    currency=ctx.book.base_currency, exponent=money.EXPONENTS.get(ctx.book.base_currency, 2))
+
+
+def private_line_ids(c: sqlite3.Connection) -> frozenset[str]:
+    return frozenset(SA.private_lines(c))
+
+
+def account_name_and_type(c: sqlite3.Connection, account_id: str) -> dict[str, str] | None:
+    row = c.execute("SELECT name, type FROM fin_accounts WHERE id=?", (account_id,)).fetchone()
+    return {"name": str(row["name"]), "type": str(row["type"])} if row else None
+
+
+def income_and_expense_accounts(c: sqlite3.Connection, limit: int) -> list[dict[str, str]]:
+    """Active income and expense accounts in chart order: the lines a Company page can show."""
+    return [{"id": str(r["id"]), "name": str(r["name"])} for r in c.execute(
+        "SELECT id, name FROM fin_accounts WHERE type IN ('income','expense') AND active=1 ORDER BY code, id LIMIT ?",
+        (limit,))]
+
+
+def descendant_ids(accounts: Mapping[str, Account], account_id: str) -> set[str]:
+    """`account_id` and every account below it in the chart."""
+    return descendants(accounts, account_id)
+
+
+def pnl_section_of(accounts: Mapping[str, Account], account_id: str) -> str:
+    """Where a P&L account sits: revenue, cost of revenue, operating expenses, or other income and expense."""
+    return pnl_section(accounts, accounts[account_id])

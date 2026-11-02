@@ -497,6 +497,50 @@ async fn a_stateless_task_lane_commits_no_memory_and_leaves_what_it_wrote_in_mem
 }
 
 #[tokio::test]
+async fn a_memory_pass_checkout_drops_its_edits_and_commits_and_leaves_main_alone() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-pass");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-pass");
+    sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
+    let env = turn_env(&tmp.0, &[]);
+    let session = sessions::path_for(&projects, "tico-pass", "t4");
+    assert_eq!(sessions::ensure(&main, &session, "t4", &env).await, ("origin/main".into(), "".into()));
+    let base = sh(&session, &["rev-parse", "HEAD"]);
+
+    // A pass commits outside memory/ and edits memory/ without committing it; both must be gone after the turn.
+    std::fs::write(session.join("stray.txt"), "outside memory\n").unwrap();
+    sh(&session, &["add", "stray.txt"]);
+    sh(&session, &["commit", "-qm", "Pass commit"]);
+    std::fs::create_dir_all(session.join("memory")).unwrap();
+    std::fs::write(session.join("memory/learnings.md"), "a rule the pass rewrote\n").unwrap();
+
+    let changed = sessions::discard_pass(&session, &env).await.unwrap();
+    assert!(changed.iter().any(|c| c.starts_with("commit ")), "{changed:?}");
+    assert!(changed.iter().any(|c| c.contains("memory/learnings.md")), "{changed:?}");
+    assert_eq!(sh(&session, &["rev-parse", "HEAD"]), base, "the pass's commit is dropped");
+    assert_eq!(sh(&session, &["status", "--porcelain"]), "", "nothing is left uncommitted");
+    assert!(!session.join("stray.txt").exists() && !session.join("memory").exists());
+    assert_eq!(sh(&session, &["rev-parse", "origin/main"]), base, "nothing reached main");
+    assert_eq!(sh(&session, &["log", "--format=%H", "origin/main..HEAD"]), "");
+}
+
+#[tokio::test]
+async fn a_memory_pass_with_nothing_changed_discards_nothing_and_says_so() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-quiet");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-quiet");
+    sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
+    let env = turn_env(&tmp.0, &[]);
+    let session = sessions::path_for(&projects, "tico-quiet", "t5");
+    assert_eq!(sessions::ensure(&main, &session, "t5", &env).await, ("origin/main".into(), "".into()));
+    assert_eq!(sessions::discard_pass(&session, &env).await.unwrap(), Vec::<String>::new());
+}
+
+#[tokio::test]
 async fn a_private_meetings_checkout_needs_no_upstream_but_a_tasks_does() {
     // A repository made on this computer with no remote: a task has no upstream to share, a private meeting's copy,
     // never pushed, starts from the checkout's own HEAD.
@@ -726,6 +770,47 @@ async fn an_attached_worktree_is_certified_then_saved_to_a_wip_branch_when_its_t
     let wip = worktrees::wip_branch(&row);
     let saved = sh(&tmp.0, &["--git-dir", bare.to_str().unwrap(), "show", &format!("{wip}:draft.txt")]);
     assert_eq!(saved, "half done");
+}
+
+#[tokio::test]
+async fn a_removal_with_a_changed_name_that_is_not_utf8_keeps_the_worktree_and_saves_nothing() {
+    use std::os::unix::ffi::OsStrExt;
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "product");
+    let workspace = tmp.0.join("ws");
+    let base = workspace.join("repos").join(crate::repositories::base_folder("org/product"));
+    std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+    sh(&tmp.0, &["clone", "-q", bare.to_str().unwrap(), base.to_str().unwrap()]);
+    sh(&base, &["remote", "set-url", "origin", "https://github.com/org/product.git"]);
+    sh(&base, &["config", &format!("url.{}.insteadOf", bare.display()), "https://github.com/org/product.git"]);
+    let tree = workspace.join("work/product");
+    sh(&base, &["worktree", "add", "-q", "-b", "tico/feature", tree.to_str().unwrap()]);
+    let env = turn_env(&tmp.0, &[]);
+    let row = json!({
+        "id": "link-0002", "task_id": "task-0002", "path": "work/product", "repo": "org/product",
+        "branch": "tico/feature", "owner": "bot:ops", "state": "present",
+        "detail_json": json!({"checkout_state": "attached_pending"}).to_string(),
+    });
+    let first = worktrees::inspect(&workspace, &row, &env, None).await;
+    assert_eq!(first["state"], "present", "{first}");
+    let head_before = sh(&tree, &["rev-parse", "HEAD"]);
+
+    // An untracked file whose name is not UTF-8 holds a token-shaped string; a second dirty file sits beside it.
+    let odd = tree.join(std::ffi::OsStr::from_bytes(b"notes-\xff.txt"));
+    std::fs::write(&odd, "ghp_abcdefghijklmnopqrstuvwxyz0123\n").unwrap();
+    std::fs::write(tree.join("draft.txt"), "half done\n").unwrap();
+    let mut action_row = row.as_object().unwrap().clone();
+    action_row.insert("full_name".into(), json!("org/product"));
+    let kept = worktrees::act(&workspace, &mut action_row, "remove", &env, &[], || async { true }).await;
+    let why = kept.err().map(|e| e.text()).unwrap_or_default();
+    assert!(why.contains("not valid UTF-8"), "{why}");
+
+    // Nothing is added, committed or pushed: the worktree, its files and its HEAD stay as they were.
+    assert!(tree.exists() && odd.exists() && tree.join("draft.txt").exists());
+    assert_eq!(sh(&tree, &["rev-parse", "HEAD"]), head_before);
+    let wip = worktrees::wip_branch(&row);
+    let heads = sh(&tmp.0, &["--git-dir", bare.to_str().unwrap(), "for-each-ref", "--format=%(refname)", "refs/heads"]);
+    assert!(!heads.lines().any(|line| line == format!("refs/heads/{wip}")), "{heads}");
 }
 
 #[tokio::test]

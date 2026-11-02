@@ -6,6 +6,7 @@ import json
 import pytest
 
 from backend import automation_flow as F
+from backend import hubdb as H
 from backend import redesign_migration as M
 from backend import rules as R
 from backend.tests.test_api import api, get, post  # noqa: F401
@@ -27,7 +28,7 @@ def routine(api, sid, bot="coo", *, cron="0 9 * * *", event=None, on=True, text=
             title="Morning notes", zone="Europe/London", due=DUE):
     """A routine as the release before wrote it (its routes are gone)."""
     with db(api).transaction() as c:
-        c.execute("INSERT INTO schedules(id, bot, cron, event_name, title, playbook, next_due, updated_at) "
+        c.execute("INSERT INTO schedules(id, bot, cron, event_name, title, playbook, next_due_at, updated_at) "
                   "VALUES(?,?,?,?,?,?,?,?)", (sid, bot, None if event else cron, event, title, text,
                                               None if event else due, "2026-10-01T00:00:00Z"))
         c.execute("INSERT INTO schedule_config(schedule_id, timezone, enabled) VALUES(?,?,?)", (sid, zone, int(on)))
@@ -37,7 +38,7 @@ def routine(api, sid, bot="coo", *, cron="0 9 * * *", event=None, on=True, text=
 def rule(api, rid, event="comment", then="wake", scope=("bot", "coo"), position=0, enabled=True):
     with db(api).transaction() as c:
         c.execute("INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, enabled, position, created_by, "
-                  "created, updated) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (rid, scope[0], scope[1], event, then, int(enabled), position, "human:ana",
                    "2026-10-01T00:00:0%dZ" % position, "2026-10-01T00:00:00Z"))
     return rid
@@ -63,7 +64,7 @@ def marks(api):
 def told(api, mid):
     """What the owner got for one migration: tasks and notices that name it."""
     tasks = rows(api, "SELECT id, title, body FROM tasks WHERE title LIKE '%Automations%'")
-    notes = [r for r in rows(api, "SELECT id, refs_json FROM messages WHERE refs_json LIKE ?", (f"%{mid}%",))]
+    notes = [r for r in rows(api, "SELECT id, refs FROM messages WHERE refs LIKE ?", (f"%{mid}%",))]
     return tasks, notes
 
 
@@ -101,17 +102,17 @@ def test_every_object_moves_once_and_runs_from_one_system(api):
     assert {i["now"] for i in after.values()} <= {"moved", "runs as before", "kept", "unchanged", "removed"}
     for sid, on in (("sch_daily", True), ("sch_off", False), ("sch_event", True)):
         assert after[("routine", sid)]["now"] == "moved"
-        old = rows(api, "SELECT deleted_at, next_due FROM schedules WHERE id=?", (sid,))[0]
-        assert old["deleted_at"] and old["next_due"] is None                    # the routine never fires again
-        made = rows(api, "SELECT enabled, next_due, flow_json FROM automations WHERE id=?",
+        old = rows(api, "SELECT deleted_at, next_due_at FROM schedules WHERE id=?", (sid,))[0]
+        assert old["deleted_at"] and old["next_due_at"] is None                    # the routine never fires again
+        made = rows(api, "SELECT enabled, next_due_at, flow FROM automations WHERE id=?",
                     (after[("routine", sid)]["automation"],))[0]
-        flow = json.loads(made["flow_json"])
+        flow = json.loads(made["flow"])
         assert bool(made["enabled"]) is on and flow["steps"][0]["bot"] == "bot:coo"
         if sid == "sch_event":
             assert flow["trigger"] == {"type": "event", "name": "release_published"}
         else:
             assert flow["trigger"] == {"type": "schedule", "cron": "0 9 * * *", "tz": "Europe/London"}
-            assert made["next_due"] == DUE                                     # its next occurrence, once
+            assert made["next_due_at"] == DUE                                     # its next occurrence, once
     assert not rows(api, "SELECT id FROM rules WHERE id IN ('rule_wake','rule_note','rule_team')")
     assert decisions(api, events, targets) == before_decisions                # the same wakes, from What wakes
     assert rows(api, "SELECT hourly_usd, per_30m_usd FROM usage_limits WHERE bot='coo'") == [
@@ -154,7 +155,7 @@ def test_a_cutover_a_restart_cut_off_resumes_and_moves_nothing_twice(api, monkey
                       "WHERE m.kind='routine' AND a.deleted_at IS NULL")
     assert sorted(m["id"] for m in moved) == ["sch_0", "sch_1", "sch_2"]
     assert len({m["aid"] for m in moved}) == 3
-    assert rows(api, "SELECT count(*) AS n FROM automations WHERE flow_json LIKE '%Routine 0%'") == [{"n": 1}]
+    assert rows(api, "SELECT count(*) AS n FROM automations WHERE flow LIKE '%Routine 0%'") == [{"n": 1}]
 
 
 def test_what_cannot_move_stays_as_it_was_and_the_owner_is_told_once(api, monkeypatch):
@@ -230,8 +231,8 @@ def test_the_librarians_briefing_routine_becomes_the_market_briefing_builtin_nev
             title="Market briefing")
     first_start(api)
     automations.tick(db(api))
-    built = rows(api, "SELECT enabled, flow_json FROM automations WHERE id='auto_builtin_market_briefing'")[0]
-    flow = json.loads(built["flow_json"])
+    built = rows(api, "SELECT enabled, flow FROM automations WHERE id='auto_builtin_market_briefing'")[0]
+    flow = json.loads(built["flow"])
     assert built["enabled"] == 1
     assert flow["trigger"] == {"type": "schedule", "cron": "0 7 * * 1-5", "tz": "America/New_York"}
     assert flow["steps"][0]["prompt"] == "Brief the team." and flow["steps"][1]["do"] == "post_update"
@@ -248,7 +249,7 @@ def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api)
         c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
     post(api, "access/people/cara", {"inbox_bot": "inbox", "mailbox": "cara@acme.example"})
     with db(api).transaction() as c:
-        c.execute("INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated) VALUES(?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO mail_agent_instructions(bot, content, runner_id, updated_at) VALUES(?,?,?,?)",
                   ("inbox", LONG, "", "2026-10-28T00:00:00Z"))
     done = first_start(api)
     assert not done["failed"] and not done["kept"]
@@ -257,11 +258,11 @@ def test_rehearsal_cases_team_rules_paused_bots_and_long_inbox_instructions(api)
     with db(api).read() as c:
         assert [r["id"] for r in M.wake_rows(c, "comment")] == ["rule_dept"]
         assert c.execute("SELECT state FROM bots WHERE slug='inbox'").fetchone()[0] == "paused"   # retired
-        made = c.execute("SELECT flow_json, owner FROM automations WHERE id=?",
+        made = c.execute("SELECT flow, owner_id FROM automations WHERE id=?",
                          (found[("inbox", "inbox:cara@acme.example")]["automation"],)).fetchone()
-        dept = json.loads(c.execute("SELECT flow_json FROM automations WHERE id=?",
+        dept = json.loads(c.execute("SELECT flow FROM automations WHERE id=?",
                                     (found[("wake_rule", "rule_dept")]["automation"],)).fetchone()[0])
-    step = json.loads(made["flow_json"])["steps"][0]
+    step = json.loads(made["flow"])["steps"][0]
     assert step["type"] == "llm" and step["prompt"].startswith(LONG.rstrip())
     assert dept["owner"] == "person:ana" and dept["wakes"]["scope_kind"] == "department"
     paused = [a for a in get(api, "automations")["automations"] if a["name"] == "Weekly ops check"]
@@ -304,7 +305,7 @@ def test_a_moved_wake_rule_does_what_its_filter_shows_and_an_edit_it_cannot_do_i
     assert r.status_code == 200, r.text
     with db(api).read() as c:
         row = [w for w in M.wake_rows(c, "comment") if w["id"] == "rule_wake"][0]
-    assert row["then_outcome"] == "ignore" and json.loads(row["when_json"]) == {"priority": "low"}
+    assert row["then_outcome"] == "ignore" and json.loads(row["condition"]) == {"priority": "low"}
     bad = steps + [{"id": "x", "type": "action", "do": "note", "args": {"bot": "coo", "text": "Hi"}}]
     r = api.patch(f"/api/v2/automations/{aid}", json={"steps": bad},
                   headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "edit-wakes-bad"})
@@ -332,5 +333,30 @@ def test_a_routine_longer_than_an_automation_takes_moves_off_with_its_text_cut(a
     assert not done["kept"] and not done["failed"]
     mark = marks(api)[("routine", "sch_long")]
     assert mark["outcome"] == "converted" and "cut to fit" in mark["why"]
-    flow = json.loads(rows(api, "SELECT flow_json FROM automations WHERE id=?", (mark["automation"],))[0]["flow_json"])
+    flow = json.loads(rows(api, "SELECT flow FROM automations WHERE id=?", (mark["automation"],))[0]["flow"])
     assert flow["enabled"] is False and len(flow["steps"][0]["prompt"]) == F.MAX_PROMPT
+
+
+def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still_reads_the_marks(api):
+    """An install from before the drop has the record and accepts tables. Migration 0007 removes them at the next start;
+    `redesign_migrated` stays, and `holds` still sees a routine the cutover converted (so it is never reseeded and fires
+    twice)."""
+    store = db(api)
+    with store.transaction() as conn:
+        conn.execute("CREATE TABLE redesign_migrations(id TEXT PRIMARY KEY, state TEXT NOT NULL, actor TEXT NOT NULL, "
+                     "created_at TEXT NOT NULL, expires_at TEXT NOT NULL, finished_at TEXT, restored_at TEXT, snapshot TEXT, "
+                     "result TEXT)")
+        conn.execute("INSERT INTO redesign_migrations(id, state, actor, created_at, expires_at) VALUES('mig_1','converted',"
+                     "'human:ana',?,?)", (H.now(), H.now()))
+        conn.execute("CREATE TABLE redesign_migration_accepts(flag TEXT PRIMARY KEY, accepted_by TEXT NOT NULL, "
+                     "accepted_at TEXT NOT NULL)")
+        conn.execute("INSERT INTO redesign_migrated(kind, id, migration, automation) VALUES('routine','sch_1','mig_1','a1')")
+        # As a file from before 0007 has it: that migration and every later one not run yet.
+        conn.execute("DELETE FROM schema_migrations WHERE version>='0007' AND version NOT LIKE 'legacy_%'")
+    store.initialize(seed_market=False)
+    with store.read() as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert not {"redesign_migrations", "redesign_migration_accepts"} & tables
+        assert "redesign_migrated" in tables
+        assert M.holds(conn, "routine", "sch_1") is True
+        assert M.holds(conn, "routine", "sch_2") is False

@@ -67,7 +67,7 @@ AUTO_MESSAGES = {
                       "new one, or paste a gateway key here.",
     "invite_used_up": "Tico AI Gateway could not connect automatically: the invite code has been used by all the "
                       "installs it allows. Ask Tico Team for a new one, or paste a gateway key here.",
-    "invite_revoked": "Tico AI Gateway could not connect automatically: Tico cancelled the invite code. Ask Tico Team "
+    "invite_revoked": "Tico AI Gateway could not connect automatically: Tico canceled the invite code. Ask Tico Team "
                       "for a new one, or paste a gateway key here.",
 }
 AUTO_LATER = "Tico AI Gateway could not connect automatically yet. Tico tries again every hour."
@@ -104,7 +104,7 @@ def _row(c):
 
 
 def _write(c, record):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(record, sort_keys=True)))
 
 
@@ -170,7 +170,7 @@ def view(c, settings=None, *, manage=False):
     return {**out, "preview": record.get("preview", "") if where == "settings" else "",
             "env": ENV_KEY if where == "environment" else "",
             "revision": int(record.get("revision") or 0),
-            "updated": record.get("updated", ""), "updated_by": record.get("updated_by", ""),
+            "updated_at": record.get("updated", ""), "updated_by": record.get("updated_by", ""),
             "state": state, "working": state not in G.REFUSED,
             "message": fresh.get("message") or ("Not checked yet." if where else "No gateway key saved."),
             "used": fresh.get("used"), "spent_usd": fresh.get("spent_usd"), "cap_usd": fresh.get("cap_usd"),
@@ -441,7 +441,7 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
     """`run_credentials` for attempt `attempt_id`, by what its claim handed it out on, to the runner `who` that holds it.
     Only a runner is handed the key: its turn reaches the Gateway through the runner's relay with a token for that turn
     alone (runner-rs/src/gateway_relay.rs), because the turn's own commands can read whatever the turn's processes hold."""
-    row = c.execute("SELECT bot FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    row = c.execute("SELECT bot_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     config = handed(c, attempt_id)
     if not row or not wanted(config):
         return []
@@ -449,7 +449,7 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
     items = run_credentials(c, vault, settings, config.get("model") if is_tico(config.get("model"))
                             else fallback.get("model") if is_tico(fallback.get("model"))
                             else config.get("gateway_fallback"))
-    if items and (bot := bot_header(c, vault, row["bot"])):
+    if items and (bot := bot_header(c, vault, row["bot_id"])):
         # The relay sends it on every model call of the turn, in place of anything the turn sends by that name.
         items.append({"id": "gateway-bot", "name": G.LABEL + " bot", "env": RUN_BOT_ENV, "kind": "text",
                       "value": bot[G.BOT_HEADER]})
@@ -458,7 +458,7 @@ def run_credentials_for(c, vault, settings, who, attempt_id):
         # primary/fallback deadline stays inside HQ's 24-hour rotation grace (runner-rs/src/gateway_relay.rs).
         c.execute("UPDATE attempts SET gateway_key_id=? WHERE id=?", (key_id(c, settings) or None, attempt_id))
         H.event(c, who.actor, "gateway.key_sent", PROVIDER,
-                {"bot": row["bot"], "attempt": attempt_id, "runner": who.runner_id})
+                {"bot": row["bot_id"], "attempt": attempt_id, "runner": who.runner_id})
     return items
 
 
@@ -509,6 +509,12 @@ def _invite_mark(code):
 def _identity(record):
     """Whether the install has its own identity (id and sealed secret) from a first enroll."""
     return bool(record.get("install") and record.get("install_secret"))
+
+
+def install_id(c):
+    """The install's Gateway id (`gi_...`), or '' before its first sign-up. It names the install on Tico HQ, in
+    federation envelopes and in every actor it sends out (backend/federation*.py)."""
+    return str(_row(c).get("install") or "")
 
 
 def maintained(c, settings=None):

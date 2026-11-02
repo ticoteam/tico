@@ -1,23 +1,22 @@
-# Propose growth ideas
+# Propose marketing ideas
 
-When: the setup task "Propose the first growth ideas", the weekly meeting when fewer than three ideas are ready to pick, or
-the owner asks. Budget 45 minutes. The outcome is three to eight Idea tasks, each with a source and an ICE score, and a
-bet whenever the strategy has one.
-Nothing is started here; the weekly meeting starts tests.
+When: the setup task "Propose the first growth ideas", the weekly meeting when fewer than three ideas are at Idea, or the
+owner asks. Budget 45 minutes. The outcome is three to eight Marketing tasks at step Idea, each with a channel label and
+a source. Nothing is started here; the weekly meeting moves an idea to Testing.
 
 ---
 
 ## 1. Read the position
 
-    hub strategy show              bets, what we will not do, goals_by_bet
-    hub gtm show                   motion, buyer, channels working now, wishes
+    hub strategy show              bets, Where we play, How we sell, what we will not do
+    hub rules list --mine          the rules that apply to you: spend limits, standing instructions
     hub brand summary              positioning and voice, for the wording
-    hub growth economics           CAC, LTV and payback by channel, and the Unknown row
-    hub growth evidence            each bet: supports, weakens, none
+    hub growth numbers             the growth numbers, and which channels are behind them
     hub growth channel list        the channels, their stage and owner
 
-Then the market: `hub market show <competitor>` for each competitor, `hub listening runs --since <30 days ago>` for the
-recent matches, then `hub growth idea list --status lost` and `hub growth idea list --status inconclusive`, one list each.
+Then the market: `hub market show <competitor>` for each competitor, and `hub listening runs --since <30 days ago>` for the
+recent matches. Then look at what was closed: `hub task list --type idea --step Lost` and
+`hub task list --type idea --step Inconclusive`, one list each.
 
 ## 2. Look at what did not work first
 
@@ -29,33 +28,25 @@ It is not a retry of the same test.
 Every idea has all of these, or you do not file it:
 
 - **A title** a person can say in one line.
-- **A hypothesis** in the form "If we X for Y, Z moves because W".
-- **A prediction** with a number and an end date, on the KPI it will be judged on. Write it as "<KPI> from <now> to <number> by <date>".
-- **A bet** (`--bet`) when the strategy has bets: then every idea names the one it serves. When it has none yet, file
-  without `--bet` and say in the closing note that the bets are missing.
-- **A KPI** (`--kpi`), the North Star or the input it moves.
-- **A source**: where the signal came from. `--source-kind` is `strategy`, `competitor`, `listening`, `peec`, `lost_test`,
-  `person` or `other`; `--source-ref` names the item (a bet id, a market page, a match, an action). No source, no idea.
-- **Channels**: one or more `--channel <slug>` from step 1.
-- **ICE**: `--i` (impact), `--c` (confidence), `--e` (ease), each a whole number from 1 to 10.
+- **A channel**: one or more `channel:<slug>` labels from step 1.
+- **A source**: where the signal came from, as a link or an id in the body. No source, no idea.
+- **A body** that says what changes, in one or two lines.
 
-    hub growth idea create --title "Price calculator on the pricing page" \
-      --hypothesis "If we show the saving against a typical cleaner, more homeowners book, because price is their first question" \
-      --prediction "First-clean bookings from price requests 22% to 30% by 2026-12-15" \
-      --bet <bet id, when there are bets> --kpi <kpi id> --channel <channel slug> --i 7 --c 6 --e 6 \
-      --source-kind listening --source-ref "<match id>"
+No score, prediction or bet is needed, and an idea does not link to a bet.
 
-A follow-up adds `--follow-up-of <lost or inconclusive idea task id>`.
+    hub task create --owner marketing-lead --type idea --label channel:<slug> \
+      --title "Price calculator on the pricing page" \
+      --body "Changes: show the saving against a typical cleaner on the pricing page. Signal: <match id, link or task id>."
 
-Before you file, check for a duplicate: `hub growth idea list --q "<two words>"`. Update an existing idea instead of
-filing a copy: `hub growth idea update <id> ...`.
+A follow-up is filed the same way, then linked to the closed task: `hub task relate <new id> <closed id> --kind follow_up`.
+
+Before you file, scan the board for a duplicate: `hub task list --type idea`. Add to an existing idea with
+`hub task comment <id> "..."` instead of filing a copy.
 
 File three to eight. More than eight is a list, not a proposal.
 
 ## 4. Finish
 
-    hub task update <id> --status done --note "<count> ideas filed; top three by ICE: <titles>; refused: <what and why>"
+    hub task update <id> --status done --note "<count> ideas filed; top three: <titles>; refused: <what and why>"
 
-With no bets in the strategy, the note also says so: "No strategy bets yet; ideas filed without one".
-
-Ideas stay at status `idea` until the weekly meeting picks them.
+Ideas stay at Idea until the weekly meeting moves one to Testing.

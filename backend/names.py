@@ -4,7 +4,7 @@ The store keeps raw actor ids (`human:ana`, `bot:ops`). A frontend should not ha
 every one up, so an answer on a stable route also carries the names, added beside the ids and never
 instead of them:
 
-- an object with an `owner`, `requester`, `from_actor`, `to_actor` or `actor` id gets `owner_name` and so on;
+- an object with an `owner_id`, `requester_id`, `sender_id`, `recipient_id` or `actor` id gets `owner_name` and so on;
 - a read (GET) answer that is an object gets `actors`: {id: name} for every id it names, one lookup for the whole page;
 - for a person, a notice the hub wrote for bots to read ("New task from bot:x: ...") is shown with names
   (the original is kept in `body_raw`). Bots and other callers get the text as written.
@@ -15,8 +15,8 @@ Nothing here reads more than the `humans` and `bots` tables, and a name is only 
 from . import fast_json
 import re
 
-ACTOR_KEYS = ("owner", "requester", "from_actor", "to_actor", "actor", "author", "operator", "reports_to",
-              "status_by", "proposed_by", "decided_by", "source_actor")
+ACTOR_KEYS = ("owner_id", "requester_id", "sender_id", "recipient_id", "actor_id", "status_by_id", "decided_by_id",
+              "owner", "requester", "actor", "author", "reports_to", "status_by", "proposed_by")
 ID = re.compile(r"\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])")
 # Tico support in a session a person opened (backend/support_access.py): no roster row, always this name.
 SUPPORT_ACTOR, SUPPORT_NAME = "human:tico-support", "Tico support"
@@ -39,7 +39,7 @@ def _collect(node, found, notices):
                 found.update(v for v in value if _is_id(v))
             else:
                 _collect(value, found, notices)
-        if node.get("kind") == "notice" and isinstance(node.get("body"), str) and "from_actor" in node:
+        if node.get("kind") == "notice" and isinstance(node.get("body"), str) and "sender_id" in node:
             notices.append(node)
             found.update(m.group(0) for m in ID.finditer(node["body"]))
     elif isinstance(node, list):
@@ -58,8 +58,8 @@ def lookup(conn, ids):
             out["human:" + row[0]] = (row[1] or "").strip() or _title(row[0])
     for start in range(0, len(bots), 500):
         chunk = bots[start:start + 500]
-        for row in conn.execute("SELECT slug,display_name FROM bots WHERE slug IN (%s)" % ",".join("?" * len(chunk)), chunk):
-            out["bot:" + row[0]] = (row[1] or "").strip() or _title(row[0])
+        for row in conn.execute("SELECT id,slug,display_name FROM bots WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk):
+            out["bot:" + row[0]] = (row[2] or "").strip() or _title(row[1])
     return out
 
 
@@ -69,7 +69,7 @@ def _apply(node, names):
             value = node[key]
             if key in ACTOR_KEYS and _is_id(value):
                 if value in names:
-                    node.setdefault(key + "_name", names[value])
+                    node.setdefault(key.removesuffix("_id") + "_name", names[value])
             elif key in ("participants", "owners", "participant_ids") and isinstance(value, list):
                 if all(isinstance(v, str) for v in value) and any(v in names for v in value):
                     node.setdefault({"participants": "participant_names", "participant_ids": "participant_names",

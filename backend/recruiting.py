@@ -232,7 +232,7 @@ def end_draft(c, row, why):
     person: nothing drafts a seat's description in the background any more."""
     task = H.task(c, row["draft_task"]) if row["draft_task"] else None
     if task and task["status"] in H.ACTIVE_STATUSES:
-        H.task_update(c, task["owner"], task["id"], status="declined", note=why[:500])
+        H.task_update(c, task["owner_id"], task["id"], status="declined", note=why[:500])
 
 
 # ------------------------------------------------------------------ 1. the job description, drafted from the title
@@ -736,9 +736,11 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
     and a cloud agent's add to a seat both land here, so they land the same way. Returns the setup task's id, if any."""
     from . import message_bots
     if card.get("session") == "task":
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.session','task') WHERE bot=?", (slug,))
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.session','task') WHERE bot=?", (slug,))
     if row["team"]:
         c.execute("UPDATE bot_config SET team=? WHERE bot=?", (row["team"], slug))
+        from .finance import actions as FA
+        FA.revalidate_org(c)                 # the seat's team is part of the org chart Finance's grants follow (spec 7.5)
     declared = onboarding._declared(c, slug)
     declared.update(template=card["template"], instructions=instructions, template_version=releases.version(),
                     recruited_from=row["id"])
@@ -747,10 +749,10 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
     c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (lifecycle.statuses.NEEDS_SETUP, slug))
     message_bots.link(c, who.actor, slug, who.actor)
     now = H.now()
-    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated=?,updated_by=? WHERE id=?",
+    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated_at=?,updated_by=? WHERE id=?",
               (now, who.actor, slug, now, who.actor, row["id"]))
     # Seats that reported to this one move under the bot that fills it, rather than under a closed seat.
-    c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
+    c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
               (slug, now, who.actor, "seat:" + row["id"]))
     end_draft(c, row, "The seat was filled")
     H.event(c, who.actor, "seat.filled", row["id"], {"bot": slug, "template": card["template"], "model": model})
@@ -767,7 +769,8 @@ def hire(auth, onboarding, c, who, seat_id, body):
     from .onboarding import BOTOPS
     row = c.execute("SELECT * FROM seats WHERE id=?", (seat_id,)).fetchone()
     if row and row["filled_by"]:
-        name = (H.bot(c, row["filled_by"]) or {}).get("display_name") or row["filled_by"]
+        filled = H.bot(c, row["filled_by"]) or {}
+        name = filled.get("display_name") or filled.get("slug") or row["filled_by"]
         raise Problem("filled", f"This seat is already filled by {name}", 409)
     row = lifecycle.seat(c, seat_id)
     _may_hire(auth, c, who, row)
@@ -800,11 +803,12 @@ def hire(auth, onboarding, c, who, seat_id, body):
         repo="bot-" + slug, thread_mode="personal", reports_to=row["reports_to"] or None,
         shared=bool(card.get("shared")), template=card["template"], model=model, effort=effort,
         owners=[H.actor_id(who.actor)], runner_id=body.runner_id or None))
+    bot_id = H.resolve_bot(c, slug)["id"]
     if stand_in:
-        onboarding._follow_default(c, slug)
+        onboarding._follow_default(c, bot_id)
         model = ""
-    setup_task = onboard(c, who, onboarding, row, card, slug, name=name, description=description,
+    setup_task = onboard(c, who, onboarding, row, card, bot_id, name=name, description=description,
                          instructions=instructions, rendered=rendered, answers=record["answers"], model=model)
-    return {"slug": slug, "name": name, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": row["reports_to"],
+    return {"bot": bot_id, "slug": slug, "name": name, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": row["reports_to"],
             "template": card["template"], "model": model, "setup_task_id": setup_task,
             "note": (created or {}).get("note") if isinstance(created, dict) else None}

@@ -2,6 +2,7 @@
 HQ, the refresh's vault write retried, and the refusals that keep the claim the only way to make a books connection.
 Nothing here calls HQ or the provider: `books_link._call` answers from lists."""
 import json
+import threading
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -14,6 +15,7 @@ from backend.finance.store import banking as SK
 from backend.finance.store import mirror as SX
 from backend.finance.store import tico as T
 from backend.tests.test_api import api, get, headers  # noqa: F401
+from backend.tests.test_hook_relay import hq, service  # noqa: F401
 from backend.tests.test_finance_fixtures import AT, OWNER, act, books, finance_template, store  # noqa: F401
 
 COMPANY = "2f7c1d3e-5b8a-4c6d-9e0f-1a2b3c4d5e6f"            # a fictional company id
@@ -93,9 +95,9 @@ def test_the_return_claims_the_grant_once_and_keeps_its_tokens_in_the_vault(api,
     assert r.status_code == 302 and result_of(r.headers["location"]) == {"books": ["connected"]}
     assert claims(linked) == 1
     with store.read() as c:
-        row = c.execute("SELECT id, provider, purpose, status, settings_json FROM fin_connections").fetchone()
+        row = c.execute("SELECT id, provider, purpose, status, settings FROM fin_connections").fetchone()
         assert (row["provider"], row["purpose"], row["status"]) == ("quickbooks", "books", "active")
-        assert "ref-1" not in row["settings_json"] and "acc-1" not in row["settings_json"]
+        assert "ref-1" not in row["settings"] and "acc-1" not in row["settings"]
         refresh = str(SX.books_settings(c, row["id"])["refresh"])
         assert T.credential_secret(c, api.app.state.vault, refresh) == "ref-1"
     again = api.get(back + "?finance=connected&claim=clm_1", headers=headers(), follow_redirects=False)
@@ -158,7 +160,7 @@ def _claimed(books: Any, vault: object) -> str:
 def test_a_consent_for_a_company_already_connected_repairs_that_connection(books, monkeypatch):
     vault = T._VAULT[0]
     other = {**tokens("acc-4", "ref-4"), "realm_id": "456"}
-    hq = HQ(claim=[tokens("acc-1", "ref-1"), tokens("acc-3", "ref-3"), other])
+    hq = HQ(claim=[tokens("acc-1", "ref-1"), tokens("acc-3", "ref-3"), other, other], disconnect=[{"ok": True}])
     monkeypatch.setattr(books_link, "_call", hq)
     first = _claimed(books, vault)
     assert _claimed(books, vault) == first                                  # the same realm: the same connection
@@ -166,10 +168,13 @@ def test_a_consent_for_a_company_already_connected_repairs_that_connection(books
         assert [row[0] for row in SX.books_connections(c, "quickbooks")] == [first]
         assert SX.books_status(c, first) == "active"
         assert T.credential_secret(c, vault, str(SX.books_settings(c, first)["refresh"])) == "ref-3"
-    second = _claimed(books, vault)                                         # another realm: a connection of its own
-    assert second != first
+    with pytest.raises(books_link.AlreadyConnected):                        # another realm for this company: refused (spec 3.4)
+        _claimed(books, vault)
     with books.read() as c:
-        assert {row[0] for row in SX.books_connections(c, "quickbooks")} == {first, second}
+        assert [row[0] for row in SX.books_connections(c, "quickbooks")] == [first]
+    second = books_link.connect_claim(books, vault, LINK, provider="quickbooks", company_id="co-other", claim_id="clm_o",
+                                      name="Other books", by=OWNER, now=AT)           # another company may connect it
+    assert second != first
 
 
 def test_a_refresh_whose_vault_write_fails_once_keeps_the_connection_active(books, monkeypatch):
@@ -488,3 +493,377 @@ def test_a_disconnect_that_HQ_refuses_keeps_the_connection_once_the_retried_writ
     with store.read() as c:
         assert SX.books_status(c, cid) == "active"
         assert T.credential_secret(c, T._VAULT[0], str(SX.books_settings(c, cid)["refresh"])) == "ref-2"
+
+
+# ------------------------------------------------------------------------------------ one organisation per install
+def replacement(**changes: Any) -> dict[str, Any]:
+    """HQ's replacement for the held organisation: the new pair, the held company and its tenant."""
+    return {"company_id": COMPANY, **xero_tokens("acc-2", "ref-2"), **changes}
+
+
+def _refusal(replacement_: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+    """HQ's 409 already_connected, with the replacement when HQ sends one."""
+    body: dict[str, Any] = {"error": "already_connected"}
+    if replacement_ is not None:
+        body["replacement"] = replacement_
+    return 409, body
+
+
+def test_already_connected_with_a_replacement_keeps_the_held_connection_on_the_new_pair(books, monkeypatch):
+    vault = T._VAULT[0]
+    wire = wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement())])
+    cid = _claimed_xero(books, vault)
+    with books.read() as c:
+        before = dict(SX.books_settings(c, cid))
+    with pytest.raises(books_link.AlreadyConnected) as refused:
+        _claimed_xero(books, vault)
+    assert refused.value.code == "already_connected" and refused.value.replacement is not None
+    with books.read() as c:
+        assert [row[0] for row in SX.books_connections(c, "xero")] == [cid]      # the refused organisation made none
+        assert SX.books_status(c, cid) == "active"
+        after = SX.books_settings(c, cid)
+        assert (after["company_id"], after["tenant_id"]) == (COMPANY, "ten-1")
+        assert not T.credential_exists(c, str(before["access"]))                # the old pair is no longer used
+        assert not T.credential_exists(c, str(before["refresh"]))
+        assert T.credential_secret(c, vault, str(after["access"])) == "acc-2"
+        assert T.credential_secret(c, vault, str(after["refresh"])) == "ref-2"
+    assert books_link.access_token(books, vault, LINK, cid, "xero", now=AT) == "acc-2"   # not due: no HQ call
+    assert [path for path, _ in wire.calls].count("oauth/xero/refresh") == 0
+
+
+@pytest.mark.parametrize("changes", [{"tenant_id": "ten-2"}, {"company_id": "co-other"}, {"tenant_id": None}])
+def test_already_connected_whose_ids_are_not_the_held_connections_saves_nothing(books, monkeypatch,
+                                                                               changes: dict[str, Any]):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement(**changes))])
+    cid = _claimed_xero(books, vault)
+    with books.read() as c:
+        before = dict(SX.books_settings(c, cid))
+    with pytest.raises(books_link.BrokerFailed) as bad:
+        _claimed_xero(books, vault)
+    assert bad.value.code == "bad_answer"
+    with books.read() as c:
+        assert SX.books_settings(c, cid) == before
+        assert SX.books_status(c, cid) == "active"
+        assert T.credential_secret(c, vault, str(before["refresh"])) == "ref-1"
+
+
+def test_already_connected_without_a_replacement_changes_nothing(books, monkeypatch):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal()])
+    cid = _claimed_xero(books, vault)
+    with books.read() as c:
+        before = dict(SX.books_settings(c, cid))
+    with pytest.raises(books_link.AlreadyConnected) as refused:
+        _claimed_xero(books, vault)
+    assert refused.value.code == "already_connected" and refused.value.replacement is None
+    with books.read() as c:
+        assert [row[0] for row in SX.books_connections(c, "xero")] == [cid]
+        assert SX.books_settings(c, cid) == before
+        assert SX.books_status(c, cid) == "active"
+        assert T.credential_secret(c, vault, str(before["refresh"])) == "ref-1"
+
+
+def test_a_replacement_whose_vault_write_fails_once_still_lands(books, monkeypatch):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement())])
+    cid = _claimed_xero(books, vault)
+    real_save, tries = books_link.save, []
+
+    def flaky(c: Any, cid_: str, fresh: Any, *, by: str, at: str) -> None:
+        tries.append(fresh.refresh_token)
+        if len(tries) == 1:
+            raise RuntimeError("vault is busy")
+        real_save(c, cid_, fresh, by=by, at=at)
+
+    monkeypatch.setattr(books_link, "save", flaky)
+    with pytest.raises(books_link.AlreadyConnected):
+        _claimed_xero(books, vault)
+    assert tries == ["ref-2", "ref-2"]                                          # the same pair, written again
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "active"
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-2"
+
+
+def test_a_replacement_vault_write_that_always_fails_asks_to_connect_again(books, monkeypatch):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement())])
+    cid = _claimed_xero(books, vault)
+    tries, asks = [], []
+
+    def down(c: Any, cid_: str, fresh: Any, *, by: str, at: str) -> None:
+        tries.append(fresh.refresh_token)
+        raise RuntimeError("vault is down")
+
+    monkeypatch.setattr(books_link, "save", down)
+    monkeypatch.setattr(T, "needs_you", lambda c, person, title, body: asks.append((person, title)))
+    with pytest.raises(books_link.ReconnectRequired) as failed:
+        _claimed_xero(books, vault)
+    assert failed.value.code == "vault_write_failed"
+    assert len(tries) == books_link.VAULT_TRIES and asks == [(OWNER, "Connect xero again")]
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "reconnect"
+
+
+def test_a_return_refused_already_connected_says_so_and_the_held_connection_keeps_the_new_pair(wired_api, monkeypatch):
+    store = wired_api.app.state.store
+    wire = wired(monkeypatch,
+                 connect=[ok({"url": CONSENT, "expires_in": 900}), ok({"url": CONSENT, "expires_in": 900})],
+                 claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement())])
+    wired_api.post("/api/v2/finance/books/connect", json={"provider": "xero"}, headers=headers())
+    wired_api.get(return_path(wired_api, wire) + "?finance=connected&claim=clm_8", headers=headers(),
+                  follow_redirects=False)
+    wired_api.post("/api/v2/finance/books/connect", json={"provider": "xero"}, headers=headers())
+    r = wired_api.get(return_path(wired_api, wire) + "?finance=connected&claim=clm_9", headers=headers(),
+                      follow_redirects=False)
+    assert r.status_code == 302
+    assert result_of(r.headers["location"]) == {"books": ["error"], "reason": ["already_connected"]}
+    with store.read() as c:
+        held = SX.books_connections(c)
+        assert len(held) == 1
+        assert T.credential_secret(c, T._VAULT[0], str(SX.books_settings(c, held[0][0])["refresh"])) == "ref-2"
+
+
+# ------------------------------------------------------------------------------ a refresh and a replacement interleaved
+def test_a_refresh_that_finishes_after_a_newer_pair_was_saved_drops_its_own_pair(books, monkeypatch):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1"))])
+    cid = _claimed_xero(books, vault)
+
+    def refresh_while_a_newer_pair_lands(link, provider, company, refresh_token):
+        # an unlocked save lands while this refresh is at HQ, as a pair kept after a refused disconnect can
+        with books.transaction() as c:
+            books_link.save(c, cid, books_link._tokens(xero_tokens("acc-2", "ref-2")), by=OWNER, at=AT)
+        return books_link._tokens(xero_tokens("acc-3", "ref-3"))
+
+    monkeypatch.setattr(books_link, "refresh", refresh_while_a_newer_pair_lands)
+    assert books_link.access_token(books, vault, LINK, cid, "xero", now=LATER, force=True) == "acc-2"
+    with books.read() as c:
+        settings = SX.books_settings(c, cid)
+        assert T.credential_secret(c, vault, str(settings["refresh"])) == "ref-2"    # the newer pair stays
+        assert T.credential_secret(c, vault, str(settings["access"])) == "acc-2"
+        assert SX.books_status(c, cid) == "active"
+
+
+def test_a_replacement_waits_for_a_refresh_at_hq_and_the_newer_pair_is_the_one_kept(books, monkeypatch):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement())])
+    cid = _claimed_xero(books, vault)
+    at_hq, release = threading.Event(), threading.Event()
+
+    def slow_refresh(link, provider, company, refresh_token):
+        at_hq.set()
+        assert release.wait(5)
+        return books_link._tokens(xero_tokens("acc-3", "ref-3"))
+
+    monkeypatch.setattr(books_link, "refresh", slow_refresh)
+    done: dict[str, Any] = {}
+
+    def refresh_now():
+        done["access"] = books_link.access_token(books, vault, LINK, cid, "xero", now=LATER, force=True)
+
+    def replace_now():
+        try:
+            _claimed_xero(books, vault)
+        except books_link.AlreadyConnected as refused:
+            done["replacement"] = refused.code
+
+    refresher = threading.Thread(target=refresh_now)
+    refresher.start()
+    assert at_hq.wait(5)
+    replacer = threading.Thread(target=replace_now)
+    replacer.start()
+    replacer.join(0.3)
+    assert replacer.is_alive()                  # the replacement waits for the refresh that holds the connection
+    with books.read() as c:
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-1"
+    release.set()
+    refresher.join(5)
+    replacer.join(5)
+    assert done == {"access": "acc-3", "replacement": "already_connected"}
+    with books.read() as c:
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-2"   # the replacement is last
+        assert SX.books_status(c, cid) == "active"
+
+
+FIN = "hr_00000000000000f1"        # HQ's system relay for `_finance`, as HQ lists it
+OTHER = "hr_00000000000000e2"      # a relay HQ lists for `_finance` without `system`: not the install's
+FIN_RELAY = {"id": FIN, "trigger_id": "_finance", "key": "hq", "system": True}
+
+
+def _books_api(api: Any, provider: str = "quickbooks", cid: str = "conn-books") -> str:
+    """A books connection made directly in the server's store, with its trigger, as connect_claim leaves it."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.ensure_setup(c, store.settings.owner_email)
+        SX.books_connection_insert(c, cid=cid, provider=provider, name="Acme books", by=OWNER, at=AT)
+        SX.set_books_settings(c, cid, {"provider": provider, "company_id": COMPANY, "realm_id": "123"})
+        SX.set_connection_status(c, cid, "active", "", AT)
+        books_link._keep_trigger(c, cid, provider=provider, by=OWNER, now=AT)
+    return cid
+
+
+def _envelope(provider: str = "quickbooks", company: str = COMPANY, event: str = "evt-9") -> bytes:
+    """HQ's envelope for one provider call, as its `_finance` relay delivers it."""
+    payload: dict[str, Any] = ({"eventNotifications": [{"realmId": "123"}]} if provider == "quickbooks"
+                               else {"events": [{"resourceId": "res-1"}]})
+    return json.dumps({"type": "tico.finance.webhook", "provider": provider, "company_id": company, "external_id": event,
+                       "payload": payload}).encode()
+
+
+def _fin_inbox(api: Any) -> int:
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM fin_inbox").fetchone()[0]
+
+
+def test_connecting_makes_the_books_trigger_that_takes_intuit_or_xero_calls(books, monkeypatch):
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))
+    cid = _claimed(books, T._VAULT[0])
+    with books.read() as c:
+        row = c.execute("SELECT preset, consumer, deleted_at FROM triggers WHERE id=?", (cid,)).fetchone()
+    assert row is not None and tuple(row) == ("intuit", "finance", None)
+
+
+def test_the_books_pass_makes_a_missing_trigger_and_asks_hq_for_nothing(books, monkeypatch):
+    vault = T._VAULT[0]
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))
+    cid = _claimed(books, vault)
+    with books.transaction() as c:
+        c.execute("UPDATE triggers SET deleted_at=? WHERE id=?", (AT, cid))
+    monkeypatch.setattr(hook_relay.Link, "call", lambda *a, **k: pytest.fail("the books pass asked HQ"))
+    books_link.ensure_triggers(books, now=AT)
+    books_link.ensure_triggers(books, now=AT)
+    with books.read() as c:
+        assert c.execute("SELECT deleted_at FROM triggers WHERE id=?", (cid,)).fetchone()[0] is None
+
+
+@pytest.mark.parametrize("provider", ["quickbooks", "xero"])
+def test_a_finance_call_from_the_recorded_system_relay_is_kept_on_its_books_connection(api, hq, provider):
+    _books_api(api, provider=provider)
+    hq.relays[FIN] = FIN_RELAY
+    hq.deliver(FIN, "d-fin-1", body=_envelope(provider=provider))
+    service(api).tick()
+    assert _fin_inbox(api) == 1
+    assert hq.acks == [1]
+
+
+def test_a_finance_call_from_a_relay_other_than_the_recorded_one_is_acked_and_not_kept(api, hq):
+    _books_api(api)
+    hq.relays[FIN] = FIN_RELAY
+    hq.relays[OTHER] = {"id": OTHER, "trigger_id": "_finance", "key": "other", "system": False}
+    hq.deliver(OTHER, "d-other-1", body=_envelope())
+    service(api).tick()
+    assert _fin_inbox(api) == 0
+    assert hq.acks == [1]
+
+
+def test_a_finance_call_for_a_company_with_no_books_connection_is_acked_and_recorded_as_unmatched(api, hq):
+    _books_api(api)
+    hq.relays[FIN] = FIN_RELAY
+    hq.deliver(FIN, "d-fin-2", body=_envelope(company="2e5b0c1d-0000-4000-8000-000000000000"))
+    service(api).tick()
+    assert _fin_inbox(api) == 0
+    assert hq.acks == [1]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action='finance.webhook_unmatched'").fetchone()[0] == 1
+
+
+def test_disconnecting_takes_the_connections_trigger_with_it(books, monkeypatch):
+    vault = T._VAULT[0]
+    hq = HQ(claim=[tokens("acc-1", "ref-1")], disconnect=[books_link.ReconnectRequired("reconnect_required")])
+    monkeypatch.setattr(books_link, "_call", hq)
+    cid = _claimed(books, vault)
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    with books.read() as c:
+        assert c.execute("SELECT deleted_at IS NOT NULL FROM triggers WHERE id=?", (cid,)).fetchone()[0] == 1
+
+
+def test_a_second_disconnect_after_a_reconnect_clears_the_local_part_again(books, monkeypatch):
+    """A disconnect is keyed to the connection's current connect. After a reconnect of the same connection, its second
+    disconnect is a new request: it clears the new credentials, the status and the trigger, and does not replay the
+    first disconnect's result (which would leave the reconnected tokens and trigger in place)."""
+    vault = T._VAULT[0]
+    hq = HQ(claim=[tokens("acc-1", "ref-1"), tokens("acc-2", "ref-2")], disconnect=[{"ok": True}, {"ok": True}])
+    monkeypatch.setattr(books_link, "_call", hq)
+    cid = _claimed(books, vault)
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    assert _claimed(books, vault) == cid
+    with books.read() as c:
+        refresh = str(SX.books_settings(c, cid)["refresh"])
+        assert T.credential_secret(c, vault, refresh) == "ref-2"
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "disconnected"
+        assert not T.credential_exists(c, refresh)
+        assert c.execute("SELECT deleted_at IS NOT NULL FROM triggers WHERE id=?", (cid,)).fetchone()[0] == 1
+
+
+def test_a_xero_consent_for_a_company_on_quickbooks_is_refused_and_HQ_takes_its_grant_off(books, monkeypatch):
+    vault = T._VAULT[0]
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))
+    _claimed(books, vault)
+    hq = HQ(claim=[xero_tokens("acc-x", "ref-x")], disconnect=[{"ok": True, "disconnected": True}])
+    monkeypatch.setattr(books_link, "_call", hq)
+    with pytest.raises(books_link.AlreadyConnected):
+        _claimed_xero(books, vault)
+    assert hq.calls[-1] == ("oauth/xero/disconnect", {"company_id": COMPANY, "refresh_token": "ref-x",
+                                                     "access_token": "acc-x"})
+    with books.read() as c:
+        assert [tuple(r) for r in c.execute("SELECT provider, purpose FROM fin_connections")] == [("quickbooks", "books")]
+
+
+def test_a_refused_second_connection_is_still_refused_when_HQ_cannot_take_its_grant_off(books, monkeypatch):
+    vault = T._VAULT[0]
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))
+    _claimed(books, vault)
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[xero_tokens("acc-x", "ref-x")],
+                                                disconnect=[books_link.BrokerFailed("revoke_failed")]))
+    with pytest.raises(books_link.AlreadyConnected):
+        _claimed_xero(books, vault)
+    with books.read() as c:
+        assert [tuple(r) for r in c.execute("SELECT provider, purpose FROM fin_connections")] == [("quickbooks", "books")]
+
+
+def test_a_disconnected_quickbooks_connection_does_not_stop_xero_connecting_the_same_company(books, monkeypatch):
+    vault = T._VAULT[0]
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")], disconnect=[{"ok": True}]))
+    qb = _claimed(books, vault)
+    with books.transaction() as c:
+        SX.disconnect(c, qb, AT)
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[xero_tokens("acc-x", "ref-x")]))
+    made = _claimed_xero(books, vault)
+    with books.read() as c:
+        assert made != qb
+        assert tuple(c.execute("SELECT provider, status FROM fin_connections WHERE id=?", (made,)).fetchone()) == (
+            "xero", "active")
+
+
+def test_a_reconnect_of_the_same_quickbooks_company_brings_its_connection_back_with_its_refs_and_cursor(books,
+                                                                                                        monkeypatch):
+    """§3.4: after a drop, connecting the same QuickBooks company again brings the company's own connection row back.
+    Its refs, its change-feed cursor and its queued writes are still keyed to it, and it takes the new tokens. Another
+    company never takes this row: it gets a connection of its own."""
+    vault = T._VAULT[0]
+    hq = HQ(claim=[tokens("acc-1", "ref-1"), tokens("acc-2", "ref-2"), tokens("acc-3", "ref-3")],
+            disconnect=[{"ok": True}, {"ok": True}])
+    monkeypatch.setattr(books_link, "_call", hq)
+    cid = _claimed(books, vault)
+    with books.transaction() as c:
+        SX.ref_insert(c, cid=cid, local_table="fin_bills", local_id="bill-1", kind="Bill", external_id="Bill:9",
+                      revision="0", status="active", at=AT, by=OWNER)
+        SX.set_mirror_state(c, cid, {"cursors": {"Bill": "2026-10-14T00:00:00Z"}})
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    assert _claimed(books, vault) == cid
+    with books.read() as c:
+        assert [row[0] for row in SX.books_connections(c, "quickbooks")] == [cid]
+        assert SX.books_status(c, cid) == "active"
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-2"
+        assert SX.mirror_state(c, cid)["cursors"] == {"Bill": "2026-10-14T00:00:00Z"}
+        assert SX.ref(c, cid, "fin_bills", "Bill:9")["local_id"] == "bill-1"
+    # Another company consenting to the same QuickBooks company is refused, and the connection stays this company's.
+    with pytest.raises(books_link.AlreadyConnected):
+        books_link.connect_claim(books, vault, LINK, provider="quickbooks", company_id="co-other", claim_id="clm_o",
+                                 name="Other books", by=OWNER, now=AT)
+    with books.read() as c:
+        assert [row[0] for row in SX.books_connections(c, "quickbooks")] == [cid]
+        assert SX.books_settings(c, cid)["company_id"] == COMPANY

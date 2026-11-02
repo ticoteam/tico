@@ -14,6 +14,7 @@ from .core.org import SYSTEM
 from .store import ap as SAP
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import raw_totals as SR
 
 
 def ensure_period(ctx: Ctx, day: str) -> str:
@@ -50,6 +51,8 @@ def post(ctx: Ctx, e: L.Entry, *, by: str, action_id: str = "", reverses_id: str
                                for x in e.lines))
     closed = SL.closed_on(ctx.c, ctx.book.id, e.entry_date)
     L.check(e, ctx.book, ctx.accounts, closed, reversing, importing)
+    if not reversing and not _raw_entry(e):
+        _no_raw_month(ctx, e.entry_date)
     period_id = ensure_period(ctx, e.entry_date)
     entry_id = SL.new_id()
     line_ids = SL.insert_entry(ctx.c, e, entry_id=entry_id, period_id=period_id, action_id=action_id,
@@ -63,6 +66,20 @@ def post(ctx: Ctx, e: L.Entry, *, by: str, action_id: str = "", reverses_id: str
     if touch:
         touched(ctx, e.lines, by)
     return entry_id, line_ids
+
+
+def _raw_entry(e: L.Entry) -> bool:
+    """The entry a spreadsheet's raw totals post as (store/raw_totals), the one import that may post into its own month."""
+    return e.source == "import" and e.source_id.startswith("raw_totals:")
+
+
+def _no_raw_month(ctx: Ctx, day: str) -> None:
+    """A month holding live raw totals takes nothing else: every itemized posting and every journal dated in it waits
+    until that month's raw entry is reversed (spec §4.1). The refusal names the month, never the entry."""
+    start, end = dates.month_bounds(dates.day(day))
+    if SR.live_entry_in(ctx.c, ctx.book.id, start.isoformat(), end.isoformat()) is not None:
+        raise FinanceError(CONFLICT, f"{day[:7]} holds raw totals: reverse that month's raw entry before anything else "
+                                     "posts there")
 
 
 def touched(ctx: Ctx, lines: Sequence[L.Line], by: str) -> None:
@@ -94,11 +111,16 @@ def reverse(ctx: Ctx, entry_id: str, *, day: str | None, memo: str, by: str, act
     when = day or str(row["entry_date"])
     if SL.closed_on(ctx.c, ctx.book.id, when):
         raise FinanceError(PERIOD_CLOSED, f"the period holding {when} is closed; reverse on an open date")
+    from .banking import opening_terms, refresh_covered    # lazy: banking imports this module
+    raw_month = str(row["source"]) == "import" and str(row["source_id"]).startswith("raw_totals:")
+    before = opening_terms(ctx) if raw_month else {}    # the openings' terms before this month uncovers rows and moves its line
     e = L.Entry(book_id=ctx.book.id, entry_date=when, memo=memo or f"Reverses {entry_id}", source=str(row["source"]),
                 source_id=str(row["source_id"]), lines=L.reversal(lines), basis=str(row["basis"] or "both"))
     rid, _ = post(ctx, e, by=by, action_id=action_id, reverses_id=entry_id, reversing=True)
     if SL.mark_reversed(ctx.c, entry_id) != 1:
         raise FinanceError(CONFLICT, "that entry is already reversed")
+    if raw_month:
+        refresh_covered(ctx, before)    # a reversed raw-totals month uncovers the feed rows behind it (§4.1)
     return rid
 
 

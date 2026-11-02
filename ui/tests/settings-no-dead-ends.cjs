@@ -55,7 +55,7 @@ async function open(browser, {role = 'owner', hash = '#/settings'} = {}) {
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'cara', name: 'Cara'}], teams: {}});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', host: 'keeper', can_chat: true,
-      can_manage: admin, operator: 'ana', users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: 1}]);
+      can_manage: admin, owner_id: 'ana', users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: 1}]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: [{bot: 'ops', state: 'idle'}]});
     if (p === '/api/v2/billing') return json({state: 'no_gateway'});

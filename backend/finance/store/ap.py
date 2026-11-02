@@ -10,7 +10,7 @@ from ..core.ledger import name_key
 from .ledger import new_id, tagset
 
 TABLES = frozenset({"fin_contacts", "fin_vendor_aliases", "fin_bills", "fin_bill_lines", "fin_invoices", "fin_invoice_lines",
-                    "fin_attachments", "fin_settlements"})
+                    "fin_attachments", "fin_settlements", "fin_invoice_reminders"})
 DOCS = {"bill": ("fin_bills", "fin_bill_lines", "bill_id", "bill_date", "vendor_id"),
         "invoice": ("fin_invoices", "fin_invoice_lines", "invoice_id", "invoice_date", "customer_id")}
 
@@ -60,7 +60,7 @@ def lines(c: sqlite3.Connection, kind: str, doc_ids: Sequence[str]) -> dict[str,
 def set_line_tags(c: sqlite3.Connection, kind: str, line_id: str, tags: Mapping[str, str]) -> None:
     """A document line's tags, after its posted line was retagged."""
     _, table, _, _, _ = DOCS[kind]
-    c.execute(f"UPDATE {table} SET tags_json=? WHERE id=?", (json.dumps(dict(tags), sort_keys=True), line_id))
+    c.execute(f"UPDATE {table} SET tags=? WHERE id=?", (json.dumps(dict(tags), sort_keys=True), line_id))
 
 
 def replace_lines(c: sqlite3.Connection, kind: str, doc_id: str, rows: Sequence[Mapping[str, object]]) -> list[str]:
@@ -71,11 +71,15 @@ def replace_lines(c: sqlite3.Connection, kind: str, doc_id: str, rows: Sequence[
 
 def docs_page(c: sqlite3.Connection, kind: str, *, book_id: str, statuses: Sequence[str] = (), contact_id: str = "",
               q: str = "", start: str = "", end: str = "", before: tuple[str, str] | None = None,
-              most: int = 200) -> list[Any]:
-    """Bills or invoices newest first by date (then id), with the contact's name as `contact_name`."""
+              most: int = 200, by_paid: bool = False) -> list[Any]:
+    """Bills or invoices newest first by date (then id), or with `by_paid` by when they were last paid (their latest
+    live settlement; never paid last), with the contact's name as `contact_name` and the order's key as `sort_key`
+    (what `before` pages from)."""
     table, _, _, day, contact = DOCS[kind]
-    sql = (f"SELECT d.*, k.name AS contact_name FROM {table} d LEFT JOIN fin_contacts k ON k.id=d.{contact} "
-           "WHERE d.book_id=?")
+    key = (f"COALESCE((SELECT MAX(s.settled_on) FROM fin_settlements s WHERE s.to_kind='{kind}' AND s.to_id=d.id "
+           "AND s.voided_at IS NULL), '')" if by_paid else f"d.{day}")
+    sql = (f"SELECT d.*, k.name AS contact_name, {key} AS sort_key FROM {table} d LEFT JOIN fin_contacts k "
+           f"ON k.id=d.{contact} WHERE d.book_id=?")
     args: list[object] = [book_id]
     if statuses:
         sql += f" AND d.status IN ({_marks(statuses)})"
@@ -93,9 +97,9 @@ def docs_page(c: sqlite3.Connection, kind: str, *, book_id: str, statuses: Seque
         sql += " AND (d.number LIKE ? ESCAPE '\\' OR d.memo LIKE ? ESCAPE '\\' OR k.name LIKE ? ESCAPE '\\')"
         args += [like(q)] * 3
     if before:
-        sql += f" AND (d.{day}<? OR (d.{day}=? AND d.id<?))"
+        sql += f" AND ({key}<? OR ({key}=? AND d.id<?))"
         args += [before[0], before[0], before[1]]
-    return c.execute(sql + f" ORDER BY d.{day} DESC, d.id DESC LIMIT ?", [*args, most]).fetchall()
+    return c.execute(sql + f" ORDER BY {key} DESC, d.id DESC LIMIT ?", [*args, most]).fetchall()
 
 
 def doc_with_contact(c: sqlite3.Connection, kind: str, doc_id: str) -> Any:
@@ -107,8 +111,8 @@ def doc_with_contact(c: sqlite3.Connection, kind: str, doc_id: str) -> Any:
 def doc_actions(c: sqlite3.Connection, kind: str, doc_id: str, most: int) -> list[Any]:
     """The latest actions naming this document (its approvals among them)."""
     named = like(f'"{kind}_id": "{doc_id}"')
-    return c.execute("SELECT * FROM fin_actions WHERE kind LIKE ? ESCAPE '\\' AND (payload_json LIKE ? ESCAPE '\\' "
-                     "OR result_json LIKE ? ESCAPE '\\') ORDER BY created_at DESC LIMIT ?",
+    return c.execute("SELECT * FROM fin_actions WHERE kind LIKE ? ESCAPE '\\' AND (payload LIKE ? ESCAPE '\\' "
+                     "OR result LIKE ? ESCAPE '\\') ORDER BY created_at DESC LIMIT ?",
                      (f"{kind}\\_%", named, named, most)).fetchall()
 
 
@@ -129,9 +133,9 @@ def drafts(c: sqlite3.Connection, book_id: str, most: int) -> list[Any]:
 
 def scheduled_due(c: sqlite3.Connection, book_id: str, day: str, most: int = 200) -> list[Any]:
     """Scheduled bills whose payment day has come and whose payment this schedule has not asked for yet (a request
-    is recorded in schedule_json as its action id; a new schedule starts without one)."""
+    is recorded in schedule as its action id; a new schedule starts without one)."""
     return c.execute("SELECT * FROM fin_bills WHERE book_id=? AND status='scheduled' AND pay_on<=? AND "
-                     "json_extract(schedule_json, '$.action_id') IS NULL ORDER BY pay_on, id LIMIT ?",
+                     "json_extract(schedule, '$.action_id') IS NULL ORDER BY pay_on, id LIMIT ?",
                      (book_id, day, most)).fetchall()
 
 
@@ -155,7 +159,7 @@ def contacts_page(c: sqlite3.Connection, *, book_id: str, kinds: Sequence[str] =
         sql += " AND active=?"
         args.append(1 if active else 0)
     if q:
-        sql += " AND (name LIKE ? ESCAPE '\\' OR emails_json LIKE ? ESCAPE '\\')"
+        sql += " AND (name LIKE ? ESCAPE '\\' OR emails LIKE ? ESCAPE '\\')"
         args += [like(q)] * 2
     if after:
         sql += " AND (name>? OR (name=? AND id>?))"
@@ -226,21 +230,12 @@ def vendor_resolved(c: sqlite3.Connection, book_id: str, key: str) -> str:
 
 def vendor_keys(c: sqlite3.Connection, book_id: str, key: str) -> list[str]:
     """Every key a vendor's lines carry: a contact's id and each name it went by (lines posted under a name before it
-    was the contact's still count, and a rename never loses them); a plain name's own key; and for each name, the
-    values phase 1 posted it under as written (fin_vendor_legacy)."""
+    was the contact's still count, and a rename never loses them), or a plain name's own key."""
     vendor = vendor_resolved(c, book_id, key)
     if not vendor:
         return []
     names = aliases_of(c, vendor) if is_contact(c, vendor) else [vendor]
-    legacy = legacy_of(c, book_id, names)
-    return list(dict.fromkeys([vendor, *names, *legacy]))
-
-
-def legacy_of(c: sqlite3.Connection, book_id: str, name_keys: Sequence[str]) -> list[str]:
-    if not name_keys:
-        return []
-    return [str(r[0]) for r in c.execute(f"SELECT raw FROM fin_vendor_legacy WHERE book_id=? AND name_key IN "
-                                         f"({_marks(name_keys)}) ORDER BY raw", (book_id, *name_keys))]
+    return list(dict.fromkeys([vendor, *names]))
 
 
 def owed(c: sqlite3.Connection, kind: str, contact_ids: Sequence[str]) -> dict[str, int]:
@@ -373,7 +368,7 @@ def raised(c: sqlite3.Connection, name: str, subject: str) -> bool:
 def categorized_into(c: sqlite3.Connection, entry_id: str) -> bool:
     """Whether a person's (or bot's) categorize action posted this entry."""
     return c.execute("SELECT 1 FROM fin_actions WHERE kind='categorize' AND status='committed' AND "
-                     "json_extract(result_json, '$.entry_id')=? LIMIT 1", (entry_id,)).fetchone() is not None
+                     "json_extract(result, '$.entry_id')=? LIMIT 1", (entry_id,)).fetchone() is not None
 
 
 def unmatched_files(c: sqlite3.Connection, book_id: str, most: int, by: str = "") -> list[Any]:
@@ -457,6 +452,13 @@ def settled_from(c: sqlite3.Connection, from_kind: str, from_id: str) -> int:
     row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_settlements WHERE from_kind=? AND from_id=? AND "
                     "voided_at IS NULL", (from_kind, from_id)).fetchone()
     return int(row[0])
+
+
+def settled_to(c: sqlite3.Connection, from_kind: str, from_id: str) -> list[tuple[str, str]]:
+    """The (kind, id) of each bill or invoice a payment or feed row is applied to, not voided, oldest first."""
+    return [(str(r[0]), str(r[1])) for r in c.execute(
+        "SELECT to_kind, to_id FROM fin_settlements WHERE from_kind=? AND from_id=? AND voided_at IS NULL "
+        "ORDER BY settled_on, id", (from_kind, from_id)).fetchall()]
 
 
 def repoint_credit(c: sqlite3.Connection, old: str, new: str) -> None:

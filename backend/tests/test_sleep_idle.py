@@ -62,7 +62,7 @@ def system_jobs(api, **on):
     config.update({key: {"on": True, "preset": preset, "at": at} for key, (preset, at) in on.items()})
     with api.app.state.store.transaction() as c:
         for key, value in ((SR.CONFIG_KEY, config), (release_flow.KEY, {"on": False})):
-            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                       (key, json.dumps(value)))
 
 
@@ -87,8 +87,15 @@ def add_routine(api, due, key="r1"):
     with api.app.state.store.transaction() as c:
         aid = routines.create(c, H.KEEPER, "ops", {"title": "Morning check", "cron": "0 9 * * *", "timezone": "UTC",
                                                     "text": "Look around"}, key=key)["automation"]
-        c.execute("UPDATE automations SET next_due=? WHERE id=?",
+        c.execute("UPDATE automations SET next_due_at=? WHERE id=?",
                   (scheduler.stamp(sleep_idle.datetime.fromtimestamp(due, sleep_idle.timezone.utc)), aid))
+
+
+def quiet_routines(api):
+    """Switch off every schedule automation. Setting up a runner seeds the Librarian's built-in schedules, due at the
+    next :00 or :30, so a test that expects busy() to be "" would fail within fifteen minutes of either."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE automations SET enabled=0 WHERE enabled=1 AND deleted_at IS NULL AND next_due_at IS NOT NULL")
 
 
 def quiet(api, minutes=60):
@@ -108,15 +115,15 @@ def test_each_thing_that_keeps_the_server_up_is_named_and_stops_the_sleep(api, h
     add_routine(api, at + 10 * 60)
     assert quiet(api)["blocker"] == "routine_due" and quiet(api)["idle"] is False
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('wh_1','we_1','ep_1','task.done','{}','ready',?,?)", (sleep_idle.stamp(at), sleep_idle.stamp(at)))    # due now
+        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('wh_1','we_1','ep_1','task.done','{}','ready',?,?)", (sleep_idle.stamp(at), sleep_idle.stamp(at)))    # due now
     assert quiet(api)["blocker"] == "send_pending"
     r = runner(api, "ana")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO runner_harness_actions(id,runner_id,harness,action,state,created,updated,requested_by) "
+        c.execute("INSERT INTO runner_harness_actions(id,runner_id,harness,action,state,created_at,updated_at,requested_by) "
                   "VALUES('a1',?,?,?,?,?,?,?)", (r["runner_id"], "claude", "update", "requested", H.now(), H.now(), "human:ana"))
     assert quiet(api)["blocker"] == "runner_job"
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                   ("w1", "T1", "bot:ops", "acme/shop", 1, "waiting", H.now(), H.now()))
     assert quiet(api)["blocker"] == "task_session"
     assign(api, r, "ops")
@@ -135,7 +142,7 @@ def test_a_quiet_hosted_server_asks_once_with_the_next_routine_as_wake_time(api,
 
     def before_the_call():                   # the history already says why, and no write transaction is open
         with api.app.state.store.read() as c:
-            seen["event"] = c.execute("SELECT detail_json FROM events WHERE action='server.sleep'").fetchone()
+            seen["event"] = c.execute("SELECT detail FROM events WHERE action='server.sleep'").fetchone()
     hq.on_sleep = before_the_call
 
     state = turn_on(api, 2, runners=False)
@@ -238,7 +245,7 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
     hq.clock[0] = noon.timestamp()
     system_jobs(api, learnings=("daily", "03:00"), kpi_asks=("15m", "09:00"))
     with api.app.state.store.transaction() as c:                         # tonight's 03:00 run already happened today
-        c.execute("INSERT INTO learning_runs(id,night,status,started) VALUES('lr1','2026-10-26','done',?)", (H.now(),))
+        c.execute("INSERT INTO learning_runs(id,night,status,started_at) VALUES('lr1','2026-10-26','done',?)", (H.now(),))
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == ""                     # the 15-minute job never keeps the server up
         night = sleep_idle.wake_time(c, hq.clock[0])
@@ -249,7 +256,7 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
         assert sleep_idle.wake_time(c, hq.clock[0]) is None and sleep_idle.busy(c, hq.clock[0]) == ""
     system_jobs(api, still_wanted=("daily", "12:10"))                    # ten minutes away: it keeps the server up
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO system_runs(id,job,started) VALUES('sr1','still_wanted',?)", (sleep_idle.stamp(hq.clock[0] - 3600),))
+        c.execute("INSERT INTO system_runs(id,job,started_at) VALUES('sr1','still_wanted',?)", (sleep_idle.stamp(hq.clock[0] - 3600),))
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
 
@@ -257,13 +264,13 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
 def test_a_send_waiting_for_a_far_retry_does_not_keep_the_server_up_but_sets_the_wake_time(api, hq):
     at = hq.clock[0]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('wh_1','we_1','ep_1','task.done','{}','ready',?,?)", (sleep_idle.stamp(at + 10 * 3600), sleep_idle.stamp(at)))
+        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('wh_1','we_1','ep_1','task.done','{}','ready',?,?)", (sleep_idle.stamp(at + 10 * 3600), sleep_idle.stamp(at)))
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, at) == ""
         assert sleep_idle.wake_time(c, at) == pytest.approx(at + 10 * 3600, abs=1)
     for later, state, due in ((at + 600, "ready", True), (at + 10 * 3600, "sending", True), (at - 60, "ready", True)):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE webhook_sends SET state=?, next_attempt=?", (state, sleep_idle.stamp(later)))
+            c.execute("UPDATE webhook_sends SET state=?, next_attempt_at=?", (state, sleep_idle.stamp(later)))
         with api.app.state.store.read() as c:
             assert (sleep_idle.busy(c, at) == "send_pending") is due
 
@@ -391,7 +398,7 @@ def test_a_cell_sleeps_after_fifteen_minutes_and_waits_only_for_a_routine_within
     tick(api)
     assert cell.sleeps == [] and quiet(api, 15)["blocker"] == "routine_due"
     with api.app.state.store.transaction() as c:         # moved to sixteen minutes: beyond the fifteen
-        c.execute("UPDATE automations SET next_due=?", (scheduler.stamp(
+        c.execute("UPDATE automations SET next_due_at=?", (scheduler.stamp(
             sleep_idle.datetime.fromtimestamp(base + 16 * 60, sleep_idle.timezone.utc)),))
     tick(api)
     assert cell.sleeps == [{"wake_at": sleep_idle.iso(base + 16 * 60), "reason": "idle"}]
@@ -454,12 +461,13 @@ def test_an_online_bot_computer_keeps_a_cell_company_up_until_it_goes_quiet(api,
     turn_on(api, 1)
     r = runner(api, "ana")
     ready(api, r, [])                        # the computer reports in now
+    quiet_routines(api)
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == "computer_online"
     tick(api)
     assert cell.sleeps == [] and quiet(api)["blocker"] == "computer_online"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?", (sleep_idle.stamp(time.time() - 300),))
+        c.execute("UPDATE runners SET last_seen_at=?", (sleep_idle.stamp(time.time() - 300),))
     tick(api)
     assert len(cell.sleeps) == 1
 
@@ -489,6 +497,7 @@ def test_tico_updates_alone_asks_hq_with_runners_and_no_computer_blocker(api, hq
     assert (state["minutes"], state["source"], state["managed"], state["active"]) == (60, "owner", False, True)
     r = runner(api, "ana")
     ready(api, r, [])                        # an online bot computer: only a cell counts it as a blocker
+    quiet_routines(api)
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == ""
     tick(api)
@@ -503,5 +512,17 @@ def test_outside_a_cell_nothing_is_defaulted_and_an_online_computer_does_not_blo
     assert (get(api, "sleep")["sleep"]["minutes"], get(api, "sleep")["sleep"]["source"]) == (120, "owner")
     r = runner(api, "ana")
     ready(api, r, [])
+    quiet_routines(api)
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == ""
+
+
+def test_an_open_live_events_stream_is_not_signed_in_activity():
+    """A tab's stream says nothing about a person being there; their own reads do."""
+    from backend.auth import Identity
+    idle = sleep_idle.SleepIdle(None, None, None)
+    person = Identity("human:ana", "human", "ana@acme.example")
+    idle.seen(person, "/api/v2/events?topics=messages&conversation=c1")
+    assert idle.ui_at == 0.0
+    idle.seen(person, "/api/v2/tasks")
+    assert idle.ui_at > 0.0

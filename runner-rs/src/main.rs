@@ -25,6 +25,7 @@ mod accounts;
 mod afterwatch;
 mod appdriver;
 mod backlog;
+mod browser_exit;
 mod capture;
 mod client;
 mod cloud_machine;
@@ -64,6 +65,7 @@ mod checkout_groups;
 mod mail_key;
 mod manifest;
 mod memory_history;
+mod memory_tidy_keep;
 mod mcp;
 mod model_subscriptions;
 mod op;
@@ -342,6 +344,8 @@ fn main() {
         std::process::exit(0);
     }
     let mut config = config::Config::load(&path).unwrap_or_else(|e| fail(&e));
+    // Before any thread starts, and before `profile login` looks for its harness.
+    harness_tools::expose_if_owned(&config);
     if let Command::Profile { action } = cli.command {
         std::process::exit(profile_main(action, &mut config));
     }
@@ -463,6 +467,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
     // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());
+    browser_exit::start(client.clone());
     service.run().await;
     screen::shutdown().await;
     if let Some((task, stop)) = side {

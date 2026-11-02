@@ -14,8 +14,8 @@ TITLE = "Review ops's stopped runs held for a check"
 
 def botops(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug, display_name, state) VALUES(?, 'BotOps', 'active')",
-                  (H.FLEET_MAINTAINER,))
+        c.execute("INSERT OR IGNORE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')",
+                  (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER))
 
 
 def held(api):
@@ -24,9 +24,9 @@ def held(api):
     botops(api)
     machine, message, attempt = restarted_mid_turn(api, [('Read', None), ('Bash', None)])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary','gh pr merge 42 --squash') "
-                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.tool')='Bash' "
-                  "AND json_extract(payload_json,'$.status')='started'", (attempt['id'],))
+        c.execute("UPDATE attempt_events SET payload=json_set(payload,'$.summary','gh pr merge 42 --squash') "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.tool')='Bash' "
+                  "AND json_extract(payload,'$.status')='started'", (attempt['id'],))
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     return machine, message, attempt
@@ -34,13 +34,13 @@ def held(api):
 
 def reviews(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,status,body,created FROM tasks WHERE title=? ORDER BY rowid",
+        return [dict(r) for r in c.execute("SELECT id,status,body,created_at FROM tasks WHERE title=? ORDER BY rowid",
                                            (TITLE,))]
 
 
 def backdate(api, task_id, minutes):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), minutes=-minutes), task_id))
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), minutes=-minutes), task_id))
 
 
 @pytest.mark.parametrize('how', ['closed', 'done'])
@@ -63,7 +63,7 @@ def test_a_held_run_whose_review_task_was_closed_reopens_it_on_the_next_sweep(ap
     assert 'merge pull request' in second['body']
     assert message['body'] not in second['body']                # the request's words stay in their own chat
     # Decided: nothing is held, so a closed review stays closed.
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The report was already sent; nothing to repeat.', 'acknowledge_uncertain_effects': True})
     with api.app.state.store.transaction() as c:
         H.task_close(c, H.KEEPER, second['id'], 'Settled.', quiet=True)
@@ -107,7 +107,7 @@ def test_a_run_held_while_a_review_is_open_is_named_on_that_review_once(api):
     second = held_again(api, machine)
     assert len(reviews(api)) == 1                                   # still the one open review
     [comment] = naming(api, review['id'], second['job_id'])
-    assert comment['from_actor'] == H.KEEPER and 'used Bash' in comment['body']
+    assert comment['sender_id'] == H.KEEPER and 'used Bash' in comment['body']
     assert first['job_id'] not in comment['body']                   # the first run is already in the body
     sweep(api)
     sweep(api)
@@ -132,12 +132,46 @@ def test_a_review_closed_while_its_runs_are_held_is_opened_again_naming_each_of_
 
 def capped(c, task):
     """Past the day's stall wakes, as test_stall does it: the next check escalates."""
-    c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), minutes=-120), task['id']))
+    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), minutes=-120), task['id']))
     for _ in range(H.STALL_WAKES_PER_DAY):
         H.event(c, H.KEEPER, 'task.stall_wake', task['id'], {})
-    c.execute("UPDATE events SET ts=? WHERE action='task.stall_wake' AND target=?",
+    c.execute("UPDATE events SET created_at=? WHERE action='task.stall_wake' AND target=?",
               (H.shift(H.now(), hours=-1), task['id']))
     c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+
+
+def test_a_bot_renamed_while_its_review_is_open_gets_no_second_review(api):
+    """The title carries the slug, so a lookup by title missed after a rename and BotOps got a second task for the bot."""
+    machine, message, first = held(api)
+    [review] = reviews(api)
+    with api.app.state.store.transaction() as c:
+        H.rename_bot(c, 'ops', 'ops-renamed')
+    with api.app.state.store.transaction() as c:
+        job = c.execute("SELECT * FROM jobs WHERE id=?", (first['job_id'],)).fetchone()
+        another = {**dict(job), 'id': 'job-after-the-rename'}
+        msg = H.message(c, message['id'])
+        api.app.state.execution._hand_to_maintainer(c, another, msg, None, ['Bash'])
+        row = H.task(c, review['id'])
+        assert H.held_review_bot(c, row) == job['bot_id']            # the stall check still reads it as this bot's
+    assert [r['id'] for r in reviews(api)] == [review['id']]
+    assert naming(api, review['id'], 'job-after-the-rename')
+
+
+def test_the_next_bot_to_take_a_renamed_bots_slug_gets_a_review_of_its_own(api):
+    """The two bots' reviews share a title, and the id in the body tells them apart."""
+    machine, message, first = held(api)
+    execution, maintainer = api.app.state.execution, H.bot_actor(H.FLEET_MAINTAINER)
+    with api.app.state.store.transaction() as c:
+        job, msg = dict(c.execute("SELECT * FROM jobs WHERE id=?", (first['job_id'],)).fetchone()), H.message(c, message['id'])
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('b-old', 'acme-ops', 'Old', 'active')")
+        execution._hand_to_maintainer(c, {**job, 'id': 'job-old', 'bot_id': 'b-old'}, msg, None, ['Bash'])
+        H.rename_bot(c, 'b-old', 'acme-support')
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('b-new', 'acme-ops', 'New', 'active')")
+        execution._hand_to_maintainer(c, {**job, 'id': 'job-new', 'bot_id': 'b-new'}, msg, None, ['Bash'])
+        rows = [dict(r) for r in c.execute("SELECT id,title,body FROM tasks WHERE owner_id=? AND title LIKE '%acme-ops%' "
+                                           "ORDER BY rowid", (maintainer,))]
+        assert [H.held_review_bot(c, H.task(c, r['id'])) for r in rows] == [None, None]    # no run of theirs is held
+    assert len(rows) == 2 and 'job-old' in rows[0]['body'] and 'job-new' in rows[1]['body']
 
 
 def test_the_stall_check_does_not_close_a_review_while_its_runs_are_still_held(api):
@@ -147,12 +181,12 @@ def test_the_stall_check_does_not_close_a_review_while_its_runs_are_still_held(a
         capped(c, H.task(c, review['id']))
         assert review['id'] in H.wake_stalled(c)['escalated']
         assert H.task(c, review['id'])['status'] == 'open'
-        kept = c.execute("SELECT json_extract(detail_json,'$.kept_open') FROM events "
+        kept = c.execute("SELECT json_extract(detail,'$.kept_open') FROM events "
                          "WHERE action='task.stall_escalated' AND target=?", (review['id'],)).fetchall()
         assert [k[0] for k in kept] == ['runs still held']
     # Its positive twin: once the run is decided, the review is finished at save time, and the stall check leaves
     # it be: nothing is held, so nothing keeps it open.
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The report was already sent; nothing to repeat.', 'acknowledge_uncertain_effects': True})
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM events WHERE action='task.stall_escalated' AND target=?", (review['id'],))
@@ -168,7 +202,7 @@ def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_
         botops_identity = privacy.actor(Identity('bot:' + H.FLEET_MAINTAINER, 'bot'))
         message = H.message(c, attempt['message']['id'])
         assert not privacy.message_readable(c, botops_identity, message)
-        operator = c.execute("SELECT operator FROM bot_config WHERE bot='ops'").fetchone()[0]
+        operator = c.execute("SELECT owner_id FROM bot_config WHERE bot='ops'").fetchone()[0]
         display_name = H.bot(c, 'ops')['display_name']
         title = H.HELD_OPERATOR_REVIEW_TITLE.format(display_name=display_name)
     with api.app.state.store.transaction() as c:
@@ -177,7 +211,7 @@ def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_
     aged(api, attempt['id'])
     assert sweep(api) == []
     with api.app.state.store.read() as c:
-        reviews = [dict(r) for r in c.execute("SELECT id,status,body FROM tasks WHERE title=? AND owner=?",
+        reviews = [dict(r) for r in c.execute("SELECT id,status,body FROM tasks WHERE title=? AND owner_id=?",
                                               (title, 'human:' + operator))]
         botops_reviews = c.execute("SELECT count(*) FROM tasks WHERE title=? AND status IN "
                                    "('open','doing','waiting','review','ready')",
@@ -193,13 +227,13 @@ def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_
         # Renamed after the review was filed, with another bot now under its old name: the title no longer leads to
         # ops, and the review still stays open while its run is held.
         c.execute("UPDATE bots SET display_name='Ops (renamed)' WHERE slug='ops'")
-        c.execute("INSERT INTO bots(slug, display_name, state) VALUES('decoy', ?, 'active')", (display_name,))
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('decoy', 'decoy', ?, 'active')", (display_name,))
         H._settle_undiagnosed(c, H.task(c, existing['id']), 'BotOps cannot diagnose this run')
         assert H.task(c, existing['id'])['status'] == 'open'
         c.execute("DELETE FROM bots WHERE slug='decoy'")
         c.execute("UPDATE bots SET display_name=? WHERE slug='ops'", (display_name,))
     # A safe decision ends the held run, so the same stall check can close the review as usual.
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The operator checked the request and it should not be repeated.',
          'acknowledge_uncertain_effects': True})
     with api.app.state.store.transaction() as c:
@@ -208,13 +242,13 @@ def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_
     # The reused operator request closes only after a safe decision; no second task appears after settlement.
     assert sweep(api) == []
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM tasks WHERE title=? AND owner=?",
+        assert c.execute("SELECT count(*) FROM tasks WHERE title=? AND owner_id=?",
                          (title, 'human:' + operator)).fetchone()[0] == 1
 
 
 def stopped_two_hours(api, attempt_id, minutes=121):
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET finished=? WHERE id=?', (H.shift(H.now(), minutes=-minutes), attempt_id))
+        c.execute('UPDATE attempts SET finished_at=? WHERE id=?', (H.shift(H.now(), minutes=-minutes), attempt_id))
 
 
 def uncertain_issue(api, token='ana-test'):
@@ -241,7 +275,7 @@ def test_a_held_run_left_two_hours_without_a_decision_is_on_health_and_its_opera
     assert ben['title'] == 'ops has 1 stopped run waiting 2 h' and ben['needs_person'] is False
     assert [ch for ch in get(api, 'health', token='ben-test')['checks'] if ch['id'] == 'stopped_runs']
     # A saved decision is a review: it is no longer "nobody decided".
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The report was already sent; nothing to repeat.', 'acknowledge_uncertain_effects': True})
     assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
     assert not [ch for ch in get(api, 'health')['checks'] if ch['id'] == 'stopped_runs']
@@ -251,12 +285,12 @@ def test_a_saved_choice_waiting_for_a_live_lane_is_not_counted_as_unreviewed(api
     """A deferred resume/dismiss is already reviewed even while its job remains uncertain (Dev 545 boundary)."""
     machine, message, attempt = interrupted(api)
     other = rival(api, machine, attempt)
-    result = post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+    result = post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
                   'note': 'Reviewed; continue after the other run ends.', 'acknowledge_uncertain_effects': True})
     assert result == {'job_id': attempt['job_id'], 'state': 'uncertain', 'deferred': True}
     assert job_state(api, attempt['job_id']) == 'uncertain'
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET finished=? WHERE id=?',
+        c.execute('UPDATE attempts SET finished_at=? WHERE id=?',
                   (H.shift(H.now(), minutes=-121), attempt['id']))
     issue = uncertain_issue(api)
     assert 'waiting 2 h' not in issue['title'] and issue['needs_person'] is False
@@ -270,7 +304,7 @@ def test_a_saved_task_choice_with_queued_work_waits_for_the_live_lane_without_as
 
     machine, attempt, task_id, _ = task_held(api)
     rival(api, machine, attempt)
-    result = post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+    result = post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
                   'note': 'Reviewed; continue after the other run ends.', 'acknowledge_uncertain_effects': True})
     assert result == {'job_id': attempt['job_id'], 'state': 'uncertain', 'deferred': True}
     assert len([job for job in queued_on(api, task_id) if job['id'] != attempt['job_id']]) == 1
@@ -320,8 +354,8 @@ def task_held_many(api, count):
         for i in range(1, count):
             message = H._write_message(c, H.KEEPER, 'bot:ops', f'Subtask result {i}', conversation, 'say',
                                        {'task': task_id}, None, None)
-            c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot,state,created) VALUES(?,?,?,'queued',?)",
-                      (message['id'], message['id'], 'ops', message['created']))
+            c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,'queued',?)",
+                      (message['id'], message['id'], 'ops', message['created_at']))
     return machine, attempt, task_id, other_id
 
 
@@ -330,7 +364,7 @@ def queued_on(api, task_id):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute(
             "SELECT j.id,j.state,j.attempt_id,m.body FROM jobs j JOIN messages m ON m.id=j.message_id "
-            f"JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot='ops' AND {queued_task_sql()}=? "
+            f"JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot_id='ops' AND {queued_task_sql()}=? "
             "ORDER BY m.rowid", (task_id,))]
 
 
@@ -345,7 +379,7 @@ def test_queued_work_behind_a_held_run_joins_its_resumed_turn(api, monkeypatch, 
     machine, attempt, task_id, other_id = task_held_many(api, count)
     assert len([j for j in queued_on(api, task_id) if j['id'] != attempt['job_id']]) == count
     ready(api, machine, ['ops'])
-    resumed = post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+    resumed = post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
                    'note': 'Nothing was pushed yet; carry on from the build.', 'acknowledge_uncertain_effects': True})
     assert resumed['state'] == 'queued'
     turn = claim(api, machine)
@@ -379,13 +413,13 @@ def test_a_resumed_turn_takes_an_input_its_held_run_read_after_the_history_sweep
     from backend import read_deps
     machine, attempt, task_id, _ = task_held(api)
     with api.app.state.store.transaction() as c:
-        verdict = c.execute("SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='ops' "
+        verdict = c.execute("SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' "
                             "AND j.state='queued' AND m.body LIKE 'VERDICT:%'").fetchone()[0]
         c.execute("INSERT INTO attempt_inputs VALUES(?,?,?)", (attempt['id'], verdict, H.now()))
     with api.app.state.store.read() as conn:
         read_deps.sweep(conn)
     ready(api, machine, ['ops'])
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
          'note': 'Nothing was pushed yet; carry on from the build.', 'acknowledge_uncertain_effects': True})
     turn = claim(api, machine)
     assert 'VERDICT: changes PR #12' in turn['message']['body']
@@ -398,11 +432,11 @@ def test_a_folded_input_another_run_already_read_keeps_that_runs_task(api):
     the task later turns private, as it does when inputs() moves a deferred input."""
     machine, attempt, task_id, _ = task_held(api)
     with api.app.state.store.transaction() as c:
-        verdict = c.execute("SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='ops' "
+        verdict = c.execute("SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' "
                             "AND j.state='queued' AND m.body LIKE 'VERDICT:%'").fetchone()[0]
         c.execute("INSERT INTO attempt_inputs VALUES(?,?,?)", (attempt['id'], verdict, H.now()))
     ready(api, machine, ['ops'])
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
          'note': 'Nothing was pushed yet; carry on from the build.', 'acknowledge_uncertain_effects': True})
     turn = claim(api, machine)
     assert turn['id'] != attempt['id'] and 'VERDICT: changes PR #12' in turn['message']['body']
@@ -419,7 +453,7 @@ def test_two_requests_folded_into_one_stopped_run_are_one_run_on_needs_you_and_h
     count wherever runs are counted (Needs you, the two-hour check on Health)."""
     from backend.tests.test_execution_review import busy_folded_run, stopped_issue
     jobs = busy_folded_run(api)
-    [attempt_id] = {job['attempt_id'] for job in jobs}
+    [attempt_id] = {job['run_id'] for job in jobs}
     issue = stopped_issue(api)
     assert issue['title'].endswith('has 1 stopped run holding up work')
     [run] = issue['runs']

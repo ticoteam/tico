@@ -1,6 +1,6 @@
 """The org chart as Finance reads it, who is acting, and who decides an approval (spec §5, §7.4, §7.5).
 
-Teammates are actor strings (`human:<id>`, `bot:<slug>`), teams are org group ids. The store builds an `Org` from the
+Teammates are actor strings (`human:<id>`, `bot:<id>`), teams are org group ids. The store builds an `Org` from the
 roster once per request; nothing here reads it.
 """
 from collections.abc import Mapping
@@ -61,6 +61,24 @@ class Org:
             if team.lead and team.lead == actor:
                 out |= self.below(team.id)
         return frozenset(out)
+
+    def reports(self, actor: str) -> frozenset[str]:
+        """Everyone who reports to `actor`, directly or not: with `led_by`, what a manager's default covers."""
+        under: dict[str, list[str]] = {}
+        for mate, boss in self.reports_to.items():
+            under.setdefault(boss, []).append(mate)
+        found: set[str] = set()
+        todo = [actor]
+        while todo:
+            for mate in under.get(todo.pop(), []):
+                if mate != actor and mate not in found:
+                    found.add(mate)
+                    todo.append(mate)
+        return frozenset(found)
+
+    def manages(self, actor: str) -> bool:
+        """Whether `actor` is a manager: leads a team or has anyone reporting to them."""
+        return bool(self.led_by(actor) or self.reports(actor))
 
     def members(self, teams: frozenset[str]) -> frozenset[str]:
         return frozenset(actor for actor, team in self.team_of.items() if team in teams)

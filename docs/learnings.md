@@ -7,7 +7,7 @@ button counts the updates since you last opened it.
 
 Each update shows its commit subject, who made it and when, a link to the commit on GitHub, the files it
 changed and, once the commit has been pushed, its diff. When the run that made it is known, the
-update links to its source: the task, or the message in the chat, that the bot was working on. Two
+update links to its source: the task, or the message in the thread, that the bot was working on. Two
 more views show the current `learnings.md` and `decisions.md`, its working rules first (a `## ` section whose
 heading says rules), then the newest entries: sections by the date in their heading, and dated `- ` entries by their
 `added:` or leading date. An undated part stays under the dated one above it.
@@ -58,7 +58,7 @@ Only the computer the bot is assigned to may report for it.
   must belong to the bot or its family (an original and its branches share one repository);
   anything else is ignored. Older commits show their author and date without a source.
 - **Privacy.** Anyone who can read the bot sees its memory history, as they see its files. The
-  source shows only to a reader who may open that task or chat; everyone else sees the update
+  source shows only to a reader who may open that task or thread; everyone else sees the update
   without it.
 
 Branches of a shared bot write the same repository, so a lesson one branch pushes shows in every
@@ -72,7 +72,7 @@ server is upgraded; the runner retains those reports for retry.
 
 - `GET /api/v2/bots/{bot}/memory?before=&limit=`: `updates`, `unseen`, `documents`,
   `document_status`, `next_before`. Each path in `document_status` has `oversized` and
-  `updated` (the saved copy's date, empty if none). Add `include_documents=false` to omit file contents
+  `updated_at` (the saved copy's date, empty if none). Add `include_documents=false` to omit file contents
   while keeping their status. The button and history pagination use this; opening the panel fetches current files.
 - `POST /api/v2/bots/{bot}/memory/seen`: you opened the history.
 
@@ -85,11 +85,11 @@ Slack or mail for this itself.
 
 **What is read**, newer than the last run (the first run looks back 24 hours), at most 600 items:
 
-- **Chats**: what people wrote in chats with bots. Personal rooms (your Assistant, your Librarian
-  room) are not read. An item from a chat with bots may go only to those bots.
+- **Chats**: what people wrote in threads with bots. DMs (your Assistant, your Librarian
+  DM) are not read. An item from a thread with bots may go only to those bots.
 - **Tasks**: people's comments on tasks, and the note of a task that was finished. A private task's
   items may go only to the bots that are its owner or requester.
-- **Slack**: people's messages in channels Tico is in (direct messages already arrive as chats).
+- **Slack**: people's messages in channels Tico is in (direct messages already arrive as DMs).
 - **Mail**: only mail a teammate **sent from their own mailbox** (the sender's address is a person's
   and is the mailbox's own). Inbound mail and shared mailboxes are never read. The quoted reply is
   dropped.
@@ -117,9 +117,178 @@ reports market facts with `hub market report`.
 made by the runs that worked its packet task), Docs (the Librarian's doc versions while its task was
 open) and Market (its market changes then), each change with its source and diff. A bot's changes show
 only to readers who may read that bot. A packet's text shows only when the reader may read the source
-today (the chat, the task, the mailbox, the meeting); anything else is counted as private.
+today (the thread, the task, the mailbox, the meeting); anything else is counted as private.
 
 - `POST /api/v2/learnings/run` (owner or admin, the same as Run now on Nightly learnings in Settings > System): tonight's run now; 409 when it is running or already ran.
 - `GET /api/v2/learnings?before=&limit=`: nights, newest first.
 - `GET /api/v2/learnings/{id}`: one night's sections.
 - `GET /api/v2/learnings/{id}/packets/{bot}`: one recipient's packet.
+
+## Nightly memory tidy contract (developer integration)
+
+`backend.memory_tidy` is the read-only proposal boundary. It does not schedule a
+pass, call a model, create a reviewer card, persist a run, or apply Keep. Those callers
+must enforce the pilot list, named model without fallback, low effort and the $50
+estimated-cost stop before calling a model. Ordinary bot/task model settings remain
+unchanged. This module requires no database or model spending.
+
+### Inputs and child isolation
+
+The orchestrator supplies a pushed snapshot mapping paths to UTF-8 text, including
+`AGENT.md` for the trusted conflict check. `build_packet(snapshot, since=...)` returns
+only rules, recent log entries and entries cited by rules; only `model_input()` may
+be sent to the edit-producing child. Do not send the snapshot, `Packet.all_logs`, run
+transcripts, evidence files or arbitrary knowledge. The initial pass uses `since=None`.
+Later passes should supply `previous_learnings`, the exact learnings snapshot at the
+last completed kept or discarded pass, to select changed undated notes. Without that
+snapshot, undated log history fails closed. Same-day dated notes remain included
+because their dates do not identify which appeared after a timestamp. Source dates,
+entry IDs and exact heading titles select cited logs. Exact originals cited by source
+ID are also read from the archive; unrelated archive contents and external references
+are never sent to the child.
+
+The exact rule headings are `Working rules` and `Standing rules`, optionally followed
+by parenthetical guidance. Top-level Working rules end at the first dated heading.
+Second-level sections end at the next undated peer or shallower heading; dated peer
+headings remain mixed notes inside that section. An explicit Log, Learning log or
+Dated learnings heading ends rules at any depth. Dated headings/bullets inside
+second-level rules are logs; a subsequent undated top-level bullet resumes rules. Imported
+`Working rules from ...` headings are log, never rules. Unrecognized prose remains
+untouched. This is a Markdown-entry contract, not a generic Markdown rewriter.
+
+Run the child without write tools, in a disposable checkout with no publication or
+main-branch credentials. Independently collect before/after manifests of **every**
+checkout path: tracked, untracked, ignored, symlink targets and file modes. Manifest
+values must identify content AND kind/mode. Pass these to `evaluate`; any difference,
+even under memory, flags the proposal. Always discard the whole child checkout at
+settlement, on success, failure or cancellation. An attachment is returned through the
+child result channel, never written into that checkout.
+
+Criterion 24 additionally requires the runner to skip `finish_place`'s automatic
+memory/knowledge commit and push for a pass check. Suppress the ordinary
+"committed for you" instruction; the pass prompt explicitly prohibits all file
+writes. Do not use stateless mode: the child must retain its permitted memory reads.
+Manifest validation alone cannot stop an automatic commit that happened before
+validation. These runner controls are a prerequisite supplied by the platform slice,
+not an effect of this pure module. Child output is consumed by code and the child is
+closed without an ordinary parent wake turn, per the engineering run-path decision.
+The module trusts these manifests, not a child's claim that it wrote nothing.
+
+### JSON attachment
+
+Return one object with `edits` and `diary` (at most three lines). Numbers are consecutive
+integers starting at 1. Each edit contains:
+
+```json
+{
+  "number": 1,
+  "operation": "generalise",
+  "targets": [{"entry_id": "packet entry ID", "old_text": "exact packet text"}],
+  "replacement": "- One rule. [sources: packet entry ID]\n",
+  "sources": ["packet entry ID"]
+}
+```
+
+Operations are `merge`, `generalise`, `resolve_contradiction`, `retire`, `archive_log`,
+`move_fact` and `move_log`. Targets are individual whole entries from the packet;
+repeated targets, wrong old text and whole-file rewrites fail. Every replaced entry
+must be a source. New rules list each source ID in their replacement text, retaining
+links to exact originals. IDs use exact content and its occurrence number, so changes
+above an entry do not change its identity. Each archived original records that same
+ID and exact character length; `resolve_source(snapshot, entry_id)` resolves current
+or archived text and validates archived content against the ID. Cited archived entries
+have kind `source` and cannot be edit targets. Retire/archive/move-log edits have empty replacements.
+A fact move supplies its unchanged original as replacement and a normalized
+`knowledge/*.md` `destination`. Other operations cannot set a destination. Paths
+containing traversal, backslashes or control characters are rejected.
+
+### Checks and output
+
+`evaluate(snapshot, raw_json, since, today, checkout_before, checkout_after,
+conflict_check, previous_learnings)` applies anchored edits to an in-memory scratch
+copy, archives every removed original verbatim, and computes a unified diff. Retired
+rules include a retirement date and edit number. Dated-note moves insert
+the original under the existing Log heading, creating one if needed. More than a quarter of actual working rules touched
+flags the proposal; exactly a quarter is permitted. Dated notes do not enter that
+count. Log entries strictly older than 30 days must be removed and present verbatim
+in the archive before an offer. Thirty-day-old entries remain eligible to stay.
+When a nonempty model proposal leaves historical old entries outside the packet,
+code adds numbered `archive_log` edits for those entries, using exact originals.
+The model never reads or targets that older history. The combined attachment, counts
+and diff include these mechanical moves for review. Empty model edits remain
+`no_change`, with no archival-only card. A kept nonempty proposal must archive every
+old entry; the check resolves its exact framed archive record rather than a substring.
+
+`conflict_check(agent_text, rules)` is a required trusted semantic check of both old
+and proposed rules against AGENT.md. It returns a list of conflict descriptions. Its
+absence, expected operational failure or any conflicts flag the proposal; the public diary reports only
+the count. Do not substitute the edit-producing child's unchecked 'no conflicts'
+claim. This module does not pretend lexical matching proves semantic consistency.
+Unexpected checker exceptions propagate without returning an offer; the caller must
+settle them as failed runs. The orchestration slice must provide this check before
+enabling offers.
+
+Token/key patterns share the company-file detector, including labelled and opaque
+values. Newly introduced secret-shaped strings anywhere in the submitted JSON or
+scratch changes are rejected unless already in memory. Flag results expose no raw
+attachment, diff, scratch files or secret values. Existing secrets are not newly
+introduced; this does not grant permission to transmit them to a model or person.
+
+The server-generated diary contains operation counts, working-rule character sizes
+before/after, the 20,000-character target and check outcome, in at most three lines.
+The child diary is validated but never trusted for counts, budget or flags. Results:
+
+| Status | Caller action |
+| --- | --- |
+| `offer` | Persist numbered attachment, diff and diary for the named reviewer; Keep remains a separate action. |
+| `flagged` | Record the sanitized reasons and notify the reviewer; never show Keep or apply scratch changes. |
+| `no_change` | Log `no change`; create no card and no edit attachment. |
+
+No UI, API endpoint, schema, runner setting or everyday memory is modified by this
+module. Caller integration and independent conflict checking remain separate from
+these pure checks. Focused synthetic regressions live in `backend/tests/test_memory_tidy.py`.
+
+### Nightly memory tidy reviewer cards
+
+`backend.memory_tidy_cards.file_card` is the trusted filing seam. Call it in the
+filing transaction with an `offer` from `backend.memory_tidy.evaluate`, the ledger
+pass id/start, base memory commit, named reviewer actor, pass model and the ledger's
+estimated USD cost (including subscription usage). GPT-6.1 Sol's current table
+rates are $2 input, $0.10 cached and $10 output per million; filing calculates cost,
+while cards preserve its estimate. Do not use a stand-in rate or “unmeasured”.
+Skipped/flagged/no-change results create no card and do not replace an existing one.
+Only this internal seam files a proposal; there is no client offer endpoint.
+The pilot model floor forbids Haiku-tier passes; the card rejects Haiku-labelled
+filings as defense in depth alongside filing admission. This never changes the
+bot’s everyday model.
+
+The persistent record is independent of the private parent/check tasks. File it
+before closing both tasks. The named reviewer retains access after those closures
+and the approval-expiry sweep; this is covered with synthetic tasks, not a live
+pilot run. Filing writes no message, approval or job and does not wake the parent.
+
+A human reviewer sees the card in Needs you. A bot reviewer uses
+`hub api GET memory-tidy/cards` and `hub api GET memory-tidy/cards/<id>`; both
+interfaces admit only that named reviewer, regardless of task ownership. Lists
+omit large diffs; the detail read shows the checked diff, diary (at most three
+lines), model, ledger estimate and base memory commit. The UI treats memory text
+as plain text. Discard uses `POST memory-tidy/cards/<id>/decide` with
+`{"decision":"discard"}` and an idempotency key, without touching the repository.
+
+A new offered pass replaces the previous open card for that bot; pass ids make
+retries harmless and pass starts reject late older offers. Unreviewed cards leave
+the list at two business days using the existing team Pacific weekday clock;
+the existing hourly sweep persists withdrawal. No new routine is enabled.
+
+Keep is installed. `POST memory-tidy/cards/<id>/decide` with
+`{"decision":"keep"}` queues the apply on the bot's assigned computer and returns the card
+with `keep_pending` true; the card stays open until that computer reports. `keep_available`
+is true only while the card is open, no Keep is pending, and the bot's assigned computer
+reports the `memory_tidy_keep_v1` capability. Otherwise `keep` is refused with 409 and the
+card stays open: "Update this bot's computer to enable Keep". A second `keep` while one is
+pending returns the same card; `discard` then returns 409 until the Keep finishes.
+The computer applies the stored anchored edits under the repository push lock against fetched
+main, checks the result with the contract, and makes at most three non-force pushes. Success
+marks the card `kept` with the pushed commit. A failed Keep leaves the card open with its reason.
+Discard still changes only the card. Pass scheduling and pilot activation are separate: no
+routine is enabled, so no card is filed yet.

@@ -20,7 +20,7 @@ const {open} = require('./tasks-page.cjs');
     const inbox = page.waitForRequest(r => new URL(r.url()).pathname === '/api/issues/7');
     await page.evaluate(numbers => {
       const host = document.createElement('div');
-      host.innerHTML = numbers.map(number => needsYouItem({number, title: 'Pick a plan', owner: 'human:ana', body: 'Monthly or annual?'}, false)).join('');
+      host.innerHTML = numbers.map(number => needsYouItem({number, title: 'Pick a plan', owner_id: 'human:ana', body: 'Monthly or annual?'}, false)).join('');
       document.querySelector('#main').append(host);
       host.querySelectorAll('details').forEach(d => { d.open = true; });
     }, [...BAD, 7]);

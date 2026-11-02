@@ -35,7 +35,7 @@ pub fn channels(kind: &str) -> &'static [&'static str] {
         // A credential's value changed: the model keys from the app are asked for again at once (signin.rs).
         "credentials" => &["sync", "keys"],
         "config" => &["sync", "config"],
-        "worktrees" | "restart" | "performance" => &["heartbeat"],
+        "worktrees" | "restart" | "performance" | "browser_exit" => &["heartbeat"],
         "capacity" => &["heartbeat"],
         "logins" => &["logins"],
         "harness_actions" => &["harness"],

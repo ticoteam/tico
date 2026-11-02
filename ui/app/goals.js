@@ -1,4 +1,4 @@
-/* ui/app/goals.js — Goals page shell and the goal editor
+/* ui/app/goals.js — Goals page shell and the goal editor; the KPI views under the tree are ui/app/goals-kpi-views.js
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -16,8 +16,8 @@ function goalOwnerInfo(actor) {
   if (actor === GOAL_COMPANY) return {kind: 'company', id: GOAL_COMPANY, name: S.config?.company_name || 'Team', avatar: '', href: ''};
   const [kind, id] = String(actor || '').split(':');
   if (kind === 'bot') {
-    const e = S.emps.find(x => x.name === id);
-    return {kind, id, name: e?.display_name || id, avatar: avatar(id, 20, stateOf(id)), href: `#/bot/${encodeURIComponent(id)}`};
+    const e = botRow(id);
+    return {kind, id, name: e?.display_name || e?.slug || id, avatar: avatar(id, 20, stateOf(id)), href: `#/bot/${encodeURIComponent(id)}`};
   }
   const p = (S.people || []).find(x => x.id === id);
   return {kind: 'person', id, name: p?.name || id, avatar: personAvatar(p || {id, name: id}, 20), href: `#/person/${encodeURIComponent(id)}`};
@@ -27,7 +27,7 @@ function goalOwnerInfo(actor) {
 function goalOrgPlace(owner) {
   const up = {};
   for (const p of S.people || []) up['p:' + p.id] = orgBossKey({kind: 'person', person: p});
-  for (const e of S.emps || []) up['b:' + e.name] = orgBossKey({kind: 'bot', ...e});
+  for (const e of S.emps || []) up['b:' + e.id] = orgBossKey({kind: 'bot', ...e});
   const key = String(owner || '').startsWith('human:') ? 'p:' + owner.slice(6) : String(owner || '').startsWith('bot:') ? 'b:' + owner.slice(4) : '';
   const above = new Set();
   for (let at = up[key]; at && !above.has(at); at = up[at]) above.add(at);
@@ -40,7 +40,7 @@ function goalMayEdit(g, goals = []) {
   const me = mePerson(), actor = me ? 'human:' + me.id : '';
   if (!actor) return false;
   const parent = goals.find(x => x.id === g.parent_id);
-  return g.owner === actor || parent?.owner === actor || goalOrgPlace(g.owner).above.has('p:' + me.id);
+  return g.owner_id === actor || parent?.owner_id === actor || goalOrgPlace(g.owner_id).above.has('p:' + me.id);
 }
 // The options of a "Supports" select: Nothing first (a goal needs no parent), then team goals,
 // goals above the owner on the org chart, and goals alongside it. Never the goal itself or anything
@@ -55,17 +55,17 @@ function goalSupportOptions(g, owner, goals) {
   const rows = {company: [], above: [], alongside: []};
   for (const x of goals) {
     if (!goalLive(x) || below.has(x.id)) continue;
-    const them = goalOrgPlace(x.owner);
-    const where = x.owner === GOAL_COMPANY ? 'company' : me.above.has(them.key) ? 'above'
+    const them = goalOrgPlace(x.owner_id);
+    const where = x.owner_id === GOAL_COMPANY ? 'company' : me.above.has(them.key) ? 'above'
       : them.key && (them.key === me.key || (them.parent && them.parent === me.parent)) ? 'alongside' : '';
     if (where || x.id === g.parent_id) rows[where || 'above'].push(x);
   }
-  const option = x => `<option value="${esc(x.id)}"${x.id === g.parent_id ? ' selected' : ''}>${esc(x.title)}${x.owner === GOAL_COMPANY ? '' : ' · ' + esc(goalOwnerInfo(x.owner).name)}</option>`;
+  const option = x => `<option value="${esc(x.id)}"${x.id === g.parent_id ? ' selected' : ''}>${esc(x.title)}${x.owner_id === GOAL_COMPANY ? '' : ' · ' + esc(goalOwnerInfo(x.owner_id).name)}</option>`;
   const group = (label, list) => list.length ? `<optgroup label="${label}">${list.sort(goalRank).map(option).join('')}</optgroup>` : '';
   return `<option value=""${g.parent_id ? '' : ' selected'}>Nothing</option>`
     + group('Team', rows.company) + group('Above on the team chart', rows.above) + group('Alongside', rows.alongside);
 }
-const goalLinkOptions = (g, goals) => goalSupportOptions(g, g.owner, goals);
+const goalLinkOptions = (g, goals) => goalSupportOptions(g, g.owner_id, goals);
 // One goal, editable in place (the bot page's Goals card): the words, and what it supports.
 function goalEditorHtml(g, goals) {
   const may = goalMayEdit(g, goals), parent = goals.find(x => x.id === g.parent_id);
@@ -137,7 +137,7 @@ function goalAddInline(host, owner, done) {
 // The Goals page's editor: one form for a new goal and an existing one. Goal, Owner (new goals),
 // Supports (optional, Nothing by default) and one Save.
 const goalEveryone = () => [...(S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id]),
-  ...shownEmps().filter(e => !isBuiltInBot(e.name)).map(e => ['bot:' + e.name, e.display_name || e.name])];
+  ...shownEmps().filter(e => !isBuiltInBot(e.id)).map(e => ['bot:' + e.id, e.display_name || e.slug])];
 function goalOwnerChoices(mine) {
   if (S.me?.role !== 'owner') return mine ? [[mine, 'Me']] : [];
   return goalEveryone();
@@ -157,8 +157,8 @@ function goalSheetOwners(current) {
 function goalMayMove(g, goals = []) {
   if (S.me?.role === 'owner') return true;
   const me = mePerson();
-  if (!me || g.owner === GOAL_COMPANY) return false;
-  return goals.find(x => x.id === g.parent_id)?.owner === 'human:' + me.id || goalOrgPlace(g.owner).above.has('p:' + me.id);
+  if (!me || g.owner_id === GOAL_COMPANY) return false;
+  return goals.find(x => x.id === g.parent_id)?.owner_id === 'human:' + me.id || goalOrgPlace(g.owner_id).above.has('p:' + me.id);
 }
 // A group's goals are its lead's: the "+" on a group's line adds one for the lead, when this person may.
 function goalGroupOwner(gid) {
@@ -200,7 +200,7 @@ function goalSheetOpen(state, {goal = '', owner = ''} = {}) {
   if (!dlg.open) dlg.showModal();
   dlg.querySelector('[data-gs-close]').onclick = () => dlg.close();
   const details = dlg.querySelector('[data-gs-details]');
-  if (details) details.onclick = () => { dlg.close(); goalPanelOpen(state, g.owner, {goal: g.id}); };
+  if (details) details.onclick = () => { dlg.close(); goalPanelOpen(state, g.owner_id, {goal: g.id}); };
   for (const a of dlg.querySelectorAll('[data-goal-go]')) a.onclick = ev => {
     if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
     ev.preventDefault();
@@ -226,7 +226,7 @@ function goalColourHtml(g) {
 }
 function goalNoteHtml(g, may) {
   const byHand = g.status_source === 'person' && ['red', 'yellow', 'green'].includes(g.status);
-  const said = byHand ? `Set by ${goalActorName(g.status_by)}${g.status_note ? ': ' + g.status_note : ''}` : g.status_note || '';
+  const said = byHand ? `Set by ${goalActorName(g.status_by_id)}${g.status_note ? ': ' + g.status_note : ''}` : g.status_note || '';
   const suggest = byHand && g.suggest_status
     ? `<div class="goal-note goal-suggest">Suggested: <b>${esc(g.suggest_status)}</b>${g.suggest_note ? ', ' + esc(g.suggest_note) : ''}${may ? ' <button class="linkish" type="button" data-goal-auto="' + esc(g.id) + '">Let the Assistant set it</button>' : ''}</div>` : '';
   return (said ? `<div class="goal-note">${esc(said)}</div>` : '') + suggest;
@@ -265,15 +265,15 @@ function goalRemovedToast(g) {
 // keeps it.
 const GOAL_FINISHED_CAP = 20;
 const GOAL_FINISHED = {};
-const goalFinishedAt = g => g.status_at || g.updated || '';
-const goalFinishedOf = (goals, owner) => goals.filter(g => g.owner === owner && !goalLive(g))
+const goalFinishedAt = g => g.status_at || g.updated_at || '';
+const goalFinishedOf = (goals, owner) => goals.filter(g => g.owner_id === owner && !goalLive(g))
   .sort((a, b) => String(goalFinishedAt(b)).localeCompare(String(goalFinishedAt(a))));
 function goalFinishedDetailHtml(d) {
   if (!d) return '<p class="muted">Loading…</p>';
   if (d.error) return '<p class="err">Could not load the goal.</p>';
-  const kpis = d.kpis || [], checkins = (d.checkins || []).slice().sort((x, y) => String(y.ts).localeCompare(String(x.ts)));
+  const kpis = d.kpis || [], checkins = (d.checkins || []).slice().sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)));
   const history = (d.events || []).filter(e => e.field === 'status').slice().reverse();
-  const said = e => `${esc(goalActorName(e.actor))} · ${esc(e.new || 'no colour')}${e.note ? ': ' + esc(e.note) : ''} · ${esc(kpiDay(e.ts))}`;
+  const said = e => `${esc(goalActorName(e.actor))} · ${esc(e.new || 'no colour')}${e.note ? ': ' + esc(e.note) : ''} · ${esc(kpiDay(e.created_at))}`;
   return `<div class="goal-fin-detail">
       <h4 class="kpi-h">Measures</h4>${kpis.length ? `<ul class="goal-fin-kpis">${kpis.map(k => `<li>${gdot(k.status)}<span>${esc(k.name)}</span>${kpiFresh(k) ? ` <span class="muted tnum">${esc(kpiNum(k.latest.value, k.unit))}</span>` : ''}</li>`).join('')}</ul>` : '<p class="muted">No KPIs.</p>'}
       <h4 class="kpi-h">Updates</h4>${checkins.length ? checkins.map(goalCheckinHtml).join('') : '<p class="muted">No check-ins.</p>'}
@@ -282,9 +282,9 @@ function goalFinishedDetailHtml(d) {
 }
 function goalReopenAutoOnly(g, goals) {
   const me = mePerson(), actor = me ? 'human:' + me.id : '';
-  if (S.me?.role === 'owner' || !actor || g.status_source != null || !g.parent_id || g.owner !== actor) return false;
+  if (S.me?.role === 'owner' || !actor || g.status_source != null || !g.parent_id || g.owner_id !== actor) return false;
   const parent = goals.find(x => x.id === g.parent_id);
-  return Boolean(parent && parent.owner !== actor);
+  return Boolean(parent && parent.owner_id !== actor);
 }
 function goalReopenFormHtml(g, goals) {
   const autoOnly = goalReopenAutoOnly(g, goals);
@@ -303,7 +303,7 @@ function goalFinishedHtml(list, goals, F) {
     return `<li class="goal-fin-row" data-fin="${esc(g.id)}">
         <div class="goal-fin-head"><button class="goal-fin-line" type="button" data-fin-open="${esc(g.id)}" aria-expanded="${open}">
           <span class="goal-fin-title">${esc(g.title)}</span><span class="goal-fin-what">${g.status === 'done' ? 'Done' : 'Dropped'}</span>
-          <span class="muted goal-fin-when">${esc(kpiDay(goalFinishedAt(g)))}${g.status_by ? ' · ' + esc(goalActorName(g.status_by)) : ''}</span></button>
+          <span class="muted goal-fin-when">${esc(kpiDay(goalFinishedAt(g)))}${g.status_by_id ? ' · ' + esc(goalActorName(g.status_by_id)) : ''}</span></button>
           ${goalMayEdit(g, goals) && F.reopen !== g.id ? `<button class="linkish" type="button" data-fin-reopen="${esc(g.id)}">Reopen</button>` : ''}</div>
         ${F.reopen === g.id ? goalReopenFormHtml(g, goals) : ''}${open ? goalFinishedDetailHtml(F.detail[g.id]) : ''}</li>`;
   };
@@ -354,13 +354,13 @@ function goalFinishedMount(host, owner, goals, changed) {
   draw();
 }
 function goalFormHtml(g, goals, {owner = '', company = false, fixed = false, sheet = false} = {}) {
-  company = company || g.owner === GOAL_COMPANY || (sheet && !g.id && owner === GOAL_COMPANY);   // a team goal supports nothing
+  company = company || g.owner_id === GOAL_COMPANY || (sheet && !g.id && owner === GOAL_COMPANY);   // a team goal supports nothing
   const may = !g.id || goalMayEdit(g, goals);
   const me = mePerson(), mine = me ? 'human:' + me.id : '';
   // The sheet always names the owner: a select while they may hand the goal to someone else, else just its one name.
-  const choices = sheet ? (g.id && !goalMayMove(g, goals) ? [[g.owner, goalOwnerInfo(g.owner).name]] : goalSheetOwners(g.owner || owner))
+  const choices = sheet ? (g.id && !goalMayMove(g, goals) ? [[g.owner_id, goalOwnerInfo(g.owner_id).name]] : goalSheetOwners(g.owner_id || owner))
     : g.id || company || fixed ? [] : goalOwnerChoices(mine);   // fixed: the owner is whoever was tapped
-  const who = g.owner || owner || mine || choices[0]?.[0] || '';
+  const who = g.owner_id || owner || mine || choices[0]?.[0] || '';
   const kids = g.id ? goals.filter(x => goalLive(x) && x.parent_id === g.id).sort(goalRank) : [];
   const ownerSel = `<label class="goal-f"><span>Owner</span><select name="owner"${sheet && choices.length < 2 ? ' disabled' : ''}>${choices.map(([v, name]) => `<option value="${esc(v)}"${v === who ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></label>`;
   const supports = (off, whose, hide = false) => `<label class="goal-f"${hide ? ' hidden' : ''}><span>Supports</span><select name="parent"${off ? ' disabled' : ''}>${goalSupportOptions(g, whose, goals)}</select></label>`;
@@ -368,11 +368,11 @@ function goalFormHtml(g, goals, {owner = '', company = false, fixed = false, she
       <label class="goal-f"><span>Goal</span><input type="text" name="title" maxlength="300" autocomplete="off" value="${esc(g.title || '')}"${may ? '' : ' readonly'} placeholder="${company ? 'Reach 100 paying customers by June' : 'Answer every ticket the same day'}"></label>
       ${sheet ? `<div class="goal-fs">${ownerSel}${supports(!may || company, who, company)}</div>`
       : choices.length ? `<div class="goal-fs">${ownerSel}${supports(false, who)}</div>`
-      : company ? '' : supports(!may, g.owner || who)}
+      : company ? '' : supports(!may, g.owner_id || who)}
       ${goalBetHtml(g, may)}
       ${sheet ? goalMeasureHtml(g, may) : ''}
       ${kids.length ? `<div class="goal-ed-kids"><span>Supported by</span>${kids.map(k =>
-        `<a href="${GOALS}/${encodeURIComponent(k.id)}" data-goal-go="${esc(k.id)}">${esc(k.title)} <span class="muted">· ${esc(goalOwnerInfo(k.owner).name)}</span></a>`).join('')}</div>` : ''}
+        `<a href="${GOALS}/${encodeURIComponent(k.id)}" data-goal-go="${esc(k.id)}">${esc(k.title)} <span class="muted">· ${esc(goalOwnerInfo(k.owner_id).name)}</span></a>`).join('')}</div>` : ''}
       ${may && g.id ? goalColourHtml(g) : ''}
       <div class="goal-actions">
         ${may ? '<button class="primary" type="submit">Save</button>' : ''}<button class="ghost" type="button" data-goal-cancel>${may ? 'Cancel' : 'Close'}</button>
@@ -448,7 +448,7 @@ function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) 
       if (g.id) {
         const body = {};
         if (words !== g.title) body.title = words;
-        if (ownerSel && !ownerSel.disabled && ownerSel.value !== g.owner) body.owner = ownerSel.value;
+        if (ownerSel && !ownerSel.disabled && ownerSel.value !== g.owner_id) body.owner = ownerSel.value;
         if (parentSel && !parentSel.disabled && parentSel.value !== (g.parent_id || '')) body.parent_id = parentSel.value;
         else if (body.owner === GOAL_COMPANY && g.parent_id) body.parent_id = '';   // a team goal supports nothing
         if (betSel && betSel.value !== (g.bet_id || '')) body.bet_id = betSel.value;   // "" unlinks it
@@ -474,20 +474,22 @@ function pageGoals() {
   const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, panel: null, strategy: null};
   // Goals is a Strategy tab: the tree is the page and "+ Goal" heads it. Talking about goals is the Ask panel's.
   $('#main').classList.add('strategy-layout', 'rd-goals');
-  $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><div id="goal-body"><p class="muted">Loading…</p></div></div>`;
+  $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><div id="goal-body"><p class="muted">Loading…</p></div>
+    <section class="card gkv" id="goal-kpis" aria-label="KPIs" hidden></section></div>`;
   const actions = $('#strat-actions');
   if (actions && (mePerson() || S.me?.role === 'owner')) {
     actions.innerHTML = '<button class="primary" type="button" id="goal-new">+ Goal</button>';
     actions.querySelector('#goal-new').onclick = () => { if (state.loaded) goalSheetOpen(state); };
   }
   goalsLoad(state);
+  goalsKpiViews($('#goal-kpis'));   // Tree · Loops · Journey (ui/app/goals-kpi-views.js)
 }
 function goalsApply(state, data, needs) {
-  state.goals = (data.goals || []).filter(g => !goalBuiltInOwner(g.owner));
-  state.other = (data.other_kpis || []).filter(k => !goalBuiltInOwner(k.owner));
+  state.goals = (data.goals || []).filter(g => !goalBuiltInOwner(g.owner_id));
+  state.other = (data.other_kpis || []).filter(k => !goalBuiltInOwner(k.owner_id));
   state.proposals = data.proposals || [];
   state.owners = data.owners || {};
-  if (needs !== undefined) state.needs = (needs?.items || []).filter(n => !goalBuiltInOwner(n.goal_owner) && !goalBuiltInOwner(n.owner) && !(data.goals || []).some(g => g.id === (n.goal_id || n.proposal?.goal_id) && goalBuiltInOwner(g.owner)));
+  if (needs !== undefined) state.needs = (needs?.items || []).filter(n => !goalBuiltInOwner(n.goal_owner) && !goalBuiltInOwner(n.owner_id) && !(data.goals || []).some(g => g.id === (n.goal_id || n.proposal?.goal_id) && goalBuiltInOwner(g.owner_id)));
 }
 // Two requests: the tree and what needs you. The roster (people, bots, departments) is already in S.
 // The strategy comes with them, for the bets a goal may serve, and the groups, for their leads (a group's "+"). The
@@ -505,7 +507,7 @@ async function goalsLoad(state) {
   state.loaded = true;
   goalsRender(state);
   const g = state.open && state.goals.find(x => x.id === state.open);
-  if (g) goalPanelOpen(state, g.owner, {goal: g.id});
+  if (g) goalPanelOpen(state, g.owner_id, {goal: g.id});
 }
 // The goals of whoever's page this is, at the top under their name: one line each. Tapping one
 // opens it on the Goals page.

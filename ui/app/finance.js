@@ -31,7 +31,7 @@ function finCapsOf(acc, who) {
   const rights = new Set(row.rights || []);
   const may = right => owner || rights.has(right) || rights.has('finance.admin');
   return {row, owner, all, rights, may,
-    any: all || row.default !== 'none' || live.length > 0,
+    any: all || row.default !== 'none' || live.length > 0 || rights.has('finance.admin'),
     company: all || what.has('pnl') || what.has('pnl_lines'),
     // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
     companyExpenses: all || live.some(g => g.whose === 'company' && (g.what === 'pnl' || g.what === 'expenses')),
@@ -53,7 +53,7 @@ function finCaps() {
 }
 // Tax workpapers are filed whole, so only a viewer who sees everything reads them (backend/finance/tax.py).
 const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
-  : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || (acc?.teammates || []).length > 1) : true);
+  : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || caps.rights.has('finance.admin') || (acc?.teammates || []).length > 1) : true);
 // ?view_as=… on every read while the owner views as someone.
 const finAs = (sep = '&') => FIN_VIEW_AS && finCaps()?.viewing ? `${sep}view_as=${encodeURIComponent(FIN_VIEW_AS)}` : '';
 // A Finance address that keeps "View as": the view is in the address, so Back and Forward carry it.
@@ -65,7 +65,7 @@ function finHref(path, params = {}) {
 }
 
 // ----------------------------------------------------------------- the sidebar
-// Finance shows in the rail once Finance is set up and the viewer sees something in it; it sits under Strategy.
+// Finance shows in the rail once Finance is set up and the viewer sees something in it; it sits under Strategy and Growth.
 function finNavSync() {
   const nav = $('#side .side-scroll'); if (!nav) return;
   const link = nav.querySelector('a[data-nav="finance"]');
@@ -74,7 +74,7 @@ function finNavSync() {
   const a = Object.assign(document.createElement('a'), {className: 'nav-link', href: FIN_ROUTE,
     innerHTML: '<span class="nav-icon" aria-hidden="true">account_balance_wallet</span>Finance'});
   a.dataset.nav = 'finance';
-  const after = nav.querySelector('a[data-nav="strategy"]');
+  const after = nav.querySelector('a[data-nav="growth"]') || nav.querySelector('a[data-nav="strategy"]');
   if (after) after.after(a); else nav.prepend(a);
   renderTree();
 }
@@ -105,10 +105,12 @@ function finBooksReturn() {
 }
 const FIN_BOOKS_WHY = {access_denied: 'access denied', not_connected: 'connect again', vault_write_failed: 'sign-in not saved',
   no_refresh_token: 'connect again', gateway_refused: 'try again', bad_answer: 'try again', unknown: 'try again',
-  connected_elsewhere: 'already connected elsewhere'};
+  connected_elsewhere: 'already connected elsewhere', already_connected: 'already has a connection'};
 
 // A narrow viewer's figures leave payroll out (§7.5): a read (or row) with `excluded` says so, as the P&L's totals do.
 const finExcl = x => x?.excluded ? ' excl. payroll' : '';
+// A viewer's totals over the slice they see, labeled so they aren't read as the company's (§7.5).
+const finOwnSlice = caps => caps.viewing ? ` · ${finWho(caps.who)}'s view` : ' · Your view';
 
 // ----------------------------------------------------------------- formats
 const FIN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -151,15 +153,32 @@ function finParseCents(text) {
   if (!/^\d+(\.\d{1,2})?$/.test(t)) return null;
   return Math.round(Number(t) * 100);
 }
-// bot:<slug>, human:<id>, a team id, "unattributed".
+// The group with no vendor, team or teammate (backend/finance/reads.py NONE): no real key starts with a space.
+const FIN_NONE = ' unattributed';
+// bot:<id>, human:<id>, a team id, or FIN_NONE.
 function finWho(ref) {
   const s = String(ref || '');
-  if (!s || s === 'unattributed') return 'Unattributed';
+  if (!s || s === FIN_NONE) return 'Unattributed';
   if (s.startsWith('bot:')) return botDisplayName(s.slice(4));
   if (s.startsWith('human:')) return personDisplay(s.slice(6));
   return s;
 }
-const finTeamName = id => ((FIN?.acc || FIN_ACCESS)?.teams || []).find(t => t.id === id)?.name || id || '';
+const finTeamName = id => ((FIN?.acc || FIN_ACCESS)?.teams || []).find(t => t.id === id)?.name
+  || (S.orgGroups || []).find(g => g.id === id)?.name || id || '';
+// The teams directly under `id` ('' for the top, which takes in teams whose parent isn't shown), in the org chart's
+// order (S.orgGroups), then by name.
+function finTeamKids(teams, id) {
+  const rank = t => (S.orgGroups || []).find(g => g.id === t.id)?.order ?? 1e9;
+  return teams.filter(t => (t.parent || '') === (id || '') || (!id && t.parent && !teams.some(x => x.id === t.parent)))
+    .sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(String(b.name)));
+}
+// A built-in helper (the Assistant, BotOps, Strategy Bot, Librarian, Task Manager, Bookkeeper, Health Monitor…; ui/app/sidebar.js
+// isHelperBot): listed together as Helpers, after the org chart.
+function finHelper(actor) {
+  if (!String(actor || '').startsWith('bot:')) return false;
+  const id = actor.slice(4), e = (S.emps || []).find(x => x.id === id);
+  return e ? isHelperBot(e) : isBuiltInBot(id);
+}
 const finAvatar = (ref, size = 18) => String(ref || '').startsWith('bot:') ? avatar(ref.slice(4), size)
   : personAvatar((S.people || []).find(p => p.id === String(ref).slice(6)) || {name: finWho(ref)}, size);
 

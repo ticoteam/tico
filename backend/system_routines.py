@@ -35,18 +35,18 @@ LOG = logging.getLogger("tico.system_routines")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS system_runs(
- id TEXT PRIMARY KEY, job TEXT NOT NULL, started TEXT NOT NULL, finished TEXT, ok INTEGER NOT NULL DEFAULT 1,
+ id TEXT PRIMARY KEY, job TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, ok INTEGER NOT NULL DEFAULT 1,
  result TEXT NOT NULL DEFAULT '', route TEXT, fallback TEXT, cost_usd REAL, runs INTEGER NOT NULL DEFAULT 1,
- first_started TEXT);
-CREATE INDEX IF NOT EXISTS system_runs_job ON system_runs(job, started);
+ first_started_at TEXT);
+CREATE INDEX IF NOT EXISTS system_runs_job ON system_runs(job, started_at);
 """
 
 
 def ensure(c):
-    """Add what SCHEMA's table gained since a database was made: `first_started`, the first of a folded row's quiet
-    repeats (its `started` moves to the latest), so counts can spread `runs` over the time they happened."""
-    if "first_started" not in {row[1] for row in c.execute("PRAGMA table_info(system_runs)")}:
-        c.execute("ALTER TABLE system_runs ADD COLUMN first_started TEXT")
+    """Add what SCHEMA's table gained since a database was made: `first_started_at`, the first of a folded row's quiet
+    repeats (its `started_at` moves to the latest), so counts can spread `runs` over the time they happened."""
+    if "first_started_at" not in {row[1] for row in c.execute("PRAGMA table_info(system_runs)")}:
+        c.execute("ALTER TABLE system_runs ADD COLUMN first_started_at TEXT")
 
 KEEP = 50                   # rows per job
 QUIET_WRITE_SECONDS = 60    # a repeated quiet run moves its row at most this often
@@ -130,6 +130,7 @@ ACTIONS = {
                           ("engineering", "exceptions", "wake", "manager")),
     "read_activity": ("read yesterday's chats, tasks, Slack, mail and meetings",
                       ("learnings", "chat", "slack", "mail", "meetings")),
+    "propose_memory_tidy": ("propose memory and knowledge edits for the pilot bots", ("memory", "tidy", "pilot")),
     "send_learnings": ("send each bot what it should remember", ("learnings", "memory", "send")),
     "remind_due": ("tell a bot when one of its tasks reaches its due time", ("due", "remind", "tasks")),
     "go_ahead": ("go ahead on a past-deadline question's default answer, or expire it",
@@ -146,6 +147,18 @@ ACTIONS = {
     "turns_finding": ("keep one Health finding per busy-turns incident and hand what it cannot fix to BotOps",
                       ("health", "turns", "incident", "botops", "busy")),
     "wake_stalled": ("wake the bot on a task nothing is moving", ("stalled", "wake", "tasks")),
+    "nudge_asks": ("nudge a person once in their thread when a bot's ask to them stays unanswered for a day",
+                   ("ask", "follow up", "nudge", "remind", "thread", "unanswered")),
+    "wake_digest_bots": ("start one run for each bot with new messages in the threads it follows on digest",
+                         ("bot", "digest", "thread", "wake", "batch")),
+    "route_message": ("have Decide read a person's message that names nobody and wake the bots it is for, three at most",
+                      ("route", "routing", "thread", "bots", "wake", "message")),
+    "resume_capped_wakes": ("let bot wakes the loop guard paused go when a thread's hour has room",
+                            ("loop", "guard", "capped", "paused", "resume", "wake", "thread", "bots")),
+    "purge_thread_messages": ("delete messages past the time their thread keeps them, with what was copied from them",
+                              ("retention", "purge", "delete", "thread", "messages", "keep")),
+    "email_digest": ("email a person once an hour the threads they follow on digest that have new messages: titles, "
+                     "unread counts and links, never the messages", ("email", "digest", "unread", "thread", "notify")),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
     "unstrand": ("send bot tasks waiting on nothing back to work", ("waiting", "tasks")),
     "ask_to_task": ("turn a bot's plain ask to a person into a small task", ("ask", "tasks")),
@@ -215,6 +228,9 @@ JOBS = [
         "Lists each engineering board's exceptions in plain code and wakes its manager (Manager profile) with them only "
         "when the list has an entry the last one did not. Tickets that move on their own are not listed.",
         CHECKS, "Hourly", 3600, control=True, then=("list_exceptions", "wake_type_manager")),
+    Job("memory_tidy", "Nightly memory tidy",
+        "Proposes memory and knowledge edits for up to three pilot bots on their named models. Pilot stop: $50.",
+        LEARNING, "Nightly at 03:30", control=True, then=("propose_memory_tidy",)),
     Job("learnings", "Nightly learnings",
         "Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember.",
         LEARNING, "Nightly at 03:00", ai=True, control=True, labels=("learnings-route",), then=("read_activity", "send_learnings")),
@@ -225,6 +241,22 @@ JOBS = [
         REMINDERS, "Hourly", 3600, control=True, then=("go_ahead",)),
     Job("approval_expiry", "Approval expiry", "Takes approvals and asks nobody will act on out of Needs you.",
         REMINDERS, "Hourly", 3600, then=("expire_approvals",)),
+    Job("thread_followups", "Follow-ups",
+        "Nudges a person once, in their thread, when a bot's ask to them stays unanswered for a day. Plain code: no "
+        "model is called, and nothing to nudge is a quiet run.",
+        REMINDERS, "Every 15 minutes", 900, then=("nudge_asks",)),
+    Job("thread_digest", "Email digest",
+        "Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread "
+        "count and a link, never the messages. Nothing unread is a quiet run.",
+        REMINDERS, "Hourly", 3600, then=("email_digest",)),
+    Job("thread_bot_digest", "Bot thread digest",
+        "Starts one run an hour for each bot that follows threads on digest and has new messages in them. Plain code: "
+        "no model is called until a batch has something in it, and nothing new is a quiet run.",
+        REMINDERS, "Hourly", 3600, then=("wake_digest_bots",)),
+    Job("thread_routing", "Thread routing",
+        "Reads a person's message that names nobody in a thread with several bots and wakes the ones it is for, three "
+        "at most. Below the confidence bar, or with Decide off, it wakes none.",
+        REMINDERS, "As messages arrive", ai=True, labels=("slack-route",), records=False, then=("route_message",)),
     Job("still_needed", "Unanswered questions",
         "On weekday mornings, sends questions unanswered for two business days back to their bots.",
         REMINDERS, "Hourly", 3600, then=("resend_questions",)),
@@ -240,6 +272,13 @@ JOBS = [
     Job("snooze_ends", "Snooze ends",
         "Brings snoozed tasks back when their date comes and starts deferred runs that are due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("end_snooze", "start_deferred", "start_task")),
+    Job("thread_loop_guard", "Paused bot replies",
+        "Lets bot replies the loop guard paused in a thread go, as many as its hour has room for, with no one having to post.",
+        HOUSEKEEPING, "Every 10 seconds", 10, records=False, then=("resume_capped_wakes",)),
+    Job("thread_retention", "Thread retention",
+        "Deletes messages past the time their thread keeps them, with what was copied from them, in short batches. Plain "
+        "code: nothing past its time is a quiet run.",
+        HOUSEKEEPING, "Every 15 minutes", 900, then=("purge_thread_messages",)),
     Job("invariant_checks", "Production checks",
         "Reads a few production invariants in plain code, shows each failing one on Health and raises one task for its "
         "owner; the task is closed when the check passes.",
@@ -321,6 +360,7 @@ CONTROLS = {
     "health_scan": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00", owner_only=True),
     # One run a night reads the day before (backend/learnings.py claims one per night): the choice is its time.
     "learnings": Control(presets=(DAILY,), preset=DAILY, at="03:00"),
+    "memory_tidy": Control(on=False, presets=(DAILY,), preset=DAILY, at="03:30"),
     "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
     "task_manager_report": Control(presets=(BUSINESS, HOURLY, FOUR_HOURS, DAILY), preset=BUSINESS, at="09:00"),
@@ -333,7 +373,7 @@ CONTROLS = {
 
 QUICK_KEYS = ("still_wanted", "kpi_asks", "health_scan", "ask_deadlines", "task_manager_report",
               "engineering_exceptions", "bookkeeper_check", "bookkeeper_watch",
-              "bookkeeper_rules_digest")   # last runs read by backend/scheduler.py (QUICK and FIXED)
+              "bookkeeper_rules_digest", "thread_followups", "thread_digest", "thread_bot_digest", "thread_retention")   # last runs read by backend/scheduler.py (QUICK and FIXED)
 
 
 def zone():
@@ -342,7 +382,7 @@ def zone():
 
 
 def _stored(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (CONFIG_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (CONFIG_KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -374,7 +414,7 @@ def schedule_words(key, cfg):
     if not cfg or not cfg.get("preset"):
         return BY_KEY[key].schedule
     words = PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
-    return "Nightly at " + cfg["at"] if key == "learnings" else words
+    return "Nightly at " + cfg["at"] if key in ("learnings", "memory_tidy") else words
 
 
 def may_change(auth, who, key):
@@ -425,7 +465,7 @@ def save_config(c, actor, key, on=None, preset=None, at=None):
         mine["at"] = at
     if mine:
         stored[key] = mine
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (CONFIG_KEY, json.dumps(stored, sort_keys=True)))
     after = config(c)[key]
     if after != before:
@@ -485,7 +525,7 @@ def next_due(cfg, last, now):
 def last_started(c, keys):
     """{job: the start of its newest run} for these jobs."""
     marks = ",".join("?" for _ in keys)
-    rows = c.execute(f"SELECT job, max(started) FROM system_runs WHERE job IN ({marks}) GROUP BY job", tuple(keys))
+    rows = c.execute(f"SELECT job, max(started_at) FROM system_runs WHERE job IN ({marks}) GROUP BY job", tuple(keys))
     return {job: H.parse_ts(started) for job, started in rows.fetchall() if started}
 
 
@@ -559,11 +599,11 @@ def _repeat(c, run, finished):
     """(the job's last row, whether it was moved under a minute ago) when `run` is a quiet repeat of it, else None."""
     if not run.quiet or run.error is not None or run.route is not None:
         return None
-    last = c.execute("SELECT id,ok,result,route,finished FROM system_runs WHERE job=? ORDER BY started DESC LIMIT 1",
+    last = c.execute("SELECT id,ok,result,route,finished_at FROM system_runs WHERE job=? ORDER BY started_at DESC LIMIT 1",
                      (run.job,)).fetchone()
     if not last or not last["ok"] or last["route"] is not None or last["result"] != run.result:
         return None
-    moved = H.parse_ts(last["finished"])
+    moved = H.parse_ts(last["finished_at"])
     return last, bool(moved and H.parse_ts(finished) - moved < timedelta(seconds=QUIET_WRITE_SECONDS))
 
 
@@ -574,10 +614,10 @@ def save(c, run, finished=None):
         last, recent = repeat
         if recent:
             return last["id"]
-        c.execute("UPDATE system_runs SET started=?,finished=?,runs=runs+1 WHERE id=?", (run.started, finished, last["id"]))
+        c.execute("UPDATE system_runs SET started_at=?,finished_at=?,runs=runs+1 WHERE id=?", (run.started, finished, last["id"]))
         return last["id"]
     rid = H.new_id()
-    c.execute("INSERT INTO system_runs(id,job,started,finished,ok,result,route,fallback,cost_usd,first_started) "
+    c.execute("INSERT INTO system_runs(id,job,started_at,finished_at,ok,result,route,fallback,cost_usd,first_started_at) "
               "VALUES(?,?,?,?,?,?,?,?,?,?)",
               (rid, run.job, run.started, finished, 0 if run.error else 1, run.error or run.result or "Done",
                run.route, run.fallback, run.cost_usd, run.started))
@@ -630,7 +670,7 @@ def prune(c):
     """Each job keeps its last KEEP rows."""
     for (job,) in c.execute("SELECT DISTINCT job FROM system_runs").fetchall():
         c.execute("DELETE FROM system_runs WHERE job=? AND id NOT IN "
-                  "(SELECT id FROM system_runs WHERE job=? ORDER BY started DESC LIMIT ?)", (job, job, KEEP))
+                  "(SELECT id FROM system_runs WHERE job=? ORDER BY started_at DESC LIMIT ?)", (job, job, KEEP))
 
 
 # ----------------------------------------------------------------------------- the list
@@ -647,7 +687,7 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
             return None
         if job.key == "learnings" and c is not None:
             return next_night(c, cfg, now)
-        return next_due(cfg, H.parse_ts(last["started"]) if last else None, now)
+        return next_due(cfg, H.parse_ts(last["started_at"]) if last else None, now)
     every = job.every
     if job.key == "directory_sync" and c is not None:
         every = (directory_minutes(c) or 0) * 60
@@ -655,7 +695,7 @@ def next_at(job, last, now, settings=None, c=None, cfg=None):
         return None
     if not last:
         return None
-    started = H.parse_ts(last["started"])
+    started = H.parse_ts(last["started_at"])
     return max(started + timedelta(seconds=every), now)
 
 
@@ -686,17 +726,17 @@ def spent_this_month(c, labels, at=None):
         return None
     at = at or datetime.now(timezone.utc)
     month = at.astimezone(timezone.utc).strftime("%Y-%m-01T00:00:00")
-    where = " OR ".join("json_extract(detail_json,'$.label') LIKE ?" for _ in labels)
-    total = c.execute("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events "
-                      f"WHERE action='judge.spend' AND ts>=? AND ({where})",
+    where = " OR ".join("json_extract(detail,'$.label') LIKE ?" for _ in labels)
+    total = c.execute("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events "
+                      f"WHERE action='judge.spend' AND created_at>=? AND ({where})",
                       (month, *[f"{label}@%" for label in labels])).fetchone()[0]
     return round(float(total or 0), 4)
 
 
 def last_runs(c):
     """The newest row per job."""
-    rows = c.execute("SELECT r.* FROM system_runs r JOIN (SELECT job, max(started) AS started FROM system_runs "
-                     "GROUP BY job) m ON m.job=r.job AND m.started=r.started").fetchall()
+    rows = c.execute("SELECT r.* FROM system_runs r JOIN (SELECT job, max(started_at) AS started_at FROM system_runs "
+                     "GROUP BY job) m ON m.job=r.job AND m.started_at=r.started_at").fetchall()
     return {r["job"]: dict(r) for r in rows}
 
 
@@ -705,7 +745,7 @@ def last_ai_runs(c):
     keys = [job.key for job in JOBS if job.ai]
     out = {}
     for key in keys:
-        row = c.execute("SELECT * FROM system_runs WHERE job=? AND route IS NOT NULL ORDER BY started DESC LIMIT 1",
+        row = c.execute("SELECT * FROM system_runs WHERE job=? AND route IS NOT NULL ORDER BY started_at DESC LIMIT 1",
                         (key,)).fetchone()
         if row:
             out[key] = dict(row)
@@ -769,6 +809,13 @@ def listing(c, settings, now=None, who=None, auth=None):
                 "owner_only": bool(ctl and ctl.owner_only),
                 "can_change": bool(ctl and who is not None and auth is not None and can_change(auth, who, job.key)),
                 "last": None, "next": _stamp(following) if following else None}
+        if job.key == "memory_tidy":
+            from . import memory_tidy_controls
+            item["run_unavailable"] = memory_tidy_controls.UNAVAILABLE
+        if job.key == "memory_tidy" and item["can_change"]:
+            from . import memory_tidy_controls
+            item["pilots"] = memory_tidy_controls.pilot_rows(c)
+            item["pilot_models"] = memory_tidy_controls.model_options(c, settings)
         item["search"] = search_words(job, when_words, then_words, department)
         if job.key == "task_manager_report":
             from .task_manager import active as task_manager_active
@@ -781,7 +828,7 @@ def listing(c, settings, now=None, who=None, auth=None):
             from .health_monitor import active
             item["note"] = None if active(c) else "Finds nothing while the Health Monitor is off (Settings > Health)"
         if row:
-            item["last"] = {"started": row["started"], "finished": row["finished"], "ok": bool(row["ok"]),
+            item["last"] = {"started_at": row["started_at"], "finished_at": row["finished_at"], "ok": bool(row["ok"]),
                             "result": row["result"], "runs": row["runs"]}
         if job.ai:
             answered = ai_last.get(job.key)
@@ -823,7 +870,15 @@ def install(app, store, auth, mutate):
         owner. Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
         who = request.state.identity
         may_change(auth, who, key)
-        mutate(request, body, lambda c: save_config(c, who.actor, key, body.on, body.preset, body.at))
+        if body.pilots is not None and key != "memory_tidy":
+            raise Problem("invalid", "Only Nightly memory tidy has a pilot list", 422)
+
+        def work(c):
+            if body.pilots is not None:
+                from . import memory_tidy_controls
+                memory_tidy_controls.save(c, store.settings, who.actor, [p.model_dump() for p in body.pilots])
+            return save_config(c, who.actor, key, body.on, body.preset, body.at)
+        mutate(request, body, work)
         with store.read() as c:
             return {"job": row_of(c, store.settings, key, who, auth)}
 

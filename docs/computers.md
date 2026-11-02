@@ -22,9 +22,11 @@ computer, and a run uses, in order, that computer's subscription for the run's A
 computer, then Tico Gateway when it is on. Otherwise the run waits.
 
 1. Open **Settings → Models** and click **Add subscription**.
-2. Pick the **Kind**: **Claude plan** (paste the token from `claude setup-token`), **ChatGPT plan** (paste Codex's
-   `auth.json`), or an Anthropic or OpenAI API key.
-3. Enter a **Name**, such as *Claude Max*, and click **Save**.
+2. Pick the **Kind**: **Claude plan**, **ChatGPT plan**, or an Anthropic or OpenAI API key, and enter a **Name**, such as
+   *Claude Max*.
+3. For a plan, click **Connect**, open the link and sign in with the account that has the plan (paste back the code the
+   page shows, or enter the code Tico shows). Tico saves the result. Or paste it and click **Save**: the token from
+   `claude setup-token`, or Codex's `auth.json`. An API key is always pasted.
 4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
 
 Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
@@ -33,7 +35,7 @@ subscription does the same on each computer that had it. A computer on an older 
 picker until it updates.
 
 Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used, or an API key's
-cost this month. **Reconnect** means the saved login stopped working; paste a new one from the row's menu. A new value
+cost this month. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value
 restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the
 old one. The page asks first and says how many.
 
@@ -69,8 +71,13 @@ its work returns to the queue without changing the task. After 10 missed starts 
 started, Tico reports a pre-start failure instead of retrying forever. Check the computer named in the failure.
 
 CPU or memory strictly above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
+Memory at **85% or more** holds them too, with **waiting: computer busy: memory N%**; they start again once memory is
+below **80%**, so the queue does not flap. A computer whose last sample is more than **2 minutes** old holds new starts
+with **waiting: computer not reporting**, because a computer that stops reporting may be frozen. A computer that has
+never reported is not held. The server also ends a run that has gone silent (no heartbeat or event for 5 minutes)
+once it is past its bot's max_run_minutes plus 5 minutes, without waiting for the computer.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
-the sustained overload clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
+the hold clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
 the waiting turns, when the computer has a free turn; Tico's notices and messages between bots wait. This brake does
 not change your account, model or computer size.
 
@@ -199,12 +206,24 @@ not here.
 
 A **subscription** is one of the company's model logins or keys, saved once in Tico rather than on a computer: a
 Claude setup-token (from `claude setup-token`), a ChatGPT login (the `auth.json` from a computer where `codex login` is
-signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key. It belongs to the company; the list says
+signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key.
+
+**Connect** signs a plan in without pasting. Tico picks an online computer on the latest release with that tool
+installed, the person's own first, and runs the sign-in there: `claude setup-token`, or `codex login` in a folder of its
+own. That computer's own login stays as it was. The page shows the link and any code, never the result, which the
+computer sends straight to Tico and keeps no copy of. If it has to run on someone else's computer, the page says so before
+the sign-in, since the result passes through that computer; cancel and paste to avoid that. With no such computer,
+**Connect** is off and pasting still works. A sign-in the command reports as failed saves nothing.
+Connecting a saved subscription is **Reconnect**, and asks first as a pasted value does. It belongs to the company; the list says
 who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
 page sees the list (name, kind, status, computers, usage), never a value.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
-computers. Every bot on that computer then runs that tool on it.
+computers. Every bot on that computer then runs that tool on it. Automatic fallback can use it too when
+that tool is installed and the company allows automatic fallback. On an updated runner, an unused automatic
+candidate's login is fetched only when the bot is about to use it. Changing or removing that login leaves a turn
+still running on another tool alone. Once the fallback fetches the login, changing it stops that turn too. Older
+runners fetch fallback logins up front and restart those turns when a login changes.
 
 - Giving, switching or taking off a computer's subscription, reconnecting it, or removing one in use, restarts that tool there: its
   running turns stop and go back in the queue (a turn that may already have acted outside Tico is held for review
@@ -216,9 +235,9 @@ computers. Every bot on that computer then runs that tool on it.
   refreshed login is sent back to Tico. Each token in it is masked in what the turn leaves.
 - A usage limit met on a subscription holds it on every computer it is given to until the reset. Meanwhile it is
   passed over: turns there run on the computer's own login, else the Gateway under the company's models choice,
-  else wait.
+  else wait. A bot waiting on the old plan's limit resumes on the new plan at once when a computer is switched to it.
 - If the provider refuses it, it shows **Needs reconnect** and is passed over (the computer's own login, then the
-  Gateway) until someone pastes a new value with **Reconnect**. The computer's own login is left alone.
+  Gateway) until someone saves a new value with **Reconnect**. The computer's own login is left alone.
 - A computer on an older runner does not take subscriptions; its bots run as before until it updates.
 
 One computer is one trust group ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)):
@@ -262,11 +281,14 @@ Click a row to open its pop-up. Its sections, top to bottom:
    **Add key**, **Replace key** and **Clear key** for a key. **Add connection** at the end opens its own pop-up to sign
    in an installed tool or add a key.
 2. **Screen**: an on/off switch, then **View** or **Control** when enabled (Beta). Enabling a screen that needs setup reveals the runner command, as described in [Install](install.md#screen).
-3. **Bots on this computer**: each bot, read-only, with a red pill when its connection has a problem. **Assign on the
+3. **Internet**: **Share internet with bots**, then the bots that may use it and the **Daily cap (GB)**, and today's
+   total, which opens to the sites that went through. Only on your own computer; an admin sees only the switch, to turn
+   it off. See [Share internet with bots](#share-internet-with-bots).
+4. **Bots on this computer**: each bot, read-only, with a red pill when its connection has a problem. **Assign on the
    Bots page** opens Settings → Bots, where a bot's computer is chosen.
-4. **Versions and updates**: Tico, the OS and runner, each AI tool's version with **Installed** and **Enabled**, and
+5. **Versions and updates**: Tico, the OS and runner, each AI tool's version with **Installed** and **Enabled**, and
    **Installation and updates**.
-5. **Settings**: **Keep for inbox bots only**, **Accepts members' bots** (admins), **Turns at once** (owners and admins:
+6. **Settings**: **Keep for inbox bots only**, **Accepts members' bots** (admins), **Turns at once** (owners and admins:
    empty is the computer's own capacity, 1 to 256 otherwise), **Performance diagnostics** and
    **Performance**, and **Revoke computer** at the bottom.
 
@@ -282,6 +304,68 @@ computer's own login and key previews (others see which kind of key it is, not t
 gets the change controls: sign in and out, Add connection, screen, tools, performance,
 inbox-only and Revoke computer. The API refuses anyone else ([Permissions](permissions.md)). BotOps cannot sign a login
 out, because that stops bots.
+
+## Share internet with bots
+
+A bot's browser can reach the web from another computer's internet connection: your laptop's home IP instead of a
+cloud machine's. Sites that block data-center addresses then see an ordinary home connection. No proxy service is
+involved.
+
+1. On your own computer's pop-up, turn on **Share internet with bots**, tick the bots that may use it, and set the
+   **Daily cap (GB)** (5 GB by default). Only the computer's operator can turn it on or pick bots; it is off until they
+   do.
+2. In the bot's settings, set **Browse through** to that computer (owners, admins and the bot's managers). Only
+   computers that share with that bot are offered.
+
+The bot's browser then goes out through that computer for every site. Both runners connect out to Tico's relay, as for
+the computer screen; neither needs an open port. The browser's encrypted traffic passes through unread: Tico sees the
+site name and how many bytes, never the pages.
+
+What each side guards against: the sharing computer protects its owner from any bot, so its rules below (home
+network, router, its own addresses, ports, the cap, the owner's choice of bots) hold whatever the bot does. The bot's
+side (its proxy, the browser wrapper, failing closed) keeps a bot from browsing directly by accident. It is no wall
+against a bot set on going around it, which could only reach the web from its own computer's address anyway.
+
+What the sharing computer allows:
+
+- Ports 80 and 443 only.
+- Public internet addresses only. The sharing computer looks the name up itself and refuses its own addresses
+  (including its home's public address, as Tico's relay sees it), its home network (`10.*`, `172.16-31.*`,
+  `192.168.*`), loopback, link-local, `100.64.0.0/10`, multicast, private IPv6 and the other special-purpose ranges
+  IANA lists, and checks the address it actually connects to. It also refuses every device on the networks its
+  interfaces are on (on IPv4 a `/16` or narrower; on IPv6 the `/64` of each of its addresses, where home devices
+  have public addresses), the far end of a point-to-point link, and its router.
+  It asks the relay for its public address over IPv4 and over IPv6 when it connects and every 5 minutes; while the
+  IPv4 answer is missing, it refuses IPv4 sites, so an IPv6-only computer reaches no IPv4 site, NAT64 included.
+- Up to the daily cap. Crossing it closes that day's connections through it until midnight UTC. Bytes count on the UTC
+  day they pass, so a connection open across midnight counts on both days.
+
+When the computer is offline, stops sharing with the bot, was removed or reached its cap, the bot's browser connection
+fails, and the proxy's answer says why ("Ana's MacBook is offline"; also at the `TICO_BROWSER_PROXY` address in a
+browser). It never falls back to going out directly. On a computer whose runner is too old for this, the bot's work waits
+("Update Office server to use Browse through"). Changing a bot's
+**Browse through**, or turning sharing off, closes the connections already open.
+
+The day's total on the pop-up opens to a table of what went through: day, bot, site and bytes, kept 30 days. The
+computer's operator and admins see it.
+
+In turns of a bot with **Browse through** set, the runner sets `TICO_BROWSER_PROXY` (a proxy on `127.0.0.1` for that
+bot), adds `--proxy-server` to `CHROMIUM_FLAGS`, and puts `google-chrome`, `chromium` and their usual names first on
+`PATH` so a browser started by name goes through it. A browser started another way takes the proxy itself, for example
+Playwright's `chromium.launch({proxy: {server: process.env.TICO_BROWSER_PROXY}})`. A browser started by name gets
+the bot's own profile (`~/.tico/browser-exit/<bot>`; any other `--user-data-dir` is refused), and refuses to start
+when a browser it didn't start through the proxy is open on that profile, or when a flag would skip the proxy (with
+one dash or two, spaces around it, or a bare `--`). `localhost` stays local: the browser reaches the bot's own computer directly, never
+through the exit.
+
+The proxy asks for no password, because a browser can't send one for every connection. Under turn isolation (Linux
+runners with `TICO_RUNNER_BOT_UID`), it takes connections only from the OS users that bot's turns run as. Without
+isolation, as on a Mac or a cloud machine, bots on one computer share one OS user and are one trust group: any of them
+can use another's proxy.
+
+API: `GET/POST /api/v2/computers/{id}/browser-exit`, `GET /api/v2/computers/{id}/browser-exit/usage`,
+`GET/POST /api/v2/bots/{bot}/browser-exit` ([OpenAPI](openapi/v2.json)). Hub: `hub computer browser-exit` and
+`hub bot browser-exit`.
 
 ## Add a connection
 
@@ -382,9 +466,9 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
 - **Switch account** is a sign-in on the side. The Computer signs the new account in to a private folder inside the
   login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps beside the login). Once the new
   account is signed in there, the dialog reads **Putting the new account in place**: the Computer asks Tico to go
-  ahead, and from Tico's yes the switch can no longer be cancelled (it gets two more minutes of its own to finish).
+  ahead, and from Tico's yes the switch can no longer be canceled (it gets two more minutes of its own to finish).
   Only then does it move the new login files in, keeping the old ones until it has checked the login again; if moving
-  a file or that check fails, the old files go back. Cancelling before that point, failing or running out of time leaves
+  a file or that check fails, the old files go back. Canceling before that point, failing or running out of time leaves
   the old account working, and the side folder is removed (kept, and named in the message, only if the old files could
   not be put back). Runs that start afterwards use the new account. The account and usage readings of the old account
   are cleared.
@@ -398,7 +482,7 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
 - **Switch to subscription** sits on a Computer's own login that runs on an API key (the shared key, the Computer's
   own key or one set in its terminal): in place of **Switch account**, or next to **Replace key** and **Clear key**. It
   is the same sign-in on the side: until the subscription is signed in and in place the key stays in use, and
-  cancelling, failing or running out of time leaves it so. Once the subscription is in place the key is removed as
+  canceling, failing or running out of time leaves it so. Once the subscription is in place the key is removed as
   **Clear key** removes it (the Computer's copies, and its own key in the vault), and no key reaches that login again:
   not readiness, not the ten-minute key login and not a turn's environment, so the next turn runs on the subscription.
   The server stops handing it the **Every computer** key too. Unlike a sign-out, a later sign-in or Switch account does
@@ -452,7 +536,7 @@ login with none. The Computer must be online and on a current runner; an older o
   own connection (the sign-in queue never carries a key) and checks it (Codex signs in with it; the others read it on
   each turn). Until the check passes and Tico agrees the key goes in, the old key stays in use for runs and in the
   Computer's key files, and the Computer's regular key fetch leaves them alone. From Tico's yes the change can no longer
-  be cancelled: the key it replaces is deleted from the vault, and a key set on the computer is taken out of
+  be canceled: the key it replaces is deleted from the vault, and a key set on the computer is taken out of
   `secrets/_shared.env`. A key that does not work, a cancel, or a check that runs out of time deletes the new key and
   leaves the old one in use (for Codex, signed in again with it). Runs that start afterwards use the new key; for Claude
   Code, a key added here is used even when the computer also has a browser login.

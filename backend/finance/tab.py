@@ -11,10 +11,10 @@ from typing import Any, cast
 from . import closing as CL
 from .context import Ctx, load
 from .core import dates
-from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, Book, descendants
+from .core.org import Org
 from .store import access as SA
 from .store import ap as SAP
 from .store import banking as SK
@@ -29,6 +29,7 @@ GROUPS = ("banks", "cards", "payments", "payroll", "bills_invoices", "tico", "ac
 GROUP_NAMES = {"banks": "Banks", "cards": "Cards", "payments": "Payments", "payroll": "Payroll",
                "bills_invoices": "Bills and invoices", "tico": "Tico", "accounting": "Accounting", "manual": "Manual"}
 OTHER_CODE = "6900"
+BILLS_EMAIL_KEY = "finance_bills_email"     # the install's bills address (actions.set_bills_email writes it)
 
 
 def page_size(limit: int) -> int:
@@ -134,7 +135,7 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
         pnl_ids = [a.id for a in ctx.accounts.values() if a.type in PNL_TYPES]
         earned = -sum(SK.balances(c, ctx.book.id, day, pnl_ids).values())
         sections["equity"].append({"account_id": None, "code": "", "name": "Net income to date", "subtype": "earnings",
-                                   "parent_id": None, "balance": earned, "entry_sources": [], "sources": []})
+                                   "parent_id": None, "balance": earned, "entry_sources": ["pnl"], "sources": []})
         totals["equity"] += earned
     return {"as_of": day, "assets": sections["asset"], "liabilities": sections["liability"],
             "equity": sections["equity"], "totals": totals, "scoped": not whole, "currency": ctx.book.base_currency,
@@ -193,7 +194,7 @@ def payment_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], r: Any)
     obligation = str(r["obligation"] or "")
     if obligation.startswith("bill:") and not bill_seen(ctx, view, cut, obligation.removeprefix("bill:")):
         return False
-    return view.everything or (account is not None and view.sees(account, SK.loads(r["tags_json"])))
+    return view.everything or (account is not None and view.sees(account, SK.loads(r["tags"])))
 
 
 def bill_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], bill_id: str) -> bool:
@@ -441,12 +442,16 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         return out
 
     hidden = set(private_cut(ctx, view))
-    line_ids = [a.id for a in ctx.accounts.values() if a.type in PNL_TYPES and view.sees_account(a) and
-                (not wanted or a.id in wanted) and a.id not in hidden]
+    seen_lines = [a for a in ctx.accounts.values() if view.sees_account(a) and (not wanted or a.id in wanted) and
+                  a.id not in hidden]
+    # Every entry shows (§12): by its income and expense lines, or by its balance sheet lines when it has no others.
+    # Asked for by line, a balance sheet line shows all of its own.
+    line_ids = [a.id for a in seen_lines if wanted or a.type in PNL_TYPES]
+    balance_ids = [a.id for a in seen_lines if not wanted and a.type not in PNL_TYPES]
 
     def fetch_lines(mark: tuple[str, str] | None, n: int) -> list[Any]:
         return SK.lines_page(c, ctx.book.id, account_ids=line_ids, before=mark, most=n, start=start_day, end=end_day,
-                             q=text)
+                             q=text, balance_only_ids=balance_ids)
 
     def show_lines(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         tags = SL.line_tags(c, [str(r["line_id"]) for r in batch])
@@ -562,8 +567,8 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
     from .store import budgets as SB
     ctx = load(c, at)
     view = ctx.view(viewer)
-    if status and status not in ("active", "frozen", "cancelled"):
-        raise invalid("status is active|frozen|cancelled")
+    if status and status not in ("active", "frozen", "canceled"):
+        raise invalid("status is active|frozen|canceled")
     most = page_size(limit)
     marks = decode_cursor(cursor)
     after = marks[0] if marks else ""
@@ -635,7 +640,7 @@ def _access_to(ctx: Ctx, account_id: str) -> list[Row]:
 def _sync(conn: Any | None) -> Row | None:
     if conn is None:
         return None
-    settings = SK.loads(conn["settings_json"])
+    settings = SK.loads(conn["settings"])
     return {"connection_id": str(conn["id"]), "provider": str(conn["provider"]), "status": str(conn["status"]),
             "last_ok_at": conn["last_ok_at"], "last_sync_at": conn["last_sync_at"], "last_error": conn["last_error"],
             "egress_ip": settings.get("egress_ip")}
@@ -657,10 +662,13 @@ def _direct_on(c: sqlite3.Connection) -> bool:
     return SL.setting(c, DIRECT_KEY) is True
 
 
-def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, at: str | None = None) -> Row:
+def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, gateway: bool = False,
+            at: str | None = None) -> Row:
     """Every source of the books, grouped (banks, cards, payments, payroll, bills and invoices, Tico, accounting,
     manual) with a count per group, so a card program with 500 cards is one row. Each source shows its account
-    mapping, sync state and who can see it. Owner-only unless granted `sources` (or everything)."""
+    mapping, sync state and who can see it. Tico's own sources show whenever they exist, entries or not: the Gateway
+    while it is connected (`gateway`), the bills inbox while it has an address, and Tico invoices always. Owner-only
+    unless granted `sources` (or everything)."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     if not (view.everything or view.sources):
@@ -692,7 +700,7 @@ def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, at:
             rows["banks"].append(item)
     for r in conns.values():
         if str(r["purpose"]) == "payments" or str(r["provider"]) == "mercury":
-            s = SK.loads(r["settings_json"])
+            s = SK.loads(r["settings"])
             rows["payments"].append({"id": str(r["id"]), "kind": "connection", "name": str(r["name"] or r["provider"]),
                                      "provider": str(r["provider"]), "sync": _sync(r),
                                      "payments": {"mode": "approval_queue",
@@ -706,12 +714,18 @@ def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, at:
                                        "provider": str(r["provider"]), "sync": _sync(r),
                                        "mirror": _books_mirror(c, ctx.book, cid, str(r["status"])),
                                        "outbox": SX.outbox_counts(c, cid)})
-    usage = {k: entries.get(k, 0) for k in ("usage",)}
-    if usage["usage"]:
-        rows["tico"].append({"id": "tico-usage", "kind": "usage", "name": "AI services and video (Gateway meter)",
-                             "entries": usage["usage"]})
-    if docs["bills"] or docs["invoices"]:
-        rows["bills_invoices"].append({"id": "documents", "kind": "documents", "name": "Bills and invoices", **docs})
+    used = entries.get("usage", 0)
+    if gateway or used:
+        rows["tico"].append({"id": "tico-usage", "kind": "usage", "name": "Tico Gateway", "entries": used,
+                             "connected": gateway})
+    address = SL.setting(c, BILLS_EMAIL_KEY)
+    if isinstance(address, str) and address:
+        rows["bills_invoices"].append({"id": "bills-inbox", "kind": "inbox", "name": "Bills inbox", "address": address,
+                                       "bills": docs["bills"]})
+    elif docs["bills"]:
+        rows["bills_invoices"].append({"id": "bills", "kind": "documents", "name": "Bills", "bills": docs["bills"]})
+    rows["bills_invoices"].append({"id": "documents", "kind": "documents", "name": "Tico invoices",
+                                   "invoices": docs["invoices"]})
     manual = {k: entries.get(k, 0) for k in ("manual", "import")}
     if any(manual.values()):
         rows["manual"].append({"id": "manual", "kind": "entries", "name": "Journal entries and imports", **manual})
@@ -729,6 +743,26 @@ def _default_of(org_led: bool, defaults: VW.Defaults, owner: bool) -> str:
     return "own_expenses" if org_led or defaults.member == "own_expenses" else "none"
 
 
+def default_team(org: Org, manager: str) -> str | None:
+    """The team a manager's default names ("Engineering expenses"): the single top team of what they cover, the teams
+    they lead (with the teams under them) and the team of each report, when that top is a team they lead. Their team
+    slice then covers everyone on it, so the name is true. A team they only have reports in is never named: a manager
+    who leads nothing gets None, and so does a sub-team lead with a report in the parent team. None too when what they
+    cover spans several teams, or a report sits on no team."""
+    led, mates = org.led_by(manager), org.reports(manager)
+    covered = set(led)
+    for mate in mates:
+        team = org.team_of.get(mate, "")
+        if team not in org.teams:
+            return None
+        covered.add(team)
+    tops = {t for t in covered if not covered.intersection(org.chain(t)[1:])}
+    if len(tops) != 1:
+        return None
+    top = next(iter(tops))
+    return top if top in led else None
+
+
 def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
     return {"id": g.id, "subject_kind": g.subject_kind, "subject": g.subject, "what": g.what, "whose": g.whose,
             "whose_team": g.whose_team or None, "account_ids": sorted(g.account_ids), "new_members": g.new_members,
@@ -738,19 +772,24 @@ def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
 
 def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     """Who can see what in Finance (spec §7.5): the org chart with each teammate's default and grants, private lines
-    and the defaults. Owner and finance admins (`finance.admin`) see everyone, with rights and private lines. A manager
-    sees their own row and the teammates in the teams they manage (nested), with defaults and grants but no rights and
-    no private lines. Anyone else sees only their own row. The owner may view as anyone."""
+    and the defaults. The owner, or anyone granted everything, sees everyone, with rights and private lines; a finance
+    admin (`finance.admin`) adds no view. A manager sees their own row, the teammates in the teams they manage (nested)
+    and everyone who reports to them, with defaults and grants but no rights and no private lines. Anyone else sees
+    only their own row. The owner may view as anyone."""
     ctx = load(c, at)
     org = ctx.org
     owner = bool(org.owner) and viewer == org.owner
-    admin = owner or R.is_admin(org, viewer, ctx.rights(viewer))
+    admin = ctx.view(viewer).everything
     led = frozenset[str]().union(*(org.below(t) for t in org.led_by(viewer)))
-    own_team = org.team_of.get(viewer, "")
     if admin:
         shown = sorted(org.humans | org.bots)
     else:
-        shown = sorted({viewer} | {m for m in org.members(led) if m in org.humans or m in org.bots})
+        under = org.members(led) | org.reports(viewer)
+        shown = sorted({viewer} | {m for m in under if m in org.humans or m in org.bots})
+    # The teams the viewer sees: the ones they manage, and the teams of the teammates shown. A default names a team only
+    # from this set, so a teammate's row never gives away a team the viewer can't see.
+    shown_teams = {org.team_of.get(m, "") for m in shown}
+    visible = {t.id for t in org.teams.values() if admin or t.id in led or t.id in shown_teams}
     defaults = SA.defaults(c)
     grants = SA.grants(c, "active") + SA.grants(c, "suspended")
     teammates: list[Row] = []
@@ -758,20 +797,35 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
         mine = [g for g in grants if VW.applies(org, g, m)]
         # Rights are admin-only, except a teammate's own.
         rights = sorted(ctx.rights(m)) if admin or m == viewer else None
+        default = _default_of(org.manages(m), defaults, bool(org.owner) and m == org.owner)
+        team = default_team(org, m) if default == "team_expenses" else None
         teammates.append({"teammate": m, "kind": "bot" if m in org.bots else "person",
                           "team": org.team_of.get(m) or None, "reports_to": org.reports_to.get(m) or None,
-                          "default": _default_of(bool(org.led_by(m)), defaults, bool(org.owner) and m == org.owner),
-                          "grants": [_grant_row(g, ctx) for g in mine], "rights": rights})
+                          "default": default,
+                          "default_team": team if team in visible else None,
+                          "grants": [_grant_row(g, ctx) for g in mine], "rights": rights,
+                          "may_grant": _may_grant(ctx, viewer, m, defaults)})
     teams = [{"id": t.id, "name": t.name, "parent": t.parent or None, "lead": t.lead or None}
-             for t in sorted(org.teams.values(), key=lambda x: x.name)
-             if admin or t.id in led or t.id == own_team]
+             for t in sorted(org.teams.values(), key=lambda x: x.name) if t.id in visible]
     private = [{"account_id": a, "name": ctx.accounts[a].name if a in ctx.accounts else a,
                 "others_see": p.others_see, "full_detail": sorted(p.full_detail) if owner else None}
                for a, p in sorted(ctx.private().items())] if admin else []
     return {"teams": teams, "teammates": teammates, "private_lines": private,
             "defaults": {"manager": defaults.manager, "member": defaults.member,
                          "manager_payroll": defaults.manager_payroll},
-            "can_view_as": owner, "can_edit_defaults": owner, "view_version": ctx.view(viewer).version}
+            "can_view_as": owner, "can_edit_defaults": owner, "view_version": ctx.view(viewer).version,
+            "finance_approver": (ctx.approver_setting() or None) if owner else None}
+
+
+def _may_grant(ctx: Ctx, viewer: str, subject: str, defaults: VW.Defaults) -> bool:
+    """Whether the viewer may grant this teammate anything (VW.check_grant on the narrowest grant, their own
+    expenses), so the page offers "Grant more" only where a grant would go through."""
+    probe = VW.Grant(id="", subject_kind="teammate", subject=subject, what="expenses", whose="own")
+    try:
+        VW.check_grant(ctx.org, viewer, probe, defaults, ctx.accounts)
+    except FinanceError:
+        return False
+    return True
 
 
 def view_as(c: sqlite3.Connection, viewer: str, target: str, at: str | None = None) -> str:

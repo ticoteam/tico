@@ -1,18 +1,19 @@
 """The Strategy page's market cards (docs/strategy.md#the-page): Where we play and Competitors, written by the owner
 in one click each. They are the market graph's own rows (backend/market.py, backend/market_spend.py), nothing new:
 
-- the segment the team plays in (**Us**) is `company/self` `operates_in` it, and the one it means to enter next
-  (**Next**) is `next: true` on the segment's properties, as the company file's import writes them
-  (backend/company_import.py). One of each: marking a segment Us ends `company/self`'s other `operates_in` edges into
-  segments, and marking one Next clears the flag on the others;
-- removing a segment retires it; its sub-segments move up to its parent;
+- a segment the team plays in (**Us**) is `company/self` `operates_in` it, and one it means to enter next (**Next**)
+  is `next: true` on the segment's properties, as the company file's import writes them (backend/company_import.py).
+  Several of each. Only people set these: a bot is refused here;
+- merging a segment into another moves its Next mark there, unless the other is Us already (`follow_merge`);
+- removing a segment retires it and clears its Next; its sub-segments move up to its parent;
 - a competitor is a company or product with a current `competes_with` edge to `company/self`, either way round.
   Removing one ends those edges (the company stays in the graph); adding one by name or site finds the company the
   graph already has, or makes it, and adds the edge.
 
 An edge ends the day before (`until` is the last day it holds, and today it should already be gone), and a new one
 starts today, so a competitor removed and added again is a new edge beside the ended one. Each write cites one
-evidence row: the owner's say-so on this page. Only the owner and the Librarian write (`market.require_writer`).
+evidence row: the owner's say-so on this page. Only the owner and the Librarian write here
+(`market.require_writer`).
 """
 import re
 from datetime import datetime, timedelta, timezone
@@ -33,8 +34,9 @@ SITE = re.compile(r"^(https?://)?([a-z0-9-]+(\.[a-z0-9-]+)+)(:\d+)?(/\S*)?$", re
 
 
 def _evidence(c, actor):
-    row, _events = MK.create_evidence(c, actor, evidence_key=MK.evidence_id(EVIDENCE), source_kind="other",
-                                      our_read="Set by the owner on the Strategy page.")
+    row, _events = MK.create_evidence(
+        c, actor, evidence_key=MK.evidence_id(EVIDENCE), source_kind="other",
+        our_read="Set by the owner on the Strategy page.")
     return [row["id"]]
 
 
@@ -46,16 +48,16 @@ def _days():
 def _current(c, where, args):
     today, _ = _days()
     return H._rows(c.execute(
-        "SELECT * FROM market_edges WHERE (since IS NULL OR substr(since,1,10)<=?) AND (until IS NULL OR "
-        f"substr(until,1,10)>=?) AND ({where})", (today, today, *args)))
+        "SELECT * FROM market_edges WHERE (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR "
+        f"substr(valid_until_on,1,10)>=?) AND ({where})", (today, today, *args)))
 
 
 def _end(c, actor, edge, ev):
     """The edge holds no longer: its last day was yesterday. One that started today starts yesterday too."""
     _, yesterday = _days()
-    since = edge["since"] if edge["since"] and str(edge["since"])[:10] <= yesterday else None
+    since = edge["valid_from_on"] if edge["valid_from_on"] and str(edge["valid_from_on"])[:10] <= yesterday else None
     MK.update_edge(c, actor, edge["id"], until=yesterday, evidence_ids=ev,
-                   **({"since": yesterday} if edge["since"] and not since else {}))
+                   **({"since": yesterday} if edge["valid_from_on"] and not since else {}))
 
 
 def _own(c, actor, name, ev):
@@ -72,28 +74,48 @@ def _segment(c, segment_id):
     return row
 
 
-def target(c, actor, segment_id, to, company=""):
-    """Mark a segment Us (`ours`), Next (`next`) or neither (`none`). Answers {id, ours, next}."""
+def mirror(c, actor, segment_id, status, company=""):
+    """Where we play as `status` says: `serving` is Us, `next` is Next, anything else (or None) neither. Only what
+    differs is written."""
     seg = _segment(c, segment_id)
-    ev = _evidence(c, actor)
-    segments = {r["id"] for r in c.execute("SELECT id FROM market_entities WHERE type='segment'")}
-    mine = [e for e in _current(c, "rel='operates_in' AND src=?", (MK.OWN_COMPANY_ID,)) if e["dst"] in segments]
-    for edge in mine:
-        if (edge["dst"] != segment_id) == (to == "ours"):        # Us moves here, or leaves here
-            _end(c, actor, edge, ev)
-    if to == "ours" and not any(e["dst"] == segment_id for e in mine):
+    ev = None
+
+    def proof():
+        nonlocal ev
+        ev = ev or _evidence(c, actor)
+        return ev
+    edges = _current(c, "rel='operates_in' AND src=? AND dst=?", (MK.OWN_COMPANY_ID, segment_id))
+    if status == "serving" and not edges:
         today, _ = _days()
-        MK.create_edge(c, actor, src=_own(c, actor, company, ev), rel="operates_in", dst=segment_id, since=today,
-                       evidence_ids=ev)
-    flagged = H._rows(c.execute("SELECT id, properties FROM market_entities WHERE type='segment' AND "
-                                "json_valid(properties) AND json_extract(properties,'$.next')"))
-    for row in flagged:
-        if (row["id"] != segment_id) == (to == "next"):          # Next moves here, or leaves here
-            props = {k: v for k, v in MK.loads(row["properties"], {}).items() if k != "next"}
-            MK.update_entity(c, actor, row["id"], properties=props, evidence_ids=ev)
-    if to == "next" and not seg["properties"].get("next"):
-        MK.update_entity(c, actor, segment_id, properties={**seg["properties"], "next": True}, evidence_ids=ev)
+        MK.create_edge(c, actor, src=_own(c, actor, company, proof()), rel="operates_in", dst=segment_id, since=today,
+                       evidence_ids=proof())
+    elif status != "serving":
+        for edge in edges:
+            _end(c, actor, edge, proof())
+    flagged = bool(seg["properties"].get("next"))
+    if (status == "next") != flagged:
+        props = {k: v for k, v in seg["properties"].items() if k != "next"}
+        MK.update_entity(c, actor, segment_id, properties={**props, "next": True} if status == "next" else props,
+                         evidence_ids=proof())
+
+
+def target(c, actor, segment_id, to, company=""):
+    """Mark a segment Us (`ours`), Next (`next`) or neither (`none`), leaving the others as they are. Answers
+    {id, ours, next}."""
+    _segment(c, segment_id)
+    mirror(c, actor, segment_id, {"ours": "serving", "next": "next"}.get(to), company)
     return {"id": segment_id, "ours": to == "ours", "next": to == "next"}
+
+
+def follow_merge(c, actor, segment_id, into_id):
+    """Segment `segment_id` was merged into `into_id` (backend/market.py merge_entities). Its Us edge moved there with
+    the graph's other edges; its Next mark moves too, unless the one it merged into is Us already (Us ranks higher)."""
+    seg = MK.entity(c, segment_id)
+    if not seg or not seg["properties"].get("next"):
+        return
+    if _current(c, "rel='operates_in' AND src=? AND dst=?", (MK.OWN_COMPANY_ID, into_id)):
+        return
+    mirror(c, actor, into_id, "next")
 
 
 def remove_segment(c, actor, segment_id):
@@ -112,6 +134,10 @@ def remove_segment(c, actor, segment_id):
             MK.create_edge(c, actor, src=edge["src"], rel="member_of", dst=parent, since=today, evidence_ids=ev)
     for edge in _current(c, "src=? OR dst=?", (segment_id, segment_id)):
         _end(c, actor, edge, ev)
+    props = MK.entity(c, segment_id)["properties"]
+    if "next" in props:                                  # added again later, it is not Next until someone says so
+        MK.update_entity(c, actor, segment_id, properties={k: v for k, v in props.items() if k != "next"},
+                         evidence_ids=ev)
     MK.retire_entity(c, actor, segment_id)
     return {"id": segment_id, "removed": True}
 
@@ -200,6 +226,9 @@ def install(app, store, auth, mutate):
 
         def work(c):
             writer(who)
+            if who.role == "bot":
+                raise Problem("forbidden", "Only a person marks a segment Us or Next; propose it to the owner instead",
+                              403)
             return target(c, who.actor, body.id, body.target, company())
 
         return mutate(request, body, work)

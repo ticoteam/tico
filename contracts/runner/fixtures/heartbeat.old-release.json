@@ -17,13 +17,17 @@
     "mail_agent": false,
     "onboarding_state": null,
     "operator": "ana",
+    "owner_id": "ana",
     "repository": "",
     "runner_id": "00000000-0000-4000-8000-000000000001",
     "state": "active",
     "updated": "2026-01-01T00:00:00.000000Z",
+    "updated_at": "2026-01-01T00:00:00.000000Z",
     "updated_by": "human:ana"
    }
   ],
+  "browser_exit": false,
+  "browser_exit_bots": [],
   "performance": true,
   "runtime_credential_source": true,
   "server_time": "2026-01-01T00:00:00.000000Z",
@@ -47,7 +51,8 @@
    "model_switch_type_v1",
    "model_remove_v1",
    "model_switch_to_key_v1",
-   "turns_at_once_v1"
+   "turns_at_once_v1",
+   "private_lanes_v1"
   ],
   "capacity": 4,
   "kind": "docker",

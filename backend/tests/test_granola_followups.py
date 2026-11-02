@@ -93,14 +93,14 @@ def test_disconnect_blocks_trigger_during_cancellation_and_cannot_resurrect_conn
     old = provider.service.load("human:ana")
 
     async def exercise():
-        started, cancelling, finish_cancel = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        started, canceling, finish_cancel = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
         async def blocked(*args, **kwargs):
             started.set()
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
-                cancelling.set()
+                canceling.set()
                 await finish_cancel.wait()
                 raise
 
@@ -110,7 +110,7 @@ def test_disconnect_blocks_trigger_during_cancellation_and_cannot_resurrect_conn
         await started.wait()
         original_job = provider.service.jobs[who.actor]
         deleting = asyncio.create_task(provider.service.disconnect(who))
-        await cancelling.wait()
+        await canceling.wait()
         assert (await provider.service.trigger(who))["state"] == "off"
         assert provider.service.jobs[who.actor] is original_job
         finish_cancel.set()

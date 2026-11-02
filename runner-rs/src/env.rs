@@ -24,7 +24,7 @@ pub const SETTINGS: &[&str] = &[
 ];
 pub const RUNNER_HUB_ENV: &[&str] = &[
     "HUB_TOKEN", "HUB_API_URL", "HUB_WORKSPACE", "HUB_EMPLOYEE", "HUB_OPERATION_ID", "HUB_BOT", "HUB_DIR", "HUB_DB",
-    "HUB_HUMAN_OVERRIDE", "HUB_INGEST_TOKEN", "HUB_RUNNER_CONFIG", "HUB_TASK_ID",
+    "HUB_HUMAN_OVERRIDE", "HUB_INGEST_TOKEN", "HUB_RUNNER_CONFIG", "HUB_TASK_ID", "HUB_BOT_FOLDER",
 ];
 pub const RESERVED_ENV: &[&str] = &["HOME", "PATH", "SHELL", "PYTHONPATH", "PYTHONHOME", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "CODEX_HOME", "CLAUDE_CONFIG_DIR"];
 pub const RESERVED_PREFIXES: &[&str] = &["TICO_", "DYLD_", "LD_"];
@@ -116,6 +116,8 @@ pub struct Vault {
     pub turn_user: Option<crate::turn_users::Lease>,
     /// The company subscriptions this turn signs in with (crate::model_subscriptions).
     pub subscriptions: Vec<crate::model_subscriptions::Delivered>,
+    /// The bot's browser proxy, and the OS users this turn lets use it (crate::browser_exit).
+    pub browser_exit: Option<crate::browser_exit::Admission>,
 }
 
 impl Vault {
@@ -147,6 +149,9 @@ impl Vault {
             (crate::isolation::identity().ok_or("missing Docker bot identity")?, crate::isolation::turn_dir())
         };
         user.move_files(env, &mut self.files, id, &dir)?;
+        if let Some(admission) = self.browser_exit.as_mut() {
+            admission.allow(id.0); // the user this hop's browser runs as
+        }
         for (name, index) in &self.file_vars { env.insert(name.clone(), self.files[*index].display().to_string()); }
         if own {
             user.private_home(env)?;
@@ -300,9 +305,36 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
     ] {
         env.insert(k.to_string(), v);
     }
+    // The bot's own checkout folder, as recorded (crate::sessions::named_folder): a bot made with a UUID id is not in
+    // bot-<HUB_BOT>, and a rename keeps its folder, so the connectors that read its manifest find it by this.
+    match crate::sessions::named_folder(&attempt["config"]) {
+        Some(folder) => env.insert("HUB_BOT_FOLDER".into(), folder),
+        None => env.remove("HUB_BOT_FOLDER"),
+    };
     // Headed browsers and computer use draw on the computer's screen, where people can watch (crate::screen).
     if let Some(display) = crate::screen::display() {
         env.insert("DISPLAY".into(), display.into());
+    }
+    // A bot with a browser exit browses from that computer's internet: Chrome started by name goes through the proxy,
+    // and nothing falls back to this computer's own address (crate::browser_exit). A proxy that can't start fails
+    // the turn.
+    if let Some(mut admission) = crate::browser_exit::turn_proxy(bot, attempt).await? {
+        // Under isolation only this turn's own user may use the proxy: its leased user (Vault::for_model lets that in
+        // once it is known), or the shared bot user a turn without a lease runs as.
+        if let (Some((uid, _)), None) = (crate::isolation::identity(), &vault.turn_user) {
+            admission.allow_always(uid);
+        }
+        let proxy = admission.url.clone();
+        vault.browser_exit = Some(admission);
+        let flags = format!("--proxy-server={proxy} --force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+        let chromium = match env.get("CHROMIUM_FLAGS").filter(|f| !f.is_empty()) {
+            Some(f) => format!("{f} {flags}"),
+            None => flags,
+        };
+        env.insert("CHROMIUM_FLAGS".into(), chromium);
+        let path = env.get("PATH").cloned().unwrap_or_default();
+        env.insert("PATH".into(), format!("{}:{path}", root.join("scripts").join("browser-exit").display()));
+        env.insert("TICO_BROWSER_PROXY".into(), proxy);
     }
     // A bot's commits carry the bot's name, never the person whose computer runs it.
     let name = attempt["config"]["display_name"].as_str().filter(|n| !n.is_empty()).unwrap_or(bot).to_string();

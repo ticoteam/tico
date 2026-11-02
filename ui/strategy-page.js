@@ -1,5 +1,5 @@
 /* Strategy: how the team means to win (backend/strategy.py, docs/strategy.md#the-page). One line on top (the summary),
-   then Where we play beside the bets, the competitors beside related news, then four fixed sections and any the owner
+   then Where we play beside the bets, the competitors beside related news, then five fixed sections and any the owner
    adds. The owner edits the draft in place and publishes numbered versions with a note; everyone else reads the latest
    published version. Where we play and Competitors are the market graph's own rows (backend/strategy_market.py), and
    Related news is what Listening found. Lenses (ui/lenses-page.js) and Market (ui/market-page.js) are the section's
@@ -12,11 +12,12 @@ let STRAT_MKT = {};
 const isStrategyRoute = r => r === '#/strategy' || r.startsWith('#/strategy?');
 const STRAT_STATUS = {proposed: 'Proposed', active: 'Active', retired: 'Retired'};
 const STRAT_MAX_ACTIVE = 7;
-// The four sections every strategy has, in this order. The placeholder is the question; nothing else is shown.
+// The five sections every strategy has, in this order. The placeholder is the question; nothing else is shown.
 const STRAT_SECTIONS = [
   {key: 'serve', title: 'Who we serve', prompt: 'The customer, what they use today, and the one you turned down'},
   {key: 'sell', title: 'What we sell, and for how much', prompt: 'The product, the price, and the price that would break if doubled or halved'},
   {key: 'know', title: "What we know that others don't", prompt: 'What the team understands that the obvious competitors miss'},
+  {key: 'how', title: 'How we sell', prompt: 'How customers find us, who does the selling, and what closes a sale'},
   {key: 'not', title: "What we won't do", prompt: 'The trade-offs: what the team refuses'},
 ];
 const STRAT_WRONG_KINDS = {kpi: 'KPI', thesis: 'Market', text: 'Sentence'};
@@ -169,7 +170,7 @@ function strategyStatusText(data, view) {
 // The line above the page: the published version and who published it, then (for the owner) where the draft stands.
 function strategyMetaHtml(data, view) {
   const v = data.current, status = strategyStatusText(data, view);
-  const head = v ? `v${esc(v.n)}${v.published ? ` · published <time datetime="${esc(v.published)}" title="${esc(fmt(v.published))}">${esc(stratDate(v.published))}</time>` : ''}${v.published_by ? ` by ${esc(firstName(goalActorName(v.published_by)) || goalActorName(v.published_by))}` : ''}` : '';
+  const head = v ? `v${esc(v.n)}${v.published_at ? ` · published <time datetime="${esc(v.published_at)}" title="${esc(fmt(v.published_at))}">${esc(stratDate(v.published_at))}</time>` : ''}${v.published_by ? ` by ${esc(firstName(goalActorName(v.published_by)) || goalActorName(v.published_by))}` : ''}` : '';
   if (!head && !status) return '';
   return `<p class="strat-meta">${head}${head && status ? ' · ' : ''}${status ? `<span class="strat-status" data-strat-status>${esc(status)}</span>` : ''}</p>`;
 }
@@ -295,7 +296,7 @@ function strategyRetiredHtml(view) {
 
 // ---------------------------------------------------------------- Where we play
 // The market's segments by spend (GET /v2/market/spend), a sized segment inside its sized parent, the rest as plain
-// tiles. Us is filled, Next outlined; a click moves a segment Us, then Next, then neither (one of each).
+// tiles. Us is filled, Next outlined; a click moves a segment Us, then Next, then neither. Several may be Us or Next.
 function strategyAddRowHtml(kind, placeholder) {
   return `<form class="strat-addrow" data-add="${kind}" novalidate><input type="text" name="name" maxlength="${kind === 'rival' ? 300 : 120}" autocomplete="off" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}">
       <button type="submit" class="strat-add">Add</button></form>`;
@@ -381,10 +382,8 @@ async function strategyMarketRead(key, load, fresh = false) {
     if (key === 'spend') value = await get('/v2/market/spend', opts);
     else if (key === 'rivals') value = (await get('/v2/market/competitors', opts))?.competitors || [];
     else if (key === 'growth') {
-      // The Brand strip and the Go-to-market card (ui/app/brand-page.js, gtm-page.js).
-      const [brand, gtm, ch, src, k] = await Promise.all([get('/v2/brand', opts).catch(() => null), get('/v2/gtm', opts).catch(() => null),
-        get('/v2/growth/channels', opts).catch(() => null), get('/v2/growth/sources', opts).catch(() => null), get('/v2/growth/kpis', opts).catch(() => null)]);
-      value = {brand, gtm, channels: ch?.channels || [], sources: src?.sources || [], kpis: k?.kpis || []};
+      // The Brand strip (ui/app/brand-page.js).
+      value = {brand: await get('/v2/brand', opts).catch(() => null)};
     }
     else {
       const since = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 19);
@@ -402,9 +401,8 @@ function strategyPaintMarket(key) {
   const owner = strategyView(STRAT.data).owner;
   if (key === 'growth') {
     const g = STRAT_MKT.growth;
-    if ($('#strat-setup')) patchHTML($('#strat-setup'), g ? brandSetupHtml(g.brand) + gtmSetupHtml(g.gtm, g) : '');
+    if ($('#strat-setup')) patchHTML($('#strat-setup'), g ? brandSetupHtml(g.brand) : '');
     if ($('#strat-brand')) patchHTML($('#strat-brand'), g ? brandStripHtml(g.brand) : '');
-    if ($('#strat-gtm')) patchHTML($('#strat-gtm'), g ? gtmCardHtml(g.gtm, g) : '');
     return;
   }
   const box = {spend: '#strat-where', rivals: '#strat-rivals', news: '#strat-news'}[key];
@@ -414,7 +412,7 @@ function strategyPaintMarket(key) {
 }
 
 // ---------------------------------------------------------------- the sections
-// The four fixed sections, then the extra ones in the order they were added. The owner writes each, one at a time;
+// The five fixed sections, then the extra ones in the order they were added. The owner writes each, one at a time;
 // an extra one can be renamed or removed, and nothing else ever drops it.
 function strategySectionList(version) {
   const s = version?.sections || {};
@@ -455,7 +453,7 @@ const STRAT_FRAME = `<div id="strat-pub"></div>
     <div class="strat-row"><section class="card strat-card strat-where" id="strat-where"></section><section class="card strat-card strat-bets-card" id="strat-sec-bets" aria-labelledby="strat-bets-h"></section></div>
     <div class="strat-setup" id="strat-setup"></div>
     <div class="strat-brand" id="strat-brand"></div>
-    <div class="strat-row strat-gtm-row"><div class="strat-gtm" id="strat-gtm"></div><div class="strat-col"><section class="card strat-card" id="strat-rivals"></section><section class="card strat-card" id="strat-news"></section></div></div>
+    <div class="strat-row"><section class="card strat-card" id="strat-rivals"></section><section class="card strat-card" id="strat-news"></section></div>
     <div class="strat-secs" id="strat-secs"></div>
     <div class="strat-add-sec" id="strat-add-sec"></div>
   </div>`;
@@ -750,10 +748,6 @@ function strategyBindMarket(state, body) {
       const seg = (spend()?.segments || []).find(s => s.id === tile.dataset.seg);
       if (!seg) return;
       const to = seg.self ? 'next' : seg.next ? 'none' : 'ours';
-      for (const s of spend().segments) {
-        if (to === 'ours' && s !== seg) s.self = false;
-        if (to === 'next' && s !== seg) s.next = false;
-      }
       seg.self = to === 'ours'; seg.next = to === 'next';
       strategyPaintMarket('spend');
       $(`#strat-where [data-seg="${CSS.escape(seg.id)}"]`)?.focus();
@@ -851,7 +845,7 @@ async function strategyVersionsOpen() {
 function strategyVersionsList(dlg, rows) {
   dlg.innerHTML = strategyDrawerHtml('Versions', rows.length ? `<ul class="strat-sv-list">${rows.map(v =>
     `<li><button type="button" class="strat-sv-row" data-sv-open="${esc(v.n)}"><span class="strat-sv-n tnum">v${esc(v.n)}</span><span class="strat-sv-note">${esc(v.note || '')}</span>
-      <span class="muted strat-sv-meta">${v.published_by ? esc(goalActorName(v.published_by)) + ' · ' : ''}<time datetime="${esc(v.published || '')}" title="${esc(fmt(v.published))}">${esc(ago(v.published))}</time></span></button></li>`).join('')}</ul>`
+      <span class="muted strat-sv-meta">${v.published_by ? esc(goalActorName(v.published_by)) + ' · ' : ''}<time datetime="${esc(v.published_at || '')}" title="${esc(fmt(v.published_at))}">${esc(ago(v.published))}</time></span></button></li>`).join('')}</ul>`
     : '<p class="muted">No versions yet.</p>');
   dlg.querySelector('[data-sv-close]').onclick = () => dlg.close();
   for (const b of dlg.querySelectorAll('[data-sv-open]')) b.onclick = () => void strategyVersionShow(dlg, Number(b.dataset.svOpen));
@@ -867,7 +861,7 @@ function strategyVersionShow(dlg, n) {
       const v = await get(`/v2/strategy/versions/${encodeURIComponent(n)}`), label = state.data.label || 'Bets';
       const bets = (v.bets || []).slice().sort(stratRank).filter(c => c.status !== 'retired');
       const block = (title, inner) => inner ? `<section class="strat-sv-sec"><h3 class="strat-k">${esc(title)}</h3>${inner}</section>` : '';
-      html = `<div class="strat-sv-title"><b>v${esc(v.n)}</b>${v.note ? ` · ${esc(v.note)}` : ''}<div class="muted">${v.published_by ? esc(goalActorName(v.published_by)) : ''}${v.published_by && v.published ? ' · ' : ''}${v.published ? esc(fmt(v.published)) : ''}</div></div>
+      html = `<div class="strat-sv-title"><b>v${esc(v.n)}</b>${v.note ? ` · ${esc(v.note)}` : ''}<div class="muted">${v.published_by ? esc(goalActorName(v.published_by)) : ''}${v.published_by && v.published_at ? ' · ' : ''}${v.published_at ? esc(fmt(v.published_at)) : ''}</div></div>
         ${block('Summary', stratText(v.summary) ? `<p>${esc(v.summary)}</p>` : '')}
         ${block(label, bets.length ? `<ol class="strat-sv-bets">${bets.map(c => `<li><b>${esc(c.statement)}</b>${stratText(c.why) ? `<div class="muted">${esc(c.why)}</div>` : ''}</li>`).join('')}</ol>` : '')}
         ${strategySectionList(v).map(sec => block(sec.title, stratText(sec.text) ? `<div class="md strat-md">${safeMd(sec.text)}</div>` : '')).join('')}`;

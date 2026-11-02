@@ -12,10 +12,11 @@ function searchEntries() {
     const label = [...a.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
     out.push({kind: 'page', label, href: a.getAttribute('href'), icon: a.querySelector('.nav-icon')?.textContent || 'article'});
   }
+  if (cpAllowed()) out.push({kind: 'page', label: 'Company page', href: OVERVIEW_COMPANY, icon: 'newspaper'});   // a tab of Overview, with no link of its own
   for (const e of shownEmps()) {
     // label is the plain name for matching and sorting; html is the same name as shown elsewhere, flag and all
     out.push({kind: 'bot', label: String(e.display_name || '').replace(TEMP_RE, ''), html: shownName(e), temp: isTempBot(e),
-      alias: e.name, href: `#/bot/${encodeURIComponent(e.name)}`, avatar: avatar(e.name, 22, stateOf(e.name))});
+      alias: e.slug, href: `#/bot/${encodeURIComponent(e.id)}`, avatar: avatar(e.id, 22, stateOf(e.id))});
   }
   for (const p of (S.people || []).filter(p => !p.hidden)) {
     out.push({kind: 'person', label: p.name || p.id, alias: p.title || '', href: `#/person/${encodeURIComponent(p.id)}`, avatar: personAvatar(p, 22)});
@@ -79,6 +80,7 @@ function searchOpen() {
   if (!d.open) d.showModal();
   $('#search-input').focus();
 }
-$('#search-open').onclick = searchOpen;
+// In the phone's drawer it is More's Search row: the drawer gets out of the way first.
+$('#search-open').onclick = () => { if (document.body.classList.contains('drawer')) setDrawer(false); searchOpen(); };
 window.ticoSearch = searchOpen;            // the desktop app's View › Search… and tray item (app/src/main.rs)
 $('#mobile-search').onclick = searchOpen;

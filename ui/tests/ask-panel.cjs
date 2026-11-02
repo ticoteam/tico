@@ -15,7 +15,7 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const now = new Date().toISOString(), ago = min => new Date(Date.now() - min * 60000).toISOString();
-const msg = (id, from, body, created = now) => ({id, from_actor: from, body, refs: {}, created, kind: 'say'});
+const msg = (id, from, body, created = now) => ({id, sender_id: from, body, refs: {}, created_at: created, kind: 'say'});
 
 async function open(browser, viewport, state) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760});
@@ -59,21 +59,22 @@ async function open(browser, viewport, state) {
       state.messages.push(user, msg('g' + state.uploaded.length, 'bot:coo', 'Read it.', new Date().toISOString()));   // the turn's reply, by the snapshot
       return json({message: user, reply: null, fast: false});
     }
-    const ticket = p.match(/^\/api\/v2\/support\/tickets\/([^/]+)\/(messages|read)$/), listing = () => json({enabled: true, tickets: state.tickets, unread: state.tickets.filter(t => t.unread).length});
+    const ticket = p.match(/^\/api\/v2\/support\/tickets\/([^/]+)\/(messages|read)$/), listing = () => json({enabled: state.supportOff !== true, tickets: state.tickets, unread: state.unreadCount ?? state.tickets.filter(t => t.unread).length});
     if (ticket) {
       const t = state.tickets.find(x => x.id === ticket[1]);
       if (ticket[2] === 'read') { state.read.push(t.id); t.unread = false; }
-      else t.messages.push({body: JSON.parse(route.request().postData()).message, from: 'you', created: new Date().toISOString()});
+      else { const body = JSON.parse(route.request().postData()); (state.replies ||= []).push(body); t.messages.push({body: body.message, from: 'you', created_at: new Date().toISOString()}); }
       return json(t);
     }
     if (p === '/api/v2/support/tickets' && method === 'POST') {
       const body = JSON.parse(route.request().postData()), t = {id: 'sup_' + (state.tickets.length + 1), status: 'open', unread: false,
-        title: body.message.slice(0, 40), message: body.message, created: new Date().toISOString(), messages: []};
+        title: body.message.slice(0, 40), message: body.message, created_at: new Date().toISOString(), messages: []};
       (state.filed ||= []).push(body); state.tickets.unshift(t);
       return route.fulfill({status: 201, contentType: 'application/json', body: JSON.stringify(t)});
     }
     if (p === '/api/v2/support/tickets' || p === '/api/v2/support/tickets/refresh') return listing();
     if (p === '/api/v2/support/compose') return json({email: 'ben@example.test', diagnostics: {}});
+    if (p === '/api/v2/support/diagnostics/capture' || p === '/api/v2/support/diagnostics') return json({id: 'diag_1', text: '{\n  "format": 1\n}', bytes: 20});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -106,12 +107,12 @@ const words = text => text.trim().split(/\s+/).length;
     // A computer. Support's request came first, then Ben asked, BotOps left a card and asked a question, and the
     // Assistant answered after both; the launch questions came last.
     let state = {messages: [msg('a1', 'human:ben', 'Where is the launch plan?', ago(15)), msg('a2', 'bot:coo', 'In Docs.', ago(10))], sent: [], read: [], decided: [], answers: [],
-      tickets: [{id: 'sup_1', status: 'answered', unread: true, title: 'Board will not load', message: 'Board will not load', created: ago(30),
-                 messages: [{body: 'Try a hard reload.', from: 'staff', created: ago(20)}]}],
+      tickets: [{id: 'sup_1', status: 'answered', unread: true, title: 'Board will not load', message: 'Board will not load', created_at: ago(30),
+                 messages: [{body: 'Try a hard reload.', from: 'staff', created_at: ago(20)}]}],
       card: {id: 'act9', summary: 'Add Cara as an admin', method: 'POST', path: '/api/v2/people', status: 'pending', result: null,
-             description: 'Add Cara as an admin', diff: [], body: {}, proposed_via: 'botops', created: ago(13)},
-      needs: [{kind: 'ask', id: 'm9', created: ago(12), ask: {id: 'm9', from_actor: 'bot:botops', to_actor: 'human:ben', body: 'Which inbox should the bot answer?', created: ago(12), refs: {}}},
-              {kind: 'question', id: 't4', created: now, ask: {id: 'q4', from_actor: 'bot:coo', to_actor: 'human:ben', body: 'Two launch questions', created: now,
+             description: 'Add Cara as an admin', diff: [], body: {}, proposed_via: 'botops', created_at: ago(13)},
+      needs: [{kind: 'ask', id: 'm9', created_at: ago(12), ask: {id: 'm9', sender_id: 'bot:botops', recipient_id: 'human:ben', body: 'Which inbox should the bot answer?', created_at: ago(12), refs: {}}},
+              {kind: 'question', id: 't4', created_at: now, ask: {id: 'q4', sender_id: 'bot:coo', recipient_id: 'human:ben', body: 'Two launch questions', created_at: now,
                refs: {questions: [{question: 'Launch day?', options: [{label: 'Mon'}, {label: 'Tue'}]}, {question: 'Price?', options: [{label: '$9'}, {label: '$19'}]}]}}}]};
     let {page, errors} = await open(browser, {width: 1280, height: 900}, state);
     assert.equal(await page.locator('#nav-assistant, #nav-botops, #help-open, #mobile-support').count(), 0, 'no BotOps, Assistant or ? in the rail');
@@ -182,6 +183,9 @@ const words = text => text.trim().split(/\s+/).length;
     const chip = panel.locator('[data-ask-people] .ask-sup-chip'), loop = panel.getByRole('button', {name: 'Loop in Support'});
     await chip.waitFor();
     assert.equal(await loop.isHidden(), true, 'no link while support is in');
+    // Your requests is there while support is on (criterion 1); its count is for unread replies only (criterion 3).
+    assert.equal(await panel.getByRole('button', {name: 'Your requests', exact: true}).isVisible(), true, 'Your requests in the header');
+    assert.equal(await panel.locator('[data-ask-loop]').getAttribute('title'), "Shares this chat's last 20 turns with Tico support", 'what Loop in Support shares');
     assert.match(await chip.innerText(), /Tico Support/);
     assert.equal(await panel.locator('[data-ask-members], [data-ask-ticket]').count(), 0, 'no members bar');
     const them = panel.locator('.ask-sup.them', {hasText: 'Try a hard reload.'});
@@ -192,6 +196,15 @@ const words = text => text.trim().split(/\s+/).length;
     assert.deepEqual(await panel.locator('.ask-sys').allInnerTexts(), ['You added Tico Support. They can now see chats.']);
     await page.waitForFunction(() => !window.supportState?.().open?.some(t => t.unread));
     assert.deepEqual(state.read, ['sup_1'], 'a reply seen here is read');
+    // No unread reply: no count. Pressing it opens Your requests over the page, and Ask stays where it was (criterion 2).
+    const mineNow = panel.getByRole('button', {name: 'Your requests', exact: true});
+    await mineNow.waitFor();
+    await mineNow.click();
+    await page.locator('#support-pop[open] [data-list]:not([hidden])').waitFor();
+    assert.equal(await panel.evaluate(el => el.classList.contains('ask-shown')), true, 'Ask stays open');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('#support-pop')?.open);
+    assert.equal(await panel.evaluate(el => el.classList.contains('ask-shown')), true, 'Ask stays open after the list closes');
     // Everything in time order, cards too: BotOps' card and question sit between Ben's question and the answer, which
     // came after them; the launch questions, newest, are last. The thread opens at the newest.
     await thread.locator('[data-action-host="act9"] [data-confirm]').waitFor();
@@ -214,7 +227,7 @@ const words = text => text.trim().split(/\s+/).length;
     await question.waitFor({state: 'detached'});
     assert.deepEqual(state.answers, ['support@acme.test']);
     // Three picks or more are a list and Send, and the one chosen survives the thread being drawn again.
-    const need = (id, extra) => ({kind: 'question', id, created: now, ask: {id: 'q' + id, from_actor: 'bot:botops', to_actor: 'human:ben', created: now, ...extra}});
+    const need = (id, extra) => ({kind: 'question', id, created_at: now, ask: {id: 'q' + id, sender_id: 'bot:botops', recipient_id: 'human:ben', created_at: now, ...extra}});
     state.picked = [];
     state.needs = [need('t7', {body: 'Tone?', refs: {questions: [{id: 'tone', question: 'Which tone?', options: [{label: 'Plain'}, {label: 'Friendly'}, {label: 'Formal'}]}]}})];
     await page.evaluate(async () => { await v2Refresh(); ASK.draw(); });
@@ -313,7 +326,7 @@ const words = text => text.trim().split(/\s+/).length;
     await page.close();
 
     // A phone: the dot in the middle of the tab bar opens a sheet over the page, above the tab bar, and closes it.
-    const ask = (id, who, body) => ({kind: 'ask', id, created: now, ask: {id, from_actor: who, to_actor: 'human:ben', body, created: now, refs: {}}});
+    const ask = (id, who, body) => ({kind: 'ask', id, created_at: now, ask: {id, sender_id: who, recipient_id: 'human:ben', body, created_at: now, refs: {}}});
     state = {messages: [msg('p1', 'human:ben', 'Our key is sk-live1234567890abcdef, board blank', ago(5)), msg('p2', 'bot:coo', 'Try a reload.', ago(4))],
       sent: [], read: [], decided: [], answers: [], tickets: [], card: null,
       needs: [ask('m8', 'bot:botops', 'Which inbox should the bot answer?'), ask('m7', 'bot:coo', 'Ship the launch post today?')]};
@@ -346,6 +359,11 @@ const words = text => text.trim().split(/\s+/).length;
     assert.equal(await peek2.isHidden(), true, 'no peek while the chat is open');
     const sheet = await page.locator('#ask-panel').boundingBox(), bar = await page.locator('#mobile-nav').boundingBox();
     assert.ok(sheet.x === 0 && sheet.width === 390 && Math.abs(sheet.y + sheet.height - bar.y) < 2, `a sheet above the tab bar (${JSON.stringify([sheet, bar])})`);
+    // Your requests is in the header with a 44 px tap target, and the words Loop in Support shares sit under the header.
+    const mineBox = await page.locator('#ask-panel [data-ask-requests]').boundingBox();
+    assert.ok(mineBox && mineBox.height >= 44 && mineBox.y >= sheet.y && mineBox.y + mineBox.height <= sheet.y + sheet.height, `Your requests in the header (${JSON.stringify(mineBox)})`);
+    assert.equal(await page.locator('#ask-panel [data-ask-requests]').innerText(), 'Your requests', 'no count without unread replies');
+    assert.equal(await page.locator('#ask-panel [data-ask-loop-note]').innerText(), "Shares this chat's last 20 turns with Tico support", 'the words, on a phone');
     assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Close Ask Tico', 'close']);
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll');
     // No open request: "Loop in Support" sends a new one at once (no form), holding the chat with its key cut out.
@@ -356,7 +374,40 @@ const words = text => text.trim().split(/\s+/).length;
     assert.deepEqual(state.filed.map(f => f.message), ['Shared from my chat with Assistant:\n\nMe: Our key is [key], board blank\nAssistant: Try a reload.']);
     assert.equal(await page.locator('#support-pop[open]').count(), 0, 'sent at once, no form');
     assert.equal(await page.locator('#ask-panel .ask-sup', {hasText: 'Shared from'}).count(), 0, 'not drawn again');
-    assert.equal(await page.locator('#ask-panel .ask-sys').last().innerText(), 'You added Tico Support. They can now see chats.');
+    // A line says diagnostics weren't sent, with Attach diagnostics (criterion 7). Attach opens Review and edit for that
+    // request, and nothing is sent until Send (criterion 8).
+    const noDiag = page.locator('#ask-panel .ask-sys', {hasText: "Diagnostics weren't sent."});
+    // The reply promise once, then the diagnostics line (criterion 7).
+    const promise = "Delivered to Tico support. We usually reply within 1 business day (Monday to Friday). The reply will appear here.";
+    assert.deepEqual(await page.locator('#ask-panel .ask-sys').allInnerTexts(), ['You added Tico Support. They can now see chats.', promise, "Diagnostics weren't sent. Attach diagnostics"]);
+    await noDiag.getByRole('button', {name: 'Attach diagnostics'}).click();
+    const review = page.getByRole('dialog', {name: 'Review and edit diagnostics'});
+    await review.waitFor();
+    await review.getByRole('button', {name: 'Use diagnostics'}).waitFor();
+    await page.waitForFunction(() => !document.querySelector('dialog[aria-label="Review and edit diagnostics"] [data-use]')?.disabled);
+    assert.equal(state.filed.length, 1, 'nothing sent by Attach diagnostics');
+    assert.equal((state.replies || []).length, 0, 'no reply written before Send');
+    // Use diagnostics attaches the reviewed capture to the looped-in request; Send then writes its reply with it (criterion 8).
+    await review.getByRole('button', {name: 'Use diagnostics'}).click();
+    await page.waitForFunction(() => !document.querySelector('dialog[aria-label="Review and edit diagnostics"]'));
+    assert.equal(await page.locator('#support-pop [name=diag]').isChecked(), true, 'the attachment is on the request');
+    assert.equal((state.replies || []).length, 0, 'still nothing sent after Use diagnostics');
+    await page.locator('#support-pop [name=message]').fill('Still broken after the reload');
+    await page.locator('#support-pop .support-send').click();
+    await page.waitForFunction(() => (window.supportState?.().open || []).length === 1 && document.querySelectorAll('#support-pop [data-thread] .support-msg.you').length >= 2);
+    assert.deepEqual(state.replies.map(r => [r.message, r.diagnostics]), [['Still broken after the reload', 'diag_1']], 'the reply goes to the looped-in request with the attachment ');
+    assert.equal(state.filed.length, 1, 'the reply is not a new request');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('#support-pop')?.open);
+    assert.equal(await page.locator('#ask-panel').evaluate(el => el.classList.contains('ask-shown')), true, 'Ask stays open');
+    // Taken out, then looped in again: the request is the same, so no line repeats (criterion 9).
+    await page.locator('#ask-panel [data-ask-sup-x]').click();
+    await ploop.waitFor();
+    await ploop.click();
+    await page.locator('#ask-panel [data-ask-people] .ask-sup-chip').waitFor();
+    assert.equal(state.filed.length, 1, 'no new request');
+    assert.equal(await noDiag.count(), 1, 'no diagnostics line repeats');
+    assert.equal(await page.locator('#ask-panel .ask-sys', {hasText: 'Delivered to Tico support.'}).count(), 1, 'the promise line is not repeated (criterion 9)');
     await page.waitForFunction(() => !document.querySelector('.ask-fly'));
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll with the chip');
     // Closing flies the dot back down into the tab bar.
@@ -373,6 +424,33 @@ const words = text => text.trim().split(/\s+/).length;
       return !!document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('#ask-panel'); }), true, 'the chat is above the needs-you sheet');
     await tab.click();
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
+    assert.deepEqual(errors, []);
+    await page.close();
+
+    // Unread replies Ask has not shown: Your requests reads their count (criterion 3); pressing it opens Your requests
+    // over the page, Ask stays open (criterion 2).
+    ({page, errors} = await open(browser, {width: 1440, height: 900}, {messages: [msg('n1', 'bot:coo', 'Hi', ago(3))],
+      sent: [], read: [], decided: [], answers: [], tickets: [], card: null, needs: [], unreadCount: 3}));
+    await page.keyboard.press('Control+j');
+    const counted = page.locator('#ask-panel [data-ask-requests]');
+    await counted.waitFor();
+    assert.equal(await counted.innerText(), 'Your requests (3)', 'the unread replies');
+    await counted.click();
+    await page.locator('#support-pop[open] [data-list]:not([hidden])').waitFor();
+    assert.equal(await page.locator('#ask-panel').evaluate(el => el.classList.contains('ask-shown')), true, 'Ask stays open');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('#support-pop')?.open);
+    assert.deepEqual(errors, []);
+    await page.close();
+
+    // Support off (TICO_SUPPORT=off, demo, rehearsal): Ask shows neither Your requests nor Loop in Support.
+    ({page, errors} = await open(browser, {width: 1440, height: 900}, {messages: [msg('o1', 'human:ben', 'Hi', ago(3)), msg('o2', 'bot:coo', 'Hello', ago(2))],
+      sent: [], read: [], decided: [], answers: [], tickets: [], card: null, needs: [], supportOff: true}));
+    await page.keyboard.press('Control+j');
+    await page.locator('#ask-panel [data-ask-thread] .conv-run[data-message="o2"]').waitFor();
+    assert.equal(await page.locator('#ask-panel [data-ask-requests]').count(), 1);
+    assert.equal(await page.locator('#ask-panel [data-ask-requests]').isHidden(), true, 'no Your requests with support off');
+    assert.equal(await page.locator('#ask-panel [data-ask-loop]').isHidden(), true, 'no Loop in Support with support off');
     assert.deepEqual(errors, []);
     await page.close();
   } finally {

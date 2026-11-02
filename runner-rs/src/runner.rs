@@ -486,6 +486,11 @@ impl Runner {
             self.accounts.store(beat.subscription_accounts == Some(true), Ordering::SeqCst);
             // Performance diagnostics run only while the computer's owner has them on (crate::perf).
             crate::perf::set_enabled(beat.performance == Some(true));
+            // This computer is a browser exit only while its owner shares its internet (crate::browser_exit).
+            crate::browser_exit::set_sharing(beat.browser_exit == Some(true));
+            if let Some(bots) = beat.browser_exit_bots.as_deref() {
+                crate::browser_exit::keep_proxies(bots, began);
+            }
             if beat.restart == Some(true) && self.restart.lock().unwrap().is_none() {
                 // Only a supervisor that starts the runner again may let it exit to restart; take main first if safe.
                 if supervised() {
@@ -769,6 +774,7 @@ impl Runner {
         tokio::spawn(self.events.clone().run(self.client.clone()));
         tokio::spawn(crate::perf::run_loop(self.clone()));
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
+        tokio::spawn(crate::memory_tidy_keep::run_loop(self.clone()));
         tokio::spawn(crate::appdriver::run_loop(self.clone()));
         let mut clock = Clock {
             polled: HashMap::new(),
@@ -845,7 +851,7 @@ impl Runner {
             || crate::follow::shared().is_some_and(|f| f.draining()) {
             if crate::follow::feature("runner_drain") { self.drain.begin(Instant::now()); }
         } else {
-            self.drain.end(); // a failed or cancelled update takes work again
+            self.drain.end(); // a failed or canceled update takes work again
         }
         let finished: Vec<String> = workers.iter().filter(|(_, w)| w.is_finished()).map(|(a, _)| a.clone()).collect();
         for aid in finished {

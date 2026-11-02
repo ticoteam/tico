@@ -23,7 +23,7 @@ function releaseLastHTML(last) {
   return `<span data-release-last>${what}</span> ${when}`;
 }
 function releaseBotPick(name, chosen, found, label) {
-  const bots = (S.emps || []).filter(e => e.state !== 'archived').map(e => e.name).sort((a, b) => empName(a).localeCompare(empName(b)));
+  const bots = (S.emps || []).filter(e => e.state !== 'archived').map(e => e.id).sort((a, b) => empName(a).localeCompare(empName(b)));
   const auto = found && !chosen ? `Find by template (${empName(found)})` : 'Find by template';
   return `<select class="settings-inline-select" name="${name}" aria-label="${esc(label)}"><option value="">${esc(auto)}</option>
     ${bots.map(b => `<option value="${esc(b)}"${b === chosen ? ' selected' : ''}>${esc(empName(b))}</option>`).join('')}</select>`;
@@ -138,7 +138,7 @@ let TASK_MANAGER_VIEW = null;
 function taskManagerHTML(v) {
   const owner = S.me?.role === 'owner';
   const state = v.on ? 'On' : v.state === 'paused' ? 'Paused' : 'Off';
-  const last = v.last_run && (v.last_run.finished || v.last_run.started);
+  const last = v.last_run && (v.last_run.finished_at || v.last_run.started_at);
   const toggle = owner ? `<button type="button" class="ghost" data-tm-toggle="${v.on ? 'off' : 'on'}">${v.on ? 'Pause' : 'Resume'}</button>` : '';
   const rows = (v.departments || []).map(d => `<div class="tm-row" data-tm-dept="${esc(d.department)}">
       <strong>${esc(d.name)}</strong>

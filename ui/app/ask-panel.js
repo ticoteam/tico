@@ -15,6 +15,9 @@
 // meanwhile). Bringing it in shares the chat (ask-rules.js askSupportSwitch): its last 20 turns, scrubbed of keys, go
 // to the request (a new one, sent at once, when none is open). Out, nothing more from this chat goes; the request stays
 // open. Support itself (every request, a new one) opens from any #/support link.
+// "Your requests", beside it, opens Support's list over the page (Ask stays where it was); it reads the count of unread
+// replies. A request Loop in Support files gets a line that diagnostics weren't sent, with "Attach diagnostics" (once
+// per request; ui/support.js supportAttach opens Review and edit, and nothing is sent until Send).
 // What waits on the person from anyone else sits in the thread by when it was asked, like every other line: a Confirm
 // card a bot such as BotOps left in its own chat (GET /v2/assistant `pending`), and bots' questions (Needs you),
 // answered here or by telling the Assistant. A peek beside the closed dot says, in Tico's words, that something waits.
@@ -23,6 +26,8 @@ const ASK_PEEKS = 'tico.ask.peek';
 const ASK_MANAGE = "We'd like Tico to fully manage our company.";
 const ASK_SUP_IN = 'You added Tico Support. They can now see chats.';
 const ASK_SUP_OUT = 'Tico Support can no longer see chats.';
+const ASK_NO_DIAG = "Diagnostics weren't sent.";
+const ASK_LOOP_NOTE = 'tico.ask.loopNote';
 let ASK = null;
 const ASK_CARDS_MAX = 3;
 // The panel's name: "Tico Assistant", or the name a team gave its assistant.
@@ -107,6 +112,7 @@ function askToggle(open = !ASK?.open, focus = true) {
   const from = askLiveDot()?.getBoundingClientRect(), back = open ? null : askHomeDot()?.getBoundingClientRect();
   const foot = open ? askFootNow() : null;
   const inside = !!$('#ask-panel')?.contains(document.activeElement);   // read before the closed panel goes inert
+  if (!open && $('#ask-panel [data-ask-loop-note]')?.classList.contains('ask-on')) askLoopNoteDone();
   askFoot(foot);
   ASK.open = open;
   askSync();
@@ -150,7 +156,15 @@ function askPeople() {
   const panel = $('#ask-panel');
   if (!panel || !ASK) return;
   const sup = askSupport(), people = panel.querySelector('[data-ask-people]'), loop = panel.querySelector('[data-ask-loop]');
-  askOn(loop, sup.available && ASK.live && !sup.on);   // in: the chip's × is the way out
+  const requests = panel.querySelector('[data-ask-requests]'), note = panel.querySelector('[data-ask-loop-note]');
+  // Your requests is there while support is on; its count is the unread replies (Support's own count).
+  askOn(requests, sup.available);
+  const unread = window.supportState?.().unread || 0;
+  askSet(requests, 'textContent', unread ? `Your requests (${unread})` : 'Your requests');
+  const loopOn = sup.available && ASK.live && !sup.on;
+  askOn(loop, loopOn);   // in: the chip's × is the way out
+  // On a phone the words under the link, the first time only: gone once the panel has been closed with them shown.
+  askOn(note, loopOn && askPhone() && !askLoopNoteSeen());
   if (!sup.available && ASK.supId === undefined) return;     // support's requests not read yet
   const id = sup.on ? sup.ticket.id : '', was = ASK.supId;
   const box = ASK.composer && pq(ASK.composer, '.p-text');
@@ -233,6 +247,7 @@ async function askFlip() {
   const panel = $('#ask-panel'), sw = panel?.querySelector('[data-ask-loop]'), error = panel?.querySelector('[data-ask-error]');
   if (!ASK || ASK.flipping) return;
   ASK.flipping = true;
+  askLoopNoteDone();   // the words were shown once; pressing the link is the same as having read them
   if (sw) sw.disabled = true;
   try {
     const act = await askSupportSwitch(askSupport(), {
@@ -242,6 +257,7 @@ async function askFlip() {
       hide: id => askSetHidden([...askHiddenTickets(), id]),
       show: id => askSetHidden(askHiddenTickets().filter(x => x !== id)),
     });
+    if (act.do === 'file' && act.id) askFiled(act.id);
     if (act.do !== 'none') { askPeople(); ASK?.draw?.(); }
   } catch (e) {
     if (error) { error.textContent = 'Tico Support was not added. ' + (e?.message || 'Try again in a moment.'); error.hidden = false; }
@@ -250,6 +266,20 @@ async function askFlip() {
     if (sw) sw.disabled = false;
   }
 }
+// A request Loop in Support filed (none was open before): the reply promise, then one line that diagnostics weren't
+// sent, with Attach diagnostics. Both are keyed by the request, so looping in again never repeats them.
+function askFiled(id) {
+  ASK.sys ||= [];
+  const at = new Date().toISOString();
+  // The reply promise, once: the same words the pop-up shows under a sent request (ui/support.js supportDelivered).
+  const promise = 'sys:promise:' + id;
+  if (!ASK.sys.some(s => s.key === promise) && window.supportDelivered) ASK.sys.push({at, text: window.supportDelivered(), id, key: promise});
+  const key = 'sys:diag:' + id;
+  if (!ASK.sys.some(s => s.key === key)) ASK.sys.push({at, text: ASK_NO_DIAG, id, key, attach: true});
+}
+const askLoopNoteKey = () => ASK_LOOP_NOTE + '.' + (S.me?.id || 'me');
+function askLoopNoteSeen() { try { return localStorage.getItem(askLoopNoteKey()) === '1'; } catch { return true; } }
+function askLoopNoteDone() { try { localStorage.setItem(askLoopNoteKey(), '1'); } catch { /* this page only */ } }
 // Tico support's messages as the thread draws them: support's blue-gray under its headset, the person's on the right.
 // `until`: a request taken out of the chat keeps what it said before then.
 function askSupportRows(t, until = '') {
@@ -258,14 +288,18 @@ function askSupportRows(t, until = '') {
     ? `<div class="ask-sup them" data-ask-row="sup:${esc(t.id)}:${i}"><span class="ask-sav"><span class="nav-icon" aria-hidden="true">headset_mic</span></span><div><small>Tico Support</small><div class="ask-sup-body">${esc(body)}</div></div></div>`
     : `<div class="ask-sup you" data-ask-row="sup:${esc(t.id)}:${i}"><div class="ask-sup-body">${esc(body)}</div></div>`});
   // What the switch shared is the chat already on screen: not drawn again.
-  return [row(t.message, false, t.created, 0), ...(t.messages || []).map((m, i) => row(m.body, m.from === 'staff', m.created, i + 1))]
+  return [row(t.message, false, t.created_at, 0), ...(t.messages || []).map((m, i) => row(m.body, m.from === 'staff', m.created_at, i + 1))]
     .filter((r, i) => (Date.parse(r.at || '') || 0) <= end && !(!r.staff && askShared(i ? t.messages[i - 1].body : t.message)));
 }
-const askSysRow = s => ({at: s.at, sys: true, html: `<div class="ask-sys" data-ask-row="${esc(s.key)}" role="status">${esc(s.text)}</div>`});
+const askSysRow = s => ({at: s.at, sys: true, html: `<div class="ask-sys" data-ask-row="${esc(s.key)}" role="status">${esc(s.text)}${s.attach
+  ? ` <button type="button" class="linkish" data-ask-attach="${esc(s.id)}">Attach diagnostics</button>` : ''}</div>`});
 function askClick(ev) {
   const t = ev.target;
   if (t.closest('[data-ask-close]')) { askToggle(false); return; }
   if (t.closest('[data-ask-loop], [data-ask-sup-x]')) { askFlip(); return; }
+  if (t.closest('[data-ask-requests]')) { window.supportOpen?.({list: true}); return; }
+  const attach = t.closest('[data-ask-attach]');
+  if (attach) { window.supportAttach?.(attach.dataset.askAttach); return; }
   const pick = t.closest('[data-ask-pick]');
   if (pick) { void askAnswer(pick.closest('[data-ask-q]'), {pick: Number(pick.dataset.askPick)}); return; }
   const more = t.closest('[data-ask-more]');
@@ -282,8 +316,8 @@ function askClick(ev) {
 // question with a line of words; several picks at once, or several questions, open the task.
 function askQuestions() {
   const me = myActor();
-  return (S.v2?.needs || []).filter(it => ['question', 'ask'].includes(it.kind) && it.ask?.to_actor === me
-    && it.ask.from_actor !== me).slice(0, ASK_CARDS_MAX);
+  return (S.v2?.needs || []).filter(it => ['question', 'ask'].includes(it.kind) && it.ask?.recipient_id === me
+    && it.ask.sender_id !== me).slice(0, ASK_CARDS_MAX);
 }
 // Who asks: the panel's own bot by the panel's name, anyone else as the question card names them.
 const askAsker = actor => actor === 'bot:' + assistantBot() ? askName() : qcardAsker(actor);
@@ -294,7 +328,7 @@ const ASK_Q_LONG = 160;
 // id) and kept as its label: the thread is drawn again whenever the chat changes. Questions no longer shown drop out.
 const askPicks = new Map(), askPickKey = (it, q) => `${it.id}:${q.id}`;
 function askQuestionHTML(it) {
-  const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.from_actor);
+  const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.sender_id);
   const text = plainActors(q ? q.question : it.ask.body);
   const body = `<div class="ask-card-who">${esc(who)} asks</div>${text.length > ASK_Q_LONG
     ? `<button type="button" class="ask-card-q" data-ask-more aria-expanded="false">${esc(text)}</button>` : `<div class="ask-card-q">${esc(text)}</div>`}`;
@@ -313,7 +347,7 @@ function askQuestionHTML(it) {
 async function askAnswer(card, {pick, text}) {
   const it = (S.v2?.needs || []).find(x => String(x.id) === card?.dataset.askQ);
   if (!it || card.dataset.busy) return;
-  const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.from_actor);
+  const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.sender_id);
   const writes = pick !== undefined && q ? qcardWrites(it, q, [q.options[pick].label])
     : it.kind === 'ask' ? [{path: `/v2/messages/${encodeURIComponent(it.id)}/answer`, body: {text}}]
     : [{path: `/v2/tasks/${encodeURIComponent(it.id)}/comments`, body: {text}}];
@@ -401,7 +435,7 @@ async function askLoad(chat) {
   let info = null, messages = [], execution = null, rendered = '', es = null, poll = null;
   const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
   chat.stop = stopStream;
-  const isReply = m => m.from_actor === 'bot:' + info?.bot;
+  const isReply = m => m.sender_id === 'bot:' + info?.bot;
   let pending = [], readFor = '';
   const seenRows = new Set();
   const draw = () => {
@@ -415,7 +449,7 @@ async function askLoad(chat) {
     const supRows = [].concat(...shown.map(x => askSupportRows(x.t, x.until)));
     const sys = [...(chat.sys || [])];
     for (const {t} of shown) if (!sys.some(s => s.id === t.id && s.text === ASK_SUP_IN))
-      sys.push({at: new Date(at(t.created) - 1).toISOString(), text: ASK_SUP_IN, id: t.id, key: 'sys:in:' + t.id});
+      sys.push({at: new Date(at(t.created_at) - 1).toISOString(), text: ASK_SUP_IN, id: t.id, key: 'sys:in:' + t.id});
     // While the Assistant is replying, Ask's dot works, then talks as the words stream in, the panel open or not;
     // waiting on Tico Support's answer, it listens.
     const streaming = !!(execution && execution.state !== 'completed' && execution.text);
@@ -427,12 +461,12 @@ async function askLoad(chat) {
     // and bots' questions. One with no time comes last.
     const here = new Set(messages.map(m => m.refs?.action).filter(Boolean)), late = new Date().toISOString(), asks = askQuestions();
     chat.pending = pending.filter(a => !here.has(a.id));   // the cards the thread shows, so a peek only points at those
-    const cards = chat.pending.map(a => ({at: a.created || late,
+    const cards = chat.pending.map(a => ({at: a.created_at || late,
       html: `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`}))
-      .concat(asks.map(it => ({at: it.ask?.created || it.created || late, html: askQuestionHTML(it)})));
+      .concat(asks.map(it => ({at: it.ask?.created_at || it.created_at || late, html: askQuestionHTML(it)})));
     const listed = new Set(asks.map(it => { const q = it.kind === 'question' && qcardQuestion(it); return q ? askPickKey(it, q) : ''; }));
     for (const k of askPicks.keys()) if (!listed.has(k)) askPicks.delete(k);
-    const rows = messages.slice(-30).map(m => ({at: m.created, html: v2MessageHTML({...m, run: null})}))
+    const rows = messages.slice(-30).map(m => ({at: m.created_at, html: v2MessageHTML({...m, run: null})}))
       .concat(supRows, sys.map(askSysRow), cards)
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);
     const live = execution && execution.state !== 'completed' ? execution.text : '';
@@ -460,7 +494,7 @@ async function askLoad(chat) {
   };
   chat.draw = draw;
   // What turning Tico Support on shares: the chat's turns, Ben's and the Assistant's, scrubbed (ask-rules askShareText).
-  chat.share = () => askShareText(messages.filter(m => m.body && (isReply(m) || m.from_actor === myActor()))
+  chat.share = () => askShareText(messages.filter(m => m.body && (isReply(m) || m.sender_id === myActor()))
     .map(m => ({me: !isReply(m), text: plainActors(m.body)})), info?.name || 'Assistant');
   // The whole chat again, with the Confirm cards waiting in other chats.
   const snapshot = async () => {

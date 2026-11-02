@@ -17,18 +17,18 @@ from backend.tests.test_wake_rules import jobs, news
 
 def add_bot(c, slug, **config):
     H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"}}, {"people": []})
-    c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+    c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?)",
               (slug, encode({"name": slug, "runtime": "fake", "status": "active", **config}), None, "ana"))
 
 
 def profile_of(c, slug):
-    return json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+    return json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
 
 
 def put(c, slug, name, **options):
     """Give an existing bot a profile the way the API does (without the Strategy Bot gate or audit)."""
     declared = profile_of(c, slug)
-    c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(P.apply(declared, name, options)), slug))
+    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(P.apply(declared, name, options)), slug))
 
 
 def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api):
@@ -45,9 +45,9 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
         add_bot(c, "pr-reviewer-2")
         kind = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
         if kind is None:
-            c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('dev','Dev tickets',?,?)", (H.now(), H.now()))
+            c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev tickets',?,?)", (H.now(), H.now()))
         H.task_create(c, "human:ana", "Fix login", "x", "bot:pr-reviewer", type="Dev tickets")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.profile','doer') WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.profile','doer') WHERE bot='cpo'")
         told = P.migrate(c)
         got = {slug: profile_of(c, slug) for slug in (*slugs, "saver", "grok-designer", "pr-reviewer", "cpo")}
         assert {slug: got[slug]["profile"] for slug in slugs} == slugs
@@ -75,7 +75,7 @@ def turn_for(api, slug):
     post(api, "tasks", {"owner": "cpo", "title": "Start the notes", "body": "Please."})
     api.app.state.store.automations.drain()
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner=?", ("bot:" + slug,)).fetchone()
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id=?", ("bot:" + slug,)).fetchone()
     found = get(api, f"automations/{aid}/runs")["runs"]
     assert len(found) == 1
     return found[0]["status"]
@@ -111,7 +111,7 @@ def test_a_reviewer_takes_review_children_only_and_wakes_for_its_request_and_peo
         assert raised.value.rule == "profile" and "reviewer" in str(raised.value)
         parent = H.task_create(c, "bot:ops", "Build 1/9", "x", "bot:cpo")
         review = H.task_create(c, "bot:ops", "QA: check the build", "x", "bot:checker", parent_id=parent["id"])
-        assert review["owner"] == "bot:checker"
+        assert review["owner_id"] == "bot:checker"
         # Its own work is not pulled by itself unless it is a review (auto_tasks), and nothing else stirs it.
         c.execute("DELETE FROM jobs")
         mine = H.task(c, review["id"])
@@ -127,7 +127,7 @@ def test_a_reviewer_takes_review_children_only_and_wakes_for_its_request_and_peo
         other = dict(mine, id="x", title="Something else")
         assert P.pull_refusal(c, other, profile_of(c, "checker")) == "auto_start_off"
         assert P.mismatches(c) == []
-        c.execute("INSERT INTO tasks(id,title,body,owner,requester,status,created,updated) "
+        c.execute("INSERT INTO tasks(id,title,body,owner_id,requester_id,status,created_at,updated_at) "
                   "VALUES('t-odd','Odd job','x','bot:checker','human:ana','open',?,?)", (H.now(), H.now()))
         assert P.mismatches(c) == [("reviewer_holds_tasks", "checker", 1)]
 
@@ -159,7 +159,7 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
             # Synthetic step: no production task, factory gate or PR is involved.
             kind = {"Post Release QA": "release_qa", "In QA": "qa", "Review 1": "review", "Review 2": "review",
                     "Second opinion": "review"}.get(parent_step)
-            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow_json) "
+            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow) "
                       "VALUES('qa-stage','general',?,99,'review',?)",
                       (parent_step, json.dumps({"check": kind}) if kind else None))
             c.execute("UPDATE tasks SET step_id='qa-stage' WHERE id=?", (parent["id"],))
@@ -205,6 +205,24 @@ def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
         assert raised.value.rule == "profile"
 
 
+def test_health_counts_a_keepers_ordinary_task_for_a_reviewer_but_not_its_pool_review(api):
+    """The reviewer_holds_tasks finding for Muse (2026-10-28): a Review 1 pool request filed under a general-type ticket
+    is review work, however its type reads; the nightly learnings task the keeper routes to the same reviewer is not."""
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        add_bot(c, "pr-reviewer")
+        ticket = H.task_create(c, "bot:pr-reviewer", "Goals: read-back", "x", "bot:pr-reviewer")
+        review = H.task_create(c, "bot:pr-reviewer", "Review 1: PR #1801", "x", "bot:checker", parent_id=ticket["id"],
+                               wake_refs={"check_pool": "Review 1"})
+        assert review["type_id"] == H.GENERAL_TYPE and P.is_review_task(c, H.task(c, review["id"]))
+        assert P.mismatches(c) == []
+        nightly = H.task_create(c, H.KEEPER, "Nightly learnings: Oct 28", "x", "bot:checker", deduplicate=False,
+                                lint=False, private=True)
+        assert not P.is_review_task(c, H.task(c, nightly["id"]))
+        assert P.mismatches(c) == [("reviewer_holds_tasks", "checker", 1)]
+
+
 def test_sweeps_follow_the_profile_and_a_custom_bot_reads_its_own_setting(api):
     with api.app.state.store.transaction() as c:
         for slug, name, options in (("d", P.DOER, {}), ("r", P.REVIEWER, {}), ("l", P.LEAD, {}), ("m", P.MONITOR, {}),
@@ -223,13 +241,13 @@ def test_a_lead_is_woken_by_people_and_hears_the_rest_once_a_day(api):
         mine = H.task_create(c, "bot:boss", "Ask around", "x", "bot:ops")
         c.execute("DELETE FROM jobs")
         # News about its task is held for the digest: the job waits, then a tick plans it for the next 09:00.
-        held = news(c, H.task(c, mine["id"]) | {"owner": "bot:boss"}, "Step moved: Open -> Doing")
+        held = news(c, H.task(c, mine["id"]) | {"owner_id": "bot:boss"}, "Step moved: Open -> Doing")
         assert held["refs"]["rule"] == "profile_lead_digest" and held["refs"]["wake_batch"] == "rule"
-        job = c.execute("SELECT id,held,created FROM jobs WHERE bot='boss'").fetchone()
+        job = c.execute("SELECT id,held,created_at FROM jobs WHERE bot_id='boss'").fetchone()
         assert job["held"] == 1
-        W.tick(c, job["created"])
+        W.tick(c, job["created_at"])
         due = c.execute("SELECT hold_until FROM jobs WHERE id=?", (job["id"],)).fetchone()[0]
-        assert due == W.digest_time(job["created"], 9) and due > job["created"]
+        assert due == W.digest_time(job["created_at"], 9) and due > job["created_at"]
         W.tick(c, due)
         assert c.execute("SELECT held FROM jobs WHERE id=?", (job["id"],)).fetchone()[0] == 0
         # A person's message, and a declined ticket it asked for, wake it at once.
@@ -320,8 +338,8 @@ def test_the_profiles_catch_all_never_beats_a_team_or_type_rule_and_a_leads_own_
         put(c, "checker", P.REVIEWER)
         add_bot(c, "boss")
         put(c, "boss", P.LEAD)
-        c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,when_json,then_outcome,params_json,enabled,position,"
-                  "created_by,created,updated,revision) VALUES('team-wake','team','','status_or_relation','{}','wake','{}',"
+        c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,position,"
+                  "created_by,created_at,updated_at,revision) VALUES('team-wake','team','','status_or_relation','{}','wake','{}',"
                   "1,1,'human:ana',?,?,1)", (H.now(), H.now()))
         parent = H.task_create(c, "bot:ops", "Build 1/9", "x", "bot:cpo")
         review = H.task_create(c, "bot:ops", "QA: check it", "x", "bot:checker", parent_id=parent["id"])
@@ -383,7 +401,7 @@ def test_a_monitor_and_a_reviewer_still_run_their_automation_turns(api):
         runs = get(api, f"automations/{aid}/runs")["runs"]
         assert runs and runs[0]["status"] != "failed", runs
         with api.app.state.store.read() as c:
-            assert c.execute("SELECT 1 FROM tasks WHERE owner=? AND title=?", ("bot:" + slug, "Sweep " + slug)).fetchone()
+            assert c.execute("SELECT 1 FROM tasks WHERE owner_id=? AND title=?", ("bot:" + slug, "Sweep " + slug)).fetchone()
 
 
 def test_a_custom_bot_that_takes_no_task_runs_no_routine_and_the_migration_copies_rows_once(api):
@@ -427,7 +445,7 @@ def test_undoing_a_profile_change_restores_it_but_not_rules_that_were_dropped(ap
 
 
 def last_to(c, slug):
-    row = c.execute("SELECT refs_json FROM messages WHERE to_actor=? ORDER BY rowid DESC LIMIT 1", ("bot:" + slug,)).fetchone()
+    row = c.execute("SELECT refs FROM messages WHERE recipient_id=? ORDER BY rowid DESC LIMIT 1", ("bot:" + slug,)).fetchone()
     return json.loads(row[0])
 
 
@@ -462,7 +480,7 @@ def test_a_lead_runs_the_task_given_to_it_but_does_not_pull_its_other_open_tasks
         add_bot(c, "boss")
         put(c, "boss", P.LEAD)
         idle = H.task_create(c, "bot:ops", "Someday plan", "x", "bot:boss")
-        c.execute("UPDATE jobs SET state='cancelled'")
+        c.execute("UPDATE jobs SET state='canceled'")
         given = H.task_create(c, "bot:ops", "Decide the export plan", "x", "bot:boss")
         assert last_to(c, "boss")["rule"] == "profile_lead_assignment"
     machine = runner(api)

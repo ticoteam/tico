@@ -107,7 +107,7 @@ def test_failed_writer_releases_admission_and_rolls_back(tmp_path, monkeypatch):
         c.execute("UPDATE t SET x=3")
 
 
-def test_writer_fifo_timeout_and_cancelled_waiter_keep_the_next_writer_live(monkeypatch):
+def test_writer_fifo_timeout_and_canceled_waiter_keep_the_next_writer_live(monkeypatch):
     from collections import deque
     from queue import Queue
     import threading
@@ -164,11 +164,11 @@ def test_writer_fifo_timeout_and_cancelled_waiter_keep_the_next_writer_live(monk
     with pytest.raises(sqlite3.OperationalError, match="database is locked"):
         gate.acquire()
     assert list(gate.queue) == [holder]
-    class Cancelled:
+    class Canceled:
         def wait(self, timeout):
             raise KeyboardInterrupt
     with monkeypatch.context() as patch:
-        patch.setattr(store_module.threading, "Event", Cancelled)
+        patch.setattr(store_module.threading, "Event", Canceled)
         with pytest.raises(KeyboardInterrupt):
             gate.acquire()
     assert list(gate.queue) == [holder]
@@ -230,6 +230,39 @@ def test_test_databases_skip_the_disk_sync_and_servers_keep_theirs(tmp_path, mon
     hub.close()
 
 
+def test_a_durable_transaction_is_fully_synced_and_its_connection_goes_back_at_the_default(tmp_path, monkeypatch):
+    """A money write's commit reaches the disk (FULL) and the pooled connection is not left at FULL, whether the
+    transaction commits, its body fails, or BEGIN itself fails after the connection was taken."""
+    from backend import flight
+    from backend import hubdb as H
+    sync = lambda c: c.execute("PRAGMA synchronous").fetchone()[0]  # 0 OFF, 1 NORMAL, 2 FULL
+    s = store(tmp_path)
+    default = {"OFF": 0, "NORMAL": 1}[H.synchronous("NORMAL")]
+    with s.transaction(durable=True) as c:
+        assert sync(c) == 2
+        c.execute("INSERT INTO t VALUES(2)")
+    with pytest.raises(RuntimeError):
+        with s.transaction(durable=True) as c:
+            assert sync(c) == 2
+            c.execute("INSERT INTO t VALUES(3)")
+            raise RuntimeError("the body failed")
+    real_begin = flight.begin
+
+    def begin_refused(conn, recorder=None, *, gate=None, checkout=None):
+        checkout()                                       # the connection is taken, then BEGIN is refused
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(flight, "begin", begin_refused)
+    with pytest.raises(sqlite3.OperationalError):
+        with s.transaction(durable=True):
+            pass
+    monkeypatch.setattr(flight, "begin", real_begin)
+    with s.transaction() as c:
+        assert sync(c) == default                        # an ordinary transaction is never durable
+    assert s.pool and all(sync(p) == default for p in s.pool)
+    with s.read() as c:
+        assert [r[0] for r in c.execute("SELECT x FROM t ORDER BY x")] == [1, 2]
+
+
 def test_sweep_deltas_drops_a_finished_runs_text_pieces_after_a_day_only(tmp_path):
     from backend.store import H, sweep_deltas
     s = store(tmp_path)
@@ -245,11 +278,11 @@ def test_sweep_deltas_drops_a_finished_runs_text_pieces_after_a_day_only(tmp_pat
         "f-final-text": (day(4), day(3), "Hello", False, None), # no message, but attempts.final_text holds the reply
     }
     with s.transaction() as c:
-        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created TEXT, finished TEXT, final_text TEXT)")
+        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created_at TEXT, finished_at TEXT, final_text TEXT)")
         c.execute("CREATE TABLE jobs(id TEXT PRIMARY KEY, attempt_id TEXT, state TEXT)")
         c.execute("CREATE TABLE attempt_events(id INTEGER PRIMARY KEY, attempt_id TEXT, seq INTEGER, kind TEXT, "
-                  "payload_json TEXT, created TEXT, UNIQUE(attempt_id,seq))")
-        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+                  "payload TEXT, created_at TEXT, UNIQUE(attempt_id,seq))")
+        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         for aid, (created, finished, final_text, final_msg, job) in runs.items():
             c.execute("INSERT INTO attempts VALUES(?,?,?,?)", (aid, created, finished, final_text))
             if job:
@@ -259,7 +292,7 @@ def test_sweep_deltas_drops_a_finished_runs_text_pieces_after_a_day_only(tmp_pat
                       (4, "message", '{"text":"Hello","final":true}' if final_msg else '{"text":"Hel"}'),
                       (5, "tool", '{"tool":"x"}')]
             for seq, kind, payload in events:
-                c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)",
                           (aid, seq, kind, payload, created))
     assert sweep_deltas(s, now, batch=1) == 4          # batch=1: one row per transaction, the pass still drains
     with s.read() as c:
@@ -288,10 +321,10 @@ def test_sweep_events_drops_noise_after_a_week_and_the_rest_after_thirty_in_boun
         rows += [(action, 40), (action, 2)]
     rows += [("sql.query", 40)] * 12                            # a backlog of noise that drains over passes
     with s.transaction() as c:
-        c.execute("CREATE TABLE events(id TEXT PRIMARY KEY, ts TEXT, actor TEXT, action TEXT, target TEXT, "
-                  "detail_json TEXT)")
-        c.execute("CREATE INDEX events_ts ON events(ts)")
-        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        c.execute("CREATE TABLE events(id TEXT PRIMARY KEY, created_at TEXT, actor TEXT, action TEXT, target TEXT, "
+                  "detail TEXT)")
+        c.execute("CREATE INDEX events_ts ON events(created_at)")
+        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         seen = {}
         for action, age in rows:
             n = seen[(action, age)] = seen.get((action, age), 0) + 1
@@ -328,12 +361,12 @@ def test_sweep_tokens_drops_a_finished_runs_token_rows_after_a_week_only(tmp_pat
         "g-turn-open": (day(10), day(9), (None, None, None), None),     # the turn was never finished
     }
     with s.transaction() as c:
-        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created TEXT, finished TEXT)")
+        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created_at TEXT, finished_at TEXT)")
         c.execute("CREATE TABLE jobs(id TEXT PRIMARY KEY, attempt_id TEXT, state TEXT)")
-        c.execute("CREATE TABLE turns(id TEXT PRIMARY KEY, finished TEXT, input_tokens INTEGER, usage_reason TEXT)")
+        c.execute("CREATE TABLE turns(id TEXT PRIMARY KEY, finished_at TEXT, input_tokens INTEGER, usage_reason TEXT)")
         c.execute("CREATE TABLE attempt_events(id INTEGER PRIMARY KEY, attempt_id TEXT, seq INTEGER, kind TEXT, "
-                  "payload_json TEXT, created TEXT, UNIQUE(attempt_id,seq))")
-        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+                  "payload TEXT, created_at TEXT, UNIQUE(attempt_id,seq))")
+        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         for aid, (created, finished, turn, job) in runs.items():
             c.execute("INSERT INTO attempts VALUES(?,?,?)", (aid, created, finished))
             if turn:
@@ -343,14 +376,14 @@ def test_sweep_tokens_drops_a_finished_runs_token_rows_after_a_week_only(tmp_pat
             events = [(1, "delta", '{"text":"Hel"}'), (2, "tokens", '{"input":900,"output":12}'),
                       (3, "message", '{"text":"Hello","final":true}'), (4, "tokens", '{"input":40,"output":0}')]
             for seq, kind, payload in events:
-                c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)",
                           (aid, seq, kind, payload, created))
     with s.read() as c:
-        totals = c.execute("SELECT id,finished,input_tokens,usage_reason FROM turns ORDER BY id").fetchall()
+        totals = c.execute("SELECT id,finished_at,input_tokens,usage_reason FROM turns ORDER BY id").fetchall()
     assert sweep_tokens(s, now, batch=1) == 4          # a-old and e-no-usage lose their two token rows each
     with s.read() as c:
         left = {(r[0], r[1]) for r in c.execute("SELECT attempt_id,seq FROM attempt_events")}
-        assert c.execute("SELECT id,finished,input_tokens,usage_reason FROM turns ORDER BY id").fetchall() == totals
+        assert c.execute("SELECT id,finished_at,input_tokens,usage_reason FROM turns ORDER BY id").fetchall() == totals
     everything = {(a, n) for a in runs for n in range(1, 5)}
     assert left == everything - {("a-old", 2), ("a-old", 4), ("e-no-usage", 2), ("e-no-usage", 4)}
     assert sweep_tokens(s, now) == 0, "the mark moved past what was swept"

@@ -1,4 +1,4 @@
-"""Gate rules (spec §6.2, §6.3), with no I/O. A rule is plain words, a `when` condition in Tico's `when_json` shape
+"""Gate rules (spec §6.2, §6.3), with no I/O. A rule is plain words, a `when` condition in Tico's `condition` shape
 (every key must match, a list means any of) with gt/gte/lt/lte/not/matches for money and text, an outcome, and
 examples that must pass before it is saved. Every matching rule runs and the strictest wins:
 deny > needs_approval > limit > allow; the lowest limit binds; one approval from the highest named approver."""
@@ -345,6 +345,10 @@ DEFAULTS: tuple[tuple[str, str, str, dict[str, object], dict[str, object], list[
      {"kind": "payment_create", "amount": {"gt": 100000}}, {"outcome": "needs_approval", "who": "owner"},
      [{"input": {"kind": "payment_create", "amount": 100001}, "expect": "needs_approval"},
       {"input": {"kind": "payment_create", "amount": 100000}, "expect": "allow"}]),
+    ("rule:po-over-1000", "Purchase orders over $1,000", "A purchase order over $1,000 asks the owner.",
+     {"kind": "po_approve", "amount": {"gt": 100000}}, {"outcome": "needs_approval", "who": "owner"},
+     [{"input": {"kind": "po_approve", "amount": 100001}, "expect": "needs_approval"},
+      {"input": {"kind": "po_approve", "amount": 100000}, "expect": "allow"}]),
     ("rule:bot-card-standing", "Standing bot cards", "A standing card for a bot asks a finance admin; single-use cards "
      "up to $200 inside the bot's budget do not.",
      {"kind": "card_create", "holder.kind": "bot", "card.kind": {"not": "single_use"}},

@@ -60,6 +60,13 @@
   let pending = null;
   const PERF_WINDOWS = [[0, 'None'], [24, '1 day'], [168, '7 days'], [336, '14 days']];
   const statuses = {open: 'Open', answered: 'Answered', closed: 'Closed', gone: 'Removed'};
+  // The reply promise (Support & Managed Owner's spec, reply-promise.md): the same words before and after sending, and who
+  // answers first. Shown on an open request only, never on an answered, closed or failed one.
+  const PROMISE = 'We usually reply within 1 business day (Monday to Friday).';
+  const WHO_ANSWERS = "Tico's support assistant answers first and brings in a person when it needs one.";
+  // The line under a request just sent: Ask's thread shows the same words (ui/app/ask-panel.js askFiled).
+  const supportDelivered = () => `Delivered to Tico support. ${PROMISE} The reply will appear here.`;
+  window.supportDelivered = supportDelivered;
   const ICON = {
     send: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 12h15M13 6l6 6-6 6"/></svg>',
     trash: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/></svg>',
@@ -79,7 +86,7 @@
   const lines = t => (t.message || '').split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
   const title = t => lines(t)[0]?.slice(0, 90) || 'Request';
   const preview = t => lines(t).slice(1).join(' ').slice(0, 140);
-  const last = t => (t.messages || []).at(-1)?.created || t.created;
+  const last = t => (t.messages || []).at(-1)?.created_at || t.created_at;
   const newestFirst = list => [...list].sort((a, b) => (Date.parse(last(b)) || 0) - (Date.parse(last(a)) || 0));
   const ended = t => ['closed', 'gone'].includes(t.status);
   // The request with the most recent message that isn't Closed or Removed.
@@ -219,12 +226,12 @@
   function renderThread(pin = false) {
     const host = pop.querySelector('[data-thread]'), t = current();
     const bubble = (body, staff, at, diag) => `<div class="support-msg ${staff ? 'staff' : 'you'}"><span class="support-who">${staff ? 'Tico support' : 'You'}${at ? ` · <time datetime="${escape(at)}">${escape(when(at))}</time>` : ''}</span><div class="support-body">${escape(body)}</div>${diag ? '<small class="support-sent">Diagnostics attached</small>' : ''}</div>`;
-    const after = {open: 'Delivered to Tico support. Their reply will appear here.', gone: 'Tico support removed this request.'};
+    const after = {open: supportDelivered(), gone: 'Tico support removed this request.'};
     // No request in the chat: an empty chat, and a way back to the last request when it is closed.
     const recent = newestFirst(state.tickets)[0], closedLast = !latest() && recent?.status === 'closed' ? recent : null;
-    const html = t ? bubble(t.message, false, t.created, t.sent?.diagnostics) + (t.messages || []).map(m => bubble(m.body, m.from === 'staff', m.created, m.has_diagnostics)).join('')
+    const html = t ? bubble(t.message, false, t.created_at, t.sent?.diagnostics) + (t.messages || []).map(m => bubble(m.body, m.from === 'staff', m.created_at, m.has_diagnostics)).join('')
         + (after[t.status] ? `<p class="support-delivered">${after[t.status]}</p>` : '')
-      : `<div class="support-empty"><p>Ask us anything. A person at Tico reads every message.</p>${closedLast
+      : `<div class="support-empty"><p>Ask us anything. ${PROMISE}</p><p>${WHO_ANSWERS}</p>${closedLast
         ? `<p>Your last request, ${escape(title(closedLast))}, is closed. <button type="button" class="linkish" data-view-last="${escape(closedLast.id)}">View it</button></p>` : ''}</div>`;
     // stays on the newest message only while the reader is there, so a poll never moves someone reading back
     // (ui/app/stick-scroll.js); a reply that lands while they are scrolled up shows the "New reply" pill instead
@@ -295,9 +302,9 @@
     const sessions = t ? (access.sessions || []).filter(x => x.ticket_id === t.id) : [];
     if (sessions.length) {
       for (const x of sessions) if (!accessLogs.has(x.id) || x.id === here?.id) void loadLog(x.id);
-      const items = sessions.flatMap(x => accessLogs.get(x.id)?.items || []).sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0));
+      const items = sessions.flatMap(x => accessLogs.get(x.id)?.items || []).sort((a, b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0));
       html += `<details class="support-access-log"${here ? ' open' : ''}><summary>Requests Tico support made</summary>${items.length
-        ? `<ol>${items.map(x => `<li><time datetime="${escape(x.ts)}" data-ago="${escape(x.ts)}" title="${escape(fmt(x.ts))}">${escape(ago(x.ts))}</time> ${escape(x.by === 'support-agent' ? 'Support Agent' : 'Staff')} · ${escape(x.method)} ${escape(x.path)} · ${escape(x.status)}</li>`).join('')}</ol>`
+        ? `<ol>${items.map(x => `<li><time datetime="${escape(x.created_at)}" data-ago="${escape(x.created_at)}" title="${escape(fmt(x.created_at))}">${escape(ago(x.created_at))}</time> ${escape(x.by === 'support-agent' ? 'Support Agent' : 'Staff')} · ${escape(x.method)} ${escape(x.path)} · ${escape(x.status)}</li>`).join('')}</ol>`
         : '<p class="support-sent">None yet.</p>'}</details>`;
     }
     host.hidden = !html;
@@ -635,6 +642,16 @@
   window.supportStart = (message, kind = 'support') => {
     starting = {message, kind};
     void open({fresh: true});
+  };
+  // Ask's "Attach diagnostics" on a request Loop in Support filed: the pop-up opens on that request and Review and edit
+  // opens over it. Nothing is sent here; the diagnostics ride along only once the person uses them and presses Send.
+  window.supportAttach = async id => {
+    await open({ticket: id});
+    if (!isOpen() || selected !== id || !current()) return;
+    const d = draft();
+    d.open = true;
+    renderComposer();
+    void openEditor(d);
   };
   document.addEventListener('click', async e => {
     const button = e.target.closest('[data-setup-help]');

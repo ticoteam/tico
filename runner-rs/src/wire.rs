@@ -29,6 +29,9 @@ pub struct HeartbeatAnswer {
     pub worktree_actions: Option<Vec<Value>>,
     pub worktree_actions_skipped: Option<u64>,
     pub performance: Option<bool>,
+    /// The computer's owner shares its internet with bots: hold the exit link open.
+    pub browser_exit: Option<bool>,
+    pub browser_exit_bots: Option<Vec<String>>,
     /// Absent or null is automatic: the machine's own capacity is the limit.
     pub turns_at_once: Option<u64>,
     pub restart: Option<bool>,

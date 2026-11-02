@@ -205,15 +205,35 @@ print("\n".join(aliases))
 PY
 }
 
+# Calls need LiveKit's signal connection on the app host's /rtc path. The tunnel sends it straight to the media server,
+# as Caddy does in the Caddy profile, because LiveKit checks the token itself. Prints the app host when TICO_MEET_URL is
+# on it and the key and secret are set; otherwise nothing, and the install cannot carry calls over the tunnel.
+meet_host() {
+  local url=${TICO_MEET_URL:-} host
+  [ -n "$url" ] && [ -n "${TICO_MEET_API_KEY:-}" ] && [ -n "${TICO_MEET_API_SECRET:-}" ] || return 1
+  host=${url#*://}; host=${host%%/*}; host=${host%%:*}
+  [ "$host" = "$TICO_DOMAIN" ] && echo "$host"
+}
+
 tunnel_config() {
   [ -n "${TICO_DOMAIN:-}" ] && [ -d "$TUNNEL_DIR" ] && [ -w "$TUNNEL_DIR" ] || return 0
   case "$TICO_DOMAIN" in *[!A-Za-z0-9.-]*|.*|*.|'') die "TICO_DOMAIN is not a plain hostname: $TICO_DOMAIN" ;; esac
-  local runner visual aliases host origin=http://hold:8080
+  local runner visual aliases host meet netloc origin=http://hold:8080
   runner=$(runner_host)
   visual=$(visual_host "$runner") || visual=  # visual_host printed the warning
   aliases=$(domain_aliases "$runner" "$visual") || return 1
+  meet=$(meet_host) || meet=
+  if [ -z "$meet" ] && [ -n "${TICO_MEET_URL:-}" ]; then
+    echo "warning: calls cannot connect over this tunnel: set TICO_MEET_URL, key and secret for $TICO_DOMAIN" >&2
+  fi
+  netloc=${TICO_MEET_INTERNAL_URL:-http://livekit:7880}; netloc=${netloc#*://}; netloc=${netloc%%/*}
   {
     echo "ingress:"
+    if [ -n "$meet" ]; then
+      echo "  - hostname: $TICO_DOMAIN"
+      echo "    path: '^/rtc(?:/.*)?\$'"
+      echo "    service: http://$netloc"
+    fi
     echo "  - hostname: $TICO_DOMAIN"
     echo "    service: $origin"
     if [ -n "$aliases" ]; then
@@ -370,11 +390,11 @@ environment_identity() {
 import json, os, re, secrets, sqlite3
 from backend.hubdb import leave_wal_for_litestream
 db = leave_wal_for_litestream(sqlite3.connect(os.environ["TICO_DB"]))
-row = db.execute("SELECT value_json FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
+row = db.execute("SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
 value = os.environ.get("TICO_ENVIRONMENT_ID") or (json.loads(row[0]) if row else secrets.token_hex(8))
 if not re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", value):
     raise SystemExit("TICO_ENVIRONMENT_ID is lowercase letters, digits and hyphens")
-db.execute("INSERT INTO registry_metadata VALUES('docker-environment-id', ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+db.execute("INSERT INTO registry_metadata VALUES('docker-environment-id', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
            (json.dumps(value),))
 db.commit()
 print(value)
@@ -541,7 +561,7 @@ import json, os, sqlite3, sys, time
 for _ in range(60):
     try:
         row = sqlite3.connect("file:%s?mode=ro" % os.environ["TICO_DB"], uri=True).execute(
-            "SELECT value_json FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
+            "SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
     except sqlite3.Error:
         row = None
     if row:

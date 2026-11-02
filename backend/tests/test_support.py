@@ -2,6 +2,7 @@
 mode, and a person sees their own tickets and HQ's replies, and no one else's."""
 
 import json
+import logging
 import re
 import secrets
 from pathlib import Path
@@ -101,11 +102,11 @@ def test_submit_forwards_exactly_what_the_form_showed_and_keeps_the_secret_on_th
     (request,) = hq.seen
     assert request.method == "POST" and str(request.url) == "https://updates.tico.team/v1/support"
     assert json.loads(request.content) == {"message": "The board will not load", "email": "ana@acme.example",
-                                           "version": "0.2.17", "install_id": form["install_id"]}
+                                           "version": "0.2.17", "install_id": form["install_id"], "source": "person"}
 
     # Without the checkbox: only the message (and the email if one is given).
     file(api, include_ids=False, app_version="0.3.47")
-    assert json.loads(hq.seen[-1].content) == {"message": "The board will not load"}
+    assert json.loads(hq.seen[-1].content) == {"message": "The board will not load", "source": "person"}
     assert file(api, include_ids=False).json()["sent"] == {}
 
 
@@ -123,13 +124,15 @@ def test_the_desktop_apps_version_goes_labelled_apart_and_an_older_hq_still_gets
     assert [json.loads(x.content).get("app_version") for x in hq.seen[-2:]] == ["0.3.47", None]
     assert len(hq.tickets) == 3
 
-    # Only that refusal is retried, once: HQ objecting to the value itself, or to another field, is answered as it is.
-    for fields, refuse, body in ((None, "app_version", {"app_version": "0.3.47"}),
-                                 ({"message"}, None, {"email": "ana@acme.example"})):
+    # Only that refusal is retried: HQ objecting to the value itself is answered at once; objecting to another field is
+    # answered after the one retry without source (an older HQ's refusal does not say which field it was).
+    for fields, refuse, body, asks in ((None, "app_version", {"app_version": "0.3.47"}, 1),
+                                       ({"message"}, None, {"email": "ana@acme.example"}, 2)):
         hq.fields, hq.refuse_field, before = fields, refuse, len(hq.seen)
         r = file(api, **body)
         assert r.status_code < 500 and r.status_code >= 400, r.text
-        assert len(hq.seen) == before + 1
+        assert len(hq.seen) == before + asks
+    assert "source" not in json.loads(hq.seen[-1].content)
     assert len(hq.tickets) == 3
 
 
@@ -210,8 +213,8 @@ def test_refresh_paces_tickets_by_activity_and_asks_about_the_one_in_view(enviro
         for name, (status, created, checked, said) in rows.items():
             hq.tickets[hq_of[name]]["status"] = status
             hq.tickets[hq_of[name]]["messages"] = [{"id": 1, "created": said, "from": "person", "body": "hi"}]
-            c.execute("UPDATE support_tickets SET status=?, created=?, checked=?, messages_json=? WHERE id=?",
-                      (status, created, checked, json.dumps([{"id": 1, "created": said, "from": "person", "body": "hi",
+            c.execute("UPDATE support_tickets SET status=?, created_at=?, checked_at=?, messages=? WHERE id=?",
+                      (status, created, checked, json.dumps([{"id": 1, "created_at": said, "from": "person", "body": "hi",
                                                               "has_diagnostics": False}]), ids[name]))
 
     def asked(body=None):
@@ -224,15 +227,15 @@ def test_refresh_paces_tickets_by_activity_and_asks_about_the_one_in_view(enviro
     assert asked() == ([hq_of["busy"], hq_of["stale"]], False)
     # The one in view is asked about first, even closed, and every 30 s; another person's ticket is not.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE support_tickets SET checked=? WHERE id IN (?,?)", (ago(60), ids["busy"], ids["closed"]))
+        c.execute("UPDATE support_tickets SET checked_at=? WHERE id IN (?,?)", (ago(60), ids["busy"], ids["closed"]))
     assert asked({"ticket": ids["closed"]}) == ([hq_of["closed"], hq_of["busy"]], False)
     riley = file(api, headers=as_person(api, "riley"), message="Riley's").json()["id"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE support_tickets SET checked=?", (now,))
+        c.execute("UPDATE support_tickets SET checked_at=?", (now,))
     assert asked({"ticket": riley}) == ([], False)
     # HQ answering 429 ends the round after the first ask, the most recent first, and keeps what was known.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE support_tickets SET checked=?", (ago(400),))
+        c.execute("UPDATE support_tickets SET checked_at=?", (ago(400),))
     hq.read_status = 429
     assert asked() == ([hq_of["busy"]], True)
 
@@ -283,7 +286,8 @@ def test_the_ticket_round_trip_keeps_to_hq_s_documented_contract(environment, mo
     (tid, held), = hq.tickets.items()
     assert TICKET_ID.fullmatch(tid) and mine["status"] == "open"
     assert hq.calls() == [("POST", "/v1/support", "", None,
-                           {"message": "The board will not load", "version": "0.2.17", "install_id": install_id})]
+                           {"message": "The board will not load", "source": "person", "version": "0.2.17",
+                            "install_id": install_id})]
     secret = held["secret"]
     assert secret not in json.dumps(api.get("/api/v2/support/tickets", headers=signed_in()).json())
 
@@ -362,6 +366,33 @@ def test_plaintext_ticket_secrets_from_before_are_sealed_once_on_start(environme
     assert api.post("/api/v2/support/tickets/refresh", headers=signed_in()).json()["tickets"][0]["status"] == "answered"
 
 
+def test_no_ticket_table_yet_is_nothing_to_seal_and_not_a_warning(environment, caplog):
+    api = environment()
+    with api.app.state.store.transaction() as c:      # a fresh database: the seal runs before Store.initialize makes the table
+        c.execute("DROP TABLE support_tickets")
+    caplog.clear()
+    assert support.seal_plaintext_secrets(api.app.state.store, api.app.state.vault) == 0
+    assert not [r for r in caplog.records if r.name == "tico.support" and r.levelno >= logging.WARNING]
+
+
+def test_a_vault_that_cannot_seal_still_fails_so_startup_names_it(environment, hq):
+    api = environment()
+    ticket = file(api).json()
+    (tid, held), = hq.tickets.items()
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE support_tickets SET hq_secret=? WHERE id=?", (held["secret"], ticket["id"]))
+
+    class KmsDown:
+        class cipher:
+            @staticmethod
+            def seal(c, context, value):
+                raise OSError("KMS unreachable")
+
+    with pytest.raises(OSError):
+        support.seal_plaintext_secrets(api.app.state.store, KmsDown)
+    assert stored_secret(api, ticket["id"]) == held["secret"]
+
+
 def test_a_vault_that_cannot_be_opened_refuses_a_ticket_before_anything_reaches_hq(environment, hq):
     api = environment()
     file(api)
@@ -381,7 +412,7 @@ def as_bot(api, slug="coo"):
     """The bot, connected as an external agent (a Hermes profile): its own standing credential, no runner lease."""
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (slug, "hermes", "hash-" + slug, "2026-01-01T00:00:00Z", "human:test"))
     api.app.state.store.settings.test_identities["bot-" + slug] = Identity("bot:" + slug, "bot", agent="hermes")
     return signed_in("bot-" + slug)
@@ -397,7 +428,7 @@ def draft(api, headers, message=REPORT, **extra):
 
 def decide(api, approval_id, decision="approved"):
     with api.app.state.store.read() as c:
-        to = c.execute("SELECT m.to_actor FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
+        to = c.execute("SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
                        (approval_id,)).fetchone()[0]
     return to, api.post(f"/api/v2/approvals/{approval_id}", json={"decision": decision}, headers=signed_in())
 
@@ -431,7 +462,8 @@ def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_th
     assert sent["filed_as"] == approver and sent["ticket"]["message"] == REPORT and consumed(api, approval["id"])
     assert sent["ticket"]["sent"]["version"] == "0.2.17" and "secret" not in r.text
     (request,) = hq.seen
-    assert set(json.loads(request.content)) == {"message", "version", "install_id"}    # no email, no diagnostics
+    assert set(json.loads(request.content)) == {"message", "version", "install_id", "source"}    # no email, no diagnostics
+    assert json.loads(request.content)["source"] == "bot_report"        # a bot's report a person approved
     # The approver's ticket: on their Support page, counted for them, not the bot's.
     with api.app.state.store.read() as c:
         assert [tuple(x) for x in c.execute("SELECT actor FROM support_tickets")] == [(approver,)]
@@ -449,7 +481,7 @@ def test_without_ids_only_the_message_goes(environment, hq):  # noqa: F811  (the
     approval = draft(api, bot, include_ids=False).json()
     decide(api, approval["id"])
     assert send(api, bot, approval["id"]).json()["ticket"]["sent"] == {}
-    assert json.loads(hq.seen[-1].content) == {"message": REPORT}
+    assert json.loads(hq.seen[-1].content) == {"message": REPORT, "source": "bot_report"}
 
 
 def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_approved(environment, hq):  # noqa: F811  (the fixture)
@@ -466,8 +498,8 @@ def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_appro
     assert send(api, bot, "nope").status_code == 404
     # The stored message changed after the person read it: its hash no longer matches.
     with api.app.state.store.transaction() as c:
-        row = c.execute("SELECT payload_json FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
-        c.execute("UPDATE approvals SET payload_json=? WHERE id=?",
+        row = c.execute("SELECT payload FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
+        c.execute("UPDATE approvals SET payload=? WHERE id=?",
                   (row.replace("hub task update", "hub task delete"), approval["id"]))
     r = send(api, bot, approval["id"])
     assert r.status_code == 409 and "hash" in r.json()["error"]["detail"]
@@ -558,7 +590,7 @@ def test_a_persons_own_draft_is_theirs_to_approve_and_is_filed_as_them(environme
     for token, message in (("riley-token", REPORT), ("riley-token", "A second report from Riley's token")):
         approval = draft(api, signed_in(token), message=message).json()
         with api.app.state.store.read() as c:
-            to = c.execute("SELECT m.to_actor FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
+            to = c.execute("SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
                            (approval["id"],)).fetchone()[0]
         assert to == "human:riley"                                   # not the default person
         # Neither their token nor the Assistant says yes for them: only Riley at their browser.
@@ -587,7 +619,7 @@ def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(e
     api = environment()
     approval = draft(api, as_bot(api)).json()
     with api.app.state.store.read() as c:
-        approver = c.execute("SELECT m.to_actor FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
+        approver = c.execute("SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
                              (approval["id"],)).fetchone()[0]
     me = api.get("/api/me", headers=signed_in()).json()
     api.app.state.store.settings.test_identities["approver-token"] = Identity(
@@ -610,7 +642,7 @@ def test_a_setup_request_starts_from_a_snapshot_and_keeps_its_kind_even_at_an_ol
     api = environment()
     with api.app.state.store.transaction() as c:                   # a parked bot whose name must not go
         H.sync_registry(c, {"payroll": {"name": "Payroll for Acme Corp", "status": "active"}}, None)
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,operator,onboarding_state) "
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,owner_id,onboarding_state) "
                   "VALUES('payroll','{}','human:test','needs_setup')")
         c.execute("UPDATE bots SET display_name='Payroll for Acme Corp' WHERE slug='payroll'")
     owner_items = api.get("/api/v2/getting-started", headers=signed_in()).json()["items"]
@@ -638,29 +670,29 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     store = api.app.state.store
     question = lambda h=None: api.get("/api/v2/config", headers=h or signed_in()).json()["feedback_question"]
     with store.transaction() as c:                                 # everyone so far acted before any result
-        c.execute("UPDATE events SET ts=?", (H.shift(H.now(), days=-3),))
+        c.execute("UPDATE events SET created_at=?", (H.shift(H.now(), days=-3),))
     complete_a_bot_turn(api, H.shift(H.now(), days=-1))
     assert question() is None                                      # only the Assistant has answered
     complete_a_bot_turn(api, H.shift(H.now(), hours=2), bot="payroll")
     assert question() is None                                      # a result stamped ahead of this clock waits
     with store.transaction() as c:
-        c.execute("UPDATE attempts SET finished=? WHERE bot='payroll'", (H.shift(H.now(), days=-1),))
+        c.execute("UPDATE attempts SET finished_at=? WHERE bot_id='payroll'", (H.shift(H.now(), days=-1),))
     assert question() == {"moment": "first_result", "question": "How is Tico working for you?"}
     assert api.get("/api/v2/config", headers=as_bot(api)).json()["feedback_question"] is None
     r = api.post("/api/v2/support/feedback", json={"moment": "first_result", "answer": "Good so far"}, headers=signed_in())
     assert r.status_code == 200 and r.json()["answered"]
     sent = json.loads(hq.seen[-1].content)                         # only their words: no IDs, no diagnostics
-    assert sent == {"message": sent["message"], "kind": "feedback"} and sent["message"].endswith("\n\nGood so far")
+    assert sent == {"message": sent["message"], "kind": "feedback", "source": "person"} and sent["message"].endswith("\n\nGood so far")
     assert question() is None
     # A week on, the person is asked once more, but not within 3 days of their last answer.
     with store.transaction() as c:
-        c.execute("UPDATE attempts SET finished=? WHERE bot='payroll'", (H.shift(H.now(), days=-8),))
-        c.execute("UPDATE events SET ts=?", (H.shift(H.now(), days=-9),))
-        c.execute("UPDATE preferences SET value_json=json_set(value_json,'$.first_result.at',?) WHERE key=?",
+        c.execute("UPDATE attempts SET finished_at=? WHERE bot_id='payroll'", (H.shift(H.now(), days=-8),))
+        c.execute("UPDATE events SET created_at=?", (H.shift(H.now(), days=-9),))
+        c.execute("UPDATE preferences SET value=json_set(value,'$.first_result.at',?) WHERE key=?",
                   (H.shift(H.now(), days=-1), "support.feedback"))
     assert question() is None
     with store.transaction() as c:
-        c.execute("UPDATE preferences SET value_json=json_set(value_json,'$.first_result.at',?) WHERE key=?",
+        c.execute("UPDATE preferences SET value=json_set(value,'$.first_result.at',?) WHERE key=?",
                   (H.shift(H.now(), days=-7), "support.feedback"))
     assert question()["moment"] == "day_7"
     before = len(hq.seen)
@@ -673,9 +705,60 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
         H.event(c, "human:riley", "test.acted", "x", {})
     assert question(riley) is None
     with store.transaction() as c:
-        c.execute("UPDATE events SET ts=? WHERE actor='human:riley'", (H.shift(H.now(), days=-7),))
+        c.execute("UPDATE events SET created_at=? WHERE actor='human:riley'", (H.shift(H.now(), days=-7),))
     from backend import support_asks
     support_asks.JOINED.clear()             # the server keeps a first action once read; only this test rewrites one
     assert question(riley)["moment"] == "day_7"
     monkeypatch.setenv("TICO_SUPPORT", "off")
     assert question(riley) is None and api.get("/api/v2/config", headers=riley).json()["support_on"] is False
+
+
+def test_each_filing_says_its_source_and_an_older_hq_still_gets_the_ticket(environment, hq):
+    """Spec ticket-source.md criteria 1, 3 and 8: the person's own app sends `person` (it never names one), a person's
+    claim of `botops` is filed as theirs (BotOps' own request is tested in test_botops_parity.py), nothing else may be
+    claimed, and an HQ that refuses `source` as an unknown field gets the ticket again without it, its message
+    unchanged (BotOps' name stays at its start, which such an HQ reads)."""
+    api = environment()
+    file(api)
+    assert json.loads(hq.seen[-1].content)["source"] == "person"
+    assert "source" not in file(api).json()["sent"]                 # HQ's sorting, not something the person sent
+    file(api, message="[BotOps] Sync fails", source="botops")
+    assert json.loads(hq.seen[-1].content)["source"] == "person"
+    for claimed in ("bot_report", "health_monitor", "hq_alert", "website", "unknown"):
+        assert file(api, source=claimed).status_code == 422
+    filed = len(hq.tickets)
+
+    hq.fields = {"message", "email", "install_id", "version", "app_version", "kind"}
+    r = file(api, message="[BotOps] Sync fails")
+    assert r.status_code == 200, r.text
+    first, again = (json.loads(x.content) for x in hq.seen[-2:])
+    assert first["source"] == "person" and "source" not in again and again["message"] == "[BotOps] Sync fails"
+    assert len(hq.tickets) == filed + 1
+    # Today's HQ knows kind but not source: only source is dropped, so a setup request keeps its kind.
+    r = file(api, message="Stuck on the computer step", kind="setup")
+    assert r.status_code == 200 and r.json()["sent"]["kind"] == "setup"
+    last = json.loads(hq.seen[-1].content)
+    assert "source" not in last and last["kind"] == "setup" and last["message"] == "Stuck on the computer step"
+    # An HQ from before kind as well: both go, as before, and the kind is named in the message.
+    hq.fields = {"message", "email", "install_id", "version"}
+    r = file(api, message="Stuck again", kind="setup")
+    assert r.status_code == 200 and "kind" not in r.json()["sent"]
+    last = json.loads(hq.seen[-1].content)
+    assert set(last) <= hq.fields and last["message"] == "[Setup] Stuck again"
+    # Only those refusals are retried: HQ objecting to the value itself is answered as it is, after one request.
+    hq.fields, hq.refuse_field, before = None, "source", len(hq.seen)
+    assert 400 <= file(api).status_code < 500 and len(hq.seen) == before + 1
+
+
+def test_the_botops_tool_says_botops_and_keeps_its_name_in_the_message(monkeypatch):
+    """Criterion 3: `hub support file` sends `source: botops` beside the `[BotOps] ` prefix older HQs read."""
+    from clients import hubtools
+    calls = []
+
+    class Api:
+        def post(self, path, body, key=None):
+            calls.append((path, body))
+            return {}
+    monkeypatch.setattr(hubtools, "_as_person", lambda api, ref=None: api)
+    hubtools.support_file(Api(), {"message": "Sync fails"})
+    assert calls == [("support/tickets", {"message": "[BotOps] Sync fails", "include_ids": True, "source": "botops"})]
