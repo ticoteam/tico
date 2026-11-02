@@ -5,6 +5,7 @@ import json
 import urllib.error
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from backend import hubdb as H
 from backend import usage_limits
@@ -74,6 +75,22 @@ def test_usage_posting_matches_gateway_billed_runs_once(books):
                                                                 "tico-image": "0.07"}), fetched_at=AT)
         assert [(p["line"], p["amount"]) for p in FA.post_usage(c, "2026-10-17T16:05:00.000000Z")] == [("ai", 2)]
         assert sum(v for (_, code), v in _usage_lines(c).items() if code == "5100") == 62
+
+
+def test_gateway_usage_in_a_raw_totals_month_posts_nothing_because_the_totals_carry_it(books):
+    """§4.1 and §9: a month holding raw totals already carries its Gateway spend, so the usage run posts nothing there
+    (a posting into that month is refused) and the month's usage posts no entry at all."""
+    raw = (Path(__file__).parent / "fixtures" / "finance" / "raw_totals.csv").read_text()
+    mapping = {"Software subscriptions": "6100", "Office rent": "6900", "Sales revenue": "4000", "Cash at bank": "1000"}
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", {"csv": raw, "basis": "cash", "mapping": mapping,
+                                                   "source_name": "Acme history"}).status == "committed"
+        _turn(c, "coder", "2026-02-15T13:00:00.000000Z", 0.30)
+        meter = _meter("2026-02-28T16:00:00Z", **{"tico-medium": "0.30", "tico-fast": "0.10", "tico-image": "0.07"})
+        meter["month"] = "2026-02"
+        assert FA.usage_snapshot(c, meter, fetched_at="2026-02-28T16:01:00.000000Z")
+        assert FA.post_usage(c, "2026-02-28T16:05:00.000000Z") == []
+        assert _usage_lines(c) == {}
 
 
 def test_a_run_hold_settles_once_and_the_posting_takes_it_in(books):

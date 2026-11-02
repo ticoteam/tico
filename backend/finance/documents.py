@@ -583,7 +583,8 @@ def bill_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if bill["entry_id"]:
             entry = SL.entry_row(ctx.c, str(bill["entry_id"]))
             if entry is not None and str(entry["status"]) == "posted":
-                posting.reverse(ctx, str(bill["entry_id"]), day=open_day(ctx, ctx.today),
+                # The bill's own date: open_day moves it to the open period only when that date is closed (§4.1).
+                posting.reverse(ctx, str(bill["entry_id"]), day=open_day(ctx, str(bill["bill_date"])),
                                 memo=f"Void bill {bill['number'] or bill['id']}: {reason}"[:200], by=who,
                                 action_id=aid)
                 posted = True
@@ -729,7 +730,7 @@ def invoice_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if inv["entry_id"]:
             entry = SL.entry_row(ctx.c, str(inv["entry_id"]))
             if entry is not None and str(entry["status"]) == "posted":
-                posting.reverse(ctx, str(inv["entry_id"]), day=open_day(ctx, ctx.today),
+                posting.reverse(ctx, str(inv["entry_id"]), day=open_day(ctx, str(inv["invoice_date"])),
                                 memo=f"Void invoice {inv['number']}: {reason}"[:200], by=who, action_id=aid)
         SAP.update(ctx.c, "fin_invoices", str(inv["id"]), {"status": "void", "voided_at": ctx.at,
                                                            "updated_at": ctx.at})
@@ -1230,6 +1231,8 @@ def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     row = SK.get(ctx.c, "fin_feed_txns", V.text(p, "feed_id", 80))
     if row is None or not seen(ctx, who, row):
         raise FinanceError(NOT_FOUND, "no such feed row in your view")
+    if str(row["status"]) == "covered":
+        raise FinanceError(CONFLICT, "that row is covered history: its month holds raw totals, so it is not linked")
     if int(row["pending"]) or str(row["status"]) == "ignored" or row["entry_id"]:
         raise FinanceError(CONFLICT, "only a settled row not yet in the books is linked; re-categorize a posted one")
     kind = "bill" if int(row["amount"]) < 0 else "invoice"

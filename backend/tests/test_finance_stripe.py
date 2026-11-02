@@ -1005,3 +1005,40 @@ def test_a_webhook_is_kept_once_for_the_one_stripe_connection_and_then_reads_the
     with books.read() as c:
         assert c.execute("SELECT status FROM fin_inbox WHERE provider_event_id='evt_stripe_1'").fetchone()[0] == "done"
         assert _sum(c, "1050") == 3_880
+
+
+def _stripe_opening(c: Any) -> int:
+    """The live opening balance entry's amount on the Stripe line (1050)."""
+    return int(c.execute("SELECT coalesce(sum(l.amount), 0) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
+                         "JOIN fin_accounts a ON a.id=l.account_id WHERE e.source='sync' AND e.source_id LIKE 'opening:%' "
+                         "AND e.status='posted' AND e.reverses_id IS NULL AND a.code='1050'").fetchone()[0])
+
+
+def test_a_stripe_opening_moves_by_a_raw_post_and_back_by_its_reversal(books):
+    """Phase 2 #2 (§4.1 opening): a Stripe row a raw-totals month covers moves the opening the way a bank row does: the
+    opening takes its amount in, with no balance read, and its reversal takes it back out. The Stripe line is the
+    provider's balance once the row is covered; before and after, the unposted row is the only difference."""
+    sep = int(datetime(2026, 9, 10, 12, tzinfo=timezone.utc).timestamp())
+    stripe = FakeStripe(start=7_000)
+    connect_stripe(books, stripe)
+    stripe.add("transfer", 500, created=sep)            # a balance type nothing posts: the balance holds it, it is asked
+    stripe.add("charge", 2_000, 0, "Acme Buyer")        # October: posted as a sale
+    stripe_pass(books, stripe)
+    with books.transaction() as c:
+        assert _stripe_opening(c) == 7_000
+        assert _sum(c, "1050") == 9_000                 # the asked transfer is the one row the books do not carry
+        assert _asked(c, "txn_0001") == 1
+    csv = "month,line,amount,team\n2026-09,Sales revenue,250000,sales\n"
+    with books.transaction() as c:
+        r = act(c, OWNER, "import_raw_totals", {"csv": csv, "basis": "cash", "mapping": {"Sales revenue": "4000"},
+                                                "source_name": "Stripe history"})
+        assert r.status == "committed", r.reason
+        entry = r.result["months"][0]["entry_id"]
+        assert _stripe_opening(c) == 7_500
+        assert _sum(c, "1050") == stripe.total() == 9_500
+        assert _every_entry_balances(c)
+    with books.transaction() as c:
+        assert act(c, OWNER, "journal", {"reverses": entry}).status == "committed"
+        assert _stripe_opening(c) == 7_000
+        assert _sum(c, "1050") == stripe.total() - 500
+        assert _feed(c, "txn_0001")["status"] == "new"    # uncovered again: it waits for a person

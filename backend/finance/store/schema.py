@@ -136,11 +136,11 @@ CREATE TABLE IF NOT EXISTS fin_feed_txns (
   id TEXT PRIMARY KEY, money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id), provider_id TEXT NOT NULL,
   txn_date TEXT NOT NULL, amount BIGINT NOT NULL, currency TEXT NOT NULL, counterparty TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','matched','posted','ignored')),
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','matched','posted','ignored','covered')),
   entry_id TEXT REFERENCES fin_entries(id), commitment_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   updated_at TEXT, pending INTEGER NOT NULL DEFAULT 0, provider_status TEXT NOT NULL DEFAULT '', posted_at TEXT,
   kind TEXT NOT NULL DEFAULT '', card_id TEXT, hold_id TEXT, reconciliation_id TEXT, version INTEGER NOT NULL DEFAULT 0,
-  request_id TEXT, raw_json TEXT NOT NULL DEFAULT '{}', UNIQUE (money_account_id, provider_id));
+  request_id TEXT, raw_json TEXT NOT NULL DEFAULT '{}', entry_line_id TEXT, UNIQUE (money_account_id, provider_id));
 
 CREATE TABLE IF NOT EXISTS fin_reconciliations (
   id TEXT PRIMARY KEY, money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id), statement_end TEXT NOT NULL,
@@ -717,6 +717,14 @@ def stripe(c: sqlite3.Connection) -> None:
     so an install from before 69 has no index on raw_json."""
     for statement in statements(STRIPE_INDEXES):
         c.execute(statement)
+
+
+def covered_history(c: sqlite3.Connection) -> None:
+    """Cloud migration 78: a settled feed row dated in a raw-totals month waits as `covered` (spec §4.1), so
+    fin_feed_txns may hold that status. SQLite cannot widen a CHECK in place, so the table is rebuilt keeping its rows
+    (entry_line_id is declared in its definition now, so the copy keeps it). Idempotent."""
+    _widen(c, "fin_feed_txns", "'covered'")
+    create(c)
 
 
 def raw_import(c: sqlite3.Connection) -> None:

@@ -13,7 +13,6 @@ from typing import Any, cast
 
 from . import banking, stripe_post
 from .context import Ctx, load
-from .core import dates
 from .core import feeds as F
 from .core import kinds as K
 from .core import validate as V
@@ -181,6 +180,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     with store.transaction() as c:
         if due:
             stripe_post.stale(load(c, now))
+            banking.refresh_connection_openings(load(c, now), cid)    # the pass's balance and rows agree now
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now}
         if due:
             fields["next_sync_at"] = _after(now, POLL_MINUTES * 60)
@@ -323,10 +323,7 @@ def _complete(store: Any, cid: str, now: str, conf: Mapping[str, Any], head: str
             for m in SK.money_accounts(c, ctx.book.id):
                 if str(m["connection_id"] or "") != cid or str(m["kind"]) != "stripe":
                     continue
-                mid = str(m["id"])
-                first = SK.first_feed_day(c, mid)
-                day = (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
-                banking.set_opening(ctx, m, int(conf["held"]) - SK.feed_total(c, mid), day)
+                banking.open_at(ctx, m, int(conf["held"]))
             done["backfilled"] = True
         SK.update(c, "fin_connections", cid, {"settings_json": SK.dump(done), "cursor": None, "updated_at": now})
 

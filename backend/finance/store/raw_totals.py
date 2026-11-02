@@ -42,6 +42,30 @@ def live_entry_in(c: sqlite3.Connection, book_id: str, start: str, end: str) -> 
                      (book_id, start, end)).fetchone()
 
 
+# The sources whose entries are itemized transactions. A month that holds one takes no raw totals: the import would
+# count its expenses a second time (§4.1, §16.4).
+ITEMIZED = ("bank", "card", "bill", "invoice", "payment", "usage", "sync")
+
+
+def itemized_in(c: sqlite3.Connection, book_id: str, start: str, end: str) -> Any:
+    """A standing entry of itemized transactions dated from start to end, if there is one."""
+    marks = ",".join("?" * len(ITEMIZED))
+    # An opening balance is sync-sourced but is not an itemized transaction: it moves before the first raw-totals month.
+    return c.execute(f"SELECT id, source FROM fin_entries WHERE book_id=? AND source IN ({marks}) AND status='posted' "
+                     "AND reverses_id IS NULL AND entry_date>=? AND entry_date<=? AND source_id NOT LIKE 'opening:%' "
+                     "ORDER BY entry_date, id LIMIT 1", (book_id, *ITEMIZED, start, end)).fetchone()
+
+
+def posted_feed_in(c: sqlite3.Connection, book_id: str, start: str, end: str) -> Any:
+    """A bank or card row dated from start to end whose live entry (posted, not a reversal) holds its activity, if there
+    is one: its month is closed to raw totals. The entry may be dated outside the month (a closed month rolls it on). A
+    row whose entry was reversed holds nothing and is not counted."""
+    return c.execute("SELECT f.id, f.entry_id FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
+                     "JOIN fin_entries e ON e.id=f.entry_id AND e.status='posted' AND e.reverses_id IS NULL "
+                     "WHERE m.book_id=? AND f.txn_date>=? AND f.txn_date<=? ORDER BY f.txn_date, f.id LIMIT 1",
+                     (book_id, start, end)).fetchone()
+
+
 def _tags(rows: list[Any]) -> list[tuple[str, dict[str, str]]]:
     return [(str(r[0]), {k: str(v) for k, v in (("team", r[1]), ("teammate", r[2])) if v}) for r in rows]
 
@@ -65,3 +89,21 @@ def live_months(c: sqlite3.Connection, book_id: str, first: str, last: str) -> l
                      "AND e.source_id<'raw_totals:'||b.id||';' WHERE e.book_id=? AND e.source='import' "
                      "AND e.status='posted' AND e.reverses_id IS NULL AND substr(e.entry_date, 1, 7) BETWEEN ? AND ? "
                      "ORDER BY month", (book_id, first, last)).fetchall()
+
+
+def live_span(c: sqlite3.Connection, book_id: str) -> tuple[str, str] | None:
+    """The first and the last month (YYYY-MM) holding a standing raw-totals entry, or None when there is none."""
+    row = c.execute("SELECT min(substr(entry_date, 1, 7)), max(substr(entry_date, 1, 7)) FROM fin_entries WHERE "
+                    "book_id=? AND source='import' AND status='posted' AND reverses_id IS NULL AND "
+                    "source_id>='raw_totals:' AND source_id<'raw_totals;'", (book_id,)).fetchone()
+    return (str(row[0]), str(row[1])) if row is not None and row[1] else None
+
+
+def line_movement(c: sqlite3.Connection, book_id: str, account_id: str) -> int:
+    """What the live raw-totals entries put on one account's GL line: the cash line of the months a sheet holds (§4.1).
+    Reversed originals and the reversals themselves are left out."""
+    row = c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id WHERE "
+                    "e.book_id=? AND e.source='import' AND e.status='posted' AND e.reverses_id IS NULL AND "
+                    "e.source_id>='raw_totals:' AND e.source_id<'raw_totals;' AND l.account_id=?",
+                    (book_id, account_id)).fetchone()
+    return int(row[0])

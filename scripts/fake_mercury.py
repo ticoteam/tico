@@ -66,6 +66,19 @@ class State:
 STATE = State()
 
 
+def balances() -> dict:
+    """The fixture's accounts, with each balance moved by the transactions posted since the fake started. The fixture's
+    balance already holds the seed transactions, so the opening is that less the seed, and a fresh fake reads the fixture."""
+    accounts = copy.deepcopy(FIXTURES["accounts"])
+    for acct in accounts["accounts"]:
+        acct_id = acct["id"]
+        seed = sum(float(FIXTURES[k]["amount"]) for k in SEED_TXNS if str(FIXTURES[k].get("accountId")) == acct_id)
+        moved = sum(float(t["amount"]) for t in STATE.txns if str(t.get("accountId")) == acct_id) - seed
+        acct["currentBalance"] = round(acct["currentBalance"] + moved, 2)
+        acct["availableBalance"] = round(acct["availableBalance"] + moved, 2)
+    return accounts
+
+
 def page(items: list[dict], key: str, start_after: str | None, limit: int) -> tuple[list[dict], dict]:
     """Mercury's cursor page: the items after `start_after`, and page.nextPage naming the last one when more follow."""
     ids = [str(i[key]) for i in items]
@@ -148,7 +161,7 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
     limit = int(one(q, "limit", "500") or 500)
     after = one(q, "start_after")
     if method == "GET" and path == "/accounts":
-        return 200, FIXTURES["accounts"]
+        return 200, balances()
     if method == "GET" and path == "/credit":
         return 200, FIXTURES["credit"]
     if method == "GET" and path == "/users":

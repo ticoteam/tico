@@ -658,6 +658,9 @@ def _debit(fake, txn_id, request_id, event_id, **extra):
                          "postedAt": "2026-10-16T10:00:00Z", **extra}
     fake.events_list.append({"id": event_id, "resourceType": "transaction", "resourceId": txn_id,
                              "operationType": "create", "resourceVersion": 1})
+    # Mercury's balance moves with the debit it posts: the books carry the row, so the balance they reconcile to does too.
+    recorded = next(a["currentBalance"] for a in MERCURY["accounts"]["accounts"] if a["id"] == "acct-chk")
+    fake.balances["acct-chk"] = fake.balances.get("acct-chk", recorded) - 500.0
 
 
 def test_a_lost_send_whose_debit_posts_before_it_is_found_settles_on_its_line_once(books):
