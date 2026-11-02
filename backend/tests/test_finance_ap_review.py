@@ -383,6 +383,7 @@ def test_reads_cut_private_amounts_unseen_accounts_and_nested_lists(books):  # n
         assert "unmatched_receipts" not in keys and "draft_bills" not in keys
         assert next(x for x in checklist["checks"] if x["key"] == "reconciled")["accounts"] == []
         assert not [i for i in FR.inbox(c, "human:cara")["items"] if i.get("file_id") == "file-loose"]
+
         assert FR.pay_from(c, "human:cara")["accounts"] == []                            # Grok 3
         assert len(FR.pay_from(c, OWNER)["accounts"]) == 2
         data = c.execute("SELECT payload_json FROM fin_events WHERE name='finance.cash.below'").fetchall()
@@ -395,3 +396,19 @@ def test_reads_cut_private_amounts_unseen_accounts_and_nested_lists(books):  # n
         report = FR.report(c, OWNER, "pnl", start="2026-10-01", end="2026-10-31", top_n=1)
         assert len([r for r in report["rows"] if r.get("key") != FR.OTHER]) == 1
         assert report["rows_total"] > 1 and any(str(r.get("label", "")).startswith("Other · ") for r in report["rows"])
+
+
+def test_a_viewer_cannot_attach_to_a_bill_hidden_from_them_though_they_see_the_bills_side(books):  # noqa: F811
+    """Attaching checks the document the viewer sees, not only that they see bills: a bill on an account hidden from
+    them is not theirs to file receipts to."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        pay = str(act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                   "parent_id": account(c, "6000")}).result["account_id"])
+        act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "hidden"})
+        hidden = _approved(c, _vendor(c, "Acme Payroll"), 10_000, code="6200")
+        act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "payables"})
+        act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.ap"})
+        got = act(c, "human:dan", "attach", {"subject_kind": "bill", "subject_id": hidden, "file_ids": ["file-x"]})
+        assert (got.status, got.code) == ("failed", "not_found"), got

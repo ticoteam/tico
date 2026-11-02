@@ -1607,7 +1607,6 @@ def attach(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """File receipts and documents (Library file ids) on an entry, a feed row, a bill or an invoice the asker sees, or
     as unmatched receipts waiting for one. Filing a file to a subject takes it out of the unmatched receipts."""
     from .banking import seen
-    from .tab_ap import sees_side
     V.only(p, ("subject_kind", "subject_id", "file_ids"))
     kind = V.choice(p, "subject_kind", ATTACH_SUBJECTS)
     if not R.has(ctx.org, who, ATTACH_RIGHT[kind], ctx.rights(who)):
@@ -1620,16 +1619,16 @@ def attach(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if kind == "entry":
         entry = SL.entry_row(ctx.c, subject)
         lines = [x for _, x in SL.entry_lines(ctx.c, subject)] if entry is not None else []
-        if entry is None or not all(x.account_id in ctx.accounts and view.sees(ctx.accounts[x.account_id], x.tags)
-                                    for x in lines):
+        if entry is None or str(entry["book_id"]) != ctx.book.id or not all(
+                x.account_id in ctx.accounts and view.sees(ctx.accounts[x.account_id], x.tags) for x in lines):
             raise FinanceError(NOT_FOUND, "no such entry in your view")
     elif kind == "feed":
         row = SK.get(ctx.c, "fin_feed_txns", subject)
-        if row is None or not seen(ctx, who, row):
+        money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"])) if row is not None else None
+        if row is None or money is None or str(money["book_id"]) != ctx.book.id or not seen(ctx, who, row):
             raise FinanceError(NOT_FOUND, "no such feed row in your view")
     elif kind in ("bill", "invoice"):
-        _doc(ctx, kind, subject)
-        if not sees_side(ctx, view, kind):
+        if not _sees_doc(ctx, who, kind, _doc(ctx, kind, subject)):     # the document, not only the side (keep_docs)
             raise FinanceError(NOT_FOUND, f"no such {kind}")
     else:
         subject = ""
