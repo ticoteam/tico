@@ -67,6 +67,12 @@ def saving(method, path):
     return method == "POST" and any(p.fullmatch(str(path or "")) for p in _SAVING)
 
 
+def turns_down(method, path):
+    """Whether this write is the owner's "no" to a suggestion (goal_routes.py `turned-down`). It is admitted on the owner's
+    cited turn whatever the team's autonomous-action setting says: a rejection they asked for in words, nothing else."""
+    return method == "POST" and str(path or "") == "/api/v2/goal-proposals/turned-down"
+
+
 def strategy_turn(who):
     """The owner's Assistant's turn in their own chat (backend/auth.py assistant_principal, the only identity `via`
     assistant): the owner's rights, via their Assistant, not a click."""
@@ -168,6 +174,27 @@ def answered(c, who, cited):
     if yes is None:
         raise not_agreed("The owner's reply is not a plain yes to the read-back")
     return back, yes, " ".join(str(msg.get("body") or "").split())[:120]
+
+
+# The owner's "no" to a suggestion in their chat (`POST /api/v2/goal-proposals/turned-down`): no read-back and no second
+# yes. The cited message must open with a no; its words are the reason, unless they said only no.
+# A Why is left out: proposing one replaces the Strategy Bot's Why still waiting, which a "no" must not reject.
+TURN_DOWN_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag")
+_NO_OPENING = re.compile(r"\s*(?:no|nope|nah|not (?:that|this|now|one)|leave (?:it|that|this)|skip (?:it|that|this)|"
+                         r"don'?t|do not)\b", re.I)
+_BARE_NO = re.compile(r"[\s,.!]*(?:no|nope|nah|no thanks|no thank you|leave it|leave that|skip it|skip that|not now|"
+                      r"not that|don'?t|do not)[\s,.!]*", re.I)
+
+
+def turned_down_words(c, cited):
+    """The owner's words for their "no" (the reason the suggestion is stored with): 403 unless the cited message opens
+    with a no; "" when it is only a no."""
+    msg = H.message(c, cited) or {}
+    text = " ".join(str(msg.get("body") or "").split())
+    if not _NO_OPENING.match(text):
+        raise Problem("not_a_no", "Only the owner's “no” to a suggestion is recorded this way; a yes is a read-back, and "
+                      "anything else is for a draft", 403)
+    return "" if _BARE_NO.fullmatch(text) else text[:1000]
 
 
 def owner_actor(c, value, actor):

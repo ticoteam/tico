@@ -210,10 +210,10 @@ def install(app, store, auth, mutate, settings):
         """The owner's yes to a goal read-back, saved by their Assistant in their chat (backend/goal_read_back.py)."""
         return who.role == "owner" and who.via == "assistant" and bool(GR.active())
 
-    def decider(c, who, item):
+    def decider(c, who, item, turn=False):
         """Whether this person may confirm the proposal: a person's own decision, by whoever owns what changes (or the
-        owner's yes to its read-back)."""
-        if who.role not in ("owner", "human") or (who.via and not in_words(who)):
+        owner's yes to its read-back, or `turn`: their own "no" in their Assistant chat)."""
+        if who.role not in ("owner", "human") or (who.via and not turn and not in_words(who)):
             return False
         if item["kind"] in ("strategy_draft", "strategy_realign"):     # the strategy is the owner's (backend/strategy.py)
             return company_editor(who)
@@ -1432,6 +1432,32 @@ def install(app, store, auth, mutate, settings):
                     refuse_exposed(c, goal, named or goal["owner"])
             done = G.decide(c, who.actor, pid, body.decision, body.note, why=body.why, option=body.option,
                             moves=body.moves, target=body.target.model_dump() if body.target else None)
+            return {"proposal": reason_view(c, who, done, hidden_owners(c, who))}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/goal-proposals/turned-down")
+    def proposal_turned_down(request: Request, body: M.GoalProposal):
+        """The owner's "no" in their Assistant chat to a suggestion the Strategy Bot would make (a number or a date, a
+        measure, new words, a flag): stored in this one call as a turned-down suggestion on the goal, with the owner's
+        words as its reason. It cites their message (`--on-behalf-of turn`): no read-back and no second yes."""
+        who = request.state.identity
+        def work(c):
+            from . import assistant as assistant_mod
+            auth.domain(who)
+            if who.role != "owner" or body.kind not in GR.TURN_DOWN_KINDS:
+                raise Problem("forbidden", "Only the owner's Assistant turns a suggestion down in chat, for a goal, "
+                              "measure, wording, flag or Why", 403)
+            cited = assistant_mod.instruction(c, who, "turn")["cited"]
+            note = GR.turned_down_words(c, cited)
+            goal = goal_or_404(c, body.goal_id) if body.goal_id else None
+            if body.kpi_id:
+                kpi_or_404(c, who, body.kpi_id)
+            if goal and not readable_goals(c, who, [goal]):
+                raise Problem("not_found", "Unknown goal", 404)
+            item = G.propose(c, who.actor, body.kind, body.goal_id, body.kpi_id, body.payload, body.reason)
+            if not decider(c, who, item, turn=True):
+                raise Problem("forbidden", "Whoever owns the goal or the KPI decides, and only a person, on their own click", 403)
+            done = G.decide(c, who.actor, item["id"], "reject", note)
             return {"proposal": reason_view(c, who, done, hidden_owners(c, who))}
         return mutate(request, body, work)
 
