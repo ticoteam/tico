@@ -1,8 +1,14 @@
 """The write path: idempotency, dry runs, denials, and the approval flow end to end (approve commits once, a changed
 payload voids and asks again, decline denies, a withdrawn or expired approval ends the action)."""
+import sqlite3
+from contextlib import closing
+
+from backend import devcopy
 from backend import hubdb as H
+from backend.config import Settings
 from backend.finance import actions as FA
 from backend.finance import reads as FR
+from backend.store import Store
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 
@@ -156,6 +162,43 @@ def test_default_gates_send_close_and_large_bot_entries_to_one_person(books):
         grant = act(c, "bot:coder", "view_grant", {"subject": "human:eve", "what": "expenses", "whose": "team",
                                                    "whose_team": "web"})
         assert grant.code == "denied"            # the coder leads no team
+
+
+def _provider_rows(c):
+    """A books connection and its outbox row, the rows a dev copy must not keep acting on."""
+    c.execute("INSERT INTO fin_connections(id,provider,purpose,created_at,created_by) "
+              "VALUES('fc1','quickbooks','books',?,'morgan')", (H.now(),))
+    c.execute("INSERT INTO fin_outbox(id,connection_id,op,idempotency_key,created_at,created_by) "
+              "VALUES('ob1','fc1','journal.create','k1',?,'morgan')", (H.now(),))
+
+
+def test_a_dev_copy_scrub_empties_the_provider_rows_with_keys_on(tmp_path):
+    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    store.initialize(seed_market=False)
+    with closing(sqlite3.connect(store.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        removed = FA.scrub_dev_copy(c, H.now())
+        assert removed["fin_connections"] == 1 and removed["fin_outbox"] == 1 and removed["fin_actions"] == 0
+        assert [t for t in FA.DEV_COPY_EMPTIED if _count(c, t)] == []
+        c.commit()
+
+
+def test_a_dev_copy_build_reports_the_rows_finance_emptied(tmp_path):
+    source = Store(Settings(db_path=tmp_path / "live" / "hub.sqlite"))
+    source.initialize(seed_market=False)
+    with closing(sqlite3.connect(source.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        c.commit()
+    for conn in source.pool:
+        conn.close()
+    source.pool.clear()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, _ = devcopy.build(source.settings.db_path, dest, days=30)
+    assert removed["fin_connections"] == 1 and removed["fin_outbox"] == 1
+    with closing(sqlite3.connect(dest)) as c:
+        assert [t for t in FA.DEV_COPY_EMPTIED if _count(c, t)] == []
 
 
 def test_a_changed_approver_voids_the_decision_and_asks_the_new_one(books):

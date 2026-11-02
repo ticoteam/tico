@@ -35,3 +35,16 @@ def test_it_catches_writes_reads_and_inner_imports(tmp_path):
     found = lint.problems(tmp_path, [bad, inside])
     assert [line.split(": ", 1)[1].split(";")[0] for line in found] == [
         "writes fin_lines", "reads fin_budgets", "imports finance.store"]
+
+
+def test_it_catches_a_finance_table_named_in_quotes_outside_finance(tmp_path):
+    """A table named in a list (a dev copy's, say) is how a delete loop reaches Finance's rows without a write in sight."""
+    lint = _lint()
+    (tmp_path / "backend" / "finance").mkdir(parents=True)
+    listing = tmp_path / "backend" / "devcopy.py"
+    listing.write_text('EMPTY = ("fin_connections", "fin_holds")\n')
+    inside = tmp_path / "backend" / "finance" / "actions.py"
+    inside.write_text('DEV_COPY_EMPTIED = ("fin_connections",)\n')
+    found = lint.problems(tmp_path, [listing, inside])
+    assert [line.split(": ", 1)[1].split(";")[0] for line in found] == [
+        "names fin_connections", "names fin_holds"]

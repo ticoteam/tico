@@ -612,10 +612,35 @@ def note_view_as(c: sqlite3.Connection, owner: str, target: str) -> None:
 
 
 # ------------------------------------------------------------------------------------------------ dev copies
+# backend/devcopy.py classifies every Finance table by these two lists. DEV_COPY_KEPT is kept whole: the books, budgets,
+# views, rules and history, and the definitions that act only through an action (scrub_dev_copy trims the pending ones).
+DEV_COPY_KEPT = (
+    "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines", "fin_bill_retained",
+    "fin_bills", "fin_books", "fin_budget_versions", "fin_budgets", "fin_contacts", "fin_dimensions", "fin_entries",
+    "fin_events", "fin_feed_txns", "fin_invoice_lines", "fin_invoices", "fin_line_tags", "fin_lines",
+    "fin_money_accounts", "fin_periods", "fin_private_lines", "fin_projections", "fin_reconciliations",
+    "fin_restatements", "fin_rights", "fin_rollups", "fin_rule_counters", "fin_rule_runs", "fin_rules",
+    "fin_settings", "fin_statements", "fin_usage_snapshots", "fin_settlements", "fin_cash_rollups",
+    "fin_credit_refunds", "fin_vendor_aliases", "fin_vendor_labels", "fin_vendor_legacy", "fin_view_defaults",
+    "fin_view_grants", "fin_view_versions", "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions",
+    "fin_tax_seeds", "fin_purchase_orders", "fin_po_lines", "fin_estimates", "fin_estimate_lines",
+)
+# Emptied: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
+# inbox, cards and their authorizations, payees and payments) and spend holds. In the order they are deleted: a row
+# goes after the rows that point at it.
+DEV_COPY_EMPTIED = (
+    "fin_card_auths", "fin_card_saves", "fin_payments", "fin_transfers", "fin_recipients", "fin_external_refs",
+    "fin_outbox", "fin_inbox", "fin_provider_users", "fin_cards", "fin_holds", "fin_connections",
+)
+
+
 def scrub_dev_copy(c: sqlite3.Connection, at: str) -> dict[str, int]:
-    """Make a dev copy's Finance tables inert (backend/devcopy.py empties the rest): an action waiting on approval
-    would commit when someone approves it in the copy, so it goes; an undrained budget event would reach rules and the
-    owner, so it is marked drained without acting; allocations lose their link to the emptied holds, not themselves.
-    {table: rows changed}."""
-    return {"fin_actions": SX.drop_waiting(c), "fin_events": SU.drain_all(c, at),
-            "fin_allocations": SB.unlink_allocation_holds(c)}
+    """Make a dev copy's Finance tables inert: an action waiting on approval would commit when someone approves it in the
+    copy, so it goes; an undrained budget event would reach rules and the owner, so it is marked drained without acting;
+    allocations lose their link to the holds, which go, not themselves; the DEV_COPY_EMPTIED tables are emptied.
+    {table: rows removed}."""
+    SB.unlink_allocation_holds(c)
+    SU.drain_all(c, at)
+    removed = {"fin_actions": SX.drop_waiting(c)}
+    removed.update(SX.empty_tables(c, DEV_COPY_EMPTIED))
+    return removed
