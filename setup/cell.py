@@ -121,7 +121,7 @@ PAGES = "pages"                         # under the cell root: one folder per co
 PAGE_MOUNT = "/company-page-public"     # where the company's server writes its release folders (backend/company_page)
 PAGE_MOUNT_ROUTER = "/pages"            # where the router reads every company's folder, read-only
 PAGE_CACHE = "public, max-age=60"
-PAGE_PATHS = ("/", "/data.json", "/feed.xml")
+PAGE_PATHS = ("/", "/data.json", "/feed.xml", "/assets/*")     # the public files a page host serves from its folder
 # Requests with a reader's cookie or any query string go to the server: they are signed-in or paged reads.
 READER_COOKIE_GLOB = "*tico_reader=*"
 # The app's own cookies, removed from what a page host sends to the server (the reader's cookie stays): the bare or
@@ -581,8 +581,9 @@ def company_site(c: dict, sites: str) -> list[str]:
 
 
 def page_site(c: dict) -> list[str]:
-    """A page host: GET or HEAD of exactly `/`, `/data.json` or `/feed.xml`, with no reader cookie and no query string, is
-    a file from the company's `current` release (`index.html` for `/`). A missing file falls through to the company's
+    """A page host: GET or HEAD of exactly `/`, `/data.json` or `/feed.xml`, or of a file under `/assets/`, with no reader
+    cookie and no query string, is a file from the company's `current` release (`index.html` for `/`). A missing file
+    falls through to the company's
     server, so an old or empty folder costs nothing. Everything else on the host goes to the server, or to the wake
     service while it sleeps: those are the same proxies as the company's own host, with the same hold. The router
     removes the Authorization header and the app's cookies from every request it sends on, so a visitor's bearer token
@@ -598,7 +599,8 @@ def page_site(c: dict) -> list[str]:
     guard = ["\t\tmethod GET HEAD", f"\t\tnot header Cookie {READER_COOKIE_GLOB}",
              "\t\texpression \"{http.request.uri.query} == ''\""]
     lines = [f"{site} {{", "\trequest_header -Authorization", f"\trequest_header Cookie \"{APP_COOKIES_RE}\" \"\""]
-    for name, paths, file in (("page_index", "/", "index.html"), ("page_files", "/data.json /feed.xml", "{path}")):
+    for name, paths, file in (("page_index", "/", "index.html"), ("page_files", "/data.json /feed.xml", "{path}"),
+                              ("page_assets", "/assets/*", "{path}")):
         lines += [f"\t@{name} {{", *guard, f"\t\tpath {paths}", "\t\tfile {", f"\t\t\troot {root}",
                   f"\t\t\ttry_files {file}", "\t\t}", "\t}",
                   f"\thandle @{name} {{", f"\t\troot * {root}", f"\t\theader Cache-Control \"{PAGE_CACHE}\"",

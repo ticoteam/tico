@@ -2280,13 +2280,13 @@ def test_a_page_host_serves_the_public_paths_from_its_own_folder_and_nothing_els
     site = site_of(cell.router_config([page_company()]), "acme.tico.page")
     assert "request_header -Authorization" in site
     assert f'request_header Cookie "{cell.APP_COOKIES_RE}" ""' in site
-    assert "\t\tpath /\n" in site and "\t\tpath /data.json /feed.xml\n" in site
+    assert "\t\tpath /\n" in site and "\t\tpath /data.json /feed.xml\n" in site and "\t\tpath /assets/*\n" in site
     assert "try_files index.html" in site and "try_files {path}" in site
     assert "root * /pages/acme/current" in site and "file_server" in site
     assert 'header Cache-Control "public, max-age=60"' in site and "header X-Content-Type-Options nosniff" in site
-    # the file matchers: GET and HEAD only, no reader cookie, no query string
-    assert site.count("\t\tmethod GET HEAD\n") == 2 and site.count(f"not header Cookie {cell.READER_COOKIE_GLOB}") == 2
-    assert site.count("expression \"{http.request.uri.query} == ''\"") == 2
+    # the file matchers (/, the two files, the assets): GET and HEAD only, no reader cookie, no query string
+    assert site.count("\t\tmethod GET HEAD\n") == 3 and site.count(f"not header Cookie {cell.READER_COOKIE_GLOB}") == 3
+    assert site.count("expression \"{http.request.uri.query} == ''\"") == 3
     # everything else is the company's own proxy, with the same hold and close delay as its domain
     assert site.rindex("handle {") > site.index("@page_files")
     assert "reverse_proxy 127.0.0.1:20000 {" in site and "stream_close_delay 5m" in site
