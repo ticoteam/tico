@@ -44,8 +44,8 @@ def roadmap(api):
     roadmap item, and idea triage turned on with a fake model."""
     item = public_setup(api, limit=100)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-lead') WHERE bot='cpo'")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','engineering-lead') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-lead') WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','engineering-lead') WHERE bot='ops'")
     api.app.state.store.settings.decisions_idea_triage = True
     model = FakeModel()
     api.app.state.judge = model
@@ -62,7 +62,7 @@ def suggest(api, title, summary=""):
 def audits(api):
     with api.app.state.store.read() as c:
         return [(r[0], r[1], json.loads(r[2])) for r in c.execute(
-            "SELECT actor,target,detail_json FROM events WHERE action='judge.call' ORDER BY rowid")]
+            "SELECT actor,target,detail FROM events WHERE action='judge.call' ORDER BY rowid")]
 
 
 def test_a_feature_matching_an_open_roadmap_item_names_the_item_and_product_sees_the_link(roadmap):
@@ -201,7 +201,7 @@ def test_a_suggestion_refused_while_another_waits_on_triage_costs_no_call(roadma
     worker.join(10)
     assert first["response"].status_code == 200, first["response"].text
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_suggest_reservations'"
+        assert c.execute("SELECT value FROM registry_metadata WHERE key='roadmap_suggest_reservations'"
                          ).fetchone()[0] == "{}", "the recorded suggestion's place is released"
 
 
@@ -219,5 +219,5 @@ def test_a_suggestion_refused_after_triage_gives_back_the_visitors_action_and_it
     assert refused.status_code == 409
     with api.app.state.store.read() as c:
         assert c.execute("SELECT coalesce(sum(actions),0) FROM roadmap_actions").fetchone()[0] == 0
-        assert c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_suggest_reservations'"
+        assert c.execute("SELECT value FROM registry_metadata WHERE key='roadmap_suggest_reservations'"
                          ).fetchone()[0] == "{}"

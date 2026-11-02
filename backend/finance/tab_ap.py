@@ -103,7 +103,7 @@ def payment_of(pay: Any) -> Row | None:
 def ask_ended(r: Any) -> Row | None:
     """How a bill's scheduled payment ended before any payment existed (its approval denied, expired or withdrawn,
     or the ask refused), in payment_of's shape with no id."""
-    end = SK.loads(r["schedule_json"]).get("ended")
+    end = SK.loads(r["schedule"]).get("ended")
     if not isinstance(end, dict):
         return None
     e = cast(dict[str, Any], end)
@@ -135,7 +135,7 @@ def doc_row(kind: str, r: Any, today: date, attached: int = 0, pay: Any = None) 
 def doc_lines(ctx: Ctx, lines: Sequence[Any]) -> Row:
     """A list row's line summary: the line its lines go to (`split` when several) and the team they share."""
     accounts = list(dict.fromkeys(str(x["account_id"] or "") for x in lines))
-    teams = {str(SK.loads(x["tags_json"]).get("team") or "") for x in lines}
+    teams = {str(SK.loads(x["tags"]).get("team") or "") for x in lines}
     return {"account": account_ref(ctx, accounts[0]) if len(accounts) == 1 else None, "split": len(accounts) > 1,
             "team": next(iter(teams)) or None if len(teams) == 1 else None}
 
@@ -263,7 +263,7 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
     pay = SK.last_payments(c, [f"bill:{doc_id}"]).get(f"bill:{doc_id}") if kind == "bill" else None
     out = doc_row(kind, r, dates.day(ctx.today), attached, pay)
     out["lines"] = [{"id": str(x["id"]), "account": account_ref(ctx, x["account_id"]), "amount": int(x["amount"]),
-                     "description": str(x["description"]), "tags": SK.loads(x["tags_json"]),
+                     "description": str(x["description"]), "tags": SK.loads(x["tags"]),
                      **({"taxable": bool(x["taxable"])} if kind == "invoice" else {})}
                     for x in found[doc_id]]
     out["settlements"] = [{"id": str(s["id"]), "from_kind": str(s["from_kind"]), "from_id": str(s["from_id"]) or None,
@@ -278,7 +278,7 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
     out["actions"] = _approvals(c, kind, doc_id)
     out["terms_days"] = r["terms_days"]
     if kind == "bill":
-        out["schedule"] = SK.loads(r["schedule_json"]) or None
+        out["schedule"] = SK.loads(r["schedule"]) or None
     out["view_version"] = view.version
     return out
 
@@ -312,7 +312,7 @@ def invoice(c: sqlite3.Connection, viewer: str, invoice_id: str, at: str | None 
 def contact_row(ctx: Ctx, r: Any, admin: bool, owed: Row | None = None) -> Row:
     """A contact. The tax id never shows; its last 4 only to a finance admin."""
     return {"id": str(r["id"]), "name": str(r["name"]), "kind": str(r["kind"]),
-            "emails": SK.loads_list(r["emails_json"]),
+            "emails": SK.loads_list(r["emails"]),
             "default_account": account_ref(ctx, r["default_account_id"]), "is_1099": bool(r["is_1099"]),
             "has_tax_id": bool(r["tax_id_ref"]), "tax_id_last4": r["tax_id_last4"] if admin else None,
             "recipient_id": r["payment_ref"], "active": bool(r["active"]), "owed": owed or {},

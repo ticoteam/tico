@@ -460,7 +460,7 @@ normally releases the bot (its Needs-you item closes, event `bot.run_recovered`)
 ended lets every bot it held go again without anyone, while a bot that is really broken makes only a few runs a day. A try that
 fails after more than a minute changes nothing. **Release** (Settings → Bots, `hub bot release <bot>`,
 `POST /api/v2/bots/{bot}/release`, MCP `hub_bot_release`) lifts the hold and its Needs-you item at once; `GET /api/v2/bots/{bot}/budget`
-shows the hold's `next_try`.
+shows the hold's `next_try_at`.
 
 **A queued run Tico cannot start is held by itself.** Each claim checks the queued jobs it considers and prepares the
 one it hands out. If an error happens for one job there, the claim rolls back only that job's writes, logs its

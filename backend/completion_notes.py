@@ -13,7 +13,7 @@ MAX_BATCH = 1000
 
 def record(c, target, task_id):
     key = PREFIX + target
-    saved = c.execute('SELECT value_json FROM registry_metadata WHERE key=?', (key,)).fetchone()
+    saved = c.execute('SELECT value FROM registry_metadata WHERE key=?', (key,)).fetchone()
     old = json.loads(saved[0]) if saved else {}
     note = H.note(c, old.get('note_id')) if old.get('note_id') else None
     pending = note and not note.get('carried_by') and not note.get('cancelled_at') and not note.get('settled_at')
@@ -30,8 +30,8 @@ def record(c, target, task_id):
         note_id = note['id']
     else:
         note_id = H.new_id()
-        c.execute('INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)',
+        c.execute('INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)',
                   (note_id, H.KEEPER, target, body, H.now()))
         H.event(c, H.KEEPER, 'note.create', note_id, {'to': target, 'completion_batch': True})
-    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
               (key, json.dumps({'note_id': note_id, 'tasks': ids, 'count': count})))

@@ -226,7 +226,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
          machine["token"])
     with api.app.state.store.transaction() as c:
         cid = H.task(c, tid)["conversation_id"]
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created_at) "
                   "VALUES('msg-coo',?,'bot:ops','bot:coo','chat','Over to you','{}',?)", (cid, H.now()))
         assert c.execute("SELECT bot FROM jobs WHERE message_id='msg-coo'").fetchone()["bot"] == "coo"
     assert get(api, f"tasks/{tid}")["execution"]["attempt_id"] == attempt["id"], "a bot's message to a bot is not it"
@@ -295,7 +295,7 @@ def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queu
     [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["attempts"]
     assert run["waiting"] == "Waiting for this computer's ChatGPT login (held by another bot since 19:06Z; position 2)"
     with api.app.state.store.read() as c:
-        kept = " ".join(r[0] for r in c.execute("SELECT payload_json FROM attempt_events WHERE attempt_id=?", (aid,)))
+        kept = " ".join(r[0] for r in c.execute("SELECT payload FROM attempt_events WHERE attempt_id=?", (aid,)))
     assert "Close the books" not in kept and "held by" not in kept
     # Held by another turn of the same bot: a reader who may see that run still learns its task.
     events(api, machine, aid, [("status", {**place, "holder": "ops"})], first=3)
@@ -380,7 +380,7 @@ def botops_decides(api, job_id, attempt_id, decision, note, at):
             c.execute("INSERT INTO bots(slug, display_name, state) VALUES(?, 'BotOps', 'active')", (H.FLEET_MAINTAINER,))
         api.app.state.execution.reconcile_job(c, Identity("bot:" + H.FLEET_MAINTAINER, "bot"), job_id, SimpleNamespace(
             attempt_id=attempt_id, decision=decision, note=note, acknowledge_uncertain_effects=True))
-        c.execute("UPDATE job_recovery SET created=? WHERE job_id=?", (at, job_id))
+        c.execute("UPDATE job_recovery SET created_at=? WHERE job_id=?", (at, job_id))
 
 
 def held_run(api, title):
@@ -412,7 +412,7 @@ def test_a_held_runs_decision_shows_beside_its_state_with_who_when_and_the_note(
 
     # The label is read from the decision record each time, never copied onto the job: a later decision shows.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE job_recovery SET decision='resume', actor='human:ana', note=?, created=? WHERE job_id=?",
+        c.execute("UPDATE job_recovery SET decision='resume', actor='human:ana', note=?, created_at=? WHERE job_id=?",
                   ("Ana wants it run again after all.", "2026-10-26T10:02:00Z", attempt["job_id"]))
     [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
     assert (run["decision"]["decision"], run["decision"]["by"], run["decision"]["by_kind"], run["decision"]["note"]) == (
@@ -461,10 +461,10 @@ def test_a_deferred_choice_keeps_the_time_it_was_made(api):
     with api.app.state.store.transaction() as c:
         row = c.execute("SELECT * FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()
         execution._decide(c, row, attempt["id"], "resume", "Run it once the lane is free.", "human:ana", deferred=True)
-        c.execute("UPDATE job_recovery SET created='2026-10-26T09:00:00Z' WHERE job_id=?", (attempt["job_id"],))
+        c.execute("UPDATE job_recovery SET created_at='2026-10-26T09:00:00Z' WHERE job_id=?", (attempt["job_id"],))
         execution._decide(c, row, attempt["id"], "resume", "Run it once the lane is free.", "human:ana")
-        assert c.execute("SELECT created FROM job_recovery WHERE job_id=?", (attempt["job_id"],)).fetchone()[0] == (
+        assert c.execute("SELECT created_at FROM job_recovery WHERE job_id=?", (attempt["job_id"],)).fetchone()[0] == (
             "2026-10-26T09:00:00Z")
         execution._decide(c, row, attempt["id"], "dismiss", "Done by hand after all, nothing to run.", "human:ana")
-        assert c.execute("SELECT created FROM job_recovery WHERE job_id=?", (attempt["job_id"],)).fetchone()[0] != (
+        assert c.execute("SELECT created_at FROM job_recovery WHERE job_id=?", (attempt["job_id"],)).fetchone()[0] != (
             "2026-10-26T09:00:00Z")

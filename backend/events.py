@@ -203,7 +203,7 @@ TRIGGERS = [
      + _needs("ask", "NEW.to_actor", "NEW.from_actor", where="NEW.kind IN ('ask','answer')")),
     # Delivery and read receipts move on every message a bot takes; they are not a change to show.
     ("changes_messages_update", "UPDATE", "messages",
-     _changed("body", "refs_json", "kind", "answered_by", "edited_at", "deleted_at", "conversation_id", "superseded_at"),
+     _changed("body", "refs", "kind", "answered_by", "edited_at", "deleted_at", "conversation_id", "superseded_at"),
      _row("messages", "update", "NEW.id", conversation="NEW.conversation_id")
      + _needs("ask", "NEW.to_actor", where="NEW.kind='ask'")),
     ("changes_messages_delete", "DELETE", "messages", None,
@@ -220,7 +220,7 @@ TRIGGERS = [
      # bot changes, independent of which conversation the viewer currently follows.
      + _row("bots", "status", "(SELECT bot FROM attempts WHERE id=NEW.attempt_id)",
             bot="(SELECT bot FROM attempts WHERE id=NEW.attempt_id)",
-            where="NEW.kind='status' AND json_type(NEW.payload_json,'$.waiting') IS NOT NULL")),
+            where="NEW.kind='status' AND json_type(NEW.payload,'$.waiting') IS NOT NULL")),
     ("changes_attempts_insert", "INSERT", "attempts", None,
      _row("runs", "attempt", "NEW.id", conversation=_RUN_CONVERSATION.format(aid="NEW.id"), bot="NEW.bot")),
     # A lease renewed is not a change; a run starting, finishing or failing is.
@@ -228,7 +228,7 @@ TRIGGERS = [
      _row("runs", "attempt", "NEW.id", conversation=_RUN_CONVERSATION.format(aid="NEW.id"), bot="NEW.bot")
      + _row("bots", "status", "NEW.bot", bot="NEW.bot",
             where="EXISTS (SELECT 1 FROM attempt_events WHERE attempt_id=NEW.id AND kind='status' "
-                  "AND json_type(payload_json,'$.waiting') IS NOT NULL)")),
+                  "AND json_type(payload,'$.waiting') IS NOT NULL)")),
     ("changes_jobs_insert", "INSERT", "jobs", None,
      _row("runs", "job", "NEW.attempt_id", ref="NEW.message_id",
           conversation="(SELECT conversation_id FROM messages WHERE id=NEW.message_id)", bot="NEW.bot")),
@@ -312,7 +312,7 @@ RUNNER_TRIGGERS = [
      + _tell("work", "SELECT NEW.runner_id AS rid", "NEW.bot")),
     ("changes_runner_assignments_delete", "DELETE", "assignments", None,
      _tell("assignments", "SELECT OLD.runner_id AS rid", "OLD.bot")),
-    ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config_json", "operator", "team", "onboarding_state"),
+    ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config", "operator", "team", "onboarding_state"),
      _bot_runner("assignments", "NEW.bot")),
     # A bot's selected connection changes its assignment and readiness even while its old login is signed out.
     ("changes_runner_subscription_insert", "INSERT", "subscription_assignments", "NEW.scope='bot'",
@@ -375,7 +375,7 @@ RUNNER_TRIGGERS = [
     ("changes_runner_harness_choice_update", "UPDATE", "runner_harness_choices", None,
      _tell("harness_actions", "SELECT NEW.runner_id AS rid")),
     ("changes_runner_restart", "UPDATE", "runners",
-     "NEW.restart_requested IS NOT NULL AND OLD.restart_requested IS NULL", _tell("restart", "SELECT NEW.id AS rid")),
+     "NEW.restart_requested_at IS NOT NULL AND OLD.restart_requested_at IS NULL", _tell("restart", "SELECT NEW.id AS rid")),
 ]
 TRIGGERS += RUNNER_TRIGGERS
 
@@ -396,7 +396,7 @@ NEEDS = {
     "changes_runner_task_links_insert": ("task_links.computer_id",),
     "changes_runner_task_links_update": ("task_links.computer_id",),
     "changes_runner_task_links_delete": ("task_links.computer_id",),
-    "changes_runner_restart": ("runners.restart_requested",),
+    "changes_runner_restart": ("runners.restart_requested_at",),
 }
 # #118's first cut, replaced by `changes`.
 _RETIRED = ["task_changes_insert", "task_changes_update", "task_changes_delete",
@@ -636,8 +636,8 @@ def runner_bell(store):
 
 # ---------------------------------------------------------------- what a viewer is sent
 
-LIVE_SQL = ("SELECT id,created FROM attempts WHERE bot=? AND state IN ('leased','running') "
-            "ORDER BY created DESC,rowid DESC LIMIT 1")
+LIVE_SQL = ("SELECT id,created_at FROM attempts WHERE bot=? AND state IN ('leased','running') "
+            "ORDER BY created_at DESC,rowid DESC LIMIT 1")
 
 
 def prime_bot_rows(c, slugs):
@@ -672,19 +672,19 @@ def prime_status_lines(c, slugs):
     for part in H.chunks(sorted({H.actor_id(s) for s in slugs if s})):
         marks = ",".join("?" * len(part))
         live = {}
-        for row in c.execute(f"SELECT bot,id,created FROM attempts WHERE state IN ('leased','running') AND bot IN ({marks}) "
-                             "ORDER BY created,rowid", part):
+        for row in c.execute(f"SELECT bot,id,created_at FROM attempts WHERE state IN ('leased','running') AND bot IN ({marks}) "
+                             "ORDER BY created_at,rowid", part):
             live[row["bot"]] = row        # the newest run, as LIMIT 1 picks it
         prime(c, LIVE_SQL, {(s,): live.get(s) for s in part})
         keys = [LAST_STOP + s for s in part]
         found = {row["key"]: row for row in c.execute(
-            f"SELECT value_json,key FROM registry_metadata WHERE key IN ({marks})", keys)}     # metadata reads row[0]
-        prime_rows(c, "SELECT value_json FROM registry_metadata WHERE key=?",
+            f"SELECT value,key FROM registry_metadata WHERE key IN ({marks})", keys)}     # metadata reads row[0]
+        prime_rows(c, "SELECT value FROM registry_metadata WHERE key=?",
                    {(k,): [found[k]] if k in found else [] for k in keys})
         # The run each mark names, its job, and a crashed bot's newest held job and run (execution.last_stop).
         stops = {}
         for slug in part:
-            mark = H._json(found[LAST_STOP + slug]["value_json"], {}) if LAST_STOP + slug in found else {}
+            mark = H._json(found[LAST_STOP + slug]["value"], {}) if LAST_STOP + slug in found else {}
             if isinstance(mark, dict) and isinstance(mark.get("attempt_id"), str) and mark["attempt_id"]:
                 stops[slug] = mark["attempt_id"]
         runs = _rows_by_id(c, STOP_ATTEMPT_SQL, set(stops.values()))
@@ -694,7 +694,7 @@ def prime_status_lines(c, slugs):
         prime(c, STOP_JOB_SQL, {(jid,): jobs.get(jid) for jid in job_ids})
         newest, newest_of = {}, {}
         for row in c.execute(f"SELECT id,attempt_id,bot FROM jobs WHERE state='uncertain' AND bot IN ({marks}) "
-                             "ORDER BY created,rowid", part):
+                             "ORDER BY created_at,rowid", part):
             newest[row["bot"]] = row                         # the newest, as ORDER BY created DESC LIMIT 1 picks it
             newest_of[(row["bot"], row["attempt_id"])] = row
         prime(c, HELD_SQL, {(s,): newest.get(s) for s in part})
@@ -729,8 +729,8 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
         # Before /started, a newly created bot has never written a status. Project only its current
         # wait, without manufacturing status history or copying private task content into a stored row.
         row = {"bot": slug, "state": "waiting_bot", "focus": "", "task_id": None,
-               "since": live["created"], "last_turn_at": None, "last_result": None, "next_due": None,
-               "open_tasks": 0, "needs_human": 0, "updated_at": live["created"]}
+               "since": live["created_at"], "last_turn_at": None, "last_result": None, "next_due": None,
+               "open_tasks": 0, "needs_human": 0, "updated_at": live["created_at"]}
     row = privacy.status(c, who, row, **(inputs or {}))
     row["bot_state"] = (H.bot(c, row["bot"]) or {}).get("state")
     # Why its last run ended without finishing, said plainly for its page header: never a bare "Crashed".
@@ -867,7 +867,7 @@ def _messages(view, rows):
             continue
         if privacy.message_readable(c, view.principal, message):
             out.append((row, {"id": subject, "conversation_id": cid,
-                              "message": {**message, "refs": H._json(message["refs_json"], {}) or {}}}))
+                              "message": {**message, "refs": H._json(message["refs"], {}) or {}}}))
         elif message.get("deleted_at") and _readable_before_deletion(view, message):
             out.append((row, {"id": subject, "conversation_id": cid, "deleted": True}))
     return out
@@ -927,11 +927,11 @@ def _runs(view, rows):
                     watched[bot] = rules_watch(c, bot)
                 if watched[bot]:
                     continue
-            event["payload"] = H._json(event.pop("payload_json"), {})
+            event["payload"] = H._json(event.pop("payload"), {})
             entry["output"] = event
         elif row["kind"] == "job":
             job = c.execute("SELECT j.*, m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                            "WHERE j.message_id=? ORDER BY j.created DESC LIMIT 1", (row["ref"],)).fetchone()
+                            "WHERE j.message_id=? ORDER BY j.created_at DESC LIMIT 1", (row["ref"],)).fetchone()
             if job is None or not privacy.message_readable(c, view.principal, H.message(c, job["message_id"])):
                 continue
             entry.update(job_id=job["id"], message_id=job["message_id"], state=job["state"], attempt_id=job["attempt_id"])

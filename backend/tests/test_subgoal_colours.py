@@ -137,7 +137,7 @@ def test_first_pass_colours_existing_blank_subgoals_and_records_each_automatic_c
         children = [make_goal(c, parent["id"]) for _ in range(6)]
         expected = ["green", "yellow", "red", "green", "yellow", "red"]
         for index, child in enumerate(children):
-            c.execute("UPDATE goals SET created=?, updated=? WHERE id=?", (stamp(30), stamp(30), child["id"]))
+            c.execute("UPDATE goals SET created_at=?, updated_at=? WHERE id=?", (stamp(30), stamp(30), child["id"]))
             if index < 3:
                 measure(c, child, [50, 41, 39][index])
             else:

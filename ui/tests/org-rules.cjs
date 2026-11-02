@@ -105,7 +105,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     assert.ok(dueId);
     await satisfy.click();
     await page.locator('#ru-side .ru-mark').waitFor({timeout: t(10000)});   // its History has the mark
-    const due = (await ok(page, 'GET', '/v2/rules/due?next=400d')).due.find(d => d.id === dueId);
+    const due = (await ok(page, 'GET', '/v2/rules/due?next=400d')).due_at.find(d => d.id === dueId);
     assert.equal(due.status, 'upcoming', 'a yearly due date moves on to next year');
     assert.equal(due.history[0].satisfied_by, 'human:dana');
 

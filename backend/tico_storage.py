@@ -85,12 +85,12 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS tico_storage(
  id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL CHECK(state IN ('off','on','credits_out','stopped')),
  bucket TEXT NOT NULL DEFAULT '', prefix TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT '',
- access_key_id TEXT NOT NULL DEFAULT '', secret TEXT NOT NULL DEFAULT '', expires TEXT,
+ access_key_id TEXT NOT NULL DEFAULT '', secret TEXT NOT NULL DEFAULT '', expires_at TEXT,
  signing_key_id TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', keep_until TEXT,
- changed TEXT, checked TEXT, error TEXT NOT NULL DEFAULT '');
+ changed_at TEXT, checked_at TEXT, error TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS storage_moves(
  id TEXT PRIMARY KEY, target TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('running','done','failed','stopped')),
- started TEXT NOT NULL, started_by TEXT NOT NULL, finished TEXT,
+ started_at TEXT NOT NULL, started_by TEXT NOT NULL, finished_at TEXT,
  estimate_files INTEGER NOT NULL, estimate_bytes INTEGER NOT NULL,
  moved_files INTEGER NOT NULL DEFAULT 0, moved_bytes INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
  error TEXT NOT NULL DEFAULT '');
@@ -358,14 +358,14 @@ def sync(store, vault, blobs, settings=None, opener=None, report=False):
         saved = row(c)
         if parsed is None:
             if saved:
-                c.execute("UPDATE tico_storage SET checked=?, error=? WHERE id=1", (now, error))
+                c.execute("UPDATE tico_storage SET checked_at=?, error=? WHERE id=1", (now, error))
             elif error:
                 LOG.warning("%s", error)
         elif parsed["state"] == "off" and not saved:
             pass
         else:
             fields = {"state": parsed["state"], "address": parsed["address"], "keep_until": parsed["keep_until"],
-                      "checked": now, "error": ""}
+                      "checked_at": now, "error": ""}
             if parsed.get("keys"):
                 signing = parsed["signing"] or ("", "")
                 fields.update(bucket=parsed["bucket"], prefix=parsed["prefix"], region=parsed["region"],
@@ -380,7 +380,7 @@ def sync(store, vault, blobs, settings=None, opener=None, report=False):
             # swaps them in (`Blobs.rekey`) and leaves the file store alone, so uploads and a Move carry on.
             moved = not saved or saved["state"] != parsed["state"] or not same
             if moved:
-                fields["changed"] = now
+                fields["changed_at"] = now
                 H.event(c, "system:gateway", "storage.tico", parsed["state"],
                         {"from": saved["state"] if saved else "off", "address": parsed["address"]})
             c.execute("UPDATE tico_storage SET " + ",".join(k + "=?" for k in fields) + " WHERE id=1", tuple(fields.values()))
@@ -676,20 +676,20 @@ def estimate(c, blobs):
 def _move_view(found):
     if not found:
         return None
-    out = {k: found[k] for k in ("id", "target", "state", "started", "finished", "estimate_files", "estimate_bytes",
+    out = {k: found[k] for k in ("id", "target", "state", "started_at", "finished_at", "estimate_files", "estimate_bytes",
                                  "moved_files", "moved_bytes", "failed", "error")}
     out["matches"] = found["state"] == "done" and found["moved_bytes"] == found["estimate_bytes"] and not found["failed"]
     return out
 
 
 def latest_move(c):
-    return _move_view(c.execute("SELECT * FROM storage_moves ORDER BY started DESC LIMIT 1").fetchone())
+    return _move_view(c.execute("SELECT * FROM storage_moves ORDER BY started_at DESC LIMIT 1").fetchone())
 
 
 def interrupted(store):
     """At start: a move that was running when the server stopped is stopped (the next one picks up where it left)."""
     with store.transaction() as c:
-        c.execute("UPDATE storage_moves SET state='stopped', finished=?, error=? WHERE state='running'",
+        c.execute("UPDATE storage_moves SET state='stopped', finished_at=?, error=? WHERE state='running'",
                   (H.now(), "The server restarted during the move; start it again to finish"))
 
 
@@ -708,7 +708,7 @@ def start_move(store, blobs, who, expect_bytes, stop=None, wait=False):
         move_id = H.new_id()
         label, _ = _target(at)
         try:
-            c.execute("INSERT INTO storage_moves(id,target,state,started,started_by,estimate_files,estimate_bytes) "
+            c.execute("INSERT INTO storage_moves(id,target,state,started_at,started_by,estimate_files,estimate_bytes) "
                       "VALUES(?,?,'running',?,?,?,?)", (move_id, label, H.now(), who.actor, len(items), total))
         except sqlite3.IntegrityError:  # another start got in after the check above (storage_moves_one_running)
             raise Problem("move_running", "Files are already being moved", 409) from None
@@ -750,7 +750,7 @@ def _move(store, blobs, move_id, items, at, stop):
     if state == "stopped" and not error:
         error = "Where new files go changed during the move; start it again to finish"
     with store.transaction() as c:
-        c.execute("UPDATE storage_moves SET state=?, finished=?, error=? WHERE id=?", (state, H.now(), error, move_id))
+        c.execute("UPDATE storage_moves SET state=?, finished_at=?, error=? WHERE id=?", (state, H.now(), error, move_id))
         H.event(c, "system:storage", "storage.moved", move_id, {"state": state, "files": moved, "bytes": size,
                                                                "failed": failed})
 
@@ -848,7 +848,7 @@ def export_entries(c, who, auth, files):
     for still in c.execute("SELECT poster_blob_id, thumb_blob_id FROM bot_file_versions UNION ALL "
                            "SELECT poster_blob_id, thumb_blob_id FROM blob_media"):
         seen.update(still)
-    for blob in c.execute("SELECT id, digest, name FROM blobs ORDER BY created, id"):
+    for blob in c.execute("SELECT id, digest, name FROM blobs ORDER BY created_at, id"):
         if blob["id"] in seen:
             continue
         try:

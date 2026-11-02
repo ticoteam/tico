@@ -36,12 +36,12 @@ def test_notice_turn_never_clears_an_independent_wait(api, wait):
     with api.app.state.store.transaction() as c:
         task, blocker = parked(c, incident=True)
         if wait == 'approval':
-            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by,created) "
+            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by,created_at) "
                       "VALUES('approval','send',?,'bot:cpo',?)", (task['id'], H.now()))
         elif wait == 'worktree':
             from backend.worktree_waits import ensure
             ensure(c)
-            c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,created,updated) "
+            c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,created_at,updated_at) "
                       "VALUES('worktree',?,'bot:cpo','acme/app',0,'waiting',?,?)", (task['id'], H.now(), H.now()))
         else:
             H._task_event(c, task['id'], 'bot:cpo', 'queue_return', 'doing', 'open', 'Return to queue')
@@ -134,7 +134,7 @@ def test_lost_notice_is_dismissed_when_its_referenced_task_closes(api):
     post(api, 'tasks/' + task['id'], {'version': get(api, 'tasks/' + task['id'])['task']['version'],
                                     'close': True, 'quiet': True})
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET finished=? WHERE id=?',
+        c.execute('UPDATE attempts SET finished_at=? WHERE id=?',
                   (H.shift(H.now(), seconds=-STALL_MAX - 1), notice['id']))
         assert c.execute('SELECT state FROM jobs WHERE id=?', (notice['job_id'],)).fetchone()[0] == 'uncertain'
         result = api.app.state.execution.auto_reconcile(c)

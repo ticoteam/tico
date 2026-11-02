@@ -39,7 +39,7 @@ def check(c, who, auth, settings):
     since = H.shift(H.now(), hours=-FAILING_HOURS)
     stuck_before = H.shift(H.now(), hours=-STUCK_SETUP_HOURS)
     failed = {r["bot"]: r["n"] for r in c.execute(
-        "SELECT bot, count(*) n FROM attempts WHERE state IN ('failed','expired') AND finished>? GROUP BY bot", (since,))}
+        "SELECT bot, count(*) n FROM attempts WHERE state IN ('failed','expired') AND finished_at>? GROUP BY bot", (since,))}
     assigned = {r["bot"]: (r["runner_id"], r["label"]) for r in c.execute(
         "SELECT a.bot,a.runner_id,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE r.revoked_at IS NULL")}
     lacking = {bot: (label, why) for bot, label, why in missing_repositories(c, online)}
@@ -54,7 +54,7 @@ def check(c, who, auth, settings):
     from .agents import external_harness
     from .read_cache import one
     from . import events, views
-    bots = c.execute("SELECT b.slug,b.display_name,b.state,b.created,bc.onboarding_state FROM bots b "
+    bots = c.execute("SELECT b.slug,b.display_name,b.state,b.created_at,bc.onboarding_state FROM bots b "
                      "JOIN bot_config bc ON bc.bot=b.slug WHERE b.state<>'archived' ORDER BY b.slug").fetchall()
     # The rows each bot's check reads, read once for every bot (a snapshot keeps them; the loop finds them there).
     slugs = [bot["slug"] for bot in bots]
@@ -78,7 +78,7 @@ def check(c, who, auth, settings):
         if state == "quarantined":
             add(bot, "quarantined", HIGH, f"{name} is stopped: it did something it may not.", f"hub api POST /api/v2/bots/{slug}/quarantine/clear")
         elif state == "planned":
-            if (bot["created"] or "") < stuck_before:
+            if (bot["created_at"] or "") < stuck_before:
                 add(bot, "stuck_setup", MEDIUM, f"{name} is still being set up.", f"hub bot go-live {slug}")
         elif state == "paused":
             reason = (one(c, PAUSE_REASON_SQL, (slug,)) or {"reason": ""})["reason"] or ""
@@ -100,7 +100,7 @@ def check(c, who, auth, settings):
                 add(bot, "repository_missing", HIGH, f"{name} cannot run on {label}: {why}",
                     f"hub bot repo-create {slug} --empty (or `hub bot place {slug}` back on the computer that held its repository)"
                     if unpublished and not branch else clone)
-            if is_parked(bot["onboarding_state"]) and (bot["created"] or "") < H.shift(H.now(), hours=-24):
+            if is_parked(bot["onboarding_state"]) and (bot["created_at"] or "") < H.shift(H.now(), hours=-24):
                 add(bot, "needs_setup", MEDIUM, f"{name} is waiting for its first setup with its owner.", f"hub bot go-live {slug}")
         if state == "active":
             try:

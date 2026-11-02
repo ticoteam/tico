@@ -451,7 +451,7 @@ async function finDocAdd(kind) {
     if (!contact) throw new Error('Pick a ' + k.who.toLowerCase());
     const payload = {[bill ? 'vendor_id' : 'customer_id']: contact, [bill ? 'bill_date' : 'invoice_date']: el.date.value, lines: docLines};
     if (el.number.value.trim()) payload.number = el.number.value.trim();
-    if (el.due.value) payload.due_date = el.due.value;
+    if (el.due_at.value) payload.due_date = el.due_at.value;
     if (el.memo.value.trim()) payload.memo = el.memo.value.trim();
     if (bill) payload.origin = 'manual';
     return [bill ? 'bill_create' : 'invoice_create', payload];

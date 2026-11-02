@@ -95,7 +95,7 @@ def wanted(conn, owner_id, at=None, reads=None):
                 items.append({"kind": "kpi_red", "ref": k["id"], "owner": who, "goal_id": goal_id,
                               "goal_title": goal["title"], "kpi_id": k["id"], "kpi_name": k["name"],
                               "reason": k["reason"]})
-    owned = [dict(r) for r in conn.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created")]
+    owned = [dict(r) for r in conn.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created_at")]
     data = K.effective_many(conn, [r["id"] for r in owned])
     for record in owned:
         who = _acts_for(record["owner"], owner_id)
@@ -424,7 +424,7 @@ def sync(conn, owner_id, at=None, reads=None):
             made = H.task_create(conn, G.AUTO_ACTOR, _free_title(conn, item["owner"], title), body, item["owner"],
                                  lint=False, lane="company", top=item["kind"] == "vision",
                                  private=True if item.get("private") else None)
-            conn.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created) VALUES (?,?,?,?,?)",
+            conn.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created_at) VALUES (?,?,?,?,?)",
                          (*key, made["id"], H.now()))
             created.append(made["id"])
             if not rush:

@@ -29,7 +29,7 @@ def parked(c, prerequisite_owner="bot:ops"):
 
 def jobs(c, slug):
     return [dict(r) for r in c.execute(
-        "SELECT m.body, m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=?", (slug,))]
+        "SELECT m.body, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=?", (slug,))]
 
 
 def test_an_active_bot_owning_the_blocker_is_accepted_and_holds_the_task_without_storing_a_person(c):
@@ -57,7 +57,7 @@ def test_the_prerequisite_resolving_wakes_the_owner_once_with_the_outcome(c, out
     woke = jobs(c, "cpo")
     assert len(woke) == 1 and woke[0]["body"].startswith("Unblocked: Ship the receipt gate")
     assert words in woke[0]["body"]
-    assert json.loads(woke[0]["refs_json"])["blocker_status"] == outcome
+    assert json.loads(woke[0]["refs"])["blocker_status"] == outcome
     assert H.wait_detail(c, H.task(c, task["id"])) is None   # eligible again: nothing holds it
 
 

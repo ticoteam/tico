@@ -85,7 +85,7 @@ def test_existing_key_only_no_mint_and_no_new_census_or_database(tmp_path, monke
         runtime.census(database)
     assert not database.exists()
     with sqlite3.connect(database) as conn:
-        conn.execute("CREATE TABLE registry_metadata(key TEXT,value_json TEXT)")
+        conn.execute("CREATE TABLE registry_metadata(key TEXT,value TEXT)")
         conn.execute("INSERT INTO registry_metadata VALUES('usage-count',?)", (wire.encoded({"install_id": ID}).decode(),))
     before = database.read_bytes()
     assert runtime.census(database) == ID

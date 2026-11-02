@@ -255,7 +255,7 @@ def task_row(org, task_id):
 
 
 def find_task(org, *titles):
-    return one(org, f"SELECT id FROM tasks WHERE title IN ({','.join('?' * len(titles))}) ORDER BY created DESC",
+    return one(org, f"SELECT id FROM tasks WHERE title IN ({','.join('?' * len(titles))}) ORDER BY created_at DESC",
                titles) or ""
 
 
@@ -431,11 +431,11 @@ def table_lines(table):
 
 def audit_leaks(org, items):
     """Audit rows (judge.call, judge.spend, screening.*) that carry any input's text."""
-    rows = org.sql("SELECT action, target, detail_json FROM events WHERE action IN "
+    rows = org.sql("SELECT action, target, detail FROM events WHERE action IN "
                    "('judge.call','judge.spend','screening.held','screening.warned','screening.modes')")
     leaks = []
     for row in rows:
-        action, blob = row["action"], f"{row['target']} {row['detail_json']}"
+        action, blob = row["action"], f"{row['target']} {row['detail']}"
         for item in items:
             for piece in (item["body"][:40], item["body"][-40:], item["subject"] if len(item["subject"]) > 20 else ""):
                 if piece and piece in blob:

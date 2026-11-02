@@ -36,13 +36,13 @@ def test_migration_64_on_an_existing_hub(store):
             c.execute(f"DROP TRIGGER {name}")
         for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'fin_%'").fetchall():
             c.execute(f"DROP TABLE {name}")
-        c.execute("INSERT INTO registry_metadata(key, value_json) VALUES('kept', '1')")
+        c.execute("INSERT INTO registry_metadata(key, value) VALUES('kept', '1')")
     store.initialize(seed_market=False)
     store.initialize(seed_market=False)
     with store.read() as c:
         tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'fin_%'")}
         assert tables == {t for t in schema.table_names()}
-        assert c.execute("SELECT value_json FROM registry_metadata WHERE key='kept'").fetchone()[0] == "1"
+        assert c.execute("SELECT value FROM registry_metadata WHERE key='kept'").fetchone()[0] == "1"
         assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=64").fetchone()[0] == 1
 
 
@@ -54,11 +54,11 @@ def test_migration_65_adds_phase_1_to_an_install_from_64(store):
         # drop a column an index names.
         c.execute("DROP INDEX IF EXISTS fin_feed_txns_stripe_link")
         c.execute("DROP INDEX IF EXISTS fin_feed_txns_stripe_source")
-        c.execute("ALTER TABLE fin_feed_txns DROP COLUMN raw_json")
+        c.execute("ALTER TABLE fin_feed_txns DROP COLUMN raw")
     store.initialize(seed_market=False)
     with store.read() as c:
         assert c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_payments'").fetchone()
-        assert "raw_json" in {r[1] for r in c.execute("PRAGMA table_info(fin_feed_txns)")}
+        assert "raw" in {r[1] for r in c.execute("PRAGMA table_info(fin_feed_txns)")}
         assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=65").fetchone()[0] == 1
 
 

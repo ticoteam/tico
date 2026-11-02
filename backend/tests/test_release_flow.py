@@ -17,7 +17,7 @@ def _team(api):
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ("cpo", "cmo", "qab")}
         H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
         for slug, template in (("cmo", RF.MANAGER), ("cpo", RF.WRITER), ("qab", RF.QA)):
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
                       (slug, encode({**bots[slug], "template": template}), "product", "ana"))
         dev = H.type_create(c, "human:ana", "Dev tickets", numbered=True, steps=[
             {"name": "In QA", "status": "review"}, {"name": "Pending Release", "status": "review"},
@@ -42,9 +42,9 @@ def _tasks(api, owner, prefix="Release:"):
 
 def _release_wakes(api, ticket):
     with api.app.state.store.read() as c:
-        return [(r["body"], r["refs_json"]) for r in c.execute(
-            "SELECT m.body, m.refs_json FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.wake')='release_published'", (ticket["id"],))]
+        return [(r["body"], r["refs"]) for r in c.execute(
+            "SELECT m.body, m.refs FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.wake')='release_published'", (ticket["id"],))]
 
 
 def test_the_daily_hour_sends_one_task_and_nothing_when_nothing_is_pending(api):
@@ -114,7 +114,7 @@ def test_a_published_release_gives_the_writer_one_task_and_qa_a_wake_per_ticket(
     wakes = {json.loads(r)["role"]: json.loads(r) for _, r in _release_wakes(api, tested)}
     assert wakes["qa"]["rule"] == "release_published" and not wakes["qa"].get("quiet"), "QA's wake is the named event"
     with api.app.state.store.read() as c:
-        written = c.execute("SELECT refs_json FROM messages WHERE body LIKE 'New task from%Docs for v1.2.3%'").fetchall()
+        written = c.execute("SELECT refs FROM messages WHERE body LIKE 'New task from%Docs for v1.2.3%'").fetchall()
     assert [json.loads(r[0])["rule"] for r in written] == ["release_published"], "the writer's docs task wakes under it too"
     docs = [t for t in _tasks(api, "cpo", "Docs for")]
     assert docs == ["Docs for v1.2.3: 2 tickets"], "one docs task for the release, however many tickets or replays"
@@ -146,5 +146,5 @@ def test_qa_hears_a_private_ticket_shipped_on_its_own_qa_subtask(api):
     with api.app.state.store.read() as c:
         woke = c.execute("SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
                          f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor='bot:qab' "
-                         "AND json_extract(m.refs_json,'$.wake')='release_published'", (check["id"],)).fetchall()
+                         "AND json_extract(m.refs,'$.wake')='release_published'", (check["id"],)).fetchall()
     assert len(woke) == 1 and "QA: payroll export" in woke[0][0] and "Acme payroll export" not in woke[0][0]

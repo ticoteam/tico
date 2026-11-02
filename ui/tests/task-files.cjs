@@ -63,7 +63,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: false};
     const bots = [{name: 'editor', display_name: 'Editor', host: 'keeper', status: 'active', can_chat: true}];
     const url = (id, n, part = '') => `/api/v2/files/${id}${part}?v=${n}`;
-    const version = (id, n, over) => ({n, size: 2048, mime: '', sha256: 'x' + n, created: at(200 - n * 30), by: 'bot:editor', comment_id: null, note: null,
+    const version = (id, n, over) => ({n, size: 2048, mime: '', sha256: 'x' + n, created_at: at(200 - n * 30), by: 'bot:editor', comment_id: null, note: null,
       ask: null, answers: [], width: null, height: null, duration_ms: null, media_state: 'none', url: url(id, n), poster_url: null, thumb_url: null, ...over});
     const verdict = {questions: [{id: 'verdict', header: 'Rough cut', question: 'Is v3 ready to publish?',
       options: [{label: 'Approve'}, {label: 'Request changes', description: 'Say what to change'}], multi: false, other: true}], who: null};
@@ -84,27 +84,27 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     const scripts = {1: '# Script\n\nIntro line.\n\nScene one.\nScene two.\n', 2: '# Script\n\nA tighter intro line.\n\nScene one.\nScene two.\nScene three.\n'};
     const csv = 'shot,length\n' + Array.from({length: 260}, (_, i) => `s${i + 1},${i % 7 + 1}s`).join('\n');
     const task = {id: 't1', title: 'Cut the launch video', owner: 'bot:editor', requester: 'human:ana', status: 'review', lane: 'company', rank: 1,
-      labels: [], links: [], parts: {total: 0, done: 0}, version: 4, created: at(400), updated: at(5), open_asks: 1,
+      labels: [], links: [], parts: {total: 0, done: 0}, version: 4, created_at: at(400), updated_at: at(5), open_asks: 1,
       body: 'Reference frame: ![frame](https://img.example.com/ref.png)\n\nMood: https://img.example.com/mood.jpg',
       attachments: [{id: 'f-frame', name: 'frame.png', content_type: 'image/png', size: 2048, url: '/api/v2/files/f-frame'}]};
-    const plain = {...task, id: 't2', title: 'Write the captions', status: 'doing', open_asks: 0, attachments: [], body: 'Captions for the cut.', updated: at(60)};
+    const plain = {...task, id: 't2', title: 'Write the captions', status: 'doing', open_asks: 0, attachments: [], body: 'Captions for the cut.', updated_at: at(60)};
     // t2 is one Ana may read but not comment on; one of its questions was answered by an older runner: {by, text, at}
     const plainComments = [
-      {id: 'p1', kind: 'ask', from_actor: 'bot:editor', body: 'Which tone?', created: at(50), answers: [{by: 'human:sam', text: 'Keep it warm and short.', at: at(40)}],
+      {id: 'p1', kind: 'ask', from_actor: 'bot:editor', body: 'Which tone?', created_at: at(50), answers: [{by: 'human:sam', text: 'Keep it warm and short.', at: at(40)}],
         refs: {task: 't2', questions: [{id: 'tone', question: 'Which tone?', options: [{label: 'Warm'}, {label: 'Plain'}], other: true}]}},
-      {id: 'p2', kind: 'ask', from_actor: 'bot:editor', body: 'Which font?', created: at(30), answers: [],
+      {id: 'p2', kind: 'ask', from_actor: 'bot:editor', body: 'Which font?', created_at: at(30), answers: [],
         refs: {task: 't2', questions: [{id: 'font', question: 'Which font?', options: [{label: 'Serif'}, {label: 'Sans'}], other: true}]}},
     ];
     const plainFiles = [{id: 'f-notes', name: 'captions.md', mime: 'text/markdown', current_version: 1, archived: false,
       versions: [version('f-notes', 1, {mime: 'text/markdown', ask: {questions: [{id: 'ok', question: 'Good to go?', options: [{label: 'Yes'}, {label: 'No'}]}], who: null}})]}];
     const comments = [
-      {id: 'm1', kind: 'say', from_actor: 'bot:editor', body: 'Second pass and a frame grab.', created: at(140), refs: {task: 't1', comment: true}},
-      {id: 'm2', kind: 'ask', from_actor: 'bot:editor', body: 'Which music and thumbnail?', created: at(90), answers: [], refs: {task: 't1',
+      {id: 'm1', kind: 'say', from_actor: 'bot:editor', body: 'Second pass and a frame grab.', created_at: at(140), refs: {task: 't1', comment: true}},
+      {id: 'm2', kind: 'ask', from_actor: 'bot:editor', body: 'Which music and thumbnail?', created_at: at(90), answers: [], refs: {task: 't1',
         questions: [{id: 'music', header: 'Music', question: 'Which tracks fit?', options: [{label: 'Upbeat'}, {label: 'Calm'}, {label: 'None'}], multi: true, other: true},
           {id: 'thumb', header: 'Thumbnail', question: 'Which thumbnail?', options: [{label: 'A', file: 'f-frame@1'}, {label: 'B', file: 'f-still@1'}], multi: false, other: false}]}},
-      {id: 'm3', kind: 'ask', from_actor: 'bot:editor', body: 'Ship today?', created: at(80), answers: [], refs: {task: 't1',
+      {id: 'm3', kind: 'ask', from_actor: 'bot:editor', body: 'Ship today?', created_at: at(80), answers: [], refs: {task: 't1',
         questions: [{id: 'ship', question: 'Ship today?', options: [{label: 'Yes'}, {label: 'No'}], multi: false, other: false}]}},
-      {id: 'm4', kind: 'ask', from_actor: 'human:ana', body: 'Captions too?', created: at(70), answers: [], refs: {task: 't1',
+      {id: 'm4', kind: 'ask', from_actor: 'human:ana', body: 'Captions too?', created_at: at(70), answers: [], refs: {task: 't1',
         questions: [{id: 'cap', question: 'Captions too?', options: [{label: 'Yes'}, {label: 'No'}]}]}},
     ];
     let prefs = {};
@@ -181,7 +181,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
           text = body.dismiss ? 'Ana dismissed the question.' : `Ana answered "${c.refs.questions[0].question}": ${Object.values(body.answers).flat().join(', ')}.`;
         }
         task.open_asks = Math.max(0, task.open_asks - 1);
-        comments.push({id: 'a' + comments.length, kind: 'answer', from_actor: 'human:ana', body: text, created: new Date().toISOString(), answer, refs: {task: 't1'}});
+        comments.push({id: 'a' + comments.length, kind: 'answer', from_actor: 'human:ana', body: text, created_at: new Date().toISOString(), answer, refs: {task: 't1'}});
         return json({comment: comments.at(-1)});
       }
       const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
@@ -400,7 +400,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     // ---- the modal's poll brings a new file and version; a playing video and a half-filled answer wait for it
     const video = view.locator('video');
     await video.evaluate(v => { v.dataset.keep = '1'; Object.defineProperty(v, 'paused', {configurable: true, get: () => false}); });
-    comments.push({id: 'm6', kind: 'ask', from_actor: 'bot:editor', body: 'Which end card?', created: new Date().toISOString(), answers: [], refs: {task: 't1',
+    comments.push({id: 'm6', kind: 'ask', from_actor: 'bot:editor', body: 'Which end card?', created_at: new Date().toISOString(), answers: [], refs: {task: 't1',
       questions: [{id: 'end', question: 'Which end card?', options: [{label: 'Logo'}, {label: 'Link'}], multi: true, other: true}]}});
     // readDone: every answer the app has read in full (its handler runs in the same turn)
     await page.evaluate(() => {
@@ -420,7 +420,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       versions: [version('f-new', 1, {mime: 'image/png', width: 160, height: 90, thumb_url: url('f-new', 1, '/thumb')})]});
     files[0].versions.unshift(version('f-cut', 4, {mime: 'video/mp4', width: 1920, height: 1080, media_state: 'ready', poster_url: url('f-cut', 4, '/poster'), thumb_url: url('f-cut', 4, '/thumb')}));
     files[0].current_version = 4;
-    comments.push({id: 'm7', kind: 'say', from_actor: 'bot:editor', body: 'End card added.', created: new Date().toISOString(), refs: {task: 't1', comment: true}});
+    comments.push({id: 'm7', kind: 'say', from_actor: 'bot:editor', body: 'End card added.', created_at: new Date().toISOString(), refs: {task: 't1', comment: true}});
     await modal.locator('.tf-tile[data-tf-file="f-new"]').waitFor();
     // two more polls of the files and the comments have been read and handled
     const polled = () => page.evaluate(() => [readDone.filter(p => p === '/api/v2/tasks/t1/files').length, readDone.filter(p => p === '/api/v2/tasks/t1').length]);

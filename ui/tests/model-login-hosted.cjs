@@ -19,7 +19,7 @@ const {unrouted} = require('./support/routes.cjs');
     const CLAUDE_URL = 'https://claude.com/cai/oauth/authorize?code=true&client_id=fixture';
 
     async function open(hosted) {
-      const box = {id: 'box', label: 'Server', operator: 'sam', bots: [], platform: 'linux', last_seen: at(-3000), readiness_at: at(-3000),
+      const box = {id: 'box', label: 'Server', operator: 'sam', bots: [], platform: 'linux', last_seen_at: at(-3000), readiness_at: at(-3000),
         needed_runtimes: ['claude', 'codex'], bot_runtimes: [], signed_out: {}, profiles: [],
         readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}, claude: {installed: true, authenticated: 'missing'}},
           harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude')}}};
@@ -52,7 +52,7 @@ const {unrouted} = require('./support/routes.cjs');
         if (p === '/api/v2/computers/box/logins' && method === 'POST') {
           const body = req.postDataJSON(), id = `in${++seq}`; writes.push({p, body});
           // The computer has not picked it up yet: it starts on the next look, still printing only its own lines.
-          rows[id] = {id, runtime: body.runtime, profile: '', kind: 'sign_in', state: 'starting', created: new Date().toISOString(),
+          rows[id] = {id, runtime: body.runtime, profile: '', kind: 'sign_in', state: 'starting', created_at: new Date().toISOString(),
             lines: ['Opening browser to sign in…', 'bot@server:~$'], accepts_code: false};
           return json(rows[id]);
         }
@@ -119,7 +119,7 @@ const {unrouted} = require('./support/routes.cjs');
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in on Server'}).waitFor();
       assert.deepEqual(writes, [{p: '/api/v2/computers/box/logins', body: {runtime: 'claude'}}], 'it started by itself');
       // Slow to start: the hint names Settings > Computers, never a terminal or the computer's lines.
-      Object.assign(last(), {created: new Date(Date.now() - 60000).toISOString()});
+      Object.assign(last(), {created_at: new Date(Date.now() - 60000).toISOString()});
       await dialog.locator('[data-status]', {hasText: 'Check that it shows as online in Settings > Computers'}).waitFor();
       assert.doesNotMatch(await dialog.innerText(), /terminal/i);
       // Waiting with no link yet: no CLI lines.
@@ -137,7 +137,7 @@ const {unrouted} = require('./support/routes.cjs');
       await dialog.getByRole('button', {name: 'Send code'}).click();
       await dialog.getByText('Code sent').waitFor();
       // Signed in: the dialog closes by itself and says so.
-      Object.assign(last(), {state: 'signed_in', updated: new Date().toISOString()});
+      Object.assign(last(), {state: 'signed_in', updated_at: new Date().toISOString()});
       await dialog.waitFor({state: 'detached'});
       await page.locator('.toast', {hasText: 'Signed in. Claude Code is ready on Server.'}).waitFor();
       assert.deepEqual(errors, []);
@@ -179,7 +179,7 @@ const {unrouted} = require('./support/routes.cjs');
       await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
       await dialog.locator('[data-status][data-state=finishing]', {hasText: late}).waitFor();
       assert.equal(await dialog.locator('[data-actions] button').count(), 0, 'nothing to cancel once it is finishing');
-      Object.assign(last(), {state: 'signed_in', updated: new Date().toISOString()});
+      Object.assign(last(), {state: 'signed_in', updated_at: new Date().toISOString()});
       await dialog.waitFor({state: 'detached'});
       await page.locator('.toast', {hasText: 'Signed in. Codex (ChatGPT) is ready on Server.'}).waitFor();
       // A failure gives its message, still without the computer's lines.
@@ -199,7 +199,7 @@ const {unrouted} = require('./support/routes.cjs');
       await signIn('claude').click();
       const dialog = login(page);
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
-      Object.assign(last(), {created: new Date(Date.now() - 60000).toISOString()});
+      Object.assign(last(), {created_at: new Date(Date.now() - 60000).toISOString()});
       await dialog.locator('[data-status]', {hasText: 'you can also sign in from its terminal'}).waitFor();
       Object.assign(last(), {state: 'waiting'});
       await dialog.locator('[data-lines]', {hasText: 'Opening browser to sign in'}).waitFor();
@@ -210,7 +210,7 @@ const {unrouted} = require('./support/routes.cjs');
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
       Object.assign(last(), {state: 'waiting', url: 'https://auth.openai.com/codex/device'});
       await dialog.locator('[data-link]').waitFor();
-      Object.assign(last(), {state: 'signed_in', updated: new Date().toISOString()});
+      Object.assign(last(), {state: 'signed_in', updated_at: new Date().toISOString()});
       await dialog.getByRole('button', {name: 'Done'}).waitFor();
       assert.deepEqual(errors, []);
       await page.close();

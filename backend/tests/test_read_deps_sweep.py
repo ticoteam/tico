@@ -9,10 +9,10 @@ from backend.tests.test_api import api  # noqa: F401  (fixture)
 def backlog(store, n):
     now = H.now()
     with store.transaction() as c:
-        c.execute("INSERT INTO conversations(id,kind,participants_json,created) VALUES('history','chat',?,?)",
+        c.execute("INSERT INTO conversations(id,kind,participants,created_at) VALUES('history','chat',?,?)",
                   (encode(["human:ana", "bot:ops"]), now))
         for i in range(n):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at,refs) "
                       "VALUES(?,'history','human:ana','bot:ops','say','Synthetic history',?,'{}')", (f"old-{i}", now))
 
 
@@ -90,7 +90,7 @@ def test_a_later_pass_searches_only_past_the_rows_already_searched_and_still_set
         top = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
     assert searched["messages"] == top
     with store.transaction() as c:
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json) "
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at,refs) "
                   "VALUES('new-0','history','human:ana','bot:ops','say','Synthetic history',?,'{}')", (H.now(),))
     with store.read() as c:
         c.set_trace_callback(statements.append)
@@ -109,10 +109,10 @@ def test_a_run_is_walked_once_per_write_and_every_message_naming_it_still_depend
     store = api.app.state.store
     now = H.now()
     with store.transaction() as c:
-        c.execute("INSERT INTO conversations(id,kind,participants_json,created) VALUES('turn-room','chat',?,?)",
+        c.execute("INSERT INTO conversations(id,kind,participants,created_at) VALUES('turn-room','chat',?,?)",
                   (encode(["human:ana", "bot:ops"]), now))
         for i in range(12):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created_at,refs) "
                       "VALUES(?,'turn-room','bot:ops','human:ana','say','Synthetic reply',?,?)",
                       (f"reply-{i}", now, encode({"turn_id": "run-1"})))
     walked, original = [], ReadIndex._attempt_sources

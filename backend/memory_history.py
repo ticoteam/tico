@@ -27,13 +27,13 @@ from .views import human_only
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_memory_updates(
- bot TEXT NOT NULL, sha TEXT NOT NULL, subject TEXT NOT NULL, author TEXT NOT NULL, committed TEXT NOT NULL,
- files_json TEXT NOT NULL, diff TEXT NOT NULL DEFAULT '', truncated INTEGER NOT NULL DEFAULT 0,
+ bot TEXT NOT NULL, sha TEXT NOT NULL, subject TEXT NOT NULL, author TEXT NOT NULL, committed_at TEXT NOT NULL,
+ files TEXT NOT NULL, diff TEXT NOT NULL DEFAULT '', truncated INTEGER NOT NULL DEFAULT 0,
  attempt_id TEXT NOT NULL DEFAULT '', shared INTEGER NOT NULL DEFAULT 0, runner_id TEXT NOT NULL,
- reported TEXT NOT NULL, PRIMARY KEY(bot, sha));
-CREATE INDEX IF NOT EXISTS bot_memory_updates_by_time ON bot_memory_updates(bot, committed);
+ reported_at TEXT NOT NULL, PRIMARY KEY(bot, sha));
+CREATE INDEX IF NOT EXISTS bot_memory_updates_by_time ON bot_memory_updates(bot, committed_at);
 CREATE TABLE IF NOT EXISTS bot_memory_documents(
- bot TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, updated TEXT NOT NULL, PRIMARY KEY(bot, path));
+ bot TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(bot, path));
 CREATE TABLE IF NOT EXISTS bot_memory_oversized(
  bot TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(bot, path));
 CREATE TABLE IF NOT EXISTS bot_memory_seen(
@@ -91,7 +91,7 @@ def changed_since(c, bot, since, pass_tasks=()):
     counts, and so does one whose run is unknown (spec criterion 2)."""
     from .learnings import run_attempts
     own = {run for task in pass_tasks for run in run_attempts(c, task)}
-    rows = c.execute("SELECT attempt_id FROM bot_memory_updates WHERE bot=? AND committed>?", (bot, since)).fetchall()
+    rows = c.execute("SELECT attempt_id FROM bot_memory_updates WHERE bot=? AND committed_at>?", (bot, since)).fetchall()
     return any((row[0] or "") not in own for row in rows)
 
 
@@ -112,8 +112,8 @@ def record(c, who, bot, report):
         if before and (before["attempt_id"] or not attempt) and (before["shared"] or not commit.shared):
             continue
         # A commit's content never changes; only what is known about it grows (its run, reaching the repository).
-        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files_json,diff,truncated,"
-                  "attempt_id,shared,runner_id,reported) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,diff,truncated,"
+                  "attempt_id,shared,runner_id,reported_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
                   "ON CONFLICT(bot,sha) DO UPDATE SET "
                   "attempt_id=CASE WHEN bot_memory_updates.attempt_id='' THEN excluded.attempt_id ELSE bot_memory_updates.attempt_id END,"
                   "shared=max(bot_memory_updates.shared,excluded.shared),"
@@ -130,8 +130,8 @@ def record(c, who, bot, report):
         if len(content.encode("utf-8")) > MAX_DOCUMENT_BYTES:
             oversized.add(path)
         elif path not in oversized:
-            c.execute("INSERT INTO bot_memory_documents(bot,path,content,updated) VALUES(?,?,?,?) "
-                      "ON CONFLICT(bot,path) DO UPDATE SET content=excluded.content,updated=excluded.updated "
+            c.execute("INSERT INTO bot_memory_documents(bot,path,content,updated_at) VALUES(?,?,?,?) "
+                      "ON CONFLICT(bot,path) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at "
                       "WHERE bot_memory_documents.content<>excluded.content", (bot, path, content, now))
             c.execute("DELETE FROM bot_memory_oversized WHERE bot=? AND path=?", (bot, path))
     for path in oversized:
@@ -154,8 +154,8 @@ def documents(c, bot):
 
 
 def document_status(c, bot):
-    saved = {r["path"]: r["updated"] for r in
-             c.execute("SELECT path,updated FROM bot_memory_documents WHERE bot=?", (bot,))}
+    saved = {r["path"]: r["updated_at"] for r in
+             c.execute("SELECT path,updated_at FROM bot_memory_documents WHERE bot=?", (bot,))}
     oversized = {r["path"] for r in c.execute("SELECT path FROM bot_memory_oversized WHERE bot=?", (bot,))}
     return {path: {"oversized": path in oversized, "updated": saved.get(path, "")}
             for path in DOCUMENTS if path in saved or path in oversized}
@@ -205,8 +205,8 @@ def install_memory_history(app, store, auth, mutate):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
             limit = max(1, min(limit, 50))
-            rows = c.execute("SELECT * FROM bot_memory_updates WHERE bot=? AND (?='' OR committed<?) "
-                             "ORDER BY committed DESC, sha LIMIT ?", (bot, before, before, limit + 1)).fetchall()
+            rows = c.execute("SELECT * FROM bot_memory_updates WHERE bot=? AND (?='' OR committed_at<?) "
+                             "ORDER BY committed_at DESC, sha LIMIT ?", (bot, before, before, limit + 1)).fetchall()
             row = c.execute("SELECT seen FROM bot_memory_seen WHERE actor=? AND bot=?", (who.actor, bot)).fetchone()
             # Before a first visit, only the last few days count as new, not years of history reported at once.
             seen, column = (row["seen"], "reported") if row else (H.shift(H.now(), days=-NEW_DAYS), "committed")
@@ -214,14 +214,14 @@ def install_memory_history(app, store, auth, mutate):
                                (bot, seen)).fetchone()[0]
             base = commit_base(c, bot, store.settings.github_owner)
             # Only a commit that reached the shared repository has an address to open.
-            updates = [{"sha": r["sha"], "subject": r["subject"], "author": r["author"], "when": r["committed"],
-                        "files": json.loads(r["files_json"]), "diff": r["diff"], "truncated": bool(r["truncated"]),
+            updates = [{"sha": r["sha"], "subject": r["subject"], "author": r["author"], "when": r["committed_at"],
+                        "files": json.loads(r["files"]), "diff": r["diff"], "truncated": bool(r["truncated"]),
                         "shared": bool(r["shared"]), "new": r[column] > seen,
                         "url": f"{base}/commit/{r['sha']}" if base and r["shared"] else None,
                         "source": source(c, auth, who, r["attempt_id"])} for r in rows[:limit]]
             return {"updates": updates, "unseen": unseen, "documents": documents(c, bot) if include_documents else {},
                     "document_status": document_status(c, bot),
-                    "next_before": rows[limit - 1]["committed"] if len(rows) > limit else None}
+                    "next_before": rows[limit - 1]["committed_at"] if len(rows) > limit else None}
 
     @app.post("/api/v2/bots/{bot}/memory/seen")
     def seen(request: Request, bot: str, body: M.Empty):

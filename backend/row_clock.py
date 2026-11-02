@@ -13,7 +13,7 @@ from threading import Lock
 from types import MappingProxyType
 
 PARTIES = "SELECT id,requester,owner,guest,private FROM tasks INDEXED BY tasks_private_parties WHERE private IS NOT 0"
-ACCESS = "SELECT key,value_json FROM registry_metadata WHERE key IN ('owner','access','rules')"
+ACCESS = "SELECT key,value FROM registry_metadata WHERE key IN ('owner','access','rules')"
 _IN_ACCESS = "IN ('owner','access','rules')"
 # Every task id, and every room's task. Only the existence of a task and a room's task reference are shared: a status
 # change or a renamed room moves nothing.
@@ -39,7 +39,7 @@ def ensure(c):
          "OR OLD.private IS NOT NEW.private) AND (OLD.private IS NOT 0 OR NEW.private IS NOT 0)", bump % "parties"),
         ("row_clock_access_insert", f"AFTER INSERT ON registry_metadata WHEN NEW.key {_IN_ACCESS}", bump % "access"),
         ("row_clock_access_delete", f"AFTER DELETE ON registry_metadata WHEN OLD.key {_IN_ACCESS}", bump % "access"),
-        ("row_clock_access_update", f"AFTER UPDATE OF key,value_json ON registry_metadata WHEN "
+        ("row_clock_access_update", f"AFTER UPDATE OF key,value ON registry_metadata WHEN "
          f"OLD.key {_IN_ACCESS} OR NEW.key {_IN_ACCESS}", bump % "access"),
         ("row_clock_refs_task_insert", "AFTER INSERT ON tasks", bump % "refs"),
         ("row_clock_refs_task_delete", "AFTER DELETE ON tasks", bump % "refs"),

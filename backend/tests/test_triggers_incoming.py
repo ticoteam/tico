@@ -84,7 +84,7 @@ def as_bot(api, slug):
     from backend.store import H
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) "
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
                   "VALUES(?,'hermes',?,?,'human:ana')", (slug, "x-" + slug, H.now()))
     api.app.state.store.settings.test_identities[slug + "-test"] = Identity("bot:" + slug, "bot", agent="hermes")
 
@@ -227,7 +227,7 @@ def test_rules_see_the_call_and_an_unheard_call_notes_its_maker_once_an_hour(api
     assert stored_rows(api, "SELECT count(*) FROM messages WHERE kind='notice' AND to_actor='human:ana'")[0][0] == 0
     hook(api, made["url"], b'{"a": 2}', {"X-Kind": "lonely"})
     hook(api, made["url"], b'{"a": 3}', {"X-Kind": "lonely"})
-    assert stored_rows(api, "SELECT count(*) FROM messages WHERE kind='notice' AND to_actor='human:ana' AND refs_json LIKE '%unheard%'")[0][0] == 1
+    assert stored_rows(api, "SELECT count(*) FROM messages WHERE kind='notice' AND to_actor='human:ana' AND refs LIKE '%unheard%'")[0][0] == 1
     log = {d["delivery"]: d for d in get(api, "triggers/shop/deliveries")["deliveries"]}
     assert log[got["delivery"]]["rules"] == 1 and log[got["delivery"]]["type"] == "heard"
 
@@ -319,7 +319,7 @@ def test_a_bot_makes_and_manages_its_own_triggers_only(api):
     # The owner changes any trigger; the secret is never in the event log.
     post(api, "triggers", {"name": "Shop"})
     post(api, "triggers/shop/rotate", {}, token="ops-test", expected=403)
-    for row in stored_rows(api, "SELECT detail_json FROM events WHERE action LIKE 'trigger.%'"):
+    for row in stored_rows(api, "SELECT detail FROM events WHERE action LIKE 'trigger.%'"):
         assert made["url"].rsplit("/", 1)[1] not in row[0]
 
 

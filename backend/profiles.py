@@ -22,7 +22,7 @@ the bot; a task a wake rule woke it for (a lead's assignment) always runs. Nothi
 only decides what wakes a bot and which tasks it is given.
 
 `wake_preset` is read from the profile: setting a profile writes the matching `token_saver` or `performance` into
-`config_json.wake_preset` (30 minutes or more is Token saver), which is what the job queue's hold trigger and every
+`config.wake_preset` (30 minutes or more is Token saver), which is what the job queue's hold trigger and every
 older client reads, and the old `POST /bots/{bot}/wake-preset` keeps working by changing only the profile's numbers.
 A bot with no profile (a database from before profiles) runs as a doer on its old preset until `migrate` gives it
 one. `custom` is the way out of a profile's fixed rows: its rows are copied into the rules table, marked
@@ -83,8 +83,8 @@ CHOICES = {"pulls": ("all", "review", "none"), "takes": ("all", "review", "watch
 
 # ---------------------------------------------------------------------------------------------------- reading
 # SQL for "this bot's profile takes no task", on a bot_config row aliased `{a}`: a routine of such a bot never fires.
-TAKES_NONE_SQL = ("(json_extract({a}.config_json,'$.profile')='responder' OR (json_extract({a}.config_json,'$.profile')="
-                  "'custom' AND json_extract({a}.config_json,'$.profile_options.takes')='none'))")
+TAKES_NONE_SQL = ("(json_extract({a}.config,'$.profile')='responder' OR (json_extract({a}.config,'$.profile')="
+                  "'custom' AND json_extract({a}.config,'$.profile_options.takes')='none'))")
 
 
 def name_of(config):
@@ -179,12 +179,12 @@ def choices():
 
 def of_bot(c, bot):
     """The bot's profile name as the engine reads it (doer when it has none)."""
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     return name_of(H._json(row[0], {}) if row else {}) or DOER
 
 
 def config_of(c, bot):
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     return H._json(row[0], {}) or {} if row else {}
 
 
@@ -340,10 +340,10 @@ def materialise(c, bot, source):
              or 0) + 1
     at = H.now()
     for n, row in enumerate(found):
-        c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,when_json,then_outcome,params_json,enabled,position,"
-                  "note,created_by,created,updated,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
-                  ("rule-" + H.new_id(), "bot", bot, row["event"], row["when_json"], row["then_outcome"],
-                   row["params_json"], start + n, f"From the {SPEC[source]['label']} profile: {row['words']}"[:500],
+        c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,position,"
+                  "note,created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
+                  ("rule-" + H.new_id(), "bot", bot, row["event"], row["condition"], row["then_outcome"],
+                   row["params"], start + n, f"From the {SPEC[source]['label']} profile: {row['words']}"[:500],
                    MATERIALISED, at, at))
     from . import redesign_migration
     redesign_migration.adopt(c, "wake_rules", ("bot", bot))     # after the cutover: in its What wakes automation
@@ -366,7 +366,7 @@ def set_profile(admin, c, who, bot, body, undo_change_id=None):
     config = admin._config(c, bot)
     if config["revision"] != body.expected_revision:
         raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
-    declared = H._json(config["config_json"], {}) or {}
+    declared = H._json(config["config"], {}) or {}
     before, prior = snapshot(declared), name_of(declared)
     name, given = body.profile, _given(body)
     custom_only = [k for k in FLAG_KEYS if k in given]
@@ -395,7 +395,7 @@ def set_profile(admin, c, who, bot, body, undo_change_id=None):
         options = given
     apply(declared, name, {k: v for k, v in options.items() if _valid(k, v)})
     after = snapshot(declared)
-    c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+    c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
     from . import wake_presets
     wake_presets.replan(c, bot)
     admin.record(c, who.actor, bot, "profile", before, after)
@@ -403,11 +403,11 @@ def set_profile(admin, c, who, bot, body, undo_change_id=None):
         c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
                   (who.actor, H.now(), undo_change_id))
     H.event(c, who.actor, "bot.profile_changed", bot, {"before": before, "after": after, "dropped_rules": dropped})
-    return view(c, bot, {"config_json": encode(declared), "revision": config["revision"] + 1})
+    return view(c, bot, {"config": encode(declared), "revision": config["revision"] + 1})
 
 
 def view(c, bot, config):
-    declared = H._json(config["config_json"], {}) or {}
+    declared = H._json(config["config"], {}) or {}
     return {"bot": bot, "profile": effective(declared), "wake": _wake(declared), "rules": materialised(c, bot),
             "revision": config["revision"]}
 
@@ -467,9 +467,9 @@ def migrate(c):
     from . import rules
     from .store import encode
     told = {}
-    for row in c.execute("SELECT bc.bot,bc.config_json,bc.operator,bc.bot_owners_json,b.state,b.display_name FROM bot_config bc "
+    for row in c.execute("SELECT bc.bot,bc.config,bc.operator,bc.bot_owners,b.state,b.display_name FROM bot_config bc "
                          "JOIN bots b ON b.slug=bc.bot ORDER BY bc.bot").fetchall():
-        declared = H._json(row["config_json"], {}) or {}
+        declared = H._json(row["config"], {}) or {}
         if not isinstance(declared, dict) or name_of(declared):
             continue
         slug = row["bot"]
@@ -478,13 +478,13 @@ def migrate(c):
         except Exception:  # noqa: BLE001 - a start never fails on a guess about one bot: it is a Doer
             name, options, source = DOER, {}, None
         apply(declared, name, options)
-        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), slug))
+        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), slug))
         if name == CUSTOM and source and rules.PROFILE_RULES.get(source):
             materialise(c, slug, source)
         H.event(c, H.KEEPER, "bot.profile_migrated", slug, {"profile": name, "options": options})
         if row["state"] == "archived":
             continue
-        owner = row["operator"] or next(iter(_owner_ids(row["bot_owners_json"])), "") or H.default_human(c)
+        owner = row["operator"] or next(iter(_owner_ids(row["bot_owners"])), "") or H.default_human(c)
         if owner and H.human(c, owner):
             told.setdefault(owner, []).append((row["display_name"] or slug, slug, name))
     for owner, bots in told.items():
@@ -512,9 +512,9 @@ def mismatches(c):
     with tasks queued, a doer whose runs for a week all did nothing. [(kind, bot, count)]."""
     out = []
     since = H.shift(H.now(), days=-IDLE_DAYS)
-    for row in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+    for row in c.execute("SELECT bc.bot,bc.config FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
                          "WHERE b.state='active' ORDER BY bc.bot").fetchall():
-        declared = H._json(row["config_json"], {}) or {}
+        declared = H._json(row["config"], {}) or {}
         name, bot = name_of(declared), row["bot"]
         if name == REVIEWER:
             tasks = H._rows(c.execute(f"SELECT * FROM tasks WHERE owner=? AND status IN {OPEN} LIMIT 200",
@@ -529,8 +529,8 @@ def mismatches(c):
                 out.append(("responder_has_tasks", bot, n))
         elif name == DOER:
             seen = c.execute("SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM turns WHERE bot=? "
-                             "AND started>? AND finished IS NOT NULL", (bot, since)).fetchone()
-            created = c.execute("SELECT created FROM bots WHERE slug=?", (bot,)).fetchone()
+                             "AND started_at>? AND finished_at IS NOT NULL", (bot, since)).fetchone()
+            created = c.execute("SELECT created_at FROM bots WHERE slug=?", (bot,)).fetchone()
             if (seen["n"] >= IDLE_MIN_RUNS and seen["idle"] == seen["n"]
                     and not (created and created[0] and created[0] > since)):
                 out.append(("doer_idle", bot, seen["n"]))

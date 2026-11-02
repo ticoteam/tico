@@ -775,7 +775,7 @@ class Cell:
         return r.returncode == 0 and bool(rules) and rules[0] == IMDS_LINE
 
     def wait_healthy(self, c: dict, started: float, timeout: int) -> int:
-        """Milliseconds from `started` (the command's start) until /healthz answers 200 through the router (with
+        """Milliseconds from `started_at` (the command's start) until /healthz answers 200 through the router (with
         `direct`, on the server's own loopback port: a sleeping company's route leads to the wake service); the wait
         itself is up to `timeout` seconds from now, so a slow image pull does not use it up."""
         deadline = self.system.monotonic() + max(timeout, 1)
@@ -1150,7 +1150,7 @@ class Cell:
                      "memory": memory or (old or {}).get("memory") or MEMORY_DEFAULT,
                      "version": args.version or (old or {}).get("version") or self.default_version(),
                      "hosted": args.hosted or (old or {}).get("hosted") or HOSTED_DEFAULT,
-                     "created": (old or {}).get("created") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                     "created_at": (old or {}).get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                      "state": "running"}
                 if aliases:
                     c["aliases"] = aliases

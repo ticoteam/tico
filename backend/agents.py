@@ -44,7 +44,7 @@ PAIRABLE = ("hermes", "openclaw")
 
 # One bot's config and agent record, read through read_cache so a page that primes them for every bot
 # (views.prime_machines) reads neither again per bot.
-CONFIG_SQL = "SELECT config_json FROM bot_config WHERE bot=?"
+CONFIG_SQL = "SELECT config FROM bot_config WHERE bot=?"
 ROW_SQL = "SELECT * FROM agents WHERE bot=?"
 
 
@@ -54,7 +54,7 @@ def external_harness(c, bot):
     row = one(c, CONFIG_SQL, (bot,))
     if not row:
         return None
-    config = H._json(row["config_json"], {}) or {}
+    config = H._json(row["config"], {}) or {}
     return resolve_harness(config) if is_external(config) else None
 
 
@@ -73,13 +73,13 @@ def presence(c, bot, harness=None, now=None):
     if harness in external_sync.HARNESSES:
         from .read_cache import one
         config = one(c, CONFIG_SQL, (bot,))
-        return external_sync.presence(c, bot, harness, H._json(config["config_json"], {}) or {}, now)
+        return external_sync.presence(c, bot, harness, H._json(config["config"], {}) or {}, now)
     now = now or H.now()
     record = row(c, bot)
     credential = bool(record and not record["revoked_at"])
-    last_seen = record["last_seen"] if record else None
+    last_seen = record["last_seen_at"] if record else None
     online = bool(credential and last_seen and last_seen > H.shift(now, seconds=-PRESENCE_GAP))
-    agent = {"harness": harness, "credential": credential, "last_seen": last_seen,
+    agent = {"harness": harness, "credential": credential, "last_seen_at": last_seen,
              "revoked_at": record["revoked_at"] if record else None,
              "version": (record["version"] if record else "") or "",
              "platform": (record["platform"] if record else "") or "",
@@ -99,12 +99,12 @@ def issue_credential(c, who, bot):
                       "this bot runs on a registered computer", 422)
     token = "tico-agent-" + secrets.token_urlsafe(32)
     now = H.now()
-    c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?) "
+    c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?) "
               "ON CONFLICT(bot) DO UPDATE SET harness=excluded.harness,token_hash=excluded.token_hash,"
-              "created=excluded.created,created_by=excluded.created_by,revoked_at=NULL,revoked_by=NULL,last_seen=NULL",
+              "created_at=excluded.created_at,created_by=excluded.created_by,revoked_at=NULL,revoked_by=NULL,last_seen_at=NULL",
               (bot, harness, digest(token), now, who.actor))
     H.event(c, who.actor, "agent.credential_issued", bot, {"harness": harness})
-    return {"bot": bot, "harness": harness, "token": token, "created": now}
+    return {"bot": bot, "harness": harness, "token": token, "created_at": now}
 
 
 def revoke_credential(c, who, bot):
@@ -124,7 +124,7 @@ def heartbeat(c, who, body):
     now = H.now()
     fields = {key: getattr(body, key) for key in ("version", "platform", "model", "provider", "profile", "detail")
               if key in body.model_fields_set}
-    fields["last_seen"] = now
+    fields["last_seen_at"] = now
     c.execute("UPDATE agents SET " + ",".join(key + "=?" for key in fields) + " WHERE bot=?",
               (*fields.values(), bot))
     if body.tools is not None:
@@ -211,7 +211,7 @@ def create_pairing(c, body, client):
     c.execute("UPDATE agent_pairings SET state='expired',token=NULL WHERE expires_at<=? AND state IN ('pending','approved')",
               (now,))
     client_hash = digest("pairing-client:" + client)
-    if c.execute("SELECT count(*) FROM agent_pairings WHERE client_hash=? AND created>?",
+    if c.execute("SELECT count(*) FROM agent_pairings WHERE client_hash=? AND created_at>?",
                  (client_hash, H.shift(now, hours=-1))).fetchone()[0] >= PAIRINGS_PER_CLIENT_HOUR:
         raise Problem("rate_limited", "Too many pairing requests from this address; try again in an hour", 429, retryable=True)
     if c.execute("SELECT count(*) FROM agent_pairings WHERE state='pending'").fetchone()[0] >= PAIRINGS_PENDING_MAX:
@@ -224,7 +224,7 @@ def create_pairing(c, body, client):
             break
     else:
         raise Problem("unavailable", "Could not make a pairing code; try again", 503, retryable=True)
-    c.execute("INSERT INTO agent_pairings(id,code_hash,secret_hash,profile,host,version,harness,client_hash,created,"
+    c.execute("INSERT INTO agent_pairings(id,code_hash,secret_hash,profile,host,version,harness,client_hash,created_at,"
               "expires_at,token_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
               (pairing_id, digest(raw), digest(secret), body.profile, body.host, body.version, body.harness,
                client_hash, now, H.shift(now, seconds=PAIRING_TTL), pairing_public(secret)))
@@ -286,7 +286,7 @@ def approve_pairing(c, who, manager, code, bot):
         raise Problem("bot_state", "This bot is " + state + "; make it planned or active first", 409)
     if state == "planned":
         c.execute("UPDATE bots SET state='active' WHERE slug=?", (bot,))
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.status','active'),revision=revision+1 WHERE bot=?", (bot,))
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.status','active'),revision=revision+1 WHERE bot=?", (bot,))
         H.event(c, who.actor, "bot.activated", bot)
     issued = issue_credential(c, who, bot)
     c.execute("UPDATE agent_pairings SET state='approved',bot=?,token=?,decided_by=?,decided_at=? WHERE id=?",
@@ -336,11 +336,11 @@ def listing(c, who, auth):
         operator = operators.get(record["bot"])
         if who.role != "owner" and not (operator and who.actor == "human:" + operator):
             continue
-        value = {k: record[k] for k in ("bot", "display_name", "harness", "created", "created_by",
-                                        "last_seen", "version", "platform", "model", "provider",
+        value = {k: record[k] for k in ("bot", "display_name", "harness", "created_at", "created_by",
+                                        "last_seen_at", "version", "platform", "model", "provider",
                                         "profile", "detail", "revoked_at", "revoked_by")}
-        value["online"] = bool(not record["revoked_at"] and record["last_seen"]
-                               and record["last_seen"] > H.shift(H.now(), seconds=-PRESENCE_GAP))
+        value["online"] = bool(not record["revoked_at"] and record["last_seen_at"]
+                               and record["last_seen_at"] > H.shift(H.now(), seconds=-PRESENCE_GAP))
         out.append(value)
     return out
 

@@ -253,7 +253,7 @@ def test_worktree_hold_moved_to_general_resumes_once_after_linking_pushes(api, w
     with api.app.state.store.transaction() as c:
         branch = f"tico/{task['id'][:8]}-offsite-plan"
         tree = H.new_id()
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,repo,branch,detail_json) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,repo,branch,detail) "
                   "VALUES(?,?,'worktree',?,'present',?,?,'Acme/product',?,?)",
                   (tree, task['id'], 'worktree:' + tree, task['owner'], H.now(), branch,
                    json.dumps({'pushed': 'd' * 40, 'expected_head': 'b' * 40})))
@@ -296,10 +296,10 @@ def test_worktree_hold_moved_to_general_resumes_once_after_linking_pushes(api, w
         task_blocked.sweep(c, H.now())
         assert H.task(c, task['id'])['version'] == resumed['version']
         wakes = H._rows(c.execute("SELECT * FROM messages WHERE to_actor=? "
-                                  "AND json_extract(refs_json,'$.task')=? AND body LIKE 'Worktree hold cleared:%'",
+                                  "AND json_extract(refs,'$.task')=? AND body LIKE 'Worktree hold cleared:%'",
                                   (task['owner'], task['id'])))
         assert len(wakes) == 1
-        assert json.loads(wakes[0]['refs_json'])['news'] == 'assignment'
+        assert json.loads(wakes[0]['refs'])['news'] == 'assignment'
 
 
 def test_review_fix_steps_accrue_active_building_time(api, monkeypatch):
@@ -389,7 +389,7 @@ def test_fresh_ci_refusal_cannot_be_cleared_by_older_cached_green(api):
         task_blocked.reconcile(c, task['id'])
         assert H.task(c, task['id'])['blocked_since']
         assert c.execute('SELECT count(*) FROM events').fetchone()[0] == event_count, 'probing never records another refusal'
-        c.execute('UPDATE task_links SET updated=?,detail_json=? WHERE id=?', (
+        c.execute('UPDATE task_links SET updated_at=?,detail=? WHERE id=?', (
             H.shift(H.now(), seconds=1), json.dumps({'head_sha': HEAD, 'checks': {'python': 'passing'}}), pr['id']))
         task_blocked.reconcile(c, task['id'])
         assert H.task(c, task['id'])['step_id'] == task['step_id']
@@ -535,7 +535,7 @@ def test_an_old_blocker_does_not_put_a_merged_ticket_back_on_hold(api):
     task = ticket(api)
     old = post(api, 'tasks', {'owner': 'cmo', 'title': 'Restore an old check', 'body': 'Old.'})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_steps SET flow_json=? WHERE id=?", (json.dumps({"can_hold": False}), task['step_id']))
+        c.execute("UPDATE task_steps SET flow=? WHERE id=?", (json.dumps({"can_hold": False}), task['step_id']))
         TR.add_blocker(c, H.KEEPER, task['id'], old['id'])
         row = H.task(c, task['id'])
         assert (row['step_id'], row['blocked_since']) == (task['step_id'], None)

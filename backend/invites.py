@@ -31,7 +31,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS invite_sends(
  actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, request_hash TEXT NOT NULL, person TEXT NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('sending','sent','refused')),
- error_code TEXT, error_detail TEXT, created TEXT NOT NULL, updated TEXT NOT NULL,
+ error_code TEXT, error_detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  PRIMARY KEY(actor,operation,key));
 """
 KEY = "invites"
@@ -51,16 +51,16 @@ REASONS = {
 
 def sent(c):
     """{person id: {at, by}} for every invite sent."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
-    value = json.loads(row["value_json"]) if row else {}
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    value = json.loads(row["value"]) if row else {}
     return value if isinstance(value, dict) else {}
 
 
 def record(c, actor, pid):
     at = H.now()
     invites = {**sent(c), pid: {"at": at, "by": actor}}
-    c.execute("INSERT INTO registry_metadata(key,value_json) VALUES(?,?) "
-              "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (KEY, encode(invites)))
+    c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) "
+              "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (KEY, encode(invites)))
     H.event(c, actor, "person.invited", pid, {})
     return at
 
@@ -117,7 +117,7 @@ def _once(store, who, request, body, person, work, unknown=None):
             raise Problem("invite_unknown", f"This invite to {name} is still being sent, or Tico couldn't tell whether it "
                                             f"went. Check the People page or ask {name} before inviting again.", 422)
         now = H.now()
-        c.execute("INSERT INTO invite_sends(actor,operation,key,request_hash,person,state,created,updated) "
+        c.execute("INSERT INTO invite_sends(actor,operation,key,request_hash,person,state,created_at,updated_at) "
                   "VALUES(?,?,?,?,?,'sending',?,?)", (who.actor, operation, key, hashed, person["id"], now, now))
     try:
         answer = work()
@@ -125,12 +125,12 @@ def _once(store, who, request, body, person, work, unknown=None):
         # A definite refusal replays as itself. Anything else leaves the request 'sending': its outcome is unknown, so
         # no copy of it ever asks the issuer again.
         with store.transaction() as c:
-            c.execute("UPDATE invite_sends SET state='refused',error_code=?,error_detail=?,updated=? "
+            c.execute("UPDATE invite_sends SET state='refused',error_code=?,error_detail=?,updated_at=? "
                       "WHERE actor=? AND operation=? AND key=?", (problem.code, problem.detail, H.now(),
                                                                   who.actor, operation, key))
         raise
     with store.transaction() as c:
-        c.execute("UPDATE invite_sends SET state='sent',updated=? WHERE actor=? AND operation=? AND key=?",
+        c.execute("UPDATE invite_sends SET state='sent',updated_at=? WHERE actor=? AND operation=? AND key=?",
                   (H.now(), who.actor, operation, key))
     return answer if answer is not None else True
 

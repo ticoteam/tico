@@ -257,7 +257,7 @@ def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_da
     with api.app.state.store.transaction() as c:
         for task, by in ((world["finance_task"], "bot:finance"), (world["private"], "bot:inbox")):
             wake = c.execute("SELECT id FROM messages WHERE conversation_id=?", (task["conversation_id"],)).fetchone()[0]
-            c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
                       (task["id"], "bot:ops", by, wake, H.shift(H.now(), hours=1)))
     assert column(api, "SELECT id FROM tasks", token) == sorted([world["coo_task"]["id"], world["finance_task"]["id"]])
     # Another person's private room stays out of reach even when named directly.
@@ -282,11 +282,11 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
         original = world['attempt']
         mid = c.execute('SELECT message_id FROM jobs WHERE id=?', (original['job_id'],)).fetchone()[0]
         for name, patch in {
-            'public': {'conversation_id': world['coo_task']['conversation_id'], 'refs_json': '{}'},
-            'private-room': {'conversation_id': world['private']['conversation_id'], 'refs_json': '{}'},
-            'private-ref': {'refs_json': json.dumps({'task': world['private']['id']})},
+            'public': {'conversation_id': world['coo_task']['conversation_id'], 'refs': '{}'},
+            'private-room': {'conversation_id': world['private']['conversation_id'], 'refs': '{}'},
+            'private-ref': {'refs': json.dumps({'task': world['private']['id']})},
             'deleted': {'deleted_at': H.now()},
-            'unknown-task': {'refs_json': json.dumps({'task': 'unknown-fixture-task'})},
+            'unknown-task': {'refs': json.dumps({'task': 'unknown-fixture-task'})},
         }.items():
             clone('messages', mid, id='message-' + name, to_actor='human:ana', **patch)
             clone('jobs', original['job_id'], id='job-' + name, message_id='message-' + name)
@@ -537,7 +537,7 @@ def test_attempt_time_index_upgrades_existing_history_without_changing_rows(api,
         assert [dict(row) for row in c.execute('SELECT * FROM attempts ORDER BY id')] == before
         assert [row[2] for row in c.execute('PRAGMA index_info(attempts_created)')] == ['created']
         assert c.execute('SELECT count(*) FROM cloud_migrations WHERE version=62').fetchone()[0] == 1
-        plan = c.execute("EXPLAIN QUERY PLAN SELECT count(*) FROM attempts WHERE created>=?", (H.now(),))
+        plan = c.execute("EXPLAIN QUERY PLAN SELECT count(*) FROM attempts WHERE created_at>=?", (H.now(),))
         assert any('attempts_created (created>?)' in row[3] for row in plan)
 
 
@@ -591,7 +591,7 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
 
         job = world['attempt']['job_id']
         asked = c.execute('SELECT message_id FROM jobs WHERE id=?', (job,)).fetchone()[0]
-        clone('messages', asked, id='message-asked-fixture', conversation_id=room, refs_json='{}', in_reply_to=None)
+        clone('messages', asked, id='message-asked-fixture', conversation_id=room, refs='{}', in_reply_to=None)
         queued = c.execute("SELECT id FROM jobs WHERE message_id='message-asked-fixture'").fetchone()
         if not queued:
             clone('jobs', job, id=aid, message_id='message-asked-fixture')
@@ -601,7 +601,7 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
         clone('turns', world['attempt']['id'], id=aid, message_id='message-asked-fixture', task_id=None)
         clone('messages', asked, id='message-reply-fixture', conversation_id=room, from_actor='bot:ops',
               to_actor='human:ana', in_reply_to='message-asked-fixture',
-              refs_json=json.dumps({'turn_id': aid, 'task': world['coo_task']['id'],
+              refs=json.dumps({'turn_id': aid, 'task': world['coo_task']['id'],
                                     'run': {'job_id': job, 'attempt_id': aid}, 'answers': ['message-asked-fixture']}))
     callers = (world['attempt']['token'], 'ben-test')
 
@@ -744,13 +744,13 @@ def test_json_table_functions_are_read_only_and_keep_source_visibility(api, worl
     for token in (world["attempt"]["token"],):
         assert query(api, "SELECT value FROM json_each('[1,2]')", token)["rows"] == [[1], [2]]
         assert query(api, "SELECT key,value,type FROM json_tree('{\"qa\":1}') WHERE key='qa'", token)["rows"] == [["qa", 1, "integer"]]
-        assert query(api, "SELECT j.value FROM messages m, json_each(m.refs_json) j "
+        assert query(api, "SELECT j.value FROM messages m, json_each(m.refs) j "
                           "WHERE m.conversation_id=:room", token,
                      params={"room": world["steven_room"]})["rows"] == []
-        assert "prohibited" in error(api, "SELECT j.value FROM main.messages m, json_each(m.refs_json) j", token)
+        assert "prohibited" in error(api, "SELECT j.value FROM main.messages m, json_each(m.refs) j", token)
         assert "prohibited" in error(api, "SELECT j.value FROM credentials c, json_each(c.id) j", token)
         assert "not authorized" in error(api, "SELECT load_extension('missing')", token)
-    assert query(api, "SELECT count(*) FROM messages m, json_tree(m.refs_json) j",
+    assert query(api, "SELECT count(*) FROM messages m, json_tree(m.refs) j",
                  world["attempt"]["token"])["rows"][0][0] >= 1
 
 
@@ -766,12 +766,12 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
             ('bot:finance', 'human:cara', 1), ('bot:inbox', 'human:ana', 0),
             ('human:ben', 'human:ana', 1), ('bot:ops', 'human:cara', 0),
         ]):
-            c.execute('INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) VALUES(?,?,?,?,?,?,?,?)',
+            c.execute('INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
                       (f'tree-{i}', 'Synthetic tree', owner, requester, private, 'open', H.now(), H.now()))
         for child, parent in [(1, 0), (2, 1), (3, 0), (4, 2), (0, 4)]:
-            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created,created_by) VALUES(?,?,'parent',?,?)",
+            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at,created_by) VALUES(?,?,'parent',?,?)",
                       (f'tree-{child}', f'tree-{parent}', H.now(), 'human:ana'))
-        c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
                   ('tree-1', 'human:cara', 'human:ana', c.execute('SELECT id FROM messages LIMIT 1').fetchone()[0],
                    H.shift(H.now(), seconds=3600)))
     callers = [Identity('human:ana', 'owner'), Identity('human:ben', 'human'),
@@ -795,7 +795,7 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
         compare(who)
     with store.transaction() as c:
         c.execute("UPDATE tasks SET owner='bot:finance',requester='human:ben',private=1 WHERE id='tree-5'")
-        c.execute("UPDATE bot_config SET access_json=? WHERE bot='ops'", (json.dumps({
+        c.execute("UPDATE bot_config SET access=? WHERE bot='ops'", (json.dumps({
             level: {'everyone': False, 'people': [], 'teams': [], 'bots': []} for level in ('see','read','write')}),))
     for who in callers:
         compare(who)
@@ -873,11 +873,11 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     with api.app.state.store.transaction() as c:
         assistant.ensure_schema(c)
         for n, (status, proposer) in enumerate([("done", "assistant"), ("cancelled", "assistant"), ("done", "bot:botops")]):
-            c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body_json,status,created,proposer) "
+            c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body,status,created_at,proposer) "
                       "VALUES(?,?,?,?,?,?,?,?,?)", (f"a{n}", "human:ana", "Pay Dana's invoice", "POST",
                                                     "/api/v2/tasks/xyz/close", '{"note":"secret"}', status, H.now(), proposer))
         # The same status across owners/routes/methods must remain one approved-grain bucket.
-        c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body_json,status,created,proposer) "
+        c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body,status,created_at,proposer) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", ("a3", "human:dana", "Private category", "DELETE",
                                                 "/api/v2/meetings/xyz", '{}', "done", H.now(), "assistant"))
         H.event(c, "bot:ops", "mcp.call", "hub_task_show", {"tool": "hub_task_show", "ms": 40})
@@ -918,7 +918,7 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     # Still no row: not the table, not a hidden column, not the base events the totals are built from.
     for sql in ("SELECT * FROM assistant_actions", "SELECT summary FROM assistant_action_weekly",
                 "SELECT owner FROM assistant_action_weekly", "SELECT area FROM assistant_action_weekly",
-                "SELECT method FROM assistant_action_weekly", "SELECT detail_json FROM mcp_call_weekly"):
+                "SELECT method FROM assistant_action_weekly", "SELECT detail FROM mcp_call_weekly"):
         assert query(api, sql, token, expected=422)
     assert query(api, "DELETE FROM assistant_actions", token, expected=422)
     # A grant to one bot never opens totals, rows or writes to another bot.
@@ -988,7 +988,7 @@ def test_private_task_parties_are_built_once_per_clock_not_once_per_request(api)
     store, auth = api.app.state.store, api.app.state.auth
     who = Identity("human:ben", "human")
     with store.transaction() as c:
-        c.execute("INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) "
+        c.execute("INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) "
                   "VALUES('priv-share','Private','bot:ops','human:ana',1,'open',?,?)", (H.now(), H.now()))
     builds = []
     original = row_clock._rows
@@ -1026,7 +1026,7 @@ def test_a_person_read_checks_the_org_chart_table_once_not_once_per_private_task
 
     def add(count, start):
         with store.transaction() as c:
-            c.executemany("INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) "
+            c.executemany("INSERT INTO tasks(id,title,owner,requester,private,status,created_at,updated_at) "
                           "VALUES(?,?,?,?,?,?,?,?)",
                           [(f"priv-{i}", "Private", "bot:ops", "human:ana", 1, "open", H.now(), H.now())
                            for i in range(start, start + count)])
@@ -1057,9 +1057,9 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
     with store.transaction() as c:
         H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in fleet},
                         {"people": people})
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode({"people": people}),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": people}),))
         for slug in fleet:
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,?)", (slug, "{}", "ana"))
+            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,?)", (slug, "{}", "ana"))
         for i, slug in enumerate(fleet):
             if i % 3 == 0:
                 restrict(c, slug, people=[f"p{i % 37}"])

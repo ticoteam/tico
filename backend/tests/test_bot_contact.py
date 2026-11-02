@@ -57,9 +57,9 @@ def notices_to(api, slug):
     the difference between news in the room and a whole run spent reading it."""
     import json
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT body,refs_json FROM messages WHERE to_actor=? ORDER BY created",
+        rows = c.execute("SELECT body,refs FROM messages WHERE to_actor=? ORDER BY created_at",
                          ("bot:" + slug,)).fetchall()
-    return [(r["body"].split("\n")[0], bool((json.loads(r["refs_json"] or "{}")).get("quiet")))
+    return [(r["body"].split("\n")[0], bool((json.loads(r["refs"] or "{}")).get("quiet")))
             for r in rows]
 
 

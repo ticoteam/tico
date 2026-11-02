@@ -61,7 +61,7 @@ def open_ask(c, blocker_key, owner, parent_id=None):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     devops = _devops(c)
     for row in H._rows(c.execute(f"SELECT id,owner FROM tasks WHERE blocker_key=? AND status IN ({marks}) "
-                                 "AND coalesce(private,0)=0 ORDER BY created,id", (blocker_key, *H.ACTIVE_STATUSES))):
+                                 "AND coalesce(private,0)=0 ORDER BY created_at,id", (blocker_key, *H.ACTIVE_STATUSES))):
         if row["id"] in above:
             continue
         if H.is_human(row["owner"]):
@@ -69,7 +69,7 @@ def open_ask(c, blocker_key, owner, parent_id=None):
     if H.is_human(owner) or not devops:
         return None
     for row in H._rows(c.execute(f"SELECT id FROM tasks WHERE blocker_key=? AND owner=? AND status IN ({marks}) "
-                                 "AND coalesce(private,0)=0 ORDER BY created,id", (blocker_key, devops, *H.ACTIVE_STATUSES))):
+                                 "AND coalesce(private,0)=0 ORDER BY created_at,id", (blocker_key, devops, *H.ACTIVE_STATUSES))):
         if row["id"] not in above:
             return H.task(c, row["id"])
     return None
@@ -110,7 +110,7 @@ def record(c, actor, row, blocker_key, ask=None, owner=None):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     waiting = []
     for other in H._rows(c.execute(f"SELECT id FROM tasks WHERE blocker_key=? AND owner=? AND id<>? AND status IN ({marks}) "
-                                   "AND coalesce(private,0)=0 ORDER BY created,id",
+                                   "AND coalesce(private,0)=0 ORDER BY created_at,id",
                                    (blocker_key, devops, row["id"], *H.ACTIVE_STATUSES))):
         if not _loops(c, other["id"], row["id"]):
             H.TR.add_blocker(c, actor, other["id"], row["id"])
@@ -129,9 +129,9 @@ def unjoined(c, actor, task_id, blocker_id):
     row = H.task(c, task_id)
     if not row or row["status"] not in H.ACTIVE_STATUSES or actor != row["owner"]:
         return
-    found = H._one(c, "SELECT detail_json FROM events WHERE action='blocker.joined' AND target=? "
+    found = H._one(c, "SELECT detail FROM events WHERE action='blocker.joined' AND target=? "
                       "ORDER BY rowid DESC LIMIT 1", (task_id,))
-    detail = H._json(found["detail_json"], {}) if found else {}
+    detail = H._json(found["detail"], {}) if found else {}
     if not detail or detail.get("ask") != blocker_id or not detail.get("owner") or detail["owner"] == row["owner"]:
         return
     if H._one(c, "SELECT 1 FROM events WHERE action='blocker.unjoined' AND target=? LIMIT 1", (task_id,)):

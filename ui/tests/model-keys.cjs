@@ -19,7 +19,7 @@ const {unrouted} = require('./support/routes.cjs');
     const SECRET = 'sk-test-not-a-real-key-123456';
     const chip = (name, runtime) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
-    const fixture = () => ({id: 'box', label: 'Team box', operator: 'sam', bots: ['writer'], platform: 'linux', last_seen: at(-3000),
+    const fixture = () => ({id: 'box', label: 'Team box', operator: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
       readiness_at: at(-3000), needed_runtimes: ['codex', 'claude'], bot_runtimes: ['codex'], signed_out: {},
       keys: {claude: {env: 'ANTHROPIC_API_KEY', preview: 'sk-…abc', since: at(-86400000)}},
       shared_keys: {codex: {env: 'OPENAI_API_KEY', preview: 'sk-…xyz'}},
@@ -77,20 +77,20 @@ const {unrouted} = require('./support/routes.cjs');
         if (bots) return json({bots: url.searchParams.get('runtime') !== 'codex' ? [] : bots[1] === 'box' ? [{bot: 'writer', name: 'Writer'}] : [{bot: 'scout', name: 'Scout'}]});
         if (p === '/api/v2/computers/box/keys/clear' && method === 'POST') {
           const body = req.postDataJSON(); writes.push({p, body});
-          rows.clr1 = {id: 'clr1', kind: 'clear_key', runtime: body.runtime, state: 'requested', polls: 0, created: new Date().toISOString(), lines: []};
+          rows.clr1 = {id: 'clr1', kind: 'clear_key', runtime: body.runtime, state: 'requested', polls: 0, created_at: new Date().toISOString(), lines: []};
           return json({computers: [{id: 'box', label: 'Team box', login: rows.clr1, waiting: false},
             ...(body.scope === 'all' ? [{id: 'far', label: 'Far box', login: null, waiting: true}] : [])]});
         }
         if (p === '/api/v2/computers/box/keys' && method === 'POST') {
           const body = req.postDataJSON(); writes.push({p, body});
-          rows.use1 = {id: 'use1', kind: 'use_key', runtime: body.runtime, state: 'requested', polls: 0, created: new Date().toISOString(), lines: []};
+          rows.use1 = {id: 'use1', kind: 'use_key', runtime: body.runtime, state: 'requested', polls: 0, created_at: new Date().toISOString(), lines: []};
           return json({...rows.use1, key: {id: 'cred9', env: 'ANTHROPIC_API_KEY', preview: 'sk-…456'}});
         }
         const one = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)$/);
         if (one) {
           const row = rows[one[1]];
           // The computer finishes on its second check.
-          if (++row.polls === 2) Object.assign(row, {state: row.kind === 'clear_key' ? 'signed_out' : 'done', updated: new Date().toISOString()});
+          if (++row.polls === 2) Object.assign(row, {state: row.kind === 'clear_key' ? 'signed_out' : 'done', updated_at: new Date().toISOString()});
           return json(row);
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -211,7 +211,7 @@ const {unrouted} = require('./support/routes.cjs');
     box.readiness.runtimes.codex = codex;
 
     // Offline: Replace key, Clear key and Switch to subscription stay on the line, disabled, saying why.
-    box.last_seen = at(-3 * 3600000);
+    box.last_seen_at = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
     await own('claude').locator('[data-model-key-replace][disabled]').waitFor();
     for (const name of ['claude', 'codex']) {
@@ -223,7 +223,7 @@ const {unrouted} = require('./support/routes.cjs');
     await own('claude').locator('[data-model-key-clear]').click({force: true});
     assert.equal(await page.locator('dialog.model-key[open]').count(), 0, 'nothing opens offline');
     assert.equal(writes.length, sent, 'nothing queues offline');
-    box.last_seen = at(-3000);
+    box.last_seen_at = at(-3000);
     assert.deepEqual(errors, []);
     await page.close();
 

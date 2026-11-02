@@ -18,7 +18,7 @@ def stamp(days_ago):
 
 def reading(value, days_ago, quality="measured"):
     return {"id": f"r{days_ago}", "value": value, "period_end": stamp(days_ago), "period_start": stamp(days_ago + 7),
-            "collected_at": stamp(days_ago), "created": stamp(days_ago), "quality": quality}
+            "collected_at": stamp(days_ago), "created_at": stamp(days_ago), "quality": quality}
 
 
 ACTIVATION = {"name": "Activation", "unit": "%", "direction": "up", "cadence": "weekly"}
@@ -27,10 +27,10 @@ CLIMB = {"kind": "improve", "baseline": 40.0, "baseline_at": stamp(60), "target"
 
 def test_automatic_cost_uses_measured_api_cost_and_ignores_retired_cost(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id, bot, started, cost, billing) VALUES('legacy', 'ops', ?, 900, 'api')",
+        c.execute("INSERT INTO turns(id, bot, started_at, cost, billing) VALUES('legacy', 'ops', ?, 900, 'api')",
                   (stamp(1),))
         assert botkpis.value(c, "ops", "cost_7d", NOW) is None
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, cost, billing) VALUES(?, 'ops', ?, ?, ?, ?)", [
+        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, cost, billing) VALUES(?, 'ops', ?, ?, ?, ?)", [
             ("measured", stamp(1), 2.5, 1000, "api"), ("subscription", stamp(1), 5, 500, "subscription")])
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 2.5
         c.execute("UPDATE turns SET est_cost_usd=0 WHERE billing='api' AND est_cost_usd IS NOT NULL")
@@ -39,18 +39,18 @@ def test_automatic_cost_uses_measured_api_cost_and_ignores_retired_cost(api):
 
 def test_automatic_cost_distinguishes_missing_usage_from_measured_zero(api):
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing, usage_reason) "
+        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, billing, usage_reason) "
                       "VALUES(?, 'ops', ?, 0, ?, ?)", [
             (f"{reason}-{billing}", stamp(1), billing, reason)
             for reason in ("usage_unreported", "usage_limited", "no_result")
             for billing in ("api", None)
         ])
         # A measured subscription and an API reading outside the window cannot supply a reading.
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
             ("subscription", stamp(1), 50, "subscription"), ("old", stamp(8), 100, "api")])
         assert botkpis.value(c, "ops", "cost_7d", NOW) is None
         assert all(r["period_end"] != stamp(0) for r in botkpis.readings(c, "auto:ops:cost_7d", NOW))
-        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+        c.executemany("INSERT INTO turns(id, bot, started_at, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
             ("measured", stamp(1), 2.5, "api"), ("legacy-billing", stamp(1), 1.25, None)])
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 3.75
         c.execute("UPDATE turns SET est_cost_usd=0 WHERE id IN ('measured', 'legacy-billing')")
@@ -191,9 +191,9 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
 
 def add_strategy_bot(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
                   "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
 
 
 def owners_chat(api):
@@ -293,12 +293,12 @@ def test_the_kpis_of_the_old_tables_become_links_with_an_improvement_target():
     for i, script in enumerate(hubdb.MIGRATIONS[:hubdb.MIGRATIONS.index(hubdb.KPIS_SCHEMA)]):
         hubdb._apply(conn, script)
         conn.execute(f"PRAGMA user_version={i + 1}")
-    conn.execute("INSERT INTO goals (id, title, owner, status, status_note, status_by, created, created_by, updated) "
+    conn.execute("INSERT INTO goals (id, title, owner, status, status_note, status_by, created_at, created_by, updated_at) "
                  "VALUES ('g1','Grow','company','green','On track','human:ana','2026-01-01T00:00:00Z','human:ana','2026-01-01T00:00:00Z')")
-    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created, created_by) VALUES "
+    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created_at, created_by) VALUES "
                  "('k1','g1','Signups','signups',500,'2026-01-02T00:00:00Z','human:ana'), "
                  "('k2','g1','NPS','',NULL,'2026-01-02T00:00:00Z','human:ana')")
-    conn.execute("INSERT INTO kpi_readings (id, kpi_id, ts, value, actor, source, note, created) VALUES "
+    conn.execute("INSERT INTO kpi_readings (id, kpi_id, ts, value, actor, source, note, created_at) VALUES "
                  "('r1','k1','2026-03-01T00:00:00Z',120,'human:ana','measured','from the dashboard','2026-03-02T00:00:00Z'), "
                  "('r2','k1','2026-04-01T00:00:00Z',200,'human:ana','estimate','','2026-04-01T00:00:00Z')")
     hubdb.migrate(conn)

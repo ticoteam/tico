@@ -18,9 +18,9 @@ def rule(api, event="task.created", action="note", params=None, *, scope_kind="t
         position = (c.execute("SELECT max(position) FROM rules WHERE scope_kind=? AND scope_id=?",
                               (scope_kind, scope_id)).fetchone()[0] or 0) + 1
         row = {"id": "rule-" + H.new_id(), "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
-               "when_json": json.dumps(when, sort_keys=True), "then_outcome": then,
-               "params_json": json.dumps(params, sort_keys=True), "enabled": 1, "position": position, "note": "",
-               "created_by": by, "action_by": by, "created": H.now(), "updated": H.now(), "revision": 1}
+               "condition": json.dumps(when, sort_keys=True), "then_outcome": then,
+               "params": json.dumps(params, sort_keys=True), "enabled": 1, "position": position, "note": "",
+               "created_by": by, "action_by": by, "created_at": H.now(), "updated_at": H.now(), "revision": 1}
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return row
 
@@ -246,10 +246,10 @@ def test_scopes_and_all_five_conditions_match_task_owner_not_message_recipient(a
     with api.app.state.store.transaction() as c:
         typ = task_type(c)
         H.tag_create(c, "human:ana", "triage", mover=True)
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         roster["org_groups"] = {"engineering": {"name": "Engineering"}, "web": {"name": "Web", "parent": "engineering"}}
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
-        c.execute("UPDATE bot_config SET team='web',config_json=json_set(config_json,'$.team','web') WHERE bot='ops'")
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE bot_config SET team='web',config=json_set(config,'$.team','web') WHERE bot='ops'")
     condition = {"type": typ["id"], "step": "Open", "tag": "triage", "owner": "ops", "requester": "ana"}
     scoped = [rule(api, scope_kind=kind, scope_id=ident, when=condition) for kind, ident in
               (("team", ""), ("type", typ["id"]), ("department", "engineering"), ("bot", "ops"))]
@@ -275,10 +275,10 @@ def test_decline_and_step_action_runs_only_after_final_task_write(api):
 
 def test_department_scope_follows_human_owner_group_and_ancestors(api):
     with api.app.state.store.transaction() as c:
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         roster["org_groups"] = {"engineering": {"name": "Engineering"}, "web": {"name": "Web", "parent": "engineering"}}
         next(p for p in roster["people"] if p["id"] == "ben")["team"] = "web"
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
     made = rule(api, scope_kind="department", scope_id="engineering")
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "human:ana", "Human work", "Synthetic body", "human:ben", lint=False, deduplicate=False)

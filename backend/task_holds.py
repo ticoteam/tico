@@ -66,7 +66,7 @@ def holds(conn, row):
     asks = H._rows(conn.execute(
         "SELECT m.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE m.from_actor=? AND m.kind='ask' AND m.superseded_at IS NULL AND {H.MESSAGE_TASK_SQL}=? "
-        "ORDER BY m.created", (row["owner"], row["id"])))
+        "ORDER BY m.created_at", (row["owner"], row["id"])))
     if asks:
         answered = H.answers_to(conn, [a["id"] for a in asks])
         out += [{"kind": "ask", "on": a["to_actor"], "what": _line(a["body"]) if _shared(conn, row, a) else "a question"}
@@ -75,7 +75,7 @@ def holds(conn, row):
     check = None
     for child in H._rows(conn.execute(
             f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) "
-            "AND status NOT IN ('done','closed','declined') ORDER BY created,id", (row["id"],))):
+            "AND status NOT IN ('done','closed','declined') ORDER BY created_at,id", (row["id"],))):
         # A pipeline check is work at the current step, not a hold, unless the check itself is blocked (wait_detail).
         if engineering and H.is_bot(child["owner"]) and profiles.is_review_task(conn, child, parent_id=row["id"]):
             if check is None:
@@ -88,7 +88,7 @@ def holds(conn, row):
     own = {r[0] for r in conn.execute(TR.CHILD_IDS, (row["id"],))}
     out += [_task_hold(conn, row, "blocker", b)
             for b in TR.live_blockers(conn, row["id"], H.ACTIVE_STATUSES) if b["id"] not in own]
-    for a in H._rows(conn.execute("SELECT * FROM approvals WHERE task_id=? AND decision IS NULL ORDER BY created",
+    for a in H._rows(conn.execute("SELECT * FROM approvals WHERE task_id=? AND decision IS NULL ORDER BY created_at",
                                   (row["id"],))):
         H.approval_wait(conn, a)
         out.append({"kind": "approval", "on": a.get("decision_owner"), "what": f"a {a.get('kind') or 'yes'} approval"})
@@ -233,14 +233,14 @@ def withdrawn(conn, task_id, ask_ids, why, *, by=None, told=True):
         return
     marks = ",".join("?" * len(ask_ids))
     asks = H._rows(conn.execute(f"SELECT id, from_actor, to_actor, body, read_at FROM messages "
-                                f"WHERE id IN ({marks}) ORDER BY created", list(ask_ids)))
+                                f"WHERE id IN ({marks}) ORDER BY created_at", list(ask_ids)))
     why = str(why or "it was withdrawn")
     day_ago = H.shift(H.now(), hours=-24)
     noticed = set()
     for ask in asks:
         person = name(conn, ask["to_actor"])
         status = f"Withdrawn {'after' if ask.get('read_at') else 'before'} {person} saw it: {why}"
-        conn.execute("UPDATE messages SET refs_json=json_set(coalesce(refs_json,'{}'),'$.withdrawn',?) WHERE id=?",
+        conn.execute("UPDATE messages SET refs=json_set(coalesce(refs,'{}'),'$.withdrawn',?) WHERE id=?",
                      (status, ask["id"]))
         asker = ask["from_actor"]
         if (not told or asker == by or not H.is_bot(asker) or (asker, ask["to_actor"]) in noticed
@@ -280,7 +280,7 @@ def backfill(conn, at=None):
     at = at or H.now()
     fixed, opened = 0, {}
     for row in H._rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND blocked_since IS NOT NULL "
-                                    "ORDER BY created, id")):
+                                    "ORDER BY created_at, id")):
         if not _applies(conn, row):
             continue
         if holds(conn, row):

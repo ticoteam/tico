@@ -140,7 +140,7 @@ def test_parked_incident_keeps_silence_and_duplicate_controls(api, control):
         task, blocker = parked(c, incident=True)
         refs = {'news': 'step_entered', **({'quiet': True} if control == 'quiet' else {})}
         if control == 'ignore':
-            c.execute("INSERT INTO rules(id,scope_kind,event,then_outcome,created_by,created,updated) "
+            c.execute("INSERT INTO rules(id,scope_kind,event,then_outcome,created_by,created_at,updated_at) "
                       "VALUES('ignore-all','team','step_entered','ignore','human:ana',?,?)", (H.now(), H.now()))
         if control == 'snooze':
             H.TS.snooze(c, 'human:ana', task['id'], H.shift(H.now(), days=1))
@@ -164,7 +164,7 @@ def test_notice_does_not_release_the_task_start_gate(api):
         task, blocker = parked(c, incident=True)
         _, job = sent_job(c, task, 'bot:cpo', 'Step moved: On Deck -> In Progress', {'news': 'step_entered'})
         assert job and job['held'] == 0
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cpo'").fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])
         assert auto_tasks.refusal(c, H.task(c, task['id']), config, woken=True) == 'task_wait'
         assert wake_rules.parked(c, H.task(c, task['id'])) == 'blocked_by'
         still_blocked(c, task, blocker)
@@ -174,10 +174,10 @@ def test_real_step_notice_writer_keeps_the_hold(api):
     with api.app.state.store.transaction() as c:
         task, blocker = parked(c, incident=True)
         R.step_entered(c, H.KEEPER, task)
-        found = c.execute("SELECT j.held,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
+        found = c.execute("SELECT j.held,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
                           "WHERE j.bot='cpo'").fetchone()
         assert found and found['held'] == 0
-        assert json.loads(found['refs_json'])['rule'] == 'incident_news'
+        assert json.loads(found['refs'])['rule'] == 'incident_news'
         still_blocked(c, task, blocker)
 
 
@@ -205,7 +205,7 @@ def test_new_urgent_override_does_not_release_a_pull_request_notice_hold(api):
     with api.app.state.store.transaction() as c:
         task, _ = parked(c, incident=True)
         c.execute("DELETE FROM task_relations WHERE to_task=? AND kind='blocks'", (task['id'],))
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,detail_json) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,detail) "
                   "VALUES('pr-hold',?,'pr','https://github.com/acme/app/pull/1','PR','open','human:ana',?,?)",
                   (task['id'], H.now(), json.dumps({'wake_once': True})))
         assert wake_rules.parked(c, H.task(c, task['id'])) == 'wake_once'

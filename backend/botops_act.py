@@ -89,7 +89,7 @@ def _owners_automation_task(c, auth, task, refs):
     automation_id = str(refs.get("automation") or "")
     if not task or task["owner"] != botops or task["requester"] not in (H.KEEPER, botops):
         return False
-    row = c.execute("SELECT owner, flow_json, trigger_type FROM automations WHERE id=? AND deleted_at IS NULL",
+    row = c.execute("SELECT owner, flow, trigger_type FROM automations WHERE id=? AND deleted_at IS NULL",
                     (automation_id,)).fetchone()
     if not row or row["owner"] != botops or row["trigger_type"] != "schedule" \
             or refs.get("trigger_source") != "automation:" + automation_id:
@@ -99,7 +99,7 @@ def _owners_automation_task(c, auth, task, refs):
                     (str(refs.get("automation_run") or ""), automation_id)).fetchone()
     if not run or refs.get("automation_chain"):
         return False
-    source = (H._json(row["flow_json"], {}) or {}).get("source")
+    source = (H._json(row["flow"], {}) or {}).get("source")
     if isinstance(source, dict) and source.get("kind") == "routine":
         found = c.execute("SELECT bot FROM schedules WHERE id=?", (source.get("id"),)).fetchone()
         if not found or found["bot"] != H.FLEET_MAINTAINER or not _owners_routine(c, auth, source["id"]):
@@ -117,14 +117,14 @@ def _owners_automation_task(c, auth, task, refs):
 def _owners_routine(c, auth, schedule_id):
     """A routine created through the API and since changed only by the owner (or the product)."""
     from .store import H
-    writers = c.execute("SELECT action,actor,detail_json FROM events WHERE target=? "
+    writers = c.execute("SELECT action,actor,detail FROM events WHERE target=? "
                         "AND action IN ('routine.created','routine.updated')", (schedule_id,)).fetchall()
     if not any(w["action"] == "routine.created" for w in writers):
         return False                # a routine from a bot.yaml: whoever pushed that file wrote it
     for w in writers:
         if w["actor"] == H.KEEPER:
             continue
-        if H._json(w["detail_json"], {}).get("via") == "assistant" or not _is_owner(c, auth, w["actor"]):
+        if H._json(w["detail"], {}).get("via") == "assistant" or not _is_owner(c, auth, w["actor"]):
             return False
     return True
 
@@ -166,16 +166,16 @@ def lend_lapsed(c, task):
                     "again, even after they reply. Only a run their own comment on it or their message in their BotOps chat "
                     "starts has their rights: in such a run, send no on_behalf_of; otherwise ask them there and end this run")
     spoke = []
-    made = c.execute("SELECT actor,detail_json FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
+    made = c.execute("SELECT actor,detail FROM events WHERE action='task.create' AND target=? ORDER BY ts,id LIMIT 1",
                      (task["id"],)).fetchone()
-    if made and made["actor"] == requester and H._json(made["detail_json"], {}).get("via") != "assistant":
-        spoke.append(task["created"])
+    if made and made["actor"] == requester and H._json(made["detail"], {}).get("via") != "assistant":
+        spoke.append(task["created_at"])
     origin = H.message(c, task["request_id"]) if task.get("request_id") else None
     if origin and origin["from_actor"] == requester:
-        spoke.append(origin["created"])
-    comment = c.execute("SELECT max(m.created) FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? "
-                        "AND m.from_actor=? AND json_extract(m.refs_json,'$.comment') IS NOT NULL "
-                        "AND json_extract(m.refs_json,'$.via') IS NULL AND json_extract(m.refs_json,'$.assistant') IS NULL",
+        spoke.append(origin["created_at"])
+    comment = c.execute("SELECT max(m.created_at) FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? "
+                        "AND m.from_actor=? AND json_extract(m.refs,'$.comment') IS NOT NULL "
+                        "AND json_extract(m.refs,'$.via') IS NULL AND json_extract(m.refs,'$.assistant') IS NULL",
                         (task["id"], requester)).fetchone()[0]
     if comment:
         spoke.append(comment)

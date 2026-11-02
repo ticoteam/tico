@@ -20,7 +20,7 @@ def ready(api, title="Recheck the cash warning", messages=(), private=None):
             H.task_comment(c, actor, task["id"], text, wake=False)
         c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
         row = H.task(c, task["id"])
-        c.execute("UPDATE tasks SET checkpoint_state=?, checkpoint_by='bot:finance', updated=? WHERE id=?",
+        c.execute("UPDATE tasks SET checkpoint_state=?, checkpoint_by='bot:finance', updated_at=? WHERE id=?",
                   (wake_rules.state_of(c, row), H.shift(H.now(), seconds=-400), task["id"]))
     return task["id"]
 
@@ -51,8 +51,8 @@ def sweep(api, tid, at=None):
 def stalls(api, tid):
     with api.app.state.store.read() as c:
         """Runs started by a stall wake on the task."""
-        return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.refs_json LIKE ? "
-                         "AND m.refs_json LIKE '%stalled%'", (f'%{tid}%',)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.refs LIKE ? "
+                         "AND m.refs LIKE '%stalled%'", (f'%{tid}%',)).fetchone()[0]
 
 
 def test_a_held_quiet_task_decide_calls_stuck_gets_one_wake_and_none_after(api):

@@ -118,7 +118,7 @@ def save(c, **fields):
 
 def live(c):
     """The relay addresses people made, not the one HQ keeps for Tico Team's notices."""
-    return [dict(r) for r in c.execute("SELECT * FROM trigger_relays WHERE deleted_at IS NULL AND trigger_id<>? ORDER BY created",
+    return [dict(r) for r in c.execute("SELECT * FROM trigger_relays WHERE deleted_at IS NULL AND trigger_id<>? ORDER BY created_at",
                                        (tico_notices.ID,)).fetchall()]
 
 
@@ -129,7 +129,7 @@ def _row(c, trigger_id):
 def public(row):
     """The relay as a trigger shows it. `wake` is whether a delivery starts a sleeping server (HQ's switch, as last
     listed), null until HQ has said."""
-    return {"address_prefix": row["address_prefix"], "created": row["created"],
+    return {"address_prefix": row["address_prefix"], "created_at": row["created_at"],
             "wake": None if row["wake"] is None else bool(row["wake"])} if row else None
 
 
@@ -526,7 +526,7 @@ class HookRelay:
             elif existing:
                 pass                                # the same HQ relay (a concurrent retry with the same key): keep it
             else:
-                c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?) "
+                c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?) "
                           "ON CONFLICT(relay_id) DO UPDATE SET trigger_id=excluded.trigger_id,address_prefix=excluded.address_prefix,"
                           "deleted_at=NULL,hq_gone=0", (relay_id, trigger_id, prefix, who.actor, H.now()))
                 H.event(c, who.actor, "trigger.relay_created", trigger_id, {"relay": relay_id})

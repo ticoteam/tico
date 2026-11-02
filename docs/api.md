@@ -81,7 +81,7 @@ Tico's own app uses more of the API than the spec lists. The line:
   `/jobs`, `/attempts`, `/agents`), settings, access, credentials, tools, market, routines, `/mcp` and
   `/scim`. They change between releases without notice. A route you need that is not in the spec: open an issue to
   have it added to the stable set.
-- **Inside answers.** Fields ending in `_json` (`refs_json`, `participants_json`, `acceptance_json`) are storage
+- **Inside answers.** Fields ending in `_json` (`refs`, `participants`, `acceptance`) are storage
   leftovers; read the parsed field beside them (`refs`, `participants`, `acceptance_criteria`). Unlisted fields may
   come and go; a client ignores what it does not know and never fails on an extra field.
 
@@ -145,7 +145,7 @@ Tag reads are team-wide; the task list keeps the caller's task visibility.
 
 Task `labels` remain a list of keys. Task responses also include `tags` with their display label,
 metadata and notes. `GET /api/v2/tasks/labels` preserves `labels` and adds `tags` for those keys.
-`task_tags` is the source of truth; the old `labels_json` column is kept for one release but
+`task_tags` is the source of truth; the old `labels` column is kept for one release but
 is no longer read or written. All tag changes are audited in `events`, and task tag changes
 keep the `labels` entry in `task_events`. See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
 
@@ -186,7 +186,7 @@ the task's comments as the task lists them. Neither wakes anyone or sends anythi
   side of the task, unless the caller owns the task, and that bot's contact rule when the caller is a bot.
 
 Every entry in a task's `comments` carries `edited_at`, null until it is edited; a deleted comment is not
-listed or included in future bot context. The task's `updated` moves, and its `events` gain
+listed or included in future bot context. The task's `updated_at` moves, and its `events` gain
 `{"field": "comment", "old": "<comment id>", "new": "<comment id>"}` for an edit and `"new": null` for a
 delete. The audit log keeps only change metadata. Deleted comments have their text cleared and are excluded
 from `POST /api/v2/sql` for every caller, including the owner. Cached write replies are refreshed when
@@ -210,7 +210,7 @@ it was already answered or withdrawn.
 ## Branches
 
 `POST /api/v2/bots/{bot}/copies` (also `/branches`) makes the caller's branch and returns its definition,
-`created` and `assignment`. Send `{ "runner_id": "your-computer-id" }`, or `{}` for a planned branch.
+`created_at` and `assignment`. Send `{ "runner_id": "your-computer-id" }`, or `{}` for a planned branch.
 The caller must be a human with Read on the original, which must allow branches (`shared: true`).
 A selected computer belongs to that human and cannot already run the original or a branch of it.
 Repeated requests return the same `<bot>-<person>` bot. Independent copies keep using `/copy`.

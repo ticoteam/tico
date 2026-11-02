@@ -39,9 +39,9 @@ LAYERS = ("personal", "company")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS learned_entries (
   id TEXT PRIMARY KEY, layer TEXT NOT NULL CHECK (layer IN ('personal','company')),
-  person TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, created TEXT NOT NULL, created_by TEXT NOT NULL,
-  via TEXT, updated TEXT, updated_by TEXT);
-CREATE INDEX IF NOT EXISTS learned_entries_layer ON learned_entries(layer, person, created);
+  person TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  via TEXT, updated_at TEXT, updated_by TEXT);
+CREATE INDEX IF NOT EXISTS learned_entries_layer ON learned_entries(layer, person, created_at);
 """
 
 
@@ -70,12 +70,12 @@ def company_reader(c, who, settings):
 
 
 def _view(row):
-    return {"id": row["id"], "layer": row["layer"], "text": row["text"], "created": row["created"],
-            "updated": row["updated"], "taught_in_chat": bool(row["via"])}
+    return {"id": row["id"], "layer": row["layer"], "text": row["text"], "created_at": row["created_at"],
+            "updated_at": row["updated_at"], "taught_in_chat": bool(row["via"])}
 
 
 def entries(c, layer, person=""):
-    return [_view(r) for r in c.execute("SELECT * FROM learned_entries WHERE layer=? AND person=? ORDER BY created",
+    return [_view(r) for r in c.execute("SELECT * FROM learned_entries WHERE layer=? AND person=? ORDER BY created_at",
                                         (layer, person if layer == "personal" else ""))]
 
 
@@ -200,12 +200,12 @@ def add(c, who, layer, text, settings):
     if c.execute("SELECT count(*) FROM learned_entries WHERE layer=? AND person=?", (layer, person)).fetchone()[0] \
             >= LAYER_MAX:
         raise Problem("too_many", f"That layer holds {LAYER_MAX} entries: delete some on What it has learned first", 409)
-    row = {"id": H.new_id(), "layer": layer, "person": person, "text": text, "created": H.now(),
+    row = {"id": H.new_id(), "layer": layer, "person": person, "text": text, "created_at": H.now(),
            "created_by": who.actor, "via": (who.task_actor or "") if who.via else None}
-    c.execute("INSERT INTO learned_entries(id,layer,person,text,created,created_by,via) "
-              "VALUES(:id,:layer,:person,:text,:created,:created_by,:via)", row)
+    c.execute("INSERT INTO learned_entries(id,layer,person,text,created_at,created_by,via) "
+              "VALUES(:id,:layer,:person,:text,:created_at,:created_by,:via)", row)
     H.event(c, who.actor, "learned.added", row["id"], {"layer": layer})
-    return _view({**row, "updated": None})
+    return _view({**row, "updated_at": None})
 
 
 def _own_entry(c, who, eid, settings):
@@ -225,7 +225,7 @@ def edit(c, who, eid, text, settings):
     row = _own_entry(c, who, eid, settings)
     text = _clean(text)
     H._writer(c, who.actor)
-    c.execute("UPDATE learned_entries SET text=?, updated=?, updated_by=? WHERE id=?", (text, H.now(), who.actor, eid))
+    c.execute("UPDATE learned_entries SET text=?, updated_at=?, updated_by=? WHERE id=?", (text, H.now(), who.actor, eid))
     H.event(c, who.actor, "learned.edited", eid, {"layer": row["layer"]})
     return _view(c.execute("SELECT * FROM learned_entries WHERE id=?", (eid,)).fetchone())
 

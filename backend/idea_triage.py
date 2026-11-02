@@ -31,7 +31,7 @@ ENGINEERING, PRODUCT = "engineering", "product"
 def engineering_bot(c):
     """The active Head of Engineering, or None."""
     row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
-                    "WHERE json_extract(bc.config_json,'$.template')='engineering-lead' AND b.state='active' "
+                    "WHERE json_extract(bc.config,'$.template')='engineering-lead' AND b.state='active' "
                     "ORDER BY bc.bot LIMIT 1").fetchone()
     return row[0] if row else None
 
@@ -40,7 +40,7 @@ def open_items(c, product_type):
     """{option name: (task id, title)} for the open roadmap items an idea can be covered by. Private tasks stay out:
     the new task's readers would see the link."""
     rows = c.execute("SELECT id,title FROM tasks WHERE type_id=? AND private=0 "
-                     "AND status NOT IN ('done','closed','declined') ORDER BY updated DESC,id LIMIT ?",
+                     "AND status NOT IN ('done','closed','declined') ORDER BY updated_at DESC,id LIMIT ?",
                      (product_type, MAX_ITEMS)).fetchall()
     return {f"item-{n}": (row[0], row[1] or "") for n, row in enumerate(rows, 1)}
 

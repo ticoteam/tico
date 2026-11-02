@@ -42,7 +42,7 @@ def state(api, aid):
 
 def notes(api, task_id):
     with api.app.state.store.read() as c:
-        return [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs_json,'$.task')=? "
+        return [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs,'$.task')=? "
                                         "AND from_actor=?", (task_id, H.KEEPER))]
 
 
@@ -54,11 +54,11 @@ def test_frees_only_proven_dead_starts_and_never_blindly_retries_a_turn_that_act
     past = H.shift(H.now(), seconds=-5)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET lease_until=? WHERE id IN ('attempt-0','attempt-4')", (past,))
-        c.execute("UPDATE attempts SET stop_requested='human:ana' WHERE id='attempt-1'")
+        c.execute("UPDATE attempts SET stop_requested_at='human:ana' WHERE id='attempt-1'")
         c.execute("UPDATE tasks SET private=0 WHERE id='task-4'")      # a company task BotOps may read
         # attempt-3 runs with a live lease but has made no progress for an hour: slow, not dead.
-        c.execute("UPDATE attempts SET started=? WHERE id IN ('attempt-3','attempt-4')", (H.shift(H.now(), hours=-1),))
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES('attempt-4',1,'tool',?,?)",
+        c.execute("UPDATE attempts SET started_at=? WHERE id IN ('attempt-3','attempt-4')", (H.shift(H.now(), hours=-1),))
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES('attempt-4',1,'tool',?,?)",
                   (json.dumps({'tool': 'Bash', 'item_id': 'x'}), H.now()))
     busy(machine, {'ops'})                      # the computer still runs the bot: a lost lease alone proves nothing
     assert fix(api)[0] == 1                     # only the stopped start
@@ -84,9 +84,9 @@ def test_dead_turn_on_a_private_task_botops_cannot_read_is_held_without_a_botops
     machine = waiters(api, n=0, running=1)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1,visibility='private' WHERE id='task-0'")
-        c.execute("UPDATE attempts SET lease_until=?,started=? WHERE id='attempt-0'",
+        c.execute("UPDATE attempts SET lease_until=?,started_at=? WHERE id='attempt-0'",
                   (H.shift(H.now(), seconds=-5), H.shift(H.now(), hours=-1)))
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES('attempt-0',1,'tool',?,?)",
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES('attempt-0',1,'tool',?,?)",
                   (json.dumps({'tool': 'Bash', 'item_id': 'z'}), H.now()))
     busy(machine)
     assert fix(api)[0] == 1
@@ -100,7 +100,7 @@ def test_leased_start_that_reported_a_tool_call_is_held_not_requeued(api):
     """A start whose lease lapsed after it reported a tool call did run something: no blind retry."""
     waiters(api, n=1, running=0)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES('attempt-0',9,'tool',?,?)",
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES('attempt-0',9,'tool',?,?)",
                   (json.dumps({'tool': 'Bash', 'item_id': 'y'}), H.now()))
         c.execute("UPDATE attempts SET lease_until=? WHERE id='attempt-0'", (H.shift(H.now(), seconds=-5),))
         api.app.state.execution.expire(c, attempt_ids=['attempt-0'])
@@ -260,9 +260,9 @@ def test_dead_sweep_walks_live_runs_not_every_attempt():
     Team, 91k attempts). Pinned to the partial index, it reads only the live runs."""
     from backend import turn_fixer
     c = sqlite3.connect(":memory:")
-    c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, state TEXT, lease_until TEXT, started TEXT, "
-              "stop_requested TEXT, created TEXT)")
-    c.execute("CREATE INDEX attempts_created ON attempts(created)")
+    c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, state TEXT, lease_until TEXT, started_at TEXT, "
+              "stop_requested_at TEXT, created_at TEXT)")
+    c.execute("CREATE INDEX attempts_created ON attempts(created_at)")
     c.execute("CREATE INDEX attempts_live_lease ON attempts(lease_until,id) WHERE state IN ('leased','running')")
     plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + turn_fixer.DEAD_SQL, ("2026-01-01",)))
     assert "USING INDEX attempts_live_lease" in plan

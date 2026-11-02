@@ -53,10 +53,10 @@ def test_nested_answers_and_file_reviews_filter_each_source_message(api):
                    'answers': {'verdict': ['Approve']}, 'other': 'Restricted review'}, 'ben-test')['comment']
     # An answer can carry another task as provenance (for example through its turn inputs).
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE conversations SET scope='direct',participants_json=? WHERE id=?",
+        c.execute("UPDATE conversations SET scope='direct',participants=? WHERE id=?",
                   (encode(['human:ana', 'human:priya', 'bot:ops']), target['conversation_id']))
         refs = H.message(c, answer['id'])['refs']
-        c.execute('UPDATE messages SET refs_json=? WHERE id=?', (encode({**refs, 'source': source['id']}), answer['id']))
+        c.execute('UPDATE messages SET refs=? WHERE id=?', (encode({**refs, 'source': source['id']}), answer['id']))
     file = post(api, f"tasks/{target['id']}/files", {'name': 'draft.md', 'text': 'Public draft'}, 'priya-test')
     with api.app.state.store.transaction() as c:
         c.execute('INSERT OR REPLACE INTO task_file_reviews(file_id,version,note,comment_id,ask_message_id) VALUES(?,1,?,?,?)',

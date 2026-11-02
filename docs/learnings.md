@@ -72,7 +72,7 @@ server is upgraded; the runner retains those reports for retry.
 
 - `GET /api/v2/bots/{bot}/memory?before=&limit=`: `updates`, `unseen`, `documents`,
   `document_status`, `next_before`. Each path in `document_status` has `oversized` and
-  `updated` (the saved copy's date, empty if none). Add `include_documents=false` to omit file contents
+  `updated_at` (the saved copy's date, empty if none). Add `include_documents=false` to omit file contents
   while keeping their status. The button and history pagination use this; opening the panel fetches current files.
 - `POST /api/v2/bots/{bot}/memory/seen`: you opened the history.
 

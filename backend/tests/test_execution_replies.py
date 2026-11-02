@@ -90,7 +90,7 @@ def test_untrusted_attempt_reference_cannot_suppress_a_new_answer(api):
     attempt = claim(api, runner)
     # Even an old bot message naming the new attempt is not trusted provenance.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode({"turn_id": attempt["id"]}), old["id"]))
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (encode({"turn_id": attempt["id"]}), old["id"]))
     start(api, runner, attempt)
     assert finish(api, runner, attempt)["in_reply_to"] == second["id"]
 
@@ -144,11 +144,11 @@ def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_ta
         task = H.task_create(c, H.KEEPER, "Refresh the map of the docs", "Refresh it", "bot:ops",
                              deduplicate=False, conversation_id=origin["conversation_id"])
         wake = c.execute("SELECT m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'").fetchone()
-        assert hidden["id"] not in (wake["refs_json"] or "")
+        assert hidden["id"] not in (wake["refs"] or "")
         if notice == "listed-private":
             # What the server wrote before: the private task listed in the room's notice.
-            refs = {**H._json(wake["refs_json"], {}), "reconcile": {"active": [{"id": hidden["id"]}]}}
-            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), wake["id"]))
+            refs = {**H._json(wake["refs"], {}), "reconcile": {"active": [{"id": hidden["id"]}]}}
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), wake["id"]))
     ready(api, runner, ["ops"])
     attempt = claim(api, runner)
     start(api, runner, attempt)
@@ -157,7 +157,7 @@ def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_ta
         assert tuple(c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()) == ("completed", "Map refreshed.")
         room = H.task(c, task["id"])["conversation_id"]
     # The task has its own room; the person's room got only the "Started task" line.
-    started = [m for m in get(api, f"conversations/{origin['conversation_id']}/messages") if m["created"] > task["created"]]
+    started = [m for m in get(api, f"conversations/{origin['conversation_id']}/messages") if m["created_at"] > task["created_at"]]
     assert [(m["refs"] or {}).get("task_started") for m in started] == [True]
     shown = get(api, f"conversations/{room}/messages")
     if notice == "current":
@@ -182,18 +182,18 @@ def test_a_task_session_becomes_the_tasks_one_primary_session_and_a_shared_threa
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": thread}, r["token"])
         finish(api, r, attempt)
         with api.app.state.store.read() as c:
-            return {link["url"]: json.loads(link["detail_json"])["primary"]
+            return {link["url"]: json.loads(link["detail"])["primary"]
                     for link in H.task_links(c, task["id"]) if link["kind"] == "session"}
 
     # A bot set to one shared thread carries its other conversations there too: no task's session.
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps({**config, "session": "bot"}),))
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "bot"}),))
     shared = post(api, "tasks", {"owner": "ops", "title": "Check the shared folder", "body": "Check it"})
     assert turn(shared, "shared-thread") == {}
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps({**config, "session": "task"}),))
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "task"}),))
     task = post(api, "tasks", {"owner": "ops", "title": "Check the task folder", "body": "Check it"})
     assert turn(task, "old") == {"session:ops/old": True}
     # Someone linked the next thread before it ran: it becomes the one primary, the old one an alternate.
@@ -216,7 +216,7 @@ def test_a_runs_confirmed_thread_replaces_the_one_it_started_on_and_only_while_i
 
     def threads():
         with api.app.state.store.read() as c:
-            links = {link["url"]: json.loads(link["detail_json"])["primary"]
+            links = {link["url"]: json.loads(link["detail"])["primary"]
                      for link in H.task_links(c, task["id"]) if link["kind"] == "session"}
             ran = c.execute("SELECT a.thread_id, t.thread_id FROM attempts a JOIN turns t ON t.id=a.id WHERE a.id=?",
                             (attempt["id"],)).fetchone()

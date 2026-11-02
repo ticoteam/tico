@@ -92,7 +92,7 @@ def test_send_reply_follows_the_inbox_send_switch(api):
     fire(api, automations.on_mail, "ana@acme.example", mail("m2"))
     with api.app.state.store.read() as c:
         actions = [(r["msg_id"], r["action"]) for r in c.execute(
-            "SELECT msg_id, action FROM automation_mail_actions ORDER BY created")]
+            "SELECT msg_id, action FROM automation_mail_actions ORDER BY created_at")]
         off = c.execute("SELECT count(*) FROM events WHERE action='automation.send_off'").fetchone()[0]
     assert actions == [("m1", "send"), ("m2", "draft")] and off == 1
 
@@ -112,7 +112,7 @@ def test_only_the_inboxs_person_or_the_top_sets_its_switch(api):
 def listed(api, name, readers=()):
     """A channel on the team's Slack list (Settings > Tools > Slack)."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO slack_channels(key,name,readers_json,created,updated) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO slack_channels(key,name,readers,created_at,updated_at) VALUES(?,?,?,?,?)",
                   ("#" + name, name, json.dumps(list(readers)), "2026-10-28T00:00:00Z", "2026-10-28T00:00:00Z"))
 
 
@@ -188,9 +188,9 @@ def test_step_detail_is_pruned_after_30_days_and_the_run_row_stays(api):
     store = api.app.state.store
     from backend.store import H
     with store.transaction() as c:
-        automations.prune(c, H.shift(run["finished"], days=29))
+        automations.prune(c, H.shift(run["finished_at"], days=29))
     assert runs(api, aid)["runs"][0]["steps"]
     with store.transaction() as c:
-        automations.prune(c, H.shift(run["finished"], days=31))
+        automations.prune(c, H.shift(run["finished_at"], days=31))
     kept = runs(api, aid)["runs"][0]
     assert kept["id"] == run["id"] and kept["status"] == "ok" and kept["steps"] is None

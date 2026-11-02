@@ -115,7 +115,7 @@ def test_guest_answer_comes_back_to_the_task_and_nowhere_wider(api):
     assert done["status"] == "done"
     # Ben's answer wakes the bot that owns the task, which can act on its task with it.
     with api.app.state.store.read() as c:
-        queued = c.execute("SELECT m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
+        queued = c.execute("SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
                            "WHERE j.bot='ops' AND j.state='queued'").fetchall()
     assert any(json.loads(r[0] or "{}").get("subtask") == child["id"] for r in queued)
     answer = run_on(api)

@@ -36,7 +36,7 @@ DETAIL_MARKS = 100          # the satisfied occurrences a detail shows, per row 
 CHAIN_MAX = 50              # the rows of one due date's chain (its edits) a detail walks
 
 SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS rule_due_dates(id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, first_due TEXT NOT NULL, "
+    "CREATE TABLE IF NOT EXISTS rule_due_dates(id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, first_due_on TEXT NOT NULL, "
     "repeats TEXT NOT NULL CHECK (repeats IN ('once','weekly','monthly','quarterly','yearly')), "
     "timezone TEXT NOT NULL, owner TEXT NOT NULL, routine_id TEXT, replaces TEXT, "
     "ended_on TEXT, retired_at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL)",
@@ -176,9 +176,9 @@ def task_days(c, rows):
     out = {}
     for start in range(0, len(ids), 500):
         part = ids[start:start + 500]
-        for r in c.execute("SELECT id, flow_json FROM automations WHERE deleted_at IS NULL AND id IN (%s)"
+        for r in c.execute("SELECT id, flow FROM automations WHERE deleted_at IS NULL AND id IN (%s)"
                            % ",".join("?" * len(part)), part):
-            trigger = json.loads(r["flow_json"]).get("trigger") or {}
+            trigger = json.loads(r["flow"]).get("trigger") or {}
             if trigger.get("type") == "due":
                 out[r["id"]] = int(trigger.get("open_days", ROUTINE_DAYS))
     return out
@@ -251,7 +251,7 @@ def detail(c, row, today=None):
     for link in chain:
         marks = [dict(m) for m in c.execute("SELECT * FROM rule_due_status WHERE due_date_id=? ORDER BY due_on DESC "
                                             "LIMIT ?", (link["id"], DETAIL_MARKS))]
-        rows.append({"id": link["id"], "first_due": link["first_due"], "repeats": link["repeats"],
+        rows.append({"id": link["id"], "first_due_on": link["first_due_on"], "repeats": link["repeats"],
                      "timezone": link["timezone"], "owner": link["owner"], "routine_id": link["routine_id"],
                      "replaces": link["replaces"], "replaced_by": _replaced_by(c, link["id"]),
                      "ended_on": link["ended_on"], "retired_at": link["retired_at"],
@@ -272,7 +272,7 @@ def satisfied_days(c, due_id):
 # ----------------------------------------------------------------------------- writes
 def add(c, actor, rule_id, first_due, repeats, zone, owner, routine_id=None, replaces=None):
     row_id = H.new_id()
-    c.execute("INSERT INTO rule_due_dates (id, rule_id, first_due, repeats, timezone, owner, routine_id, replaces, "
+    c.execute("INSERT INTO rule_due_dates (id, rule_id, first_due_on, repeats, timezone, owner, routine_id, replaces, "
               "ended_on, retired_at, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,NULL,NULL,?,?)",
               (row_id, rule_id, first_due, repeats, zone, owner, routine_id, replaces, actor, H.now()))
     return row_id
@@ -284,7 +284,7 @@ def restart(c, actor, row, changes):
     ended = local_today(row["timezone"]).isoformat()
     c.execute("UPDATE rule_due_dates SET ended_on=? WHERE id=?", (ended, row["id"]))
     fresh = {**row, **changes}
-    return add(c, actor, row["rule_id"], fresh["first_due"], fresh["repeats"], fresh["timezone"], fresh["owner"],
+    return add(c, actor, row["rule_id"], fresh["first_due_on"], fresh["repeats"], fresh["timezone"], fresh["owner"],
                fresh["routine_id"], replaces=row["id"])
 
 
@@ -369,9 +369,9 @@ def linked(c, row, routine_id):
         return False
     if row["routine_id"] == routine_id:
         return True
-    for found in c.execute("SELECT before_json, after_json FROM audit_log WHERE object=?", ("org_rule:" + row["rule_id"],)):
+    for found in c.execute("SELECT before, after FROM audit_log WHERE object=?", ("org_rule:" + row["rule_id"],)):
         for raw in found:
-            due = (json.loads(raw) or {}).get("due") if raw else None
+            due = (json.loads(raw) or {}).get("due_at") if raw else None
             if isinstance(due, dict) and due.get("id") == row["id"] and due.get("routine_id") == routine_id:
                 return True
     return False

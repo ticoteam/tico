@@ -244,7 +244,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     }
     // An open task restores the notice in another browser, but its thirty minutes count from when the task was
     // filed: a reload never starts them again, and the clock running out brings the questions back.
-    const filedAgo = minutes => ({id: 't-market', status: 'open', created: new Date(Date.now() - minutes * 60000).toISOString()});
+    const filedAgo = minutes => ({id: 't-market', status: 'open', created_at: new Date(Date.now() - minutes * 60000).toISOString()});
     setup = {...setup, task: filedAgo(31)};
     page = await context.newPage();
     page.on('pageerror', e => errors.push('market-open: ' + e.message));
