@@ -861,3 +861,34 @@ def test_the_stored_checks_keep_the_newest_when_every_check_passes(api):
     checks = _many_checks("passing")
     kept = G._kept(checks)
     assert len(kept) == 100 and "lint" not in kept and list(kept) == list(checks)[1:]
+
+
+def _check_run(api, name, conclusion):
+    """A check run finishing on the head, as GitHub sends it (`check_run`)."""
+    hook(api, "check_run", {"action": "completed", "repository": {"full_name": "ticoteam/tico"}, "check_run": {
+        "name": name, "head_sha": HEAD, "status": "completed", "conclusion": conclusion, "pull_requests": [{"number": 412}]}})
+
+
+@pytest.mark.parametrize("final", ["pending", "failing", "passing"])
+def test_a_head_with_more_than_100_non_passing_checks_never_reads_passing_from_its_kept_copy(api, final):
+    """Dev 731: 101 checks are not passing; the stored copy keeps 100, so `shard 0` (the oldest) is dropped. The 100
+    kept checks then pass one at a time by webhook. Until a full read, the head must not read passing, and no merge may
+    wake. A full read that still has `shard 0` open (pending or failing) keeps the head there; one where it has passed
+    lets the head finish."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    with api.app.state.store.transaction() as c:
+        G.apply_checks(c, _link(api, task)["id"], HEAD, {f"shard {n}": "pending" for n in range(101)})
+    assert _link(api, task)["checks"] == "pending"
+    assert H._json(_link(api, task)["detail_json"], {})["checks_cut"] is True
+    for n in range(1, 101):
+        _check_run(api, f"shard {n}", "success")
+        assert _link(api, task)["checks"] != "passing", n
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"], "shard 0 has not finished"
+    with api.app.state.store.transaction() as c:
+        state = G.apply_checks(c, _link(api, task)["id"], HEAD, {"shard 0": final, **{f"shard {n}": "passing" for n in range(1, 101)}})
+    link = _link(api, task)
+    assert state == link["checks"] == final
+    merged = [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+    assert bool(merged) == (final == "passing"), final
+    assert H._json(link["detail_json"], {})["checks_cut"] is False, "one non-passing check now fits the kept copy"
