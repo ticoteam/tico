@@ -13,21 +13,30 @@ const opsLinks = rows => `<ul class="ops-links">${rows.map(([href, label, note =
 function opsSelect() {
   const state = OPS, panel = $('#ops-panel'), split = $('#ops-split');
   if (!state || !panel || !split) return;
+  const key = state.sel ? 'id:' + state.sel : state.customer ? 'customer:' + state.customer : '', changed = key !== (state.panelKey || '');
+  state.panelKey = key;
+  if (state.sel) state.fromRow = state.sel;
   document.querySelectorAll('#ops-table tr[data-ops-row]').forEach(tr => tr.classList.toggle('ops-on', tr.dataset.opsRow === state.sel));
   const load = ++state.panelLoad;
-  if (!state.sel && !state.customer) { panel.hidden = true; panel.innerHTML = ''; split.classList.remove('has-panel'); document.body.classList.remove('ops-sheet-open'); return; }
+  if (!state.sel && !state.customer) { panel.hidden = true; panel.innerHTML = ''; split.classList.remove('has-panel'); document.body.classList.remove('ops-sheet-open');
+    // Back to the row it opened from.
+    if (changed && state.fromRow) document.querySelector(`#ops-table tr[data-ops-row="${CSS.escape(state.fromRow)}"] a.ops-name`)?.focus({preventScroll: true});
+    return;
+  }
   panel.hidden = false; split.classList.add('has-panel');
   document.body.classList.add('ops-sheet-open');
   panel.innerHTML = `<div class="ops-panel-head"><span class="spacer"></span><a class="ghost ops-x" href="${opsHref(state.tab)}" aria-label="Close">✕</a></div>${skelRows(4, {dot: false})}`;
+  // Into the panel when it opens; a reload of the same record leaves focus where it is.
+  if (changed) panel.focus({preventScroll: true});
   void (state.customer ? opsCustomerLoad(state, load) : opsPanelLoad(state, load));
 }
 // A due date moved: the table's Next due catches up, the open panel and any More pages stay.
 async function opsRowRefresh(state, id) {
   const one = OPS_ONE[state.tab], read = await get(`/v2/${state.tab}/${encodeURIComponent(id)}`, {fresh: true}).catch(() => null), row = read?.[one] || read;
   if (OPS !== state || !row?.id) return;
-  state.rows = state.rows.map(r => r.id === id ? {...r, ...row} : r);
+  const inactive = OPS_FILTERS[state.tab].inactive;
+  state.rows = state.rows.map(r => r.id === id ? {...r, ...row} : r).filter(r => r.id !== id || !r.archived_at || inactive);
   opsTable(state);
-  document.querySelector(`#ops-table tr[data-ops-row="${CSS.escape(state.sel || '')}"]`)?.classList.add('ops-on');
 }
 const opsLive = (state, load) => OPS === state && state.panelLoad === load && !!$('#ops-panel');
 async function opsPanelLoad(state, load) {
@@ -48,7 +57,9 @@ function opsPanelDraw(state, load, r) {
   const facts = {locations: opsLocationFacts, items: opsItemFacts, projects: opsProjectFacts, equipment: opsEquipmentFacts}[tab](r);
   $('#ops-panel').innerHTML = `<div class="ops-panel-head"><h2>${esc(r.name)}</h2>${opsSourceIcon(r)}<span class="spacer"></span><a class="ghost ops-x" href="${opsHref(tab)}" aria-label="Close">✕</a></div>
     ${r.archived_at ? '<p class="ops-off-note"><span class="pill">Inactive</span></p>' : ''}
+    ${opsCopyLine(r) ? `<p class="ops-copy muted" data-ops-copy>${esc(opsCopyLine(r))}${opsStale(r)}</p>` : ''}
     <div class="ops-facts">${facts}</div>
+    <div id="ops-m-files"></div>
     <div id="ops-panel-more"></div>
     ${edit ? `<div class="ops-panel-foot"><button type="button" class="ghost" data-ops-edit>Edit</button><button type="button" class="ghost" data-ops-archive>${r.archived_at ? 'Make active' : 'Make inactive'}</button></div>` : ''}`;
   const panel = $('#ops-panel'), on = (sel, run) => { const el = panel.querySelector(sel); if (el) el.onclick = run; };
@@ -65,9 +76,8 @@ const opsCustomerFact = (tab, r) => r.customer_id && opsCustomerName(r) ? `<a hr
 function opsLocationFacts(r) {
   const a = r.address || {};
   const address = [a.street, [a.city, a.state].filter(Boolean).join(', '), a.postal_code].filter(Boolean).map(esc).join('<br>');
-  const parent = r.parent_id && (OPS_REFS?.locations || []).find(l => l.id === r.parent_id);
   return opsKv('Kind', esc(opsLabel(OPS_LOCATION_KINDS, r.kind))) + opsKv('Address', address)
-    + opsKv('Parent', parent ? `<a href="${opsHref('locations', parent.id)}">${esc(parent.name)}</a>` : '')
+    + opsKv('Parent', r.parent_id && r.parent_name ? `<a href="${opsHref('locations', r.parent_id)}">${esc(r.parent_name)}</a>` : '')
     + opsKv('Customer', opsCustomerFact('locations', r)) + opsKv('In books', r.in_books == null ? '' : r.in_books ? 'Yes' : 'No');
 }
 function opsItemFacts(r) {
@@ -92,11 +102,12 @@ function opsEquipmentFacts(r) {
 
 // ----------------------------------------------------------------- what each panel reads beyond the record
 const OPS_DOC_READS = {
-  po: ['Open POs', 'ops-m-pos', 'purchase-orders', 'orders', {}, ['draft', 'sent', 'approved', 'partial'], () => `${FIN_ROUTE}/payables/orders`],
-  estimate: ['Estimates', 'ops-m-est', 'estimates', 'estimates', {}, ['draft', 'sent', 'accepted'], () => `${FIN_ROUTE}/receivables/estimates`],
-  invoice: ['Invoices', 'ops-m-inv', 'finance/invoices', 'invoices', {status: 'unpaid'}, null, () => `${FIN_ROUTE}/receivables`],
+  po: ['Open POs', 'ops-m-pos', 'purchase-orders', 'orders', {}, ['draft', 'sent', 'approved', 'partial'], '/payables/orders'],
+  estimate: ['Estimates', 'ops-m-est', 'estimates', 'estimates', {}, ['draft', 'sent', 'accepted'], '/receivables/estimates'],
+  invoice: ['Invoices', 'ops-m-inv', 'finance/invoices', 'invoices', {status: 'unpaid'}, null, '/receivables'],
 };
 function opsPanelMore(state, load, r) {
+  if (state.tab !== 'projects') void opsPanelFiles(state, load, r);
   const more = $('#ops-panel-more'), docs = key => { for (const kind of Object.keys(OPS_DOC_READS)) void opsPanelDocs(state, load, kind, key, r.id); };
   const hosts = '<div id="ops-m-pnl"></div><div id="ops-m-pos"></div><div id="ops-m-est"></div><div id="ops-m-inv"></div>';
   if (state.tab === 'locations') {
@@ -118,26 +129,91 @@ function opsPut(state, load, id, html) { if (opsLive(state, load)) { const el = 
 // This month on a location, all time on a project, from the same cut of the books the P&L reads; nothing when it is refused.
 async function opsPanelPnl(state, load, r, by, host) {
   const window_ = by === 'project' ? {start: '2000-01-01', end: finToday()} : {};
-  const [report, byAccount] = await Promise.all([get('/v2/finance/reports/pnl_by?' + opsQs({by, top_n: 200, ...window_}), {fresh: true}).catch(() => null),
-    by === 'project' ? get('/v2/finance/reports/pnl_by_account?' + opsQs({by, id: r.id, ...window_}), {fresh: true}).catch(() => null) : null]);
+  // This record's own read: a project outside the list's largest 200 still has its figures.
+  const report = await get('/v2/finance/reports/pnl_by_account?' + opsQs({by, id: r.id, ...window_}), {fresh: true}).catch(() => null);
   if (!report) return;
-  const row = (report.rows || []).find(x => x.key === r.id);
   const your = opsPartial(report) ? ' <span class="pill" data-ops-your-view>Your view</span>' : '';
   const open = `<a href="${FIN_ROUTE}/pnl?split=${by}" data-ops-pnl>Open in P&amp;L</a>`;
   const title = by === 'project' ? 'P&L' : 'P&L this month';
   opsPut(state, load, host, `<section class="ops-sec"><header class="ops-sec-h"><h3>${esc(title)}</h3>${your}<span class="spacer"></span>${open}</header>
-    ${finKv('Income', finUsd(row?.income ?? 0))}${finKv(by === 'project' ? 'Costs' : 'Expenses', finUsd(row?.expense ?? 0))}${finKv(by === 'project' ? 'Profit' : 'Net', finUsd(row?.net ?? 0))}${opsPnlAccounts(byAccount)}</section>`);
+    ${finKv('Income', finUsd(report.income ?? 0))}${finKv(by === 'project' ? 'Costs' : 'Expenses', finUsd(report.expense ?? 0))}${finKv(by === 'project' ? 'Profit' : 'Net', finUsd(report.net ?? 0))}${by === 'project' ? opsPnlAccounts(report) : ''}</section>`);
 }
 const opsPnlAccounts = report => report?.rows?.length ? `<table class="fin-t ops-pnl-accounts" data-ops-pnl-accounts><tbody>${report.rows.map(x =>
   `<tr><td>${esc(x.label)}</td><td class="fin-n">${finUsd(x.amount)}</td></tr>`).join('')}</tbody></table>` : '';
 // The open purchase orders, estimates and invoices that name this record on a line. A refused read shows nothing.
 async function opsPanelDocs(state, load, kind, key, id) {
-  const [title, host, path, list, params, open, href] = OPS_DOC_READS[kind];
+  const [title, host, path, list, params, open, route] = OPS_DOC_READS[kind];
   const read = await get(`/v2/${path}?${opsQs({[key]: id, limit: 50, ...params})}`, {fresh: true}).catch(() => null);
   const docs = (read?.[list] || []).filter(d => !open || open.includes(d.status));
-  if (docs.length) opsPut(state, load, host, opsSec(title, opsDocLinks(docs, href())));
+  if (docs.length) opsPut(state, load, host, opsSec(title, opsDocLinks(docs, route)));
 }
-const opsDocLinks = (docs, href) => opsLinks(docs.map(d => [href, `${d.number || ''} ${d.contact?.name || d.customer?.name || ''}`.trim() || '—', finUsd(d.total)]));
+// The Library files this record links. The record's read names each by id; the name comes from the file's own meta, and a
+// file that can't be read says so rather than hiding a link someone may need to remove.
+async function opsPanelFiles(state, load, r) {
+  const files = r.files || [], edit = opsEditor();
+  if (!files.length && !edit) { opsPut(state, load, 'ops-m-files', ''); return; }
+  const metas = await Promise.all(files.map(f => get(`/v2/files/${encodeURIComponent(f.file_id)}/meta`).catch(() => null)));
+  if (!opsLive(state, load)) return;
+  const rows = files.map((f, n) => {
+    const name = metas[n]?.name || metas[n]?.title || 'File';
+    return `<li><a href="${API}/v2/files/${encodeURIComponent(f.file_id)}" data-name="${esc(name)}">${esc(name)}</a>${edit ? `<button type="button" class="ghost ops-mini" data-file-remove="${esc(f.id)}" aria-label="Remove ${esc(name)}">Remove</button>` : ''}</li>`;
+  }).join('');
+  opsPut(state, load, 'ops-m-files', opsSec('Files', rows ? `<ul class="ops-links">${rows}</ul>` : '<p class="muted ops-note">None yet</p>', edit ? '<span class="spacer"></span><button type="button" class="ghost ops-mini" data-file-add>+ Add</button>' : ''));
+  const host = $('#ops-m-files');
+  if (!host || !edit) return;
+  const reread = async () => {
+    const read = await get(`/v2/${state.tab}/${encodeURIComponent(r.id)}`, {fresh: true}).catch(() => null);
+    if (read && opsLive(state, load)) await opsPanelFiles(state, load, {...r, ...read[OPS_ONE[state.tab]]});
+  };
+  const add = host.querySelector('[data-file-add]');
+  if (add) add.onclick = () => opsFilePicker(OPS_ONE[state.tab], r.id, files, reread);
+  host.querySelectorAll('[data-file-remove]').forEach(b => {
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const done = await finAct('record_file_remove', {record_file_id: b.dataset.fileRemove});
+        if (done?.status === 'committed') toast('Removed');   // otherwise finAct said who it went to
+        await reread();
+      } catch (e) { toast(e.message || 'Did not work', true); b.disabled = false; }
+    };
+  });
+}
+// Library files to link: the recent ones, then search hits by title and text, as the rule document picker offers them.
+async function opsFilePicker(subject_type, subject_id, linked, reread) {
+  const taken = new Set(linked.map(f => f.file_id));
+  const usable = f => !f.archived && !taken.has(f.id);
+  let recent = [], found = [], pick = '', soon = 0, seq = 0;
+  const dlg = finDialog('Add file', `${opsField('File', '<input type="search" name="find" placeholder="Search Files" autocomplete="off">')}<div class="ops-picks" role="listbox" aria-label="Files"></div>`, 'Add', async () => {
+    if (!pick) throw new Error('Choose a file');
+    const done = await finAct('record_file_add', {subject_type, subject_id, file_id: pick});
+    if (done?.status === 'committed') toast('File added');   // otherwise finAct said who it went to
+    await reread();
+  });
+  const find = dlg.querySelector('[name=find]'), picks = dlg.querySelector('.ops-picks');
+  const draw = () => {
+    const seen = new Set(), rows = (find.value.trim() ? found : recent).filter(f => usable(f) && !seen.has(f.id) && seen.add(f.id));
+    picks.innerHTML = rows.map(f => `<button type="button" class="ops-pick${f.id === pick ? ' on' : ''}" role="option" aria-selected="${f.id === pick}" data-file-pick="${esc(f.id)}">${esc(f.title || f.name || f.id)}</button>`).join('')
+      || `<p class="muted ops-note">${find.value.trim() ? 'No files match' : 'No files yet'}</p>`;
+  };
+  picks.onclick = ev => { const b = ev.target.closest('[data-file-pick]'); if (b) { pick = b.dataset.filePick; draw(); } };
+  find.oninput = () => {
+    clearTimeout(soon);
+    const q = find.value.trim(), mine = ++seq;
+    if (!q) { draw(); return; }
+    soon = setTimeout(async () => {
+      const read = await get('/v2/files/search?limit=20&q=' + encodeURIComponent(q)).catch(() => null);
+      if (mine !== seq || !dlg.open) return;
+      found = read?.results || [];
+      draw();
+    }, 250);
+  };
+  const read = await get('/v2/files?limit=50', {fresh: true}).catch(() => null);
+  if (!dlg.open) return;
+  recent = read?.files || [];
+  draw();
+}
+// Each opens that document in Finance (finOrdPage and finDocPage read ?doc=).
+const opsDocLinks = (docs, route) => opsLinks(docs.map(d => [finHref(route, {doc: d.id}), `${d.number || ''} ${d.contact?.name || d.customer?.name || ''}`.trim() || '—', finUsd(d.total)]));
 async function opsPanelEquipment(state, load, r) {
   const read = await get('/v2/equipment?' + opsQs({location_id: r.id, limit: 50}), {fresh: true}).catch(() => null);
   const here = read?.equipment || [];
@@ -170,8 +246,8 @@ async function opsCustomerLoad(state, load) {
     ${list('Locations', read.locations, l => [opsHref('locations', l.id), l.name, esc(opsLabel(OPS_LOCATION_KINDS, l.kind))])}
     ${list('Equipment', read.equipment, x => [opsHref('equipment', x.id), x.name, esc([x.make, x.model].filter(Boolean).join(' '))])}
     ${list('Due dates', read.due_dates, opsCustomerDue)}
-    ${estimates.length ? opsSec('Estimates', opsDocLinks(estimates, OPS_DOC_READS.estimate[6]())) : ''}
-    ${invoices.length ? opsSec('Invoices', opsDocLinks(invoices, OPS_DOC_READS.invoice[6]())) : ''}`;
+    ${estimates.length ? opsSec('Estimates', opsDocLinks(estimates, OPS_DOC_READS.estimate[6])) : ''}
+    ${invoices.length ? opsSec('Invoices', opsDocLinks(invoices, OPS_DOC_READS.invoice[6])) : ''}`;
 }
 function opsCustomerDue(d) {
   const tab = {location: 'locations', equipment: 'equipment'}[d.subject_type];

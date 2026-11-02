@@ -1,7 +1,7 @@
 """Reads of the locations, items and projects tables on the caller's connection. Rows only: who may see them is the
 caller's question."""
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .store import ROW_TABLES, resolve
@@ -36,6 +36,16 @@ def names(c: sqlite3.Connection, table: str) -> dict[str, str]:
     """Every row's name by id, active or not: a line keeps naming the record it was tagged with."""
     assert table in ROW_TABLES
     return {str(r[0]): str(r[1]) for r in c.execute(f"SELECT id, name FROM {table}")}
+
+
+def names_of(c: sqlite3.Connection, table: str, ids: Iterable[str]) -> dict[str, str]:
+    """These rows' names by id, in one read, for a page of rows that name them."""
+    assert table in ROW_TABLES
+    wanted = sorted(set(ids))
+    if not wanted:
+        return {}
+    return {str(r[0]): str(r[1]) for r in
+            c.execute(f"SELECT id, name FROM {table} WHERE id IN ({','.join('?' * len(wanted))})", wanted)}
 
 
 def ids_of(c: sqlite3.Connection, table: str, row_id: str) -> tuple[str, ...]:

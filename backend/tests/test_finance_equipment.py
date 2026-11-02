@@ -238,6 +238,49 @@ def test_equipment_lists_its_next_due_day_and_filters_to_soon_overdue_and_warran
         assert getattr(bad.value, "code", "") == "invalid"
 
 
+def test_a_row_carries_its_location_and_parent_names_in_one_read(books):  # noqa: F811
+    """The API names the location an equipment row points at and a location's parent, on the list and the detail, with one
+    read of the names for the whole page."""
+    with books.transaction() as c:
+        region = _site(c, "Region West")
+        store_id = _site(c, "North Store")
+        assert act(c, OWNER, "location_update", {"location_id": store_id, "parent_id": region}).status == "committed"
+        unit = _unit(c, "Cooler", "owned", location=store_id)
+        _unit(c, "Oven", "owned", location=region)
+        reads: list[str] = []
+        c.set_trace_callback(reads.append)
+        rows = {r["name"]: r for r in FR.records(c, OWNER, kind="equipment")["equipment"]}
+        c.set_trace_callback(None)
+        assert rows["Cooler"]["location_name"] == "North Store" and rows["Oven"]["location_name"] == "Region West"
+        assert sum("SELECT id, name FROM locations" in q for q in reads) == 1
+        assert FR.record(c, OWNER, kind="equipment", record_id=unit)["equipment"]["location_name"] == "North Store"
+        sites = {r["name"]: r for r in FR.records(c, OWNER, kind="location")["locations"]}
+        assert sites["North Store"]["parent_name"] == "Region West" and sites["Region West"]["parent_name"] is None
+        assert FR.record(c, OWNER, kind="location", record_id=store_id)["location"]["parent_name"] == "Region West"
+
+
+def test_a_rows_due_status_is_the_rule_its_due_dates_use_not_a_fixed_window(books):  # noqa: F811
+    """A date 60 days out with a 90-day lead is due; 10 days out with no lead is upcoming; the most pressing date wins."""
+    with books.transaction() as c:
+        far_lead = _unit(c, "Far lead", "owned")
+        no_lead = _unit(c, "No lead", "owned")
+        both = _unit(c, "Both", "owned")
+        site = _site(c, "North Store")
+        _due(c, "equipment", far_lead, "Licence", TODAY + timedelta(days=60), lead=90)
+        _due(c, "equipment", no_lead, "Service", TODAY + timedelta(days=10))
+        _due(c, "equipment", both, "Later", TODAY + timedelta(days=5))
+        _due(c, "equipment", both, "Past", TODAY - timedelta(days=1))
+        _due(c, "location", site, "Inspection", TODAY - timedelta(days=2))
+        rows = {r["name"]: r for r in FR.records(c, OWNER, kind="equipment", at=AT)["equipment"]}
+        assert rows["Far lead"]["next_due_status"] == "due"
+        assert rows["No lead"]["next_due_status"] == "upcoming"
+        assert rows["Both"]["next_due_status"] == "overdue"
+        kept = FR.records(c, OWNER, kind="equipment", at=AT, filters={"due": "soon"})["equipment"]
+        assert {r["name"] for r in kept} == {r["name"] for r in rows.values() if r["next_due_status"] == "due"}
+        one = FR.record(c, OWNER, kind="location", record_id=site, at=AT)["location"]
+        assert (one["next_due_status"], one["next_due_on"]) == ("overdue", (TODAY - timedelta(days=2)).isoformat())
+
+
 def test_h7a_the_customer_panel_lists_its_equipment_and_due_dates(books):  # noqa: F811
     """H7a: the owner opens customer Smith and sees Smith's equipment, each piece with its next due day, and the due
     dates on the contact, its sites and its equipment, the next due first. Another customer's unit is left out."""

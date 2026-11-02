@@ -32,6 +32,8 @@ function opsDueDraw(box, failed = null) {
   if (!host) return;
   const add = edit ? '<span class="spacer"></span><button type="button" class="ghost ops-mini" data-due-add>+ Add</button>' : '';
   const rows = (box.dues || []).filter(d => !d.archived_at).map(d => opsDueRow(box, d, edit)).join('');
+  // Nothing to show and nothing to add: no empty heading.
+  if (!edit && !rows && !failed) { host.innerHTML = ''; return; }
   host.innerHTML = opsSec('Due dates', failed ? opsFail(failed) : rows, add);
   host.onclick = ev => {
     const hit = ev.target.closest('[data-due-add],[data-due-done],[data-due-reopen],[data-due-stop]');
@@ -41,7 +43,7 @@ function opsDueDraw(box, failed = null) {
       : hit.matches('[data-due-reopen]') ? ['due_date_occurrence_reopen', {due_date_id: hit.dataset.dueReopen, due_on: hit.dataset.on}, 'Reopened']
       : ['due_date_update', {due_date_id: hit.dataset.dueStop, active: false}, 'Stopped'];
     hit.disabled = true;
-    void finAct(write[0], write[1]).then(() => { toast(write[2]); box.onWrite?.(); return opsDueLoad(box); }).catch(e => { toast(e.message || 'Not saved', true); hit.disabled = false; });
+    void finAct(write[0], write[1]).then(done => { if (done?.status === 'committed') toast(write[2]); box.onWrite?.(); return opsDueLoad(box); }).catch(e => { toast(e.message || 'Not saved', true); hit.disabled = false; });
   };
   host.querySelectorAll('details[data-due-history]').forEach(el => {
     el.ontoggle = () => { if (el.open) box.open.add(el.dataset.dueHistory); else box.open.delete(el.dataset.dueHistory); };

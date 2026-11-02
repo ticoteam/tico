@@ -60,7 +60,7 @@ function opsImportReview(st) {
   // Problems first: the rows that need a person, then the rest.
   const rank = l => OPS_IMPORT_BAD.has(l.status) ? 0 : l.status === 'possible_duplicate' ? 1 : 2;
   const ordered = lines.map((l, n) => [l, n]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([l]) => l);
-  st.dlg.innerHTML = opsImportFrame('Import CSV', `<ul class="ops-import-rows">${ordered.map(row).join('')}</ul>
+  st.dlg.innerHTML = opsImportFrame('Import CSV', `${ordered.length ? `<ul class="ops-import-rows">${ordered.map(row).join('')}</ul>` : '<p class="muted ops-note">No rows in this file</p>'}
     ${bulk.map(([name, label, pairs]) => opsPick(label, name, pairs(), '', '—')).join('')}
     <div class="fin-foot"><button type="button" class="ghost" data-import-back>Back</button><button type="button" class="primary" data-import-commit${fine + st.keep.size ? '' : ' disabled'}>Import ${fine + st.keep.size}</button></div>`);
   opsImportWire(st);

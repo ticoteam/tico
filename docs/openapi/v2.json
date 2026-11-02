@@ -40514,6 +40514,24 @@
               "null"
             ]
           },
+          "location_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_due_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_due_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "source": {
             "type": "string"
           },
@@ -49501,8 +49519,20 @@
               "null"
             ]
           },
+          "next_due_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "in_books": {
             "type": "boolean"
+          },
+          "parent_name": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "source": {
             "type": "string"
