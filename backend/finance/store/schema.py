@@ -647,6 +647,14 @@ def create(c: sqlite3.Connection) -> None:
     tico.watch_org(c)
 
 
+def ensure(c: sqlite3.Connection) -> None:
+    """Every start: the columns in ADDED and the records tables (backend/records). Migrations 64 to 77 run once, so an
+    install already past them gets what they added to Finance's and the records' tables here, once; each skips what exists."""
+    _add_columns(c)
+    from ...records import store as RS
+    RS.create(c)
+
+
 def phase1(c: sqlite3.Connection) -> None:
     """Cloud migration 65: phase 1's tables, columns, indexes and triggers on an install migration 64 made before
     them. The same statements as `create`, which skips whatever exists."""

@@ -2120,6 +2120,10 @@ class Store:
             # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
             from . import read_deps
             read_deps.ensure(c)
+            # Finance's added columns and the records tables, for an install already past the migrations that made them
+            # (finance/store/schema.py ensure). The sidebar below reads the records, so this runs first.
+            from .finance.store import schema as _finance_schema
+            _finance_schema.ensure(c)
             # The company's sidebar: an install set up before business types gets its upgrade default, once
             # (backend/sidebar.py ensure). Runs after the records tables it reads have been created.
             from . import sidebar
