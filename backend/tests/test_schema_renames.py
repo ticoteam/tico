@@ -68,8 +68,8 @@ def restore(path):
     return before
 
 
-# Dropped as redundant by backend/migrations/0040_prune_redundant_indexes.sql.
-DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals"}
+# Dropped as redundant by backend/migrations/0040_prune_redundant_indexes.sql; kpis_goal goes with kpis.goal_id (0042).
+DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "kpis_goal"}
 # Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
            "gtm_versions", "gtm_drafts"}
@@ -126,8 +126,7 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
     _store, conn, before = upgraded
     for kind in ("index", "trigger", "view"):
         now = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
-        # The tables 0035_growth_rethink retires take their indexes with them. Migration 0040 drops two indexes that
-        # duplicate or are a prefix of a kept one (backend/migrations/0040_*.sql).
+        # The tables 0035_growth_rethink retires take their indexes with them; later migrations drop DROPPED_INDEXES.
         kept = {name for name in before[kind + "es" if kind == "index" else kind + "s"]
                 if not any(table in name for table in RETIRED) and not name.startswith("growth_idea")
                 and name not in DROPPED_INDEXES}
