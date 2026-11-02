@@ -198,6 +198,8 @@ class Settings:
     visual_origin: str = ""
     # The Company page's own address and the folder its public files are written to (backend/company_page).
     reader_origin: str = ""
+    # The domain a page's own address sits under when the install has no reader origin of its own: <slug>.<page domain>.
+    page_domain: str = ""
     company_page_dir: str = ""
     runner_url: str = ""
     screen_relay_url: str = ""
@@ -499,6 +501,7 @@ class Settings:
                         "http://127.0.0.1:" + os.environ.get("TICO_PORT", "8765")).rstrip("/"),
             visual_origin=os.environ.get("TICO_VISUAL_ORIGIN", "").strip(),
             reader_origin=os.environ.get("TICO_READER_ORIGIN", "").strip(),
+            page_domain=os.environ.get("TICO_PAGE_DOMAIN", "").strip().strip("."),
             company_page_dir=os.environ.get("TICO_COMPANY_PAGE_DIR", "").strip(),
             owner_name=os.environ.get("TICO_OWNER_NAME", "").strip(),
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),

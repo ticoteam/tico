@@ -7821,6 +7821,8 @@ def create_app(settings=None):
     install_internal(app, store, auth, mutate, mover)
     from .public_roadmaps import install as install_public_roadmaps
     install_public_roadmaps(app, store, auth, mutate)
+    from .company_page import api as company_page_api
+    company_page_api.register(app, store, auth, mutate, settings)
     from .service_keys import install_service_keys
     install_service_keys(app, store, auth, mutate)
     install_views(app, store, auth, mutate, task_view)
