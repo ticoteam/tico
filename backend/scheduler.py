@@ -467,6 +467,12 @@ class Scheduler:
                 threading.Thread(target=updates.write_draft, args=(self.store, sent, writer, settings.assistant_bot),
                                  name="update-draft", daemon=True).start()
             run.did("1 asked" if sent else "Nobody due", quiet=not sent)
+        # The Company page's editions that came due (backend/company_page/schedule.py); the model call is off this loop.
+        try:
+            from .company_page import schedule as company_page_schedule
+            company_page_schedule.start(self.store, at)
+        except Exception as exc:
+            failures.append({"company_page": type(exc).__name__})
         # The nightly learning run (backend/learnings.py): one row per night claims it; the work runs
         # in a background thread, so the decision model's calls never hold the write lock.
         try:

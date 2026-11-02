@@ -51,7 +51,7 @@ LIST_BYTES = 200_000        # the serialized size one page of rules may reach; a
 SCOPE_MAX = 100             # the names one Who or With may hold, in all
 DUE_PER_RULE = 20           # the due dates a rule's view names; the rest are counted (`due_more`)
 SETTINGS_TASK_CAPS = 20     # the task limits a bot's settings name; the rest are counted
-SCOPE_KEYS = ("everyone", "all_bots", "groups", "bots", "people", "names")
+SCOPE_KEYS = ("everyone", "all_bots", "outside_editions", "groups", "bots", "people", "names")
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS rule_sources(id TEXT PRIMARY KEY, name TEXT NOT NULL, "
@@ -104,8 +104,8 @@ def _json(value):
 
 
 def _has(scope):
-    return bool(scope) and bool(scope.get("everyone") or scope.get("all_bots") or scope.get("groups")
-                                or scope.get("bots") or scope.get("people"))
+    return bool(scope) and bool(scope.get("everyone") or scope.get("all_bots") or scope.get("outside_editions")
+                                or scope.get("groups") or scope.get("bots") or scope.get("people"))
 
 
 def _row(r):
@@ -233,6 +233,8 @@ def _scope_view(ctx, scope, *, flags=True):
            "people": [{"id": p, "name": _person_name(ctx, p)} for p in scope.get("people", [])]}
     if flags:
         out = {"everyone": bool(scope.get("everyone")), "all_bots": bool(scope.get("all_bots")), **out}
+        if scope.get("outside_editions"):
+            out["outside_editions"] = True
     return out
 
 
@@ -301,8 +303,8 @@ def scope_in(c, value, *, flags):
     unknown = sorted(set(raw) - set(SCOPE_KEYS))
     if unknown:
         raise Problem("validation", f"Unknown field {unknown[0]} in who or with", 422)
-    if not flags and (raw.get("everyone") or raw.get("all_bots")):
-        raise Problem("validation", "With names teammates: not everyone and not all bots", 422)
+    if not flags and (raw.get("everyone") or raw.get("all_bots") or raw.get("outside_editions")):
+        raise Problem("validation", "With names teammates: not everyone, all bots or outside editions", 422)
     ctx = _ctx(c)
     out = {"everyone": bool(raw.get("everyone")) if flags else False,
            "all_bots": bool(raw.get("all_bots")) if flags else False,
@@ -321,6 +323,8 @@ def scope_in(c, value, *, flags):
         out["groups"], out["bots"], out["people"] = [], [], []
     for key in ("groups", "bots", "people"):
         out[key] = sorted(out[key])
+    if flags and raw.get("outside_editions"):
+        out["outside_editions"] = True      # only when set: a Who without it reads exactly as it always has
     if len(out["groups"]) + len(out["bots"]) + len(out["people"]) > SCOPE_MAX:
         raise Problem("validation", f"Keep one Who or With to {SCOPE_MAX} names", 422)
     return out
@@ -392,6 +396,12 @@ def matching(c, author, recipients=()):
     return out
 
 
+def outside_edition_rules(c):
+    """The active rules whose Who is Outside editions (backend/company_page/editions.py). No teammate's write matches
+    this Who (`_hits` never reads it): it reaches only what the Company page sends outside."""
+    return [row for row in _active(c) if row["who"].get("outside_editions")]
+
+
 def applies_to(c, bot, rules, ctx=None):
     """The rules a bot reads as its own: those whose Who names it, and those whose With names it."""
     key = who_key(c, "bot:" + bot, ctx)
@@ -417,7 +427,7 @@ def may_manage(c, auth, who, scope, ctx=None):
         return False
     if auth.bot_admin(who):
         return True
-    if who.role != "human" or scope.get("everyone"):
+    if who.role != "human" or scope.get("everyone") or scope.get("outside_editions"):
         return False
     if set(scope.get("groups") or ()) & _led(ctx or _ctx(c), who.actor):
         return True
@@ -609,6 +619,8 @@ def _scope_checked(c, auth, who, value):
         raise Problem("validation", "Say who follows it: everyone, all bots, a group, a bot or a person", 422)
     if scope["everyone"] and not auth.bot_admin(who):
         raise Problem("forbidden", "Only the owner and admins make a rule Everyone", 403)
+    if scope.get("outside_editions") and not auth.bot_admin(who):
+        raise Problem("forbidden", "Only the owner and admins make a rule for outside editions", 403)
     return scope
 
 
@@ -1071,6 +1083,7 @@ def counts(c, auth, who):
 class RuleScope(Contract):
     everyone: bool = False
     all_bots: bool = False
+    outside_editions: bool = False
     groups: list[str] = Field(default_factory=list, max_length=100)
     bots: list[str] = Field(default_factory=list, max_length=100)
     people: list[str] = Field(default_factory=list, max_length=100)
