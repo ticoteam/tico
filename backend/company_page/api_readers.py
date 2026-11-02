@@ -61,7 +61,8 @@ def register(app, store, auth, mutate):
         available, reason = R.availability(settings)
         with store.read() as c:
             items, after = P.page(R.list_rows(c, limit, cursor), limit, cursor)
-        return {"readers": items, "next": after, "sign_in": {"available": available, "reason": reason}}
+        return {"readers": items, "next": after, "sign_in": {"available": available, "reason": reason},
+                "email_available": R.notices_available()}
 
     @app.post("/api/v2/readers")
     def readers_add(request: Request, body: ReaderInput):
@@ -108,6 +109,12 @@ def register(app, store, auth, mutate):
     def invites_revoke(request: Request, audience_id: str, invite_id: str, body: Empty | None = None):
         who = company_admin(request)
         return mutate(request, body or Empty(), lambda c: R.revoke_invite(c, who.actor, audience_id, invite_id))
+
+    @app.get("/api/v2/editions/{edition_id}/notices")
+    def edition_notices(request: Request, edition_id: str):
+        company_admin(request)
+        with store.read() as c:
+            return {**R.notices_of(c, edition_id), "email_available": R.notices_available()}
 
     @app.get("/api/v2/reader-messages")
     def messages_list(request: Request, limit: Limit = 100, cursor: Cursor = 0):

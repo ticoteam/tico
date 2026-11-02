@@ -146,20 +146,20 @@ class ReaderOidc(O.Oidc):
         email, target, _, account = self.finish(query, cookie)
         return email, account, target, str(pending.get("i") or "")
 
-    def send_notice(self, email, company, link, unsubscribe):
-        """Ask the issuer to mail a link-only notice: (HTTP status, answer), or None when it sends none. Only the issuer's
-        own host gets this client's secret, as with `invite`. One address a request, because its unsubscribe link is its
-        own. The body holds no text of ours: the issuer's mail says only that there is an update."""
+    def send_notice(self, emails, company, link, unsubscribe):
+        """Ask the issuer to mail a link-only notice to up to 50 addresses: (HTTP status, answer), or None when it sends
+        none, as a provider other than a Tico account doesn't. Only the issuer's own host gets this client's secret, as
+        with `invite`. The body holds no text of ours: the issuer's mail says only that there is an update."""
         if R.rehearsing(self.settings):
             return None
         endpoint = self._endpoint(self._discover(), NOTICE_ENDPOINT)
         if endpoint is None:
             return None
         try:
-            reply = httpx.post(endpoint, json={"to": [email], "company": company[:80], "url": link,
+            reply = httpx.post(endpoint, json={"to": emails, "company": " ".join(company.split())[:80], "url": link,
                                                "unsubscribe_url": unsubscribe},
                                auth=httpx.BasicAuth(self.settings.oidc_client_id, self.settings.oidc_client_secret),
-                               timeout=20, follow_redirects=False)
+                               timeout=30, follow_redirects=False)
             answer = reply.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise O.SignInError("notice failed: " + type(exc).__name__, 502) from exc
@@ -457,19 +457,19 @@ def build(store, settings, judge=lambda: None):
         return await message(request, "can_help")
 
     def do_unsubscribe(request, form):
-        """The link is the credential: no sign-in, no origin check (a mail client's one-click POST has neither), and it
-        works with the page Closed. GET only asks, because mail scanners open links."""
+        """The link is the credential: no sign-in, and it works with the page Closed. GET only asks, because mail scanners
+        open links. One link went to many readers, so it asks whose address, and answers alike whether it was on the list."""
         token = (form or {}).get("token") or request.query_params.get("token")
-        reader_id = R.unsubscribe_reader(settings, token)
-        if not reader_id:
+        if not R.unsubscribe_valid(settings, token):
             return not_found()
-        if request.method != "POST":
-            return page(200, "Stop these emails?", '<form method="post" action="/unsubscribe"><input type="hidden" '
-                        f'name="token" value="{html.escape(token, quote=True)}"><button class="b" type="submit">'
-                        "Stop emails</button></form>")
+        email = (form or {}).get("email", "").strip()
+        if not email:
+            return page(200, "Stop these emails", '<form method="post" action="/unsubscribe"><input type="hidden" '
+                        f'name="token" value="{html.escape(token, quote=True)}"><p><label>Email <input type="email" '
+                        'name="email" required></label></p><button class="b" type="submit">Stop emails</button></form>')
         with store.transaction() as c:
-            R.set_notify(c, reader_id, False)
-        return page(200, "Emails stopped", "You won't get emails about new updates.")
+            R.unsubscribe_address(c, email)
+        return page(200, "Emails stopped", "That address won't get emails about new updates.")
 
     async def unsubscribe(request: Request):
         form = await _form(request) if request.method == "POST" else None
@@ -535,7 +535,7 @@ class ReaderGate:
 
 def install(app, store, auth, settings):
     """Put the gate in front of `app`. It goes on last, so it is outermost. No reader origin, no gate and no routes."""
-    R._state.update(store=store, settings=settings, oidc=None)
+    R._state.update(store=store, settings=settings, oidc=None, not_before=0.0)
     if not settings.reader_origin:
         return
     reader_app = build(store, settings, judge=lambda: getattr(app.state, "judge", None))

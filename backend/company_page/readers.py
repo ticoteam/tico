@@ -16,10 +16,12 @@ import csv
 import hashlib
 import hmac
 import io
+import json
 import logging
 import re
 import secrets
 import threading
+import time
 
 from .. import hubdb as H
 from ..store import Problem, digest
@@ -36,12 +38,17 @@ MESSAGE_MAX, MESSAGES_PER_DAY = 4000, 10
 ASK_ID_MAX = 100
 PAGE_SIZE = 10
 NOTICE_ATTEMPTS = 3
+NOTICE_BATCH = 50                       # the issuer's most recipients in one request
+NOTICE_MAX_AGE_HOURS = 24
+NOTICE_WAIT_MIN, NOTICE_WAIT_MAX = 60, 3600
 RANK = {"board": 0, "investors": 1, "custom": 2, "public": 3}
+# What the issuer will send to. Stricter than the list: a reader's address can come from any sign-in provider.
+SENDABLE = re.compile(r"[^@\s<>\",;()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.[A-Za-z]{2,24}")
 EMAIL = re.compile(r"[^@\s<>\"',;:()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
                    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+")
 
 # Set by reader_app.install: what `reader_view` and `notify_edition`, which take only a connection, need of the install.
-_state = {"store": None, "settings": None, "oidc": None}
+_state = {"store": None, "settings": None, "oidc": None, "not_before": 0.0}
 
 
 class InviteRefused(Exception):
@@ -562,27 +569,37 @@ def signed(settings, purpose, value):
     return hmac.new(_secret(settings, purpose), value.encode(), hashlib.sha256).hexdigest()
 
 
-def unsubscribe_token(settings, reader_id):
-    """Good only for turning this reader's notices off."""
-    encoded = base64.urlsafe_b64encode(reader_id.encode()).rstrip(b"=").decode()
-    return encoded + "." + signed(settings, b"unsubscribe", reader_id)
+def unsubscribe_token(settings, edition_id):
+    """For the link in one edition's notices. One request mails many readers with one link, so it can't say who clicked:
+    it proves only that its holder was sent a notice, and all it can do is stop an address's notices."""
+    encoded = base64.urlsafe_b64encode(edition_id.encode()).rstrip(b"=").decode()
+    return encoded + "." + signed(settings, b"unsubscribe", edition_id)
 
 
-def unsubscribe_reader(settings, token):
-    """The reader id a good unsubscribe token names, or None."""
+def unsubscribe_valid(settings, token):
+    """A way out outlasts what it came with, so a good signature is enough: the edition may be long retracted."""
     encoded, _, mac = str(token or "").partition(".")
     try:
-        reader_id = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+        edition_id = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
     except ValueError:
-        return None
-    good = signed(settings, b"unsubscribe", reader_id)
-    return reader_id if reader_id and hmac.compare_digest(mac.encode(), good.encode()) else None
+        return False
+    return bool(edition_id) and hmac.compare_digest(mac.encode(), signed(settings, b"unsubscribe", edition_id).encode())
+
+
+def unsubscribe_address(c, email):
+    """Stop this address's notices, if it has any. The caller answers the same either way, so the page can't be used to
+    learn who is on the list."""
+    row = c.execute("SELECT id FROM readers WHERE lower(email)=? AND removed_at IS NULL",
+                    (str(email or "").strip().lower(),)).fetchone()
+    if row:
+        set_notify(c, row["id"], False)
 
 
 def notify_edition(c, edition_id):
     """A link-only notice of a published edition to the readers of its audience with notices on. Inside the caller's
     write it only queues them; the mail goes after the commit, so a slow issuer never holds a write and a rolled-back
-    publish sends nothing. {"status": queued | no_edition | closed | unavailable | rehearsal, "count"}."""
+    publish sends nothing. {"status": queued | no_edition | closed | unavailable | rehearsal, "count"}. A provider with
+    no notice endpoint shows up after that, as `unavailable` on each notice: see `notices_of`."""
     settings, store = _state["settings"], _state["store"]
     if not settings or not availability(settings)[0]:
         return {"status": "unavailable", "count": 0}
@@ -604,6 +621,13 @@ def notify_edition(c, edition_id):
     if count and store is not None and hasattr(c, "after_commit"):
         c.after_commit.append(lambda: kick())
     return {"status": "queued", "count": count}
+
+
+def notices_available():
+    """Whether this install's sign-in provider sends these emails. Only a Tico account does; any other leaves the page
+    working with no email. Reads discovery at most hourly, and never raises."""
+    from .reader_app import NOTICE_ENDPOINT
+    return bool(_state["oidc"] and _state["oidc"].offers(NOTICE_ENDPOINT))
 
 
 def rehearsing(settings):
@@ -632,7 +656,7 @@ def kick():
 
 
 def tick(store):
-    """For the scheduler: what a restart left waiting goes out."""
+    """For the scheduler: what a restart or an issuer's limit left waiting goes out, once the limit allows."""
     if store is not _state["store"]:
         return
     with store.read() as c:
@@ -640,58 +664,107 @@ def tick(store):
             kick()
 
 
+def _waiting(store):
+    """Up to one batch of the oldest edition with notices waiting, after settling what can no longer go. The issuer doesn't
+    check who it mails, so this is the check: only a reader on the list, in that audience now, with notices on, for an
+    edition still published, and anything else is cancelled. A notice a day old stops waiting, which bounds any backlog: by
+    then the page is what says there is news."""
+    now = H.now()
+    with store.transaction() as c:
+        c.execute("UPDATE reader_notices SET status='failed',updated_at=? WHERE status='pending' AND created_at<?",
+                  (now, H.shift(now, hours=-NOTICE_MAX_AGE_HOURS)))
+        closed = transparency_of(c) == "closed"
+        c.execute("UPDATE reader_notices SET status='cancelled',updated_at=? WHERE status='pending' AND (? OR id NOT IN ("
+                  "SELECT n.id FROM reader_notices n JOIN readers r ON r.id=n.reader_id JOIN editions e ON e.id=n.edition_id "
+                  "JOIN audiences a ON a.id=e.audience_id JOIN audience_readers ar ON ar.audience_id=a.id AND ar.reader_id=r.id "
+                  "WHERE n.status='pending' AND r.removed_at IS NULL AND r.notify=1 AND a.enabled=1 AND e.status='published'))",
+                  (now, closed))
+        first = c.execute("SELECT edition_id FROM reader_notices WHERE status='pending' ORDER BY created_at,id LIMIT 1").fetchone()
+        if not first:
+            return None, []
+        rows = c.execute("SELECT n.id,n.attempts,r.email FROM reader_notices n JOIN readers r ON r.id=n.reader_id "
+                         "WHERE n.status='pending' AND n.edition_id=? ORDER BY n.created_at,n.id LIMIT ?",
+                         (first["edition_id"], NOTICE_BATCH)).fetchall()
+        rows = [dict(r) for r in rows]
+        # The issuer refuses a whole request over one address it can't send to, so that one doesn't go in.
+        unsendable = [r["id"] for r in rows if len(r["email"]) > 254 or not SENDABLE.fullmatch(r["email"])]
+        for notice_id in unsendable:
+            c.execute("UPDATE reader_notices SET status='failed',updated_at=? WHERE id=?", (now, notice_id))
+    return first["edition_id"], [r for r in rows if r["id"] not in unsendable]
+
+
 def drain():
-    """Send what is waiting. Each is looked at again first: a reader removed, an edition retracted or Closed since it was
-    queued sends nothing. An issuer that is down or says "too many" ends the pass with the rest still waiting, for the
-    next `tick`. Never logs an address."""
+    """Send what is waiting, a batch at a time, outside any transaction. Never logs an address. Only a limit or a network
+    failure leaves notices waiting; every other answer is final for that batch, and the page works regardless."""
     from ..oidc import SignInError
     store, settings, oidc = _state["store"], _state["settings"], _state["oidc"]
-    if store is None or oidc is None or rehearsing(settings):
+    if store is None or oidc is None or rehearsing(settings) or time.time() < _state["not_before"]:
         return
     while True:
-        with store.read() as c:
-            waiting = [dict(r) for r in c.execute(
-                "SELECT n.id,n.reader_id,n.attempts,r.email,r.notify,r.removed_at,e.status,e.retracted_at "
-                "FROM reader_notices n JOIN readers r ON r.id=n.reader_id JOIN editions e ON e.id=n.edition_id "
-                "WHERE n.status='pending' ORDER BY n.created_at,n.id LIMIT 200")]
-            closed = transparency_of(c) == "closed"
-        if not waiting:
+        edition_id, batch = _waiting(store)
+        if edition_id is None:
             return
-        for row in waiting:
-            if closed or row["removed_at"] or not row["notify"] or row["status"] != "published" or row["retracted_at"]:
-                _notice_done(store, row["id"], "cancelled")
-                continue
-            try:
-                answer = oidc.send_notice(row["email"], settings.company_name, settings.reader_origin + "/",
-                                          settings.reader_origin + "/unsubscribe?token="
-                                          + unsubscribe_token(settings, row["reader_id"]))
-            except SignInError as exc:
-                log.warning("Reader notices wait: %s", exc.reason)
-                return _notice_retry(store, row)
-            status = answer[0] if answer else None
-            if answer is None or status == 409:     # this issuer sends no notices, or doesn't know the reader address
-                _notice_done(store, row["id"], "unavailable")
-            elif status == 202:
-                _notice_done(store, row["id"], "sent")
-            elif status == 429:                     # not this reader's fault: the install's hourly allowance
-                log.info("Reader notices wait: the issuer's limit")
-                return
-            elif status >= 500:
-                log.warning("Reader notices wait: the issuer answered HTTP %s", status)
-                return _notice_retry(store, row)
-            else:
-                log.warning("The issuer refused a reader notice: HTTP %s", status)
-                _notice_done(store, row["id"], "failed")
+        if not batch:
+            continue
+        link = settings.reader_origin + "/"
+        unsubscribe = settings.reader_origin + "/unsubscribe?token=" + unsubscribe_token(settings, edition_id)
+        try:
+            answer = oidc.send_notice([r["email"] for r in batch], settings.company_name, link, unsubscribe)
+        except SignInError as exc:
+            log.warning("Reader notices wait: %s", exc.reason)
+            return _notices_retry(store, batch)
+        if answer is None:                  # this provider sends no notices
+            _notices_done(store, edition_id, batch, "unavailable")
+            continue
+        status, body = answer
+        if status == 202:
+            _notices_done(store, edition_id, batch, "sent", body)
+        elif status == 429:                 # the install's allowance, not these readers': they wait for it to refill
+            _state["not_before"] = time.time() + _retry_after(body)
+            log.info("Reader notices wait: the issuer's limit")
+            return
+        elif status == 409:                 # the issuer doesn't know this install's reader address
+            log.warning("Reader notices weren't sent: the issuer has no reader address for this install")
+            _notices_done(store, edition_id, batch, "unavailable")
+        else:
+            log.warning("Reader notices weren't sent: the issuer answered HTTP %s", status)
+            _notices_done(store, edition_id, batch, "failed")
 
 
-def _notice_done(store, notice_id, status):
+def _retry_after(body):
+    try:
+        return min(NOTICE_WAIT_MAX, max(NOTICE_WAIT_MIN, float(body.get("retry_after"))))
+    except (TypeError, ValueError):
+        return NOTICE_WAIT_MIN
+
+
+def _notices_done(store, edition_id, batch, status, body=None):
+    counts = {k: v for k, v in (body or {}).items() if k in ("sent", "failed", "limited") and isinstance(v, int)}
     with store.transaction() as c:
-        c.execute("UPDATE reader_notices SET status=?,attempts=attempts+1,updated_at=? WHERE id=?",
-                  (status, H.now(), notice_id))
+        for row in batch:
+            c.execute("UPDATE reader_notices SET status=?,attempts=attempts+1,updated_at=? WHERE id=?",
+                      (status, H.now(), row["id"]))
+        H.event(c, H.KEEPER, "reader.notices", edition_id, {"status": status, "readers": len(batch), **counts})
 
 
-def _notice_retry(store, row):
+def _notices_retry(store, batch):
     with store.transaction() as c:
-        status = "failed" if row["attempts"] + 1 >= NOTICE_ATTEMPTS else "pending"
-        c.execute("UPDATE reader_notices SET status=?,attempts=attempts+1,updated_at=? WHERE id=?",
-                  (status, H.now(), row["id"]))
+        for row in batch:
+            status = "failed" if row["attempts"] + 1 >= NOTICE_ATTEMPTS else "pending"
+            c.execute("UPDATE reader_notices SET status=?,attempts=attempts+1,updated_at=? WHERE id=?",
+                      (status, H.now(), row["id"]))
+
+
+def notices_of(c, edition_id):
+    """What became of an edition's notices, for the owner: readers by state, and what the issuer said of those it took. It
+    answers per request, so `limited` and `failed` here are counts it reported, not named readers."""
+    states = dict.fromkeys(("pending", "sent", "failed", "unavailable", "cancelled"), 0)
+    for row in c.execute("SELECT status,count(*) n FROM reader_notices WHERE edition_id=? GROUP BY status", (edition_id,)):
+        states[row["status"]] = row["n"]
+    reported = {"delivered": 0, "failed": 0, "limited": 0}
+    for row in c.execute("SELECT detail_json FROM events WHERE action='reader.notices' AND target=?", (edition_id,)):
+        detail = json.loads(row["detail_json"] or "{}")
+        reported["delivered"] += detail.get("sent", 0)
+        reported["failed"] += detail.get("failed", 0)
+        reported["limited"] += detail.get("limited", 0)
+    return {"readers": states, "issuer": reported}
