@@ -679,6 +679,7 @@ const close = async (o, label) => { assert.deepEqual(o.errors, [], label + ' pag
     await files.getByRole('link', {name: 'Warranty.pdf'}).waitFor();
     assert.deepEqual(w.actions.at(-1), {kind: 'record_file_add', payload: {subject_type: one, subject_id: id, file_id: 'f-2'}});
     assert.match(await files.getByRole('link', {name: 'Warranty.pdf'}).getAttribute('href'), /\/v2\/files\/f-2$/);
+    assert.equal(await files.locator('[data-files-more]').count(), 0, 'all of them fit: nothing more to find');
     // A linked file isn't offered again.
     await files.locator('[data-file-add]').click();
     await dlg.getByRole('option', {name: 'Manual.pdf'}).waitFor();
@@ -709,6 +710,16 @@ const close = async (o, label) => { assert.deepEqual(o.errors, [], label + ' pag
     await m.page.waitForTimeout(200);
     assert.equal(await m.page.locator('#ops-m-files .ops-sec').count(), 0, 'no empty section for a viewer');
     await close(m, 'files viewer');
+  }
+  // A read past the 50 cap points to the Library.
+  for (const [tab, id] of [['locations', 'loc-1'], ['items', 'it-1'], ['equipment', 'eq-1']]) {
+    const w = world(), row = w[tab].find(r => r.id === id);
+    Object.assign(row, {files_more: true, files: [{id: 'link-1', file_id: 'f-1', added_at: '2026-11-01T10:00:00Z', added_by_id: 'human:ana'}]});
+    const m = await open(browser, 'cara', w, `#/operations/${tab}?id=${id}`);
+    const more = m.page.locator('#ops-m-files [data-files-more]');
+    await more.waitFor();
+    assert.equal(await more.getAttribute('href'), '#/library/files');
+    await close(m, 'files more ' + tab);
   }
 
   // Setup: the question asks once the server's record carries the answer, and the answer goes top level on the save.

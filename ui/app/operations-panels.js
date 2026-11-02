@@ -155,7 +155,7 @@ async function opsPanelFiles(state, load, r) {
   if (!r.files?.length && !edit) { opsPut(state, load, 'ops-m-files', ''); return; }
   const files = await recordFileNames(r.files);
   if (!opsLive(state, load)) return;
-  opsPut(state, load, 'ops-m-files', opsSec('Files', files.length ? recordFileRows(files, edit) : '<p class="muted ops-note">None yet</p>', edit ? '<span class="spacer"></span><button type="button" class="ghost ops-mini" data-file-add>+ Add</button>' : ''));
+  opsPut(state, load, 'ops-m-files', opsSec('Files', files.length ? recordFileRows(files, edit) + recordFilesMore(r.files_more) : '<p class="muted ops-note">None yet</p>', edit ? '<span class="spacer"></span><button type="button" class="ghost ops-mini" data-file-add>+ Add</button>' : ''));
   const host = $('#ops-m-files');
   if (!host || !edit) return;
   const again = async () => {

@@ -121,7 +121,7 @@ function finOrdRail(d, full) {
       `<a class="fin-link" href="${esc(finHref('/payables', {doc: b.id}))}">${finCents(b.on_order)}</a>`)).join('')}`);
     // Linked, not billed: these count toward no line and not toward Billed above.
     if (d.linked_bills?.length) parts.push(`<h3 class="fin-h">Linked bills</h3>${d.linked_bills.map(b => finKv([b.number || 'Bill', b.vendor].filter(Boolean).join(' · ') + ` · ${b.status[0].toUpperCase()}${b.status.slice(1)}`,
-      `<a class="fin-link" href="${esc(finHref('/payables', {doc: b.id}))}">${finCents(b.total)}</a>`)).join('')}`);
+      `<a class="fin-link" href="${esc(finHref('/payables', {doc: b.id}))}">${finCents(b.total)}</a>`)).join('')}${d.linked_bills_more ? '<p class="muted fin-note" data-bills-more>More bills are linked</p>' : ''}`);
     const asked = finOrdAsked(d);
     if (asked) parts.push(finKv('Approval', esc(finAskText(asked.approval_to))));
     parts.push(finOrdActsHtml(d));

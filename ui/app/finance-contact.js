@@ -49,22 +49,22 @@ async function finContactRead(me) {
   if (record) me.name = record.contact.name;
   const files = record ? await recordFileNames(record.files) : null;
   if (me.kind !== 'customer') {
-    if (record.contact.kind !== 'customer') return {contact: record.contact, record: record.contact, files};
+    if (record.contact.kind !== 'customer') return {contact: record.contact, record: record.contact, files, filesMore: record.files_more};
     me.kind = 'customer';
   }
   const d = await get(`/v2/customers/${id}${as}`, {fresh: true});
   me.name = d.contact?.name || me.name;
-  return {contact: d.contact, record: record?.contact, files, sites: d.locations, gear: d.equipment, due: d.due_dates, estimates: d.estimates, invoices: d.invoices?.invoices};
+  return {contact: d.contact, record: record?.contact, files, filesMore: record?.files_more, sites: d.locations, gear: d.equipment, due: d.due_dates, estimates: d.estimates, invoices: d.invoices?.invoices};
 }
 // A copy from a provider's books: when it last synced, and whether it may be behind. Tico's own record says nothing.
 function finContactFresh(c) {
   if (!c?.source || c.source === 'tico') return '';
   return (c.as_of ? finKv('Last sync', esc(fmt(c.as_of))) : '') + (c.stale ? '<p class="fin-stale" data-fin-stale>May be out of date</p>' : '');
 }
-function finContactFilesHtml(files) {
+function finContactFilesHtml(files, more) {
   const edit = finCaps()?.may('finance.records');
   if (!files || (!files.length && !edit)) return '';
-  return `<h3 class="fin-h">Files</h3>${recordFileRows(files, edit)}
+  return `<h3 class="fin-h">Files</h3>${recordFileRows(files, edit)}${recordFilesMore(more)}
     ${edit ? '<div class="fin-acts"><button type="button" class="ghost" data-file-add>Add file</button></div>' : ''}`;
 }
 function finContactDraw(me, parts) {
@@ -89,7 +89,7 @@ function finContactDraw(me, parts) {
       list('Invoices', parts.invoices, i => finKv(i.number || 'Invoice', open(finHref('/receivables', {doc: i.id}), finUsd(i.status === 'draft' ? i.total : i.remaining ?? i.total)))),
       list('Due dates', parts.due, d => finKv(d.name, d.next_due_on ? esc(finDayLabel(d.next_due_on)) : '—')));
   }
-  out.push(finContactFilesHtml(parts.files));
+  out.push(finContactFilesHtml(parts.files, parts.filesMore));
   finRail(out.join(''));
   finContactWire(me, c, parts.files);
 }
@@ -110,6 +110,8 @@ const recordFileNames = files => Promise.all((files || []).map(async f =>
   ({...f, name: (await get(`/v2/files/${encodeURIComponent(f.file_id)}/meta`).catch(() => null))?.name})));
 const recordFileRows = (files, edit) => files.map(f => `<div class="fin-rec-file"><a href="${API}/v2/files/${encodeURIComponent(f.file_id)}" target="_blank" rel="noopener" data-name="${esc(f.name || 'File')}">${esc(f.name || 'File')}</a>
     ${edit ? `<button type="button" class="ghost tmodal-x" data-file-remove="${esc(f.id)}" aria-label="Remove ${esc(f.name || 'file')}">✕</button>` : ''}</div>`).join('');
+// A read holds at most 50 links; the rest are in the Library.
+const recordFilesMore = more => more ? `<p class="fin-note"><a class="fin-link" data-files-more href="${RD_FILES}">More in Library</a></p>` : '';
 // The same reads and rows as the rules' document picker: recent files whose name fits, then search hits. Stored files only:
 // a link has no copy to open from here. `done` runs once the link is made, not when it waits on a person.
 async function recordFilePick(subject_type, subject_id, linked, done) {
