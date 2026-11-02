@@ -932,7 +932,7 @@ def watch(c, kpi_id=None, market_id=None, today=None):
         return []
     done = {r[0] for r in c.execute("SELECT json_extract(payload,'$.bet_id') FROM strategy_events WHERE kind=? AND "
                                     "json_extract(payload,'$.n')=?", (TRIPPED, row["n"]))}
-    today = today or date.today().isoformat()
+    today = today or H.now()[:10]                        # the hub clock, so a demo build judges checks by its own day
     tripped = []
     for number, item in enumerate(active, 1):
         wrong = item["wrong_if"]
