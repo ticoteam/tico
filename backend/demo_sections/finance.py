@@ -1,19 +1,21 @@
 """Finance: Tico's own books for the previous full month and this month to date, four monthly budgets (one near its
-limit), six invoices, bills, finance rules and one bookkeeper proposal waiting for Ana.
+limit), six invoices, bills and finance rules. The Bookkeeper's books view is granted six days before the build, and its
+first rule proposal is approved by Ana two days before it.
 
 The books are dated from the build's own moment (`b.now`): the previous full month, then this month up to the build, so
 the app's default month always has numbers. Nothing is dated after the build (`Calendar.at` stops at it). Every entry
 goes through the Finance actions the app runs (`FA.act`) with an explicit `at`, and Gateway usage is posted the way
-Gateway usage is (`FA.post_entry`, source "usage"). Finance's own clock is never read. The hub's clock is the build's
-(tasks, grants). Nothing reaches a bank, a payment processor or a mailbox: invoices are sent by hand and the book has no
-bank feed.
+Gateway usage is (`FA.post_entry`, source "usage"). Finance's own clock is never read. The hub's clock is set to the day
+of each hub stamp (tasks, approvals) with `_hub_clock`. Nothing reaches a bank, a payment processor or a mailbox:
+invoices are sent by hand and the book has no bank feed.
 """
 
+import contextlib
 from datetime import date, datetime, timedelta, timezone
 
 from .. import bookkeeper, hubdb
 from ..finance import actions as FA
-from ..finance.store import ledger as SL
+from ..finance import reads as RD
 
 OWNER = "human:ana"
 BOOKKEEPER = "bot:bookkeeper"
@@ -159,17 +161,24 @@ CONTENT = {
                       {"input": {"kind": "bill", "counterparty": "Keelson Freight Forwarding", "amount": 192000},
                        "expect": "none"}],
          "by": OWNER, "on": ("prev", 1)},
-        # The bookkeeper proposes this; a bot's rule needs a finance admin, so it waits for Ana.
-        {"kind": "posting", "name": "Freight bills go to 5400",
-         "words": "Bills from Keelson Freight Forwarding post to Freight in.",
-         "when": {"counterparty": "Keelson Freight Forwarding"},
-         "outcome": {"outcome": "post", "account": "5400"},
-         "examples": [{"input": {"kind": "bill", "counterparty": "Keelson Freight Forwarding", "amount": 192000},
-                       "expect": "post", "account": "5400"},
-                      {"input": {"kind": "bill", "counterparty": "Lumen Assembly Co.", "amount": 864000},
-                       "expect": "none"}],
-         "by": BOOKKEEPER, "expect": "needs_approval", "on": ("this", 1)},
     ],
+    # The Bookkeeper's first rule proposal. A bot's rule needs a person's approval, so it waits in Ana's queue until she
+    # approves it. The proposal is made four days before the build and approved two days before it.
+    "proposal": {
+        "kind": "posting", "name": "Freight bills go to 5400", "by": BOOKKEEPER,
+        "words": "Bills from Keelson Freight Forwarding post to Freight in.",
+        "when": {"counterparty": "Keelson Freight Forwarding"},
+        "outcome": {"outcome": "post", "account": "5400"},
+        "examples": [{"input": {"kind": "bill", "counterparty": "Keelson Freight Forwarding", "amount": 192000},
+                      "expect": "post", "account": "5400"},
+                     {"input": {"kind": "bill", "counterparty": "Lumen Assembly Co.", "amount": 864000},
+                      "expect": "none"}],
+        "proposed": ("ago", 4), "approved": ("ago", 2),
+        "note": "Yes. Keelson's freight bills go to Freight in.",
+    },
+    # The Bookkeeper's books view: Ana grants it on Finance's Access page six days before the build, and marks the
+    # Bookkeeper's ask done. The Bookkeeper's entries follow it, since it can only post to accounts it can see.
+    "view": {"granted": ("ago", 6), "note": "The Bookkeeper can see the books (Everything)."},
     "chase": {
         "title": "Chase ACME-1003 from Tidewater Coffee Co.",
         "body": ("Invoice ACME-1003 for $1,240.00 was due {due} and is still unpaid. Send the usual reminder "
@@ -180,7 +189,8 @@ CONTENT = {
 
 
 class Calendar:
-    """The months the books are dated in, counted from the build's own month. A CONTENT date is (month, day)."""
+    """The months the books are dated in, counted from the build's own month. A CONTENT date is (month, day), or
+    ("ago", days) for the day that many days before the build's."""
 
     OFFSET = {"prev": -1, "this": 0}
 
@@ -191,6 +201,8 @@ class Calendar:
         if isinstance(when, date):
             return when
         month, day = when
+        if month == "ago":
+            return self.now.date() - timedelta(days=day)
         index = self.now.year * 12 + self.now.month - 1 + self.OFFSET[month]
         return date(index // 12, index % 12 + 1, day)
 
@@ -214,9 +226,21 @@ class Calendar:
         return f"{day:%B} {day.day}"
 
 
-def _codes(c):
-    """Account id by chart code, for this book."""
-    return {a.code: a.id for a in SL.accounts(c, SL.book(c).id).values()}
+@contextlib.contextmanager
+def _hub_clock(b, days):
+    """The hub's clock set to `days` before the build for the writes inside: the tasks and approvals they stamp."""
+    before = b.clock.at
+    b.at(days=days)
+    try:
+        yield
+    finally:
+        b.clock.at = before
+
+
+def _codes(c, cal):
+    """Account id by chart code, for this book, read through Finance's reads (the books as the Company page reads them,
+    at the build's moment)."""
+    return {a.code: a.id for a in RD.book_view(c, cal.at(cal.now.date())).accounts.values()}
 
 
 def _act(c, cal, who, kind, payload, tag, when, expect="committed"):
@@ -255,14 +279,14 @@ def _setup(c, cal):
     bookkeeper.grant_defaults(c)
     _act(c, cal, OWNER, "right_grant", {"teammate": ACCOUNTS_PAYABLE, "right": "finance.ap"}, "right-ap", opened)
     _act(c, cal, OWNER, "right_grant", {"teammate": FINANCE_LEAD, "right": "finance.budgets"}, "right-budgets", opened)
-    for who in (BOOKKEEPER, ACCOUNTS_PAYABLE, FINANCE_LEAD):
+    for who in (ACCOUNTS_PAYABLE, FINANCE_LEAD):
         _act(c, cal, OWNER, "view_grant", {"subject_kind": "teammate", "subject": who, "what": "everything"},
              f"view-{who}", opened)
     for code, name, kind, parent in CONTENT["chart"]:
-        codes = _codes(c)
+        codes = _codes(c, cal)
         _act(c, cal, OWNER, "account_create", {"code": code, "name": name, "type": kind, "parent_id": codes[parent]},
              f"account-{code}", opened)
-    codes = _codes(c)
+    codes = _codes(c, cal)
     start = cal.day(("this", 1))
     for i, bud in enumerate(CONTENT["budgets"]):
         payload = {"name": bud["name"], "period": "month", "account_id": codes[bud["account"]],
@@ -272,7 +296,7 @@ def _setup(c, cal):
 
 
 def _books(c, cal):
-    codes = _codes(c)
+    codes = _codes(c, cal)
     op = CONTENT["opening"]
     opened = cal.opening()
     _journal(c, cal, OWNER, "opening", opened, op["memo"],
@@ -304,7 +328,7 @@ def _books(c, cal):
 
 
 def _billing(c, cal):
-    codes = _codes(c)
+    codes = _codes(c, cal)
     vendors, customers = {}, {}
     for v in CONTENT["vendors"]:
         res = _act(c, cal, BOOKKEEPER, "contact_create",
@@ -341,21 +365,59 @@ def _billing(c, cal):
                   "account_id": codes["1000"]}, f"paid-{bill['number']}", bill["paid"])
 
 
+def _rule_payload(rule, codes):
+    return _resolve({k: rule[k] for k in ("kind", "name", "words", "when", "outcome", "examples")}, codes)
+
+
+def _bookkeeper_view(c, cal):
+    """Ana gives the Bookkeeper the books and marks its ask done. The grant comes before the Bookkeeper's first entry:
+    a journal line on an account the poster cannot see is refused (handlers.may_write)."""
+    ask = bookkeeper.ask_for_view(c, OWNER)
+    if ask is None:
+        raise AssertionError("finance demo: the Bookkeeper's view was asked for before the demo's own ask")
+    view = CONTENT["view"]
+    _act(c, cal, OWNER, "view_grant", {"subject_kind": "teammate", "subject": BOOKKEEPER, "what": "everything"},
+         "view-bookkeeper", view["granted"])
+    hubdb.task_update(c, OWNER, ask, status="done", note=view["note"])
+
+
 def _rules_and_tasks(c, cal):
-    codes = _codes(c)
+    codes = _codes(c, cal)
     for i, rule in enumerate(CONTENT["rules"]):
-        payload = {k: rule[k] for k in ("kind", "name", "words", "when", "outcome", "examples")}
-        _act(c, cal, rule["by"], "rule_create", _resolve(payload, codes), f"rule-{i}", rule["on"],
-             expect=rule.get("expect", "committed"))
+        _act(c, cal, rule["by"], "rule_create", _rule_payload(rule, codes), f"rule-{i}", rule["on"])
     chase = CONTENT["chase"]
     due = cal.day(next(i for i in CONTENT["invoices"] if i["number"] == chase["invoice"])["due"])
     body = chase["body"].format(due=cal.long(due), by=cal.long(cal.now.date() + timedelta(days=7)))
     hubdb.task_create(c, OWNER, chase["title"], body, "bot:ar-followup", allow_planned=True)
 
 
+def _propose_rule(c, cal, rule):
+    """The Bookkeeper's proposal: a bot's rule waits for a person's approval, so it lands in Ana's queue."""
+    res = _act(c, cal, rule["by"], "rule_create", _rule_payload(rule, _codes(c, cal)), "rule-proposal",
+               rule["proposed"], expect="needs_approval")
+    if not res.approval_id:
+        raise AssertionError("finance demo: the rule proposal has no approval")
+    return res.approval_id
+
+
+def _approve_rule(c, cal, approval_id, rule):
+    """Ana's decision as the decide route makes it: the hub records it, then Finance acts on it in the same transaction,
+    dated to the decision."""
+    hubdb.approval_decide(c, OWNER, approval_id, "approved", rule["note"])
+    done = FA.approval_decided(c, approval_id, at=cal.at(rule["approved"]))
+    if done is None or done.status != "committed":
+        raise AssertionError(f"finance demo: the rule approval did not commit: {done and done.status}")
+
+
 def seed(b):
     cal = Calendar(b.now)
     b.write(lambda c: _setup(c, cal))
+    with _hub_clock(b, days=6):
+        b.write(lambda c: _bookkeeper_view(c, cal))
     b.write(lambda c: _books(c, cal))
     b.write(lambda c: _billing(c, cal))
     b.write(lambda c: _rules_and_tasks(c, cal))
+    with _hub_clock(b, days=4):
+        approval_id = b.write(lambda c: _propose_rule(c, cal, CONTENT["proposal"]))
+    with _hub_clock(b, days=2):
+        b.write(lambda c: _approve_rule(c, cal, approval_id, CONTENT["proposal"]))
