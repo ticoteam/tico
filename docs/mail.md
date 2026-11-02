@@ -482,7 +482,7 @@ try. When Google answers `admin_policy_enforced`, Settings says so in those word
 acme.example has a policy that blocks Tico", and that only a Workspace admin can allow it (Admin console > Security >
 API controls > App access control > Tico). Google sometimes shows that block on its own page ("Access blocked: Tico is
 not approved by your admin", Error 400 `admin_policy_enforced`) and never sends the person back; it is the same block.
-A cancelled consent reads as "not approved", and a problem with Tico's own Google app says it is Tico's to fix.
+A canceled consent reads as "not approved", and a problem with Tico's own Google app says it is Tico's to fix.
 
 Reconnect and revoke:
 - If the person removes Tico at myaccount.google.com/permissions, changes their password, or the admin blocks the app

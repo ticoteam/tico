@@ -26,7 +26,7 @@ def note(api, text="Cancellations are flat; nothing for Ben today.", to="ops", t
 
 def jobs(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM jobs WHERE bot=?", (bot,)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
 
 
 def listed(api, slug="ops"):
@@ -52,7 +52,7 @@ def test_a_failed_run_gives_them_back_and_a_finished_one_does_not(api):
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
     post(api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='uncertain'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
         c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)
@@ -94,7 +94,7 @@ def test_the_note_a_lifted_quarantine_leaves_reaches_the_next_run_ahead_of_a_bac
     with api.app.state.store.transaction() as c:
         H.quarantine(c, "ops", "10 repeated refusals today", refusal={"rule": "identity", "detail": "lane is a person's"})
         for i in range(50):
-            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at) VALUES(?,?,?,?,?)",
                       (H.new_id(), "human:ana", "bot:ops", f"Older note {i}", H.shift(H.now(), seconds=-600 + i)))
         H.status_set(c, "human:ana", "ops", state="active", reason="reviewed")
     post(api, "chat/ops", {"text": "Back to the exports"})
@@ -120,7 +120,7 @@ def test_a_completed_run_settles_its_notes_and_a_failed_one_does_not(api):
     with api.app.state.store.read() as c:
         assert [x["id"] for x in H.notes_waiting(c, "ops")] == [n["id"]]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE state='uncertain'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='uncertain'")
         c.execute("UPDATE run_backoff SET wait_until=NULL")
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)
@@ -180,7 +180,7 @@ def test_the_waiting_scan_reads_only_the_unsettled_index(api):
     store = api.app.state.store
     with store.read() as c:
         for sql, args in ((f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} "
-                           "ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created,n.id LIMIT ?",
+                           "ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created_at,n.id LIMIT ?",
                            ("bot:ops", "tico", 50)),
                           (f"SELECT n.to_actor,count(*) FROM notes n WHERE n.to_actor IN (?) AND {H.NOTE_WAITING_SQL} "
                            "GROUP BY n.to_actor", ("bot:ops",))):
@@ -214,7 +214,7 @@ def test_a_deferred_thread_note_the_bot_lost_access_to_is_cancelled_not_carried(
     own = claim(api, r)
     assert any("Ben's note for ops" in n["text"] for n in own["notes"]), own["notes"]
     with store.read() as c:
-        cancelled = c.execute("SELECT cancelled_at FROM notes WHERE message_id=?", (lost_msg["id"],)).fetchone()[0]
+        cancelled = c.execute("SELECT canceled_at FROM notes WHERE message_id=?", (lost_msg["id"],)).fetchone()[0]
     assert cancelled
 
 

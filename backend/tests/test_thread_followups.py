@@ -3,6 +3,7 @@ thread. The watcher is plain code: it never queues a model run, a quiet run writ
 
 from datetime import datetime, timedelta, timezone
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import hubdb as H
 from backend import scheduler, threads, thread_followups
 from backend.tests.test_api import api, headers, setup_attempt  # noqa: F401
@@ -43,7 +44,7 @@ def test_an_unanswered_ask_is_nudged_once_in_its_thread(api):
     assert [d["message"] for d in done] == [message["id"]]
     with api.app.state.store.read() as c:
         nudge = c.execute("SELECT body FROM messages WHERE conversation_id=? AND kind='notice' "
-                          "AND to_actor='human:ana'", (tid,)).fetchone()
+                          "AND recipient_id='human:ana'", (tid,)).fetchone()
     assert nudge is not None and "Can you confirm" in nudge["body"]
     assert sweep(api, later(48)) == []                   # one nudge, however often the watcher runs
 
@@ -119,7 +120,7 @@ def test_a_legacy_ask_stays_hidden_from_a_reader_it_was_hidden_from_in_its_nudge
     with api.app.state.store.transaction() as c:
         cara = threads.actor_viewer(c, "human:cara")
         nudge = c.execute("SELECT id, body, legacy_audience FROM messages WHERE conversation_id=? AND kind='notice' "
-                          "AND to_actor='human:ana'", (tid,)).fetchone()
+                          "AND recipient_id='human:ana'", (tid,)).fetchone()
         assert nudge is not None
         assert nudge["legacy_audience"] == "shared:finance"
         assert threads.readable(c, cara, message["id"]) is False
@@ -210,16 +211,16 @@ def test_a_manager_hears_once_about_a_closed_history_in_their_dm_with_the_bot_an
     assert {d["to"] for d in done} == {"human:ana"} and {d["bot"] for d in done} == {"finance"}
     assert earlier_sweep(api) == []
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT m.conversation_id, m.refs_json, m.from_actor, cv.audience, cv.id AS thread FROM messages m "
+        rows = c.execute("SELECT m.conversation_id, m.refs, m.sender_id, cv.audience, cv.id AS thread FROM messages m "
                          "JOIN conversations cv ON cv.id=m.conversation_id "
-                         "WHERE m.kind='notice' AND m.refs_json LIKE '%earlier_messages%'").fetchall()
+                         "WHERE m.kind='notice' AND m.refs LIKE '%earlier_messages%'").fetchall()
         assert len(rows) == 1 and rows[0]["conversation_id"] != home, "the Home's readers do not get this notice"
         # Their own chat with the bot, a stored DM or the older personal room already there.
         assert threads.audience_of(threads.thread_row(c, rows[0]["conversation_id"])) == "personal"
-        assert rows[0]["from_actor"] == H.KEEPER
-        assert H._json(rows[0]["refs_json"], {})["earlier_messages"]["thread_id"] == home
+        assert rows[0]["sender_id"] == H.KEEPER
+        assert H._json(rows[0]["refs"], {})["earlier_messages"]["thread_id"] == home
         woken = c.execute("SELECT COUNT(*) FROM message_deliveries WHERE message_id IN (SELECT id FROM messages "
-                          "WHERE refs_json LIKE '%earlier_messages%') AND recipient LIKE 'bot:%' AND mode<>'none'").fetchone()[0]
+                          "WHERE refs LIKE '%earlier_messages%') AND recipient LIKE 'bot:%' AND mode<>'none'").fetchone()[0]
     assert woken == 0 and counts(api)[0] == jobs
     seen = api.get(f"/api/v2/threads/{rows[0]['thread']}/timeline", headers=headers()).json()["messages"]
     assert [m["refs"]["earlier_messages"]["thread_id"] for m in seen if "earlier_messages" in (m.get("refs") or {})] == [home]

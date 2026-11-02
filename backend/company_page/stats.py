@@ -202,7 +202,7 @@ def _kpi_points(c, row, quarterly):
     replaced = {r.get("supersedes") for r in rows if r.get("supersedes")}
     live = [r for r in rows if not r.get("superseded_by") and r["id"] not in replaced and r.get("quality") != "partial"]
     newest = {}
-    for r in sorted(live, key=lambda r: (r.get("collected_at") or "", r.get("created") or "")):
+    for r in sorted(live, key=lambda r: (r.get("collected_at") or "", r.get("created_at") or "")):
         ended = K._dt(r.get("period_end"))
         if ended:
             newest[ended] = float(r["value"])

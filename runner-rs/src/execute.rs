@@ -1196,7 +1196,7 @@ impl Runner {
     /// `login` for this turn: at once when it is free, else once the turns that asked first are done with it. While
     /// it waits the turn says so, "Waiting for <login> to be free (busy with <bot>)", in a `status` event the chat and
     /// the task's Runs show (a wait, not a failure), renamed when the holder changes and cleared once the wait is
-    /// over. A lost lease, a person's Stop or the computer stopping ends the wait, and a turn cancelled just as the
+    /// over. A lost lease, a person's Stop or the computer stopping ends the wait, and a turn canceled just as the
     /// login came free never starts on it (crate::login_turns::wait_for).
     async fn take_login(&self, aid: &str, turn: &crate::login_turns::Turn, login: &crate::login_turns::Login, flags: &Flags, wake: &Notify) -> Result<crate::login_turns::Held, Fail> {
         let mut waited = false;
@@ -1854,7 +1854,7 @@ impl Runner {
             }
             let persisted = async {
                 if let Some(f) = fresh.as_ref().filter(|f| f.confirmed.lock().unwrap().is_none()) {
-                    // The host can confirm while the drive is blocked or being cancelled for a drain.
+                    // The host can confirm while the drive is blocked or being canceled for a drain.
                     if let Some(session) = h.confirmed(th) {
                         self.confirm_thread(f, &session).await?;
                     }
@@ -5000,7 +5000,7 @@ for line in sys.stdin:
         assert_drain_settled(&runner, "a-wait");
         assert_eq!(posted(&seen, "/attempts/a-wait/started"), 0);
         assert_eq!(posted(&seen, "/attempts/a-wait/complete"), 1);
-        assert!(runner.lanes.lane("ops", "main").try_lock_owned().is_ok(), "cancelled preparation retained its lane");
+        assert!(runner.lanes.lane("ops", "main").try_lock_owned().is_ok(), "canceled preparation retained its lane");
         drop(checkout);
         let place = tokio::time::timeout(Duration::from_secs(1), runner.enter_lanes(&attempt, &AtomicBool::new(false))).await.unwrap().unwrap();
         drop(place);
@@ -5008,7 +5008,7 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn drain_keeps_returning_a_task_claim_cancelled_at_its_worktree_git_lock() {
+    async fn drain_keeps_returning_a_task_claim_canceled_at_its_worktree_git_lock() {
         let _controls = RunControls;
         let (url, seen, server) = recording_server().await;
         let (runner, dir) = drain_runner_on(&url, 300).await;
@@ -5031,7 +5031,7 @@ for line in sys.stdin:
         };
         let result = tokio::time::timeout(Duration::from_secs(5), async { let (result, ()) = tokio::join!(work, drain); result }).await;
         server.abort();
-        result.expect("a cancelled git-lock wait became a worktree wait that the drain no longer cancels").unwrap();
+        result.expect("a canceled git-lock wait became a worktree wait that the drain no longer cancels").unwrap();
         assert_drain_settled(&runner, "a-git");
         assert_eq!(posted(&seen, "/attempts/a-git/started"), 0, "a returned claim acknowledged its start");
         drop((git, checkout));

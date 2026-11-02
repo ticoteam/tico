@@ -188,7 +188,7 @@ fn callback(listener: &TcpListener, state: &str, issuer: &str) -> Result<String>
         );
         ensure!(ok, "Sign-in answer did not match this request. Try again");
         if get("error") == "access_denied" {
-            bail!("Sign-in was cancelled in the browser");
+            bail!("Sign-in was canceled in the browser");
         }
         ensure!(!code.is_empty(), "Tico did not sign in: {}", get("error"));
         return Ok(code);

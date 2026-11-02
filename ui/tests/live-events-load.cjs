@@ -18,14 +18,14 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 const EVENTS = 50;
 const CEILING = 5;   // requests a page may make for the whole burst; reading lists per change makes 15 or more
 const now = new Date().toISOString();
-const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Details.', owner: 'bot:ops', requester: 'human:ana',
-  status: 'doing', lane: 'company', labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created: now, updated: now, ...over});
+const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Details.', owner_id: 'bot:ops', requester_id: 'human:ana',
+  status: 'doing', lane: 'company', labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
 
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
   const errors = [], requests = [];
-  const threads = threadsFake({bot: 'ops', messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes'}]});
+  const threads = threadsFake({bot: 'ops', messages: [{id: 'm1', sender_id: 'human:ana', body: 'Draft the release notes'}]});
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
     window.EventSource = class {

@@ -30,16 +30,16 @@ REMINDER_BATCH = 50
 
 def remind(c, row, at):
     """Whether a task from H.tasks_due_for_bots gets its due-date reminder now."""
-    due = H.parse_ts(row.get("due"))
+    due = H.parse_ts(row.get("due_at"))
     if due and due.tzinfo is None:
         # Legacy rows allowed dates/local timestamps. New API writes require an
         # offset; preserve the old machine's Pacific interpretation on migration.
         due = due.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
-    if not due or due > at or not row["owner"].startswith("bot:"):
+    if not due or due > at or not row["owner_id"].startswith("bot:"):
         return False
-    if c.execute("SELECT 1 FROM task_reminders WHERE task_id=? AND due=?", (row["id"], row["due"])).fetchone():
+    if c.execute("SELECT 1 FROM task_reminders WHERE task_id=? AND due_at=?", (row["id"], row["due_at"])).fetchone():
         return False
-    return H.bot(c, H.actor_id(row["owner"]))["state"] == "active"
+    return H.bot(c, H.actor_id(row["owner_id"]))["state"] == "active"
 
 
 # The controlled system routines' blocks (backend/system_routines.py CONTROLS), shared by the scheduler and Run now: a
@@ -417,12 +417,12 @@ class Scheduler:
             try:
                 # One snapshot for the cursor read and the selection, so the runs' provenance primes together.
                 with self.store.read_transaction() as c:
-                    saved = c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
+                    saved = c.execute('SELECT value FROM registry_metadata WHERE key=?',
                                       (assigned_start.CURSOR_KEY,)).fetchone()
                     cursor = [H._json(saved[0], "") if saved else ""]
                     unstarted = assigned_start.due(c, stamp(at), cursor=cursor, failures=failures)
                 with locked("assigned_start_cursor") as c:
-                    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+                    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                               (assigned_start.CURSOR_KEY, H._dump(cursor[0])))
             except Exception as exc:
                 failures.append({'assigned_start': 'selection', 'error': type(exc).__name__})
@@ -467,27 +467,27 @@ class Scheduler:
             with locked("reminders") as c:
                 for listed in ready[batch:batch + REMINDER_BATCH]:
                     with isolated(c, "reminder", listed["id"], failures):
-                        row = c.execute("SELECT id,title,owner,due,conversation_id FROM tasks WHERE id=? AND due=? "
-                                        "AND owner=? AND snoozed_until IS NULL AND status IN (" +
+                        row = c.execute("SELECT id,title,owner_id,due_at,conversation_id FROM tasks WHERE id=? AND due_at=? "
+                                        "AND owner_id=? AND snoozed_until IS NULL AND status IN (" +
                                         ",".join("?" * len(H.ACTIVE_STATUSES)) + ")",
-                                        (listed["id"], listed["due"], listed["owner"], *H.ACTIVE_STATUSES)).fetchone()
+                                        (listed["id"], listed["due_at"], listed["owner_id"], *H.ACTIVE_STATUSES)).fetchone()
                         if row is None or not remind(c, dict(row), at):
                             continue
                         try:
-                            H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
+                            H.say(c, H.KEEPER, row["owner_id"], "Due: " + row["title"], kind="notice",
                                   conversation_id=row["conversation_id"],
                                   refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule",
                                                            purpose="work task due soon"))
                         except H.Refused as exc:
                             H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
-                        c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))
+                        c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due_at"], stamp(at)))
                         reminders += 1
         SR.write(self.store, SR.Run("due_reminders").did(SR.words_of(reminders, "reminder sent", "Nothing due"),
                                                          quiet=not reminders))
         longest = max(holds, default=(0, 0, None))
         with self.store.transaction() as c:
             c.execute("INSERT INTO service_health VALUES('scheduler',?,?,?) ON CONFLICT(service) DO UPDATE SET "
-                      "last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
+                      "last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
                       (stamp(at), "schedule errors" if failures else None,
                        # How long the 10-second pass took, the longest any one of its transactions held the write
                        # lock and which step that was, and the longest it waited for the lock behind other writers.
@@ -577,7 +577,7 @@ class Scheduler:
             self.swept = at
             with SR.recording(self.store, "cleanup") as run:
                 with self.store.transaction() as c:
-                    c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail_json,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
+                    c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
                     # A duplicate is not a failure (batch_work.isolated); rows an older server wrote for one go.
                     c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND last_error LIKE '%: duplicate: %'")
                     SR.prune(c)                                # each system job keeps its last runs
@@ -831,8 +831,8 @@ class Scheduler:
                         # The expensive privacy/provenance scan does not need the writer lock.
                         from . import task_privacy
                         job_ids = [row["job_id"] for row in c.execute(
-                            "SELECT j.id AS job_id,j.bot,m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'")
-                            if not task_privacy.message_readable(c, "bot:" + row["bot"], row, current=True)]
+                            "SELECT j.id AS job_id,j.bot_id,m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'")
+                            if not task_privacy.message_readable(c, "bot:" + row["bot_id"], row, current=True)]
                     for job_id in job_ids:
                         with locked("drop_unreadable:" + job_id) as c:
                             self.execution.drop_unreadable(c, job_ids=[job_id])

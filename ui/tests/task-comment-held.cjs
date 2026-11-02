@@ -8,7 +8,7 @@ const TEXT = 'Our favorite color is gold.';
 const HOLD = {id: 'h-task', operation: 'comment', author: 'human:ana', author_name: 'Ana', state: 'held', outcome: 'blocked',
   rules: [{id: 'r-color', kind: 'internal', text: 'Acme does not name a favorite color.', version: 1, status: 'active',
            if_broken: 'block'}],
-  text: TEXT, to: ['Ops'], reviewer: null, task_id: null, created: new Date().toISOString(), can_withdraw: true,
+  text: TEXT, to: ['Ops'], reviewer: null, task_id: null, created_at: new Date().toISOString(), can_withdraw: true,
   can_send: false};
 
 (async () => {

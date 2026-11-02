@@ -16,9 +16,9 @@ const today = new Date(now).toLocaleDateString('en-CA', {timeZone: 'America/Los_
 const EIGHT = [['seo', 'AI SEO'], ['ads', 'Ads Bot'], ['copy', 'Copywriter'], ['social', 'Social Bot'], ['pr', 'PR Bot'],
   ['events', 'Events Bot'], ['brand', 'Brand Bot'], ['email', 'Email Bot']];
 const bots = [['cmo', 'AI CMO'], ...EIGHT, ['writer', 'Writer Bot']].map(([name, display_name]) =>
-  ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: 'marketing', operator: 'ana'}));
+  ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: 'marketing', owner_id: 'ana'}));
 const update = (id, bot, body, read, more = {}) => ({id, bot, kind: 'daily', day: today, headline: body.slice(2), body, read,
-  created: iso(-hour), updated: iso(-hour), replies: 0, drafted_by: null, edited_by: null, slides: null, inputs: [], ...more});
+  created_at: iso(-hour), updated_at: iso(-hour), replies: 0, drafted_by: null, edited_by: null, slides: null, inputs: [], ...more});
 // Noon on the queue's clock (Pacific), for the Friday checks.
 const THURSDAY = '2026-10-15', FRIDAY = '2026-10-16', noon = day => new Date(`${day}T19:00:00Z`);
 const drafted = {goal: 'Open the Northwind office by November', done: ['Signed the lease'], focus: ['Hire an office manager'], blockers: [],

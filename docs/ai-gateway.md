@@ -146,7 +146,7 @@ under 24 hours, including any fallback; its run details explain the shorter limi
   on the card turns it back on.
 - If Tico turns the Gateway off for your install, Health says "Tico AI Gateway was turned off for this install by
   Tico. Contact support." Decide and bots on Tico models stop, and the server stops asking for a key.
-- If the invite code doesn't work (expired, used by all the installs it allows, or cancelled), Health says so. Ask
+- If the invite code doesn't work (expired, used by all the installs it allows, or canceled), Health says so. Ask
   Tico Team for a new code and run the install command again with it, or paste a gateway key on the card.
 
 The Gateway counts each call against the install, its key, the model and the bot. It gets an id for the bot that only

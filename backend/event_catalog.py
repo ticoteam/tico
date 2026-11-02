@@ -41,7 +41,7 @@ _TASK = "5b1d2c0e-7f34-4a9e-8c1b-2f6a9d3e4b10"
 
 def _task(**more):
     return {"id": _TASK, "title": "Renew the acme.example domain", "status": "doing", "step": "doing",
-            "owner": "bot:ops", "requester": "human:ana", "actor": "bot:ops", **more}
+            "owner_id": "bot:ops", "requester_id": "human:ana", "actor": "bot:ops", **more}
 
 
 def _change(field, old, new, **more):
@@ -70,10 +70,10 @@ def _build():
     add("task.reopened", "A finished task was opened again.",
         _change("status", "done", "open", status="open", actor="human:ana"))
 
-    approval = {"id": "a1", "kind": "send", "task_id": _TASK, "requested_by": "bot:ops", "decision_owner": "human:ana"}
+    approval = {"id": "a1", "kind": "send", "task_id": _TASK, "requested_by_id": "bot:ops", "decision_owner": "human:ana"}
     add("approval.requested", "A bot asked a person to approve something.", approval)
     add("approval.decided", "A person approved or declined a request.",
-        {**approval, "decision": "approved", "decided_by": "human:ana"})
+        {**approval, "decision": "approved", "decided_by_id": "human:ana"})
     add("approval.withdrawn", "A request was withdrawn because it no longer applies.", approval)
 
     asked = {"id": "n1", "to": "human:ana", "from": "bot:ops", "task_id": _TASK}
@@ -83,17 +83,17 @@ def _build():
     # Threads (docs/threads.md). Payloads are thin: ids and facts, never a message's words. An endpoint hears a thread
     # only if its owner can read the thread, message.held included. message.created is for outgoing
     # webhooks alone: a routine or rule does not hear every message.
-    thread = {"id": "t1", "title": "Refund policy", "audience": "members", "owner_actor": "human:ana", "root_id": "t1",
+    thread = {"id": "t1", "title": "Refund policy", "audience": "members", "owner_id": "human:ana", "root_id": "t1",
               "parent_id": None, "parent_message_id": None}
     add("thread.created", "A thread was started.", thread)
     add("message.created", "A message was posted to a thread (outgoing webhooks only).",
         {"id": "m1", "thread_id": "t1", "root_id": "t1", "parent_message_id": None, "seq": 4411,
-         "from_actor": "human:ana", "to_actor": None, "kind": "say"})
+         "sender_id": "human:ana", "recipient_id": None, "kind": "say"})
     add("message.held", "The org rules held a message before it reached its thread.",
-        {"id": "m2", "thread_id": "t1", "root_id": "t1", "from_actor": "bot:ops", "rule": "refund_terms",
+        {"id": "m2", "thread_id": "t1", "root_id": "t1", "sender_id": "bot:ops", "rule": "refund_terms",
          "hold": "h1"})
 
-    add("bot.run_failed", "A bot's run failed.", {"bot": "ops", "attempt_id": "r1", "error_class": "login"})
+    add("bot.run_failed", "A bot's run failed.", {"bot": "ops", "run_id": "r1", "error_class": "login"})
     add("bot.held", "A bot was held: it hit a limit or kept failing.",
         {"bot": "ops", "reason": "budget", "window": "1h", "runs": 40, "budget": 30, "task": _TASK})
     add("bot.released", "A held bot was released.", {"bot": "ops", "reason": "budget", "released_by": "human:ana"})

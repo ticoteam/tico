@@ -42,8 +42,8 @@ COMPANY_PAGE_OWNER_TABLES = ("company_page_settings", "audiences", "audience_sou
                              "stat_board_approvals", "page_releases")
 # Table-valued functions SQLite reports like tables of the main schema.
 TABLE_FUNCTIONS = {"json_each", "json_tree"}
-SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt",
-                                "slack_ts", "created", "updated"}}
+SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt_at",
+                                "slack_ts", "created_at", "updated_at"}}
 # Columns nobody reads through SQL. Tables not named in `guarded` (credentials, credential_keys,
 # credential_grants, credential_uses, idempotency, runners, enrollments, session_epochs, bot_session_epochs, settings_changes,
 # backup_verified_blobs, _litestream_*, sqlite_* except sqlite_master) are denied outright.
@@ -79,12 +79,12 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
             # In it, as teammate_access.Known says: its participant list or its root's, or a member of its root.
             return (f"EXISTS (SELECT 1 FROM {inner('conversations')} v JOIN {inner('conversations')} vr "
                     f"ON vr.id=COALESCE(v.root_id,v.id) WHERE v.id={conversation} AND ("
-                    f"EXISTS (SELECT 1 FROM json_each(v.participants_json) p WHERE p.value={me}) OR "
-                    f"EXISTS (SELECT 1 FROM json_each(vr.participants_json) p WHERE p.value={me}) OR "
+                    f"EXISTS (SELECT 1 FROM json_each(v.participants) p WHERE p.value={me}) OR "
+                    f"EXISTS (SELECT 1 FROM json_each(vr.participants) p WHERE p.value={me}) OR "
                     f"EXISTS (SELECT 1 FROM {inner('thread_members')} tm WHERE tm.thread_id=vr.id AND tm.actor IN {names})))")
 
         def party(task):
-            return (f"EXISTS (SELECT 1 FROM {inner('tasks')} t WHERE t.id={task} AND (t.owner={me} OR t.requester={me} "
+            return (f"EXISTS (SELECT 1 FROM {inner('tasks')} t WHERE t.id={task} AND (t.owner_id={me} OR t.requester_id={me} "
                     f"OR {member('t.conversation_id')}))")
 
         def masked(column, known, among=hidden):
@@ -92,34 +92,34 @@ def teammate_masks(unseen, me, inner=None, names=None, bots=()):
         out["thread_members"] = {column: masked(column, member("source.thread_id"), qlist(strangers))
                                  for column in ("actor", "added_by")}
     if people and inner is not None:
-        out["tasks"] = {column: masked(column, party("source.id")) for column in ("owner", "requester", "closed_by")}
+        out["tasks"] = {column: masked(column, party("source.id")) for column in ("owner_id", "requester_id", "closed_by_id")}
         out["task_events"] = {"actor": masked("actor", party("source.task_id"))}
         out["events"] = {"actor": masked("actor", f"({member('source.target')} OR {party('source.target')})")}
         # As REST and the stream say it (teammate_access.Known): the message stays, its author is not named.
-        out["messages"] = {column: masked(column, member("source.conversation_id")) for column in ("from_actor", "to_actor")}
+        out["messages"] = {column: masked(column, member("source.conversation_id")) for column in ("sender_id", "recipient_id")}
         out["thread_followers"] = {"actor": masked("actor", member("source.thread_id"))}
         said = (f"(SELECT mm.conversation_id FROM {inner('messages')} mm WHERE mm.id=source.message_id)")
         out["message_mentions"] = {"actor": masked("actor", member(said))}
     if people or groups:
         out["bot_config"] = bot_config_masks(people, bare, groups)
     if people:
-        out["conversations"] = {"participants_json": (
-            "CASE WHEN source.participants_json IS NULL OR NOT json_valid(source.participants_json) THEN NULL "
-            f"WHEN EXISTS (SELECT 1 FROM json_each(source.participants_json) WHERE value={me}) THEN source.participants_json "
-            f"ELSE (SELECT json_group_array(value) FROM json_each(source.participants_json) WHERE value NOT IN {qlist(people)}) "
+        out["conversations"] = {"participants": (
+            "CASE WHEN source.participants IS NULL OR NOT json_valid(source.participants) THEN NULL "
+            f"WHEN EXISTS (SELECT 1 FROM json_each(source.participants) WHERE value={me}) THEN source.participants "
+            f"ELSE (SELECT json_group_array(value) FROM json_each(source.participants) WHERE value NOT IN {qlist(people)}) "
             "END")}
         if inner is not None:
-            out["conversations"]["owner_actor"] = masked("owner_actor", member("source.id"))
+            out["conversations"]["owner_id"] = masked("owner_id", member("source.id"))
     if groups:
-        out["humans"] = {"teams_json": (
-            "CASE WHEN source.teams_json IS NULL OR NOT json_valid(source.teams_json) THEN source.teams_json "
-            f"ELSE (SELECT json_group_array(value) FROM json_each(source.teams_json) WHERE value NOT IN {qlist(groups)}) END")}
+        out["humans"] = {"teams": (
+            "CASE WHEN source.teams IS NULL OR NOT json_valid(source.teams) THEN source.teams "
+            f"ELSE (SELECT json_group_array(value) FROM json_each(source.teams) WHERE value NOT IN {qlist(groups)}) END")}
     return out
 
 
 def bot_config_masks(people, bare, groups):
     """bot_config columns less the people (`human:<id>` in `people`, bare ids in `bare`) and groups the caller may
-    not see: ids read '', owner lists drop them, and the configuration loses a `team`, `reports_to` or `operator`
+    not see: ids read '', owner lists drop them, and the configuration loses a `team`, `reports_to` or `owner_id`
     naming one."""
     nobody = "(SELECT NULL WHERE 0)"              # an IN list that matches nothing
     actors, ids, teams = qlist(people) if people else nobody, qlist(bare) if bare else nobody, \
@@ -127,18 +127,18 @@ def bot_config_masks(people, bare, groups):
     out = {"team": f"CASE WHEN source.team IN {teams} THEN NULL ELSE source.team END"}
     if not people:
         return out
-    for column in ("operator", "reports_to"):
+    for column in ("owner_id", "reports_to"):
         out[column] = (f"CASE WHEN source.{column} IN {ids} OR source.{column} IN {actors} THEN '' "
                        f"ELSE source.{column} END")
     for column in ("created_by", "definition_updated_by"):
         out[column] = f"CASE WHEN source.{column} IN {actors} THEN '' ELSE source.{column} END"
-    for column in ("owner_ids_json", "bot_owners_json"):
+    for column in ("owner_ids", "bot_owners"):
         out[column] = (f"CASE WHEN source.{column} IS NULL OR NOT json_valid(source.{column}) THEN source.{column} "
                        f"ELSE (SELECT json_group_array(value) FROM json_each(source.{column}) "
                        f"WHERE value NOT IN {ids} AND value NOT IN {actors}) END")
-    out["config_json"] = (
-        "CASE WHEN source.config_json IS NULL OR NOT json_valid(source.config_json) THEN source.config_json "
-        "ELSE json_patch(source.config_json, (SELECT json_group_object(key, NULL) FROM json_each(source.config_json) "
+    out["config"] = (
+        "CASE WHEN source.config IS NULL OR NOT json_valid(source.config) THEN source.config "
+        "ELSE json_patch(source.config, (SELECT json_group_object(key, NULL) FROM json_each(source.config) "
         f"WHERE (key='team' AND value IN {teams}) OR (key IN ('reports_to','operator') "
         f"AND (value IN {ids} OR value IN {actors})))) END")
     return out
@@ -150,7 +150,7 @@ def unsettled_watched(c, inner):
     and capture keep it (backend/org_rule_check.py hides_run). A late result filed against an expired run included."""
     from .org_rule_check import UNSETTLED, watched_bots
     watched = watched_bots(c)
-    return (f"SELECT id FROM {inner('attempts')} WHERE bot IN {qlist(watched)} AND state IN {qlist(UNSETTLED)}"
+    return (f"SELECT id FROM {inner('attempts')} WHERE bot_id IN {qlist(watched)} AND state IN {qlist(UNSETTLED)}"
             if watched else "")
 
 
@@ -161,8 +161,8 @@ def live_masks(unsettled):
         return {}
     hidden = lambda column: f"CASE WHEN source.id IN ({unsettled}) THEN NULL ELSE source.{column} END"  # noqa: E731
     return {"attempts": {"final_text": hidden("final_text"),
-                         "result_json": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result_json "
-                                        "WHEN json_valid(source.result_json) THEN json_remove(source.result_json,'$.text') "
+                         "result": f"CASE WHEN source.id NOT IN ({unsettled}) THEN source.result "
+                                        "WHEN json_valid(source.result) THEN json_remove(source.result,'$.text') "
                                         "ELSE NULL END"},
             "turns": {"summary": hidden("summary")}}
 # Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
@@ -172,19 +172,17 @@ def live_masks(unsettled):
 DERIVED = {
     # Runs per week (Monday, UTC), bot, trigger and purpose, with tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
-    # measured usage (every primary and fallback segment) first, and the runner's older one-number `tokens_in` only
-    # when there is none: a resumed thread may report its whole running total there. An attempt that never got a
+    # measured usage (every primary and fallback segment). A run from before measured usage has its one-number
+    # count in input_tokens (migration 76). An attempt that never got a
     # turn row (one that failed or expired before it started) is counted too, as `unknown`, with no tokens or outcome;
     # one whose turn the caller may not read is not turnless, and is not counted.
     "run_weekly": (("turns", "attempts"), """
-        SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
+        SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                coalesce(purpose, 'unknown') AS purpose,
                count(*) AS runs,
-               sum(CASE WHEN input_tokens IS NOT NULL OR cached_tokens IS NOT NULL
-                        THEN coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)
-                        ELSE coalesce(tokens_in, 0) END) AS input_tokens,
+               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
-               sum(coalesce(output_tokens, tokens_out, 0)) AS output_tokens,
+               sum(coalesce(output_tokens, 0)) AS output_tokens,
                sum(coalesce(outcome, '') = 'acted') AS acted,
                sum(coalesce(outcome, '') = 'no_change') AS no_change,
                sum(coalesce(outcome, '') = 'nothing_to_do') AS nothing_to_do,
@@ -195,39 +193,37 @@ DERIVED = {
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
-        FROM (SELECT started, bot, trigger_kind, purpose, input_tokens, cached_tokens, tokens_in, output_tokens, tokens_out,
+        FROM (SELECT started_at, bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
                      outcome, did_nothing, rotated
-              FROM {turns} WHERE started IS NOT NULL
+              FROM {turns} WHERE started_at IS NOT NULL
               UNION ALL
-              SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+              SELECT coalesce(a.started_at, a.created_at), a.bot_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
               FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
         GROUP BY 1, 2, 3, 4"""),
     # Runs per week, bot and wake rule (backend/rules.py): the rule that woke the run, with its tokens and how many did
     # nothing. A run from before rules, or whose message carried none, reads `unknown`. Same token sums as run_weekly.
     "rule_weekly": (("turns",), """
-        SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(rule_id, 'unknown') AS rule,
+        SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(rule_id, 'unknown') AS rule,
                count(*) AS runs,
-               sum(CASE WHEN input_tokens IS NOT NULL OR cached_tokens IS NOT NULL
-                        THEN coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)
-                        ELSE coalesce(tokens_in, 0) END) AS input_tokens,
+               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
-               sum(coalesce(output_tokens, tokens_out, 0)) AS output_tokens,
+               sum(coalesce(output_tokens, 0)) AS output_tokens,
                sum(coalesce(outcome, '') = 'acted') AS acted,
                sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
                round(100.0 * sum(coalesce(did_nothing, 0) = 1) / count(*), 1) AS did_nothing_pct
-        FROM {turns} WHERE started IS NOT NULL
+        FROM {turns} WHERE started_at IS NOT NULL
         GROUP BY 1, 2, 3"""),
 }
 # Totals over rows the reader may not read one by one, built only for the owner and a bot the owner granted them
 # (backend/outcome_stats.py). Each groups by week and fixed names (status, proposer, bot, tool) and carries no text, no
 # id and no person: a proposal's owner, a call's person and its token label never leave the base row.
 GRANTED = {
-    # Assistant and BotOps proposals per week, proposer and status (pending, running, done, failed, cancelled,
+    # Assistant and BotOps proposals per week, proposer and status (pending, running, done, failed, canceled,
     # expired); `share_pct` is that status's share of its week and proposer.
     "assistant_action_weekly": (("assistant_actions",), """
         SELECT week, proposer, status, actions,
                round(100.0 * actions / sum(actions) OVER (PARTITION BY week, proposer), 1) AS share_pct
-        FROM (SELECT date(created, '-6 days', 'weekday 1') AS week,
+        FROM (SELECT date(created_at, '-6 days', 'weekday 1') AS week,
                      coalesce(proposer, proposed_via, 'assistant') AS proposer,
                      status, count(status) AS actions
               FROM {all_assistant_actions} GROUP BY 1, 2, 3)"""),
@@ -237,17 +233,17 @@ GRANTED = {
         SELECT week, bot, tool, count(*) AS calls, sum(error) AS errors,
                round(100.0 * sum(error) / count(*), 1) AS error_pct,
                CAST(round(avg(ms)) AS INTEGER) AS avg_ms, max(ms) AS max_ms
-        FROM (SELECT date(ts, '-6 days', 'weekday 1') AS week,
-                     CASE WHEN actor LIKE 'bot:%' AND substr(actor, 5) IN (SELECT slug FROM {bots})
+        FROM (SELECT date(created_at, '-6 days', 'weekday 1') AS week,
+                     CASE WHEN actor LIKE 'bot:%' AND substr(actor, 5) IN (SELECT id FROM {bots})
                           THEN substr(actor, 5) END AS bot,
                      CASE WHEN target IN {tool_names} THEN target ELSE 'other' END AS tool,
-                     coalesce(json_extract(detail_json, '$.error'), 0) <> 0 AS error,
-                     coalesce(json_extract(detail_json, '$.ms'), 0) AS ms
+                     coalesce(json_extract(detail, '$.error'), 0) <> 0 AS error,
+                     coalesce(json_extract(detail, '$.ms'), 0) AS ms
               FROM {all_events} WHERE action = 'mcp.call' AND actor LIKE 'bot:%')
         GROUP BY 1, 2, 3"""),
 }
 # Base tables only a GRANTED view reads, and the columns it may see of them.
-GRANTED_SOURCES = {"assistant_actions": ("created", "proposer", "proposed_via", "status")}
+GRANTED_SOURCES = {"assistant_actions": ("created_at", "proposer", "proposed_via", "status")}
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
 FTS_SHADOWS = ("_data", "_idx", "_content", "_docsize", "_config")
 STATEMENT = re.compile(r"^\s*(?:(?:--[^\n]*\n?|/\*.*?\*/)\s*)*(select|with|explain\s+query\s+plan)\b", re.I | re.S)
@@ -358,13 +354,13 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     legacy_messages = threads.message_sql(c, viewer, "", inner=inner)
     tasks = auth.task_sql(c, who, delegations=inner("task_delegations"), unreadable=hidden)
     # Evaluate provenance only for candidate rows, never scan unrelated content first.
-    msg_gate = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
+    msg_gate = function("message") + "(id,conversation_id,refs,in_reply_to)"
     message_columns = set(columns.get("messages", ())) if columns is not None else {r[1] for r in c.execute("PRAGMA table_info(messages)")}
     for deleted in ("deleted_at", "deleted"):
         if deleted in message_columns:
             msg_gate += f" AND coalesce({deleted},0)=0"
     attempt_gate = function("attempt") + "(id)"
-    event_gate = function("event") + "(target,actor,ts,detail_json)"
+    event_gate = function("event") + "(target,actor,created_at,detail)"
     tag_gate = function("tag") + "(id,is_template)"
     content_gate = lambda cols: function("content") + "(" + ",".join(cols) + ")"
     blob_gate = function("blob") + "(id)"
@@ -394,12 +390,12 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         meetings = "0"
     else:
         email = q(who.email.lower())
-        meetings = (f"lower(owner)={email} OR (json_extract(metadata_json,'$.kind')='meeting' AND ("
-                    "coalesce(json_extract(metadata_json,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
-                    f"json_each(json_extract(metadata_json,'$.calendar.attendees')) WHERE lower(value)={email}) "
-                    "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata_json,'$.participants')) "
+        meetings = (f"lower(owner)={email} OR (json_extract(metadata,'$.kind')='meeting' AND ("
+                    "coalesce(json_extract(metadata,'$.private'),0)=0 OR EXISTS (SELECT 1 FROM "
+                    f"json_each(json_extract(metadata,'$.calendar.attendees')) WHERE lower(value)={email}) "
+                    "OR EXISTS (SELECT 1 FROM json_each(json_extract(metadata,'$.participants')) "
                     f"WHERE lower(json_extract(value,'$.email'))={email})))")
-    goals = f"owner NOT IN {qlist(['bot:' + slug for slug in hidden])}" if hidden else "id IS NOT NULL"
+    goals = f"owner_id NOT IN {qlist(['bot:' + slug for slug in hidden])}" if hidden else "id IS NOT NULL"
     kpis = goals            # a KPI is owned like a goal: a bot's own are read by whoever may read the bot
     admin = who.role == "owner" or auth.bot_admin(who)
     # What happened is for whoever it involved: their own actions and what they may read. The rest is the
@@ -410,7 +406,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         events = mine
     else:
         events = (f"actor={me} OR target IN (SELECT id FROM tasks) OR target IN (SELECT id FROM conversations) "
-                  "OR target IN (SELECT slug FROM bots) OR target IN (SELECT 'bot:'||slug FROM bots)")
+                  "OR target IN (SELECT id FROM bots) OR target IN (SELECT 'bot:'||id FROM bots)")
     # Imported drafts do not enter company search, exports or the audit feed.
     meetings = f"({meetings}) AND review_state='live'"
     events = (f"({events}) AND target NOT IN (SELECT id FROM {inner('meetings')} "
@@ -433,8 +429,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
         "approvals": ("(task_id IS NULL OR " + by_task + ") AND " + by_message + " AND (" +
-                      ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE to_actor={me})") + ")"),
-        "bots": bots_visible("slug"),
+                      ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})") + ")"),
+        "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"), "bot_status_history": bots_visible("bot"),
         "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_control": bots_visible("bot"),
         "bot_transitions": bots_visible("bot"), "assignments": bots_visible("bot"),
@@ -442,9 +438,9 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "turns": f"{bots_visible('bot')} AND (message_id IS NULL OR {by_message}) AND "
                  f"(task_id IS NULL OR {by_task}) AND " + attempt_gate,
         "deltas": "turn_id IN (SELECT id FROM turns)" + (f" AND turn_id NOT IN ({unsettled})" if unsettled else ""),
-        "jobs": f"{bots_visible('bot')} AND {by_message}",
+        "jobs": f"{bots_visible('bot_id')} AND {by_message}",
         "attempts": by_job + " AND " + attempt_gate, "job_recovery": by_job + " AND " + by_attempt,
-        "attempt_events": by_attempt + " AND " + content_gate(("payload_json",)) + (
+        "attempt_events": by_attempt + " AND " + content_gate(("payload",)) + (
             f" AND NOT (kind IN ('delta','message') AND attempt_id IN ({unsettled}))" if unsettled else ""),
         "attempt_inputs": by_attempt, "attempt_conversations": by_attempt,
         "bot_transition_checkpoints": "conversation_id IN (SELECT id FROM conversations)",
@@ -502,19 +498,18 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         if admin and not bot else "0",
         "events": f"({events}) AND " + event_gate,
         "refusals": "(" + ("1" if owner else mine if bot else f"actor={me}") + ") AND " +
-                    function("event") + "('',actor,ts,detail_json)",
+                    function("event") + "('',actor,created_at,detail)",
         "meetings": f"({meetings}) AND id NOT IN (SELECT meeting_id FROM {inner('media_control')} WHERE deleted_at IS NOT NULL)",
         "meeting_versions": by_meeting, "meeting_deliveries": by_meeting, "media_assets": by_meeting, "media_control": by_meeting,
         "meeting_items": by_meeting, "meeting_brain": by_meeting, "meeting_comments": by_meeting,
         "import_refs": by_meeting,
-        "documents": "1" if owner else "visibility='external'",
-        "document_versions": "id IN (SELECT id FROM documents)",
+        "market_pages": "1",
         "docs": "id IS NOT NULL", "doc_versions": "doc_id IN (SELECT id FROM docs)",
         "linked_docs": "id IS NOT NULL",
-        "bot_files": (file_gate + " AND " + (f"bot={q(H.actor_id(who.actor))} AND " if bot else "")
+        "bot_files": (file_gate + " AND " + (f"bot_id={q(H.actor_id(who.actor))} AND " if bot else "")
                       + f"(CASE WHEN scope LIKE 'task:%' THEN substr(scope,6) IN (SELECT id FROM tasks) "
                         "WHEN scope LIKE 'conversation:%' THEN substr(scope,14) IN (SELECT id FROM conversations) "
-                        f"ELSE {bots_visible('bot')} END)"),
+                        f"ELSE {bots_visible('bot_id')} END)"),
         "bot_file_versions": "file_id IN (SELECT id FROM bot_files)",
         "bot_file_activity": "file_id IN (SELECT id FROM bot_files)",
         # The company owner is not thereby the owner of everyone's private attachments (media.py).
@@ -540,10 +535,10 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         rules[table] += " AND (task_id IS NULL OR " + by_task + ")"
         # Untagged free-form status can retain the previous private turn's content.
         rules[table] += (" AND NOT EXISTS (SELECT 1 FROM " + inner("tasks") +
-                         " t WHERE (t.owner='bot:'||bot OR t.requester='bot:'||bot) "
+                         " t WHERE (t.owner_id='bot:'||bot OR t.requester_id='bot:'||bot) "
                          "AND (t.private IS NULL OR t.private<>0) AND NOT " +
                          function("task") + "(t.id))")
-    for table in ("docs", "doc_versions", "linked_docs", "documents", "document_versions"):
+    for table in ("docs", "doc_versions", "linked_docs", "market_pages"):
         cols = columns.get(table, ()) if columns is not None else [r[1] for r in c.execute(f'PRAGMA table_info("{table}")')]
         rules[table] = "(" + rules[table] + ") AND " + content_gate(cols)
     rules["task_file_reviews"] = "file_id IN (SELECT id FROM bot_files) OR file_id IN (SELECT id FROM blobs)"
@@ -623,11 +618,11 @@ class Gates:
     def root(self, alias):
         """A message settled by its own row: no parent, answers or inputs, and (unread here) no run."""
         return (f"coalesce(coalesce({alias}.in_reply_to,'')='' AND {alias}.conversation_id NOT IN "
-                f"(SELECT id FROM {self.rooms}) AND {self.refs(alias + '.refs_json', top=False)}, 0)")
+                f"(SELECT id FROM {self.rooms}) AND {self.refs(alias + '.refs', top=False)}, 0)")
 
     def message(self, alias="source"):
         """ReadIndex.message: the row, its run, and each message it replies to, answers or took in as input."""
-        refs = alias + ".refs_json"
+        refs = alias + ".refs"
         ancestors = (f"SELECT {alias}.in_reply_to AS id UNION ALL "
                      f"SELECT value FROM json_each({refs},'$.answers') WHERE type='text' UNION ALL "
                      f"SELECT value FROM json_each({refs},'$.inputs') WHERE type='text'")
@@ -647,9 +642,9 @@ class Gates:
                 f"AND {aid} NOT IN (SELECT id FROM {self.carriers}) "
                 f"AND NOT EXISTS (SELECT 1 FROM {events} retained WHERE retained.action IN {RUN_EVENTS} "
                 f"AND retained.target={aid} AND NOT coalesce(retained.action='task.next-run.carried' AND "
-                f"(coalesce(retained.detail_json,'')='' OR (json_valid(retained.detail_json) AND "
-                f"json_type(retained.detail_json)='object' AND instr(retained.detail_json,'\\')=0 AND "
-                f"{self.strings('retained.detail_json')})), 0)), 0)")
+                f"(coalesce(retained.detail,'')='' OR (json_valid(retained.detail) AND "
+                f"json_type(retained.detail)='object' AND instr(retained.detail,'\\')=0 AND "
+                f"{self.strings('retained.detail')})), 0)), 0)")
 
 
 def materialize(conn, index, tables, inner, function, private):
@@ -684,7 +679,7 @@ def materialize(conn, index, tables, inner, function, private):
     create("denied_reads", "SELECT key FROM main.read_deps WHERE dep IN (SELECT 't:'||id FROM "
                            f'"{private("denied_tasks")}")')
     gates = Gates(inner, private, index.denied)
-    message = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
+    message = function("message") + "(id,conversation_id,refs,in_reply_to)"
     attempt = function("attempt") + "(id)"
 
     def settled(prefix, fast):
@@ -695,7 +690,7 @@ def materialize(conn, index, tables, inner, function, private):
     # SQLite evaluates the side of an OR without a subquery first, so `fast OR function` asked Python about every
     # row. The fast answer goes in as an argument instead: a fast yes returns before any provenance is read.
     return {table: (predicate.replace(message, function("settled_message") +
-                                      f"(id,conversation_id,refs_json,in_reply_to,{settled('m', gates.message())})")
+                                      f"(id,conversation_id,refs,in_reply_to,{settled('m', gates.message())})")
                     .replace(attempt, function("settled_attempt") + f"(id,{settled('a', gates.attempt('source.id'))})"),
                     hidden)
             for table, (predicate, hidden) in tables.items()}
@@ -953,11 +948,11 @@ def install_sql(app, store, auth):
                 principal = who
                 if who.role == "runner":
                     # Only a personal Mac reads SQL with its registering person's rights.
-                    row = c.execute("SELECT operator,platform FROM runners WHERE id=?", (who.runner_id,)).fetchone()
+                    row = c.execute("SELECT owner_id,platform FROM runners WHERE id=?", (who.runner_id,)).fetchone()
                     if not str(row["platform"] or "").startswith("darwin"):
                         raise Problem("forbidden", "Only a Mac's runner credential reads as its operator; "
                                                    "use a personal API token", 403)
-                    principal = auth.identity_for_actor(c, "human:" + row["operator"])
+                    principal = auth.identity_for_actor(c, "human:" + row["owner_id"])
                     detail["as"] = principal.actor
                 cap, seconds = LIMITS[principal.role]
                 if body.max_rows:

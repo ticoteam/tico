@@ -8,6 +8,7 @@ relay. The threads are read and written through `/api/v2/threads` on each side, 
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_federation import OWNER, clock, connect, drive, hq, make_side, row_for, share, status  # noqa: F401
 from backend.tests.threads_e2e import call, create_thread, ok, require_threads_api, say, timeline
 

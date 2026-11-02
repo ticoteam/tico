@@ -173,11 +173,11 @@ def hub(tmp_path):
         c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({
             "default_user": "ana", "teams": {}, "people": PEOPLE}),))
         for slug, entry in BOTS.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,team,operator,description,reports_to) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,team,owner_id,description,reports_to) VALUES(?,?,?,?,?,?)",
                       (slug, encode({"name": slug, "runtime": "fake"}), None, "ana", entry["description"], entry["reports_to"]))
         now = H.now()
         for thread_id, audience, subject in ((COMPANY, "company", "Marketing"), (MEMBERS, "members", "Plans")):
-            c.execute("INSERT INTO conversations (id,kind,subject,created,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
+            c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) VALUES (?,?,?,?,?,?,'')",
                       (thread_id, "thread", subject, now, audience, thread_id))
         # A members thread is read by its members: Ana is one, so the admin can see it and link it.
         c.execute("INSERT INTO thread_members (id,thread_id,actor,role,added_by,created_at,updated_at) "
@@ -274,9 +274,9 @@ def origin_message(world, stamp):
 # ----------------------------------------------------------------------------- linking
 def test_a_link_is_requested_for_one_root_thread_at_a_time(world):
     with world.hub.transaction() as c:
-        c.execute("INSERT INTO conversations (id,kind,subject,created,audience,root_id,parent_id,parent_message_id,path) "
+        c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,parent_id,parent_message_id,path) "
                   "VALUES ('T-reply','thread','Reply','x','company',?,?,'m1','')", (COMPANY, COMPANY))
-        c.execute("INSERT INTO conversations (id,kind,subject,created,audience,root_id,path) "
+        c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) "
                   "VALUES ('T-own','thread','Own','x','personal','T-own','')")
         c.execute("INSERT INTO thread_members (id,thread_id,actor,role,added_by,created_at,updated_at) "
                   "VALUES ('m-own-ana','T-own','human:ana','member','human:ana','x','x')")
@@ -359,9 +359,9 @@ def test_a_channel_message_goes_through_the_gateway_as_the_mapped_person_and_nev
                           "ts": ts(1), "text": "Kickoff is at 10"}}
     assert world.gw.receive(envelope) == "posted"
     assert all_rows(world, "SELECT event_id FROM slack_events") == []
-    msg = one(world, "SELECT from_actor, body, refs_json, origin_id FROM messages")
-    assert msg["from_actor"] == "human:ana" and msg["body"] == "Kickoff is at 10"
-    refs = json.loads(msg["refs_json"])
+    msg = one(world, "SELECT sender_id, body, refs, origin_id FROM messages")
+    assert msg["sender_id"] == "human:ana" and msg["body"] == "Kickoff is at 10"
+    refs = json.loads(msg["refs"])
     assert refs["slack"] == {"channel": MARKETING, "ts": ts(1), "team": TEAM}
     assert msg["origin_id"].endswith(f"@slack:{TEAM}")
     assert "slack" in world.screened
@@ -515,10 +515,10 @@ def test_history_is_opt_in_and_carries_only_mapped_members_from_the_last_thirty_
     world.bridge.tick()
     link = link_row(world, link_id)
     assert link["history_state"] == "done" and link["history_count"] == 2
-    carried = all_rows(world, "SELECT from_actor, body, refs_json FROM messages ORDER BY created")
+    carried = all_rows(world, "SELECT sender_id, body, refs FROM messages ORDER BY created_at")
     assert [m["body"] for m in carried] == ["Kickoff today", "Sounds good"]
-    assert [m["from_actor"] for m in carried] == ["human:ana", "human:ben"]
-    assert all(json.loads(m["refs_json"])["import"] is True for m in carried)
+    assert [m["sender_id"] for m in carried] == ["human:ana", "human:ben"]
+    assert all(json.loads(m["refs"])["import"] is True for m in carried)
 
 
 def test_history_is_off_unless_asked_for(world):
@@ -616,7 +616,7 @@ def test_a_rule_break_holds_the_slack_message_as_its_person_with_its_provenance(
     assert all_rows(world, "SELECT id FROM messages") == []
     hold = one(world, "SELECT * FROM org_rule_holds")
     assert hold["author"] == "human:ana"
-    provenance = json.loads(hold["payload_json"])["provenance"]
+    provenance = json.loads(hold["payload"])["provenance"]
     assert provenance["origin"] == {"source": "slack", "origin": f"{MARKETING}:{ts(1)}"}
     assert provenance["authenticated"].startswith("slack:")
     assert world.slack.ephemeral[-1][1] == "U1"
@@ -630,9 +630,9 @@ def test_send_anyway_carries_a_held_slack_message_in_as_its_person(world):
     hold = one(world, "SELECT id, nonce FROM org_rule_holds")
     with world.hub.transaction() as c:
         OR.send(c, OWNER, hold["id"], hold["nonce"], auth=Auth(world.hub))
-    carried = one(world, "SELECT m.from_actor, m.body FROM messages m JOIN slack_message_links l ON l.message_id = m.id "
+    carried = one(world, "SELECT m.sender_id, m.body FROM messages m JOIN slack_message_links l ON l.message_id = m.id "
                          "WHERE l.ts = ?", ts(1))
-    assert carried["from_actor"] == "human:ana" and carried["body"] == "The favorite color is teal"
+    assert carried["sender_id"] == "human:ana" and carried["body"] == "The favorite color is teal"
 
 
 # ----------------------------------------------------------------------------- P1-1: revoked access stops sends
@@ -813,7 +813,7 @@ def test_a_busy_channel_does_not_hold_back_another_channel_in_one_pass(world, mo
     world.slack.channels[sales] = {"id": sales, "name": "sales", "is_member": True, "is_private": False}
     world.slack.members[sales] = ["U1", BOT_USER]
     with world.hub.transaction() as c:
-        c.execute("INSERT INTO conversations (id,kind,subject,created,audience,root_id,path) "
+        c.execute("INSERT INTO conversations (id,kind,subject,created_at,audience,root_id,path) "
                   "VALUES ('T-sales','thread','Sales','x','company','T-sales','')")
     assert gate(world, request(world, "#sales", thread="T-sales")) == "active"
     for n in range(10):

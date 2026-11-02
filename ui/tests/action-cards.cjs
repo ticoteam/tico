@@ -17,10 +17,10 @@ const {unrouted} = require('./support/routes.cjs');
 const {assistantView} = require('./support/assistant-chat.cjs');
 
 const at = n => new Date(Date.UTC(2026, 9, 17, 9, n)).toISOString();
-const say = (id, from, body, n, refs = {}) => ({id, from_actor: from, body, refs, created: at(n), kind: 'say'});
+const say = (id, from, body, n, refs = {}) => ({id, sender_id: from, body, refs, created_at: at(n), kind: 'say'});
 
 function fixture() {
-  const card = (id, extra) => ({id, owner: 'human:ana', status: 'pending', result: null, proposed_via: 'botops', proposer: 'botops',
+  const card = (id, extra) => ({id, owner_id: 'human:ana', status: 'pending', result: null, proposed_via: 'botops', proposer: 'botops',
     diff: [], body: {}, ...extra});
   const actions = {
     act1: card('act1', {method: 'PUT', path: '/api/v2/bots/security-engineer-2/repositories',
@@ -99,7 +99,7 @@ async function open(browser, state) {
       if (state.slowPost) await new Promise(done => setTimeout(done, state.slowPost));
       const action = state.actions[act[1]];
       state.decided.push([act[1], act[2]]);
-      action.status = act[2] === 'confirm' ? 'done' : 'cancelled';
+      action.status = act[2] === 'confirm' ? 'done' : 'canceled';
       // The server says how it went in the chat (assistant.py action_confirm): one more message.
       state.messages.push(say('r' + act[1], 'bot:botops', 'Done: ' + action.description, state.n++, {assistant: true, action_result: act[1]}));
       return json({action});

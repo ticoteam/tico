@@ -958,8 +958,8 @@ def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             raise FinanceError(NOT_FOUND, "no such card")
         if str(card["budget_id"] or "") != V.text(p, "budget_id", 80):
             raise invalid("a card's allocation is on its own budget")
-        if str(card["status"]) == "cancelled":
-            raise FinanceError(CONFLICT, "that card is cancelled")
+        if str(card["status"]) == "canceled":
+            raise FinanceError(CONFLICT, "that card is canceled")
     route = figure_route(ctx, who, str(p.get("budget_id") or ""), card)
     if card is not None and not route:
         from .cards import check_lower

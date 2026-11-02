@@ -8,6 +8,7 @@ from the claim, and the reply stays in that sub-thread. A runner claims and comp
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import execution, org_rule_check, threads
 from backend.auth import Identity
 from backend.store import H
@@ -52,7 +53,7 @@ def rows(api, sql, args=()):
 
 
 def replies(api, bot="cpo"):
-    return rows(api, "SELECT id, conversation_id, to_actor, in_reply_to, body FROM messages WHERE from_actor=? "
+    return rows(api, "SELECT id, conversation_id, recipient_id, in_reply_to, body FROM messages WHERE sender_id=? "
                      "ORDER BY rowid", ("bot:" + bot,))
 
 
@@ -74,7 +75,7 @@ def test_a_mention_in_a_sub_thread_is_answered_in_that_sub_thread_to_the_asker(a
     finish(api, r, attempt, "Risks: pricing, timing", **({"parent_message_id": named} if echo else {}))
     [reply] = replies(api)
     assert reply["conversation_id"] == sub, "the answer lands in the sub-thread that asked, never the root"
-    assert reply["to_actor"] == "human:ana" and reply["in_reply_to"] == asked["id"]
+    assert reply["recipient_id"] == "human:ana" and reply["in_reply_to"] == asked["id"]
 
 
 def test_a_carrier_turns_reply_is_withheld_when_the_bot_can_no_longer_post_there(api):

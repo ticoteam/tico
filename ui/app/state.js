@@ -67,7 +67,7 @@ const isAssistantHelper = slug => ASSISTANT_HELPERS.includes(slug);
 const strategyDefaultName = () => 'Strategy Bot';
 const strategyDefaultish = name => !name || name === 'Goal Manager' || name === 'CEO Bot';
 const strategyBotName = () => {
-  const name = String((S.emps || []).find(e => e.name === 'goal-manager')?.display_name || '').trim();
+  const name = String(botRow('goal-manager')?.display_name || '').trim();
   return strategyDefaultish(name) ? strategyDefaultName() : name;
 };
 // Everyone's chat is their Assistant, the owner's too (backend/assistant.py): the Strategy Bot is a helper it asks.
@@ -186,7 +186,7 @@ function betaMark(root = document) {
 }
 // ----------------------------------------------------------------- derived state
 function stateOf(slug) {
-  const e = S.emps.find(x => x.name === slug);
+  const e = botRow(slug);
   if (!e || e.status === 'planned') return 'planned';
   if (e.status === 'paused') return 'paused';
   const live = S.v2?.status?.[slug];
@@ -199,8 +199,8 @@ const openCount = slug => S.v2?.status?.[slug]?.open_tasks || 0;
 // number is a fixed attention count matching the default Needs You tab, independent of edits to that tab.
 function botNeeds(slug) {
   return (S.v2?.needs || []).filter(it => (['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it)
-    && companyNeedActor(it, it) === 'bot:' + slug) || (it.kind === 'ask' && it.requester === 'bot:' + slug)
-    || (it.kind === 'approval' && (it.requested_by || it.requester) === 'bot:' + slug));
+    && companyNeedActor(it, it) === 'bot:' + slug) || (it.kind === 'ask' && it.requester_id === 'bot:' + slug)
+    || (it.kind === 'approval' && (it.requested_by_id || it.requester_id) === 'bot:' + slug));
 }
 // While only some pages are held, the counts are the server's over the whole list (its `bots`).
 const needsBotsWhole = () => S.v2?.needsNext && S.v2.needsBots ? S.v2.needsBots : null;
@@ -212,7 +212,7 @@ function needsMeCounts() {
   const counts = new Map();
   for (const it of S.v2?.needs || []) {
     const actor = ['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it) ? companyNeedActor(it, it)
-      : it.kind === 'ask' ? it.requester : it.kind === 'approval' ? it.requested_by || it.requester : null;
+      : it.kind === 'ask' ? it.requester_id : it.kind === 'approval' ? it.requested_by_id || it.requester_id : null;
     if (typeof actor === 'string' && actor.startsWith('bot:')) counts.set(actor, (counts.get(actor) || 0) + 1);
   }
   return counts;

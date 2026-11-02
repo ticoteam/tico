@@ -107,7 +107,7 @@ async function open(browser, {mode = 'model', viewport = DESKTOP} = {}) {
       if (mode === 'refuse') return json({error: {code: 'validation', detail: "That address is this computer or an internal one; give the team's public website"}}, 422);
       job = {id: 'job-1', state: mode === 'no_model' ? 'no_model' : 'running', step: mode === 'no_model' ? null : body.url ? 'reading' : 'thinking',
         url: body.url, text: body.text, revision: st.draft.revision, pages: [], found: null, written: null, error: null,
-        started: '2026-10-25T09:00:00Z', finished: null};
+        started_at: '2026-10-25T09:00:00Z', finished_at: null};
       return json(job);
     }
     const poll = p.match(/^\/api\/v2\/strategy\/draft-from\/([^/]+)$/);

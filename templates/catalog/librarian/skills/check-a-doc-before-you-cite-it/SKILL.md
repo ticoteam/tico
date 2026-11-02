@@ -7,7 +7,7 @@ description: "Before a price, policy, limit, date or process from a doc goes int
 When to use: before a fact from an internal doc or a linked page goes into an answer, a map entry, the FAQ or a market page, when the fact is a price, a policy, a limit, a date, a process step or a named owner. A definition that does not change needs no check.
 
 Steps:
-1. Read the whole doc this run (`hub doc read <id or path>`). Note its `version`, its `updated` date and `updated_by_name`. A fact you saw only in a search excerpt is not checked yet.
+1. Read the whole doc this run (`hub doc read <id or path>`). Note its `version`, its `updated_at` date and `updated_by_name`. A fact you saw only in a search excerpt is not checked yet.
 2. If the doc changed in the last 30 days, read `hub doc history <id or path>`. Cite the newest version and give its date.
 3. Name who stands behind it: the person who last changed it (`updated_by_name`) and any owner the doc's own text names. If neither exists, the age clause says "no owner named".
 4. Age: a doc not updated in a year that states a price, a policy or a process is named by its date in the answer. A linked page is dated by the date its page shows, or by its walk date in `_librarian/where-things-live.md` when it shows none. Say which one you used.

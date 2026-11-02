@@ -101,14 +101,14 @@ def bd_confirmed(message_id, attendee, thread_id):
             message = Client(os.environ['HUB_API_URL'], os.environ.get('HUB_TOKEN', '')).get('messages/' + message_id)
         except APIError:
             return False  # Cloud mode must never fall back to a stale local database.
-        if message.get('from_actor') != 'bot:business-development':
+        if message.get('sender_id') != 'bot:business-development':
             return False
         lines = {line.strip().lower() for line in message.get('body', '').splitlines()}
         return {f'scheduling approval: {attendee}', f'thread: {thread_id}'} <= lines
     path = Path(os.environ.get('HUB_DB') or PROJECTS / 'runtime/hub.db').resolve()
     try:
         with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as conn:
-            row = conn.execute('SELECT from_actor, body FROM messages WHERE id=?', (message_id,)).fetchone()
+            row = conn.execute('SELECT sender_id, body FROM messages WHERE id=?', (message_id,)).fetchone()
     except (sqlite3.Error, OSError):
         return False
     if not row or row[0] != 'bot:business-development':

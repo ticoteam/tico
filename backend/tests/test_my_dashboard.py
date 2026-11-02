@@ -4,6 +4,7 @@ already read.
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture)."""
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
 from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_botops_parity import act
@@ -63,7 +64,7 @@ def test_a_pin_there_widens_nothing(api):
 
 
 def test_its_cards_show_each_reader_only_their_own(api):
-    task(api, "human:cara", "Cara's report", due="2026-11-03")
+    task(api, "human:cara", "Cara's report", due_at="2026-11-03")
     task(api, "human:ana", "Ana's private thing", private=True)
     task(api, "bot:inbox", "Inbox work")                    # Ana's bot: not Cara's to read
     mine = place(api, "person:me", "cara-test")
@@ -88,8 +89,8 @@ def test_botops_arranges_it_for_its_person_only(api, botops):
     assert act(api, cara, "GET", "places/person:ana").status_code == 404
     assert act(api, cara, "POST", "cards", {"template": "updates", "place": "person:ana"}).status_code == 404
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT made_by FROM cards WHERE id=?", (made.json()["card"]["id"],)).fetchone()
-        assert row["made_by"] == "human:cara"
+        row = c.execute("SELECT made_by_id FROM cards WHERE id=?", (made.json()["card"]["id"],)).fetchone()
+        assert row["made_by_id"] == "human:cara"
 
 
 def test_a_bot_has_no_my_dashboard_and_an_unknown_person_is_no_place(api):
@@ -140,7 +141,7 @@ def test_its_writes_leave_events_that_name_nothing(api):
     delete(api, "pins/" + unpin[0], "cara-test")
     # The page's own activity, read by whoever reads the page, does not say it was pinned there either.
     assert "person:" not in str(get(api, f"files/{shared}/activity"))
-    query = {"sql": "SELECT action,target,detail_json FROM events WHERE actor='human:cara'"}
+    query = {"sql": "SELECT action,target,detail FROM events WHERE actor='human:cara'"}
     rows = api.post("/api/v2/sql", json=query, headers=headers("ana-test")).json()["rows"]
     actions = {r[0] if isinstance(r, list) else r["action"] for r in rows}
     assert {"card.added", "pin.added", "card.changed", "pin.removed", "card.removed"} <= actions

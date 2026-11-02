@@ -11,7 +11,7 @@ const {unrouted} = require('./support/routes.cjs');
 const {threadsFake} = require('./support/threads-fake.cjs');
 
 const now = new Date().toISOString();
-const msg = (id, from, body) => ({id, from_actor: from, body, refs: {}, created: now, kind: 'say'});
+const msg = (id, from, body) => ({id, sender_id: from, body, refs: {}, created_at: now, kind: 'say'});
 const bot = (name, display_name) => ({name, display_name, host: 'keeper', status: 'active', can_chat: false});
 
 async function open(browser, me, view, strategyName) {
@@ -19,7 +19,7 @@ async function open(browser, me, view, strategyName) {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin: 'https://tico-ui.test'});
   const page = await context.newPage();
   const errors = [], read = [], sent = [];
-  const helpers = ['botops', 'goal-manager'].map(bot => threadsFake({bot, home: [{id: 'h-' + bot, from_actor: 'bot:' + bot, body: 'Nothing to report.'}]}));
+  const helpers = ['botops', 'goal-manager'].map(bot => threadsFake({bot, home: [{id: 'h-' + bot, sender_id: 'bot:' + bot, body: 'Nothing to report.'}]}));
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;

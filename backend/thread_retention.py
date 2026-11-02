@@ -29,7 +29,7 @@ def _due(c, root_id, cutoff):
     """Up to BATCH message ids of this root's tree past `cutoff` (a carrier has no seq and goes with its message). Each
     thread's index (messages_conversation) is read only as far as the cutoff."""
     return [r[0] for r in c.execute(
-        "SELECT m.id FROM conversations s CROSS JOIN messages m ON m.conversation_id=s.id AND m.created<? "
+        "SELECT m.id FROM conversations s CROSS JOIN messages m ON m.conversation_id=s.id AND m.created_at<? "
         "WHERE s.root_id=? AND m.deleted_at IS NULL AND m.seq IS NOT NULL LIMIT ?", (cutoff, root_id, BATCH)).fetchall()]
 
 
@@ -42,7 +42,7 @@ def purge(c, root_id, ids, days):
             continue
         threads._revise(c, message, H.KEEPER, deleted=True, purge=True)
         origin = (message.get("refs") or {}).get("origin")
-        c.execute("UPDATE messages SET refs_json=? WHERE id=?", (H._dump({"origin": origin} if origin else {}), message_id))
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump({"origin": origin} if origin else {}), message_id))
         file_library.release_message_files(c, H.KEEPER, message_id)
         gone += 1
     if gone:

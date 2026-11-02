@@ -16,7 +16,7 @@ def seed(api):
     now = H.now()
     with api.app.state.store.transaction() as c:
         for wid, who in (("wh-ben", "human:ben"), ("wh-cara", "human:cara")):
-            c.execute("INSERT INTO webhooks(id,name,url,host,created_by,created,updated) VALUES(?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO webhooks(id,name,url,host,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
                       (wid, "Hook " + wid, "https://hooks.acme.example/x", "hooks.acme.example", who, now, now))
         c.execute("INSERT INTO triggers(id,name,secret_hash,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?)",
                   ("tr-1", "Orders", "x", "human:ana", now, now))
@@ -76,7 +76,7 @@ def test_the_list_is_paged_and_byte_capped(api, monkeypatch):
     now = H.now()
     with api.app.state.store.transaction() as c:          # more webhooks than one page, and Cara's among them
         for i in range(7):
-            c.execute("INSERT INTO webhooks(id,name,url,host,created_by,created,updated) VALUES(?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO webhooks(id,name,url,host,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
                       (f"wh-{i:02d}", f"Hook {i}", "https://hooks.acme.example/x", "hooks.acme.example",
                        "human:cara" if i % 3 == 0 else "human:ben", now, now))
     for token in ("ana-test", "cara-test"):
@@ -100,7 +100,7 @@ def test_a_narrowed_intake_inbox_names_nothing_outside_its_group(api):
     """Physical mail's email-in inbox follows the inbox's audience: Connections and GET /postal/intake."""
     seed(api)                                              # ibx_c is Operations'; Cara is not in it
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO mail_intake(singleton,inbox_id,set_by,set_at,senders_json) VALUES(1,?,?,?,?)",
+        c.execute("INSERT INTO mail_intake(singleton,inbox_id,set_by,set_at,senders) VALUES(1,?,?,?,?)",
                   ("ibx_c", "human:ana", H.now(), '["scans@provider.acme.example"]'))
     address = get(api, "inbound/inboxes")["inboxes"]
     address = next(i["address"] for i in address if i["inbox_id"] == "ibx_c")

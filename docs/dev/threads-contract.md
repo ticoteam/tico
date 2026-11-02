@@ -31,8 +31,8 @@ recorded under `registry_metadata` key `threads-migration` and runs inside one t
 
 ### 1.1 `conversations` (a thread)
 
-Existing columns keep their meaning: `subject` = **title**, `kind`, `task_id`, `participants_json`, `scope` (legacy,
-read for one release), `owner_actor`, `room_key`, `created`, `last_message_at`, `closed_at`.
+Existing columns keep their meaning: `subject` = **title**, `kind`, `task_id`, `participants`, `scope` (legacy,
+read for one release), `owner_actor`, `room_key`, `created_at`, `last_message_at`, `closed_at`.
 
 ```sql
 ALTER TABLE conversations ADD COLUMN audience TEXT;            -- company|team|members|task|home|personal|participants|meeting
@@ -51,7 +51,7 @@ ALTER TABLE conversations ADD COLUMN retention_days INTEGER;   -- on a root: how
 --   personal -> the DM's starter (migrated personal rooms: their owner, as today)
 --   members/company/team -> the starter
 CREATE UNIQUE INDEX threads_parent_message ON conversations(parent_message_id) WHERE parent_message_id IS NOT NULL;
-CREATE UNIQUE INDEX threads_one_home ON conversations(owner_actor) WHERE audience='home' AND closed_at IS NULL;
+CREATE UNIQUE INDEX threads_one_home ON conversations(owner_id) WHERE audience='home' AND closed_at IS NULL;
 CREATE INDEX threads_root ON conversations(root_id);
 CREATE INDEX threads_path ON conversations(path);
 CREATE INDEX threads_recent ON conversations(root_id, last_seq) WHERE archived_at IS NULL;
@@ -177,7 +177,7 @@ CREATE TABLE IF NOT EXISTS sequences (name TEXT PRIMARY KEY, value INTEGER NOT N
 | `task` | whoever may read the task (`auth.task`, `task_private_readable`) | today's task-discussion rule |
 | `home` | the Read audience of `owner_actor` (bot, person or group), its managers (Manage ⇒ Read) | posting needs Read **and** Write on the owner |
 | `personal` | `thread_members` (leaving removes reading, its starter's too), plus `owner_actor` for a special room (`room_key`); **no owner bypass**; the Strategy owner-seat rule stays | all new DMs; migrated personal/Assistant/Librarian/Strategy rooms |
-| `participants` | actors in `participants_json`, plus the company owner (today's inspection) | migrated `direct` rows only |
+| `participants` | actors in `participants`, plus the company owner (today's inspection) | migrated `direct` rows only |
 | `meeting` | `live_privacy.require_conversation` as today | migrated meeting rooms (`room_key` starts `live_privacy.ROOM_PREFIX`) |
 
 Sub-threads are evaluated through their **root** row (same audience by §1.1, but the root is the authority).
@@ -185,7 +185,7 @@ Sub-threads are evaluated through their **root** row (same audience by §1.1, bu
 ### 2.2 Bots
 Bots are AI employees: an internal bot reads what a person in the same seat reads.
 - **Every bot** reads by access membership (`thread_members`, including via a group), the participant grant
-  (`participants_json`), `home` when it is the Home's owner or holds Read on its owner, or a task thread it may read
+  (`participants`), `home` when it is the Home's owner or holds Read on its owner, or a task thread it may read
   (`auth.task`). Its own open asks to a person stay readable (`_own_ask_to_a_person`). `members`, `personal` and
   `participants` threads open to nothing else.
 - **Internal bots** (runner token, any turn) also read every `company` thread, and the `team` threads of the group
@@ -194,7 +194,7 @@ Bots are AI employees: an internal bot reads what a person in the same seat read
   stored audience) still opens to an internal bot only by that grant, and migrated shared-room history only to the
   room's bot, a participant or a granted turn.
 - **External agents** (agent token) never get `company` or `team` standing read: there only their participation
-  counts, which `add_member` (or naming the bot when the thread is made) writes on a public root's `participants_json`,
+  counts, which `add_member` (or naming the bot when the thread is made) writes on a public root's `participants`,
   and `remove_member` takes away. A bot in a thread's wake audience (`threads.audience_has`: company bots, the group's bots) may still be
   woken there.
 - **Posting in a Home** takes Write on its owner for bots as for people (`can_post`). Only the Home's own bot and a
@@ -458,7 +458,7 @@ warning `{"rule": "unsolicited_cap", "actor": ...}`.
 
 ## 5. C4: order and read state
 - `messages.seq` is per install, strictly increasing, from `sequences('messages')`. Tree order:
-  `parent_message_id` + `seq`. `created` stays for display.
+  `parent_message_id` + `seq`. `created_at` stays for display.
 - Counters per thread: `last_seq` (every message), `last_unread_seq` (a human's message, or one addressed to
   someone: `to_actor` set or any mention). Sidebar aggregates per root come from the counters of the root's subtree,
   never from per-follower writes.
@@ -586,7 +586,7 @@ narrows `runs`. They do not narrow `threads`: the sidebar stays live while a thr
  "message_id": "...", "reactions": [{"emoji": ":+1:", "count": 2, "actors": ["human:ana", "bot:legal"]}]}
                                                  // kind=reactions, only when the viewer reads that message
 ```
-`changes.kind` values written by core's triggers: `created`, `renamed`, `archived`, `unarchived`, `audience`,
+`changes.kind` values written by core's triggers: `created_at`, `renamed`, `archived`, `unarchived`, `audience`,
 `members`, `sub_thread`, `counters` (on `conversations`), `read` (on `thread_followers`, `ref` = actor),
 `reactions` (on `message_reactions`, `ref` = message id).
 

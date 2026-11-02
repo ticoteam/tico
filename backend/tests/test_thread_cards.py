@@ -2,6 +2,7 @@
 body. The card is written as the author, so a bot never wakes on its own card, and the Home's audience decides who
 reads it. An edit the same day keeps the one card."""
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import hubdb as H
 from backend import threads, updates
 from backend.auth import Identity
@@ -15,11 +16,11 @@ CARA = Identity("human:cara", "human", "cara@acme.example")
 
 def home_cards(c, actor):
     home = threads.home(c, actor, create=True)
-    rows = c.execute("SELECT id, body, refs_json FROM messages WHERE conversation_id=? AND kind='notice' "
+    rows = c.execute("SELECT id, body, refs FROM messages WHERE conversation_id=? AND kind='notice' "
                      "ORDER BY seq", (home["id"],)).fetchall()
     cards = []
     for row in rows:
-        refs = H._json(row["refs_json"], {}) or {}
+        refs = H._json(row["refs"], {}) or {}
         if refs.get("card") == "update":
             cards.append({"id": row["id"], "body": row["body"], "update": refs["update"]})
     return cards

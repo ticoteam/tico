@@ -17,7 +17,7 @@ let GR_LOAD = 0;
 const GR_STAGES = [['reach', 'Reach'], ['acquire', 'Acquire'], ['activate', 'Activate'], ['retain', 'Retain'], ['refer', 'Refer']];
 const GR_ACQUISITION = ['reach', 'acquire', 'activate'];
 const GR_CH_STAGE = {idea: 'Idea', testing: 'Testing', scaling: 'Scaling', paused: 'Paused'};
-const GR_MOVES = {started: 'Started', won: 'Won', lost: 'Lost', inconclusive: 'Inconclusive', dropped: 'Dropped'};
+const GR_MOVES = {started_at: 'Started', won: 'Won', lost: 'Lost', inconclusive: 'Inconclusive', dropped: 'Dropped'};
 
 // ----------------------------------------------------------------- shared formats and pieces
 // Who may change company-level growth records: the owner or an admin (the server checks and is the one that enforces it).
@@ -27,7 +27,8 @@ const grWho = ref => {
   const s = String(ref || '');
   if (!s) return '';
   if (s.includes(':')) return actorLabel(s);
-  return (S.emps || []).some(e => e.name === s) ? botDisplayName(s) : personDisplay(s);
+  const bot = botByRef(s);
+  return bot ? botDisplayName(bot.id) : personDisplay(s);
 };
 function grUsd(v) {
   const n = Number(v), a = Math.abs(n);
@@ -58,13 +59,13 @@ const grCrumbs = (base, baseLabel, title, tools = '') => `<div class="gr-crumbs"
 // A labelled field: the caption over the control.
 const grField = (label, control, cls = '') => `<label class="gr-f${cls ? ' ' + cls : ''}"><span>${esc(label)}</span>${control}</label>`;
 const grNum = (v, d = null) => { const t = String(v ?? '').trim().replace(/[$,%\s]/g, ''); if (t === '') return d; const n = Number(t); return Number.isFinite(n) ? n : d; };
-// The people and bots a row can belong to, as human:<id> and bot:<slug>.
+// The people and bots a row can belong to, as human:<id> and bot:<id>.
 function grOwnerOpts(selected) {
-  const sel = String(selected || ''), bare = sel.replace(/^bot:/, '');
+  const sel = String(selected || ''), picked = sel.startsWith('human:') ? '' : botByRef(sel)?.id;
   const people = (S.people || []).filter(p => !p.hidden).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
-  const bots = (S.emps || []).filter(e => e.status !== 'archived').slice().sort((a, b) => String(a.display_name || a.name).localeCompare(String(b.display_name || b.name)));
+  const bots = (S.emps || []).filter(e => e.status !== 'archived').slice().sort((a, b) => String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
   return `<option value="">—</option><optgroup label="People">${people.map(p => `<option value="human:${esc(p.id)}"${sel === 'human:' + p.id ? ' selected' : ''}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
-    <optgroup label="Bots">${bots.map(e => `<option value="bot:${esc(e.name)}"${bare === e.name ? ' selected' : ''}>${esc(e.display_name || e.name)}</option>`).join('')}</optgroup>`;
+    <optgroup label="Bots">${bots.map(e => `<option value="bot:${esc(e.id)}"${picked === e.id ? ' selected' : ''}>${esc(e.display_name || e.slug)}</option>`).join('')}</optgroup>`;
 }
 // Retire asks once more on the same button (no window.confirm); `after` runs once it is retired.
 function grRetireButton(btn, dlg, path, after) {

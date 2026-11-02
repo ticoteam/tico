@@ -41,13 +41,13 @@ async function open(browser, viewport, touch, {messages, goal, theme = ''}) {
 async function serverNotice(browser) {
   const t = (m, s) => `2026-10-01T09:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}Z`;
   const messages = [
-    {id: 'm1', kind: 'say', from_actor: 'human:ana', body: '/goal Produce the revised Acme summary', created: t(1, 0),
+    {id: 'm1', kind: 'say', sender_id: 'human:ana', body: '/goal Produce the revised Acme summary', created_at: t(1, 0),
      refs: {command: true, goal_action: 'set', goal_id: 'g9', goal_revision: t(1, 0), goal_objective: 'Produce the revised Acme summary'}},
-    {id: 'm2', kind: 'say', from_actor: 'human:ana', body: '/goal clear', created: t(2, 0), refs: {command: true, goal_action: 'pause', goal_id: 'g9'}},
-    {id: 'm3', kind: 'say', from_actor: 'human:ana', body: '/goal Produce the revised Acme summary', created: t(3, 0), refs: {command: true, goal_action: 'resume', goal_id: 'g9'}},
-    {id: 'm4', kind: 'say', from_actor: 'bot:coo', body: 'Summary revised and posted.', created: t(9, 0), refs: {}},
+    {id: 'm2', kind: 'say', sender_id: 'human:ana', body: '/goal clear', created_at: t(2, 0), refs: {command: true, goal_action: 'pause', goal_id: 'g9'}},
+    {id: 'm3', kind: 'say', sender_id: 'human:ana', body: '/goal Produce the revised Acme summary', created_at: t(3, 0), refs: {command: true, goal_action: 'resume', goal_id: 'g9'}},
+    {id: 'm4', kind: 'say', sender_id: 'bot:coo', body: 'Summary revised and posted.', created_at: t(9, 0), refs: {}},
     // As backend/chat_goals.py writes it: refs {chat_goal, goal_status}; a two-line objective, then the note.
-    {id: 'm5', kind: 'notice', from_actor: 'bot:coo', body: 'Goal met: Produce the revised Acme summary\nwith the Q3 numbers\nThe condition holds.', created: t(9, 5),
+    {id: 'm5', kind: 'notice', sender_id: 'bot:coo', body: 'Goal met: Produce the revised Acme summary\nwith the Q3 numbers\nThe condition holds.', created_at: t(9, 5),
      refs: {chat_goal: 'g9', goal_status: 'met'}},
   ];
   const goal = {id: 'g9', conversation_id: 'c1', bot: 'coo', objective: 'Produce the revised Acme summary\nwith the Q3 numbers', status: 'met',

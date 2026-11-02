@@ -40,7 +40,7 @@ day that is not Monday, stop at once.
 7. File the run with `hub market sweep`. Every `needs-human` insight from this run becomes one task on the team owner, never one task each.
 8. On Mondays, run `hub market refresh --today <date>` to refresh the weekly delta page. The daily Market briefing is its
    own run (`playbooks/write-the-briefing.md`), not part of this one.
-9. Staleness: an entity past `last_verified` plus 60 days (core tier: 30) that you tried to check and could not verify is named in that same sweep, with what to look for. The server files a task on the Social Media Manager (`listening`) only for those. A date being old is not itself a task.
+9. Staleness: an entity past `last_verified_at` plus 60 days (core tier: 30) that you tried to check and could not verify is named in that same sweep, with what to look for. The server files a task on the Social Media Manager (`listening`) only for those. A date being old is not itself a task.
 
 Done when every insight you read is applied, merged, rejected or needs-human, each listening item you filed is resolved
 (or left `new` on purpose), and the sweep is filed.
