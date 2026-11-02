@@ -9,8 +9,10 @@ import asyncio
 import base64
 import calendar
 import json
+import logging
 import threading
 import time
+from urllib.parse import quote
 
 from . import federation as F
 from . import federation_envelope as E
@@ -22,12 +24,14 @@ from . import screening
 AREA = "federation"          # HQ's routes: <root>/federation/... where the root is the Gateway's base without `/gateway`
 EVERY = 15                   # seconds between ticks
 SYNC_EVERY = 60              # seconds between reads of the peerings from HQ
+SYNC_PAGES = 50              # pages of peerings read in one sync (HQ's default page is 200); past that it is incomplete
 PULL_LIMIT = 50              # envelopes asked for per pull
 PAGES = 10                   # pulls in one tick while HQ says there is more
 BACKOFF_MAX = 300
 SWEEP_ROUNDS = 200             # passes over the lane heads in one tick (each pass moves a row on)
 DRAIN_ROUNDS = 200           # passes over the held lane heads in one tick
 now = time.time              # tests' controlled clock
+log = logging.getLogger(__name__)
 
 
 def root(base):
@@ -156,14 +160,33 @@ class Relay:
         return {"key_id": key_id, "public_key": public}
 
     def sync(self, link):
-        """HQ's list of this install's peerings, applied here."""
-        answer = self.call(link, "GET", "peerings")
-        items = answer.get("items") if isinstance(answer.get("items"), list) else []
-        with self.store.transaction() as c:
-            for view in items:
-                if isinstance(view, dict):
-                    record(c, view)
-            c.execute("UPDATE federation_state SET listed_at=? WHERE singleton=1", (now(),))
+        """HQ's list of this install's peerings, a page at a time, applied here. An HQ from before paging answers `items`
+        alone, which is the whole list. What was read is applied even when the rest was not: a view speaks only for its own
+        peering, and a peering missing from the list is never changed, so a partial list takes nothing away. Only a whole
+        list sets `listed_at`. A failed page is raised after that; running out of pages is logged and the tick goes on."""
+        views, cursor, whole = [], None, False
+        try:
+            for _ in range(SYNC_PAGES):
+                answer = self.call(link, "GET", "peerings" + (f"?cursor={quote(cursor, safe='')}" if cursor else ""))
+                if not isinstance(answer.get("items"), list):
+                    break
+                views.extend(answer["items"])
+                following = answer.get("next")
+                if following is None:
+                    whole = True
+                    break
+                if not isinstance(following, str) or not following or following == cursor:
+                    break
+                cursor = following
+            if not whole:
+                log.warning("federation: HQ's list of peerings was not read to its end (%s read)", len(views))
+        finally:
+            with self.store.transaction() as c:
+                for view in views:
+                    if isinstance(view, dict):
+                        record(c, view)
+                if whole:
+                    c.execute("UPDATE federation_state SET listed_at=? WHERE singleton=1", (now(),))
 
     # ------------------------------------------------------------------------- envelopes
     def send(self, link, row, outbound):
