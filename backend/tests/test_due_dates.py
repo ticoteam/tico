@@ -680,6 +680,33 @@ def test_reopening_an_early_completion_puts_the_chain_back_on_its_occurrence(boo
     assert _next(books, chain, NOV1) == "2026-11-08"
 
 
+def test_a_new_schedule_or_a_stop_closes_the_open_task_and_a_rename_does_not(books):
+    def open_tasks():
+        return [t for t in _tasks(books, "human:eve") if t["status"] != "closed"]
+
+    with books.transaction() as c:
+        due = _due(c, "location", _location(c, "Acme Moved Store"), name="Moved check", assignee="human:eve")
+    _tick(books)
+    [task] = _tasks(books, "human:eve")
+    with books.transaction() as c:
+        assert act(c, OWNER, "due_date_update", {"due_date_id": due, "name": "Moved check 2"}).status == "committed"
+    assert [t["id"] for t in open_tasks()] == [task["id"]], "a rename keeps the task"
+    with books.transaction() as c:
+        assert act(c, OWNER, "due_date_update", {"due_date_id": due, "starts_on": "2027-06-01"}).status == "committed"
+    assert open_tasks() == [], "the old day's task closed"
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM due_date_occurrences WHERE due_date_id=? AND completed_at IS NULL",
+                         (due,)).fetchone()[0] == 0
+    with books.transaction() as c:
+        back = act(c, OWNER, "due_date_update", {"due_date_id": due, "starts_on": DAY})
+        assert back.status == "committed", back.reason
+    _tick(books, later(1))
+    assert len(open_tasks()) == 1, "the next pass opens the current day"
+    with books.transaction() as c:
+        assert act(c, OWNER, "due_date_update", {"due_date_id": due, "active": False}).status == "committed"
+    assert open_tasks() == [], "a stopped due date asks for nothing"
+
+
 def test_reassigning_a_due_date_moves_its_open_task_to_the_new_assignee(books):
     with books.transaction() as c:
         due = _due(c, "location", _location(c, "Acme Handoff Store"), name="Handoff check", assignee="bot:coder")
