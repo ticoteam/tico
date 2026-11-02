@@ -217,7 +217,9 @@ the core's); a release newer than the host's core runs with that release's own c
 Before anything changes, the updater also renders the compose files with the target tag (`docker compose config`) and
 refuses the update when `server`, or `slack` when it runs, would not get that release's image: an override that sets
 `image:` would keep it on the old one. After the switch the server must run the image just pulled and report the target
-release on `/healthz`; otherwise the update counts as unhealthy and is rolled back.
+release on `/healthz`; otherwise the update counts as unhealthy and is rolled back. If the new server container exits while
+the update waits for it, or restarts twice since the wait began (a crash loop), the update stops waiting and rolls back at
+once; the update status says why. A server that runs but is slow to answer gets the whole wait.
 
 `GET /api/v2/system/update` also says which release the server is `running`, the one it ran `previous`ly and a short
 `history`. The server writes these itself at startup, so they stay right after an update done outside the updater.
