@@ -782,7 +782,7 @@ class StrategyDraft(Contract):
     guide: str | None = Field(default=None, max_length=40)
     summary: str | None = Field(default=None, max_length=2000)
     vision: str | None = Field(default=None, max_length=2000)
-    sections: dict | None = None          # {serve, sell, know, not, extra: {key: {title, body}}}, any of them
+    sections: dict | None = None          # {serve, sell, know, how, not, extra: {key: {title, body}}}, any of them
 
 
 class StrategyPublish(Contract):

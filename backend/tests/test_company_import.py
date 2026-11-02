@@ -762,6 +762,7 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
     assert draft["sections"]["serve"] == ("_Unconfirmed: drafted from the company file._\n\nSuperintendents and "
                                           "foremen at general contractors with 50 to 500 staff.")
     assert all(draft["sections"][k].startswith("_Unconfirmed") for k in ("sell", "know", "not"))
+    assert draft["sections"]["how"] == ""           # the file has four sections; How we sell is not in it
     assert draft["sections"]["extra"]["watching"] == {
         "title": "Watching", "body": "- Competitor changelogs: Trestle, FieldCraft\n"
                                      "- Superintendents asking for a better schedule app"}

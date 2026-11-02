@@ -1774,7 +1774,7 @@ def _bet_body(args):
     return body
 
 
-@tool("hub_strategy_show", "The team's published strategy: summary, vision, the four sections, the bets with their "
+@tool("hub_strategy_show", "The team's published strategy: summary, vision, the five sections, the bets with their "
       "wrong-ifs, each bet's goals and colour, and the team's website. The owner also gets the draft.", {})
 def strategy_show(api, args):
     return _as_person(api).get("strategy")
