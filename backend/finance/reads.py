@@ -1814,7 +1814,7 @@ def close_blockers(ctx: Ctx, month: str, who: str) -> list[str]:
     if row["closable"]:
         return []
     why = [] if row["ended"] else [f"{month} has not ended"]
-    for check in row["checks"]:
+    for check in cast(list[dict[str, Any]], row["checks"]):
         if check["ok"]:
             continue
         if check["key"] == "reconciled":

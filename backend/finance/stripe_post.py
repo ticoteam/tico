@@ -339,7 +339,7 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
     before = SK.stripe_refunded(ctx.c, str(money["id"]), F.STRIPE_UNWINDS, link) - sum(given.values())
     plain = -gross - sum(move for _, move in shares)
     lines = [banking.feed_line(account, amount, tags, contact) for account, amount, tags, contact
-             in _reversal(counter, before, before + plain)]
+             in reversal_shares(counter, before, before + plain)]
     lines += [_reopened(ctx, s, move) for s, move in shares if move]
     if fee:
         lines.append(banking.feed_line(_fees(ctx).id, fee))
@@ -402,7 +402,7 @@ def _counter(ctx: Ctx, original: Any) -> list[Share] | None:
             if line.role != L.MONEY_ROLE and line.amount < 0]
 
 
-def _reversal(counter: Sequence[Share], before: int, now: int) -> list[Share]:
+def reversal_shares(counter: Sequence[Share], before: int, now: int) -> list[Share]:
     """The counter lines a refund reverses: each line's share of what the sale has refunded in all, so far, less its
     share before this refund. The shares are cumulative, so separate refunds add up to the same as one, to the cent.
     Counter lines are credits, so a refund debits them."""

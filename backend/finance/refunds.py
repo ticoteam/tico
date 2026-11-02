@@ -45,7 +45,7 @@ def _candidates(ctx: Ctx, money: Any, t: F.FeedTxn) -> list[tuple[Any, int]]:
     start = (date.fromisoformat(t.txn_date) - timedelta(days=WINDOW_DAYS)).isoformat()
     out: list[tuple[Any, int]] = []
     for r in SK.refund_candidates(ctx.c, str(money["id"]), start, t.txn_date):
-        if not documents._same_name(t.counterparty, str(r["counterparty"])):
+        if not documents.same_name(t.counterparty, str(r["counterparty"])):
             continue
         if str(r["kind"]) in F.TRANSFER_KINDS or SAP.settled_from(ctx.c, "feed", str(r["id"])):
             continue
@@ -74,10 +74,10 @@ def _post(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, original: Any, card: Any
         return
     before = sum(int(x["amount"]) for x in SK.refunds_of(ctx.c, str(original["id"])))
     lines = [banking.feed_line(account, amount, tags, contact)
-             for account, amount, tags, contact in stripe_post._reversal(counter, before, before + t.amount)]
+             for account, amount, tags, contact in stripe_post.reversal_shares(counter, before, before + t.amount)]
     day = str(original["txn_date"])
     memo = f"{t.counterparty[:140]} refund of the charge dated {day}" if SL.closed_on(ctx.c, ctx.book.id, day) else ""
-    entry = banking.post_row(ctx, fid, t, lines, banking._gl(ctx, money).id, [], memo=memo)
+    entry = banking.post_row(ctx, fid, t, lines, banking.gl_account(ctx, money).id, [], memo=memo)
     banking.mark_posted(ctx, [fid], entry)
     SK.update(ctx.c, "fin_feed_txns", fid, {"refund_of": str(original["id"]), "updated_at": ctx.at})
     if card is not None:

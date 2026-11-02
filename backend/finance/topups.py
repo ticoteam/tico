@@ -32,7 +32,7 @@ def topup_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """One top-up: Dr Gateway credit / Cr the bank account's line (clearing when the account is not connected). Dated
     the day given (today by default); a day in a closed period posts today and names its own date in the memo, as a
     late bank row does (banking.open_day). With feed_id, the bank row already in the feed posts it (dated by its bank)."""
-    from .banking import _unpost, feed_line, mark_posted, open_day, post_row
+    from .banking import feed_line, mark_posted, open_day, post_row, unpost_row
     from .documents import CLEARING, clearing
     from .tab import sees_money_account
     if ctx.book.mode == "mirror":
@@ -76,7 +76,7 @@ def topup_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         if row is not None:
             if row["entry_id"]:
-                _unpost(ctx, row, "re-categorized")
+                unpost_row(ctx, row, "re-categorized")
             t = F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
                           txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
                           counterparty=str(row["counterparty"]), description=str(row["description"]),
@@ -127,8 +127,8 @@ def _feed_row(ctx: Ctx, who: str, money: Any, feed_id: str, amount: int) -> Any:
 
 def _unposted_row(ctx: Ctx, money: Any, amount: int, day: str) -> Any:
     """A settled row of this amount on this account, within the match window of `day`, that no entry has taken yet."""
-    from .documents import _window
-    start, end = _window(day)
+    from .documents import match_window
+    start, end = match_window(day)
     for r in SK.transfer_candidates(ctx.c, [str(money["id"])], -amount, start, end):
         if r["entry_id"] is None and str(r["status"]) == "new" and not r["request_id"] and not r["card_id"]:
             return r
@@ -144,9 +144,9 @@ def waiting_for(ctx: Ctx, money: Any, t: F.FeedTxn) -> list[str]:
     """The entries of top-ups from this connected account, of this amount, dated within the match window of the row's
     day, that no bank row has taken yet: the row is their bank side. banking._settle links the row when there is
     exactly one."""
-    from .documents import _window
+    from .documents import match_window
     bank = str(money["account_id"])
-    start, end = _window(t.txn_date)
+    start, end = match_window(t.txn_date)
     found: list[str] = []
     for e in SL.posted_by_source_prefix(ctx.c, ctx.book.id, "bank", PREFIX):
         if not start <= str(e["entry_date"]) <= end or SK.rows_of_entry(ctx.c, str(e["id"])):

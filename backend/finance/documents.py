@@ -1091,7 +1091,7 @@ def _unschedule(ctx: Ctx, bill: Any, sched: Mapping[str, object], status: str, r
 
 
 # ------------------------------------------------------------------------------------------------ paying
-def _same_name(counterparty: str, name: str) -> bool:
+def same_name(counterparty: str, name: str) -> bool:
     a = "".join(ch for ch in counterparty.lower() if ch.isalnum())
     b = "".join(ch for ch in name.lower() if ch.isalnum())
     return bool(a and b) and (a == b or (min(len(a), len(b)) >= NAME_MIN and (a in b or b in a)))
@@ -1099,7 +1099,7 @@ def _same_name(counterparty: str, name: str) -> bool:
 
 def named(counterparty: str, docs: Sequence[Any]) -> list[Any]:
     """The documents whose contact the counterparty names (no counterparty names none)."""
-    return [d for d in docs if _same_name(counterparty, str(d["contact_name"] or ""))]
+    return [d for d in docs if same_name(counterparty, str(d["contact_name"] or ""))]
 
 
 OWING_MOST = 50             # open documents owing a row's exact amount looked at; with more, the row is unclear
@@ -1115,7 +1115,7 @@ def _owed_by(ctx: Ctx, t: F.FeedTxn) -> tuple[str, list[Any], bool]:
     owing = SAP.open_owing(ctx.c, kind, ctx.book.id, abs(t.amount), OWING_MOST + 1)
     if len(owing) > OWING_MOST:
         return kind, [], True
-    return kind, [d for d in owing if _same_name(t.counterparty, str(d["contact_name"] or ""))], False
+    return kind, [d for d in owing if same_name(t.counterparty, str(d["contact_name"] or ""))], False
 
 
 def match_feed(ctx: Ctx, row: Any, t: F.FeedTxn) -> tuple[str, Any] | str | None:
@@ -1155,7 +1155,7 @@ def several_match(ctx: Ctx, row: Any) -> bool:
     return match_feed(ctx, row, _row_txn(row)) == MANY
 
 
-def _window(day: str) -> tuple[str, str]:
+def match_window(day: str) -> tuple[str, str]:
     from .banking import MATCH_DAYS
     d = dates.day(day)
     return (d - timedelta(days=MATCH_DAYS)).isoformat(), (d + timedelta(days=MATCH_DAYS)).isoformat()
@@ -1163,7 +1163,7 @@ def _window(day: str) -> tuple[str, str]:
 
 def _named(counterparty: str, name: str) -> bool:
     """A bank row with no counterparty matches on amount, account and day alone."""
-    return not counterparty.strip() or _same_name(counterparty, name)
+    return not counterparty.strip() or same_name(counterparty, name)
 
 
 ASK = "ask"                 # expected_match: the row may pay a marked payment, but which is unclear; a person picks
@@ -1181,7 +1181,7 @@ def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, *, posted: F.Fe
     single one (the row stays new, never posting a second money line, and a person picks); "" when nothing waits, and
     the row posts as usual."""
     kind = "bill" if t.amount < 0 else "invoice"
-    start, end = _window(t.txn_date)
+    start, end = match_window(t.txn_date)
     exact, cut = _waiting(ctx, kind, money, abs(t.amount), start, end)
     if cut:
         return ASK              # more waiting than were looked at: which one is unclear
@@ -1212,7 +1212,7 @@ def may_wait(ctx: Ctx, row: Any, money: Any) -> bool:
     if row["entry_id"] or not gross or str(row["kind"] or "") in F.TRANSFER_KINDS:
         return False                # a transfer is never matched to payments at ingest either
     kind = "bill" if int(row["amount"]) < 0 else "invoice"
-    start, end = _window(str(row["txn_date"]))
+    start, end = match_window(str(row["txn_date"]))
     exact, cut = _waiting(ctx, kind, money, gross, start, end)
     if exact or cut:
         return True
@@ -1241,7 +1241,7 @@ def _pick(sets: Sequence[list[Any]], counterparty: str) -> list[Any] | None:
     """The one candidate, else the one whose contact the counterparty names, else None."""
     if len(sets) == 1:
         return sets[0]
-    named = [g for g in sets if counterparty.strip() and _same_name(counterparty, str(g[0]["contact_name"] or ""))]
+    named = [g for g in sets if counterparty.strip() and same_name(counterparty, str(g[0]["contact_name"] or ""))]
     return named[0] if len(named) == 1 else None
 
 
@@ -1332,7 +1332,7 @@ def _candidates(ctx: Ctx, who: str, row: Any, money: Any, ids: Sequence[str] = (
     comes out of what the row carries, so the payments may add up to its gross."""
     from .banking import provider_fee
     kind = "bill" if int(row["amount"]) < 0 else "invoice"
-    start, end = _window(str(row["txn_date"]))
+    start, end = match_window(str(row["txn_date"]))
     gross = abs(int(row["amount"])) + provider_fee(row, money)
     waiting, cut = _waiting(ctx, kind, money, 0, start, end, ids)
     return [s for s in waiting if int(s["amount"]) <= gross
@@ -1387,7 +1387,7 @@ def _arrived(ctx: Ctx, kind: str, doc: Any, money: Any, amount: int, day: str) -
     on the money account of exactly this amount, within MATCH_DAYS of `day`, named like the contact, not a Finance
     payment, a transfer or already applied to a document. An unbooked row that other marked payments may be the bank
     side of is left to a person (feed_match); this payment then waits like any other from the account."""
-    start, end = _window(day)
+    start, end = match_window(day)
     signed = -amount if kind == "bill" else amount
     found = [r for r in SK.transfer_candidates(ctx.c, [str(money["id"])], signed, start, end)
              if not r["request_id"] and not r["card_id"] and str(r["kind"] or "") not in F.TRANSFER_KINDS

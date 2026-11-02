@@ -62,7 +62,7 @@ def by_code(ctx: Ctx, code: str) -> L.Account | None:
     return next((a for a in ctx.accounts.values() if a.code == code), None)
 
 
-def _gl(ctx: Ctx, money: Any) -> L.Account:
+def gl_account(ctx: Ctx, money: Any) -> L.Account:
     account = ctx.accounts.get(str(money["account_id"] or ""))
     if account is None:
         raise invalid("that money account has no account in the books")
@@ -217,7 +217,7 @@ def set_opening(ctx: Ctx, money: Any, amount: int, day: str) -> str | None:
     """Make the money account's one opening-balance entry say `amount` on `day` (Dr/Cr its GL line against Opening
     balance equity). Unchanged: nothing. Changed: the old entry is reversed and the new one posted, each on an open
     day (a closed month keeps its meaning). The live entry's id, or None when the opening is 0."""
-    gl = _gl(ctx, money)
+    gl = gl_account(ctx, money)
     prior = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
     if prior is not None:
         moved = sum(line.amount for _, line in SL.entry_lines(ctx.c, str(prior["id"])) if line.account_id == gl.id)
@@ -336,11 +336,11 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     if row["entry_id"]:
         if _unchanged(ctx, row, money):
             return
-        _unpost(ctx, row, "the bank changed this transaction")
+        unpost_row(ctx, row, "the bank changed this transaction")
         row = SK.get(ctx.c, "fin_feed_txns", fid)
     if str(row["status"]) == "ignored":
         return
-    gl = _gl(ctx, money)
+    gl = gl_account(ctx, money)
     pay = SK.payment_by_request(ctx.c, t.request_id) if t.request_id else None
     if pay is None and t.amount < 0:
         pay = SK.direct_payment(ctx.c, t.provider_id) or _marked(ctx, money, t)
@@ -475,7 +475,7 @@ def payment_linked(ctx: Ctx, pay: Any) -> None:
     if money is None:
         return
     if row["entry_id"]:
-        _unpost(ctx, row, "its payment was found")
+        unpost_row(ctx, row, "its payment was found")
         row = SK.get(ctx.c, "fin_feed_txns", str(row["id"]))
     t = F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
                   txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
@@ -674,7 +674,7 @@ def _unchanged(ctx: Ctx, row: Any, money: Any) -> bool:
     return moved == int(row["amount"]) and (shared or same_day)
 
 
-def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
+def unpost_row(ctx: Ctx, row: Any, memo: str) -> None:
     """Reverse a row's entry (and any reclassification of it, `_reclass`); the other side of a transfer goes back to
     waiting too."""
     entry_id = str(row["entry_id"])
@@ -707,7 +707,7 @@ def undo(ctx: Ctx, row: Any) -> None:
         budgeting.release(ctx, str(row["hold_id"]))
         SB.void_settled(ctx.c, str(row["hold_id"]), ctx.at)
     if row["entry_id"]:
-        _unpost(ctx, row, "the bank cancelled this transaction")
+        unpost_row(ctx, row, "the bank cancelled this transaction")
     SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"status": "ignored", "entry_id": None, "entry_line_id": None,
                                                        "updated_at": ctx.at})
 
@@ -732,7 +732,7 @@ def _counterpart(ctx: Ctx, row: Any, money: Any) -> Any:
 def transfer(ctx: Ctx, row: Any, money: Any, other: Any) -> None:
     """One entry for both sides: Dr the account money went to, Cr the one it left."""
     other_money = SK.get(ctx.c, "fin_money_accounts", str(other["money_account_id"]))
-    here, there = _gl(ctx, money), _gl(ctx, other_money)
+    here, there = gl_account(ctx, money), gl_account(ctx, other_money)
     amount = int(row["amount"])
     first = sorted([str(row["id"]), str(other["id"])])
     done = posting.post_entry(ctx.c, {
@@ -802,7 +802,7 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     tags = shared.check_tags(ctx, posting.with_team(ctx, L.tags(p.get("tags"))))
     if not may_write(ctx, who, account.id, tags):
         raise denied("that line or those tags are outside your view")
-    gl = _gl(ctx, money)
+    gl = gl_account(ctx, money)
     t = F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=amount, txn_date=str(row["txn_date"]),
                   status=F.POSTED, kind=str(row["kind"]), counterparty=str(row["counterparty"]),
                   description=str(row["description"]), card_id=str(row["card_id"] or ""))
@@ -816,7 +816,7 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if left + taken == 0:
             raise FinanceError(CONFLICT, "that bank row is already applied in full")
         if row["entry_id"]:
-            _unpost(ctx, row, "re-categorized")
+            unpost_row(ctx, row, "re-categorized")
         holds = [str(row["hold_id"])] if row["hold_id"] and amount < 0 else []
         fee = provider_fee_line(ctx, row, money)
         lines = [feed_line(account.id, -(left + taken), tags, t.counterparty)]
