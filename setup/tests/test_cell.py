@@ -1280,6 +1280,16 @@ def test_route_and_company_hosts_never_overlap(ready):
     assert ready(*args)["error"] == "domain_taken"                         # demo.tico.team is the route's
 
 
+def test_if_router_current_refuses_a_router_this_checkout_did_not_write(ready):
+    ready(*add_args(ready, "alpha"))
+    assert ready(*DEMO, "--if-router-current")["ok"]                     # this checkout's file, with or without routes
+    path = ready.root / "router" / "Caddyfile"
+    newer = path.read_text() + "# a newer core's block\n"
+    path.write_text(newer)
+    assert ready(*DEMO, "--if-router-current")["error"] == "router_changed"
+    assert path.read_text() == newer
+
+
 @pytest.mark.parametrize("extra", [["--port", "8080"], ["--port", "20001"], ["--port", "80"], []])
 def test_route_ports_stay_clear_of_the_cells_own(ready, extra):
     answer = ready("route", "set", "--name", "demo", "--host", "demo.tico.team", *extra, "--json")

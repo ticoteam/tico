@@ -16,6 +16,7 @@ minute with no domain, DNS, sign-in or model account. It cannot be mistaken for 
 import argparse
 import asyncio
 import contextlib
+import contextvars
 import errno
 import ipaddress
 import logging
@@ -193,8 +194,41 @@ def avatar(pid):
     return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "private, max-age=3600"})
 
 
+class _Discarded(Exception):
+    """Ends a public demo GET's write transaction so it rolls back."""
+
+
+# Set for a public demo's GET or HEAD: a read may still open a write (a DM page makes the DM it shows), and on a demo
+# every visitor shares that write would change the company for everyone, so it rolls back instead.
+PUBLIC_READ = contextvars.ContextVar("demo_public_read", default=False)
+
+
+def discard_read_writes(store):
+    """Make `store.transaction()` roll back, never commit, while PUBLIC_READ is set. The caller still sees its own
+    writes inside the transaction, so the page it asked for is drawn; nothing stays."""
+    real = store.transaction
+
+    @contextlib.contextmanager
+    def transaction(durable=False):
+        if not PUBLIC_READ.get():
+            with real(durable) as c:
+                yield c
+            return
+        try:
+            with real(durable) as c:
+                yield c
+                c.after_commit.clear()
+                raise _Discarded
+        except _Discarded:
+            pass
+
+    store.transaction = transaction
+
+
 def install(app, auth, settings):
     """The demo's front gate, outermost so nothing else answers first."""
+    if settings.demo_public:
+        discard_read_writes(app.state.store)
 
     # "Ask the librarian" answers from the graph alone: no model is called.
     from . import market
@@ -231,6 +265,7 @@ def install(app, auth, settings):
             if settings.demo_public and not PUBLIC_WRITES.match(path):
                 return problem(403, "demo", "This public demo is read-only. Run your own with "
                                "`docker run --rm -p 127.0.0.1:8765:8765 ghcr.io/ticoteam/tico demo`.")
+        PUBLIC_READ.set(settings.demo_public and request.method in ("GET", "HEAD"))
         return await call_next(request)
 
 

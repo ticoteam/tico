@@ -96,23 +96,12 @@ install_units() {
 }
 
 # The demo's hosts in the router, from this checkout's `cell route`, and only when the router's file is what this core
-# writes for the companies (with or without the route): then the companies' blocks stay exactly as they are.
+# writes for the companies (with or without the route), checked under the cell lock: then the companies' blocks stay
+# exactly as they are.
 route() {
-  local args=(--name demo --port "${PORT[blue]}" --port "${PORT[green]}" --noindex) h
+  local args=(--name demo --port "${PORT[blue]}" --port "${PORT[green]}" --noindex --if-router-current) h
   for h in "${HOSTS[@]}"; do args+=(--host "$h"); done
   [ "${1:-}" = --tunnel ] || args+=(--router-only)
-  (cd "$TOOLS" && python3 -I - "$CELL" <<'PY'
-import sys
-sys.path.insert(0, ".")
-from pathlib import Path
-from setup import cell as C
-c = C.Cell(Path(sys.argv[1]), C.System())
-now = (c.root / "router" / "Caddyfile").read_text()
-companies = c.live_companies()
-if now not in (C.router_config(companies), C.router_config(companies, c.routes())):
-    sys.exit("tico-demo: the router's file is not what this checkout's cell writes for these companies; not touching it")
-PY
-  )
   local answer
   answer=$(cd "$TOOLS" && python3 -m setup cell route set "${args[@]}" --json) || die "cell route: $answer"
   echo "$answer"

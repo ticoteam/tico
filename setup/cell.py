@@ -505,6 +505,8 @@ def parser() -> Parser:
                    help=f"a loopback port (repeat, at most {MAX_ROUTE_PORTS}): the first healthy one is used")
     o.add_argument("--noindex", action="store_true", help="X-Robots-Tag: noindex, nofollow and a robots.txt that "
                    "disallows everything")
+    o.add_argument("--if-router-current", action="store_true", help="refuse (router_changed) unless the router's "
+                   "file is what this checkout writes, checked under the cell lock")
     o.add_argument("--router-only", action="store_true", help="leave the tunnel's routes for a later change (no "
                    "tunnel restart); the answer's tunnel_pending says whether one is due")
     return p
@@ -1833,6 +1835,13 @@ class Cell:
         name = check_slug(args.name)
         path = self.root / ROUTES / f"{name}.json"
         with self.lock("cell"):
+            if getattr(args, "if_router_current", False):
+                # A checkout that may be older than the host's core (the demo's deploy): change nothing unless the
+                # router's file is what this checkout writes, read under the same lock the rewrite takes.
+                live = self.live_companies()
+                if _read(self.root / "router" / "Caddyfile") not in (router_config(live), router_config(live, self.routes())):
+                    raise CellError("router_changed", "the router's file is not what this checkout's cell writes for "
+                                                      "these companies; not touching it")
             if args.op == "set":
                 hosts = [check_host(h, "--host", cell["domain"]) for h in args.host or []]
                 ports = list(args.port or [])
