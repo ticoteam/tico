@@ -238,17 +238,24 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION):
             counts[name] = counts.get(name, 0) + 1
     if len(counts) < total:
         raise RuntimeError(f'{len(counts)} test files cannot fill {total} shards')
-    weights, unrecorded = file_weights(counts, recorded_timings('release' if selection else 'default'))
-    loads, groups = [0.0] * total, [[] for _ in range(total)]
-    for name in sorted(counts, key=lambda name: (-weights[name], name)):
-        lightest = min(range(total), key=lambda i: (loads[i], i))
-        loads[lightest] += weights[name]
-        groups[lightest].append(name)
+    groups, loads, unrecorded = bin_shards(counts, recorded_timings('release' if selection else 'default'), total)
     mine = groups[index - 1]
     print(f'Python shard {index}/{total}: {len(mine)} files, {sum(counts[name] for name in mine)} of '
           f'{sum(counts.values())} tests, about {loads[index - 1]:.0f} of {sum(loads):.0f} seconds, recorded or estimated '
           f'({len(unrecorded)} of {len(counts)} files unrecorded, weighed by test count)', flush=True)
     return sorted(mine)
+
+
+def bin_shards(counts, timings, total):
+    """Greedy binning of {file: test count} into `total` shards by weight (see file_weights): the slowest file first,
+    into the lightest shard. Returns (groups, loads in seconds, unrecorded files)."""
+    weights, unrecorded = file_weights(counts, timings)
+    loads, groups = [0.0] * total, [[] for _ in range(total)]
+    for name in sorted(counts, key=lambda name: (-weights[name], name)):
+        lightest = min(range(total), key=lambda i: (loads[i], i))
+        loads[lightest] += weights[name]
+        groups[lightest].append(name)
+    return groups, loads, unrecorded
 
 
 def browser_shard(index, total):
@@ -313,6 +320,37 @@ def record_timings(default_report, slow_report):
     TIMINGS.write_text(json.dumps({**timings, **({'browser': browser} if browser else {})}, indent=1) + '\n')
     print(f'Recorded {len(default)} default and {len(release)} release test files in {TIMINGS.name}: '
           f'{sum(default.values()):.0f}s and {sum(release.values()):.0f}s', flush=True)
+    return 0
+
+
+def record_shard_timings(report_dir):
+    """Refresh the 'release' seconds in TIMINGS from the per-shard junit reports of a release validation (every `*.xml`
+    under `report_dir`, written with `-o junit_family=xunit1`). Each file's tests run in one shard, so its seconds are
+    the sum of its cases. A file that did not run keeps its recorded seconds while it still exists in the checkout;
+    the 'default' record is only pruned, since these reports are the release selection's. Browser seconds are kept."""
+    reports = sorted(Path(report_dir).rglob('*.xml'))
+    if not reports:
+        raise RuntimeError(f'no junit reports under {report_dir}')
+    fresh = {}
+    for path in reports:
+        for name, seconds in junit_seconds(path).items():
+            fresh[name] = fresh.get(name, 0.0) + seconds
+    try:
+        recorded = json.loads(TIMINGS.read_text())
+    except FileNotFoundError:
+        recorded = {}
+    exists = lambda name: (ROOT / name).is_file()
+    release = {name: seconds for name, seconds in recorded.get('release', {}).items() if name not in fresh and exists(name)}
+    release.update(fresh)
+    default = {name: seconds for name, seconds in recorded.get('default', {}).items() if exists(name)}
+    timings = {'default': dict(sorted(default.items())),
+               'release': {name: round(seconds, 2) for name, seconds in sorted(release.items())}}
+    if recorded.get('browser'):
+        timings['browser'] = recorded['browser']
+    TIMINGS.write_text(json.dumps(timings, indent=1) + '\n')
+    print(f'Recorded {len(fresh)} files from {len(reports)} junit reports into {TIMINGS.name}; '
+          f'kept {len(release) - len(fresh)} release and {len(default)} default records: '
+          f'{sum(release.values()):.0f}s release', flush=True)
     return 0
 
 
@@ -469,6 +507,9 @@ def main(argv=None):
     parser.add_argument('--part', choices=PARTS, help='with --release: run only this slice of the gate')
     parser.add_argument('--record-timings', nargs=2, metavar=('DEFAULT_XML', 'SLOW_XML'),
                         help='rewrite scripts/test-timings.json from junit reports of the default suite and the slow tests')
+    parser.add_argument('--record-shard-timings', metavar='JUNIT_DIR',
+                        help="refresh the 'release' seconds in scripts/test-timings.json from the per-shard junit reports "
+                             "(xunit1) of a release validation, a directory of python-K-of-N.xml files")
     parser.add_argument('--record-browser-timings', nargs='+', metavar='LOG',
                         help="rewrite the 'browser' seconds in scripts/test-timings.json from browser-test logs")
     parser.add_argument('--shard', type=parse_shard,
@@ -481,6 +522,8 @@ def main(argv=None):
         parser.error('--shard with --release needs --part python or browser')
     if args.record_timings:
         return record_timings(*args.record_timings)
+    if args.record_shard_timings:
+        return record_shard_timings(args.record_shard_timings)
     if args.record_browser_timings:
         return record_browser_timings(*args.record_browser_timings)
     if args.release:
@@ -494,7 +537,7 @@ def in_slot(env=os.environ):
 
 
 if __name__ == '__main__':
-    if not in_slot() and not {'--record-timings', '--record-browser-timings'} & set(sys.argv):
+    if not in_slot() and not {'--record-timings', '--record-shard-timings', '--record-browser-timings'} & set(sys.argv):
         # A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh).
         os.execvp('bash', ['bash', str(ROOT / 'scripts/heavy.sh'), sys.executable, __file__, *sys.argv[1:]])
     raise SystemExit(main())
