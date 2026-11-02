@@ -1,7 +1,7 @@
 /* ui/app/org-rules.js — Rules (docs/rules-plan.md, Screens 1, 2, 4–8): the Rules page with its Internal, External, Due
    and Suggested tabs, the rule and due-date side panels, the Add rule and Add document dialogs, and a bot's Rules tab.
    Everything is read from and written to the org rules API (backend/org_rules.py): GET /api/v2/rules (paged; every
-   page is read, a team has dozens of rules), /rules/counts, /rules/due, /rule-sources and /bots/<slug>/rules. A rule
+   page is read, a team has dozens of rules), /rules/due, /rule-sources and /bots/<slug>/rules. A rule
    says whether the caller may change it (`can_edit`), so the panels show its controls only then; the server checks
    again, and a refusal shows as one line. Saving sends the rule's `version`: a 409 reloads it and says so. Add document
    starts a Counsel review (POST /rules/read, backend/counsel.py); its suggestions wait in Suggested, and each one's
@@ -16,10 +16,13 @@ const RU_TABS = [['internal', 'Internal'], ['external', 'External'], ['due', 'Du
 const RU_REPEATS = [['once', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['quarterly', 'Quarterly'], ['yearly', 'Yearly']];
 const RU_STATUS = {overdue: ['Overdue', 'fail'], due_soon: ['Due soon', 'ready'], upcoming: ['Upcoming', ''], satisfied: ['Satisfied', 'ok']};
 const RU_KINDS = [['vendor', 'Vendor'], ['customer', 'Customer'], ['government', 'Government'], ['other', 'Other']];
-const RU_BROKEN = [['block', 'Block'], ['escalate', 'Escalate'], ['warn', 'Warn']];
+// If broken: the stored values stay block / escalate / warn; each label says what happens (org-rule-holds.js and
+// overview-graph.js use the same words).
+const RU_BROKEN = [['block', 'Stop'], ['escalate', 'Ask first'], ['warn', 'Warn']];
+const RU_BROKEN_HINT = {block: 'The output is refused.', escalate: 'Held until the reviewer OKs it.', warn: 'It goes through with a note.'};
 const RU_PAGES = 50;        // pages read for one list at most (a page stops at 100 rows or at its byte budget)
 const RU_SETTINGS_BATCH = 40;   // bots whose settings "Settings too" reads at a time (More reads the next ones)
-let RU = null;   // {root, tab, counts, rules: {internal, external}, suggested, due, sources, settings, filter, seq, loaded}
+let RU = null;   // {root, tab, rules: {internal, external}, suggested, due, sources, settings, filter, seq, loaded}
 
 const ruPhone = () => matchMedia('(max-width:760px)').matches;
 const ruQuery = () => new URLSearchParams((S.route || '').split('?')[1] || '');
@@ -52,10 +55,56 @@ function ruScopeWords(scope, empty = '—') {
   const words = [...(scope.all_bots ? ['All bots'] : []), ...outside, ...['groups', 'bots', 'people'].flatMap(k => (scope[k] || []).map(x => x.name || x.id))];
   return words.length ? words.join(', ') : empty;
 }
+// Who follows a rule and with whom, in one sentence: "All bots follow this with Ben Okafor." Takes the API's view
+// ({id, name} entries) or the scope editor's ids.
+function ruFollowSentence(who, withScope) {
+  const name = (kind, x) => x?.name || (kind === 'groups' ? ruGroupName(x) : kind === 'bots' ? botDisplayName(x) : ruPersonName(x));
+  const names = s => ['groups', 'bots', 'people'].flatMap(k => (s?.[k] || []).map(x => name(k, x)));
+  const list = a => a.length < 3 ? a.join(' and ') : a.slice(0, -1).join(', ') + ' and ' + a.at(-1);
+  const parts = who?.everyone ? ['Everyone'] : [...(who?.all_bots ? ['All bots'] : []), ...names(who)];
+  if (who?.outside_editions) parts.push('Outside editions');
+  if (!parts.length) return '';
+  const subject = list(parts.map((p, i) => i && (p === 'All bots' || p === 'Outside editions') ? p.toLowerCase() : p));
+  const one = parts.length === 1 && !['All bots', 'Outside editions'].includes(parts[0]);
+  const other = names(withScope);
+  return `${subject} ${one ? 'follows' : 'follow'} this${other.length ? ' with ' + list(other) : ''}.`;
+}
 // Its ids only, as the API takes it and as the scope editor keeps it.
 const ruScopeIds = scope => ({everyone: !!scope?.everyone, all_bots: !!scope?.all_bots, outside_editions: !!scope?.outside_editions,
   groups: (scope?.groups || []).map(x => x.id ?? x), bots: (scope?.bots || []).map(x => x.id ?? x), people: (scope?.people || []).map(x => x.id ?? x)});
 const ruSameScope = (a, b) => JSON.stringify(ruScopeIds(a)) === JSON.stringify(ruScopeIds(b));
+
+// ----------------------------------------------------------------- mentions
+// A rule names a teammate the way a thread's composer writes a mention: @slug for a bot, @handle for a person (their
+// id, the part of their email before the @, or a first name no one else shares). Each shows as a mention chip.
+function ruMentionOf(word) {
+  const w = word.toLowerCase();
+  const bot = (S.emps || []).find(e => e.status !== 'archived' && (String(e.id).toLowerCase() === w || String(e.name || '').toLowerCase() === w));
+  if (bot) return {href: '#/bot/' + encodeURIComponent(bot.id), name: botDisplayName(bot.id)};
+  const people = (S.people || []).filter(p => !p.archived), first = p => String(p.name || '').split(' ')[0].toLowerCase();
+  const firsts = people.filter(p => first(p) === w);
+  const p = people.find(p => String(p.id).toLowerCase() === w || (p.email && personHandle(p.email) === w)) || (firsts.length === 1 ? firsts[0] : null);
+  return p ? {href: '#/person/' + encodeURIComponent(p.id), name: p.name || p.id} : null;
+}
+// A rule's text as HTML, its @mentions as chips. `as`: 'link' (an <a>), 'inline' (inside a row that is itself a link:
+// a span that opens the teammate on its own click) or 'plain' (inside a button: the chip's look only).
+function ruTextHTML(text, as = 'link') {
+  return esc(text).replace(/(^|[^\w@])@(\w[\w.-]*)((?:&#39;s\b|[,;:!?)])*)/g, (all, pre, word, after) => {
+    const handle = word.replace(/[.-]+$/, ''), hit = handle && ruMentionOf(handle);
+    if (!hit) return all;
+    const label = '@' + esc(hit.name), tail = word.slice(handle.length) + after;
+    const chip = as === 'link' ? `<a class="ru-at" href="${esc(hit.href)}">${label}</a>`
+      : as === 'inline' ? `<span class="ru-at" data-href="${esc(hit.href)}">${label}</span>` : `<span class="ru-at">${label}</span>`;
+    return pre + (tail ? `<span class="ru-at-w">${chip}${tail}</span>` : chip);
+  });
+}
+// An inline chip opens its teammate, not the row around it.
+document.addEventListener('click', ev => {
+  const at = ev.target.closest?.('.ru-at[data-href]');
+  if (!at) return;
+  ev.preventDefault(); ev.stopPropagation();
+  location.hash = at.dataset.href;
+}, true);
 
 // "Jan 31", or "Jan 31, 2027" outside this year.
 function ruDay(iso, year = false) {
@@ -95,7 +144,6 @@ async function ruAll(path) {
 }
 async function ruLoad(tab) {
   const state = RU, seq = ++state.seq;
-  const counts = get('/v2/rules/counts', {fresh: true}).catch(() => null);
   try {
     if (tab === 'internal') {
       state.rules.internal = await ruAll('/v2/rules?kind=internal');
@@ -109,9 +157,7 @@ async function ruLoad(tab) {
     }
     state.error = '';
   } catch (e) { state.error = e.message; }
-  const c = await counts;
   if (RU !== state || seq !== state.seq) return false;
-  if (c) state.counts = c;
   state.loaded.add(tab);
   return true;
 }
@@ -155,7 +201,7 @@ async function pageRules() {
       <header class="ru-ph"><h1>Rules</h1><nav class="ru-tabs" aria-label="Rules"></nav><span class="spacer"></span><span class="ru-acts"></span></header>
       <div class="ru-body"><aside class="ru-filters" aria-label="Filters"></aside><section class="ru-list" aria-live="polite">${skelRows(6)}</section>
         <aside class="ru-side" id="ru-side" hidden></aside></div></div>`;
-    RU = {root: $('#ru-root'), tab: null, counts: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [], threads: null,
+    RU = {root: $('#ru-root'), tab: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [], threads: null,
           settings: [], settingsBy: new Map(), settingsLeft: 0, filter: {q: '', who: '', with: '', from: '', due: false, status: '', routine: '', settings: false, moreFrom: false},
           seq: 0, loaded: new Set(), error: ''};
     ruWire();
@@ -178,9 +224,8 @@ async function pageRules() {
 function rulesStop() { RU = null; }
 
 function ruDrawHead() {
-  const c = RU.counts || {};
   RU.root.querySelector('.ru-tabs').innerHTML = RU_TABS.map(([k, label]) =>
-    `<a href="${ruHref(k)}" data-ru-tab="${k}"${RU.tab === k ? ' class="cur" aria-current="page"' : ''}>${label}${c[k] != null ? ` <span class="ru-cnt">· ${c[k]}</span>` : ''}</a>`).join('');
+    `<a href="${ruHref(k)}" data-ru-tab="${k}"${RU.tab === k ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('');
   const human = S.me?.role !== 'bot';
   const acts = {
     internal: human ? '<button class="primary small" type="button" data-ru-add>+ Add rule</button>' : '',
@@ -239,16 +284,16 @@ const ruSel = id => ruQuery().get('rule') === id;
 function ruDrawInternal(filters, list) {
   const all = RU.rules.internal, f = RU.filter;
   filters.innerHTML = `${ruSearch()}
-    <div class="ru-fh">Who</div>${ruScopeFacets(all, 'who', 'who') || '<div class="ru-fnone">—</div>'}
+    <div class="ru-fh">Followed by</div>${ruScopeFacets(all, 'who', 'who') || '<div class="ru-fnone">—</div>'}
     <div class="ru-fh">With</div>${ruScopeFacets(all, 'with', 'with') || '<div class="ru-fnone">—</div>'}
     <div class="ru-fh">Show</div><label class="ru-f ru-toggle"><span>Settings too</span><input type="checkbox" data-ru-settings${f.settings ? ' checked' : ''}></label>`;
   const rows = all.filter(r => ruScopeHas(r.who, f.who) && ruScopeHas(r.with, f.with) && ruMatches(r.text + ' ' + r.description, f.q));
-  const head = '<div class="ru-row ru-head" role="row"><span>Rule</span><span>Who</span><span>With</span><span>Due</span></div>';
+  const head = '<div class="ru-row ru-head" role="row"><span>Rule</span><span>Followed by</span><span>With</span><span>Due</span></div>';
   const body = rows.map(r => `<a class="ru-row${ruSel(r.id) ? ' sel' : ''}" role="row" href="${ruHref('internal', {rule: r.id})}" data-rule="${esc(r.id)}">
-      <span class="ru-txt">${esc(r.text)}</span><span class="ru-c" data-l="Who">${esc(ruScopeWords(r.who))}</span>
+      <span class="ru-txt">${ruTextHTML(r.text, 'inline')}</span><span class="ru-c" data-l="Followed by">${esc(ruScopeWords(r.who))}</span>
       <span class="ru-c${ruScopeWords(r.with) === '—' ? ' ru-none' : ''}" data-l="With">${esc(ruScopeWords(r.with))}</span><span class="ru-c" data-l="Due">${ruDueCell(r)}</span></a>`).join('');
   const settings = f.settings && !f.with ? RU.settings.filter(s => ruMatches(s.text, f.q) && (!f.who || f.who === 'bots:' + s.bot || (f.who === 'all_bots' && !s.bot)))
-    .map(s => `<div class="ru-row ru-setting" role="row"><span class="ru-txt">${esc(s.text)}</span><span class="ru-c" data-l="Who">${esc(s.who)}</span><span class="ru-c ru-none">—</span>
+    .map(s => `<div class="ru-row ru-setting" role="row"><span class="ru-txt">${esc(s.text)}</span><span class="ru-c" data-l="Followed by">${esc(s.who)}</span><span class="ru-c ru-none">—</span>
       <span class="ru-c">${ruSettingLink(s, s.bot)}</span></div>`).join('') : '';
   const more = f.settings && !f.with && RU.settingsLeft
     ? `<button type="button" class="ru-row ru-more-row" data-ru-settings-more>More bots' settings · ${RU.settingsLeft}</button>` : '';
@@ -286,14 +331,14 @@ function ruDrawExternal(filters, list) {
   filters.innerHTML = `${ruSearch()}
     <div class="ru-fh">From</div>${shown.map(([id, s]) => ruFacet('from', id, s.name, s.n, f.from === id)).join('') || '<div class="ru-fnone">—</div>'}
     ${sorted.length > 5 && !f.moreFrom ? `<button type="button" class="ru-f ru-more" data-ru-more>${sorted.length - 5} more</button>` : ''}
-    <div class="ru-fh">Who</div>${ruScopeFacets(all, 'who', 'who') || '<div class="ru-fnone">—</div>'}
+    <div class="ru-fh">Followed by</div>${ruScopeFacets(all, 'who', 'who') || '<div class="ru-fnone">—</div>'}
     <div class="ru-fh">Due</div>${ruFacet('due', '1', 'Has a due date', withDue, !!f.due)}`;
   const rows = all.filter(r => (!f.from || r.source?.id === f.from) && ruScopeHas(r.who, f.who) && (!f.due || (r.due || []).length)
     && ruMatches(r.text + ' ' + r.description + ' ' + (r.source?.name || ''), f.q));
-  const head = '<div class="ru-row ru-head" role="row"><span>Rule</span><span>From</span><span>Who</span><span>Due</span></div>';
+  const head = '<div class="ru-row ru-head" role="row"><span>Rule</span><span>From</span><span>Followed by</span><span>Due</span></div>';
   const body = rows.map(r => `<a class="ru-row${ruSel(r.id) ? ' sel' : ''}" role="row" href="${ruHref('external', {rule: r.id})}" data-rule="${esc(r.id)}">
-      <span class="ru-txt">${esc(r.text)}</span><span class="ru-c" data-l="From">${r.source ? `<span class="ru-src ${esc(r.source.kind)}">${esc(r.source.name)}</span>` : '—'}</span>
-      <span class="ru-c" data-l="Who">${esc(ruScopeWords(r.who))}</span><span class="ru-c" data-l="Due">${ruDueCell(r)}</span></a>`).join('');
+      <span class="ru-txt">${ruTextHTML(r.text, 'inline')}</span><span class="ru-c" data-l="From">${r.source ? `<span class="ru-src ${esc(r.source.kind)}">${esc(r.source.name)}</span>` : '—'}</span>
+      <span class="ru-c" data-l="Followed by">${esc(ruScopeWords(r.who))}</span><span class="ru-c" data-l="Due">${ruDueCell(r)}</span></a>`).join('');
   list.innerHTML = `<div class="ru-table ru-ext" role="table">${head}${body}</div>${body ? '' : `<p class="muted ru-pad">${all.length ? 'Nothing matches.' : 'No external rules yet.'}</p>`}`;
 }
 
@@ -306,7 +351,7 @@ function ruDrawDue(filters, list) {
   const open = ruQuery().get('due');
   const head = '<div class="ru-row ru-head" role="row"><span>Due</span><span>Rule</span><span>Repeats</span><span>Routine</span><span>Owner</span><span>Status</span></div>';
   const body = rows.map(d => `<a class="ru-row${open === d.id ? ' sel' : ''}" role="row" href="${ruHref('due', {due: d.id})}" data-due="${esc(d.id)}">
-      <span class="ru-c ru-day">${esc(ruDay(d.due_on))}</span><span class="ru-txt">${esc(d.rule.text)}</span>
+      <span class="ru-c ru-day">${esc(ruDay(d.due_on))}</span><span class="ru-txt">${ruTextHTML(d.rule.text, 'inline')}</span>
       <span class="ru-c" data-l="Repeats">${esc(ruRepeatWord(d.repeats))}</span>
       <span class="ru-c${d.task_days != null ? '' : ' ru-none'}" data-l="Routine">${esc(ruLead(d.task_days) || '—')}</span>
       <span class="ru-c ru-owner" data-l="Owner">${ruOwnerHTML(d.owner)}</span><span class="ru-c">${ruPill(d.status)}</span></a>`).join('');
@@ -332,8 +377,8 @@ function ruDrawSuggested(filters, list) {
   // rows that have one and leaves the rest waiting.
   list.innerHTML = [...groups].map(([key, g]) => `<section class="ru-sg" data-group="${esc(key)}"><header><h2>${esc(g.name)}</h2><span class="spacer"></span>
         <button class="primary small" type="button" data-ru-add-all="${esc(key)}" hidden></button></header>
-      ${g.rows.map(r => { const who = ruScopeWords(r.who, ''); return `<div class="ru-prop${ruSel(r.id) ? ' sel' : ''}" data-rule="${esc(r.id)}"${who ? ' data-has-who' : ''}><a class="ru-pt" href="${ruHref('suggested', {rule: r.id})}">${esc(r.text)}</a>
-        <select class="ru-pwho" aria-label="Who" data-ru-who${r.can_edit ? '' : ' disabled'}><option value="">${esc(who || 'Pick who')}</option>${ruWhoOptions()}</select>
+      ${g.rows.map(r => { const who = ruScopeWords(r.who, ''); return `<div class="ru-prop${ruSel(r.id) ? ' sel' : ''}" data-rule="${esc(r.id)}"${who ? ' data-has-who' : ''}><a class="ru-pt" href="${ruHref('suggested', {rule: r.id})}">${ruTextHTML(r.text, 'inline')}</a>
+        <select class="ru-pwho" aria-label="Followed by" data-ru-who${r.can_edit ? '' : ' disabled'}><option value="">${esc(who || 'Pick who')}</option>${ruWhoOptions()}</select>
         <span class="ru-pacts">${r.can_edit ? `<button class="ghost small" type="button" data-ru-skip>Skip</button><button class="primary small" type="button" data-ru-accept${who ? '' : ' disabled'}>Add</button>` : ''}</span></div>`; }).join('')}</section>`)
     .join('') || '<p class="muted ru-pad">No suggestions.</p>';
   list.querySelectorAll('.ru-sg').forEach(ruAddAllSync);
@@ -448,7 +493,7 @@ async function ruSkip(prop) {
   catch (e) { toast(ruError(e), true); }
   await ruReload([r.id]);
 }
-// After a write: the open tab and the counts read again; the other tabs read again when shown. `written` names rules
+// After a write: the open tab reads again; the other tabs read again when shown. `written` names rules
 // a list row wrote: when the open panel shows one of them, it reads that rule again, and on Suggested it closes once
 // the rule is no longer a suggestion (a row's Add, Skip or Add all leaves the panel's copy stale otherwise).
 async function ruReload(written = []) {
@@ -629,6 +674,19 @@ function ruWhereValue(form, where) {
   return id ? [pick + ':' + id] : where;
 }
 
+// If broken: the three choices, one line on what the chosen one does, and under Ask first the reviewer (no pick: the
+// manager above the one who broke it).
+function ruBrokenHTML(value, reviewer, disabled) {
+  const dis = disabled ? ' disabled' : '';
+  return `${ruSegHTML('if_broken', RU_BROKEN, value, disabled)}<p class="ru-hint" data-ru-hint>${esc(RU_BROKEN_HINT[value] || '')}</p>
+    <label class="ru-reviewer"${value === 'escalate' ? '' : ' hidden'}><span class="ru-lbl">Reviewer <span class="ru-opt">(optional)</span></span>
+      <select name="reviewer"${dis}><option value="">Manager</option>${ruPeople().map(p => `<option value="${esc(p.id)}"${reviewer === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>`;
+}
+function ruBrokenSync(form, value) {
+  form.querySelector('.ru-reviewer').hidden = value !== 'escalate';
+  form.querySelector('[data-ru-hint]').textContent = RU_BROKEN_HINT[value] || '';
+}
+
 async function ruRulePanel(side, id, note = '') {
   const want = side.dataset.open;
   side.innerHTML = ruPanelHead('Rule', ruHref(RU.tab)) + skelRows(4);
@@ -644,15 +702,16 @@ async function ruRulePanel(side, id, note = '') {
   const suggested = r.status === 'suggested';
   side.innerHTML = `${ruPanelHead('Rule', ruHref(RU.tab))}
     <form class="ru-form" data-rule="${esc(r.id)}">
-      <label class="ru-fl"><span class="ru-lbl">Rule</span><textarea name="text" rows="2" maxlength="1000" required${dis}>${esc(r.text)}</textarea></label>
+      <div class="ru-fl"><span class="ru-lbl">Rule</span>
+        <div class="ru-read"${edit ? ' tabindex="0" title="Edit"' : ''}>${ruTextHTML(r.text)}</div>
+        <textarea name="text" rows="2" maxlength="1000" required aria-label="Rule" hidden${dis}>${esc(r.text)}</textarea>
+        <p class="ru-follow">${esc(ruFollowSentence(r.who, internal ? r.with : null))}</p></div>
       <label class="ru-fl"><span class="ru-lbl">Description</span><textarea name="description" rows="2" maxlength="2000"${dis}>${esc(r.description || '')}</textarea></label>
-      <div class="ru-fl"><span class="ru-lbl">Who</span><div data-scope="who"></div></div>
+      <div class="ru-fl"><span class="ru-lbl">Followed by</span><div data-scope="who"></div></div>
       <div class="ru-fl"><span class="ru-lbl">Where <span class="ru-opt">(optional)</span></span><div class="ru-where">${ruWhereHTML(r.where || [], dis)}</div></div>
       ${internal ? '<div class="ru-fl"><span class="ru-lbl">With <span class="ru-opt">(optional)</span></span><div data-scope="with"></div></div>'
         : `<label class="ru-fl"><span class="ru-lbl">From</span><select name="source"${dis}>${ruSourceOptions(RU.sources, r.source?.id)}</select></label>`}
-      <div class="ru-fl"><span class="ru-lbl">If broken</span>${ruSegHTML('if_broken', RU_BROKEN, r.if_broken, !edit)}
-        <label class="ru-reviewer"${r.if_broken === 'escalate' ? '' : ' hidden'}><span class="ru-lbl">Reviewer <span class="ru-opt">(optional)</span></span>
-          <select name="reviewer"${dis}><option value="">Manager</option>${ruPeople().map(p => `<option value="${esc(p.id)}"${r.reviewer?.id === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label></div>
+      <div class="ru-fl"><span class="ru-lbl">If broken</span>${ruBrokenHTML(r.if_broken, r.reviewer?.id, !edit)}</div>
       <div class="ru-fl"><span class="ru-lbl">Due</span>${dues.map(due =>
           `<a class="ru-duebox" href="${ruHref('due', {due: due.id})}" data-due="${esc(due.id)}"><span>${esc(ruDay(due.due_on, true))}${due.repeats && due.repeats !== 'once' ? ' · ' + esc(ruRepeatWord(due.repeats).toLowerCase()) : ''}${due.task_days != null ? ' · task ' + esc(ruLead(due.task_days)) : ''}</span>${ruPill(due.status)}<span class="spacer"></span><span class="muted">›</span></a>`).join('')}
         ${r.due_more ? `<a class="ru-adddue" href="${ruHref('due')}">${r.due_more} more</a>` : ''}
@@ -668,11 +727,24 @@ async function ruRulePanel(side, id, note = '') {
   // A suggestion is added only with a Who: Add waits until the editor names one.
   const addOne = form.querySelector('[data-ru-accept-one]');
   const whoSet = scope => scope.everyone || scope.all_bots || scope.outside_editions || ['groups', 'bots', 'people'].some(k => scope[k].length);
+  // The sentence under the rule follows the Who and With being edited.
+  const follow = () => { form.querySelector('.ru-follow').textContent = ruFollowSentence(who.value(), withEd?.value()); };
   const who = ruScopeEditor(form.querySelector('[data-scope="who"]'), r.who, {flags: true, disabled: !edit,
-    onChange: () => { if (addOne) addOne.disabled = !whoSet(who.value()); }});
+    onChange: () => { if (addOne) addOne.disabled = !whoSet(who.value()); follow(); }});
   if (addOne) addOne.disabled = !whoSet(who.value());
-  const withEd = internal ? ruScopeEditor(form.querySelector('[data-scope="with"]'), r.with, {flags: false, disabled: !edit}) : null;
-  ruSegWire(form, (name, v) => { if (name === 'if_broken') form.querySelector('.ru-reviewer').hidden = v !== 'escalate'; });
+  const withEd = internal ? ruScopeEditor(form.querySelector('[data-scope="with"]'), r.with, {flags: false, disabled: !edit, onChange: follow}) : null;
+  ruSegWire(form, (name, v) => { if (name === 'if_broken') ruBrokenSync(form, v); });
+  // The rule reads with its mentions as chips; an editor clicks it (or presses Enter on it) to edit the words.
+  const read = form.querySelector('.ru-read');
+  const write = () => {
+    read.hidden = true;
+    const box = form.elements.text;
+    box.hidden = false; box.focus(); box.setSelectionRange(box.value.length, box.value.length);
+  };
+  if (edit) {
+    read.addEventListener('click', ev => { if (!ev.target.closest('a')) write(); });
+    read.addEventListener('keydown', ev => { if (ev.key === 'Enter' && !ev.target.closest('a')) { ev.preventDefault(); write(); } });
+  }
   // The fields changed in the panel, as an edit sends them (`version` alone when nothing changed).
   const changes = () => {
     const body = {version: r.version};
@@ -686,7 +758,7 @@ async function ruRulePanel(side, id, note = '') {
     if (!internal && form.elements.source.value !== r.source?.id) body.source_id = form.elements.source.value;
     const broken = ruSegValue(form, 'if_broken');
     if (broken !== r.if_broken) body.if_broken = broken;
-    // The reviewer shows only under Escalate; a stored one stays unless the person picks another.
+    // The reviewer shows only under Ask first; a stored one stays unless the person picks another.
     const reviewer = form.elements.reviewer.value;
     if (broken === 'escalate' && reviewer !== (r.reviewer?.id || '')) body.reviewer = reviewer;
     return body;
@@ -865,8 +937,8 @@ async function ruDuePanel(side, id, ruleId, note = '') {
 }
 
 // ----------------------------------------------------------------- Add rule
-// Internal or External first; Internal asks Rule, Who and With, External asks Rule, Who and From (an existing one, or
-// a new name with its kind). A person who can't manage what they wrote adds a suggestion, which the server decides.
+// Internal or External first; Internal asks Rule, Who (Followed by) and With, External asks Rule, Who and From (an
+// existing one, or a new name with its kind); then If broken. A person who can't manage what they wrote adds a suggestion, which the server decides.
 async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
   let dlg = document.getElementById('ru-add');
   if (!dlg) {
@@ -882,13 +954,14 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
       <div class="ru-side-h"><h2>Add rule</h2><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-ru-close aria-label="Close">✕</button></div>
       ${ruSegHTML('kind', [['internal', 'Internal'], ['external', 'External']], kind)}
       <label class="ru-fl"><span class="ru-lbl">Rule</span><textarea name="text" rows="2" maxlength="1000" required></textarea></label>
-      <div class="ru-fl"><span class="ru-lbl">Who</span><div data-scope="who"></div></div>
+      <div class="ru-fl"><span class="ru-lbl">Followed by</span><div data-scope="who"></div></div>
       <div class="ru-fl"><span class="ru-lbl">Where <span class="ru-opt">(optional)</span></span><div class="ru-where">${ruWhereHTML([], '')}</div></div>
       <div class="ru-fl" data-for="internal"><span class="ru-lbl">With <span class="ru-opt">(optional)</span></span><div data-scope="with"></div></div>
       <div class="ru-fl" data-for="external"><span class="ru-lbl">From</span>
         <select name="source"><option value="">Pick one</option>${ruSourceOptions(sources, '')}<option value="new">New…</option></select>
         <div class="ru-newsrc" hidden><input name="source_name" maxlength="200" placeholder="Name" aria-label="Name">
           <select name="source_kind" aria-label="Kind">${RU_KINDS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></div></div>
+      <div class="ru-fl"><span class="ru-lbl">If broken</span>${ruBrokenHTML('block', '', false)}</div>
       <p class="ru-status" role="status"></p>
       <div class="ru-foot"><span class="spacer"></span><button class="ghost" type="button" data-ru-close>Cancel</button><button class="primary" type="submit">Save</button></div>
     </form>`;
@@ -897,14 +970,15 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
   const withEd = ruScopeEditor(form.querySelector('[data-scope="with"]'), {}, {flags: false});
   const show = k => form.querySelectorAll('[data-for]').forEach(el => { el.hidden = el.dataset.for !== k; });
   show(kind);
-  ruSegWire(form, (name, v) => { if (name === 'kind') show(v); });
+  ruSegWire(form, (name, v) => { if (name === 'kind') show(v); if (name === 'if_broken') ruBrokenSync(form, v); });
   form.elements.source.onchange = () => { form.querySelector('.ru-newsrc').hidden = form.elements.source.value !== 'new'; };
   form.querySelectorAll('[data-ru-close]').forEach(b => { b.onclick = () => dlg.close(); });
   form.onsubmit = async ev => {
     ev.preventDefault();
     const k = ruSegValue(form, 'kind'), f = form.elements, button = form.querySelector('[type=submit]');
-    const body = {kind: k, text: f.text.value.trim(), who: whoEd.value(), where: ruWhereValue(form, [])};
+    const body = {kind: k, text: f.text.value.trim(), who: whoEd.value(), where: ruWhereValue(form, []), if_broken: ruSegValue(form, 'if_broken')};
     if (k === 'internal') body.with = withEd.value();
+    if (body.if_broken === 'escalate' && f.reviewer.value) body.reviewer = f.reviewer.value;
     button.disabled = true; status.textContent = 'Saving…';
     try {
       if (k === 'external') {
@@ -1049,8 +1123,8 @@ async function ruDocOpen() {
 // ----------------------------------------------------------------- the bot's Rules tab
 // Internal first (the written rules whose Who or With names the bot, then its settings as sentences, each opening the
 // setting), then External. Every teammate reads it. Each kind is paged on its own: a More row reads its next page.
-const ruBotRow = r => `<a class="ru-row" role="row" href="${ruHref(r.kind, {rule: r.id})}" data-rule="${esc(r.id)}"><span class="ru-txt">${esc(r.text)}</span>${r.kind === 'internal'
-  ? `<span class="ru-c${ruScopeWords(r.with, 'Anyone') === 'Anyone' ? ' ru-none' : ''}" data-l="With">${esc(ruScopeWords(r.with, 'Anyone'))}</span><span class="ru-c" data-l="Who">${esc(ruScopeWords(r.who))}</span>`
+const ruBotRow = r => `<a class="ru-row" role="row" href="${ruHref(r.kind, {rule: r.id})}" data-rule="${esc(r.id)}"><span class="ru-txt">${ruTextHTML(r.text, 'inline')}</span>${r.kind === 'internal'
+  ? `<span class="ru-c${ruScopeWords(r.with, 'Anyone') === 'Anyone' ? ' ru-none' : ''}" data-l="With">${esc(ruScopeWords(r.with, 'Anyone'))}</span><span class="ru-c" data-l="Followed by">${esc(ruScopeWords(r.who))}</span>`
   : `<span class="ru-c" data-l="From">${r.source ? `<span class="ru-src ${esc(r.source.kind)}">${esc(r.source.name)}</span>` : '—'}</span><span class="ru-c" data-l="Due">${ruDueCell(r)}</span>`}</a>`;
 const ruBotMore = (kind, cursor) => cursor ? `<button type="button" class="ru-row ru-more-row" data-ru-bot-more="${kind}" data-cursor="${esc(cursor)}">More</button>` : '';
 let RU_BOT_GEN = 0;   // each read of the tab; an older response (or its More) never paints over a newer one
@@ -1068,7 +1142,7 @@ async function botRulesLoad(slug) {
   const count = (page, extra = 0) => `${page.rules.length + extra}${page.next_cursor ? '+' : ''}`;
   host.innerHTML = `<section class="card ru-bot-card"><header><h2>Internal</h2><span class="muted" data-ru-n="internal">${count(internal, settings.length)}</span><span class="spacer"></span>
         ${S.me?.role !== 'bot' ? '<button class="ghost small" type="button" data-ru-bot-add>+ Add rule</button>' : ''}</header>
-      <div class="ru-table ru-bot-int" role="table"><div class="ru-row ru-head" role="row"><span>Rule</span><span>With</span><span>Who</span></div>
+      <div class="ru-table ru-bot-int" role="table"><div class="ru-row ru-head" role="row"><span>Rule</span><span>With</span><span>Followed by</span></div>
         ${internal.rules.map(ruBotRow).join('')}${ruBotMore('internal', internal.next_cursor)}
         ${/* the settings follow every written rule: More adds its page above itself, so above these */ ''}
         ${settings.map(s => `<div class="ru-row ru-setting" role="row"><span class="ru-txt">${esc(s.text)}</span><span class="ru-c ru-none">—</span><span class="ru-c">${ruSettingLink(s, slug)}</span></div>`).join('')}

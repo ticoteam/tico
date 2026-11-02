@@ -1,5 +1,6 @@
 // The Rules page (ui/app/org-rules.js) on a real hub seeded with the scenario org and its groups: Dana adds an internal
-// rule with a Who and a With and sees it listed, edits it in the side panel, a stale save is refused and the panel
+// rule with a Who and a With and sees it listed (its panel says who follows it with whom, and If broken reads Stop / Ask
+// first / Warn), a rule naming a teammate as @slug shows a mention chip that opens them, edits it in the side panel, a stale save is refused and the panel
 // reloads, a due date is added, marked satisfied, its repeat changed and a routine set, a second date shows beside
 // it, the Engineering Lead's Rules tab shows the rule and its settings, a teammate who manages nothing reads the rule
 // without Save or Retire, and the Engineering Lead's suggestions are added all at once. With RULES_SHOTS=<dir>, it also
@@ -66,6 +67,34 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     assert.deepEqual(rule.who.bots.map(b => b.id), ['engineering-lead']);
     assert.equal(rule.with.groups.length, 1);
     assert.ok(rule.can_edit);
+    assert.deepEqual(await page.locator('.ru-int .ru-head span').allInnerTexts().then(a => a.map(x => x.toLowerCase())),
+      ['rule', 'followed by', 'with', 'due']);
+    assert.deepEqual(await page.locator('.ru-tabs a').allInnerTexts(), ['Internal', 'External', 'Due', 'Suggested'], 'tabs carry no counts');
+    // Its panel: one sentence from Who and With, the If broken labels say what happens, and the reviewer shows only
+    // under Ask first.
+    await go(page, '#/rules?rule=' + ruleId);
+    const follow = page.locator(`#ru-side form[data-rule="${ruleId}"] .ru-follow`);
+    await follow.waitFor({timeout: t(10000)});
+    assert.match(await follow.textContent(), /^\S.* follows this with Engineering\.$/);
+    assert.deepEqual(await page.locator('#ru-side [data-ru-seg="if_broken"] button').allInnerTexts(), ['Stop', 'Ask first', 'Warn']);
+    assert.equal(await page.locator('#ru-side .ru-reviewer').isHidden(), true);
+    await page.locator('#ru-side [data-ru-seg="if_broken"] [data-v="escalate"]').click();
+    assert.equal(await page.locator('#ru-side .ru-reviewer').isVisible(), true);
+    assert.equal(await page.locator('#ru-side [data-ru-hint]').textContent(), 'Held until the reviewer OKs it.');
+    await go(page, '#/rules');
+
+    // A teammate named @slug in a rule's text is a mention chip; in a list row it opens the teammate, not the rule.
+    const named = await ok(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Ask @engineering-lead before you merge.', who: {all_bots: true}});
+    const chip = page.locator(`.ru-int a.ru-row[data-rule="${named.id}"] .ru-at`);
+    await chip.waitFor({timeout: t(10000)}).catch(async () => { await go(page, '#/overview'); await go(page, '#/rules'); await chip.waitFor({timeout: t(10000)}); });
+    assert.equal(await chip.getAttribute('data-href'), '#/bot/engineering-lead');
+    assert.ok((await chip.textContent()).startsWith('@'));
+    await chip.click();
+    await page.waitForFunction(() => location.hash.startsWith('#/bot/engineering-lead'), null, {timeout: t(10000)});
+    await go(page, '#/rules?rule=' + named.id);
+    await page.locator('#ru-side .ru-read a.ru-at[href="#/bot/engineering-lead"]').waitFor({timeout: t(10000)});
+    await ok(page, 'POST', `/v2/rules/${named.id}/retire`, {version: named.version});
+    await go(page, '#/rules');
 
     // Where: a thread the viewer can read is in the picker, and the rule keeps it.
     const thread = await ok(page, 'POST', '/v2/conversations', {kind: 'chat', participants: ['bot:engineering-lead'], subject: 'Deploy talk'});
@@ -77,11 +106,16 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await threaded.locator('[data-scope="who"] .ru-addsel').selectOption('engineering-lead');
     await threaded.locator('input[name=where_kind][value=thread]').check();
     await threaded.locator('select[name=where_thread]').selectOption(thread.id);
+    // If broken in Add rule: Ask first with a reviewer.
+    await threaded.locator('[data-ru-seg="if_broken"] [data-v="escalate"]').click();
+    await threaded.locator('select[name=reviewer]').selectOption('dana');
     await threaded.locator('button[type=submit]').click();
     const threadRow = page.locator('.ru-int a.ru-row', {hasText: 'Post deploy notes in the thread'});
     await threadRow.waitFor({timeout: t(10000)});
     const threadRule = await ok(page, 'GET', '/v2/rules/' + (await threadRow.getAttribute('data-rule')));
     assert.deepEqual(threadRule.where, ['thread:' + thread.id]);
+    assert.equal(threadRule.if_broken, 'escalate');
+    assert.equal(threadRule.reviewer.id, 'dana');
     await row.click();   // saving the threaded rule opened its panel; the edit below is for the first rule
     // Outside editions travels with the rule: shown in its Who, and still set after a save that doesn't touch Who.
     let outside = await ok(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Never name a customer outside the company', who: {outside_editions: true}});

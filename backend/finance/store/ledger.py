@@ -4,17 +4,20 @@ Rollups (`fin_rollups`, day x account x tag set) change in the same transaction 
 so reports read them and never scan lines."""
 import json
 import sqlite3
-import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal
 from typing import Any
 
+from ... import hubdb as _hubdb
 from ..core.ledger import Account, Book, Entry, Line, tagset
+
+# Tico's own modules are untyped: Finance reaches them through this file, typed at each call.
+_H: Any = _hubdb
 
 
 def new_id() -> str:
-    """Core's id format."""
-    return str(uuid.uuid4())
+    """Core's id format: the hub's id, so a demo build repeats its ids (demo_seed patches the hub's `new_id`)."""
+    return str(_H.new_id())
 
 
 # ------------------------------------------------------------------------------------------------ settings

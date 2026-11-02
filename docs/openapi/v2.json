@@ -38644,7 +38644,7 @@
     },
     "/api/v2/usage": {
       "get": {
-        "summary": "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead",
+        "summary": "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, task (the top 25), harness, model, effort or subscription, filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead",
         "operationId": "getUsage",
         "parameters": [
           {
@@ -67915,6 +67915,7 @@
               "bot",
               "day",
               "routine",
+              "task",
               "harness",
               "model",
               "effort",
@@ -67934,7 +67935,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "By bot: bot, name, department; by day: day; by routine: routine (null for runs that came from none), title, bot, name. Every row has the usage figures and `share`, its part of the total (estimate plus API-equivalent)",
+              "description": "By bot: bot, name, department; by day: day; by routine: routine (null for runs that came from none), title, bot, name; by task: value and name (its title, 'A private task', or null and 'Chats and other runs' for runs with none). Every row has the usage figures and `share`, its part of the total (estimate plus API-equivalent)",
               "additionalProperties": true
             }
           },

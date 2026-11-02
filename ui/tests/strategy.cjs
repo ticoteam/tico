@@ -185,6 +185,11 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/' + route);
+  // On Goals, what waits is one line; its cards are answered in the sheet Review opens.
+  if (route.startsWith('#/goals') && needs.length) {
+    await page.locator('#goal-needs-line [data-needs-review]').click();
+    await page.locator('#goal-needs-sheet[open] #goal-needs').waitFor();
+  }
   return {page, errors, sent, st, mk};
 }
 const sectionTitles = page => page.locator('[data-section] .strat-sec-head .strat-k').allInnerTexts();
