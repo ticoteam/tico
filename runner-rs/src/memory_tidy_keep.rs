@@ -66,3 +66,37 @@ pub async fn run_loop(runner: Arc<Runner>) {
         tokio::time::sleep(Duration::from_secs(15)).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn ordinary_push_lock_excludes_keep_before_repository_access() {
+        let dir = std::env::temp_dir().join(format!("tico-keep-lock-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", server.local_addr().unwrap());
+        let config = crate::config::Config {
+            path: dir.join("runner.json"),
+            data: json!({"projects_dir": dir, "url": url, "token": "synthetic", "runner_id": "test"}).as_object().unwrap().clone(),
+        };
+        let runner = Arc::new(Runner::new(config, crate::client::Client::new(&url, "synthetic", 2, 0).unwrap(),
+                                        crate::state::State::open(&dir.join("state")).unwrap()));
+        let ordinary_push = runner.push_lock.lock().await;
+        let other = runner.clone();
+        let keep = tokio::spawn(async move { apply(&other, &json!({"id": "test-operation", "bot": "ops", "config": {}})).await });
+        assert!(tokio::time::timeout(Duration::from_millis(50), server.accept()).await.is_err());
+        drop(ordinary_push);
+        let (mut stream, _) = tokio::time::timeout(Duration::from_secs(2), server.accept()).await.unwrap().unwrap();
+        let mut request = [0u8; 8192];
+        let n = stream.read(&mut request).await.unwrap();
+        assert!(String::from_utf8_lossy(&request[..n]).contains("github/token"));
+        let body = r#"{"configured":false}"#;
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        assert!(keep.await.unwrap().unwrap_err().contains("credentials unavailable"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
