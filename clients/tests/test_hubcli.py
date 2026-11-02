@@ -23,7 +23,7 @@ from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 SUBCOMMANDS = ["whoami", "inbound", "mail", "meeting", "message", "conversation", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "rules", "strategy", "brand", "gtm", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
+               "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "finance", "task-manager", "stall-triage", "roadmap", "service-key"]
 
@@ -837,11 +837,14 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
             self.__dict__["_tico_is_botops"] = False
 
         def get(self, path, **query):
+            if path.startswith("growth/"):
+                sent.append(("GET", path, query))
+                return {}
             return {"actor": "bot:growth", "kind": "bot"}
 
         def call(self, method, path, body=None, key=None, query=None, delegate=False):
             sent.append((method, path, body))
-            return {"idea": {}, "kpi": {}, "segment": {}}
+            return {"kpi": {}}
 
         def post(self, path, body=None, key=None):
             return self.call("POST", path, body)
@@ -854,37 +857,88 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
     def run(*argv):
         remotecli.run(hubcli.parser().parse_args(list(argv)))
         return sent[-1]
-    assert run("growth", "idea", "create", "--title", "Referral card", "--bet", "b1", "--kpi", "k1", "--channel",
-               "referral", "--channel", "door", "--i", "7", "--c", "5", "--e", "8", "--source-kind", "lost_test",
-               "--follow-up-of", "t9", "--assignee", "me") == ("POST", "growth/ideas", {
-        "title": "Referral card", "bet_id": "b1", "kpi_id": "k1", "channels": ["referral", "door"], "source_kind": "lost_test",
-        "ice_i": 7, "ice_c": 5, "ice_e": 8, "follow_up_of": "t9", "assignee": "bot:growth"})
-    assert run("growth", "idea", "start", "t1", "--from", "2026-10-01", "--to", "2026-10-15", "--change", "New card",
-               "--stop-if", "CAC over 80", "--judged-kpi", "k2", "--min-events", "30", "--audience", "Austin")[2] == {
-        "test_from": "2026-10-01", "test_to": "2026-10-15", "change": "New card", "stop_if": "CAC over 80",
-        "judged_kpi_id": "k2", "min_events": 30, "audience": "Austin"}
-    assert run("growth", "idea", "verdict", "t1", "--status", "lost", "--bet-effect", "weakens",
-               "--confidence", "high")[1:] == ("growth/ideas/t1/verdict", {"status": "lost", "bet_effect": "weakens",
-                                                                           "confidence": "high"})
-    assert run("growth", "idea", "score", "t1", "--i", "3", "--c", "4", "--e", "5")[2] == {"i": 3, "c": 4, "e": 5}
+    assert run("growth", "channel", "add", "google-search", "--name", "Google search", "--track", "performance",
+               "--stage", "testing", "--owner", "me", "--budget", "500", "--source", "src1", "--why", "Demand exists",
+               "--guardrail-kpi", "k9", "--guardrail-max", "80", "--sort", "2") == ("POST", "growth/channels", {
+        "slug": "google-search", "name": "Google search", "track": "performance", "stage": "testing",
+        "owner_ref": "bot:growth", "budget_month": 500.0, "source_id": "src1", "why": "Demand exists",
+        "guardrail_kpi_id": "k9", "guardrail_max": 80.0, "sort": 2})
+    assert run("growth", "channel", "update", "door", "--stage", "paused", "--owner", "") == (
+        "PATCH", "growth/channels/door", {"stage": "paused", "owner_ref": None})                  # "" clears
+    assert run("growth", "channel", "retire", "door") == ("POST", "growth/channels/door/retire", {})
+    assert run("growth", "source", "add", "--truth-for", "bookings", "--system", "Stripe", "--reach-kind", "mcp",
+               "--reach-ref", "stripe", "--may", "read only", "--owner", "me") == ("POST", "growth/sources", {
+        "truth_for": "bookings", "system": "Stripe", "reach_kind": "mcp", "reach_ref": "stripe", "may": "read only",
+        "owner_ref": "bot:growth"})
+    assert run("growth", "source", "update", "src1", "--may", "pause ads") == (
+        "PATCH", "growth/sources/src1", {"may": "pause ads"})
     assert run("growth", "cohort", "set", "--channel", "unknown", "--month", "2026-10", "--new", "18",
                "--source", "new_customers=Stripe") == ("PUT", "growth/cohorts", {
         "channel": "unknown", "month": "2026-10", "new_customers": 18, "sources": {"new_customers": "Stripe"}})
-    assert run("growth", "segment", "create", "--name", "Property managers", "--why", "Big portfolios") == (
-        "POST", "growth/segments", {"name": "Property managers", "why": "Big portfolios", "status": "testing"})
-    assert run("growth", "segment", "update", "segment/property-managers", "--status", "serving", "--motion",
-               "sales_led", "--who-buys", "Ops lead", "--owner", "me")[1:] == (
-        "growth/segments/segment/property-managers", {"status": "serving", "motion": "sales_led", "who_buys": "Ops lead",
-                                                      "owner_ref": "bot:growth"})
-    assert run("growth", "idea", "update", "t1", "--segment", "s1", "--segment", "s2")[2] == {"segments": ["s1", "s2"]}
-    assert run("growth", "channel", "update", "door", "--segment", "")[2] == {"segments": []}       # "" clears
-    assert run("growth", "cohort", "set", "--channel", "door", "--month", "2026-10", "--segment", "s1",
-               "--new", "4")[2] == {"channel": "door", "month": "2026-10", "segment_id": "s1", "new_customers": 4}
+    assert run("growth", "cohort", "set", "--channel", "door", "--month", "2026-10", "--spend", "900", "--d30", "42",
+               "--margin", "70", "--quality", "estimate")[2] == {
+        "channel": "door", "month": "2026-10", "spend": 900.0, "kept_d30": 42.0, "margin_pct": 70.0,
+        "quality": "estimate"}
+    assert run("growth", "cohort", "list", "--channel", "door", "--month", "2026-10", "--limit", "5") == (
+        "GET", "growth/cohorts", {"channel": "door", "month": "2026-10", "limit": 5})
+    assert run("growth", "economics", "--month", "2026-10") == ("GET", "growth/economics", {"month": "2026-10"})
+    assert run("growth", "numbers", "--months", "6") == ("GET", "growth/numbers", {"months": 6})
+    assert run("growth", "kpis") == ("GET", "growth/kpis", {})
+    assert run("growth", "settings") == ("GET", "growth/settings", {})
+    assert run("growth", "settings", "--set", "margin_pct=40", "--set", "unit=orders") == (
+        "PUT", "growth/settings", {"margin_pct": 40.0, "unit": "orders"})
     kpi = run("kpi", "update", "k1", "--parent", "k0", "--role", "north_star", "--loop", "referral:2")[2]
     assert (kpi["parent_kpi_id"], kpi["growth_role"], kpi["loop_name"], kpi["loop_step"]) == ("k0", "north_star", "referral", 2)
     assert "stage" not in kpi
     assert run("brand", "draft", "--section", "positioning", "--body", '"Acme cleans homes"')[1:] == (
         "brand/draft", {"sections": {"positioning": "Acme cleans homes"}})
+
+
+def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_notice(monkeypatch, capsys):
+    ran = []
+    monkeypatch.setattr(hubcli, "run", lambda argv, who: ran.append(argv) or 0)
+    for old, new in ((["gtm", "show", "--json"], ["strategy", "show", "--section", "how", "--json"]),
+                     (["gtm", "summary"], ["strategy", "show", "--section", "how"]),
+                     (["gtm", "sources"], ["growth", "source", "list"])):
+        assert hubcli.main(old) == 0
+        assert ran[-1] == new
+    assert '"hub gtm show" is now "hub strategy show --section how"' in capsys.readouterr().err
+
+    assert hubcli.main(["growth", "idea", "create", "--title", "Referral card", "--hypothesis", "Friends bring friends",
+                        "--prediction", "Sign-ups up 10%", "--bet", "b1", "--kpi", "k1", "--channel", "referral",
+                        "--channel", "door", "--assignee", "me", "--i", "7", "--segment", "s1"]) == 0
+    assert ran[-1] == ["task", "create", "--type", "Marketing", "--owner", "me", "--title", "Referral card", "--body",
+                       "Hypothesis: Friends bring friends\nPrediction: Sign-ups up 10%\nBet: b1\nKPI: k1",
+                       "--label", "channel:referral", "--label", "channel:door"]
+    assert '"hub growth idea create" is now "hub task create --type Marketing"' in capsys.readouterr().err
+    assert hubcli.main(["growth", "idea", "list", "--status", "testing", "--channel", "referral"]) == 0
+    assert ran[-1] == ["task", "list", "--type", "Marketing", "--step", "Testing", "--label", "channel:referral"]
+    assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "won", "--result", "CPA 31",
+                        "--learning", "Video works"]) == 0
+    assert ran[-2:] == [["task", "update", "t1", "--step", "Won"],
+                        ["task", "comment", "t1", "Result: CPA 31\nLearning: Video works"]]
+
+
+def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_published(monkeypatch, capsys):
+    from clients import remotecli
+    published = {"current": {"sections": {"how": "- Motion: self serve", "serve": "SMBs"}}}
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.__dict__["_tico_is_botops"] = False
+
+        def get(self, path, **query):
+            return {"actor": "bot:growth", "kind": "bot"} if path == "me" else published
+    monkeypatch.setattr(remotecli, "Client", Client)
+    monkeypatch.setenv("HUB_API_URL", "https://hub.example.test")
+
+    remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how"]))
+    assert capsys.readouterr().out == "- Motion: self serve\n"
+    remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how", "--json"]))
+    assert json.loads(capsys.readouterr().out) == published
+    published["current"] = None
+    remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how"]))
+    assert capsys.readouterr().out == "Nothing published yet.\n"
 
 
 def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):
