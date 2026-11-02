@@ -57,10 +57,10 @@ ROOT = Path(__file__).resolve().parents[1]
 BUDGET_SECONDS = 480
 DEFAULT_BUDGET_SECONDS = 300
 CANDIDATE = 'v9.9.9'   # what scripts/journey-test.sh calls a local build
-# Checks whose failure is reported but does not fail the gate. Chris, Nov 2 (v0.5.54): the upgrade journey is optional;
-# Tico Team takes each release first and its updater rolls a release that does not come up healthy back on its own.
-# TICO_RELEASE_OPTIONAL_CHECKS (comma-separated, empty for none) overrides it.
-OPTIONAL_CHECKS = frozenset(name for name in os.environ.get('TICO_RELEASE_OPTIONAL_CHECKS', 'journey').split(',') if name)
+# Checks whose failure is reported but does not fail the gate: none by default. The upgrade journey blocks, since it
+# finds real upgrade bugs (v0.5.54: two crashes on an upgraded database). TICO_RELEASE_OPTIONAL_CHECKS=journey
+# (comma-separated) waives a check for one release.
+OPTIONAL_CHECKS = frozenset(name for name in os.environ.get('TICO_RELEASE_OPTIONAL_CHECKS', '').split(',') if name)
 # The edge network range (A.B.C.0/28, see docker/edge-env.sh) of each compose stack the gate runs side by side. A
 # separate project and host port do not separate networks: Docker refuses a second network on a range in use.
 EDGE = {'journey': '172.30.252', 'smoke': '172.30.253', 'backup-test': '172.30.251'}   # the journey runs backup-test
