@@ -238,7 +238,8 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                     ("kind?", "standing|person", "standing for a bot (the default for one), person for a teammate; "
                      "single_use is not on Mercury yet"),
                     ("nickname?", "str", ""), ("money_account_id?", "str", ""),
-                    ("provider_user_id?", "str", "the Mercury user the card is issued to")),
+                    ("provider_user_id", "str", "the Mercury user the card is issued to; Mercury issues cards "
+                     "to its own users")),
     "card_update_limit": (("card_id", "str", ""), ("amount", "minor", "")),
     "card_freeze": (("card_id", "str", ""), ("budget_id?", "str", ""), ("reason?", "str", "")),
     "card_unfreeze": (("card_id", "str", ""), ("reason?", "str", "")),

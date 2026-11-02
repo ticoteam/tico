@@ -210,6 +210,17 @@ def test_system_work_cannot_lift_a_person_freeze_through_the_action_path(books):
         assert _frozen_by(c, coder) == "budget"
 
 
+def test_the_card_help_marks_the_mercury_user_required_as_the_code_does(books):
+    """Mercury issues a card to one of its own users, so a card needs provider_user_id; the help says so too."""
+    fields = {f["name"]: f["required"] for f in FA.help("card_create")["fields"]}
+    assert fields["provider_user_id"] is True
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        refused = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": _budget(c), "amount": 20_000})
+        assert (refused.status, refused.code) == ("failed", "invalid")
+        assert "provider_user_id is required" in refused.reason
+
+
 def test_a_person_who_freezes_a_budget_frozen_card_keeps_it_frozen_when_the_budget_has_room(books):
     fake = FakeMercury()
     budget, coder, _ = _world(books, fake)
