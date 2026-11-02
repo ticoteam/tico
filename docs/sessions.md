@@ -189,6 +189,12 @@ Every minute, the server checks attempts for five minutes without either an atte
 It marks them `stalled` in the run list and Health, with their last event and time. This warning does not stop
 the attempt or change its lease. Fresh activity clears it.
 
+The server also ends a run that has been silent this way, with no heartbeat or event for five minutes, once it has run
+past its bot's `max_run_minutes` plus five minutes. It does not wait for the computer. The run ends as `expired`, and its
+end reason reads "Ended by the server: no heartbeat for 5 minutes, more than 5 minutes past max_run_minutes (60 minutes)",
+where 60 is the bot's own limit. A renewal does not restore the run, but its late result is still filed. While
+the computer keeps sending heartbeats, its own limit applies instead.
+
 The runner also keeps up to 200 lines / 64 KiB of scrubbed harness stderr per attempt for seven days,
 even with provider stream capture off. `hub run export <attempt> --fixture` adds `stderr.log` when present,
 and works with stderr alone when no provider stream exists. Its access rules remain the same as raw stream

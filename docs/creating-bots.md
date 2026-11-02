@@ -661,7 +661,8 @@ Levers set in **Settings → Bots**, not in the repository:
   Compact at alone. The line under the picker shows what the bot runs on. Each run in a task's **Runs** says what woke it.
   A branch picks its own. The old **Wakes** setting (`wake_preset`) is still read and set by older clients: it changes only
   the Doer's window.
-- **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
+- **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope. A run that goes silent
+  past this plus five minutes is ended by the server ([Why a run stopped or stalled](sessions.md#why-a-run-stopped-or-stalled)).
 - **`gateway:`** (optional, in a template's `bot.yaml`): `level: low | medium | high` and `fast: true` (Fast costs more and runs on another vendor, so no template turns it on). A bot made from the
   template that runs on the [Tico AI Gateway](ai-gateway.md) with no model of its own starts on its department's pick at that
   level, for example `gateway: {level: low}` on a mail watcher, or `level: high` on an engineering builder. It
