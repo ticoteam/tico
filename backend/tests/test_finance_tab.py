@@ -201,7 +201,8 @@ def test_access_shows_each_viewer_their_part_and_only_the_owner_views_as(books):
         assert len(mates["human:eve"]["grants"]) == 1
         # A manager (Ben leads Engineering, so Web under it too) sees his own row and his teams', never Sales.
         ben = FR.access(c, "human:ben", at=AT)
-        assert {m["teammate"] for m in ben["teammates"]} == {"human:ben", "human:cara", "human:eve", "human:fay", "bot:coder"}
+        assert {m["teammate"] for m in ben["teammates"]} == {
+            "human:ben", "human:cara", "human:eve", "human:fay", "bot:bookkeeper", "bot:coder"}
         assert not ben["can_view_as"]
         mine = next(m for m in ben["teammates"] if m["teammate"] == "human:ben")
         assert mine["default"] == "team_expenses" and mine["rights"] == []
@@ -318,7 +319,8 @@ def test_access_over_http_is_the_roster_for_admins_and_each_managers_own_teams_o
     assert rows["human:cara"]["rights"] is not None and rows["human:eve"]["rights"] is None
     # Ben leads Engineering, so Web is under him too.
     ben = get(api, "finance/access", token="ben-test")
-    assert {m["teammate"] for m in ben["teammates"]} == {"human:ben", "human:cara", "human:eve", "human:fay", "bot:coder"}
+    assert {m["teammate"] for m in ben["teammates"]} == {
+        "human:ben", "human:cara", "human:eve", "human:fay", "bot:bookkeeper", "bot:coder"}
     # Eve is a plain teammate: her own row only.
     eve = get(api, "finance/access", token="eve-test")
     assert [m["teammate"] for m in eve["teammates"]] == ["human:eve"] and eve["private_lines"] == []

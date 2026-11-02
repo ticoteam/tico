@@ -207,7 +207,9 @@ def test_c4_every_act_kind_the_playbooks_name_exists(environment):
     from backend.finance.core import kinds as K
     api = built(environment)
     ensure(api)
-    known = set(K.ALL) | set(K.NEEDS)
+    from backend.finance import reads as FR
+    fields = {name.rstrip("?") for shape in K.SHAPES.values() for name, _, _ in shape}
+    known = set(K.ALL) | set(K.NEEDS) | set(FR.INBOX_KINDS) | fields
     text = "\n".join(p.read_text() for p in INSTRUCTIONS)
     named = set(re.findall(r"`((?:bill|invoice|payment|card|budget|tax|rule|recipient|contact|account|allocation|"
                            r"projection|close|reopen|reconcile|categorize|journal|view|right|connection)_[a-z_]+)`", text))
@@ -237,7 +239,7 @@ def test_c4_the_payloads_the_playbooks_show_take_those_fields(environment):
              if kind != "help"]
     assert len(shown) >= 6, shown                 # bill_schedule, payment_create, reconcile, contact_create, ...
     for kind, raw in shown:
-        payload = json.loads(raw)
+        payload = json.loads(re.sub(r"<[a-z_]+>", "1", raw))     # `<month>` and `<stage>` are values the bot fills in
         assert kind in K.SHAPES, kind
         names = {name.rstrip("?") for name, _, _ in K.SHAPES[kind]}
         required = {name for name, _, _ in K.SHAPES[kind] if not name.endswith("?")}

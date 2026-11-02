@@ -869,7 +869,8 @@ def test_rules_strictest_wins_examples_must_pass_and_a_bots_rule_needs_a_finance
                          (deny.result["rule_id"],)).fetchall()
         assert [r[0] for r in runs] == ["deny"]
         tested = act(c, OWNER, "rule_test", {"rule_id": deny.result["rule_id"]})
-        assert tested.result["changed_count"] == 1
+        # the refused card is already denied, and the deny outcome still gives that: nothing would change
+        assert tested.result["changed_count"] == 0
         assert FR.rules(c, OWNER, at=AT)["rules"]
         with pytest.raises(FinanceError):
             FR.rules(c, "bot:coder", at=AT)

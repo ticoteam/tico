@@ -65,6 +65,6 @@ approver. Use it when unsure, then send the same command without it. A kind's fi
 - `close_period` refuses a `note` field. The variance note is a task comment.
 - `bill_create` refuses `date` and `currency`. The fields are `bill_date` and the ones `help` lists.
 - `hub task show` takes ids only: it has no `--json`.
-- Quote only the `--q` value: `hub finance search --kind bill --q "Summit Leasing"`. A flag list in one quoted string is one argument, and the hub refuses it.
+- Quote only the `--q` value: `hub finance search --kind bill --q "Summit Leasing"`. A flag list in one quoted string is one argument, and the command is refused.
 - An action's status is `hub finance action <action id>`. `finance act action` does not exist.
 - `hub finance inbox --kind` takes only the kinds listed above. `bill_email` is not one.

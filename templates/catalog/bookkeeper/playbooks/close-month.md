@@ -3,7 +3,7 @@
 Finance raised `finance.period.ready`: the month in this task's data has nothing left that blocks its close.
 
 Inputs: the month from the task, and the task's id.
-Done when: the close checklist is read, the variance note is a comment on this task, `close_period` is asked for with the
+Done when: the close checklist is read, the variance comment is on this task, `close_period` is asked for with the
 month only, the task says it waits on the owner, and the task is marked done with one line.
 
 1. `hub finance report close --month <month>`. Finish what the checklist lists that is yours (categorize, attach,

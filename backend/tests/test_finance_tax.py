@@ -228,6 +228,9 @@ def test_a_jurisdiction_needs_a_vendor_authority_and_a_remittance_needs_one(keep
 
 def test_due_dates_wait_for_finance_and_the_bookkeeper_then_seed_once(store):
     with store.transaction() as c:
+        # the shared fixture registers the Bookkeeper; a new install has none until its own set-up
+        c.execute("DELETE FROM bot_config WHERE bot=?", ("bookkeeper",))
+        c.execute("DELETE FROM bots WHERE slug=?", ("bookkeeper",))
         assert FT.seed_dues(c, AT) == []
         FA.setup(c, OWNER, AT)
         assert FT.seed_dues(c, AT) == []
