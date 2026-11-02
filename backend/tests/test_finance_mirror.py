@@ -853,7 +853,11 @@ def test_a_settled_bill_in_a_closed_month_is_revised_in_the_open_period_and_its_
             "open", 1500, 2000)
         assert [tuple(r) for r in c.execute("SELECT from_kind, amount FROM fin_settlements WHERE to_id=? "
                                             "AND voided_at IS NULL", (bill,)).fetchall()] == [("account", 1500)]
-        assert FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", "month", "accrual", AT) == sept
+        # The figures read as they closed; the snapshot alone carries the one restatement flag (spec 10).
+        sept_now = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", "month", "accrual", AT)
+        assert sept_now["snapshot"] == {"month": "2026-09", "restatements": 1}
+        assert {k: v for k, v in sept_now.items() if k != "snapshot"} == {k: v for k, v in sept.items()
+                                                                          if k != "snapshot"}
         assert _bank_to(c, "2026-09-30") == bank
         # The change lands in October (the open period): reversal and new entry, so October's expense moves by 500.
         assert FR.pnl(c, OWNER, "2026-10-01", "2026-10-31", "month", "accrual", AT)["expense"] == [500]

@@ -51,9 +51,10 @@ def marker(c: sqlite3.Connection, book_id: str, month: str) -> dict[str, Any] | 
     return {"month": month, "restatements": len(json.loads(str(row["restated_json"])))}
 
 
-def restate(c: sqlite3.Connection, book_id: str, month: str, by: str, at: str) -> int:
-    """Flag a closed month whose accrual totals now differ from its snapshot: the accounts that moved, with their old
-    and new totals (spec 10). Returns how many accounts changed; a month that still matches takes no flag."""
+def restate(c: sqlite3.Connection, book_id: str, month: str) -> int:
+    """How many accounts of a closed month now total differently from its snapshot (spec 10). Reports only: it writes
+    no flag. The edit that moved the totals flags the snapshot once, where it posts (mirror._restate), so a check that
+    runs alongside that edit cannot count it twice. A month that still matches returns 0."""
     row = SL.snapshot(c, book_id, month)
     if row is None:
         return 0
@@ -61,10 +62,7 @@ def restate(c: sqlite3.Connection, book_id: str, month: str, by: str, at: str) -
     was_doc: dict[str, Any] = json.loads(str(row["pnl_json"]))
     was = {str(k): int(v) for k, v in was_doc["accrual"].items()}
     now = _sums(SL.rollup_rows(c, book_id, first.isoformat(), last.isoformat()))
-    changes = {k: [was.get(k, 0), now.get(k, 0)] for k in sorted(set(was) | set(now)) if was.get(k, 0) != now.get(k, 0)}
-    if changes:
-        _append(c, row, {"at": at, "by": by, "changes": changes})
-    return len(changes)
+    return len({k for k in set(was) | set(now) if was.get(k, 0) != now.get(k, 0)})
 
 
 def flag(c: sqlite3.Connection, book_id: str, month: str, by: str, at: str, change: str) -> int:
