@@ -233,14 +233,19 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
             banking.refresh_connection_openings(load(c, now), cid)
     with store.transaction() as c:
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now}
+        # A first backfill still under way goes on at once (rung below), not a poll later: until it ends the books
+        # carry part of the history and no opening balance.
+        going = due and not problems and not _settings(SK.get(c, "fin_connections", cid)).get("backfilled")
         if due:
-            fields["next_sync_at"] = _after(now, POLL_MINUTES * 60)
+            fields["next_sync_at"] = now if going else _after(now, POLL_MINUTES * 60)
         if problems:
             fields.update({"status": "error", "last_error": problems[0][:300]})
             banking.sync_failed(load(c, now), cid, str(row["status"]), problems[0])
         else:
             fields.update({"status": "active", "last_error": None, "last_ok_at": now})
         SK.update(c, "fin_connections", cid, fields)
+    if going:
+        BELL.ring()
     return "failed" if problems else "ok"
 
 

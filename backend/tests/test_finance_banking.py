@@ -658,6 +658,36 @@ def test_a_backfill_posts_the_opening_balance_so_the_first_reconcile_is_done_wit
         assert next(r for r in sheet["assets"] if r["code"] == "1000")["balance"] == 12_525_050
 
 
+def test_an_unfinished_backfill_goes_on_at_once_and_then_polls(books, monkeypatch):
+    """A first backfill that needs more steps is due again at once and rings the worker, so the books do not sit a
+    poll (15 minutes) with part of the history and no opening; once it ends the next pass is a poll away."""
+    fake = FakeMercury()
+    for i in range(3):
+        fake.txns[f"txn-{i}"] = _txn(f"txn-{i}", "acct-chk", -10.0, "wireFee", day=f"2026-09-0{i + 1}")
+    paged = fake.transactions
+    monkeypatch.setattr(fake, "transactions", lambda start_after, limit=500: paged(start_after, 1))
+    monkeypatch.setattr(sync, "BACKFILL_PAGES", 1)
+    connect(books, fake)
+
+    def state():
+        with books.read() as c:
+            r = c.execute("SELECT settings, next_sync_at FROM fin_connections").fetchone()
+            return bool(json.loads(r[0] or "{}").get("backfilled")), str(r[1])
+
+    rung = sync.BELL.rung
+    sync_once(books, fake)
+    assert state() == (False, AT) and sync.BELL.rung > rung
+    for _ in range(4):
+        if state()[0]:
+            break
+        sync_once(books, fake)
+    backfilled, due = state()
+    assert backfilled and due > AT
+    with books.read() as c:
+        assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE provider_id LIKE 'txn-%'").fetchone()[0] == 3
+        assert len(_opening(c)) == 2
+
+
 def test_a_closed_month_correction_reconciles_that_month_at_the_new_amount(books):
     """Round 3 #2: Sept posts 100.00, Sept closes, Mercury corrects it to 120.00 (reversal and repost land in
     October): reconciling Sept to 120.00 is done, the original still in Sept's rollup notwithstanding."""
