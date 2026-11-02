@@ -49,6 +49,13 @@ def test_email_and_phone_page_reads_configured_in_the_demo_and_still_refuses_wri
         assert refused.status_code == 409 and refused.json()["error"]["code"] == "inbound_unconfigured"
 
 
+def test_phone_requests_read_is_empty_in_the_demo_not_an_error(built):
+    with as_ana(built) as api:
+        listed = api.get("/api/v2/inbound/phone-requests")
+        assert listed.status_code == 200
+        assert listed.json() == {"phone_requests": [], "next": None}
+
+
 def test_letters_carry_the_mailing_address_and_reach_their_owners(built):
     with as_ana(built) as api:
         items = {row["external_id"]: row for row in api.get("/api/v2/postal/items").json()["items"]}

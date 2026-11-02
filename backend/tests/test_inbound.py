@@ -222,6 +222,7 @@ def test_inbox_page_says_not_configured_on_a_real_install_with_inbound_off(api):
     assert svc.off and not svc.settings.demo         # no key and not the demo: the page's connection is off
     listed=api.get('/api/v2/inbound/inboxes',headers=headers()).json()
     assert len(listed['inboxes'])==3 and listed['configured'] is False
+    assert api.get('/api/v2/inbound/phone-requests',headers=headers()).status_code==409  # no HQ: not an empty list
     svc.off=False                                    # with a key and a reachable HQ the same inboxes are configured
     assert api.get('/api/v2/inbound/inboxes',headers=headers()).json()['configured'] is True
 

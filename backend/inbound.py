@@ -346,6 +346,9 @@ class Inbound:
     def phone_requests(self, who, after='', limit=100):
         with self.store.read_transaction() as c:
             permit(c,who,admin=True,auth=self.auth)
+        # The demo has no HQ to ask, and it has no requests: an empty list, not an error. Writes still refuse in `remote`.
+        if self.settings.demo:
+            return {'phone_requests':[],'next':None}
         return self.remote('GET','phone-requests?'+urlencode({'after':after,'limit':limit}))
 
     def phone_request(self, who, *, name=None, operation=None, ident=None, action=None, price=None):
