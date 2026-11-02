@@ -6,8 +6,9 @@ from decimal import Decimal
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.store import ledger as SL
+from backend.finance.store import banking as SK
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, FakeMercury, act, books, connect, finance_template, spend, store)
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
 from backend.tests.test_finance_payments import _checking
 
 PLAIN = "human:eve"          # a web teammate with no grants or rights
@@ -140,3 +141,112 @@ def test_a_top_up_is_refused_when_the_books_have_no_gateway_credit_account_and_n
         got = act(c, OWNER, "gateway_topup", {"money_account_id": _checking(c), "amount": 10_000})
         assert (got.status, got.code) == ("failed", "not_found"), got
         assert c.execute("SELECT COUNT(*) FROM fin_accounts WHERE code='1100'").fetchone()[0] == 0
+
+
+def _txn(raw_id: str, amount: float, day: str = "2026-10-15", account_id: str = "acct-chk", **extra):
+    """A Mercury outgoing transfer on the checking account (what the bank brings in as a feed row)."""
+    return {**MERCURY["txn_bank_fee"], "id": raw_id, "accountId": account_id, "amount": amount,
+            "kind": "externalTransfer", "createdAt": f"{day}T10:00:00Z", "postedAt": f"{day}T10:00:00Z",
+            "counterpartyName": "Gateway", **extra}
+
+
+def _feed_id(c, provider_id: str) -> str:
+    return str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id=?", (provider_id,)).fetchone()[0])
+
+
+def _moves(c, bank: str) -> tuple[int, int, int]:
+    """The bank line, Other expenses (6900) and Gateway credit (1100), as they stand."""
+    return (_balance(c, bank), _balance(c, "6900"), _balance(c, "1100"))
+
+
+def test_a_top_up_then_its_bank_row_posts_the_cash_once(books):
+    """A top-up from a connected account posts at once; the bank row that shows the same payment takes its entry, so
+    the row posts nothing of its own."""
+    fake = FakeMercury()
+    connect(books, fake)
+    sync_once(books, fake)                 # the account's opening is posted before anyone tops up from it
+    with books.transaction() as c:
+        money = _checking(c)
+        bank = _bank_code(c, money)
+        made = act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 10_000, "date": "2026-10-15"})
+        assert made.status == "committed", made
+        entry = str(made.result["entry_id"])
+        before = _moves(c, bank)
+    assert before[1:] == (0, 10_000)
+    fake.txns["txn-topup"] = _txn("txn-topup", -100.0, day="2026-10-16")
+    fake.events_list.append({"id": "evt-topup", "resourceType": "transaction", "resourceId": "txn-topup",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, "2026-10-15T12:30:00.000000Z")
+    with books.read() as c:
+        assert _moves(c, bank) == before
+        assert c.execute("SELECT COUNT(*) FROM fin_entries WHERE source_id IN (SELECT id FROM fin_feed_txns)"
+                         ).fetchone()[0] == 0          # the row posted no entry of its own
+        assert tuple(c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE provider_id='txn-topup'").fetchone()
+                     ) == ("posted", entry)
+
+
+def test_a_bank_row_already_in_the_feed_is_the_top_up_when_its_feed_id_is_given(books):
+    """The row posted to Other expenses when it arrived; the top-up names it, so the row is what posts Dr 1100 and the
+    cash moves once."""
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.txns["txn-topup"] = _txn("txn-topup", -100.0, day="2026-10-16")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        money = _checking(c)
+        bank = _bank_code(c, money)
+        posted = _moves(c, bank)               # the row as it arrived: its cash, against Other expenses
+        feed_id = _feed_id(c, "txn-topup")
+        made = act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 10_000, "feed_id": feed_id})
+        assert made.status == "committed", made
+    with books.read() as c:
+        assert _moves(c, bank) == (posted[0], posted[1] - 10_000, 10_000)
+        assert tuple(c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE provider_id='txn-topup'").fetchone()
+                     ) == ("posted", str(made.result["entry_id"]))
+
+
+def test_a_top_up_from_an_account_with_no_connection_goes_through_clearing(books):
+    """No connection, so no bank row will ever show the payment: the top-up credits payments clearing (1050), and the
+    bank's own line is not touched."""
+    with books.transaction() as c:
+        money = SL.new_id()
+        c.execute("INSERT INTO fin_money_accounts(id, book_id, kind, name, provider, account_id, created_at, created_by)"
+                  " VALUES(?,?,?,?,?,?,?,?)", (money, SL.book(c).id, "bank", "Checking", "mercury",  # type: ignore[union-attr]
+                                               account(c, "1000"), AT, OWNER))
+        bank = _bank_code(c, money)
+        cash = _balance(c, bank)
+        made = act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 10_000, "date": "2026-10-15"})
+        assert made.status == "committed", made
+        assert (_balance(c, bank) - cash, _balance(c, "1050"), _balance(c, "1100")) == (0, -10_000, 10_000)
+
+
+def test_a_top_up_is_refused_while_an_unposted_bank_row_of_its_amount_is_in_the_feed(books):
+    """A settled row of this amount that no entry has taken yet may be this payment: the top-up names it instead of
+    posting a second cash line beside it."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        money = _checking(c)
+        SK.insert(c, "fin_feed_txns", {
+            "money_account_id": money, "provider_id": "txn-waiting", "txn_date": "2026-10-15", "amount": -10_000,
+            "counterparty": "Gateway", "currency": "USD", "status": "new", "created_at": AT, "created_by": OWNER})
+        entries = _entries(c)
+        got = act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 10_000, "date": "2026-10-15"})
+        assert (got.status, got.code) == ("failed", "conflict"), got
+        assert _entries(c) == entries
+        assert _balance(c, "1100") == 0
+
+
+def test_a_bank_row_that_is_a_top_ups_bank_side_cannot_be_recategorized(books):
+    """Re-categorizing it would reverse the top-up's own entry and with it the Gateway credit."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        money = _checking(c)
+        assert act(c, OWNER, "gateway_topup", {"money_account_id": money, "amount": 10_000,
+                                               "date": "2026-10-15"}).status == "committed"
+    fake.txns["txn-topup"] = _txn("txn-topup", -100.0)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        got = act(c, OWNER, "categorize", {"feed_id": _feed_id(c, "txn-topup"), "account_id": account(c, "6100")})
+        assert (got.status, got.code) == ("failed", "conflict"), got
+        assert _balance(c, "1100") == 10_000

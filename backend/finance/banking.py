@@ -395,6 +395,15 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         if expected == documents.ASK:   # it may pay one of several marked payments: it stays new, a person picks
             event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
         return                      # the bank row of a payment marked paid from this account: linked, posted once
+    if t.amount < 0 and str(money["kind"]) == "bank":
+        from . import topups             # lazy: topups posts through this module's helpers
+        waiting = topups.waiting_for(ctx, money, t)
+        if len(waiting) == 1:            # the Gateway top-up this payment made: the row takes its entry, cash posts once
+            mark_posted(ctx, [fid], waiting[0])
+            return
+        if waiting:                      # several could be it: a person picks
+            event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+            return
     found = documents.match_feed(ctx, row, t)
     if isinstance(found, str):          # it may pay a document past what was looked at, or one of several: a person links it
         _review_match(ctx, fid, t, found)
@@ -640,8 +649,11 @@ def _unchanged(ctx: Ctx, row: Any, money: Any) -> bool:
         return False
     gl = str(money["account_id"])
     moved = sum(line.amount for _, line in SL.entry_lines(ctx.c, str(row["entry_id"])) if line.account_id == gl)
-    # A transfer's two sides, or a row linked to a payment marked paid on a bill or invoice, keep their entry's day.
-    shared = len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1 or str(entry["source"]) in L.DOC_SOURCES
+    from .topups import is_top_up     # lazy: topups posts through this module's helpers
+    # A transfer's two sides, a row linked to a payment marked paid on a bill or invoice, or the bank side of a Gateway
+    # top-up keep their entry's day.
+    shared = len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1 or str(entry["source"]) in L.DOC_SOURCES \
+        or is_top_up(entry)
     day, posted = str(row["txn_date"]), str(entry["entry_date"])
     # A row dated in a closed period posted on a later open day (`open_day`), or one paying several documents marked
     # paid posted on its reversals' later day (`documents._post_combined`): that shift is not a change.
@@ -745,6 +757,9 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(CONFLICT, "that row is reconciled; undo the reconciliation to change it")
     if row["entry_id"] and len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1:
         raise FinanceError(CONFLICT, "that row is a transfer between your own accounts")
+    from .topups import is_top_up        # lazy: topups posts through this module's helpers
+    if row["entry_id"] and is_top_up(SL.entry_row(ctx.c, str(row["entry_id"]))):
+        raise FinanceError(CONFLICT, "that row is the bank side of a Gateway top-up; its entry is the top-up's")
     amount = int(row["amount"])
     money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
     mirrored = ctx.book.mode == "mirror"
