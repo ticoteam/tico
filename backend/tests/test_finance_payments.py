@@ -230,7 +230,7 @@ def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_a
     fake.land(sent, "req-9")                                                     # it was there after all, page 3
     sync_once(books, fake, HOURS[4])
     assert len(fake.sent("request_send_money")) == 1
-    assert any(after for _, after in fake.sent("send_requests"))                # it read past the first page
+    assert any(after for _, after, _ in fake.sent("send_requests"))             # it read past the first page
     with books.read() as c:
         assert c.execute("SELECT status, provider_request_id FROM fin_payments WHERE id=?", (pid,)).fetchone()[:] == \
             ("awaiting_bank_approval", "req-9")
@@ -477,6 +477,136 @@ def test_a_cancel_asked_at_the_same_instant_as_a_lookup_waits_for_the_next_sweep
     with books.read() as c:
         assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
         assert _holds(c) == [(50_000, "released")]
+
+
+def test_an_admin_cancel_of_a_request_sent_and_no_longer_listed_finds_its_transaction_and_is_settled_once(books):
+    """Item 2 (spec §9): Mercury may have sent an unknown payment's request and then stop listing it (its lists show
+    pending, approved, rejected and cancelled only). The admin's cancel is not decided by the lists alone: the account's
+    transactions, read back to the payment's creation, carry its key, so the payment goes on as submitted under its
+    request, is never sent again, and settles on its bank row."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, key = _unknown_and_flagged(books, fake, "bill-12")
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_cancel", {"payment_id": pid}, at=HOURS[2]).status == "committed"
+    fake.land({"recipientId": "rcp-1", "amount": 500.0, "note": f"tico:{key}", "externalMemo": f"tico:{key} Acme"},
+              "req-sent", "approved")
+    fake.unlisted.add("req-sent")                                             # sent: no longer in any list
+    fake.txns["txn-sent"] = {**MERCURY["txn_bank_fee"], "id": "txn-sent", "accountId": "acct-chk", "amount": -500.0,
+                             "kind": "outgoingPayment", "counterpartyName": "Acme Supplies", "requestId": "req-sent",
+                             "note": f"tico:{key}", "externalMemo": f"tico:{key} Acme",
+                             "createdAt": "2026-10-15T14:00:00Z"}
+    sync_once(books, fake, HOURS[3])
+    with books.read() as c:
+        assert c.execute("SELECT status, provider_request_id, cancel_asked_at FROM fin_payments WHERE id=?",
+                         (pid,)).fetchone()[:] == ("submitted", "req-sent", None)
+        assert _holds(c) == [(50_000, "held")]
+    fake.events_list.append({"id": "evt-sent", "resourceType": "transaction", "resourceId": "txn-sent",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, HOURS[4])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "settled"
+    assert len(fake.sent("request_send_money")) == 1                             # sent once, never again
+    assert {status for _, _, status in fake.sent("send_requests")} == \
+        {"pendingApproval", "approved", "rejected", "cancelled"}                 # one list call per documented status
+
+
+def test_an_admin_cancel_waits_while_the_transactions_read_back_is_incomplete(books):
+    """Item 2: a read back that did not finish decides nothing: the payment is neither cancelled nor found, and the hold
+    stays, until a whole read (the next sweep's) finds nothing and ends it."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, _ = _unknown_and_flagged(books, fake, "bill-13")
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_cancel", {"payment_id": pid}, at=HOURS[2]).status == "committed"
+    fake.queue["account_transactions"] = [Answer(None, {})]                  # the first page of the read fails
+    sync_once(books, fake, HOURS[3])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "unknown"
+        assert _holds(c) == [(50_000, "held")]
+    assert len(fake.sent("account_transactions")) == 1
+    sync_once(books, fake, HOURS[4])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _holds(c) == [(50_000, "released")]
+
+
+def test_an_admin_cancel_of_a_direct_send_whose_transaction_landed_finds_it_by_its_key(books):
+    """Item 2: a direct send that got no answer may have landed as Mercury's transaction. The admin's cancel is decided
+    by the account's transactions read back to the payment's creation: the transaction carries the key, so the send
+    goes on as submitted under its own transaction id, is never sent again, and settles on its bank row."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake)
+    requests_before = len(fake.sent("request_send_money"))
+    fake.queue["create_transaction"] = [Answer(None, {})]
+    dpid = _direct(books, rid)
+    sync_once(books, fake, HOURS[8])                                             # no answer: unknown
+    sync_once(books, fake, HOURS[9])                                             # not found for an hour: flagged
+    with books.read() as c:
+        key, flagged = c.execute("SELECT idempotency_key, flagged_at FROM fin_payments WHERE id=?", (dpid,)).fetchone()
+    assert flagged
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_cancel", {"payment_id": dpid}, at=HOURS[9]).status == "committed"
+    fake.txns["txn-direct-1"] = {**MERCURY["txn_bank_fee"], "id": "txn-direct-1", "accountId": "acct-chk",
+                                 "amount": -100.0, "kind": "outgoingPayment", "counterpartyName": "Acme Supplies",
+                                 "requestId": None, "note": f"tico:{key}", "externalMemo": f"tico:{key} Acme",
+                                 "createdAt": "2026-10-15T20:00:00Z"}
+    sync_once(books, fake, HOURS[10])
+    with books.read() as c:
+        assert c.execute("SELECT status, provider_request_id FROM fin_payments WHERE id=?",
+                         (dpid,)).fetchone()[:] == ("submitted", "txn-direct-1")
+    fake.events_list.append({"id": "evt-direct-sent", "resourceType": "transaction", "resourceId": "txn-direct-1",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, "2026-10-16T00:30:00.000000Z")
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "settled"
+    assert len(fake.sent("create_transaction")) == 1                             # the lost send, never again
+    assert len(fake.sent("request_send_money")) == requests_before
+
+
+def test_a_bank_debit_carrying_a_cancelled_payments_key_asks_once_and_pays_nothing_it_owes(books):
+    """Item 2: a payment a finance admin cancelled (nothing found) may still have been sent, and its debit can post
+    later carrying its key. That debit asks a person once; it does not pay the bill the payment was for (reopened when
+    the payment ended), and the payment stays cancelled."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        vendor = str(act(c, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor",
+                                                      "recipient_id": rid}).result["contact_id"])
+        made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10", "number": "LATE-1",
+                                             "lines": [{"account_id": account(c, "6100"), "amount": 50_000}]})
+        assert made.status == "committed", made
+        bid = str(made.result["bill_id"])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        paid = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "obligation": f"bill:{bid}",
+                                                "account_id": account(c, "2000"), "money_account_id": _checking(c)})
+        assert paid.status == "committed", paid
+        pid = str(paid.result["payment_id"])
+    fake.queue["request_send_money"] = [Answer(None, {})]
+    sync_once(books, fake, HOURS[1])
+    sync_once(books, fake, HOURS[2])
+    with books.read() as c:
+        key, flagged = c.execute("SELECT idempotency_key, flagged_at FROM fin_payments WHERE id=?", (pid,)).fetchone()
+    assert flagged
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_cancel", {"payment_id": pid}, at=HOURS[2]).status == "committed"
+    sync_once(books, fake, HOURS[3])
+    fake.txns["txn-late"] = {**MERCURY["txn_bank_fee"], "id": "txn-late", "accountId": "acct-chk", "amount": -500.0,
+                             "kind": "outgoingPayment", "counterpartyName": "Acme Supplies", "requestId": None,
+                             "note": f"tico:{key}", "externalMemo": f"tico:{key} Acme",
+                             "createdAt": "2026-10-15T14:00:00Z", "postedAt": "2026-10-15T14:00:00Z"}
+    fake.events_list.append({"id": "evt-late", "resourceType": "transaction", "resourceId": "txn-late",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, HOURS[4])
+    sync_once(books, fake, HOURS[5])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert FR.bill(c, OWNER, bid)["status"] == "open"
+        assert c.execute("SELECT entry_id FROM fin_feed_txns WHERE provider_id='txn-late'").fetchone()[0] is None
+        assert _asks(c, "Check a bank debit for cancelled payment") == 1
+    assert len(fake.sent("request_send_money")) == 1
 
 
 def test_a_409_with_the_request_is_accepted_and_a_cut_off_send_is_unknown(books):

@@ -131,6 +131,7 @@ class FakeMercury:
         self.calls: list[tuple[str, object]] = []
         self.cards_list: list[dict[str, object]] = []
         self.balances: dict[str, float] = {}       # account id -> currentBalance, in place of the recorded one
+        self.unlisted: set[str] = set()            # request ids Mercury no longer lists (sent): still answered by id
         self.card_page = 500
 
     def _answer(self, name: str, arg: object, default: object):
@@ -172,8 +173,9 @@ class FakeMercury:
         return self._answer("transaction", txn_id, raw if raw is not None else self.Answer(404, {}))
 
     def account_transactions(self, account_id, search=None, start=None, end=None, start_after=None, limit=500):
-        """Mercury's search over one account's transactions: `search` matches a transaction's note, description or
-        counterparty; `start` and `end` (dates, YYYY-MM-DD) bound its created day. The whole match comes in one page."""
+        """One account's transactions a page at a time: `search` (when given) matches a transaction's note, description
+        or counterparty; `start` and `end` (dates, YYYY-MM-DD) bound its created day; `start_after` reads on from the
+        last page's nextPage, as the other lists do."""
         def hit(txn: dict) -> bool:
             if str(txn.get("accountId")) != account_id:
                 return False
@@ -183,8 +185,13 @@ class FakeMercury:
             day = str(txn.get("createdAt") or "")[:10]
             return (not start or day >= start) and (not end or day <= end)
         hits = [t for t in self.txns.values() if hit(t)]
+        ids = [str(t["id"]) for t in hits]
+        first = ids.index(start_after) + 1 if start_after in ids else 0
+        chunk = hits[first:first + limit]
+        more = first + limit < len(hits)
+        page = {"nextPage": str(chunk[-1]["id"])} if more and chunk else {}
         return self._answer("account_transactions", (account_id, search, start, end),
-                            {"transactions": hits, "page": {}})
+                            {"transactions": chunk, "page": page})
 
     def events(self, start_after, limit=500, newest=False):
         found = list(reversed(self.events_list))[:limit] if newest else self.events_list
@@ -268,12 +275,15 @@ class FakeMercury:
 
     page_size = 1000
 
-    def send_requests(self, account_id, start_after=None):
-        rows = list(self.requests.values())
+    def send_requests(self, account_id, start_after=None, status=None):
+        """The list filtered to one status when given (Mercury's documented filters), and without the requests in
+        `unlisted` (sent and approved: no longer listed, though still answered by id)."""
+        rows = [r for r in self.requests.values() if str(r["requestId"]) not in self.unlisted
+                and (status is None or r["status"] == status)]
         ids = [str(r["requestId"]) for r in rows]
         rows = rows[ids.index(start_after) + 1:] if start_after in ids else rows
         page, more = rows[:self.page_size], len(rows) > self.page_size
-        return self._answer("send_requests", (account_id, start_after),
+        return self._answer("send_requests", (account_id, start_after, status),
                             {"requests": page, "page": {"nextPage": str(page[-1]["requestId"]) if more else None}})
 
 

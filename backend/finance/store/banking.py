@@ -599,9 +599,17 @@ def payment_debit(c: sqlite3.Connection, money_account_id: str, request_id: str)
 
 
 def payments_unlinked(c: sqlite3.Connection, money_account_id: str, amount: int) -> list[Any]:
-    """Live payments from this account for this amount whose Mercury request is not known yet (a lost send answer)."""
-    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? AND COALESCE(provider_request_id, '')='' "
-                     "AND status IN ('unknown','sending') ORDER BY created_at", (money_account_id, amount)).fetchall()
+    """Live payments from this account for this amount whose Mercury request is not known yet: a lost send answer, or
+    a transaction found with no request id (payments.found), whose bank row is then tied to it by its key."""
+    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? "
+                     "AND COALESCE(provider_request_id, '')='' AND status IN ('unknown','sending','submitted') "
+                     "ORDER BY created_at", (money_account_id, amount)).fetchall()
+
+
+def payments_cancelled(c: sqlite3.Connection, money_account_id: str, amount: int) -> list[Any]:
+    """Cancelled payments from this account for this amount: a bank debit that carries one's key was sent after all."""
+    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? AND status='cancelled' "
+                     "ORDER BY created_at", (money_account_id, amount)).fetchall()
 
 
 def unknown_transfers(c: sqlite3.Connection, connection_id: str) -> list[Any]:

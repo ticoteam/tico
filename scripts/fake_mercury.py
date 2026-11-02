@@ -14,6 +14,12 @@ Control endpoints under /_fake/ are not Mercury's:
                                frozen or cancelled card is declined (a failed transaction), as Mercury does
   GET  /_fake/calls            every Mercury call Tico made, in order (method, path, query, body; never the token)
 
+Its lists follow the documented behavior: GET /request-send-money takes one status (pendingApproval, approved, rejected
+or cancelled; any other is a 400) and a limit from 1 to 1000 (else a 400). A request that was approved and sent is a
+transaction, and the request list no longer shows it (the docs do not say whether it stays): it is still answered by
+id, and its transaction carries its request id and the key in externalMemo, as a finance lookup reads it back.
+POST /account/<id>/transactions is a direct send: a transaction at once, with no approver.
+
   python3 scripts/fake_mercury.py --port 18790
 """
 import argparse
@@ -31,6 +37,7 @@ FIXTURES = json.loads((Path(__file__).resolve().parent.parent / "backend" / "tes
 PREFIX = "/api/v1"
 BANK, CARD = "acct-chk", "credit-io"          # the checking account and the IO credit account in the fixtures
 SEED_TXNS = ("txn_card_posted", "txn_card_bill_bank", "txn_card_bill_io", "txn_bank_fee", "txn_deposit")
+REQUEST_STATUSES = ("pendingApproval", "approved", "rejected", "cancelled")   # the request list's documented filters
 # The last four Mercury gives each new card, in turn (fictional; never a real card's).
 LAST_FOUR = ("4021", "7713", "3390", "5168", "8842", "2207", "6634", "1958", "9071", "3546")
 
@@ -215,11 +222,34 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
         return 200, req
     if method == "GET" and parts[0] == "request-send-money" and len(parts) == 2:
         return found(next((r for r in STATE.requests if r["requestId"] == parts[1]), None))
+    if method == "POST" and len(parts) == 3 and parts[0] == "account" and parts[2] == "transactions":
+        return direct_send(parts[1], body)
     if method == "GET" and path == "/request-send-money":
-        mine = [r for r in STATE.requests if r["accountId"] == one(q, "accountId")]
+        status = one(q, "status")
+        if status is not None and status not in REQUEST_STATUSES:
+            return 400, {"message": f"status is one of {', '.join(REQUEST_STATUSES)}"}
+        if not 1 <= limit <= 1000:
+            return 400, {"message": "limit is from 1 to 1000"}
+        mine = [r for r in STATE.requests if r["accountId"] == one(q, "accountId") and not r.get("sent")
+                and (status is None or r["status"] == status)]
         chunk, nxt = page(mine, "requestId", after, limit)
         return 200, {"requests": chunk, "page": nxt}
     return 404, {"message": f"fake Mercury does not answer {method} {path}"}
+
+
+def direct_send(account: str, body: dict) -> tuple[int, dict]:
+    """POST /account/<id>/transactions: a direct send, Mercury's transaction at once (no approver), with the note and
+    external memo it was sent with, pending until its bank row posts."""
+    try:
+        amount = abs(float(body["amount"]))
+    except (KeyError, TypeError, ValueError):
+        return 400, {"message": "amount (a number) is required"}
+    txn = {"id": STATE.new("txn-direct"), "accountId": account, "amount": -amount, "createdAt": now(), "postedAt": None,
+           "status": "pending", "kind": "outgoingPayment", "counterpartyName": str(body.get("recipientId") or ""),
+           "bankDescription": "ACH", "cardId": None, "requestId": None, "note": body.get("note"),
+           "externalMemo": body.get("externalMemo")}
+    STATE.add_txn(txn)
+    return 200, txn
 
 
 def new_card(body: dict) -> dict:
@@ -336,6 +366,7 @@ def decide(verb: str, rid: str) -> tuple[int, dict]:
         req["reviews"] = [{"userId": "user-ben", "decision": "rejected"}]
         return 200, req
     req["status"] = "approved"
+    req["sent"] = True                      # sent as the transaction below: no longer in the request list
     req["reviews"] = [{"userId": "user-ben", "decision": "approved"}]
     txn = {"id": STATE.new("txn-req"), "accountId": req["accountId"], "amount": -abs(float(req["amount"])),
            "createdAt": now(), "postedAt": now(), "status": "sent", "kind": "outgoingPayment",

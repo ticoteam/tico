@@ -433,8 +433,9 @@ def ring() -> None:
 def _ask_mercury(ctx: Ctx, who: str, pay: Any) -> Plan:
     """A finance admin's cancel of an unknown payment (flagged: its key was not found for UNKNOWN_ASK_MINUTES). Nothing is
     cancelled here, since the planner cannot call Mercury: the worker looks Mercury up by the key (sync.pay), and the
-    payment ends cancelled only when a complete lookup begun after this ask finds no request with the key (not_found). A
-    request with the key that turns up instead keeps it going, and it is never sent again under a fresh key (§9)."""
+    payment ends cancelled only when a complete lookup begun after this ask finds neither a request with the key nor a
+    transaction with it read back to the payment's creation (not_found). A request or transaction with the key that
+    turns up instead keeps it going, and it is never sent again under a fresh key (§9)."""
     if pay["cancel_asked_at"]:
         raise FinanceError(CONFLICT, "Finance is already looking for it in Mercury")
 
@@ -897,12 +898,32 @@ def matches(pay: Any, rec: Any, r: Mapping[str, object]) -> bool:
     return keyed(str(pay["idempotency_key"]), r, int(pay["amount"]))
 
 
-def found(ctx: Ctx, pay: Any, requests: Sequence[Mapping[str, object]]) -> bool:
-    """Resolve an `unknown` payment from Mercury's requests (`matches`). False when none is it."""
+def cancel_asked_before(pay: Any, now: str) -> bool:
+    """Whether a finance admin asked to cancel this unknown payment before this sweep began (`now`): a lookup this sweep
+    begins after it, so a lookup finding nothing may end the payment. An ask at the same instant waits for the next."""
+    asked = str(pay["cancel_asked_at"] or "")
+    return bool(asked) and asked < now
+
+
+def found(ctx: Ctx, pay: Any, requests: Sequence[Mapping[str, object]],
+          transactions: Sequence[Mapping[str, object]] = ()) -> bool:
+    """Resolve an `unknown` payment from Mercury: its request (`matches`), else a transaction the account read back
+    carries its key (`keyed`), which is a request Mercury sent and no longer lists (or a direct send's own transaction).
+    False when neither is it."""
     rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
     mine = next((r for r in requests if matches(pay, rec, r)), None)
     if mine is None:
-        return False
+        txn = next((t for t in transactions if keyed(str(pay["idempotency_key"]), t, int(pay["amount"]))), None)
+        if txn is None:
+            return False
+        # Sent: a direct send's transaction is its own id (what its bank row carries); an approval's is its request's.
+        rid = str(txn.get("id") or "") if str(pay["mode"]) == "direct" else str(txn.get("requestId") or "")
+        SK.update(ctx.c, "fin_payments", str(pay["id"]), {"status": "submitted", "updated_at": ctx.at,
+                                                          "unknown_since": None, "last_error": None,
+                                                          "cancel_asked_at": None, "cancel_asked_by": "",
+                                                          "provider_request_id": rid,
+                                                          "next_try_at": _later(ctx, 1)})
+        return True
     SK.update(ctx.c, "fin_payments", str(pay["id"]), {"status": "awaiting_bank_approval", "updated_at": ctx.at,
                                                       "unknown_since": None, "last_error": None,
                                                       "cancel_asked_at": None, "cancel_asked_by": "",
@@ -912,15 +933,22 @@ def found(ctx: Ctx, pay: Any, requests: Sequence[Mapping[str, object]]) -> bool:
     return True
 
 
+def read_incomplete(ctx: Ctx, pay: Any) -> None:
+    """A finance admin's cancel waits: the account's transactions were not read back whole, so neither a cancel nor a
+    find is decided. The next sweep reads again."""
+    SK.update(ctx.c, "fin_payments", str(pay["id"]), {"next_try_at": _later(ctx, 1), "updated_at": ctx.at})
+
+
 def not_found(ctx: Ctx, pay: Any) -> None:
-    """Mercury's requests did not show it. It stays `unknown` with its hold; once it has been looked for over
-    UNKNOWN_ASK_MINUTES, one Needs-you goes to a finance admin to check Mercury (and cancel it here if it is not
-    there)."""
+    """Neither Mercury's requests nor the account's transactions read back to the payment's creation showed it (the
+    caller reads those back whole when a cancel is waiting). It stays `unknown` with its hold; once it has been looked
+    for over UNKNOWN_ASK_MINUTES, one Needs-you goes to a finance admin to check Mercury (and cancel it here if it is
+    not there)."""
     fields: dict[str, object] = {"next_try_at": _later(ctx, 2), "updated_at": ctx.at}
     asked = str(pay["cancel_asked_at"] or "")
     if asked and asked < ctx.at:
-        # A finance admin asked to cancel it before this sweep's complete lookup by its key began, and it found nothing.
-        # An ask at this same instant may have come after that lookup began, so the next sweep decides instead.
+        # A finance admin asked to cancel it before this sweep's complete lookups began, and they found nothing. An ask
+        # at this same instant may have come after those lookups began, so the next sweep decides instead.
         end(ctx, pay, "cancelled", f"not in Mercury when its key was looked for ({pay['cancel_asked_by']} cancelled it)")
         return
     if asked:

@@ -41,6 +41,9 @@ UNOWNED_HOURS = 24               # an event no connection could read (404) is re
 MISSING = "404"                   # in an inbox row's tried list: some connection's read came back 404 this round
 GONE_TRIES = 5                    # a transaction Mercury keeps answering 404 for is given up after this many reads
 REQUEST_PAGES = 10                # pages of Mercury's approval requests read to find an unknown payment
+# The documented filters of Mercury's request list: one list call each (it shows no sent status, so a sent request is
+# found by its transaction, read back, not by this list).
+REQUEST_STATUSES = ("pendingApproval", "approved", "rejected", "cancelled")
 Make = Callable[[str], Provider]
 
 
@@ -682,14 +685,20 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
                 banking.payment_linked(ctx, SK.get(c, "fin_payments", pid))
             continue
         if status == "unknown":
+            # A cancel a finance admin asked for before this sweep is decided only by a read back of the account's
+            # transactions to the payment's creation (what Mercury sent, whether or not it still lists the request).
+            asked = payments.cancel_asked_before(p, now)
             requests, complete = _requests(provider, account)
+            back, whole = _read_back(provider, account, p, now) if complete and asked else ([], False)
             with store.transaction() as c:
                 ctx = load(c, now)
                 row = SK.get(c, "fin_payments", pid)
-                if payments.found(ctx, row, requests):
+                if payments.found(ctx, row, requests, back):
                     banking.payment_linked(ctx, SK.get(c, "fin_payments", pid))   # a debit taken in before it
-                elif complete:
+                elif complete and (whole or not asked):
                     payments.not_found(ctx, row)
+                elif complete:
+                    payments.read_incomplete(ctx, row)
             continue
         if status != "queued":
             continue
@@ -715,8 +724,25 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
 
 
 def _requests(provider: Provider, account: str) -> tuple[list[dict[str, Any]], bool]:
-    """Mercury's approval requests for one account, every page (up to REQUEST_PAGES)."""
-    return _every_page(lambda after: provider.send_requests(account, after), "requests")
+    """Mercury's approval requests for one account: every page of each documented status (REQUEST_STATUSES), one list
+    call per status. Whole only when all of them were read whole."""
+    out: list[dict[str, Any]] = []
+    whole = True
+    for status in REQUEST_STATUSES:
+        rows, done = _every_page(lambda after, s=status: provider.send_requests(account, after, s), "requests")
+        out += rows
+        whole = whole and done
+    return out, whole
+
+
+def _read_back(provider: Provider, account: str, pay: Any, now: str) -> tuple[list[dict[str, Any]], bool]:
+    """The account's transactions from the payment's creation day through the day after now (Mercury's days are UTC),
+    every page (up to REQUEST_PAGES): the rows, and whether the whole span was read."""
+    if not account:
+        return [], False
+    start = str(pay["created_at"])[:10]
+    end = (datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(days=1)).date().isoformat()
+    return _every_page(lambda after: provider.account_transactions(account, None, start, end, after), "transactions")
 
 
 def _every_page(read: Callable[[str | None], Answer], rows_key: str) -> tuple[list[dict[str, Any]], bool]:
