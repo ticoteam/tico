@@ -81,8 +81,9 @@ ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_cr
               "connection_disconnect", "connection_map")
 # Only the owner turns direct send on or off for the company (§9) and sets what each role sees by default (§7.5).
 OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags", "mirror_xero_location")
-# System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
-SYSTEM_KINDS = ("card_freeze",)
+# System work may freeze cards at a budget's cutoff and lift those freezes once the budgets have room (§6.4 rule 4,
+# §8.2), and nothing else card-side.
+SYSTEM_KINDS = ("card_freeze", "card_unfreeze")
 SPEND = ("payment_create",)
 # Resolved values kept on the stored action only: a fingerprint of a hidden total must not reach an approval, a
 # rule test or anything a requester reads. Drift still compares it, from the stored body.

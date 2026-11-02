@@ -403,6 +403,8 @@ def _state(kind: str) -> handlers.Planner:
                 raise FinanceError(CONFLICT, "that card is cancelled")
         if kind == "card_unfreeze":
             from .core import dates
+            if who == SYSTEM and any(str(card["freeze_by"] or "") != "budget" for card in cards):
+                raise FinanceError(CONFLICT, "only a budget's cutoff lifts its own freeze")
             leaf = str(cards[0]["budget_id"] or "")
             blocker = blocking_budget(ctx, leaf, dates.day(ctx.today))
             if blocker:
@@ -438,24 +440,46 @@ def _state(kind: str) -> handlers.Planner:
 
 
 def unfreeze_with_room(ctx: Ctx, budget_id: str = "", aid: str = "") -> int:
-    """Lift the freezes a budget's cutoff made once every budget over the card has room again: a new period, a raise, or
-    a hold or reserve released (§8.2). A card a person froze is never lifted. With `budget_id`, only cards under that
-    budget are looked at. Each lift goes to Mercury through `sync`, like any change. How many."""
-    from .budgeting import subtree
-    from .core import dates
-    budgets = ctx.budgets()
-    scope = subtree(ctx, budget_id) if budget_id else None
-    today = dates.day(ctx.today)
+    """Lift the freezes a budget's cutoff made, inside the action that gave the room (a raise): each lift goes to
+    Mercury through `sync` as part of that action. The hourly look lifts through `lift_through_actions` instead."""
     lifted = 0
-    for card in SK.budget_frozen_cards(ctx.c, scope):
-        leaf = str(card["budget_id"] or "")
-        if leaf not in budgets or blocking_budget(ctx, leaf, today):
-            continue
+    for card in lift_eligible(ctx, budget_id):
         cid = str(card["id"])
         SK.update(ctx.c, "fin_cards", cid, {"status": "active", "freeze_by": None, "freeze_budget_id": None,
                                             "updated_at": ctx.at})
         sync(ctx, cid, aid, SYSTEM)
         lifted += 1
+    return lifted
+
+
+def lift_eligible(ctx: Ctx, budget_id: str = "") -> list[Any]:
+    """The cards a budget's cutoff froze that every budget over them now has room for: a new period, a raise, or a
+    hold or reserve released (§8.2). A card a person froze is never among them. With `budget_id`, only cards under
+    that budget are looked at."""
+    from .budgeting import subtree
+    from .core import dates
+    budgets = ctx.budgets()
+    scope = subtree(ctx, budget_id) if budget_id else None
+    today = dates.day(ctx.today)
+    eligible = []
+    for card in SK.budget_frozen_cards(ctx.c, scope):
+        leaf = str(card["budget_id"] or "")
+        if leaf in budgets and not blocking_budget(ctx, leaf, today):
+            eligible.append(card)
+    return eligible
+
+
+def lift_through_actions(ctx: Ctx) -> int:
+    """The hourly look's lift (§8.2): each card lift_eligible names is unfrozen as system work through the action path,
+    one action a card, so the lift is logged, refused like any unfreeze and replay-safe. How many."""
+    from . import actions
+    lifted = 0
+    for card in lift_eligible(ctx):
+        cid = str(card["id"])
+        res = actions.act(ctx.c, SYSTEM, "card_unfreeze", {"card_id": cid, "reason": "budget has room"},
+                          f"cutoff-lift-{cid}-{card['updated_at']}", at=ctx.at)
+        if res.status == "committed":
+            lifted += 1
     return lifted
 
 

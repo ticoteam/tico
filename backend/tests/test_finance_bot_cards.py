@@ -2,6 +2,7 @@
 sees and acts on its own cards only; a decline budget's cutoff freezes them and a purchase over the budget is not held;
 a card is saved on vendor accounts by a person, replay-safe, and a bot reads where its card works; a single-use card
 waits for a provider that has them; and no card number reaches a payload, a receipt, a read or a tool."""
+import json
 import random
 import re
 import threading
@@ -15,6 +16,7 @@ from backend.finance import budgeting
 from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import validate as V
+from backend.finance.core.org import SYSTEM
 from backend.finance.store import budgets as SB
 from backend.finance.store import schema as FS
 from backend.tests.test_api import api, headers  # noqa: F401
@@ -174,6 +176,38 @@ def test_a_cutoff_freeze_lifts_at_a_new_period_and_a_person_freeze_stays(books):
     sync_once(books, fake, NEXT)
     sent = fake.sent("card_state")
     assert ("card-coder", "unfreeze") in sent and ("card-seller", "unfreeze") not in sent
+
+
+def test_the_hourly_look_lifts_a_cutoff_freeze_as_a_logged_system_action(books):
+    fake = FakeMercury()
+    _, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "budget"
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        assert FA.watch_documents(c, NEXT) >= 1
+        assert _status(c, coder) == "active" and _status(c, seller) == "active"
+        lifts = c.execute("SELECT actor, status, payload_json FROM fin_actions WHERE kind='card_unfreeze'").fetchall()
+        assert sorted((actor, status) for actor, status, _ in lifts) == [(SYSTEM, "committed")] * 2
+        assert {json.loads(payload)["card_id"] for *_, payload in lifts} == {coder, seller}
+    sync_once(books, fake, NEXT)
+    sent = fake.sent("card_state")
+    assert ("card-coder", "unfreeze") in sent and ("card-seller", "unfreeze") in sent
+
+
+def test_system_work_cannot_lift_a_person_freeze_through_the_action_path(books):
+    fake = FakeMercury()
+    _, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "card_freeze", {"card_id": seller}).status == "committed"
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)
+        refused = act(c, SYSTEM, "card_unfreeze", {"card_id": seller}, key="system-lift-person")
+        assert (refused.status, refused.code) == ("failed", "conflict")
+        assert _status(c, seller) == "frozen" and _frozen_by(c, seller) == "person"
+        assert _frozen_by(c, coder) == "budget"
 
 
 def test_a_person_who_freezes_a_budget_frozen_card_keeps_it_frozen_when_the_budget_has_room(books):

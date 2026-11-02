@@ -141,7 +141,7 @@ def watch(c: sqlite3.Connection, at: str | None = None) -> int:
         event(ctx, READY_EVENT, month, {"month": month})
         n += 1
     from . import cards
-    n += cards.unfreeze_with_room(ctx)      # a new period (or any room again) lifts the cutoff freezes (§8.2)
+    n += cards.lift_through_actions(ctx)    # a new period (or any room again) lifts the cutoff freezes (§8.2)
     return n
 
 
