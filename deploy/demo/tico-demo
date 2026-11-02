@@ -156,6 +156,11 @@ deploy() {
   old=$(cat "$CONF/active" 2>/dev/null || echo green)
   new=$([ "$old" = blue ] && echo green || echo blue)
   ln -sfn "releases/$sha" "$BASE/$new"
+  local dropin=/etc/systemd/system/tico-demo@$new.service.d
+  install -d -m 755 "$dropin"
+  printf '[Service]\nRootDirectory=%s\nBindReadOnlyPaths=%s:/opt/demo\n' \
+    "$(readlink -f "$BASE/releases/$sha/root")" "$(readlink -f "$BASE/releases/$sha/src")" >"$dropin/paths.conf"
+  systemctl daemon-reload
   printf 'TICO_DEMO_URL=%s\nTICO_DEMO_PORT=%s\nTICO_DEMO_SHA=%s\n' "$url" "${PORT[$new]}" "$sha" >"$CONF/$new.env"
   log "building $sha as $new on 127.0.0.1:${PORT[$new]} (image $image, url $url)"
   systemctl restart "tico-demo@$new"

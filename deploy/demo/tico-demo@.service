@@ -11,8 +11,8 @@ Type=simple
 User=tico-demo
 Group=tico-demo
 EnvironmentFile=/etc/tico-demo/%i.env
-RootDirectory=/srv/tico-demo/%i/root
-BindReadOnlyPaths=/srv/tico-demo/%i/src:/opt/demo
+# RootDirectory= (a release image's files) and BindReadOnlyPaths= (the commit's source at /opt/demo) are set per copy
+# in tico-demo@<copy>.service.d/paths.conf: systemd refuses a root reached through a symlink.
 WorkingDirectory=/opt/demo
 Environment=HOME=/tmp PATH=/opt/tico/.venv/bin:/usr/local/bin:/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 TICO_UPDATE_CHECK=off
 ExecStart=/opt/tico/.venv/bin/python -m backend.demo --public-demo --url ${TICO_DEMO_URL} --host 127.0.0.1 --port ${TICO_DEMO_PORT}
