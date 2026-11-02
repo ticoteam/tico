@@ -1279,15 +1279,7 @@ def migrate(conn, adopt_legacy=False):
     from . import migrations
     migrations.apply(conn)
     ensure_market_reads(conn)
-    # Cloud added explicit room scopes after the original local schema. Keep old local
-    # databases usable without relying on SQLite's unsupported ADD COLUMN IF NOT EXISTS.
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(conversations)")}
-    if "scope" not in columns:
-        conn.execute("ALTER TABLE conversations ADD COLUMN scope TEXT NOT NULL DEFAULT 'direct'")
-    if "owner_id" not in columns:
-        conn.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT")
-    if "room_key" not in columns:
-        conn.execute("ALTER TABLE conversations ADD COLUMN room_key TEXT")
+    # conversations.scope, owner_id and room_key (cloud room scopes) are migration 0036's.
     # Deleted tasks wait here until restored or purged (backend/task_delete.py).
     from .task_delete import ensure as ensure_task_trash
     ensure_task_trash(conn)

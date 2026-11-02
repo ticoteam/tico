@@ -55,17 +55,8 @@ KINDS = ("bot", "human", "group")
 FULL = {"see": True, "read": True, "write": True, "manage": True}
 NONE = {"see": False, "read": False, "write": False, "manage": False}
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS teammate_accesses (id TEXT PRIMARY KEY, target_type TEXT NOT NULL "
-    "CHECK (target_type IN ('human','group')), target_id TEXT NOT NULL, access TEXT NOT NULL, "
-    "revision INTEGER NOT NULL DEFAULT 1, updated_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS teammate_accesses_target ON teammate_accesses(target_type, target_id)",
-)
-
-
 def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
+    """Every start: the one data step. The table is migration 0036."""
     migrate_team_pages(c)
 
 
