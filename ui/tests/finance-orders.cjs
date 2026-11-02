@@ -453,6 +453,16 @@ const DAY = '2026-10-20';       // the scenario world's frozen day; the pages' c
     assert.deepEqual(await fresh({source: 'quickbooks', as_of: '2026-10-01T15:00:00Z', stale: true}), [true, true]);
     await shot(page, 'vendor-stale-desktop');
     assert.deepEqual(await fresh({source: 'quickbooks', as_of: null, stale: true}), [false, true]);
+    // Past the 50 cap the files point to the Library; the real read of one file doesn't.
+    await page.evaluate(id => finContactShow({id, name: '', kind: 'vendor'}), supplier);
+    await rail(page).getByRole('link', {name: 'acme-contract.txt'}).waitFor({timeout: t(10000)});
+    assert.equal(await rail(page).locator('[data-files-more]').count(), 0);
+    const contactRoute = `**/api/v2/finance/contacts/${supplier}*`;
+    await page.route(contactRoute, async r => { const res = await r.fetch(), json = await res.json(); await r.fulfill({response: res, json: {...json, files_more: true}}); });
+    await page.evaluate(id => finContactShow({id, name: '', kind: 'vendor'}), supplier);
+    await rail(page).locator('[data-files-more]').waitFor({timeout: t(10000)});
+    assert.equal(await rail(page).locator('[data-files-more]').getAttribute('href'), '#/library/files');
+    await page.unroute(contactRoute);
     await page.evaluate(() => finContactClose());
 
     // ---- A bill of any vendor links to an order: not a billed line, not in its total.
@@ -476,6 +486,14 @@ const DAY = '2026-10-20';       // the scenario world's frozen day; the pages' c
     await go(page, `#/finance/payables/orders?doc=${id}`);
     await rail(page).getByRole('heading', {name: 'Linked bills'}).waitFor({timeout: t(10000)});
     await shot(page, 'po-linked-desktop');
+    // Past the 50 cap the panel says there are more; the real read of one bill doesn't.
+    assert.equal(await rail(page).locator('[data-bills-more]').count(), 0);
+    const orderRoute = `**/api/v2/purchase-orders/${id}*`;
+    await page.route(orderRoute, async r => { const res = await r.fetch(), json = await res.json(); await r.fulfill({response: res, json: {...json, linked_bills_more: true}}); });
+    await go(page, '#/finance/payables/orders');
+    await go(page, `#/finance/payables/orders?doc=${id}`);
+    await rail(page).locator('[data-bills-more]').waitFor({timeout: t(10000)});
+    await page.unroute(orderRoute);
     await rail(page).locator(`a[href*="${linked.id}"]`).click();
     await rail(page).getByRole('button', {name: 'Change', exact: true}).waitFor({timeout: t(10000)});
     assert.ok(page.url().includes(linked.id), page.url());
