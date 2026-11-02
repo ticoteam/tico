@@ -2,6 +2,9 @@
 feed_match links the whole set); a bill's payment and its bank row hide a private bill from a balance-sheet viewer; a
 queued bill payment meets its budgets again before it goes; a combined row arriving after a close moves the bank once
 in every period. Synthetic fixtures (Acme)."""
+import pytest
+
+from backend import hubdb as H
 from backend.finance import actions as FA
 from backend.finance import documents as FD
 from backend.finance import payments as FP
@@ -11,8 +14,8 @@ from backend.finance.core.errors import CONFLICT
 from backend.finance.store import banking as SK
 from backend.tests.test_finance_ap import _balance, _bill, _events, _ingest, _txn, _vendor
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, FakeMercury, account, act, books, connect, finance_template, store)
-from backend.tests.test_finance_payments import _checking, _payee
+    AT, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
+from backend.tests.test_finance_payments import HOURS, _checking, _payee
 
 NOV = "2026-11-05T12:00:00.000000Z"
 DEC = "2026-12-03T12:00:00.000000Z"
@@ -390,3 +393,93 @@ def test_a_bill_waiting_for_a_payment_is_not_asked_again_by_a_mark_paid_or_a_pay
         assert (again.status, again.code) == ("failed", CONFLICT), again
         assert c.execute("SELECT COUNT(*) FROM fin_actions WHERE status='needs_approval'").fetchone()[0] == before + 1
         assert FR.bill(c, OWNER, paid_first)["status"] == "open"
+
+
+def _pay_bill(c, rid, bid, who="bot:seller"):
+    return act(c, who, "payment_create", {"recipient_id": rid, "money_account_id": _checking(c), "amount": 15_000,
+                                          "account_id": account(c, "2000"), "obligation": f"bill:{bid}"})
+
+
+def test_a_bill_pays_once_across_a_declined_ask_a_second_ask_and_its_approval(books):  # noqa: F811
+    """Item 3: a declined ask ends its wait, so the bill may be asked again; while that second one waits no third ask is
+    taken, and approving it pays the bill once. Nothing pays it a second time (the live payment refuses another)."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        assert act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000,
+                                               "at_limit": "ask"}).status == "committed"
+        bid = _approved(c, _vendor(c, recipient_id=rid), 15_000)
+        FA.grant_defaults(c, "bot:seller", at=AT)
+        act(c, OWNER, "view_grant", {"subject": "bot:seller", "what": "everything"})
+        first = _pay_bill(c, rid, bid)
+        assert first.status == "needs_approval", first
+        H.approval_decide(c, OWNER, first.approval_id, "declined")
+        assert FA.approval_decided(c, first.approval_id, AT).status != "committed"
+        assert FR.bill(c, OWNER, bid)["status"] == "open"
+        second = _pay_bill(c, rid, bid)
+        assert second.status == "needs_approval", second
+        third = _pay_bill(c, rid, bid)
+        assert (third.status, third.code) == ("failed", CONFLICT), third
+        assert "waiting for approval" in third.reason
+        H.approval_decide(c, OWNER, second.approval_id, "approved")
+        done = FA.approval_decided(c, second.approval_id, AT)
+        assert done.status == "committed", done
+        again = _pay_bill(c, rid, bid)
+        assert (again.status, again.code) == ("failed", CONFLICT), again
+        assert "live" in again.reason
+        assert c.execute("SELECT COUNT(*) FROM fin_payments WHERE obligation=?", (f"bill:{bid}",)).fetchone()[0] == 1
+    sync_once(books, fake, HOURS[1])
+    assert [b["amount"] for b in fake.sent("request_send_money")] == [150]
+
+
+@pytest.mark.parametrize("first", ["payment", "scheduled"])
+def test_a_bill_with_a_scheduled_pay_and_a_payment_both_waiting_is_paid_once_whichever_is_approved(books, first):
+    """Item 3: two asks for one bill can both wait when one is a scheduled pay (bill_schedule) and the other a payment
+    (the one-ask guard covers payments and mark-paid asks). Approving both, in either order, pays the bill once: the
+    payment is live, or it is withdrawn by the schedule, and the scheduled day never pays it a second time."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        bid = _approved(c, _vendor(c, recipient_id=rid), 15_000)
+        obligation = f"bill:{bid}"
+        FA.grant_defaults(c, "bot:seller", at=AT)
+        act(c, OWNER, "view_grant", {"subject": "bot:seller", "what": "everything"})
+        # A bot's scheduling is allowed by default: a finance rule makes it wait for a finance admin (a waiting ask).
+        assert act(c, OWNER, "rule_create", {
+            "kind": "gate", "name": "Bill schedules", "when": {"kind": "bill_schedule"},
+            "outcome": {"outcome": "needs_approval", "who": "finance_admin"},
+            "examples": [{"input": {"kind": "bill_schedule"}, "expect": "needs_approval"}]},
+            at=AT).status == "committed"
+        sched = act(c, "bot:seller", "bill_schedule", {"bill_id": bid, "pay_on": "2026-11-05",
+                                                       "money_account_id": _checking(c)})
+        assert sched.status == "needs_approval", sched
+        pay = _pay_bill(c, rid, bid)
+        assert pay.status == "needs_approval", pay
+        for ask in (pay, sched) if first == "payment" else (sched, pay):
+            status = c.execute("SELECT status FROM fin_actions WHERE id=?", (ask.action_id,)).fetchone()[0]
+            if status != "needs_approval":
+                continue                  # the schedule withdrew the payment's ask: its approval is gone
+            H.approval_decide(c, OWNER, ask.approval_id, "approved")
+            FA.approval_decided(c, ask.approval_id, AT)
+        assert c.execute("SELECT status FROM fin_actions WHERE id=?", (pay.action_id,)).fetchone()[0] == (
+            "committed" if first == "payment" else "withdrawn")
+        assert c.execute("SELECT COUNT(*) FROM fin_payments WHERE obligation=?", (obligation,)).fetchone()[0] == (
+            1 if first == "payment" else 0)
+    sync_once(books, fake, HOURS[1])
+    assert [b["amount"] for b in fake.sent("request_send_money")] == ([150] if first == "payment" else [])
+    # The scheduled day: a live payment stops it; without one it asks again, once (a waiting ask, never a second pay).
+    with books.transaction() as c:
+        FA.watch_documents(c, "2026-11-05T13:00:00.000000Z")         # the hourly look: pay_due on the scheduled day
+    with books.transaction() as c:
+        asks = c.execute("SELECT id, approval_id FROM fin_actions WHERE status='needs_approval' "
+                         "AND kind='payment_create' AND payload_json LIKE ?", (f"%{obligation}%",)).fetchall()
+        paid = c.execute("SELECT COUNT(*) FROM fin_payments WHERE obligation=?", (obligation,)).fetchone()[0]
+        assert paid + len(asks) == 1, (paid, asks)
+        for _, approval in asks:
+            H.approval_decide(c, OWNER, approval, "approved")
+            assert FA.approval_decided(c, approval, AT).status == "committed"
+    sync_once(books, fake, "2026-11-05T14:00:00.000000Z")
+    assert [b["amount"] for b in fake.sent("request_send_money")] == [150]
