@@ -447,6 +447,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     mark = _savepoint(c, "fin_decide")
     try:
         ctx.deciding = True
+        ctx.decider = str(appr.get("decided_by") or "")      # the person who said yes (verify: approval_to)
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
         now_to = _decider(ctx, row, gate, p.who)
         if now_to and (now_to != row["approval_to"] or _drifted(body, plan)):

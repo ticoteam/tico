@@ -1823,6 +1823,12 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.reminders(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(80,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=81").fetchone():
+                    # Invoice emails: the send approval and the Bookkeeper's delivery report (backend/finance/delivery.py).
+                    # Idempotent like 80.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.delivery(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(81,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

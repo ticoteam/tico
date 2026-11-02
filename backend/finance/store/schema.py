@@ -113,7 +113,8 @@ CREATE TABLE IF NOT EXISTS fin_invoices (
   number TEXT NOT NULL DEFAULT '', invoice_date TEXT NOT NULL, due_date TEXT,
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','partial','paid','void')),
   currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, amount_paid BIGINT NOT NULL DEFAULT 0, payment_link TEXT,
-  entry_id TEXT REFERENCES fin_entries(id), created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+  entry_id TEXT REFERENCES fin_entries(id), created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
+  send_approval_id TEXT, send_to TEXT, send_text TEXT, delivered_at TEXT, delivery_reason TEXT);
 
 CREATE TABLE IF NOT EXISTS fin_invoice_lines (
   id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES fin_invoices(id), account_id TEXT REFERENCES fin_accounts(id),
@@ -620,6 +621,7 @@ REMINDERS = """
 CREATE TABLE IF NOT EXISTS fin_invoice_reminders (
   id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES fin_invoices(id), stage INTEGER NOT NULL CHECK (stage > 0),
   text TEXT NOT NULL, sent_to TEXT NOT NULL, action_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  send_approval_id TEXT, delivered_at TEXT, delivery_reason TEXT,
   UNIQUE (invoice_id, stage));
 """
 
@@ -809,6 +811,26 @@ def refunds(c: sqlite3.Connection) -> None:
 def reminders(c: sqlite3.Connection) -> None:
     """Cloud migration 80: the invoice reminders a stage is sent once by (fin_invoice_reminders). Idempotent: `create`
     adds whatever is missing."""
+    create(c)
+
+
+# The columns invoice emails added (cloud migration 81), by table: the send approval, what it names, and the Bookkeeper's
+# delivery report (backend/finance/delivery.py). The CREATE statements carry them for a new install.
+DELIVERY_COLUMNS = {
+    "fin_invoices": (("send_approval_id", "TEXT"), ("send_to", "TEXT"), ("send_text", "TEXT"),
+                     ("delivered_at", "TEXT"), ("delivery_reason", "TEXT")),
+    "fin_invoice_reminders": (("send_approval_id", "TEXT"), ("delivered_at", "TEXT"), ("delivery_reason", "TEXT")),
+}
+
+
+def delivery(c: sqlite3.Connection) -> None:
+    """Cloud migration 81: an invoice email's send approval and delivery report (DELIVERY_COLUMNS). Idempotent: a column
+    that is already there is left as it is."""
+    for table, columns in DELIVERY_COLUMNS.items():
+        have = {str(r[1]) for r in c.execute(f"PRAGMA table_info({table})")}
+        for name, kind in columns:
+            if name not in have:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
     create(c)
 
 

@@ -131,6 +131,17 @@ def approval_consume(c: sqlite3.Connection, actor: str, approval_id: str) -> Non
     _H.approval_consume(c, actor, approval_id)
 
 
+def approval_decide(c: sqlite3.Connection, actor: str, approval_id: str, decision: str) -> None:
+    """A person's decision, recorded as theirs. Only a person can make it (hubdb refuses any other actor); Finance calls
+    this only for an invoice email's send approval, decided by the person whose yes the action waited on."""
+    _H.approval_decide(c, actor, approval_id, decision)
+
+
+def is_person(actor: str) -> bool:
+    """Whether the actor is a person: only a person decides an approval."""
+    return bool(_H.is_human(actor))
+
+
 def approval_withdraw(c: sqlite3.Connection, approval_id: str, note: str) -> None:
     _H.approval_withdraw(c, approval_id, note)
 
