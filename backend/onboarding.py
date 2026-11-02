@@ -522,7 +522,7 @@ class Onboarding:
         """The machine this bot runs on, and what it last said about the repository. A null
         repository report means no machine has looked yet, not that the repository is missing."""
         row = c.execute("SELECT r.id,r.label,r.readiness FROM assignments a "
-                        "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (slug,)).fetchone()
+                        "JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?", (slug,)).fetchone()
         if not row:
             return None, None
         reported = readiness_document(row["readiness"]).get("bots", {}).get(slug)
@@ -534,7 +534,7 @@ class Onboarding:
         recent = H.shift(H.now(), seconds=-60)
         runners = [{"id": row["id"], "label": row["label"],
                     "online": bool(row["last_seen_at"] and row["last_seen_at"] > recent)}
-                   for row in c.execute("SELECT id,label,last_seen_at FROM runners "
+                   for row in c.execute("SELECT id,label,last_seen_at FROM runners_with_state "
                                         "WHERE revoked_at IS NULL ORDER BY created_at")]
         return {"runners": runners, "enrolled": bool(runners)}
 
@@ -1101,7 +1101,7 @@ class Onboarding:
             if not row:
                 # The owner changed after the machine enrolled; a lone online machine is still
                 # the one this company's bots belong on.
-                online = c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL AND last_seen_at>?",
+                online = c.execute("SELECT id,label FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
                                    (H.shift(H.now(), seconds=-60),)).fetchall()
                 row = online[0] if len(online) == 1 else None
                 if row:

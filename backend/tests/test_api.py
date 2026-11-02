@@ -326,20 +326,20 @@ def test_turn_output_and_completion_are_durable_and_idempotent(api):
 def slept(api, r, seconds=3600, awake_since=None):
     """Age a machine's last contact the way an hour of sleep does."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=?,awake_since=? WHERE id=?",
+        c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=? WHERE runner_id=?",
                   (H.shift(H.now(), seconds=-seconds), awake_since, r["runner_id"]))
 
 
 def settled(api, r):
     """A machine that came back and has been reporting in ever since."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET awake_since=? WHERE id=?",
+        c.execute("UPDATE runner_states SET awake_since=? WHERE runner_id=?",
                   (H.shift(H.now(), seconds=-AWAKE_SETTLE - 1), r["runner_id"]))
 
 
 def awake_since(api, r):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT awake_since FROM runners WHERE id=?", (r["runner_id"],)).fetchone()["awake_since"]
+        return c.execute("SELECT awake_since FROM runners_with_state WHERE id=?", (r["runner_id"],)).fetchone()["awake_since"]
 
 
 def test_approval_decision_and_consumption_have_separate_authority(api):

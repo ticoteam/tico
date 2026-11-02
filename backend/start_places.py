@@ -68,7 +68,7 @@ def computer_hold(c, runner_id, now=None, status=None):
         # Samples past retention are gone, but a computer that reported before still reports nothing now.
         if not on(c, runner_id):
             return None
-        seen = c.execute("SELECT last_sampled_at FROM runners WHERE id=?", (runner_id,)).fetchone()
+        seen = c.execute("SELECT last_sampled_at FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
         return (NOT_REPORTING, NOT_REPORTING) if seen and seen[0] else None
     if latest['stale']:
         return NOT_REPORTING, NOT_REPORTING
@@ -77,7 +77,7 @@ def computer_hold(c, runner_id, now=None, status=None):
     mem = latest['mem_pct']
     if mem is None:
         return None
-    held = c.execute("SELECT memory_hold FROM runners WHERE id=?", (runner_id,)).fetchone()
+    held = c.execute("SELECT memory_hold FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
     if mem >= MEM_HOLD_AT or (mem >= MEM_HOLD_CLEAR and held and held[0]):
         return MEMORY_HOLD, f'{MEMORY_HOLD} {round(mem)}%'
     return None
@@ -236,7 +236,7 @@ def reserve(c, attempt, settings=None):
     if bot_cap is not None and bot_held(c, attempt['bot_id'], exclude=aid) >= bot_cap:
         waiting(c, aid, BOT_WAIT)
         return {'reserved': False, 'waiting': BOT_WAIT}
-    capacity = turn_limit(c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone())
+    capacity = turn_limit(c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone())
     # Waiters ready to run take their turns by original claim order. Login/lane waiters are not ready yet.
     ahead = c.execute("SELECT 1 FROM start_places p JOIN attempts a ON a.id=p.attempt_id "
                       "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested_at IS NULL "
@@ -303,7 +303,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             out[rid]['queued'] += 1
     from .execution import claim_refusal
     from .store import readiness_document
-    runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners WHERE id IN ({marks})", runner_ids)}
+    runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners_with_state WHERE id IN ({marks})", runner_ids)}
     statuses = performance.load_statuses(c, runner_ids)
     holds = {}      # a computer's hold, asked once and only for a computer with queued work
     reasons = {'cooling_off': 'quota', 'limit': 'spending limit', 'not_ready': 'computer readiness',

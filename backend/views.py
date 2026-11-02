@@ -409,7 +409,7 @@ def bot_owner_rows(c, registry, slug, people, configs, archived):
 # A bot's computer, as machine() reads it; prime_machines reads it for many bots at once.
 ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,r.revoked_at,r.readiness,"
                     "r.platform,r.version,r.awake_since,r.screen,r.capabilities")
-ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?"
+ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?"
 
 
 def prime_machines(c, slugs):
@@ -423,7 +423,7 @@ def prime_machines(c, slugs):
         for statement, query in ((CONFIG_SQL, f"SELECT config,bot FROM bot_config WHERE bot IN ({marks})"),
                                  (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
                                  (ASSIGNED_SQL, ASSIGNED_COLUMNS + ",a.bot FROM assignments a "
-                                                f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
+                                                f"JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
                                  ("SELECT * FROM bot_status WHERE bot=?", f"SELECT * FROM bot_status WHERE bot IN ({marks})")):
             found = {row["bot"]: row for row in c.execute(query, part)}
             read_cache.prime(c, statement, {(s,): found.get(s) for s in part})
@@ -751,7 +751,7 @@ def operation_issues(c, who, auth):
         # Container backups report through replication; imported VM timer history stays historical.
         managed_backups = bool(os.environ.get("TICO_BACKUP_MODE"))
         for row in c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,version,checkout,restart_requested_at "
-                             "FROM runners WHERE revoked_at IS NULL"):
+                             "FROM runners_with_state WHERE revoked_at IS NULL"):
             online = row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-60)
             if online and not runner_version_supported(row["version"]):
                 add("runner_version", row["label"] + " needs a runner update",
@@ -776,7 +776,7 @@ def operation_issues(c, who, auth):
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.
-        if c.execute("SELECT 1 FROM runners WHERE revoked_at IS NULL AND last_seen_at>?",
+        if c.execute("SELECT 1 FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
                      (H.shift(H.now(), seconds=-60),)).fetchone():
             for service, label, limit in (("connector:calendar", "Calendar", 15), ("connector:mail", "Mail", 90)):
                 row = c.execute("SELECT last_succeeded_at,last_error FROM service_health WHERE service=?", (service,)).fetchone()
@@ -828,7 +828,7 @@ def own_sign_in(c, bot, settings=None):
 def free_turn(c, bot, location, human=False):
     """The computer whose running work and short starts occupy all its places, or ''."""
     machine = location.get("machine") or {}
-    row = c.execute("SELECT * FROM runners WHERE id=?", (machine.get("runner_id"),)).fetchone()
+    row = c.execute("SELECT * FROM runners_with_state WHERE id=?", (machine.get("runner_id"),)).fetchone()
     if not row:
         return ""
     held = turns_here(c, machine["runner_id"])
@@ -2398,7 +2398,7 @@ def install_views(app, store, auth, mutate, task_view):
             runners = list(c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,platform,version,capacity,readiness,"
                                       "accepts_member_bots,turns_at_once,screen,performance,capabilities,"
                                       "restart_since,"
-                                      "readiness_at FROM runners ORDER BY created_at"))
+                                      "readiness_at FROM runners_with_state ORDER BY created_at"))
             from . import usage_limits
             from .start_places import describe, summaries, turn_limit
             # One company Default for every computer's queue classify: without it each summary rebuilds

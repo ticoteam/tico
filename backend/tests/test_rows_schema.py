@@ -15,6 +15,7 @@ TABLES = {
     rows.TaskRow: "tasks",
     rows.AttemptRow: "attempts",
     rows.RunnerRow: "runners",
+    rows.RunnerStateRow: "runner_states",
     rows.ApprovalRow: "approvals",
     rows.AttemptEventRow: "attempt_events",
     rows.PrincipalRow: "principals",

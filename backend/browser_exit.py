@@ -65,7 +65,7 @@ def today():
 
 
 def _computer(c, rid):
-    return c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+    return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
 
 
 def _bots(value):

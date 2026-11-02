@@ -54,7 +54,7 @@ def seed(api):
                           "VALUES(?,?,'human:ana',?,'say','Synthetic work',?,'{}')",
                           (f"work-{s}-{k}", room, "bot:" + s, now))
         # Room for many turns on each computer, and up long enough to be trusted with a lease.
-        c.execute("UPDATE runners SET capacity=40,awake_since=?,last_seen_at=?", (H.shift(now, minutes=-10), now))
+        c.execute("UPDATE runner_states SET capacity=40,awake_since=?,last_seen_at=?", (H.shift(now, minutes=-10), now))
     return computers, places
 
 

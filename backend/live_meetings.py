@@ -476,7 +476,7 @@ def _wait_for_update(c, rid, turn_id, slug):
     """Say once per meeting and bot when no computer running the bot can take a private meeting's turn: one without
     private lanes is never handed it (execution.PRIVATE_LANES), so the turn waits for its runner's update."""
     from .execution import PRIVATE_LANES, _capability_set
-    computers = c.execute("SELECT r.label,r.capabilities FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    computers = c.execute("SELECT r.label,r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                           "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchall()
     old = [r["label"] or "This bot's computer" for r in computers
            if PRIVATE_LANES not in _capability_set(r["capabilities"])]

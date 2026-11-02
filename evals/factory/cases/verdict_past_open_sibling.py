@@ -63,7 +63,7 @@ def _watch_results(run, w):
     with no free turn, only delays it; the claim holding it back is what the check counts."""
     from backend import execution as E
     with w.store.read() as c:
-        runner = c.execute("SELECT * FROM runners WHERE id=?", (w.runner["runner_id"],)).fetchone()
+        runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (w.runner["runner_id"],)).fetchone()
         ready = E.readiness_document(runner["readiness"])
         rows = c.execute("SELECT j.*, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE j.state='queued' AND json_extract(m.refs,'$.subtask') IS NOT NULL "

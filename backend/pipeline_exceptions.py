@@ -287,7 +287,7 @@ def _outages(c, out, typ, rows, at):
             out.add("bot:" + slug, "outage", f"{row['slug']} is {row['status']}", row["updated_at"] or at,
                     bot=row["slug"])
         elif not check_pools.online(c, slug):
-            seen = c.execute("SELECT max(r.last_seen_at) FROM assignments a JOIN runners r ON r.id=a.runner_id "
+            seen = c.execute("SELECT max(r.last_seen_at) FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                              "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchone()[0]
             out.add("bot:" + slug, "outage", f"{row['slug']}'s computer is offline", seen or at, bot=row["slug"])
 

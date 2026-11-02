@@ -761,7 +761,7 @@ def test_out_of_credit_is_the_gateways_wait_and_tico_models_are_back_within_a_mi
     at = H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT + 2)
     with api.app.state.store.transaction() as c:
         # The computer has been reporting in all along, not waking from a silence.
-        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (at,))
+        c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=NULL", (at,))
     ready(api, machine, ["ops"])
     retried = claim(api, machine, "ops")
     assert retried and retried["job_id"] == attempt["job_id"] and retried["config"]["model"] == "tico-mid-1.0"
@@ -787,7 +787,7 @@ def test_a_rate_limited_bot_its_fallback_finished_for_is_back_on_tico_models_aft
     assert holds and all(hold["until"] <= H.shift(at, seconds=G.GATEWAY_WAIT + 1) for hold in holds), holds
     at = H.shift(at, seconds=G.GATEWAY_WAIT + 2)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (at,))
+        c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=NULL", (at,))
     post(api, "chat/ops", {"text": "Use only the synthetic fixture again"})
     ready(api, machine, ["ops"])
     again = claim(api, machine, "ops")
