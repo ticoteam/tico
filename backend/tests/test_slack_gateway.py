@@ -975,3 +975,31 @@ def test_a_queued_slack_copy_to_someone_removed_from_the_thread_is_not_sent(gate
     gateway.deliver()
     assert len(slack.posts) == 1, "no copy reaches a Slack user who left the thread"
     assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", after)[0]["state"] == "cancelled"
+
+
+def test_a_copy_to_ben_never_reuses_another_members_slack_dm(gateway, hub):
+    """A members thread whose Slack mapping is Cara's DM: a bot's message to Ben must not be copied into Cara's DM,
+    since the copy would reach Cara with Ben's message. A shared channel mapping of the same thread still gets it."""
+    from backend import threads
+    with hub.transaction() as c:
+        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])["id"]
+        c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,reply_ts,ts,user_id,event_type,"
+                  "text,received,state,actor) VALUES('ev-cara',?,'D0CARA','im','','','1','U5','message','hi',?,'routed',"
+                  "'human:cara')", (TEAM, "2000-01-01T00:00:00Z"))
+        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed) "
+                  "VALUES('D0CARA','','legal',?,'2000-01-01T00:00:00Z',NULL)", (tid,))
+        dm_copy = threads.post(c, "bot:legal", tid, "Ben, the draft.", kind="say", to_actor="human:ben")["id"]
+    gateway.mirror()
+    gateway.deliver()
+    assert not any(post["channel"] == "D0CARA" for post in gateway.slack.posts)
+    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", dm_copy)[0]["state"] == "cancelled"
+
+    with hub.transaction() as c:
+        channel_tid = threads.create(c, "human:ana", title="Shared", audience="members", members=["human:ben"])["id"]
+        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed) "
+                  "VALUES(?,'','legal',?,'2000-01-01T00:00:00Z',NULL)", (MARKETING, channel_tid))
+        shared = threads.post(c, "bot:legal", channel_tid, "Team, the draft.", kind="say", to_actor="human:ben")["id"]
+    gateway.mirror()
+    gateway.deliver()
+    assert rows(hub, "SELECT channel FROM slack_posts WHERE message_id=?", shared)[0]["channel"] == MARKETING
+    assert any(post["channel"] == MARKETING for post in gateway.slack.posts)
