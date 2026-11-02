@@ -262,13 +262,15 @@ def test_close_turn(api):
     assert get(api, f"approvals/{asked['approval_id']}")["kind"] == "finance"
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: close-month.md step 3 asks for close_period 'with the month and the note', but "
-                   "close_period takes only `month` (backend/finance/core/kinds.py SHAPES close_period).")
-def test_gap_close_period_takes_the_note(api):
+def test_close_period_takes_the_month_and_nothing_else(api):
+    """close_period takes only `month` (kinds.py SHAPES): the close asks for approval, and a note is refused as an
+    unknown field. The variance note goes on the task (close-month.md step 3)."""
     token = hire(api)
-    err, asked = ask(api, token, "close_period", {"month": "2026-10", "note": "Software over plan by 12%"},
-                     "close:2026-10:note")
+    err, asked = ask(api, token, "close_period", {"month": "2026-10"}, "close:2026-10")
     assert not err and asked["status"] == "needs_approval", asked
+    err, noted = ask(api, token, "close_period", {"month": "2026-10", "note": "Software over plan by 12%"},
+                     "close:2026-10:note")
+    assert err or noted["status"] != "needs_approval", noted
 
 
 # ----------------------------------------------------------------------------- monthly report (playbook: monthly-report.md)

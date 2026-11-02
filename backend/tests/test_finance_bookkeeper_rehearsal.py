@@ -209,16 +209,17 @@ def test_c4_every_act_kind_the_playbooks_name_exists(environment):
     assert named <= known, sorted(named - known)
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: close-month playbook asks for close_period with the note, but the kind "
-                   "takes only month (kinds.py), so the variance note is not stored with the approval; decide: add "
-                   "the note to the kind, or drop it from the playbook")
-def test_c4_close_period_takes_the_note_the_close_playbook_passes(environment):
+def test_c4_close_period_is_asked_with_the_fields_it_takes(environment):
+    """The kind takes only `month`; the close playbook asks for close_period with that alone and puts the variance note
+    on the task, so no playbook line asks for a note on the close."""
     api = built(environment)
     ensure(api)
     err, out = call(api, "hub_finance_act", {"kind": "help", "payload": {"kind": "close_period"}}, token=_token(api))
     fields = {f["name"] for f in out["fields"]}
-    playbook = (TEMPLATE / "playbooks" / "close-month.md").read_text()
-    assert "note" not in playbook or "note" in fields, sorted(fields)
+    assert fields == {"month"}, sorted(fields)
+    asks = [line for line in (TEMPLATE / "playbooks" / "close-month.md").read_text().splitlines()
+            if "close_period" in line]
+    assert asks and not any("note" in line for line in asks), asks
 
 
 # ----------------------------------------------------------------------------- check 6: failures are visible
