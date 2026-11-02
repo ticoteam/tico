@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend import demo
 from backend.app import create_app
+from backend.demo_sections.schedules import SETTLE
 from backend.scheduler import next_due
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
@@ -148,7 +149,7 @@ def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_fu
             # Next is the schedule's first time after the build's now.
             assert at_time(row["next_run"]) > NOW, row["name"]
             assert at_time(row["next_run"]) == next_due(trigger["cron"], NOW, trigger["tz"]), row["name"]
-            due = occurrences_between(trigger, week_start, NOW)
+            due = occurrences_between(trigger, week_start, NOW - SETTLE)
             assert due, row["name"]
             runs, _ = runs_of(api, row["id"])
             started = sorted(at_time(run["started_at"]) for run in runs if at_time(run["started_at"]) > week_start)

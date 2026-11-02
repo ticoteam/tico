@@ -23,6 +23,9 @@ WINDOW = timedelta(days=7)
 START_LAG = timedelta(seconds=12)  # a run's start after its time: the pass fires it and the run's step starts its turn
 CLAIM_POLL = timedelta(seconds=5)   # the gap between two claim polls on the demo clock (a computer takes work after 120 s)
 CLAIM_TRIES = 60                    # polls a computer makes for a bot's job before it gives up
+# Occurrences this close to the build's now are not played: their runs (a few minutes each, one after another) would
+# finish after now. Their schedule's next time is still its first one after now.
+SETTLE = timedelta(minutes=20)
 
 # Routines whose summaries are not in D.ROUTINES: the Strategy, Librarian and BotOps bots.
 EXTRA_SUMMARIES = {
@@ -55,7 +58,7 @@ def seed(b):
     b.write(lambda c: box.update(rows=_pending_schedules(c, start)))
     plan = {}
     for row in box["rows"]:
-        for index, due in enumerate(_occurrences(row["trigger"], start, b.now)):
+        for index, due in enumerate(_occurrences(row["trigger"], start, b.now - SETTLE)):
             plan.setdefault(due, []).append((row, index))
     b.write(lambda c: _set_next_due(c, box["rows"], start))
     # The jobs the bots' queues already hold (the history's assignments, never claimed) are held while the window's
