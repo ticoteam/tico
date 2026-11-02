@@ -25,7 +25,10 @@ def private_run(api, bot="ops"):
     machine = runner(api)
     assign(api, machine, bot)
     ready(api, machine, [bot])
-    return row, claim(api, machine, bot)
+    attempt = claim(api, machine, bot)
+    with api.app.state.store.transaction() as c:      # the run carries its private task (its work)
+        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], row["id"]))
+    return row, attempt
 
 
 def company_message_by_bot(api, bot="ops", text="Company status"):
@@ -268,3 +271,82 @@ def test_a_stored_derived_title_is_cleared_when_its_parent_task_turns_private(ap
     for token in ("ben-test", "cara-test"):
         found = api.get("/api/v2/threads/search", params={"q": "quarterly"}, headers=headers(token)).json()
         assert all("Quarterly launch" not in (hit.get("title") or "") for hit in found["hits"]), token
+
+
+def test_a_removed_bot_cannot_fetch_a_message_addressed_to_it(api):
+    """A bot removed from a members thread keeps its addressed message only while it reads the thread: its
+    sender/addressee shortcut must not answer before the thread's readers are checked."""
+    from backend.tests.test_api import setup_attempt
+    from backend.tests.test_thread_api import new_thread
+    _, _, attempt = setup_attempt(api, "ops")
+    thread = new_thread(api, members=("bot:ops",))
+    sent = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": "Note for ops", "to": "bot:ops"},
+                    headers=headers("ana-test"))
+    assert sent.status_code == 200, sent.text
+    message_id = sent.json()["id"]
+    assert api.get(f"/api/v2/messages/{message_id}", headers=headers(attempt["token"])).status_code == 200
+    removed = api.delete(f"/api/v2/threads/{thread['id']}/members/bot:ops", headers=headers("ana-test"))
+    assert removed.status_code == 200, removed.text
+    seen = api.get(f"/api/v2/messages/{message_id}", headers=headers(attempt["token"]))
+    assert seen.status_code == 404, seen.text
+    assert "Note for ops" not in seen.text
+
+
+def test_a_private_run_cannot_answer_a_company_question_with_private_words(api):
+    """Ben asks the bot ops in a company thread; the bot's private run answers through the answer route. The answer is
+    a message the company thread's readers read, so the run's confidential words are refused there."""
+    thread = company_thread_with_bot_and_ben(api)
+    added = api.post(f"/api/v2/threads/{thread['id']}/members", json={"actor": "bot:ops"}, headers=headers("ana-test"))
+    assert added.status_code == 200, added.text
+    asked = api.post("/api/v2/messages", json={"to": "bot:ops", "text": "Which launch date?", "kind": "ask",
+                                               "conversation_id": thread["id"]}, headers=headers("ben-test"))
+    assert asked.status_code == 200, asked.text
+    row, attempt = private_run(api)
+    answer = api.post(f"/api/v2/messages/{asked.json()['id']}/answer", json={"text": "Confidential launch plan"},
+                      headers=headers(attempt["token"]))
+    assert answer.status_code == 403, answer.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM messages WHERE body LIKE 'Confidential%'").fetchone()[0] == 0
+
+
+def _route_context(api, attempt):
+    """A company thread with the bot ops in it and a message the bot wrote there, for the route table below."""
+    thread = company_thread_with_bot_and_ben(api)
+    added = api.post(f"/api/v2/threads/{thread['id']}/members", json={"actor": "bot:ops"}, headers=headers("ana-test"))
+    assert added.status_code == 200, added.text
+    with api.app.state.store.transaction() as c:
+        posted = threads.post(c, "bot:ops", thread["id"], "Company status")
+    return {"thread": thread["id"], "message": posted["id"], "token": attempt["token"], "ben": "human:ben"}
+
+
+# Every route a private run can use to put message text or a title into a company thread, with the body that would
+# do it. A private run is refused on each: its text is one the company thread's readers would read.
+ROUTE_WRITES = [
+    ("POST", "/api/v2/messages", lambda x: {"to": x["ben"], "text": "Confidential", "conversation_id": x["thread"]}),
+    ("POST", "/api/v2/conversations/{thread}/messages", lambda x: {"text": "Confidential"}),
+    ("POST", "/api/v2/threads/{thread}/messages", lambda x: {"text": "Confidential"}),
+    ("PATCH", "/api/v2/messages/{message}", lambda x: {"text": "Confidential"}),
+    ("PATCH", "/api/v2/threads/{thread}", lambda x: {"title": "Confidential"}),
+    ("POST", "/api/v2/threads", lambda x: {"title": "Confidential", "audience": "company"}),
+    ("POST", "/api/v2/threads/dm", lambda x: {"to": x["ben"], "text": "Confidential"}),
+    ("POST", "/api/v2/threads/{thread}/members", lambda x: {"actor": x["ben"]}),
+    ("PUT", "/api/v2/threads/{thread}/follow", lambda x: None),
+    ("POST", "/api/v2/conversations/{thread}/goal", lambda x: {"action": "set", "objective": "Confidential"}),
+    ("POST", "/api/v2/notes", lambda x: {"title": "Confidential", "body": "Confidential"}),
+    ("POST", "/api/v2/updates", lambda x: {"title": "Confidential", "body": "Confidential"}),
+]
+
+
+@pytest.mark.parametrize("method,path,body", ROUTE_WRITES, ids=[f"{m} {p}" for m, p, _ in ROUTE_WRITES])
+def test_a_private_run_is_refused_on_every_route_that_writes_text_into_a_company_thread(api, method, path, body):
+    _, attempt = private_run(api)
+    ctx = _route_context(api, attempt)
+    url = path.format(thread=ctx["thread"], message=ctx["message"])
+    payload = body(ctx)
+    kwargs = {"headers": headers(ctx["token"])}
+    if payload is not None:
+        kwargs["json"] = payload
+    response = api.request(method, url, **kwargs)
+    assert response.status_code == 403, f"{method} {path}: {response.status_code} {response.text}"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM messages WHERE body LIKE 'Confidential%'").fetchone()[0] == 0
