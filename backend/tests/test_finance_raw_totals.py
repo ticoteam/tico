@@ -123,6 +123,29 @@ def test_a_month_with_transactions_takes_no_raw_totals(books):
         assert act(c, OWNER, "import_raw_totals", _body()).status == "committed"
 
 
+def test_a_month_with_a_posted_bank_row_takes_no_raw_totals_even_when_its_entry_rolled_forward(books):
+    """A bank row of a month that posted refuses that month's raw totals, though its entry is dated outside the month: a
+    row posted while February was closed lands in the open period (open_day), so no itemized entry is found in February."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-02"}).status == "committed"
+    fake.txns["txn-feb"] = _feed("txn-feb", -1_500, "2026-02-10")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        fid = c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-feb'").fetchone()[0]
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900")}).status == "committed"
+        entry = c.execute("SELECT entry_id FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()[0]
+        assert act(c, OWNER, "reopen_period", {"month": "2026-02"}).status == "committed"
+        refused = act(c, OWNER, "import_raw_totals", _body())
+        assert refused.status == "failed" and refused.code == CONFLICT, refused
+        assert "2026-02" in refused.reason and "bank or card" in refused.reason, refused.reason
+        # Reversing the row's entry clears the month, and the file posts.
+        assert act(c, OWNER, "journal", {"reverses": entry}).status == "committed"
+        again = act(c, OWNER, "import_raw_totals", _body())
+        assert again.status == "committed", again.reason
+
+
 def test_a_sheet_past_the_64_bit_range_is_refused_by_the_dry_run(books):
     # Twelve 18-digit rows net past the ledger's 64-bit range, and twenty rows that net to zero still sum past it: each
     # is refused at the dry run, and the commit refuses it too with nothing posted.

@@ -87,12 +87,20 @@ def _check_month(ctx: Ctx, who: str, month: str) -> None:
             raise denied(OUTSIDE)
         raise FinanceError(CONFLICT, f"{month} already has raw totals in entry {held['id']}: reverse it first")
     itemized = SR.itemized_in(ctx.c, ctx.book.id, start, end)
-    if itemized is None:
+    if itemized is not None:
+        if not _covered(ctx, who, SR.entry_lines(ctx.c, str(itemized["id"]))):
+            raise denied(OUTSIDE)
+        raise FinanceError(CONFLICT, f"{month} already has transactions in entry {itemized['id']}: raw totals post only "
+                                     "to months with none")
+    # A bank or card row of the month that already posted: its entry can be dated outside the month (a closed month
+    # rolls it forward), so the entries above do not see it. Its month is closed to raw totals all the same.
+    posted = SR.posted_feed_in(ctx.c, ctx.book.id, start, end)
+    if posted is None:
         return
-    if not _covered(ctx, who, SR.entry_lines(ctx.c, str(itemized["id"]))):
+    if not _covered(ctx, who, SR.entry_lines(ctx.c, str(posted["entry_id"]))):
         raise denied(OUTSIDE)
-    raise FinanceError(CONFLICT, f"{month} already has transactions in entry {itemized['id']}: raw totals post only "
-                                 "to months with none")
+    raise FinanceError(CONFLICT, f"{month} already has bank or card transactions posted in entry {posted['entry_id']}: "
+                                 "raw totals post only to months with none")
 
 
 def _again(row: Any) -> Plan:

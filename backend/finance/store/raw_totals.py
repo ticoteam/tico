@@ -55,6 +55,16 @@ def itemized_in(c: sqlite3.Connection, book_id: str, start: str, end: str) -> An
                      (book_id, *ITEMIZED, start, end)).fetchone()
 
 
+def posted_feed_in(c: sqlite3.Connection, book_id: str, start: str, end: str) -> Any:
+    """A bank or card row dated from start to end whose live entry (posted, not a reversal) holds its activity, if there
+    is one: its month is closed to raw totals. The entry may be dated outside the month (a closed month rolls it on). A
+    row whose entry was reversed holds nothing and is not counted."""
+    return c.execute("SELECT f.id, f.entry_id FROM fin_feed_txns f JOIN fin_money_accounts m ON m.id=f.money_account_id "
+                     "JOIN fin_entries e ON e.id=f.entry_id AND e.status='posted' AND e.reverses_id IS NULL "
+                     "WHERE m.book_id=? AND f.txn_date>=? AND f.txn_date<=? ORDER BY f.txn_date, f.id LIMIT 1",
+                     (book_id, start, end)).fetchone()
+
+
 def _tags(rows: list[Any]) -> list[tuple[str, dict[str, str]]]:
     return [(str(r[0]), {k: str(v) for k, v in (("team", r[1]), ("teammate", r[2])) if v}) for r in rows]
 
