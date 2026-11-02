@@ -148,7 +148,10 @@ start_runner() {  # image tag, then the join arguments: as docker/runner.compose
 }
 runner_online() { get getting-started | json 'sys.exit(0 if any(i["id"]=="computer" and i["done"] for i in d["items"]) else 1)'; }
 runner_id() { get operations | json 'd["machines"][0]["id"]'; }
-last_seen() { sql "SELECT coalesce(max(last_seen_at),'') FROM runners WHERE revoked_at IS NULL"; }
+last_seen() {  # the runners' last contact, under the column this database has (the previous release predates the rename)
+  local column; column="$(sql "SELECT name FROM pragma_table_info('runners') WHERE name IN ('last_seen_at','last_seen') ORDER BY name='last_seen_at' DESC LIMIT 1")"
+  sql "SELECT coalesce(max($column),'') FROM runners WHERE revoked_at IS NULL"
+}
 seen_since() { [[ "$(last_seen)" > "$1" ]]; }
 botops_ready() { get operations | json 'sys.exit(0 if d["machines"][0]["readiness"]["bots"]["botops"]["ready"] else 1)'; }
 
