@@ -2,6 +2,8 @@
 
 Run this before the weekly review (above Passive), and when the owner asks. Read `hub goal list --all` and `hub proposal list`.
 
+Inputs: the live goals, the pending proposals, the rejected proposals (`hub proposal list --status rejected`), and `hub kpi list --unlinked`.
+
 For each live goal:
 - **Vague**: no way to tell whether it happened ("improve the customer experience"). Propose clearer words
   (`goal_wording`) that a human can confirm with one click, keeping their meaning. If you cannot tell what they
@@ -40,3 +42,5 @@ not edit a goal, and `playbooks/README.md` has the payload shapes.
 empty and that has no pending `goal_why`, propose one line saying how the goal serves the vision, in the company's
 own words where it has them: `goal_why` with `{"why": "..."}` and a one-sentence reason. Never write a goal's Why
 yourself; the owner accepts, edits or writes their own.
+
+**Done when:** every live goal has been read, each problem has one pending proposal or a flag, and the rejected suggestions were read before any was filed.

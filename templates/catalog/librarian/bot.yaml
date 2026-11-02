@@ -12,7 +12,8 @@ max_run_minutes: 45
 outbound_send: false
 
 # The routines this bot starts with. The server seeds them once, when the Librarian is built in; from
-# then on Tico's rows are the routines and `hub routine set` changes them (docs/routines.md).
+# then on they are Automations: `hub automation list --owner bot:librarian` lists them and
+# `hub automation update <id>` changes one (docs/routines.md).
 routines:
   - id: refresh-the-map
     title: Refresh the map of the docs

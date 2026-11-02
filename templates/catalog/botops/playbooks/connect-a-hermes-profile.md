@@ -8,6 +8,10 @@ connection script's commands, `--model openclaw` when you register the bot, and 
 default profile in `~/.openclaw`). No MCP entry is added to OpenClaw; its skill calls Tico through the connection script, and
 that is already set up by `pair`.
 
+Inputs: the profile's name, how often it should check Tico, and whether it is Hermes or OpenClaw: the answers to the questions in step 1.
+
+Done when: the profile is paired and its bot reports a heartbeat, and the human knows how often it checks; if it is not reporting yet, the one fix still missing is in the message to them.
+
 ## 1. Ask three things
 
 - **Which profile?** Its name, as Hermes calls it (`hermes profile list` on their computer; `openclaw --profile <name>`

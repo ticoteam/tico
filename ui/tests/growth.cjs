@@ -140,6 +140,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await flat(page, `${tag}: Channels, no numbers`);
   await snap(page, `${tag}-00c-channels-empty`);
   await page.locator('[data-gc-row="google-ads"]').click();
+  assert.ok(await page.locator('.gc-list').evaluate(el => el.nextElementSibling?.matches('.gc-bar') && !el.previousElementSibling), `${tag}: the month and settings sit under the list`);
   await page.locator('[data-gc-month-add]').click();
   const md = page.locator('dialog.gr-dlg');
   assert.equal(await md.locator('[name="month"]').inputValue(), MONTH, `${tag}: this month by default`);
@@ -331,6 +332,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await flat(page, `${tag}: Buyers with Dropped open`);
   // The go-to-market block edits the draft and publishes it; who buys stays as it was.
   assert.match(await page.locator('.gb-gtm').innerText(), /Local services \+ Self-serve/, `${tag}: the motion reads`);
+  assert.equal(await page.locator('.gb-gtm h2').count(), 0, `${tag}: no heading on the block`);
   await page.locator('[data-gtm-edit]').click();
   const gd = page.locator('dialog.gr-dlg');
   assert.equal(await gd.locator('[name="cycle"]').inputValue(), '1 week', `${tag}: the cycle in the form`);
