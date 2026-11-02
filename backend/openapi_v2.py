@@ -1798,6 +1798,7 @@ SCHEMAS.update({
                               "approval_to": "n", "rule_id": "n", "created_at": "s"})),
         "settlement_count": "i", "settlements_more": "b", "attachment_count": "i", "attachments_more": "b",
         "terms_days": {"type": ["integer", "null"]}, "purchase_order_id": {"type": ["string", "null"]},
+        "book_mode": {"type": "string", "enum": ["native", "mirror"]},
         "schedule": {"type": ["object", "null"]}, "view_version": "i"},
         required=["lines", "settlements", "attachments", "actions"])]},
     "FinanceContacts": obj({"contacts": items(_FINANCE_CONTACT), "next_cursor": "n", "view_version": "i"}),

@@ -1534,6 +1534,7 @@ export type FinanceConnectionResult = {
 export type FinanceContact = {
   contact: {
   active: boolean;
+  as_of?: string | null;
   created_at?: string;
   default_account?: Record<string, unknown> | null;
   emails?: Array<string>;
@@ -1547,6 +1548,8 @@ export type FinanceContact = {
   invoices?: number;
 };
   recipient_id?: string | null;
+  source?: string;
+  stale?: boolean;
   tax_id_last4?: string | null;
 };
   files: Array<{
@@ -1599,6 +1602,7 @@ export type FinanceDocument = (FinanceDocumentRow & {
   id: string;
 }>;
   attachments_more?: boolean;
+  book_mode?: "native" | "mirror";
   lines: Array<{
   account: Record<string, unknown> | null;
   amount: number;

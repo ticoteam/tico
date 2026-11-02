@@ -219,6 +219,23 @@ def test_x10_a_copy_the_owning_system_cannot_reach_says_as_of_when_it_last_synce
         assert [(r["source"], r["as_of"], r["stale"]) for r in found] == [("quickbooks", None, True)]
 
 
+def test_x10_a_contact_the_books_hold_says_when_it_last_synced_and_tico_s_own_says_it_is_tico_s(books):
+    with books.transaction() as c:
+        held = str(_ok(act(c, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor"})).result["contact_id"])
+        own = str(_ok(act(c, OWNER, "contact_create", {"name": "Acme Own", "kind": "vendor"})).result["contact_id"])
+        c.execute("INSERT INTO fin_connections(id, provider, purpose, status, last_ok_at, created_at, created_by) "
+                  "VALUES('conn-books','quickbooks','books','new',NULL,?,?)", (AT, OWNER))
+        c.execute("INSERT INTO fin_external_refs(id, connection_id, local_table, local_id, external_id, created_at, "
+                  "created_by) VALUES('ref-acme','conn-books','fin_contacts',?,'Vendor:9',?,?)", (held, AT, OWNER))
+
+        def copy_of(contact: str) -> tuple:
+            shown = FR.contact(c, OWNER, contact, at=AT)["contact"]
+            return shown["source"], shown["as_of"], shown["stale"]
+
+        assert copy_of(held) == ("quickbooks", None, True)
+        assert copy_of(own) == ("tico", AT, False)
+
+
 def test_x20_a_location_takes_a_shipped_kind_and_the_table_refuses_the_retired_one(books):
     with books.transaction() as c:
         refused = act(c, OWNER, "location_create", {"name": "Old", "kind": "location"})
