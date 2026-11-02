@@ -107,13 +107,18 @@ async function pageThreads() {
   });
   if (inbox) {
     // Its held messages come from Needs you, read a page at a time to the end so none is missed; the sidebar counts
-    // them too. Read again whenever Needs you is (the first read may land after this page opened).
+    // them too. Read again whenever Needs you moves; before its first read there is no next page to follow, so it is
+    // read here.
     let paging = false;
     const readHolds = async () => {
       if (paging || typeof needsAll !== 'function') return;
       paging = true;
       try {
-        for (let i = 0; i < 100 && S.route === route && !needsAll(); i++) {
+        if (!S.v2.needsVersion && await v2NeedsRead() && S.route === route) {
+          draw();
+          if (typeof threadsSideRender === 'function') threadsSideRender();
+        }
+        while (S.route === route && !needsAll()) {
           if (await v2NeedsMore() === false) break;
           if (S.route !== route) break;
           draw();
