@@ -354,13 +354,6 @@ def opening_entry(c: sqlite3.Connection, book_id: str, money_account_id: str) ->
                      "LIMIT 1", (book_id, f"opening:{money_account_id}", f"opening:{money_account_id}:%")).fetchone()
 
 
-def opening_ever(c: sqlite3.Connection, book_id: str, money_account_id: str) -> bool:
-    """Whether any opening-balance entry was ever posted for this money account (live or since reversed)."""
-    return c.execute("SELECT 1 FROM fin_entries WHERE book_id=? AND source='sync' AND reverses_id IS NULL AND "
-                     "(source_id=? OR source_id LIKE ?) LIMIT 1",
-                     (book_id, f"opening:{money_account_id}", f"opening:{money_account_id}:%")).fetchone() is not None
-
-
 def feed_outstanding(c: sqlite3.Connection, money_account_id: str, through: str) -> tuple[int, int]:
     """Settled rows on or before `through` the books don't have yet (`new`): how many, and their total."""
     row = c.execute("SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=? AND "

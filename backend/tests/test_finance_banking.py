@@ -1233,3 +1233,30 @@ def test_late_history_keeps_moving_an_opening_it_brought_to_zero(books):
         rows = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE provider_id LIKE 'old-%'").fetchone()[0]
         assert rows == 5_000                              # both taken in (one may wait for review before it posts)
         assert _opening(c) == [("2026-08-31", "1000", 5_000), ("2026-08-31", "3900", -5_000)]
+
+
+def test_an_older_connection_whose_opening_went_to_zero_gets_it_back_from_the_balance_once(books):
+    """A connection from before `opened` was kept, whose opening an older pass brought to 0 (reversed, no live entry):
+    the next pass makes it again from the balance, once."""
+    fake = FakeMercury()
+    fake.txns["txn-old"] = _txn("txn-old", "acct-chk", -1000.0, "wireFee", day="2026-09-03")
+    connect(books, fake)
+    sync_once(books, fake)
+    from backend.finance import banking
+    from backend.finance.context import load
+    with books.transaction() as c:
+        made = _opening(c)
+        ctx = load(c, AT)
+        money = c.execute("SELECT * FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()
+        banking.set_opening(ctx, money, 0, "2026-09-02")
+        row = c.execute("SELECT id, settings FROM fin_connections").fetchone()
+        conf = {k: v for k, v in json.loads(row[1]).items() if k not in ("opened", "opened_at")}
+        c.execute("UPDATE fin_connections SET settings=? WHERE id=?", (json.dumps(conf), row[0]))
+        assert _opening(c) == []
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        assert _opening(c) == made
+    fake.balances["acct-chk"] = 1.0
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        assert _opening(c) == made

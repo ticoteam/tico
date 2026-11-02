@@ -352,11 +352,12 @@ def _backfilled(ctx: Ctx, money: Any) -> bool:
 
 def _opened(ctx: Ctx, money: Any) -> bool:
     """Whether the money account's first opening was made once its backfill finished (`opened` in the connection's
-    settings; a connection from before that list: whether an opening entry was ever posted)."""
+    settings; a connection from before that list: whether it has a live opening entry, so one an older pass brought to
+    0 and reversed is made again from the balance, once)."""
     conf = _conn_settings(ctx, money)
     if "opened" in conf:
         return str(money["id"]) in conf["opened"]
-    return SK.opening_ever(ctx.c, ctx.book.id, str(money["id"]))
+    return SK.opening_entry(ctx.c, ctx.book.id, str(money["id"])) is not None
 
 
 def mark_opened(ctx: Ctx, connection_id: str, money_ids: Sequence[str]) -> None:
@@ -369,7 +370,7 @@ def mark_opened(ctx: Ctx, connection_id: str, money_ids: Sequence[str]) -> None:
     had = conf.get("opened")
     if had is None:
         had = [str(m["id"]) for m in SK.money_accounts(ctx.c, ctx.book.id)
-               if str(m["connection_id"] or "") == connection_id and SK.opening_ever(ctx.c, ctx.book.id, str(m["id"]))]
+               if str(m["connection_id"] or "") == connection_id and SK.opening_entry(ctx.c, ctx.book.id, str(m["id"]))]
     conf["opened"] = sorted({*had, *money_ids})
     conf["opened_at"] = {**dict(conf.get("opened_at") or {}), **{m: ctx.at for m in money_ids}}
     SK.update(ctx.c, "fin_connections", connection_id, {"settings": SK.dump(conf)})
