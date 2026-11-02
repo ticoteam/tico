@@ -83,18 +83,32 @@ def test_quickbooks_shapes_map_to_mirror_records_with_exact_money():
 
 
 class Wire:
-    """A fake QuickBooks transport: replies in order, and every request it was sent."""
+    """A fake QuickBooks transport: replies in order, and every request it was sent. The company's Preferences are
+    answered here (a company that tracks a class on each line, unless `prefs` says otherwise), not from the replies, and
+    are not counted as sent."""
 
-    def __init__(self, *replies: QC.Reply) -> None:
+    def __init__(self, *replies: QC.Reply, prefs: QC.Reply | None = None) -> None:
         self.replies, self.sent = list(replies), []
+        self.prefs = prefs or QC.Reply(200, {"Preferences": {"AccountingInfoPrefs": {"ClassTrackingPerTxnLine": True}}})
 
     def __call__(self, method: str, url: str, headers: object, data: bytes | None) -> QC.Reply:
+        if method == "GET" and "/preferences?" in url:
+            return self.prefs
         self.sent.append((method, url, dict(headers), data))  # type: ignore[call-overload]
         return self.replies.pop(0)
 
 
 def _client(wire: Wire, tokens=lambda force: "tok") -> QC.QuickBooks:
     return QC.QuickBooks("123", tokens, base="http://127.0.0.1:9", transport=wire, sleep=lambda s: None)
+
+
+def test_a_write_that_cannot_tell_whether_classes_are_tracked_is_not_sent_and_is_not_final():
+    wire = Wire(prefs=QC.Reply(0))
+    body = {"party": "Vendor:9", "number": "B-1", "day": "2026-10-05", "due": "", "memo": "",
+            "lines": [{"account": "Account:2", "amount": 1500, "description": "seats", "class": "30"}]}
+    made = _client(wire).send("bill.create", body, "bill-no-prefs")
+    assert made.ok is False and made.final is False, made
+    assert wire.sent == []
 
 
 def test_a_401_takes_one_new_token_from_hq_and_the_call_is_tried_again():

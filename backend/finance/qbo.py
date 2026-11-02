@@ -157,6 +157,7 @@ class QuickBooks:
         self.transport = transport or _urllib
         self.sleep = sleep
         self._items: dict[str, dict[str, str]] | None = None      # one read of the items per pass, when a document needs it
+        self._per_line: bool | None = None                        # whether the company tracks a class on each line, read once
 
     def _call(self, method: str, path: str, *, query: Mapping[str, str] | None = None,
               body: Mapping[str, Any] | None = None, request_id: str = "") -> Reply:
@@ -216,6 +217,21 @@ class QuickBooks:
                     return self._items
             return f"more than {MAX_PAGES * PAGE} items: the item list is too long to read"
         return self._items
+
+    def _line_classes(self) -> bool | str:
+        """Whether the company tracks a class on each transaction line (its Preferences), read once per client. A read that
+        does not say is an error and the write is tried again: nothing is sent that the company may not take."""
+        if self._per_line is None:
+            reply = self._call("GET", "preferences")
+            if reply.status != 200:
+                return _fault(reply.body, reply.status) if reply.status else "QuickBooks did not answer the preferences read"
+            prefs: dict[str, Any] = Q.as_map(reply.body.get("Preferences")) or {}
+            info: dict[str, Any] = Q.as_map(prefs.get("AccountingInfoPrefs")) or {}
+            flag = info.get("ClassTrackingPerTxnLine")
+            if not isinstance(flag, bool):
+                return "QuickBooks did not say whether classes are tracked on each transaction line"
+            self._per_line = flag
+        return self._per_line
 
     def _query(self, entity: str, start: int, size: int) -> Read:
         sql = f"SELECT * FROM {entity}{_where(entity)} STARTPOSITION {start} MAXRESULTS {size}"
@@ -371,6 +387,12 @@ class QuickBooks:
             if isinstance(found, str):
                 return Sent(False, error=found)
             items = found
+        if op in CLASS_OPS:
+            tracked = self._line_classes()
+            if isinstance(tracked, str):
+                return Sent(False, error=tracked)
+            if not tracked:
+                body = _without_classes(body)
         body = {**body, "marker": _marker(key)}
         if op == "writeoff.create":
             item = self._write_off_item(str(body["account"]), key)
@@ -396,6 +418,20 @@ class QuickBooks:
             # The estimate link is best effort: a refusal sends the invoice again without it, under its own request.
             return self._send(op, {k: v for k, v in body.items() if k != "linked_estimate"}, key, f"{key}:unlinked")
         return Sent(False, error=_fault(reply.body, reply.status), final=final)
+
+
+# The writes that carry a class on their lines (a journal's, a bill's or order's or estimate's, an invoice's).
+CLASS_OPS = ("journal.create", "bill.create", "invoice.create", "purchaseorder.create", "estimate.create")
+
+
+def _without_classes(body: Mapping[str, Any]) -> dict[str, Any]:
+    """The write with no line class: a company that does not track classes per line has no line to name one on."""
+    lines = body.get("lines")
+    if not isinstance(lines, list):
+        return dict(body)
+    kept = [{k: v for k, v in x.items() if k not in ("class", "classes")} if isinstance(x, Mapping) else x
+            for x in lines]
+    return {**body, "lines": kept}
 
 
 def _write_of(op: str, body: Mapping[str, Any],

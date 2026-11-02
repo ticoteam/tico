@@ -129,6 +129,33 @@ def test_an_order_and_an_estimate_are_stored_with_their_location_class_and_item(
     assert est[0]["Line"][0]["SalesItemLineDetail"]["ClassRef"] == {"value": "30"}
 
 
+CLASSED = {"account": "Account:12", "amount": 150_000, "description": "work", "item": "Item:40", "location": "Department:20",
+           "class": "30", "project": ""}
+
+
+def test_a_line_class_is_not_sent_when_the_company_does_not_track_classes_per_line(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    _fake(fake_quickbooks, "POST", "/_fake/classes", {"per_line": False})
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    made = client.send("estimate.create", {"party": "Customer:50", "number": "EST-2", "day": "2026-10-10", "due": "",
+                                           "memo": "", "lines": [CLASSED]}, "estimate:no-class")
+    assert made.ok, made
+    stored = _read(fake_quickbooks, "SELECT * FROM Estimate STARTPOSITION 1 MAXRESULTS 10")["QueryResponse"]["Estimate"]
+    assert stored[0]["Line"][0]["SalesItemLineDetail"]["ItemRef"] == {"value": "40"}
+    assert "ClassRef" not in stored[0]["Line"][0]["SalesItemLineDetail"]
+
+
+def test_the_company_class_setting_is_read_once_for_a_client(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    for n in (1, 2):
+        made = client.send("estimate.create", {"party": "Customer:50", "number": f"EST-{n}", "day": "2026-10-10",
+                                               "due": "", "memo": "", "lines": [CLASSED]}, f"estimate:read-{n}")
+        assert made.ok, made
+    calls = _fake(fake_quickbooks, "GET", "/_fake/calls")["calls"]
+    assert len([call for call in calls if call["path"].endswith("/preferences")]) == 1
+
+
 def test_a_connected_book_backfills_from_quickbooks_and_its_pnl_reads_by_location(books, fake_quickbooks):  # noqa: F811
     _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
     _fake(fake_quickbooks, "POST", "/_fake/clock", {"now": AT})     # the book runs on AT's date, not the real one

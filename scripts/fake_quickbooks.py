@@ -13,6 +13,9 @@ Control endpoints under /_fake/ are not QuickBooks':
                        answer is lost (the connection closes with no reply); a retry with the same RequestId finds it
   GET  /_fake/calls    every call made, in order (method, path, query, body; never the token), plus "lost" and
                        "refused" (401s given) counts
+  POST /_fake/classes  {"per_txn": false, "per_line": true}: whether the company tracks a class on the transaction
+                       (per_txn) and on each line (per_line, the default). GET preferences reports both; a write whose
+                       line names a class is refused while per_line is off (the fake's reading of the docs, unverified)
   POST /_fake/reset    empties everything
 
   python3 scripts/fake_quickbooks.py --port 18791
@@ -44,7 +47,8 @@ def reset() -> None:
     STATE.clear()
     STATE.update({"books": {e: [] for e in ENTITIES}, "changes": [], "by_request": {}, "calls": [], "expire": False,
                   # Ids are unique per entity, as in QuickBooks: a new record must not take a seeded id (101 to 706).
-                  "next_id": 1000, "lose": [], "lost": 0, "refused": 0, "window_clock": None})
+                  "next_id": 1000, "lose": [], "lost": 0, "refused": 0, "window_clock": None,
+                  "classes": {"per_txn": False, "per_line": True}})
 
 
 def _rows(entity: str) -> list[dict[str, object]]:
@@ -200,12 +204,24 @@ def _complete(made: dict[str, object], entity: str) -> None:
         made["TotalAmt"] = float(sum(Decimal(str(x.get("Amount", 0))) for x in lines if isinstance(x, dict)))
 
 
+def _has_line_class(body: dict[str, object]) -> bool:
+    """True when a line of the write names a class (a ClassRef inside the line's own detail)."""
+    lines = body.get("Line")
+    if not isinstance(lines, list):
+        return False
+    return any(isinstance(line, dict) and any(isinstance(d, dict) and "ClassRef" in d for d in line.values())
+               for line in lines)
+
+
 def create(path: str, body: dict[str, object], request_id: str, operation: str) -> tuple[int, dict[str, object]]:
     if request_id and request_id in STATE["by_request"]:  # type: ignore[operator]
         return STATE["by_request"][request_id]  # type: ignore[index,return-value]
     entity = CREATE.get(path)
     if entity is None:
         return 404, {"Fault": {"Error": [{"Message": "no such entity"}], "type": "ValidationFault"}}
+    classes: dict[str, bool] = STATE["classes"]  # type: ignore[assignment]
+    if operation not in ("delete", "void") and not classes["per_line"] and _has_line_class(body):
+        return _fault("This company does not track a class on each transaction line, so a line cannot name a class")
     if operation in ("delete", "void"):
         answer = _remove(entity, str(body.get("Id", "")), str(body.get("SyncToken", "")), operation)
     elif body.get("Id"):
@@ -308,6 +324,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(*query(query_string.get("query", "")))
             if method == "GET" and parts[3] == "cdc":
                 return self._send(*cdc(query_string.get("entities", ""), query_string.get("changedSince", "")))
+            if method == "GET" and parts[3] == "preferences":
+                classes: dict[str, bool] = STATE["classes"]  # type: ignore[assignment]
+                return self._send(200, {"Preferences": {"AccountingInfoPrefs": {
+                    "ClassTrackingPerTxn": classes["per_txn"], "ClassTrackingPerTxnLine": classes["per_line"]}}})
             if method == "POST":
                 answer = create(parts[3], body, query_string.get("requestid", ""), query_string.get("operation", ""))
                 if _lose(parts[3]):
@@ -331,6 +351,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True})
         if path == "/_fake/lose":
             STATE["lose"].append({"path": str(body.get("path", "")), "count": int(body.get("count", 1))})  # type: ignore[attr-defined]
+            return self._send(200, {"ok": True})
+        if path == "/_fake/classes":
+            classes: dict[str, bool] = STATE["classes"]  # type: ignore[assignment]
+            classes.update({k: bool(body[k]) for k in ("per_txn", "per_line") if k in body})
             return self._send(200, {"ok": True})
         if path == "/_fake/seed" or path == "/_fake/change":
             for entity, rows in body.items():
