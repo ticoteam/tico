@@ -5,8 +5,9 @@ from datetime import date
 
 from backend.finance import reads as FR
 from backend.finance.core import watch as W
+from backend.finance.store import ledger as SL
 from backend.finance.store import tico as ST
-from backend.tests.test_finance_fixtures import OWNER, act, books, finance_template, store  # noqa: F401
+from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 
 def charge(i: str, payee: str, amount: int, day: str) -> W.Charge:
@@ -90,4 +91,43 @@ def test_a_card_held_by_an_archived_bot_or_one_with_no_turn_in_thirty_days_is_id
                           ("card_never", "never")):
             c.execute("INSERT INTO fin_cards(id, provider, holder, kind, currency, created_at, created_by) "
                       "VALUES(?, 'mercury', ?, 'standing', 'USD', ?, ?)", (card, "bot:" + bot, at, OWNER))
+        # A card someone already cancelled is not a problem to raise, whoever held it.
+        c.execute("INSERT INTO fin_cards(id, provider, holder, kind, currency, created_at, created_by, status) "
+                  "VALUES('card_gone', 'mercury', 'bot:coder', 'standing', 'USD', ?, ?, 'cancelled')", (at, OWNER))
         assert ST.idle_bot_cards(c, at, 30) == {"card_coder": "coder", "card_idle": "idle", "card_never": "never"}
+
+
+PRIOR_MONTHS = ("2026-08-05", "2026-09-05", "2026-10-05")
+WATCH_AT = "2026-11-01T00:00:00.000000Z"
+
+
+def _bot_card_charges(c, slug: str, card: str, days: tuple[str, ...], amount: int = 4_900) -> None:
+    """A card held by bot `slug`, on a checking account, with one posted card charge on each of `days`: the rows the
+    bank feed brings in for a card (fin_feed_txns with card_id)."""
+    money = SL.new_id()
+    book = SL.book(c)
+    c.execute("INSERT INTO fin_money_accounts(id, book_id, kind, name, provider, account_id, created_at, created_by) "
+              "VALUES(?,?,?,?,?,?,?,?)", (money, book.id, "bank", "Checking", "mercury", account(c, "1000"), AT, OWNER))  # type: ignore[union-attr]
+    c.execute("INSERT INTO fin_cards(id, provider, holder, kind, currency, created_at, created_by, money_account_id) "
+              "VALUES(?, 'mercury', ?, 'standing', ?, ?, ?, ?)",
+              (card, "bot:" + slug, book.base_currency, AT, OWNER, money))  # type: ignore[union-attr]
+    for day in days:
+        c.execute("INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, counterparty, "
+                  "status, created_at, created_by, card_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                  (SL.new_id(), money, f"txn-{SL.new_id()[:8]}", day, -amount, book.base_currency,  # type: ignore[union-attr]
+                   "ACME CLOUD", "new", AT, OWNER, card))
+
+
+def test_a_monthly_card_charge_on_an_archived_bots_card_is_an_unused_subscription_from_the_books(books):  # noqa: F811
+    with books.transaction() as c:
+        c.execute("INSERT INTO bots(slug, state) VALUES('quiet', 'archived')")
+        _bot_card_charges(c, "quiet", "card_quiet", PRIOR_MONTHS)
+        found = [f for f in FR.watch_findings(c, OWNER, WATCH_AT) if f["kind"] == "unused_subscription"]
+        assert [f["key"] for f in found] == ["unused_subscription:card_quiet:acme cloud"]
+
+
+def test_the_same_monthly_card_charge_on_an_active_bots_card_is_not_an_unused_subscription(books):  # noqa: F811
+    with books.transaction() as c:
+        c.execute("INSERT INTO bots(slug, state, last_turn_at) VALUES('busy', 'active', '2026-10-30T09:00:00.000000Z')")
+        _bot_card_charges(c, "busy", "card_busy", PRIOR_MONTHS)
+        assert [f for f in FR.watch_findings(c, OWNER, WATCH_AT) if f["kind"] == "unused_subscription"] == []

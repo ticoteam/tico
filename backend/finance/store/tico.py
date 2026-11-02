@@ -253,7 +253,8 @@ def bot_average_run(c: sqlite3.Connection, bot: str, since: str, most: int) -> s
 def idle_bot_cards(c: sqlite3.Connection, at: str, days: int) -> dict[str, str]:
     """Each card a bot holds whose bot is archived, or has run no turn since `days` before `at`: card id -> the bot's
     slug. A bot that never ran is idle; a holder with no bot row is not judged. The bot facts are the hub's (bots)."""
-    holders = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, holder FROM fin_cards WHERE holder LIKE 'bot:%'")}
+    holders = {str(r[0]): str(r[1]) for r in c.execute(
+        "SELECT id, holder FROM fin_cards WHERE holder LIKE 'bot:%' AND status <> 'cancelled'")}
     slugs = sorted({holder.split(":", 1)[1] for holder in holders.values()})
     if not slugs:
         return {}
