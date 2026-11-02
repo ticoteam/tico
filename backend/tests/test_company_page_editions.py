@@ -3,18 +3,21 @@ the ways back. Acme is the fictional company: Ana owns it, Ben is an admin, Ops 
 modules belong to other tracks and are stubbed by attribute, so these tests keep working once they land."""
 import json
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
 import pytest
 
-import backend.company_page as package
 from backend import assistant
 from backend import batch
+from backend import kpis as K
 from backend import sleep_idle
 from backend import updates
 from backend.auth import Identity
+from backend.company_page import disclosure as D
 from backend.company_page import editions as E
+from backend.company_page import readers
+from backend.company_page import release
 from backend.company_page import schedule as S
+from backend.company_page import stats as ST
 from backend.store import H, Problem
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
 from backend.tests.test_assistant import asked, assistant_turn
@@ -22,9 +25,11 @@ from backend.tests.test_org_rule_check import Judge
 from backend.tests.test_org_rules import as_bot, org, rule
 
 START, END = "2026-10-01", "2026-10-31"
-FACTS = {"stats": [{"label": "Revenue", "display": "$120k", "period": "October 2026"}], "company": "Acme"}
+FACTS = {"stats": [{"label": "Revenue", "display": "$120,000", "period": "October 2026"}], "company": "Acme"}
+NO_FIGURES = {"title": "A quiet month", "sections": {
+    "highlights": ["The team kept shipping."], "lowlights": [], "numbers": [], "asks": [], "next": ["We keep going."]}}
 GOOD = {"title": "October in review", "sections": {
-    "highlights": ["Revenue reached $120k."], "lowlights": [], "numbers": ["Revenue: $120k"],
+    "highlights": ["Revenue reached $120,000."], "lowlights": [], "numbers": ["Revenue: $120,000"],
     "asks": ["Intros to design partners, please."], "next": ["We keep shipping."]}}
 SECRET_RULE = "Never name a customer."
 
@@ -38,22 +43,9 @@ class Page:
 
     def __init__(self, api, monkeypatch):
         self.api, self.store = api, api.app.state.store
-        self.facts, self.answer, self.engine = dict(FACTS), GOOD, True
-        self.config, self.calls, self.rebuilds, self.notified = "config-1", [], [], []
-        monkeypatch.setattr(package, "stats", SimpleNamespace(
-            facts=lambda c, a, s, e: self.facts, board_config_hash=lambda c, a: self.config,
-            project=lambda c, a, at: {"stats": [{"label": "Revenue", "display": "$120k", "period": "October 2026",
-                                                 "chart": "number"}], "held": []}), raising=False)
+        self.answer, self.engine = GOOD, True
+        self.calls, self.rebuilds, self.notified = [], [], []
         self.refreshes, self.rebuilt_on = [], []
-
-        def rebuild(store_or_c, why):
-            self.rebuilds.append(why)
-            self.rebuilt_on.append("store" if hasattr(store_or_c, "transaction") else "transaction")
-            return {"id": "release-1", "empty": False, "failed": False}
-        monkeypatch.setattr(package, "release", SimpleNamespace(rebuild=rebuild, refresh=lambda st, at: self.refreshes.append(at)),
-                            raising=False)
-        monkeypatch.setattr(package, "readers", SimpleNamespace(notify_edition=lambda c, e: self.notified.append(e)),
-                            raising=False)
         monkeypatch.setattr(updates, "writer_for", lambda c, s, st: self.write if self.engine else None)
         at = H.now()
         with self.store.transaction() as c:
@@ -61,6 +53,30 @@ class Page:
             c.execute("INSERT INTO audiences(id,name,kind,due_rule,enabled,created_at,updated_at) "
                       "VALUES('board','Board','board','{\"business_day\": 5}',1,?,?)", (at, at))
             c.execute("INSERT INTO audience_sources(id,audience_id,author,created_at) VALUES('s1','board','ops',?)", (at,))
+            # Revenue is a KPI the board may show: the real projection and facts read it.
+            revenue = K.create(c, "human:ana", "human:ana", {"name": "Revenue", "unit": "$", "cadence": "monthly"})
+            K.add_reading(c, "human:ana", revenue, 120000, period_start=START, period_end=END)
+            D.set_rule(c, "human:ana", "board", "kpi", mode="show")
+            ST.create_stat(c, "human:ana", "kpi", revenue["id"], data_class="kpi", label="Revenue", chart="number")
+        real_rebuild = release.rebuild
+        real_notify = readers.notify_edition
+
+        def rebuild(store_or_c, why, at=None):
+            self.rebuilds.append(why)
+            self.rebuilt_on.append("store" if hasattr(store_or_c, "transaction") else "transaction")
+            return real_rebuild(store_or_c, why, at)
+
+        def notify(c, edition_id):
+            self.notified.append(edition_id)
+            return real_notify(c, edition_id)
+        real_refresh = release.refresh
+
+        def refresh(store, at):
+            self.refreshes.append(at)
+            return real_refresh(store, at)
+        monkeypatch.setattr(release, "rebuild", rebuild)
+        monkeypatch.setattr(release, "refresh", refresh)
+        monkeypatch.setattr(readers, "notify_edition", notify)
         self.note("ops", "weekly", "2026-10-12", "We shipped the board page.")
         settings = self.store.settings.test_identities
         settings["ana-token"] = Identity("human:ana", "owner", "ana@acme.example", via_token=True)
@@ -122,7 +138,8 @@ def test_a_draft_reads_only_the_instructions_the_facts_and_the_chosen_updates(pa
     system, user = page.calls[0]
     assert system == E.INSTRUCTIONS
     sent = json.loads(user)
-    assert set(sent) == {"period", "facts", "updates"} and sent["facts"] == FACTS
+    assert set(sent) == {"period", "facts", "updates"}
+    assert [(x["label"], x["display"]) for x in sent["facts"]["stats"]] == [("Revenue", "$120,000")]
     assert [u["text"] for u in sent["updates"]] == ["We shipped the board page."]
     assert set(sent["updates"][0]) == {"from", "day", "kind", "text"}
     full = get(page.api, f"editions/{edition['id']}")
@@ -185,8 +202,10 @@ def test_an_ask_keeps_its_id_through_an_edit_and_a_write_cannot_name_a_new_one(p
 def test_the_leak_check_flags_numbers_names_and_links_not_in_the_facts():
     def found(*texts):
         return E.leak_findings("October in review", plain_sections(*texts), FACTS, START, END, ["Board"])
-    assert found("Revenue reached $120k.", "The team shipped in October 2026.") == {}
-    assert found("Revenue reached $130k.") == {"numbers": ["130"], "names": [], "links": []}
+    assert found("Revenue reached $120,000.", "The team shipped in October 2026.") == {}
+    assert found("Revenue reached $130,000.") == {"numbers": ["130,000"], "names": [], "links": []}
+    # The dates in the facts don't make their digits allowed: a day's "1" is not a million.
+    assert found("Revenue hit $1m.")["numbers"] == ["1"]
     assert found("We signed Globex this month.")["names"] == ["Globex"]
     assert found("Globex renewed.")["names"] == ["Globex"]            # a name at a sentence's start is still a name
     assert found("Dana Reyes joined.")["names"] == ["Dana", "Reyes"]
@@ -211,7 +230,7 @@ def test_a_leak_holds_a_draft_and_a_clean_edit_by_a_person_releases_it(page):
     assert leak["outcome"] == "flagged" and "Globex" in leak["detail"]["names"] and "900" in leak["detail"]["numbers"]
     assert post(page.api, f"editions/{edition['id']}/approval", {}, expected=409)["error"]["code"] == "conflict"
     r = page.api.patch(f"/api/v2/editions/{edition['id']}", headers=headers(),
-                       json={"sections": plain_sections("Revenue reached $120k.")})
+                       json={"sections": plain_sections("Revenue reached $120,000.")})
     assert r.status_code == 200 and r.json()["status"] == "ready"
     # A person's own write gets the same check: their edit can put it back on hold.
     r = page.api.patch(f"/api/v2/editions/{edition['id']}", headers=headers(),
@@ -279,7 +298,7 @@ def test_the_approval_carries_the_whole_text_and_goes_to_the_named_approver(page
     found = get(page.api, f"approvals/{edition['approval']['id']}")
     payload = found["payload"]
     assert payload["url"] == f"tico:editions/{edition['id']}/1" and found["kind"] == "publish"
-    assert "Revenue reached $120k." in payload["text"] and "Intros to design partners, please." in payload["text"]
+    assert "Revenue reached $120,000." in payload["text"] and "Intros to design partners, please." in payload["text"]
     # Asking twice is one ask. Someone who left is replaced by the owner.
     assert page.ask(edition)["approval"]["id"] == edition["approval"]["id"]
     with page.store.transaction() as c:
@@ -377,13 +396,13 @@ def test_no_route_serves_a_bot_a_token_only_acts_where_it_may(page):
     post(page.api, f"{path}/approval", {}, token="ana-assistant", expected=403)
     post(page.api, f"{path}/retract", {"note": "x"}, token="ana-assistant", expected=403)
     assert page.api.patch(f"/api/v2/{path}", headers=headers("ana-assistant"),
-                          json={"sections": plain_sections("Revenue reached $120k.")}).status_code == 200
+                          json={"sections": plain_sections("Revenue reached $120,000.")}).status_code == 200
 
 
 def test_an_edit_after_approval_makes_publish_refuse(page):
     edition = page.approved()
     r = page.api.patch(f"/api/v2/editions/{edition['id']}", headers=headers(),
-                       json={"sections": plain_sections("Revenue reached $120k, reworded.")})
+                       json={"sections": plain_sections("Revenue reached $120,000, reworded.")})
     assert r.status_code == 200 and r.json()["status"] == "ready" and r.json()["approval"] is None
     assert page.publish(edition, expected=409)["error"]["code"] == "conflict"
     assert page.rebuilds == [] and page.notified == []
@@ -455,7 +474,8 @@ def test_publishing_while_closed_rebuilds_but_notifies_nobody_and_a_failed_notic
     with page.store.transaction() as c:
         c.execute("UPDATE company_page_settings SET transparency='private'")
     page.note("ops", "weekly", "2026-09-14", "September.")
-    monkeypatch.setattr(package.readers, "notify_edition", boom)
+    page.answer = NO_FIGURES         # September's facts have no revenue, so a figure would be a leak
+    monkeypatch.setattr(readers, "notify_edition", boom)
     second = post(page.api, "editions", {"audience_id": "board", "author": "ops", "period_start": "2026-09-01",
                                          "period_end": "2026-09-30"})
     second = page.ask(second)
@@ -471,7 +491,7 @@ def test_a_failed_rebuild_after_publishing_is_told_and_the_publication_stands(pa
         if failure == "raises":
             raise RuntimeError("disk full")
         return {"id": "release-2", "empty": True, "failed": True}
-    monkeypatch.setattr(package.release, "rebuild", boom)
+    monkeypatch.setattr(release, "rebuild", boom)
     done = page.publish(edition)
     assert done["status"] == "published" and done["release_failed"] is True
     with page.store.read() as c:
@@ -490,7 +510,7 @@ def test_a_retract_whose_rebuild_cannot_swap_changes_nothing(page, monkeypatch):
 
     def boom(store_or_c, why):
         raise RuntimeError("swap failed")
-    monkeypatch.setattr(package.release, "rebuild", boom)
+    monkeypatch.setattr(release, "rebuild", boom)
     with pytest.raises(RuntimeError):
         page.api.post(f"/api/v2/editions/{edition['id']}/retract", headers=headers(), json={"note": "Wrong."})
     assert page.rows("SELECT status FROM editions WHERE id=?", (edition["id"],)) == [{"status": "published"}]
@@ -541,7 +561,7 @@ def test_retract_discards_an_unpublished_edition_and_kills_its_approval(page):
 def test_a_correction_is_a_new_version_through_the_same_steps_and_replaces_the_old_only_when_published(page):
     old = page.published()
     path = f"editions/{old['id']}/correct"
-    body = {"note": "Fixed the figure.", "title": "October, corrected", "sections": plain_sections("Revenue reached $120k.")}
+    body = {"note": "Fixed the figure.", "title": "October, corrected", "sections": plain_sections("Revenue reached $120,000.")}
     post(page.api, path, {**body, "note": ""}, expected=422)
     new = post(page.api, path, body)
     assert new["version"] == 2 and new["supersedes_id"] == old["id"] and new["status"] == "ready"
@@ -571,7 +591,7 @@ def test_a_correction_is_a_new_version_through_the_same_steps_and_replaces_the_o
 def test_a_retracted_edition_comes_back_only_through_a_correction_and_a_new_approval(page):
     old = page.published()
     post(page.api, f"editions/{old['id']}/retract", {"note": "Hold on."})
-    body = {"note": "Back with the right figure.", "sections": plain_sections("Revenue reached $120k.")}
+    body = {"note": "Back with the right figure.", "sections": plain_sections("Revenue reached $120,000.")}
     new = page.ask(post(page.api, f"editions/{old['id']}/correct", body))
     page.decide(new["approval"]["id"])
     assert page.publish(new)["status"] == "published"
@@ -592,6 +612,7 @@ def test_the_stream_shows_published_only_newest_first_paged_with_a_display_name_
         c.execute("UPDATE bots SET display_name='Riley' WHERE slug='ops'")
     first = page.published()
     page.note("ops", "weekly", "2026-09-14", "September.")
+    page.answer = NO_FIGURES
     draft = post(page.api, "editions", {"audience_id": "board", "author": "ops", "period_start": "2026-09-01",
                                         "period_end": "2026-09-30"})
     with page.store.read() as c:
@@ -636,25 +657,33 @@ def test_a_stats_board_approval_is_recorded_only_once_decided_and_only_for_the_b
     assert asked_for["state"] == "pending" and post(page.api, path, {})["approval"] == asked_for["approval"]
     aid = asked_for["approval"]
     payload = get(page.api, f"approvals/{aid}")["payload"]
-    assert payload["url"] == "tico:stat-board/board/config-1" and "Revenue: $120k" in payload["text"]
+    with page.store.read() as c:
+        config = ST.board_config_hash(c, "board")
+    assert payload["url"] == f"tico:stat-board/board/{config}" and "Revenue: $120,000" in payload["text"]
     for token in ("ana-token", "ana-assistant", "ops-test", "ben-test"):
         page.decide(aid, token, expected=403)
     assert page.rows("SELECT * FROM stat_board_approvals") == []
     page.decide(aid)
     rows = page.rows("SELECT * FROM stat_board_approvals")
-    assert [(r["audience_id"], r["config_hash"], r["approved_by"]) for r in rows] == [("board", "config-1", "human:ana")]
+    assert [(r["audience_id"], r["config_hash"], r["approved_by"]) for r in rows] == [("board", config, "human:ana")]
     assert get(page.api, f"approvals/{aid}")["consumed_at"]
     assert get(page.api, path)["approval"]["state"] == "spent"
-    # A loosened rule or a new stat changes the hash: the yes given to the old board is not recorded for the new one.
-    page.config = "config-2"
+
+    # A changed rule changes the board's hash: the yes given to the old board is not recorded for the new one.
+    def change_board(mode):
+        with page.store.transaction() as c:
+            D.set_rule(c, "human:ana", "board", "kpi", mode=mode)
+    change_board("rounded")
     second = post(page.api, path, {})["approval"]
-    page.config = "config-3"
+    change_board("range")
     page.decide(second)
-    assert len(page.rows("SELECT * FROM stat_board_approvals")) == 1
+    # A tightening carries the standing approval forward (carry_board_approval), so rows for the first approval are
+    # expected; none may be for the ask made under the old board.
+    assert not [r for r in page.rows("SELECT * FROM stat_board_approvals") if r["approval_id"] == second]
     assert get(page.api, path)["approval"]["state"] == "stale"
     # An ask for a board that has since changed leaves the queue when the new one is asked for.
     third = post(page.api, path, {})["approval"]
-    page.config = "config-4"
+    change_board("hidden")
     fourth = post(page.api, path, {})["approval"]
     assert get(page.api, f"approvals/{third}")["decision"] == "withdrawn" and fourth != third
 
@@ -771,7 +800,7 @@ def test_what_the_audiences_module_writes_is_what_the_schedule_reads(page):
             assert S.next_due(audiences.get(c, ident), after, ZONE) == due, ident
 
 
-def test_the_stats_refresh_once_a_day_and_never_while_closed(page):
+def test_the_stats_refresh_once_a_day_and_never_while_closed(page, monkeypatch):
     at = local(2026, 11, 20, 9)
     S.tick(page.store, at)
     S.tick(page.store, at + timedelta(hours=2))
@@ -782,15 +811,16 @@ def test_the_stats_refresh_once_a_day_and_never_while_closed(page):
     assert S.start(page.store, next_day) is False
     # A failing refresh waits for tomorrow, and doesn't stop the drafts.
     page.note("ops", "weekly", "2026-11-03", "November.")
+    page.answer = NO_FIGURES
 
     def boom(store, when):
         raise RuntimeError("render failed")
-    package.release.refresh = boom
+    monkeypatch.setattr(release, "refresh", boom)
     assert [d["status"] for d in S.tick(page.store, local(2026, 12, 7))] == ["ready"]
     assert S.start(page.store, local(2026, 12, 7)) is False
     with page.store.transaction() as c:
         c.execute("UPDATE company_page_settings SET transparency='closed'")
-    package.release.refresh = lambda store, when: page.refreshes.append(when)
+    monkeypatch.setattr(release, "refresh", lambda store, when: page.refreshes.append(when))
     S.tick(page.store, local(2026, 12, 8))
     assert len(page.refreshes) == 2 and S.start(page.store, local(2026, 12, 8)) is False
 

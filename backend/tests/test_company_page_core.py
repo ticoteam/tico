@@ -2,16 +2,16 @@
 way a real number could get out: a missing rule, a raw Finance field, a clock that starts in the wrong place, a replaced
 reading, a value worked out from what is shown, or a bot's hand on the switch."""
 import json
-import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest import mock
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from backend import company_page, hubdb as H, kpis as K
 from backend.auth import Identity
-from backend.company_page import audiences as A, disclosure as D, settings as S, stats as ST
+from backend.company_page import audiences as A, disclosure as D, release, render, settings as S, stats as ST
 from backend.finance import actions as FA, reads as FR
 from backend.store import Problem
 from backend.tests.test_api import api, headers  # noqa: F401
@@ -23,24 +23,16 @@ POINT_KEYS = {"period", "value", "display"}
 
 @pytest.fixture(autouse=True)
 def rebuilds(monkeypatch):
-    """The release module is another part of the build: here it records that it was called, and when, within the step."""
+    """Records each release rebuild with the transparency it saw, within the step. The real module runs: a stub in
+    sys.modules would be bound for good by whichever module imported the release or schedule module first."""
     calls = []
-    fake = SimpleNamespace(rebuild=lambda c, reason: calls.append((reason, S.get(c)["transparency"])))
-    monkeypatch.setattr(company_page, "release", fake, raising=False)
-    monkeypatch.setitem(sys.modules, "backend.company_page.release", fake)
+    real = release.rebuild
+
+    def spy(c, reason, at=None):
+        calls.append((reason, S.get(c)["transparency"]))
+        return real(c, reason, at)
+    monkeypatch.setattr(release, "rebuild", spy)
     return calls
-
-
-@pytest.fixture(autouse=True)
-def schedule(monkeypatch):
-    """Another part of the build too. Midnight in the company's zone is the next day in UTC, so a route that printed the
-    UTC date would be a day out."""
-    def next_due(audience, after, zone):
-        return datetime(2026, 12, 8, 8, tzinfo=timezone.utc)
-    fake = SimpleNamespace(company_zone=lambda: ZoneInfo("America/Los_Angeles"), next_due=next_due)
-    monkeypatch.setattr(company_page, "schedule", fake, raising=False)
-    monkeypatch.setitem(sys.modules, "backend.company_page.schedule", fake)
-    return fake
 
 
 def make_kpi(c, name="Signups", unit="", cadence="monthly"):
@@ -837,18 +829,20 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
 
     # The next due day: only for an audience the schedule would write for, as the day it is in the company's zone.
     def dues():
-        return {a["id"]: a["next_due"] for a in call(api, "GET", "audiences")["audiences"]}
+        # Frozen on a Monday, 2 November 2026, so the business days below are fixed.
+        with mock.patch.object(H, "now", return_value="2026-11-02T12:00:00.000000Z"):
+            return {a["id"]: a["next_due"] for a in call(api, "GET", "audiences")["audiences"]}
     call(api, "PATCH", "audiences/board", {"enabled": True})
     assert dues()["board"] is None                                     # no sources
     board_source = call(api, "POST", "audiences/board/sources", {"author": "company"})
     assert dues()["board"] is None                                     # the page is Closed
     call(api, "PATCH", "company-page", {"transparency": "private"})
-    assert dues()["board"] == "2026-12-08" and dues()["investors"] is None
+    assert dues()["board"] == "2026-11-06" and dues()["investors"] is None
     call(api, "PATCH", "audiences/public", {"enabled": True})
     call(api, "POST", "audiences/public/sources", {"author": "company"})
     assert dues()["public"] is None                                    # no readers until it is Open
     call(api, "PATCH", "company-page", {"transparency": "open"})
-    assert dues()["public"] == "2026-12-08"
+    assert dues()["public"] == "2026-11-30"  # October ends the 31st; 30 days after it
     call(api, "PATCH", "company-page", {"transparency": "closed"})
     call(api, "PATCH", "audiences/public", {"enabled": False})
     call(api, "DELETE", f"audiences/board/sources/{board_source['id']}")
@@ -864,17 +858,14 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
 
     # The preview renders the audience's view, on an opaque origin.
     seen = {}
+    real_page = render.page
 
     def page(view):
         seen.update(view)
-        return "<!doctype html><title>Preview</title>"
-    render = SimpleNamespace(page=page)
-    editions = SimpleNamespace(stream=lambda c, ids: [])
-    for name, fake in (("render", render), ("editions", editions)):
-        monkeypatch.setattr(company_page, name, fake, raising=False)
-        monkeypatch.setitem(sys.modules, "backend.company_page." + name, fake)
+        return real_page(view)
+    monkeypatch.setattr(render, "page", page)
     r = api.get("/api/v2/company-page/preview?audience=investors", headers=headers("ben-test"))
-    assert r.status_code == 200 and r.text.endswith("Preview</title>")
+    assert r.status_code == 200 and r.text.startswith("<!doctype html>")
     assert "sandbox" in r.headers["content-security-policy"] and "no-store" in r.headers["cache-control"]
     assert seen["audience"] == {"kind": "investors", "name": "Investors"}
     assert api.get("/api/v2/company-page/preview?audience=nobody", headers=headers()).status_code == 404
