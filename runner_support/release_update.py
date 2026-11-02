@@ -109,12 +109,13 @@ def pip_install(root, old, new, run=subprocess.run):
 
 def prepare_binary(root, run=subprocess.run):
     """The checkout's Rust runner, ready before the restart, so a release with none fails here and goes back. A new
-    process: this one still has the old code in memory. Returns an error or "". A tree from before the shim
-    (runner_support/engine.py without `prepare`) is left to get its own."""
-    if not (Path(root) / "runner_support" / "engine.py").is_file():
+    process: this one still has the old code in memory. Returns an error or "". A release from before
+    runner_support/ (going back to one) keeps its engine in runner/; a tree with neither is left to get its own."""
+    module = next((name for name in ("runner_support", "runner") if (Path(root) / name / "engine.py").is_file()), None)
+    if not module:
         return ""
     try:
-        done = run([sys.executable, "-m", "runner_support.engine", "prepare"], cwd=str(root), capture_output=True, text=True,
+        done = run([sys.executable, "-m", f"{module}.engine", "prepare"], cwd=str(root), capture_output=True, text=True,
                    timeout=2400, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError) as exc:
         return f"could not get the Rust runner ready ({type(exc).__name__})"

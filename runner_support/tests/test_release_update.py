@@ -161,9 +161,14 @@ def test_the_prepare_step_is_a_new_process_of_the_new_tree(tmp_path, monkeypatch
         seen.append((cmd, kw["cwd"]))
         return subprocess.CompletedProcess(cmd, 1, "", "Tico runner: no Rust runner for this checkout: cargo is not on PATH\n")
     assert ru.prepare_binary(tmp_path, run=run) == "" and not seen      # a tree from before the shim gets its own
+    monkeypatch.setattr(ru.sys, "executable", "/opt/env-python/bin/python3")
+    # Going back to a release from before runner_support/: its engine is still runner/engine.py.
+    (tmp_path / "runner").mkdir()
+    (tmp_path / "runner" / "engine.py").write_text("")
+    assert "cargo is not on PATH" in ru.prepare_binary(tmp_path, run=run)
+    assert seen.pop() == (["/opt/env-python/bin/python3", "-m", "runner.engine", "prepare"], str(tmp_path))
     (tmp_path / "runner_support").mkdir()
     (tmp_path / "runner_support" / "engine.py").write_text("")
-    monkeypatch.setattr(ru.sys, "executable", "/opt/env-python/bin/python3")
     assert "cargo is not on PATH" in ru.prepare_binary(tmp_path, run=run)
     assert seen == [(["/opt/env-python/bin/python3", "-m", "runner_support.engine", "prepare"], str(tmp_path))]
 
