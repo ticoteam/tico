@@ -666,20 +666,29 @@ def facts(c, audience_id, period_start, period_end, at=None):
 
 
 # ------------------------------------------------------------------------------------------------- the board's approval
-def board_config_hash(c, audience_id):
-    """What an approval of the stats board covers: which stats this audience sees, in which form and order, with what
-    words, under which disclosure revision. Values aren't in it: they refresh daily with no one asked. A KPI's unit and
-    definition version are, because a bot can change those and the number then means something else."""
+def board_terms(c, audience_id):
+    """Each stat the board's approval covers, in the board's order: what it is and how this audience gets it. Hidden stats
+    are not here. The approval's hash and the text an approver reads are both made from this list, so they can't differ."""
     rules = D.all_rules(c, audience_id)
-    stats = []
+    terms = []
     for row in _board(c):
-        if _rule(rules, row)["mode"] == "hidden":
+        rule = _rule(rules, row)
+        if rule["mode"] == "hidden":
             continue
         record = K.kpi(c, row["ref_id"]) if row["source_kind"] == "kpi" else None
-        stats.append({"id": row["id"], "source": row["source_kind"], "ref": row["ref_id"], "class": row["data_class"],
+        terms.append({"id": row["id"], "source": row["source_kind"], "ref": row["ref_id"], "class": row["data_class"],
                       "label": row.get("label") or "", "definition": row.get("definition") or "", "chart": row["chart"],
-                      "unit": (record or {}).get("unit"), "version": (record or {}).get("definition_version")})
-    body = {"audience": audience_id, "revision": D.current_revision(c, audience_id), "stats": stats}
+                      "unit": (record or {}).get("unit"), "version": (record or {}).get("definition_version"),
+                      "mode": rule["mode"], "lag_days": rule["lag_days"], "rounding": rule["rounding"]})
+    return terms
+
+
+def board_config_hash(c, audience_id):
+    """What an approval of the stats board covers: which stats this audience sees, in which form and order, with what
+    words, how each is delayed or rounded, under which disclosure revision. Values aren't in it: they refresh daily with no
+    one asked. A KPI's unit and definition version are, because a bot can change those and the number then means
+    something else."""
+    body = {"audience": audience_id, "revision": D.current_revision(c, audience_id), "stats": board_terms(c, audience_id)}
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
 
 

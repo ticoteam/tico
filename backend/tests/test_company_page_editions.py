@@ -734,6 +734,21 @@ def test_a_declined_board_writes_nothing(page):
     assert page.rows("SELECT * FROM stat_board_approvals") == []
 
 
+def test_a_board_approval_names_a_delayed_stat_even_when_nothing_is_shown_and_a_new_delay_asks_again(page):
+    """A delayed stat with nothing eligible yet isn't on the board, so the board reads as nothing shown. The approval still
+    names the stat with its delay, so a yes to that can't approve a delay the approver never saw. A changed delay is a new ask."""
+    with page.store.transaction() as c:
+        D.set_rule(c, "human:ana", "board", "kpi", mode="delayed", lag_days=400)
+    aid = post(page.api, "audiences/board/stats/approval", {})["approval"]
+    text = get(page.api, f"approvals/{aid}")["payload"]["text"]
+    assert "Revenue" in text and "400 day lag" in text
+    with page.store.transaction() as c:
+        D.set_rule(c, "human:ana", "board", "kpi", mode="delayed", lag_days=30)
+    again = post(page.api, "audiences/board/stats/approval", {})["approval"]
+    assert again != aid and get(page.api, f"approvals/{aid}")["decision"] == "withdrawn"
+    assert "30 day lag" in get(page.api, f"approvals/{again}")["payload"]["text"]
+
+
 # ----------------------------------------------------------------------------- schedule
 ZONE = "America/Los_Angeles"
 
