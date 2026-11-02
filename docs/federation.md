@@ -116,6 +116,9 @@ the thread. A paused or revoked peering lists nothing: its messages wait for it.
   theirs: any title on a copy, and a sub-thread's title on a shared thread (the first line of its parent message). A
   webhook names a remote author by install only. Message text never goes to either. A sub-thread is not shared by itself
   (`sub_thread`): it goes with its thread. Only the home can add a company, so a replica can't pass a thread on.
+- **Revoked.** When the other company revokes a peering, this install learns it from HQ's list of revoked peerings, read
+  after the working list, once a minute. Nothing more is sent to that company. Its peering shows as Revoked, and a thread
+  shared with it no longer has its company name. An older HQ lists revoked peerings in the working list instead.
 - **Order.** The home numbers each shared thread's messages (`home_seq`). A replica applies them in that order. An edit
   or delete for a message the replica does not have yet waits for a catch-up, and is never made into a message: only the
   first send of a message (`first`) can create one, whatever its revision. A catch-up asks the home for everything after

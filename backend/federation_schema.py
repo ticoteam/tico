@@ -13,6 +13,8 @@ like backend/strategy.py: an older release never reads these tables.
   message is for a member only when it was created after the member joined: `joined_message_seq` is the newest core
   message when the member joined, so eligibility is fixed at creation, not by when the home numbers it.
   `catch_up_after` is how far a catch-up the home is still paging for that member has got (NULL when none is).
+- `federation_state.history_through`: HQ's time of the newest revoked peering a finished read of its history saw;
+  `history_cursor` and `history_top` hold a read that was cut short.
 - `federation_threads.subtree_seq`: how far the sub-threads of a shared thread have been looked at for deliveries.
 - `federation_messages.sent_revision`: the newest revision of the message HQ took from this install (a tombstone is sent
   only when an earlier revision may have gone out).
@@ -94,6 +96,8 @@ INSERT OR IGNORE INTO federation_state(singleton) VALUES (1);
 # Columns added after their table first existed: a database created before them gets them on open.
 COLUMNS = (("federation_peerings", "peer_company", "TEXT NOT NULL DEFAULT ''"), ("federation_peerings", "approved_by", "TEXT"),
            ("federation_state", "company", "TEXT NOT NULL DEFAULT ''"),
+           ("federation_state", "history_through", "REAL"), ("federation_state", "history_cursor", "TEXT"),
+           ("federation_state", "history_top", "REAL"),
            ("federation_threads", "subtree_seq", "INTEGER NOT NULL DEFAULT 0"),
            ("federation_members", "joined_message_seq", "INTEGER NOT NULL DEFAULT 0"),
            ("federation_members", "catch_up_after", "INTEGER"),
