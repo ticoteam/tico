@@ -42,3 +42,18 @@ def test_cash_for_one_money_account_counts_only_that_account(books):
         with pytest.raises(FinanceError) as missing:
             FR.metric(c, OWNER, "cash", account_id="ma_none", at=AT)
         assert missing.value.code == NOT_FOUND
+
+
+def test_runway_is_withheld_for_a_slice_and_burn_says_it_is_scoped(books):
+    """§7.5: company cash over one team's burn is no company runway, so a slice gets no runway and its burn says it is
+    scoped; the owner's company runway carries no scoped flag."""
+    with books.transaction() as c:
+        spend(c, "5100", 1_000, team="sales", day="2026-08-10")
+        for grant in ({"subject": "human:ben", "what": "expenses", "whose": "team", "whose_team": "sales"},
+                      {"subject": "human:ben", "what": "bs_lines", "account_ids": [account(c, "1000")]}):
+            assert act(c, OWNER, "view_grant", grant).status == "committed"
+        ben = FR.metric(c, "human:ben", "runway_months", at=AT)
+        owner = FR.metric(c, OWNER, "runway_months", at=AT)
+        assert ben["scoped"] is True and ben["value"] is None
+        assert owner["scoped"] is False and owner["value"] is not None
+        assert FR.metric(c, "human:ben", "burn", start="2026-08-01", end="2026-08-31", at=AT)["scoped"] is True

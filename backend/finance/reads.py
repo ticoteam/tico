@@ -1176,11 +1176,12 @@ def _cash(s: _Seen, money_id: str | None = None) -> tuple[int, list[Row], list[s
     return sum(sums.get(g, 0) for g in by_gl), per, [str(r["id"]) for r in rows]
 
 
-def _net_burn(c: sqlite3.Connection, viewer: str, a: date, z: date, at: str | None) -> int:
+def _net_burn(c: sqlite3.Connection, viewer: str, a: date, z: date, at: str | None) -> tuple[int, bool]:
     """Cash burn over a window: cash-basis expenses minus cash-basis income the viewer sees (financing, being on the
-    balance sheet, never counts)."""
+    balance sheet, never counts), and whether private lines (payroll) were left out of it."""
     found = pnl(c, viewer, a.isoformat(), z.isoformat(), "year", "cash", at)
-    return sum(cast(list[int], found["expense"])) - sum(cast(list[int], found["income"]))
+    burn = sum(cast(list[int], found["expense"])) - sum(cast(list[int], found["income"]))
+    return burn, bool(found["excluded"])
 
 
 def _full_months(today: date, n: int) -> tuple[date, date]:
@@ -1198,7 +1199,8 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
     """One number for a card, a goal or a bot (§7.2), cut to the viewer like every read, with `as_of` (when it was
     worked out) and, for numbers resting on bank data, `data_as_of` and `stale`. cash: the books' balance of the cash
     accounts the viewer sees (per account in `accounts`, or the one money account `account_id` names); burn: cash out minus cash in this month (or the window);
-    runway_months: cash over the average burn of the last 3 full months (null when nothing burns); revenue, spend: the
+    runway_months: cash over the average burn of the last 3 full months (null when nothing burns, or when the viewer sees
+    a slice rather than company expenses: `scoped`); burn and runway say `excluded` when payroll was left out; revenue, spend: the
     window (this month by default); budget_remaining / budget_pct_used: one budget; ap_due: open bills due within
     `days` (default 7, overdue included); ar_overdue: invoices at least `days` (default 1) late;
     uncategorized_count: settled rows waiting for a category (last 90 days); unreconciled_days: days since the
@@ -1230,11 +1232,12 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
         if name == "cash":
             return {**base, "value": total, "unit": "minor", "currency": currency, "accounts": per}
         a, z = _full_months(today, RUNWAY_MONTHS)
-        burn = _net_burn(c, viewer, a, z, at)
+        burn, excluded = _net_burn(c, viewer, a, z, at)
+        scoped = not s.view.company_expenses()    # company cash over a slice's burn is no company runway
         monthly = Decimal(burn) / RUNWAY_MONTHS
-        value = None if monthly <= 0 else str((Decimal(total) / monthly).quantize(Decimal("0.1")))
+        value = None if monthly <= 0 or scoped else str((Decimal(total) / monthly).quantize(Decimal("0.1")))
         return {**base, "value": value, "unit": "months", "cash": total, "monthly_burn": int(monthly),
-                "start": a.isoformat(), "end": z.isoformat()}
+                "start": a.isoformat(), "end": z.isoformat(), "excluded": excluded, "scoped": scoped}
     if name in ("ap_due", "ar_overdue"):
         kind = "bill" if name == "ap_due" else "invoice"
         if not tab_ap.sees_side(s.ctx, s.view, kind):
@@ -1266,8 +1269,9 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
         return {**base, "value": worst or 0, "unit": "days", "data_as_of": data_as_of, "stale": stale}
     a, z = _window(start, end, s.ctx)
     if name == "burn":
-        return {**base, "value": _net_burn(c, viewer, a, z, at), "unit": "minor", "currency": currency,
-                "start": a.isoformat(), "end": z.isoformat()}
+        burn, excluded = _net_burn(c, viewer, a, z, at)
+        return {**base, "value": burn, "unit": "minor", "currency": currency, "start": a.isoformat(),
+                "end": z.isoformat(), "excluded": excluded, "scoped": not s.view.company_expenses()}
     if name == "revenue":
         found = pnl(c, viewer, a.isoformat(), z.isoformat(), "year", "accrual", at)
         return {**base, "value": sum(cast(list[int], found["income"])), "unit": "minor", "currency": currency,
