@@ -7,7 +7,8 @@
 # and a desktop failure leaves the server release in place. Tico Recorder (recorder.yml) follows the same way, with
 # its own updater manifest (recorder-latest.json). See docs/releasing.md.
 # Linux jobs run on RunsOn in Tico's own AWS account, on-demand rather than Spot: an interruption must never leave
-# a release half-published. macOS builds stay on GitHub-hosted runners.
+# a release half-published. The two jobs between the tag and the published release (validated, release) run on
+# GitHub-hosted Ubuntu, which starts faster and is never interrupted either. macOS builds stay on GitHub-hosted runners.
 name: Release
 
 on:
@@ -35,7 +36,9 @@ jobs:
   # run built. A manual rebuild may reuse an already published release; an unpublished tag still needs its validation.
   # The job always runs (never skipped), because a skipped job would also skip every job after it.
   validated:
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    # GitHub-hosted (free for this public repo, never interrupted): starts in seconds where a RunsOn VM boots for ~25 s,
+    # and these two jobs are on the path from the tag to the published release.
+    runs-on: ubuntu-24.04
     permissions:
       actions: read   # lists Release validation runs
       contents: read  # verifies an existing release before allowing a manual rebuild
@@ -90,7 +93,7 @@ jobs:
   release:
     needs: validated
     if: needs.validated.outputs.published != 'true'
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
+    runs-on: ubuntu-24.04
     permissions:
       actions: read     # downloads the validation run's binaries and image digests
       contents: write   # creates the GitHub release
@@ -137,8 +140,9 @@ jobs:
       # (v1.2.0-rc1) never moves latest; a dry run only prints the manifests it would push.
       - name: Point the version tags at the validated images
         run: |
-          for image in tico tico-runner tico-updater; do
-            sources=()
+          # The three images at once, each in its own subshell; any failure fails the step.
+          point() {
+            local image=$1 sources=() platform digest built tags flags attempt
             for platform in amd64 arm64; do
               digest="$(cat "$RUNNER_TEMP/images/image-$image-$platform/$image-$platform")"
               [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad $image-$platform digest"; exit 1; }
@@ -153,11 +157,16 @@ jobs:
             [ "$DRY_RUN" = true ] && flags+=(--dry-run)
             # The registry sometimes drops the manifest upload; retry instead of failing the release.
             for attempt in 1 2 3 4; do
-              timeout 120 docker buildx imagetools create "${flags[@]}" "${tags[@]}" "${sources[@]}" && continue 2
-              echo "imagetools create failed (attempt $attempt); retrying"; sleep $((attempt * 5))
+              timeout 120 docker buildx imagetools create "${flags[@]}" "${tags[@]}" "${sources[@]}" && return 0
+              echo "$image: imagetools create failed (attempt $attempt); retrying"; sleep $((attempt * 5))
             done
-            exit 1
-          done
+            return 1
+          }
+          pids=()
+          for image in tico tico-runner tico-updater; do (point "$image") & pids+=($!); done
+          failed=0
+          for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
+          exit $failed
       - name: Publish the release
         run: |
           files=(dist/install/install.sh dist/install/install-wsl.ps1 "dist/install/tico-bundle-$VERSION.tar.gz" dist/install/SHA256SUMS
