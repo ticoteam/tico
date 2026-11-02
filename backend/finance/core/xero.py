@@ -251,10 +251,13 @@ def document_record(j: Mapping[str, Any], system: System, credit: bool = False) 
                                      rounding=True))
     except _Unavailable as e:
         return M.Refused(ext, str(e))
+    # its control account is Xero's own debtors (receivable) or creditors (payable) system account, which the books mirror
+    # (spec 10: their books are the source of truth), not the native chart's line
+    control = system("DEBTORS" if str(j.get("Type") or "").startswith("ACCREC") else "CREDITORS")
     return M.Document(ext, party=_contact(j), number=str(j.get("CreditNoteNumber" if credit else "InvoiceNumber") or ""),
                       day=day(j, "Date"), due=day(j, "DueDate") if j.get("DueDate") else "", total=total,
                       lines=tuple(lines), memo=str(j.get("Reference") or ""), tax=tax,
-                      currency=str(j.get("CurrencyCode") or ""))
+                      currency=str(j.get("CurrencyCode") or ""), control=control)
 
 
 def credit_application(j: Mapping[str, Any]) -> M.Settlement | M.Ext | None:
