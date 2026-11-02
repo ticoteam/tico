@@ -2727,14 +2727,19 @@ OLD_SERVER_MEDIA = ("This Tico server takes video and audio files up to 25 MB. A
 
 # ----------------------------------------------------------------------------- cards and pins (docs/overview.md)
 CARD_TEMPLATES = ("tasks_by_status", "done_per_week", "needs_you", "spend", "kpi", "automation_runs", "latest_pages",
-                  "needs_attention", "unread_threads", "my_tasks", "updates")
-PLACE = _s("Where: dashboard, team:<group id>, bot:<slug> (a sidebar), task:<id>, or person:me (My dashboard, the "
-           "person's own landing page)")
+                  "needs_attention", "unread_threads", "my_tasks", "updates", "growth_number", "growth_funnel",
+                  "growth_channels", "growth_retention", "growth_board")
+PLACE = _s("Where: dashboard, growth (the Growth page), team:<group id>, bot:<slug> (a sidebar), task:<id>, or person:me "
+           "(My dashboard, the person's own landing page)")
 CARD_SETTINGS = {"team": _s("A group id; empty for the whole company"),
                  "weeks": {"type": "integer", "description": "Done per week: weeks shown, 4 to 26"},
                  "count": {"type": "integer", "description": "Latest pages, Unread threads, My tasks, Updates: how many, "
-                           "1 to 10"},
-                 "kpi": _s("KPI: the KPI id")}
+                           "1 to 10; Growth channels 1 to 20; Growth board 1 to 5 per lane"},
+                 "kpi": _s("KPI: the KPI id"),
+                 "metric": _s("Growth number: new_customers, spend, bot_cost, cac, revenue_month, margin_pct, ltv, "
+                              "ltv_cac, payback_months, kept_d30, kept_d90 or kept_d180"),
+                 "channel": _s("Growth number: a channel slug; empty for all channels"),
+                 "months": {"type": "integer", "description": "Growth retention: cohort months shown, 3 to 12"}}
 SIZE = _s("small, medium or large", enum=["small", "medium", "large"])
 
 
@@ -2750,7 +2755,8 @@ def card_list(api, args):
 
 
 @tool("hub_card_add", "Add one of Tico's built-in cards, pinned at a place you may arrange. A bot pins to its own "
-      "sidebar or its task; the Dashboard and team pages are a person's (BotOps: the person who asked).",
+      "sidebar or its task; the Dashboard and team pages are a person's (BotOps: the person who asked). Growth cards go "
+      "on the Growth page only, which the owner, admins and bots arrange.",
       {"template": _s("The card", enum=list(CARD_TEMPLATES)), "title": _s("Its heading; empty uses the card's name"),
        "place": PLACE, "size": SIZE, **CARD_SETTINGS}, required=("template",), writes=True)
 def card_add(api, args):
