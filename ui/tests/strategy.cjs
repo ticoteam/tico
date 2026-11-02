@@ -216,7 +216,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.equal(await page.locator('li[data-bet="b-offices"] [data-bet-health]').getAttribute('data-bet-health'), 'red');
       assert.equal(await page.locator('li[data-bet="b-weekly"] .strat-pill').innerText(), 'Proposed');
       assert.equal(await page.locator('.strat-retired li[data-bet="b-old"]').count(), 1, 'retired bets sit apart');
-      assert.deepEqual(await sectionTitles(page), ['WHO WE SERVE', 'WHAT WE SELL, AND FOR HOW MUCH', "WHAT WE KNOW THAT OTHERS DON'T", "WHAT WE WON'T DO", 'BRAND']);
+      assert.deepEqual(await sectionTitles(page), ['WHO WE SERVE', 'WHAT WE SELL, AND FOR HOW MUCH', "WHAT WE KNOW THAT OTHERS DON'T", 'HOW WE SELL', "WHAT WE WON'T DO", 'BRAND']);
       assert.equal(await page.locator('[data-section="serve"] .strat-md strong').innerText(), 'small offices', 'sections are markdown');
       assert.equal(await page.locator('[data-bet-add]').getAttribute('aria-label'), 'Add Bet');
       assert.equal(await page.locator('[data-bet-add]').innerText(), '+ Bet');
@@ -243,7 +243,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       await page.locator('[data-section-new] button[type="submit"]').click();
       await page.locator('[data-section="sales-channels"]').waitFor();
       assert.deepEqual(sent.filter(x => x[1] === '/draft').at(-1)[2], {sections: {extra: {'sales-channels': {title: 'Sales channels', body: 'Property managers, then word of mouth.'}}}, revision: 9});
-      assert.deepEqual((await sectionTitles(page)).slice(3), ["WHAT WE WON'T DO", 'BRAND', 'SALES CHANNELS']);
+      assert.deepEqual((await sectionTitles(page)).slice(4), ["WHAT WE WON'T DO", 'BRAND', 'SALES CHANNELS']);
       await page.locator('[data-section="sales-channels"] [data-section-edit]').click();
       await page.locator('[data-section-form] input[name="title"]').fill('Channels we use');
       await page.locator('[data-section-form] button[type="submit"]').click();

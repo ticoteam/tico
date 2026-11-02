@@ -265,6 +265,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 /* KPI views: Tree · Loops · Journey */
 .gkv{display:flex;flex-direction:column;gap:12px;margin-top:16px}
 .gkv[hidden]{display:none}
+.gkv-hit{outline:2px solid var(--accent);outline-offset:2px}
 .gkv-h{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .gkv-h .strat-k{margin:0}
 .gkv-h .spacer{flex:1}

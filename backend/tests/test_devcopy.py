@@ -111,8 +111,12 @@ def test_every_table_is_classified(tmp_path):
     with closing(sqlite3.connect(store.settings.db_path)) as c:
         names = devcopy.data_tables(c)
         virtual = {t for t in devcopy.tables(c) if t not in names}
+    dropped = set()
     for source in Path(devcopy.__file__).parent.glob("*.py"):         # tables a module creates when it starts
-        names |= set(re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+) ?\(", source.read_text())) - virtual
+        text = source.read_text()
+        names |= set(re.findall(r"CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+) ?\(", text)) - virtual
+        dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", text))     # and a migration script drops again
+    names -= dropped
     groups = (devcopy.KEEP, set(devcopy.HISTORY), set(devcopy.EMPTY))
     assert {t: n for t in names if (n := sum(t in g for g in groups)) != 1} == {}
 

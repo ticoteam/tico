@@ -892,8 +892,9 @@ CREATE TABLE IF NOT EXISTS browser_exit_marks (boot TEXT PRIMARY KEY, seq INTEGE
 """
 
 
-# Growth (backend/growth.py) and the brand and go-to-market pages (backend/brand_gtm.py). Brand and GTM each keep
-# one draft row (id 1, with a revision so two editors never overwrite each other) and numbered published versions.
+# Growth (backend/growth.py) and the brand page (backend/brand.py). The brand keeps one draft row (id 1, with a revision
+# so two editors never overwrite each other) and numbered published versions. The idea and go-to-market tables made
+# here are dropped by GROWTH_RETHINK_SCHEMA.
 # A cohort with no channel is the Unknown row: SQLite treats NULLs as distinct in UNIQUE, so the one-row-per-month
 # rule is an expression index over coalesce(channel_id, '').
 GROWTH_SCHEMA = """
@@ -951,11 +952,9 @@ ALTER TABLE kpis ADD COLUMN loop_step INTEGER;
 """
 
 
-# Growth segments (backend/growth.py): who the company sells to, each a market `segment` entity with its growth
-# fields. Serving mirrors `company/self` `operates_in` the segment and next its `next: true` property
-# (backend/strategy_market.py keeps both in step). Channels and ideas name the segments they reach; a cohort may be one
-# segment's share of a channel's month, so the one-row rule takes the segment in. Segments the graph already marks Us
-# or Next start as serving or next.
+# Growth segments, and the segment a cohort may be a share of. Each segment is a market `segment` entity with its growth
+# fields: serving mirrors `company/self` `operates_in` the segment and next its `next: true` property. The last
+# migration (GROWTH_RETHINK_SCHEMA) drops these tables and the cohort column.
 SEGMENTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS growth_segments (
   id TEXT PRIMARY KEY, segment_id TEXT NOT NULL UNIQUE,
@@ -986,6 +985,18 @@ INSERT OR IGNORE INTO growth_segments (id, segment_id, status, created_at, updat
     OR (json_valid(e.properties) AND json_extract(e.properties,'$.next')));
 """
 
+# The growth rethink (backend/marketing_tasks.py, backend/strategy.py, backend/growth.py): the idea and go-to-market
+# tables go once migrate_growth_rethink has moved their content. Children first.
+GROWTH_RETHINK_SCHEMA = """
+DROP TABLE IF EXISTS growth_idea_channels;
+DROP TABLE IF EXISTS growth_idea_segments;
+DROP TABLE IF EXISTS growth_channel_segments;
+DROP TABLE IF EXISTS growth_ideas;
+DROP TABLE IF EXISTS growth_segments;
+DROP TABLE IF EXISTS gtm_versions;
+DROP TABLE IF EXISTS gtm_drafts;
+"""
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -1007,7 +1018,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
               LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
               POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA,
-              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA, SEGMENTS_SCHEMA, COMPANY_PAGE_SCHEMA]
+              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA, SEGMENTS_SCHEMA, COMPANY_PAGE_SCHEMA,
+              GROWTH_RETHINK_SCHEMA]
 
 
 class Refused(Exception):
@@ -1356,6 +1368,103 @@ def _keep_old_strategy_tables(conn):
         raise
 
 
+def _json_object(text):
+    try:
+        value = json.loads(text or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _gtm_markdown(body):
+    """The go-to-market page as plain markdown: its motion, buyer and playbooks, one bullet per fact."""
+    lines = []
+    motion = body.get("motion") or {}
+    if motion.get("primary"):
+        primary = str(motion["primary"]).replace("_", " ")
+        second = str(motion.get("secondary") or "").replace("_", " ")
+        lines.append(f"- Motion: {primary}" + (f", then {second}" if second else ""))
+    buyer = body.get("buyer") or {}
+    for label, key in (("Who buys", "who_buys"), ("Who uses it", "who_uses"), ("Deal size", "deal_size"),
+                       ("Sales cycle", "cycle")):
+        if str(buyer.get(key) or "").strip():
+            lines.append(f"- {label}: {str(buyer[key]).strip()}")
+    for item in buyer.get("objections") or []:
+        if str(item or "").strip():
+            lines.append(f"- Objection: {str(item).strip()}")
+    for item in body.get("playbooks") or []:
+        if str(item or "").strip():
+            lines.append(f"- Playbook: {str(item).strip()}")
+    return "\n".join(lines)
+
+
+def migrate_growth_rethink(conn):
+    """Move what the retired pages held into their new homes, then drop the tables (GROWTH_RETHINK_SCHEMA): a
+    marketing idea's notes into its task's body and its channels into `channel:<slug>` labels, the newest go-to-market
+    page into the strategy draft's How we sell when that is empty, go-to-market proposals deleted (a leftover ask for
+    one closes on the Strategy Bot's next sync, which finds nothing to decide), cohorts
+    without their segment split, and the verdict settings. The idea type takes the Marketing name once, unless the
+    team already has a type of that name. Each step reads what is there, so a file that never had a table takes the
+    same path as one that did, and a note already in a body is not added twice."""
+    from . import marketing_tasks as MT
+    found = _tables(conn)
+    stamp = now()
+    if "task_types" in found:
+        conn.execute("UPDATE task_types SET name=?, updated=? WHERE id=? AND name IN ('Idea', 'Growth idea') "
+                     "AND NOT EXISTS (SELECT 1 FROM task_types WHERE name=? AND id<>?)",
+                     (MT.TYPE_NAMES[0], stamp, MT.TYPE_ID, MT.TYPE_NAMES[0], MT.TYPE_ID))
+    if {"growth_ideas", "tasks"} <= found:
+        for task_id, hypothesis, prediction, result, learning in conn.execute(
+                "SELECT i.task_id, i.hypothesis, i.prediction, i.result, i.learning FROM growth_ideas i "
+                "JOIN tasks t ON t.id=i.task_id").fetchall():
+            body = conn.execute("SELECT body FROM tasks WHERE id=?", (task_id,)).fetchone()[0] or ""
+            # A text already in the body is not copied again: an idea filed with only a hypothesis had it as the body.
+            texts = [(label, str(text).strip()) for label, text in (
+                ("Hypothesis", hypothesis), ("Prediction", prediction), ("Result", result), ("Learning", learning))
+                if str(text or "").strip()]
+            missing = [f"{label}: {text}" for label, text in texts if text not in body]
+            if missing:
+                body = "\n\n".join(part for part in (body.strip(), "\n".join(missing)) if part)
+                conn.execute("UPDATE tasks SET body=? WHERE id=?", (body, task_id))
+    if {"growth_idea_channels", "growth_channels", "tasks", "tags", "task_tags"} <= found:
+        for task_id, slug in conn.execute(
+                "SELECT i.task_id, c.slug FROM growth_idea_channels i JOIN growth_channels c ON c.id=i.channel_id "
+                "JOIN tasks t ON t.id=i.task_id").fetchall():
+            keys = _labels([f"channel:{slug}"])
+            if not keys:
+                continue
+            conn.execute("INSERT INTO tags (id, key, label, created, updated) SELECT ?,?,?,?,? WHERE NOT EXISTS "
+                         "(SELECT 1 FROM tags WHERE key=?)", (f"tag-{new_id()}", keys[0], keys[0], stamp, stamp,
+                                                             keys[0]))
+            conn.execute("INSERT OR IGNORE INTO task_tags (task_id, tag_id) SELECT ?, id FROM tags WHERE key=?",
+                         (task_id, keys[0]))
+    if {"gtm_versions", "strategy_versions"} <= found:
+        version = conn.execute("SELECT body_json FROM gtm_versions ORDER BY n DESC LIMIT 1").fetchone()
+        draft = conn.execute("SELECT id, sections FROM strategy_versions WHERE status='draft'").fetchone()
+        text = _gtm_markdown(_json_object(version[0])) if version else ""
+        if draft and text:
+            sections = _json_object(draft[1])
+            if not str(sections.get("how") or "").strip():
+                sections["how"] = text
+                conn.execute("UPDATE strategy_versions SET sections=?, revision=revision+1, updated=?, updated_by=? "
+                             "WHERE id=?", (json.dumps(sections, sort_keys=True), stamp, KEEPER, draft[0]))
+    if "goal_proposals" in found:
+        conn.execute("DELETE FROM goal_proposals WHERE kind='gtm_draft'")
+    if "growth_cohorts" in found:
+        if "segment_id" in {row[1] for row in conn.execute("PRAGMA table_info(growth_cohorts)")}:
+            conn.execute("DELETE FROM growth_cohorts WHERE segment_id IS NOT NULL")
+            conn.execute("DROP INDEX IF EXISTS growth_cohorts_month_segment")
+            conn.execute("ALTER TABLE growth_cohorts DROP COLUMN segment_id")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS growth_cohorts_month "
+                     "ON growth_cohorts(coalesce(channel_id, ''), month)")
+    if "growth_settings" in found:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(growth_settings)")}
+        for column in ("framework", "verdict_win_pct"):
+            if column in columns:
+                conn.execute(f"ALTER TABLE growth_settings DROP COLUMN {column}")
+    _apply(conn, GROWTH_RETHINK_SCHEMA)
+
+
 def migrate(conn, adopt_legacy=False):
     """Apply every migration the file has not seen, by `PRAGMA user_version`.
 
@@ -1378,6 +1487,8 @@ def migrate(conn, adopt_legacy=False):
             elif i == 39:
                 _apply(conn, MIGRATIONS[i])
                 RT.backfill(conn)
+            elif MIGRATIONS[i] is GROWTH_RETHINK_SCHEMA:
+                migrate_growth_rethink(conn)
             else:
                 _apply(conn, MIGRATIONS[i])
             conn.execute(f"PRAGMA user_version={i + 1}")
@@ -6517,7 +6628,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         # The hold keeps the ticket where it asked to go, but not in the working step it named.
         self_wait.append('Task remains Blocked: ' + (row.get('blocked_reason') or 'a hold is still outstanding'))
     if closing_step:
-        _task_close_allowed(conn, actor, row, note, mover)
+        _task_close_allowed(conn, actor, row, note, mover, step, type)
     if waiting_on is not None:
         waiting_on = _waiting_person(conn, actor, row, waiting_on, status, owner, private)
     # A close is the requester's or a person's decision; a bot's update that started before it (a late
@@ -7213,7 +7324,23 @@ def _task_close_party(conn, actor, row):
     return False
 
 
-def _task_close_allowed(conn, actor, row, note, mover=None):
+def _marketing_outcome(conn, actor, row, step, type=None):
+    """Whether the bot that owns a marketing idea finishes it on an outcome step (Won, Lost, Inconclusive, Dropped;
+    backend/marketing_tasks.py). Only the owner: its managers inherit no close from it (_task_close_party), and no
+    other bot closes it. The board it lands on is the marketing type too: a move to another board (`type`) is not an
+    outcome, whatever its step is called. The requester is told of the close as it is for any close."""
+    from . import marketing_tasks as MT
+    if not step or not is_bot(actor) or actor != row["owner"]:
+        return False
+    board = type_get(conn, type if type is not None else row.get("type_id") or GENERAL_TYPE)
+    if not board or board["id"] != MT.TYPE_ID:
+        return False
+    named = {r[0] for r in conn.execute("SELECT id FROM task_steps WHERE type_id=? AND (id=? OR name=?)",
+                                        (MT.TYPE_ID, step, step))}
+    return bool(named & set(MT.finished_step_ids()))
+
+
+def _task_close_allowed(conn, actor, row, note, mover=None, step=None, type=None):
     _task_private_writer(conn, actor, row)
     # A person closes a task they can edit, as task_update decides: on it (_task_close_party), or a mover. The person
     # it waits on may close it too: it asked them to decide, and "not now" is a decision. Reading it is not enough:
@@ -7227,9 +7354,11 @@ def _task_close_allowed(conn, actor, row, note, mover=None):
     # A board's shipped column is ready; a bot that works the board (a deploy bot) closes what shipped.
     shipped = row["status"] == "ready" and type_bot_works(conn, actor, row)
     shipped = shipped or task_manager_acts(conn, actor, row)       # it closes with a note: the one rule below, not a mover
+    outcome = _marketing_outcome(conn, actor, row, step, type)
     if actor == TASK_MANAGER and actor != row["requester"] and not (note or "").strip():
         refuse(conn, actor, "close", "The Task Manager closes a task only with a note saying why it is finished")
-    if not task_represents(conn, actor, row["requester"]) and not is_human(actor) and actor != KEEPER and not shipped:
+    if not task_represents(conn, actor, row["requester"]) and not is_human(actor) and actor != KEEPER and not (
+            shipped or outcome):
         refuse(conn, actor, "close", f"{actor_id(row['requester'])} asked for this; only they or their managers close it")
     # A person closes without giving a reason; the requesting bot is still told it was closed (task_close wakes it).
 
@@ -7242,7 +7371,7 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
-    _task_close_allowed(conn, actor, row, note, mover)
+    _task_close_allowed(conn, actor, row, note, mover, step, type)
     if row["status"] == "closed":
         if type is not None or step is not None:
             _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "")

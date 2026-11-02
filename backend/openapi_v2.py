@@ -2561,6 +2561,34 @@ SCHEMAS.update({
 SCHEMAS["Seat"]["properties"].update({name: _t("s") for name in ("agent", "agent_name", "request_state")})
 SCHEMAS["Seat"]["required"] = sorted(set(SCHEMAS["Seat"]["required"]) | {"agent", "agent_name", "request_state"})
 
+# The Growth page's numbers (backend/growth_numbers.py): the one read it draws from.
+STABLE.append(("/api/v2/growth/numbers", "get", "KPIs", "getGrowthNumbers",
+               "The Growth page's numbers: the newest months (1 to 24, default 12), every channel's and the total's CAC, LTV "
+               "and retention, revenue and margin per month (null where not recorded), the KPI tree with each KPI's last 24 "
+               "readings, and the marketing tests that started or finished, newest first", "GrowthNumbers"))
+NUM_N_INT = {"type": ["integer", "null"]}
+SCHEMAS.update({
+    "GrowthMonth": obj({"month": "s", "spend": NUM_N, "bot_cost": NUM_N, "new_customers": NUM_N_INT, "cac": NUM_N,
+                        "kept_d30": NUM_N, "kept_d90": NUM_N, "kept_d180": NUM_N, "expected_months": NUM_N, "ltv": NUM_N,
+                        "ltv_cac": NUM_N, "payback_months": NUM_N, "quality": "n", "revenue_month": NUM_N,
+                        "margin_pct": NUM_N}),
+    "GrowthChannel": obj({"slug": "s", "name": "s", "stage": "n", "owner_ref": "n",
+                          "series": items(ref("GrowthMonth"))}),
+    "GrowthKpi": obj({"id": "s", "name": "s", "unit": "s", "latest": NUM_N, "latest_at": "n", "target": NUM_N,
+                      "goal_id": "n", "parent_kpi_id": "n", "growth_role": "n", "stage": "n", "loop_name": "n",
+                      "loop_step": NUM_N_INT,
+                      "series": items(obj({"at": "n", "value": {"type": "number"}}))}),
+    "GrowthMarker": obj({"task_id": "s", "title": "s", "kind": {"enum": ["started", "finished"]},
+                         "outcome": {"enum": ["won", "lost", "inconclusive", "dropped", None]}, "at": "s",
+                         "channels": items({"type": "string"}), "goal_id": "n"}),
+    "GrowthNumbers": obj({"months": items({"type": "string"}), "series": items(ref("GrowthMonth")),
+                          "channels": items(ref("GrowthChannel")),
+                          "kpis": obj({"north_star": {"oneOf": [ref("GrowthKpi"), {"type": "null"}]},
+                                       "inputs": items(ref("GrowthKpi")), "guardrails": items(ref("GrowthKpi")),
+                                       "other": items(ref("GrowthKpi"))}),
+                          "markers": items(ref("GrowthMarker")), "may_edit": {"type": "boolean"}}),
+})
+
 # The Company page (backend/company_page): what an owner or an admin writes, and the page's own settings. Readers never
 # reach these routes; the reader origin serves the page and its data without a key.
 COMPANY_LOGO_TYPES = ("image/png", "image/jpeg", "image/webp")   # company_page/release.py LOGO_TYPES

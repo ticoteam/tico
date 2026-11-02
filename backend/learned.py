@@ -109,12 +109,11 @@ def for_turn(c, settings, conversation, bot):
     if text:
         layers = {**(layers or {}), "strategy": text}
     if growth_facing(c, bot):
-        # The brand and the go-to-market, for the bots whose words and plans reach customers (backend/brand_gtm.py).
-        from . import brand_gtm
-        for kind in brand_gtm.KINDS:
-            text = brand_gtm.summary_text(c, kind)
-            if text:
-                layers = {**(layers or {}), kind: text}
+        # The brand, for the bots whose words reach customers (backend/brand.py).
+        from . import brand
+        text = brand.summary_text(c)
+        if text:
+            layers = {**(layers or {}), "brand": text}
     return layers
 
 

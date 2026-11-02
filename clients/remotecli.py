@@ -736,7 +736,7 @@ def run(args, who=None):
             if args.body_file:
                 args.body = Path(args.body_file).read_text()
         return tool(client, args)
-    if cmd in ("kpi", "proposal", "strategy", "brand", "gtm", "growth"):
+    if cmd in ("kpi", "proposal", "strategy", "brand", "growth"):
         return tool(client, args)
     if cmd == "lens":
         from clients import hubtools
@@ -1259,11 +1259,11 @@ def _table(rows, cols):
 
 
 def growth_text(fn, result):
-    """`hub brand|gtm|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
+    """`hub brand|growth ...` for a person: the summary as text, lists as tables, the rest as indented lines.
     `--json` prints the API response instead."""
     if not isinstance(result, dict):
         return "\n".join(_plain(result))
-    if fn in ("brand summary", "gtm summary"):
+    if fn == "brand summary":
         return result.get("text") or "Nothing published yet."
     if fn == "brand check":
         hits = result.get("hits") or []
@@ -1271,25 +1271,17 @@ def growth_text(fn, result):
             return f"No hits against brand v{result.get('n', 0)}." if result.get("n") else "No brand published yet."
         return "\n".join(f"{h['level']}: {h['kind']} \"{h['match']}\" at {h['index']}" + (f" ({h['rule']})" if h.get("rule") else "")
                          for h in hits)
-    if fn == "growth segment list":
-        return _table(result.get("segments") or [], [("id", "id"), ("name", "name"), ("status", "status"),
-                      ("motion", "motion"), ("buyer", "who_buys"), ("deal", "deal_size"),
-                      ("channels", lambda r: ", ".join(r.get("channels") or [])), ("ideas", "ideas")])
     if fn in ("growth channel list",):
         return _table(result.get("channels") or [], [("slug", "slug"), ("name", "name"), ("stage", "stage"),
                       ("track", "track"), ("owner", "owner_ref"), ("budget/mo", "budget_month")])
-    if fn in ("gtm sources", "growth source list"):
+    if fn == "growth source list":
         text = _table(result.get("sources") or [], [("id", "id"), ("truth for", "truth_for"), ("system", "system"),
                       ("reach", lambda r: f"{r.get('reach_kind')}:{r.get('reach_ref') or ''}".rstrip(":")), ("may", "may")])
         conflicts = result.get("conflicts") or []
         return text + ("\n\nConflicts:\n" + "\n".join(_plain(conflicts)) if conflicts else "")
-    if fn == "growth idea list":
-        return _table(result.get("ideas") or [], [("id", "task_id"), ("status", "status"), ("ice", "ice"),
-                      ("title", "title"), ("assignee", "assignee")])
     if fn == "growth economics":
         rows = list(result.get("rows") or []) + ([result["total"]] if result.get("total") else [])
         head = f"Month: {result.get('month') or 'none yet'}"
-        head += f"  Segment: {result['segment']}" if result.get("segment") else ""
         return head + "\n" + _table(rows, [
             ("channel", "name"), ("spend", "spend"), ("bot", "bot_cost"), ("new", "new_customers"), ("CAC", "cac"),
             ("months", "expected_months"), ("LTV", "ltv"), ("LTV:CAC", "ltv_cac"), ("payback", "payback_months")])
@@ -1298,6 +1290,14 @@ def growth_text(fn, result):
                       ("spend", "spend"), ("bot", "bot_cost"), ("new", "new_customers"), ("d30", "kept_d30"),
                       ("d90", "kept_d90"), ("d180", "kept_d180"), ("quality", "quality")])
     return "\n".join(_plain(result)) or "Nothing yet."
+
+
+def strategy_section_text(result, key):
+    """One section of the published strategy as text, for `hub strategy show --section`."""
+    current = result.get("current") if isinstance(result, dict) else None
+    if not current:
+        return "Nothing published yet."
+    return (current.get("sections") or {}).get(key) or ""
 
 
 def main(args, who=None):
@@ -1313,9 +1313,11 @@ def main(args, who=None):
             print(integrations_text(result))
         elif args.fn == "tool show" and not args.json:
             print(integration_text(result))
+        elif args.fn == "strategy show" and getattr(args, "section", None) and not args.json:
+            print(strategy_section_text(result, args.section))
         elif args.fn == "tool query-search" and not args.json:
             print(query_text(result) if args.query_id else queries_text(result))
-        elif args.cmd in ("brand", "gtm", "growth") and not getattr(args, "json", False):
+        elif args.cmd in ("brand", "growth") and not getattr(args, "json", False) and args.fn != "growth numbers":
             print(growth_text(args.fn, result))
         elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
             print(result["text"])

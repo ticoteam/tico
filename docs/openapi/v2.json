@@ -16805,6 +16805,59 @@
         ]
       }
     },
+    "/api/v2/growth/numbers": {
+      "get": {
+        "summary": "The Growth page's numbers: the newest months (1 to 24, default 12), every channel's and the total's CAC, LTV and retention, revenue and margin per month (null where not recorded), the KPI tree with each KPI's last 24 readings, and the marketing tests that started or finished, newest first",
+        "operationId": "getGrowthNumbers",
+        "parameters": [
+          {
+            "name": "months",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 12,
+              "title": "Months"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthNumbers"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "KPIs"
+        ]
+      }
+    },
     "/api/v2/health": {
       "get": {
         "summary": "Checks, computers and failures (bots see counts, computers and failed runs)",
@@ -46653,8 +46706,7 @@
               "goal_why",
               "recovery",
               "strategy_draft",
-              "brand_draft",
-              "gtm_draft"
+              "brand_draft"
             ],
             "title": "Kind"
           },
@@ -48164,6 +48216,391 @@
         "type": "object",
         "title": "GroupUpdate",
         "description": "Rename a group, move it under another (`parent`; \"\" = top level), and add or remove teammates. A teammate\nadded to a group leaves the one it was in."
+      },
+      "GrowthChannel": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "stage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrowthMonth"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "owner_ref",
+          "series",
+          "slug",
+          "stage"
+        ],
+        "additionalProperties": true
+      },
+      "GrowthKpi": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "latest": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "latest_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "goal_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent_kpi_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "growth_role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "loop_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "loop_step": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "value": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "at",
+                "value"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "goal_id",
+          "growth_role",
+          "id",
+          "latest",
+          "latest_at",
+          "loop_name",
+          "loop_step",
+          "name",
+          "parent_kpi_id",
+          "series",
+          "stage",
+          "target",
+          "unit"
+        ],
+        "additionalProperties": true
+      },
+      "GrowthMarker": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "started",
+              "finished"
+            ]
+          },
+          "outcome": {
+            "enum": [
+              "won",
+              "lost",
+              "inconclusive",
+              "dropped",
+              null
+            ]
+          },
+          "at": {
+            "type": "string"
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "goal_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at",
+          "channels",
+          "goal_id",
+          "kind",
+          "outcome",
+          "task_id",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "GrowthMonth": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "spend": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "bot_cost": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "new_customers": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cac": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "kept_d30": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "kept_d90": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "kept_d180": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "expected_months": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "ltv": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "ltv_cac": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "payback_months": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "quality": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revenue_month": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "margin_pct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "bot_cost",
+          "cac",
+          "expected_months",
+          "kept_d180",
+          "kept_d30",
+          "kept_d90",
+          "ltv",
+          "ltv_cac",
+          "margin_pct",
+          "month",
+          "new_customers",
+          "payback_months",
+          "quality",
+          "revenue_month",
+          "spend"
+        ],
+        "additionalProperties": true
+      },
+      "GrowthNumbers": {
+        "type": "object",
+        "properties": {
+          "months": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "series": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrowthMonth"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrowthChannel"
+            }
+          },
+          "kpis": {
+            "type": "object",
+            "properties": {
+              "north_star": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/GrowthKpi"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GrowthKpi"
+                }
+              },
+              "guardrails": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GrowthKpi"
+                }
+              },
+              "other": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GrowthKpi"
+                }
+              }
+            },
+            "required": [
+              "guardrails",
+              "inputs",
+              "north_star",
+              "other"
+            ],
+            "additionalProperties": true
+          },
+          "markers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrowthMarker"
+            }
+          },
+          "may_edit": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "channels",
+          "kpis",
+          "markers",
+          "may_edit",
+          "months",
+          "series"
+        ],
+        "additionalProperties": true
       },
       "HeaderIn": {
         "properties": {
