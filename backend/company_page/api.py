@@ -229,20 +229,29 @@ def register(app, store, auth, mutate, settings):
         with store.read() as c:
             return grid(c, audience_id)
 
+    def tightened(c, audience_id, change):
+        """A tightening leaves published editions up: they are dated statements a person approved, and Retract or Closed
+        take them back. So the response says how many there are, rather than changing the page in silence."""
+        if not change["tightened"]:
+            return {}
+        count = c.execute("SELECT count(*) FROM editions WHERE audience_id=? AND status='published' AND retracted_at IS NULL",
+                          (audience_id,)).fetchone()[0]
+        return {"published_editions": count}
+
     @app.put("/api/v2/audiences/{audience_id}/disclosure")
     def disclosure_put(request: Request, audience_id: str, body: Rules):
         rules = [r.model_dump() for r in body.rules]
 
         def work(c, actor):
-            D.set_rules(c, actor, audience_id, rules)
-            return grid(c, audience_id)
+            change = D.set_rules(c, actor, audience_id, rules)
+            return {**grid(c, audience_id), **tightened(c, audience_id, change)}
         return write(request, body, work)
 
     @app.post("/api/v2/audiences/{audience_id}/disclosure/preset")
     def disclosure_preset(request: Request, audience_id: str, body: Preset):
         def work(c, actor):
-            D.apply_preset(c, actor, audience_id, body.name)
-            return grid(c, audience_id)
+            change = D.apply_preset(c, actor, audience_id, body.name)
+            return {**grid(c, audience_id), **tightened(c, audience_id, change)}
         return write(request, body, work)
 
     # ------------------------------------------------------------------ sources

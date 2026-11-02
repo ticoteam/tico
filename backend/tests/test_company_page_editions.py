@@ -221,6 +221,15 @@ def test_the_leak_check_flags_numbers_names_and_links_not_in_the_facts():
     assert found("Revenue hit $10m.")["numbers"] == ["10"]
 
 
+
+
+def test_times_and_ids_in_the_facts_do_not_make_figures_allowed():
+    """A clock reading or an id in the facts would allow its digits, so a figure would pass only at some hours."""
+    facts = {"stats": [{"as_of": "2026-11-02T01:23:45.000Z", "id": "4b5cb1b2-fe2c-4de8-bdb2-d086f4c6d008",
+                        "updated": "00:01:30", "display": "$120,000"}]}
+    assert E.leak_findings("t", plain_sections("Revenue hit $1m."), facts, START, END)["numbers"] == ["1"]
+
+
 def test_a_leak_holds_a_draft_and_a_clean_edit_by_a_person_releases_it(page):
     page.answer = {**GOOD, "sections": {**GOOD["sections"], "highlights": ["We signed Globex for $900k."]}}
     edition = page.draft()
@@ -586,6 +595,28 @@ def test_a_correction_is_a_new_version_through_the_same_steps_and_replaces_the_o
     with page.store.read() as c:
         assert E.stream(c, ["board"]) == []
     assert get(page.api, f"editions/{old['id']}")["status"] == "superseded"
+
+
+def test_a_correction_note_with_a_figure_is_held_like_the_text(page):
+    """The note is published beside the text, so the leak check reads it too."""
+    old = page.published()
+    body = {"title": "October, corrected", "sections": plain_sections("Revenue reached $120,000.")}
+    flagged = post(page.api, f"editions/{old['id']}/correct", {**body, "note": "Revenue was really $1m."})
+    assert flagged["status"] == "held"
+    assert next(c for c in flagged["checks"] if c["kind"] == "leak")["outcome"] == "flagged"
+
+
+def test_a_changed_correction_note_makes_the_approval_stale(page):
+    """The approval covers the note as well as the text: a note changed after the yes makes the publish refuse."""
+    old = page.published()
+    body = {"title": "October, corrected", "sections": plain_sections("Revenue reached $120,000."), "note": "Fixed it."}
+    new = post(page.api, f"editions/{old['id']}/correct", body)
+    assert new["status"] == "ready"
+    asked = page.ask(new)
+    page.decide(asked["approval"]["id"])
+    with page.store.transaction() as c:
+        c.execute("UPDATE editions SET correction_note='Fixed a different figure.' WHERE id=?", (new["id"],))
+    assert page.publish(asked, expected=409)["error"]["code"] == "approval_stale"
 
 
 def test_a_retracted_edition_comes_back_only_through_a_correction_and_a_new_approval(page):

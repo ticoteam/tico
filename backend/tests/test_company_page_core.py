@@ -510,10 +510,11 @@ def test_is_loosening_is_conservative(old, new, loosens):
 def test_every_change_writes_a_revision_and_the_same_rule_again_writes_none(store):
     setup(store)
     with store.transaction() as c:
-        first = D.set_rule(c, OWNER, "investors", "revenue", mode="show")
+        first = D.set_rule(c, OWNER, "investors", "revenue", mode="show")["revision"]
         assert first == D.current_revision(c, "investors")
-        assert D.set_rule(c, OWNER, "investors", "revenue", mode="show") == first
-        second = D.set_rule(c, OWNER, "investors", "revenue", mode="hidden")
+        assert D.set_rule(c, OWNER, "investors", "revenue", mode="show") == {"revision": first, "loosened": False,
+                                                                             "tightened": False}
+        second = D.set_rule(c, OWNER, "investors", "revenue", mode="hidden")["revision"]
         assert second != first
         count = c.execute("SELECT count(*) FROM disclosure_revisions WHERE audience_id='investors'").fetchone()[0]
     assert count == 2

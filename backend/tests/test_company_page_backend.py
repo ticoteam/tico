@@ -4,7 +4,11 @@ import json
 from datetime import datetime, timezone
 
 from backend import company
-from backend.company_page import audiences as A, disclosure as D, release, render, settings as S
+from backend.company_page import audiences as A, disclosure as D, editions as E, release, render, settings as S, stats as ST
+from backend.tests.test_company_page_core import numbers, setup, shown
+from backend.tests.test_company_page_editions import plain_sections
+from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.test_company_page_editions import page  # noqa: F401
 from backend.tests.test_finance_fixtures import OWNER, finance_template, store  # noqa: F401
 
 VISION = "Every landlord runs on Acme."
@@ -49,3 +53,30 @@ def test_going_open_turns_public_on_in_the_same_step(store):  # noqa: F811
         # Going back doesn't have to switch it off; a page is served only while the company is Open.
         S.set_transparency(c, OWNER, "closed")
         assert release.public_view(c, datetime.now(timezone.utc)) == {}
+
+
+def test_a_tightening_says_how_many_published_editions_it_leaves_up(page):  # noqa: F811
+    """Published editions stay when a rule tightens: they're dated statements a person approved. The response says so
+    instead of changing the page in silence. A loosening doesn't carry the count."""
+    page.published()
+    tighter = page.api.put("/api/v2/audiences/board/disclosure", headers=headers(),
+                           json={"rules": [{"data_class": "kpi", "mode": "hidden"}]})
+    assert tighter.status_code == 200 and tighter.json()["published_editions"] == 1
+    looser = page.api.put("/api/v2/audiences/board/disclosure", headers=headers(),
+                          json={"rules": [{"data_class": "kpi", "mode": "show"}]})
+    assert looser.status_code == 200 and "published_editions" not in looser.json()
+    assert page.rows("SELECT status FROM editions WHERE status='published'") != []
+
+
+def test_a_held_label_is_not_in_the_draft_and_its_word_is_not_allowed_in_the_text(store):  # noqa: F811
+    """A held stat's label goes nowhere near the model: the draft's facts leave it out, so the leak check doesn't allow
+    the word either, and a draft that names it is flagged."""
+    setup(store, shown("cash_runway"))
+    with store.transaction() as c:
+        numbers(c, ("Northwind", "cash_runway", "months"), ("Harbor", "cash_runway", "$"))
+        facts = ST.facts(c, "investors", "2026-10-01", "2026-10-31")
+    assert "held" not in facts and facts["stats"] == []
+    prompt = E.draft_input(facts, [], "2026-10-01", "2026-10-31", {})
+    assert "Northwind" not in prompt and "Harbor" not in prompt and "12,000" not in prompt
+    found = E.leak_findings("Update", plain_sections("Northwind was 12,000 in October."), facts, "2026-10-01", "2026-10-31")
+    assert found["numbers"] == ["12,000"] and found["names"] == ["Northwind"]
