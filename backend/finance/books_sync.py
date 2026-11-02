@@ -81,9 +81,10 @@ def delivery(c: Any, preset: str, body: Mapping[str, object]) -> str:
 
 
 def pass_once(store: Any, vault: object, settings: Any, *, now: str) -> list[str]:
-    """One pass: the Gateway relays of the books connections that lack one are made first (books_link.ensure_relays), then
-    the books pass runs. Returns what the pass recorded."""
-    return books_link.ensure_relays(store, vault, settings, now=now) + _sync_pass(store, vault, settings, now=now)
+    """One pass: the books connections' triggers that are missing are made first (books_link.ensure_triggers), then the
+    books pass runs. Returns what the pass recorded."""
+    books_link.ensure_triggers(store, now=now)
+    return _sync_pass(store, vault, settings, now=now)
 
 
 def _sync_pass(store: Any, vault: object, settings: Any, *, now: str) -> list[str]:

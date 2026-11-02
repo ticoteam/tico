@@ -15,6 +15,7 @@ from backend.finance.store import banking as SK
 from backend.finance.store import mirror as SX
 from backend.finance.store import tico as T
 from backend.tests.test_api import api, get, headers  # noqa: F401
+from backend.tests.test_hook_relay import hq, service  # noqa: F401
 from backend.tests.test_finance_fixtures import AT, OWNER, act, books, finance_template, store  # noqa: F401
 
 COMPANY = "2f7c1d3e-5b8a-4c6d-9e0f-1a2b3c4d5e6f"            # a fictional company id
@@ -685,19 +686,34 @@ def test_a_replacement_waits_for_a_refresh_at_hq_and_the_newer_pair_is_the_one_k
         assert SX.books_status(c, cid) == "active"
 
 
-RELAY_ID = "hr_0123456789abcdef"
+FIN = "hr_00000000000000f1"        # HQ's system relay for `_finance`, as HQ lists it
+OTHER = "hr_00000000000000e2"      # a relay HQ lists for `_finance` without `system`: not the install's
+FIN_RELAY = {"id": FIN, "trigger_id": "_finance", "key": "hq", "system": True}
 
 
-def _relay_asks(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, Any, Any]]:
-    """HQ's relay endpoint in place of the network: every ask is recorded and answered with one relay."""
-    asks: list[tuple[str, str, Any, Any]] = []
+def _books_api(api: Any, provider: str = "quickbooks", cid: str = "conn-books") -> str:
+    """A books connection made directly in the server's store, with its trigger, as connect_claim leaves it."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.ensure_setup(c, store.settings.owner_email)
+        SX.books_connection_insert(c, cid=cid, provider=provider, name="Acme books", by=OWNER, at=AT)
+        SX.set_books_settings(c, cid, {"provider": provider, "company_id": COMPANY, "realm_id": "123"})
+        SX.set_connection_status(c, cid, "active", "", AT)
+        books_link._keep_trigger(c, cid, provider=provider, by=OWNER, now=AT)
+    return cid
 
-    def call(link: object, method: str, path: str, body: Any = None, idempotency: Any = None, **_: Any) -> dict[str, Any]:
-        asks.append((method, path, body, idempotency))
-        return {"relay_id": RELAY_ID, "address": f"https://hooks.tico.dev/{RELAY_ID}"}
-    monkeypatch.setattr(hook_relay.Link, "call", call)
-    monkeypatch.setattr(hook_relay, "link_of", lambda c, vault, settings: LINK)
-    return asks
+
+def _envelope(provider: str = "quickbooks", company: str = COMPANY, event: str = "evt-9") -> bytes:
+    """HQ's envelope for one provider call, as its `_finance` relay delivers it."""
+    payload: dict[str, Any] = ({"eventNotifications": [{"realmId": "123"}]} if provider == "quickbooks"
+                               else {"events": [{"resourceId": "res-1"}]})
+    return json.dumps({"type": "tico.finance.webhook", "provider": provider, "company_id": company, "external_id": event,
+                       "payload": payload}).encode()
+
+
+def _fin_inbox(api: Any) -> int:
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM fin_inbox").fetchone()[0]
 
 
 def test_connecting_makes_the_books_trigger_that_takes_intuit_or_xero_calls(books, monkeypatch):
@@ -708,45 +724,55 @@ def test_connecting_makes_the_books_trigger_that_takes_intuit_or_xero_calls(book
     assert row is not None and tuple(row) == ("intuit", "finance", None)
 
 
-def test_the_books_pass_asks_hq_for_each_connections_relay_once_and_keeps_it(books, monkeypatch):
+def test_the_books_pass_makes_a_missing_trigger_and_asks_hq_for_nothing(books, monkeypatch):
     vault = T._VAULT[0]
     monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))
     cid = _claimed(books, vault)
-    asks = _relay_asks(monkeypatch)
-    assert books_link.ensure_relays(books, vault, None, now=AT) == []
-    assert books_link.ensure_relays(books, vault, None, now=AT) == []     # the relay is kept: no second ask
-    assert asks == [("POST", "relays", {"trigger_id": cid, "name": "QuickBooks"}, "books-relay:" + cid)]
-    with books.read() as c:
-        kept = c.execute("SELECT relay_id FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL", (cid,)).fetchall()
-    assert [row[0] for row in kept] == [RELAY_ID]
-
-
-def test_a_relayed_intuit_call_for_the_connection_is_kept_on_its_trigger(books, monkeypatch):
-    from backend import triggers
-    vault = T._VAULT[0]
-    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))
-    cid = _claimed(books, vault)
-    _relay_asks(monkeypatch)
-    books_link.ensure_relays(books, vault, None, now=AT)
-    body = json.dumps({"type": "tico.finance.webhook", "provider": "quickbooks", "company_id": COMPANY, "external_id": "evt-9",
-                       "payload": {"eventNotifications": [{"realmId": "123"}]}}).encode()
     with books.transaction() as c:
-        got = triggers.receive(c, cid, body, {"content-type": "application/json"}, secret=None, via="gateway",
-                               delivery_id="relay-9", vault=None)
-    assert got.outcome == "accepted"
+        c.execute("UPDATE triggers SET deleted_at=? WHERE id=?", (AT, cid))
+    monkeypatch.setattr(hook_relay.Link, "call", lambda *a, **k: pytest.fail("the books pass asked HQ"))
+    books_link.ensure_triggers(books, now=AT)
+    books_link.ensure_triggers(books, now=AT)
     with books.read() as c:
-        assert c.execute("SELECT count(*) FROM fin_inbox").fetchone()[0] == 1
+        assert c.execute("SELECT deleted_at FROM triggers WHERE id=?", (cid,)).fetchone()[0] is None
 
 
-def test_disconnecting_takes_the_connections_trigger_and_relay_with_it(books, monkeypatch):
+@pytest.mark.parametrize("provider", ["quickbooks", "xero"])
+def test_a_finance_call_from_the_recorded_system_relay_is_kept_on_its_books_connection(api, hq, provider):
+    _books_api(api, provider=provider)
+    hq.relays[FIN] = FIN_RELAY
+    hq.deliver(FIN, "d-fin-1", body=_envelope(provider=provider))
+    service(api).tick()
+    assert _fin_inbox(api) == 1
+    assert hq.acks == [1]
+
+
+def test_a_finance_call_from_a_relay_other_than_the_recorded_one_is_acked_and_not_kept(api, hq):
+    _books_api(api)
+    hq.relays[FIN] = FIN_RELAY
+    hq.relays[OTHER] = {"id": OTHER, "trigger_id": "_finance", "key": "other", "system": False}
+    hq.deliver(OTHER, "d-other-1", body=_envelope())
+    service(api).tick()
+    assert _fin_inbox(api) == 0
+    assert hq.acks == [1]
+
+
+def test_a_finance_call_for_a_company_with_no_books_connection_is_acked_and_recorded_as_unmatched(api, hq):
+    _books_api(api)
+    hq.relays[FIN] = FIN_RELAY
+    hq.deliver(FIN, "d-fin-2", body=_envelope(company="2e5b0c1d-0000-4000-8000-000000000000"))
+    service(api).tick()
+    assert _fin_inbox(api) == 0
+    assert hq.acks == [1]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action='finance.webhook_unmatched'").fetchone()[0] == 1
+
+
+def test_disconnecting_takes_the_connections_trigger_with_it(books, monkeypatch):
     vault = T._VAULT[0]
     hq = HQ(claim=[tokens("acc-1", "ref-1")], disconnect=[books_link.ReconnectRequired("reconnect_required")])
     monkeypatch.setattr(books_link, "_call", hq)
     cid = _claimed(books, vault)
-    _relay_asks(monkeypatch)
-    books_link.ensure_relays(books, vault, None, now=AT)
     books_link.drop(books, vault, LINK, cid, by=OWNER)
     with books.read() as c:
         assert c.execute("SELECT deleted_at IS NOT NULL FROM triggers WHERE id=?", (cid,)).fetchone()[0] == 1
-        assert c.execute("SELECT count(*) FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL",
-                         (cid,)).fetchone()[0] == 0

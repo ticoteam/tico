@@ -31,7 +31,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Mapping, cast
 
-from ..hook_relay import Failed, Link, Stop, forget as forget_relay, keep_answer
+from ..hook_relay import Failed, Link, Stop
+from .. import triggers
 from ..triggers import digest
 from .core import mirror as M
 from .store import mirror as SX
@@ -408,36 +409,40 @@ def _keep_trigger(c: Any, cid: str, *, provider: str, by: str, now: str) -> None
                PRESET[provider], "finance"))
 
 
-def ensure_relays(store: Any, vault: object, settings: Any, *, now: str) -> list[str]:
-    """Each books connection's Gateway relay, which HQ delivers its Intuit or Xero calls to (spec §3.4). It is asked of HQ
-    outside any transaction, and tried again on each books pass until HQ takes it, so a connection made while HQ could not
-    be reached, or from before this, gets its relay then. Nothing is asked without a Gateway key. Returns what failed."""
-    from ..hook_relay import link_of
+def ensure_triggers(store: Any, *, now: str) -> None:
+    """Each books connection's Finance trigger is made again when it is missing: a connection made before it, or whose
+    trigger was removed. HQ is not asked. A connection's QuickBooks or Xero calls reach it over the install's `_finance`
+    system relay (relayed_call), so no relay of its own is made."""
     with store.read() as c:
-        missing = [(cid, provider) for cid, provider, _ in SX.books_connections(c)
-                   if c.execute("SELECT 1 FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL",
-                                (cid,)).fetchone() is None]
-        link = link_of(c, vault, settings) if missing else None
-        owners = {cid: SX.connection_owner(c, cid) for cid, _ in missing}
-    if not missing or link is None:
-        return []
-    problems: list[str] = []
-    for cid, provider in missing:
-        label = LABEL.get(provider, provider)
+        missing = [(cid, provider, SX.connection_owner(c, cid)) for cid, provider, _ in SX.books_connections(c)
+                   if c.execute("SELECT 1 FROM triggers WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone() is None]
+    for cid, provider, owner in missing:
         with store.transaction() as c:
-            _keep_trigger(c, cid, provider=provider, by=owners[cid], now=now)
-        try:
-            answer = link.call("POST", "relays", {"trigger_id": cid, "name": label}, "books-relay:" + cid)
-        except Stop:
-            problems.append(f"The Tico Gateway does not accept this server's key, so the {label} relay was not made")
-            continue
-        except Failed as failed:
-            problems.append(f"The Tico Gateway did not take the {label} relay ({failed.code})")
-            continue
-        with store.transaction() as c:
-            if not keep_answer(c, answer, trigger_id=cid, by=owners[cid]):
-                problems.append(f"The Tico Gateway gave an answer for the {label} relay this server cannot use")
-    return problems
+            _keep_trigger(c, cid, provider=provider, by=owner, now=now)
+
+
+FED, UNMATCHED = "fed", "unmatched"
+
+
+def relayed_call(c: Any, body: bytes, *, delivery_id: str, received_at: str | None, vault: object, auth: Any) -> str:
+    """A `_finance` delivery HQ relayed to this install (backend/hook_relay.py, from the relay recorded for `_finance`), in
+    the pull's write transaction. HQ's envelope is the body of the call: it goes through the trigger of the one books
+    connection whose provider and company it names, as a gateway call (triggers.receive, then books_sync.delivery keeps
+    it). Unmatched, when no books connection of that provider holds the company or its trigger is gone: nothing is kept,
+    and an event records it."""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        parsed = None
+    envelope = _map(parsed)
+    provider, company = str(envelope.get("provider") or ""), str(envelope.get("company_id") or "")
+    held = [cid for cid, _, co in SX.books_connections(c, provider) if co == company] if provider in LABEL and company else []
+    if len(held) == 1 and c.execute("SELECT 1 FROM triggers WHERE id=? AND deleted_at IS NULL", (held[0],)).fetchone():
+        triggers.receive(c, held[0], body, {}, secret=None, via="gateway", delivery_id=delivery_id,
+                         received_at=received_at, vault=vault, auth=auth)
+        return FED
+    tico.audit(c, SYSTEM, "finance.webhook_unmatched", "", {"provider": provider, "delivery": delivery_id[:200]})
+    return UNMATCHED
 
 
 def _keep_claimed(store: Any, cid: str, tokens: Tokens, *, provider: str, by: str, now: str) -> None:
@@ -581,12 +586,10 @@ def disconnect_books(store: Any, vault: object, link: Link, cid: str, provider: 
 
 
 def _drop_trigger(c: Any, cid: str, *, now: str) -> None:
-    """The connection's trigger goes with it: what HQ relayed to it, its seen ids, and its Gateway relay (HQ is told of that
-    by the relay loop, so no network call waits in this write)."""
+    """The connection's trigger goes with it: what HQ relayed to it and its seen ids."""
     c.execute("UPDATE triggers SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL", (now, now, cid))
     c.execute("DELETE FROM trigger_bodies WHERE trigger_id=?", (cid,))
     c.execute("DELETE FROM trigger_seen WHERE trigger_id=?", (cid,))
-    forget_relay(c, cid)
 
 
 # ------------------------------------------------------------------------------------------------ the routes' calls

@@ -10,7 +10,8 @@ Notices from Tico Team ride the same queue (backend/tico_notices.py): HQ keeps a
 `_tico`, so a Gateway key alone is enough to receive them. The loop then pulls every minute instead of every 15
 seconds. That relay is recorded only from HQ's list of relays (`system: true`, asked at most hourly, and at once when a
 delivery names a relay not recorded yet); a delivery naming `_tico` from any other relay is dropped and acked. Physical
-mail (backend/postal_mail.py) arrives on the same system relay with the trigger `_mail`, under the same rule.
+mail (backend/postal_mail.py) and the QuickBooks and Xero calls (backend/finance/books_link.py) each have a system relay of
+their own, for the triggers `_mail` and `_finance`, under the same rule.
 
 The pull follows the mail loop (backend/inbound.py): `wait=0`, a cursor kept here, an ack after the work is committed,
 off the scheduler thread. Every outcome of `receive` (accepted, duplicate, refused, rate_limited, not_found) is
@@ -68,7 +69,8 @@ POISON = 5                       # a delivery whose handling raised this many ti
 RELAY = re.compile(r"hr_[0-9a-f]{16}")
 # The system relays HQ makes per install, one for each trigger (hooks/store.py SYSTEM_RELAYS). Each is listed with
 # `system: true`, recorded from that list only, and fed only from the relay recorded for its own trigger.
-SYSTEM_TRIGGERS = (tico_notices.ID, postal_mail.TRIGGER)
+FINANCE_TRIGGER = "_finance"     # the books' calls: HQ's envelope, fed to the books connection it names (books_link)
+SYSTEM_TRIGGERS = (tico_notices.ID, postal_mail.TRIGGER, FINANCE_TRIGGER)
 
 
 def _prefix(address, relay_id):
@@ -155,17 +157,6 @@ def keep(c, *, relay_id, trigger_id, prefix, by):
               "ON CONFLICT(relay_id) DO UPDATE SET trigger_id=excluded.trigger_id,address_prefix=excluded.address_prefix,"
               "deleted_at=NULL,hq_gone=0", (relay_id, trigger_id, prefix, by, H.now()))
     H.event(c, by, "trigger.relay_created", trigger_id, {"relay": relay_id})
-
-
-def keep_answer(c: Any, answer: dict[str, Any], *, trigger_id: str, by: str) -> bool:
-    """HQ's answer to a relay this install asked for (`POST relays`), kept as the trigger's live relay. False, and nothing
-    kept, when the answer is not one this install can use."""
-    relay_id = str(answer.get("relay_id") or "")
-    prefix = _prefix(str(answer.get("address") or ""), relay_id)
-    if not RELAY.fullmatch(relay_id) or not prefix:
-        return False
-    keep(c, relay_id=relay_id, trigger_id=trigger_id, prefix=prefix, by=by)
-    return True
 
 
 def record_system(c, trigger_id: str, relay_id: str) -> bool:
@@ -431,6 +422,16 @@ class HookRelay:
             mail = getattr(self.app.state, "postal_mail", None)
             if kick and mail:
                 mail.kick()
+            return True
+        if trigger_id == FINANCE_TRIGGER:
+            # HQ's envelope for a QuickBooks or Xero call (backend/finance/books_link.py): fed only from the relay recorded
+            # for `_finance`, to the books connection it names. Anything else from that relay is acked and not kept.
+            from .finance import actions as finance
+            with self.store.transaction() as c:
+                if system_accepts(c, FINANCE_TRIGGER, relay_id):
+                    finance.books_relayed(c, body, delivery_id=str(item.get("delivery_id") or ""),
+                                          received_at=received(item.get("received_at")), vault=self.vault(), auth=self.auth)
+                save(c, cursor=seq)
             return True
         with self.store.transaction() as c:
             # Only a trigger that has this live relay here is fed: HQ's word alone never reaches another trigger. The
