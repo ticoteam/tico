@@ -615,7 +615,8 @@ def board(c, audience_id, at=None):
 
 def facts(c, audience_id, period_start, period_end, at=None):
     """The filtered structured facts an edition for this period may use: each Stat cut to the period, and which classes
-    this audience may read about at all. `held` is for the owner; it stays out of the model's prompt."""
+    this audience may read about at all. Held stats are left out entirely, labels included: the model's prompt and the
+    leak check's allowed words both come from here, so a held label would otherwise pass as if it were shown."""
     start, end = _when(period_start), _when(K.utc(period_end, end=True))
     built, held, _ = _build(c, audience_id, at)
     stats = []
@@ -627,7 +628,6 @@ def facts(c, audience_id, period_start, period_end, at=None):
             stats.append(_stat(b["row"], inside, b["stale"]))
     rules = D.all_rules(c, audience_id)
     return {"period_start": str(period_start), "period_end": str(period_end), "stats": stats,
-            "held": _held_list(c, held),
             "classes": {cls: D.lookup(rules, cls)["mode"] for cls in D.DATA_CLASSES}}
 
 

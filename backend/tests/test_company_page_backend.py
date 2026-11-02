@@ -4,7 +4,9 @@ import json
 from datetime import datetime, timezone
 
 from backend import company
-from backend.company_page import audiences as A, disclosure as D, release, render, settings as S
+from backend.company_page import audiences as A, disclosure as D, editions as E, release, render, settings as S, stats as ST
+from backend.tests.test_company_page_core import numbers, setup, shown
+from backend.tests.test_company_page_editions import plain_sections
 from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_company_page_editions import page  # noqa: F401
 from backend.tests.test_finance_fixtures import OWNER, finance_template, store  # noqa: F401
@@ -64,3 +66,17 @@ def test_a_tightening_says_how_many_published_editions_it_leaves_up(page):  # no
                           json={"rules": [{"data_class": "kpi", "mode": "show"}]})
     assert looser.status_code == 200 and "published_editions" not in looser.json()
     assert page.rows("SELECT status FROM editions WHERE status='published'") != []
+
+
+def test_a_held_label_is_not_in_the_draft_and_its_word_is_not_allowed_in_the_text(store):  # noqa: F811
+    """A held stat's label goes nowhere near the model: the draft's facts leave it out, so the leak check doesn't allow
+    the word either, and a draft that names it is flagged."""
+    setup(store, shown("cash_runway"))
+    with store.transaction() as c:
+        numbers(c, ("Northwind", "cash_runway", "months"), ("Harbor", "cash_runway", "$"))
+        facts = ST.facts(c, "investors", "2026-10-01", "2026-10-31")
+    assert "held" not in facts and facts["stats"] == []
+    prompt = E.draft_input(facts, [], "2026-10-01", "2026-10-31", {})
+    assert "Northwind" not in prompt and "Harbor" not in prompt and "12,000" not in prompt
+    found = E.leak_findings("Update", plain_sections("Northwind was 12,000 in October."), facts, "2026-10-01", "2026-10-31")
+    assert found["numbers"] == ["12,000"] and found["names"] == ["Northwind"]
