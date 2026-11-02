@@ -560,7 +560,8 @@ jobs:
   release-check:
     needs: [gate, native-macos, factory-sim, images]
     if: always()
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    # Only compares results: GitHub-hosted starts in seconds, where a RunsOn VM boots for ~20 s at the run's very end.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every part of the release gate passed
