@@ -62,7 +62,7 @@ RETRY_REHEARSAL = (1, 2, 4, 8)                       # mirror.RETRY for this reh
 # Steps 4 to 7, in cents. Software is the 21 account in QuickBooks; Office supplies is 24.
 B1, I1, B2, J1, J2 = 150000, 200000, 2500, 5000, 1000
 BUDGET, B3, B4, B5 = 1000000, 400000, 500000, 1000
-SOFTWARE_OCT_BEFORE = 12000 + B1 + B2                 # bill 106 (Oct, Software) + the step 4 bills
+SOFTWARE_OCT_BEFORE = 12000 + 3000 + B1 + B2         # bill 106 (Oct), bill 101's late +30.00 (posted in Oct, §4.1), the step 4 bills
 NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -562,7 +562,7 @@ class Rehearsal:
         try:
             books_link.connect_claim(self.store, self.vault, self.link, provider=self.provider,
                                      company_id=COMPANY, claim_id="clm_rehearsal_2", name="second",
-                                     by=OWNER_ACTOR, now="2026-11-01T12:00:00.000000Z")
+                                     by=OWNER_ACTOR, now=scenario_now())
         except books_link.AlreadyConnected:
             refused = True
         res.check("a second organisation on the same install is refused (already_connected)", refused)
@@ -570,7 +570,7 @@ class Rehearsal:
         # Reconnecting the same organisation repairs its connection; it does not make another.
         same_cid = books_link.connect_claim(self.store, self.vault, self.link, provider=self.provider,
                                             company_id=COMPANY, claim_id="clm_rehearsal_3", name="again",
-                                            by=OWNER_ACTOR, now="2026-11-01T12:01:00.000000Z")
+                                            by=OWNER_ACTOR, now=scenario_now())
         res.check("reconnecting the same organisation keeps the same connection", same_cid == self.cid)
 
     def step_first_sync(self) -> None:
@@ -771,7 +771,9 @@ class Rehearsal:
             if not found:
                 raise RuntimeError(f"no {name!r} in the books")
             return str(found[0]["id"])
-        return {"software": coded(bill_lines, "6120", "Software"),
+        # Software is QuickBooks account 21, numbered 6120 there. The Tico account bound to it keeps Tico's code 6100
+        # (mirror._account: a system line finds its account by code), so it is looked up by that code and name.
+        return {"software": coded(bill_lines, "6100", "Software"),
                 "consulting": coded(invoice_lines, "4010", "Consulting income"),
                 "office": coded(journal_lines, "6410", "Office supplies"),
                 "checking_account": coded(journal_lines, "1010", "Checking"),
@@ -1009,7 +1011,7 @@ class Rehearsal:
         try:
             cid = books_link.connect_claim(self.store, self.vault, self.link, provider="quickbooks",
                                            company_id=COMPANY, claim_id="clm_rehearsal_4", name="back",
-                                           by=OWNER_ACTOR, now="2026-11-01T12:05:00.000000Z")
+                                           by=OWNER_ACTOR, now=scenario_now())
         except Exception as exc:
             cid = f"{type(exc).__name__}: {exc}"
         active = self.live_books()
@@ -1051,12 +1053,38 @@ class Rehearsal:
         return self.res.ok
 
 
+def pin_clock() -> None:
+    """Run the child on the scenario day: its clock starts at noon on DAY and runs on from there.
+
+    The finance code reads the wall clock (context.now), so on any other day the October budget is a past
+    period and is refused. Only this rehearsal child is pinned; the product code is unchanged.
+    """
+    real = dt.datetime
+    shift = real.fromisoformat(f"{DAY}T12:00:00+00:00") - real.now(dt.timezone.utc)
+
+    class PinnedDatetime(real):
+        @classmethod
+        def now(cls, tz=None):
+            moment = (real.now(dt.timezone.utc) + shift).astimezone(tz)
+            # an instance of this class, not the base class: croniter and others isinstance-check the class they were given
+            return cls(moment.year, moment.month, moment.day, moment.hour, moment.minute, moment.second,
+                       moment.microsecond, moment.tzinfo)
+
+    dt.datetime = PinnedDatetime
+
+
+def scenario_now() -> str:
+    """Now on the pinned clock, in the store's timestamp format."""
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def run_child(provider: str, keep: bool) -> int:
     os.environ.setdefault("TICO_UPDATE_CHECK", "off")
     os.environ["TICO_QUICKBOOKS_BASE"] = f"http://127.0.0.1:{QBO_PORT}"
     os.environ["TICO_XERO_BASE"] = f"http://127.0.0.1:{XERO_PORT}/api.xro/2.0"
     sys.path.insert(0, str(ROOT))
     os.chdir(ROOT)
+    pin_clock()
     from backend import demo
     rehearsal = Rehearsal(provider, keep)
     with demo.network_blocked():
