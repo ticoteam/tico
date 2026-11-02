@@ -230,13 +230,17 @@ def _is_date(text, start, raw):
     return bool(words) and words[-1].lower() in MONTHS and raw.isdigit() and 1 <= int(raw) <= 31
 
 
+ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def leak_findings(title, sections, facts, period_start, period_end, names=()):
     """Numbers, proper names and links in an edition that are not in the filtered facts. A person reads what this flags
     and may override it; so it errs toward flagging, and a word it can't place counts as a name."""
     strings = []
     _gather(facts, strings)
     strings.extend(n for n in names if n)
-    corpus = " ".join(strings)
+    # A date in the facts is not a figure: "2026-10-01" would otherwise make "1" an allowed number.
+    corpus = ISO_DATE.sub(" ", " ".join(strings))
     numbers = {_number(n) for n in NUMBER.findall(corpus)} | _period_years(period_start, period_end)
     words = {w.lower().removesuffix("'s").removesuffix("’s") for w in WORD.findall(corpus)}
     links = {m.lower() for m in LINK.findall(corpus)}

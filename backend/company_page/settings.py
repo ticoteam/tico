@@ -88,6 +88,9 @@ def set_transparency(c, actor, value):
     if value == before:
         return get(c)
     _save(c, actor, transparency=value)
+    if value == "open":
+        # Open means Public is on, in the same step: a page with no public audience would have nothing to serve.
+        c.execute("UPDATE audiences SET enabled=1, updated_at=? WHERE kind='public' AND enabled=0", (H.now(),))
     H.event(c, actor, "company_page.transparency", "company", {"from": before, "to": value})
     rebuild(c, f"transparency {before} to {value}")
     return get(c)
