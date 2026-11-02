@@ -179,7 +179,7 @@ function finCardRail() {
   const app = c.holder === finMe() && c.status !== 'cancelled' && FIN_CARD_APP[c.provider || 'mercury'];
   const saved = c.saved_on || [], bot = String(c.holder || '').startsWith('bot:');
   finRail(`<div class="fin-rail-title"><h2>${esc(finCardName(c))}</h2><span class="pill ${cls}">${esc(label)}</span></div>
-    ${finKv('Holder', esc(finWho(c.holder)))}${finKv('Budget', c.budget ? esc(c.budget.name) : '—')}
+    ${finKv('Holder', esc(finWho(c.holder)))}${finKv('Budget', c.budget ? esc(c.budget.name) + (c.status === 'cancelled' ? '' : finCardLimitsTag({card_limits: true})) : '—')}
     ${finKv('Limit', c.limit == null ? '—' : `${finUsd(c.limit)}${c.limit_interval ? ` <span class="muted">/ ${esc(c.limit_interval.replace(/ly$/, '').replace('dai', 'day'))}</span>` : ''}`)}
     ${finKv('Spent', finUsd(c.spent))}${c.expires_at ? finKv('Expires', esc(finDayLabel(c.expires_at))) : ''}
     ${app ? finKv('Number', `<a href="${esc(app)}" target="_blank" rel="noopener noreferrer">Show in ${esc(c.provider === 'mercury' || !c.provider ? 'Mercury' : c.provider)}</a>`) : ''}

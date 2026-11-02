@@ -1,7 +1,7 @@
 // The Finance tab (ui/app/finance*.js) against a fake hub: Acme (acme.example) with an owner (Ana), a manager (Cara,
 // who leads Engineering) and a few bots. The owner sees every tab; the manager only P&L (expenses), Cards, Transactions
-// and Access, and Balance sheet / Sources stay hidden even by address. A budget cell edits on a double-click only in a
-// future month and sends budget_update with effective_from; the card rail's Freeze sends card_freeze. Payables and
+// and Access, and Balance sheet / Sources stay hidden even by address. A budget cell edits on a double-click in a
+// future month (or, to raise it, this one), dry run first, and sends budget_update with effective_from; the card rail's Freeze sends card_freeze. Payables and
 // Receivables list bills and invoices with no totals row; their decisions run a dry run first and send the right action,
 // and both tabs hide from a viewer without payables or receivables (a payables grant shows only Payables, read only).
 // The Balance sheet's "+ Add" enters a journal entry and offers Loan, Asset and Import history. Cards: Unfreeze only
@@ -391,11 +391,36 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       for (const want of ['Gross profit', 'Gross margin', 'Total operating expenses', 'Net income']) assert.ok(firsts.includes(want), `${tag}: the statement has ${want}`);
       assert.equal(await page.locator('.fin-pl thead th.fin-p').count() > 0, true, tag + ': projected columns are shaded');
       assert.equal(await page.locator('.fin-pl thead .fin-tag').first().textContent(), 'Imported', tag + ': an imported month says so');
-      // The budget column is the current month's: not editable, and a double-click does nothing.
-      assert.equal(await page.locator('td[data-fin-budget]').count(), 0, tag + ': the current month\'s budgets are not editable');
-      const softwareBudget = page.locator('.fin-ln:has(a[href$="/line/a-6100"]) td.fin-b').last();
+      // The budget column is the current month's: a line with a budget takes a raise, a line without one nothing.
+      assert.equal(await page.locator('td[data-fin-budget="a-5200"]').count(), 0, tag + ': this month has no new budgets');
+      const softwareBudget = page.locator('td[data-fin-budget="a-6100"]');
+      const nowCols = await page.evaluate(() => FIN.pnl.data.columns), now = nowCols.find(c => c.state === 'current');
+      let wrote = actions(writes).length;
       await softwareBudget.dblclick();
-      assert.equal(await page.locator('.fin-cell-in').count(), 0, tag + ': no editor on a current month');
+      await page.locator('.fin-cell-in').fill('1');
+      await page.locator('.fin-cell-in').press('Enter');
+      await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
+      assert.equal(actions(writes).length, wrote, tag + ': this month only goes up');
+      // A raise the rules send for approval says so first, and Cancel sends nothing.
+      hub.ask = 'human:ana';
+      await softwareBudget.dblclick();
+      await page.locator('.fin-cell-in').fill('9000');
+      await page.locator('.fin-cell-in').press('Enter');
+      await page.locator('dialog.fin-dlg .fin-ask').waitFor();
+      assert.match(await page.locator('dialog.fin-dlg .fin-ask').innerText(), /^Approval from /, tag + ': names the approver');
+      assert.match(await page.locator('dialog.fin-dlg .fin-kv').first().innerText(), /\$9,000/, tag + ': shows the change');
+      assert.equal(sent(writes).length, 0, tag + ': nothing sent yet');
+      assert.equal(actions(writes).at(-1).dry_run, true, tag + ': the dry run came first');
+      await page.locator('dialog.fin-dlg .fin-foot [data-close]').click();
+      assert.equal(sent(writes).length, 0, tag + ': Cancel sends nothing');
+      await softwareBudget.dblclick();
+      await page.locator('.fin-cell-in').fill('9000');
+      await page.locator('.fin-cell-in').press('Enter');
+      await page.locator('dialog.fin-dlg .fin-ask').waitFor();
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.locator('dialog.fin-dlg').waitFor({state: 'detached'});
+      assert.deepEqual(actions(writes).at(-1), {kind: 'budget_update', payload: {budget_id: 'b-software', amount: 900000, effective_from: now.start}}, tag + ': Send sends the raise');
+      hub.ask = '';
       // A past month's cell moves the budget column there; still not editable.
       const cols = await page.evaluate(() => FIN.pnl.data.columns);
       const past = cols.findIndex(c => c.state === 'past'), future = cols.findIndex(c => c.state === 'future');
@@ -461,7 +486,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await projSum(), 3100, tag + ': by teammate too');
       await page.locator('[data-fin-by]').selectOption('vendor');
       await page.locator('[data-fin-key="GitHub"]').waitFor();
-      assert.equal(await page.locator('input[data-fin-vb]').count(), 0, tag + ': this month\'s vendor budgets are read only');
+      assert.equal(await page.locator('input[data-fin-vb="GitHub"]').count(), 1, tag + ': this month\'s vendor budget takes a raise');
+      assert.equal(await page.locator('input[data-fin-vb="Notion"]').count(), 0, tag + ': this month takes no new vendor budget');
       const next = cols[future].start.slice(0, 7);
       await page.locator('[data-fin-month]').fill(next);
       await page.locator('input[data-fin-vb="GitHub"]').waitFor();
@@ -961,7 +987,9 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(sent(writes).slice(-2), [{kind: 'contact_create', payload: {name: 'Acme Paper', kind: 'vendor'}},
         {kind: 'bill_create', payload: {vendor_id: 'v-new', bill_date: today, lines: [{account_id: 'a-6100', amount: 4550}], number: 'AP-1', origin: 'manual'}}],
         tag + ': contact_create, then bill_create');
-      await page.waitForFunction(() => FIN.doc.sel === 'bill-2' && document.querySelector('tr.fin-on[data-fin-doc="bill-2"]'));
+      // The new draft shows: the list turns to Draft and asks for it.
+      await page.waitForFunction(() => document.querySelector('[data-fin-seg="status"] button[data-v="draft"]').getAttribute('aria-checked') === 'true');
+      assert.ok(reads.some(r => r.startsWith('/api/v2/finance/bills?') && r.includes('status=draft')), tag + ': the list reads drafts after a new bill');
       // Receivables.
       await go(page, '#/finance/receivables', READY.receivables);
       assert.deepEqual(await heads(), ['CUSTOMER', 'INVOICE', 'SENT', 'DUE', 'AMOUNT', 'STATUS'], tag + ': the invoice columns');

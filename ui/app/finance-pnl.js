@@ -2,8 +2,10 @@
    the budget and vs budget of one period (the current one, or the one picked). Company shows revenue, cost of revenue,
    gross profit, operating expenses and net income; Expenses keeps the expense lines, filtered to teams and teammates
    from the org chart (bots, people or both; Unattributed), with the filter's teammates spent vs budget in the rail. A cell opens the rail for its line and
-   period; a future month's budget cell edits on a double-click (budget_update from that month on). A line opens its
-   page: by vendor, team or teammate, last month and this one, each vendor's budget edited in place.
+   period; a future month's budget cell edits on a double-click (budget_update from that month on), and so does this
+   month's, to raise a budget it has. Saving is a dry run first: an allowed change saves, one needing approval names the
+   approver and is sent from a small dialog. A line opens its page: by vendor, team or teammate, last month and this
+   one, each vendor's budget edited in place.
    Reads: GET /api/v2/finance/pnl, /finance/budgets, /finance/lines/{account_id}. Writes: budget_create and
    budget_update through POST /api/v2/finance/actions.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -112,6 +114,7 @@ function finPnlClick(ev) {
     finPnlDraw(); finPnlRail();
   }
 }
+const FIN_ONLY_RAISE = 'This month can only go up';
 const finSegSet = btn => btn.parentElement.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b === btn)));
 // A popover under its button; a click outside or Escape closes it.
 function finPop(btn, pop) {
@@ -221,8 +224,8 @@ function finPnlDraw() {
   const excl = finExcl(data), hasPrivate = rows => rows.some(r => r.private);
   // Compare shows the plan as it stood on a past day: not the live budget, so not editable.
   const comparing = state.view === 'company' && !!state.compare;
-  const editable = (r) => !caps.viewing && !comparing && caps.may('finance.budgets') && p.period === 'month' && bcol?.state === 'future'
-    && r.type === 'expense' && !r.private && finBudgetFor(r.account_id) !== false;
+  const editable = (r) => !caps.viewing && !comparing && caps.may('finance.budgets') && p.period === 'month'
+    && r.type === 'expense' && !r.private && finBudgetEditable(bcol, finBudgetFor(r.account_id));
   const nums = (vals, budget, actualB, good, cls = '') => {
     const diff = budget == null || actualB == null ? null : good * (actualB - budget);
     const d = finDiff(diff);
@@ -317,6 +320,25 @@ function finBudgetFor(accountId) {
   if (tops.length > 1 || tops[0].period !== 'month') return false;
   return tops[0];
 }
+// Which month's cell takes an edit: any future month's, a budget or a new one; this month's only to raise a budget it
+// has (§4.4 sends the raise to the budget's owner); never a past month's.
+const finBudgetEditable = (col, b) => b !== false && (col?.state === 'future' || (col?.state === 'current' && !!b));
+// A budget edit in place, dry run first (§12): an allowed one saves and says no more, a refused one says why, and one
+// that needs approval shows the change and whom it goes to, and goes when sent. `alive` says the page is still there.
+async function finBudgetDecide(kind, payload, {title, change, alive, saved, undo}) {
+  let r;
+  try { r = await finDecide(kind, payload); }
+  catch (e) { toast(e.message, true); if (alive()) undo(); return; }
+  if (r.ask == null) { if (r.status === 'committed') toast('Saved'); if (alive()) saved(); return; }
+  if (!alive()) return;
+  let sent = false;
+  finDialog(title, `${change}<p class="fin-ask">${esc(finAskText(r.ask))}</p>${finImpactHtml(r.impact)}`, 'Send', async () => {
+    await finDecide(kind, payload, r.sig);
+    sent = true;
+    if (alive()) saved();
+  }).addEventListener('close', () => { if (!sent && alive()) undo(); });
+}
+const finBudgetChange = (month, was, cents) => finKv(month, `${was == null ? '' : finUsd(was) + ' → '}${finUsd(cents)}`);
 // A line's own budget (the root of its tree: no team, teammate or vendor), which vendor budgets sit under.
 function finLineBudget(accountId, budgets) {
   const live = (budgets || []).filter(b => b.active && !b.catch_all), ids = new Set(live.map(b => b.id));
@@ -328,10 +350,9 @@ function finPnlEdit(td) {
   if (td.querySelector('input')) return;
   const id = td.dataset.finBudget, state = FIN.pnl, cols = state.data.columns, col = cols[FIN_PNL.budgetCol];
   const row = state.model.lines.find(r => r.account_id === id);
-  if (state.busy || state.compare || !row || col?.state !== 'future') return;
   // The budget this cell shows, fixed now: a filter change while typing reloads the table and the edit is dropped.
   const data = state.data, b = finBudgetFor(id);
-  if (b === false) return;
+  if (state.busy || state.compare || !row || !finBudgetEditable(col, b)) return;
   const was = row.budget?.[FIN_PNL.budgetCol] ?? null;
   td.innerHTML = `<input class="fin-cell-in" inputmode="decimal" autocomplete="off" value="${finCentsField(was)}" aria-label="${esc(row.name)} budget, ${esc(finColLong(col))}">`;
   const input = td.querySelector('input');
@@ -341,13 +362,12 @@ function finPnlEdit(td) {
     if (done) return; done = true;
     const cents = finParseCents(input.value);
     if (!save || cents == null || cents === was || state.busy || state.data !== data) { finPnlDraw(); return; }
+    if (col.state === 'current' && was != null && cents < was) { toast(FIN_ONLY_RAISE, true); finPnlDraw(); return; }
     input.disabled = true;
-    try {
-      const r = b ? await finAct('budget_update', {budget_id: b.id, amount: cents, effective_from: col.start})
-        : await finAct('budget_create', {name: row.name, period: 'month', account_id: id, amount: cents, effective_from: col.start});
-      if (r.status === 'committed') toast('Saved');
-      void finPnlLoad();
-    } catch (e) { toast(e.message, true); finPnlDraw(); }
+    const [kind, payload] = b ? ['budget_update', {budget_id: b.id, amount: cents, effective_from: col.start}]
+      : ['budget_create', {name: row.name, period: 'month', account_id: id, amount: cents, effective_from: col.start}];
+    await finBudgetDecide(kind, payload, {title: row.name, change: finBudgetChange(finColLong(col), was, cents), alive: () => FIN?.pnl === state,
+      saved: () => void finPnlLoad(), undo: finPnlDraw});
   };
   input.onkeydown = ev => {
     if (ev.key === 'Enter') { ev.preventDefault(); void finish(true); }
@@ -363,6 +383,8 @@ function finPnlExport() {
 // ----------------------------------------------------------------- the rail
 // How a projection was made (the read's projection_method), as a small label.
 const FIN_PROJ = {trend: 'Trend', run_rate: 'Run rate', recurring: 'Recurring', fixed: 'Fixed', manual: 'Manual', mixed: 'Mixed'};
+// A budget a card draws on holds only as tight as the card's limit (§8.2).
+const finCardLimitsTag = b => b?.card_limits ? ' <span class="fin-tag">Enforced by card limits</span>' : '';
 const finProjTag = m => FIN_PROJ[m] ? ` <span class="fin-tag">${FIN_PROJ[m]}</span>` : '';
 // Columns holding a month a spreadsheet's history was imported into on the other basis (the read's `imported`, shown
 // only to those who see everything): each such column's months and basis, for its "Imported" label.
@@ -393,7 +415,7 @@ async function finPnlRail() {
     const nextAt = cols.findIndex((c, k) => k > i && c.state === 'future');
     html += `${sec && sec.top.account_id !== row.account_id ? `<div class="muted fin-sup">${esc(sec.top.name)}</div>` : ''}
       <h2>${esc(row.name)} · ${esc(finColLong(col))}</h2>
-      ${finKv(future ? 'Projected' : 'Actual', finUsd(v) + (future ? finProjTag(row.projection_method) : ''))}${finKv('Budget' + finExcl(finBudgetFor(row.account_id)?.state), finUsd(budget))}
+      ${finKv(future ? 'Projected' : 'Actual', finUsd(v) + (future ? finProjTag(row.projection_method) : ''))}${finKv('Budget' + finExcl(finBudgetFor(row.account_id)?.state), finUsd(budget) + finCardLimitsTag(finBudgetFor(row.account_id)))}
       ${over == null ? '' : over > 0 ? finKv(row.type === 'income' ? 'Under' : 'Over', finUsd(over), 'fin-bad') : finKv(row.type === 'income' ? 'Over' : 'Left', finUsd(-over))}
       ${nextAt >= 0 ? finKv(finColLabel(cols[nextAt], false) + ' projected', finUsd(row.projection?.[nextAt] ?? null) + finProjTag(row.projection_method)) : ''}
       <div id="fin-by"></div>`;
@@ -523,8 +545,11 @@ function finLinePage(accountId) {
 }
 const finMonthBounds = ym => { const [y, m] = ym.split('-').map(Number); return [finIso(new Date(y, m - 1, 1)), finIso(new Date(y, m, 0))]; };
 const finNextMonth = ym => { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m, 1); return `${d.getFullYear()}-${finPad(d.getMonth() + 1)}`; };
-// Budgets change from a future month on, as on the P&L: this month and earlier stand as they were.
+// Budgets change from a future month on, as on the P&L.
 const finLineFuture = () => FIN_LINE.month > finToday().slice(0, 7);
+// ...and this month's goes up only, on a budget it already has (finBudgetEditable).
+const finLineNow = () => FIN_LINE.month === finToday().slice(0, 7);
+const finVendorEditable = (b, parent) => finLineFuture() ? (b ? b.period === 'month' : !!parent) : finLineNow() && b?.period === 'month';
 // The line's own monthly budget, which vendor budgets sit under; null when it has none (or keeps one by quarter or year).
 const finLineParent = () => { const b = finLineBudget(FIN.line.id, FIN.line.budgets); return b && b.period === 'month' ? b : null; };
 const finPrevMonth = ym => { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 2, 1); return `${d.getFullYear()}-${finPad(d.getMonth() + 1)}`; };
@@ -579,7 +604,7 @@ function finLineLabel(key, label) {
 function finLineDraw() {
   const state = FIN.line, box = $('#fin-line'); if (!box || !state.cur) return;
   const L = FIN_LINE, vendor = L.by === 'vendor', may = finCaps().may('finance.budgets');
-  const rows = finLineKeys(), future = finLineFuture(), parent = finLineParent();
+  const rows = finLineKeys(), parent = finLineParent();
   const add = $('#fin-line-add');
   if (add) add.innerHTML = !may ? '' : parent ? '<button type="button" class="primary" data-fin-vendor-add>+ Vendor budget</button>'
     : finLineBudget(state.id, state.budgets) ? '' : '<button type="button" class="primary" data-fin-line-add>+ Line budget</button>';
@@ -591,7 +616,7 @@ function finLineDraw() {
   const body = rows.map(r => {
     const b = vendor && finIsVendor(r.key) ? finVendorBudget(r.key) : null;
     const amount = b?.state?.amount ?? null;
-    const edit = may && future && finIsVendor(r.key) && (b ? b.period === 'month' : !!parent);
+    const edit = may && finIsVendor(r.key) && finVendorEditable(b, parent);
     const per = b && b.period !== 'month' ? ` <span class="muted">/ ${FIN_PER[b.period] || b.period}</span>` : '';
     const budgetCell = !vendor ? '' : !finIsVendor(r.key) ? '<td class="fin-n fin-b"></td><td></td>'
       : `<td class="fin-n fin-b">${edit ? `<input class="fin-in" inputmode="decimal" autocomplete="off" data-fin-vb="${esc(r.key)}" value="${finCentsField(amount)}" aria-label="${esc(r.label)} budget a month from ${esc(FIN_MONTH[cm])}">` : finNum(amount) + per}</td><td${b ? '' : ' class="muted"'}>${b ? esc(FIN_AT_LIMIT[b.at_limit] || b.at_limit) : ''}</td>`;
@@ -612,18 +637,22 @@ function finLineRail() {
   const one = vendor && row.key !== FIN_OTHER, got = one ? state.vendors[row.key] : null, d = got?.data || null;
   const match = e => L.by === 'team' ? (e.tags?.team || (e.tags?.teammate ? 'no_team' : FIN_NONE)) === row.key : (e.tags?.teammate || FIN_NONE) === row.key;
   const entries = one ? (d?.entries || []).slice(0, 5) : row.key === FIN_OTHER ? [] : (state.cur.entries || []).filter(match).slice(0, 8);
-  const paid = one ? d?.paid_by || [] : [], teams = one ? (d?.by_team || []).filter(r => r.amount) : [];
+  const paid = one ? d?.paid_by || [] : [];
+  // Who it went to: by team and by teammate, each when the data names one; with no names at all, one Unattributed row.
+  const teams = one ? (d?.by_team || []).filter(r => r.amount) : [], mates = one ? (d?.by_teammate || []).filter(r => r.amount) : [];
+  const namesTeam = teams.some(r => r.key !== FIN_NONE && r.key !== 'no_team'), namesMate = mates.some(r => r.key !== FIN_NONE);
   const name = finLineLabel(row.key, row.label), lineName = state.cur.account?.name || '';
   const nm = state.cur.next_month, nmLabel = nm?.month ? FIN_MON[Number(nm.month.slice(5, 7)) - 1] : '';
   const q = new URLSearchParams({account_id: state.id}); if (vendor && row.key !== FIN_OTHER && row.key !== FIN_NONE) q.set('q', row.key);
   const paidLabel = r => r.kind === 'card' ? 'Card · ' + r.name : r.kind === 'bank' ? r.name : r.name === 'manual' ? 'Journal' : r.name;
   finRail(`<div class="fin-rail-title"><h2>${esc(name)}</h2><span class="fin-big">${finUsd(row.cur)}${vendor ? ' / mo' : ''}</span></div>
     ${pct == null ? '' : `<div class="fin-bar-m${pct >= 100 ? ' bad' : b && pct >= b.warn_pct ? ' warn' : ''}" aria-hidden="true"><i style="width:${pct}%"></i></div><div class="muted fin-small">${finUsd(spent)} of ${finUsd(amount)} · ${month}</div>`}
-    ${b ? finKv('Budget' + finExcl(b.state), `${finUsd(amount)} <span class="muted">/ ${{month: 'month', quarter: 'quarter', year: 'year'}[b.period] || b.period}</span>`) + finKv('Warn at', b.warn_pct + '%') + finKv('At limit', esc((FIN_AT_LIMIT[b.at_limit] || b.at_limit) + (b.at_limit === 'ask' && b.owner ? ' ' + finWho(b.owner) : ''))) : ''}
+    ${b ? finKv('Budget' + finExcl(b.state), `${finUsd(amount)} <span class="muted">/ ${{month: 'month', quarter: 'quarter', year: 'year'}[b.period] || b.period}</span>${finCardLimitsTag(b)}`) + finKv('Warn at', b.warn_pct + '%') + finKv('At limit', esc((FIN_AT_LIMIT[b.at_limit] || b.at_limit) + (b.at_limit === 'ask' && b.owner ? ' ' + finWho(b.owner) : ''))) : ''}
     ${nm && nm.projection != null ? finKv(`${lineName} · ${nmLabel} projected`, finUsd(nm.projection) + finProjTag(nm.projection_method)) : ''}
     ${one && d?.seats != null ? finKv('Seats', esc(Number(d.seats).toLocaleString('en-US'))) : ''}${one && d?.renewal_on ? finKv('Renews', esc(finDayLabel(d.renewal_on))) : ''}
     ${paid.length ? `<h3 class="fin-h">Paid by</h3>${paid.map(r => finKv(paidLabel(r), finUsd(r.amount))).join('')}` : ''}
-    ${teams.length ? `<h3 class="fin-h">By team · ${month}</h3>${finBars(teams.map(r => ({label: r.key === FIN_NONE ? 'Unattributed' : r.key === FIN_OTHER ? r.label : finTeamName(r.key) || r.label, amount: r.amount})))}` : ''}
+    ${teams.length && (namesTeam || !namesMate) ? `<h3 class="fin-h">By team · ${month}</h3>${finBars(teams.map(r => ({label: r.key === FIN_NONE ? 'Unattributed' : r.key === FIN_OTHER ? r.label : finTeamName(r.key) || r.label, amount: r.amount})))}` : ''}
+    ${namesMate ? `<h3 class="fin-h">By teammate · ${month}</h3>${finBars(mates.map(r => ({label: r.key === FIN_NONE ? 'Unattributed' : r.key === FIN_OTHER ? r.label : finWho(r.key), amount: r.amount})))}` : ''}
     ${entries.length ? `<h3 class="fin-h">Transactions</h3>${entries.map(e => finKv(finDayLabel(e.date), finCents(e.amount))).join('')}` : ''}
     ${row.key !== FIN_OTHER ? `<a class="fin-more" href="${FIN_ROUTE}/transactions?${q}${state.fq ? '&' + state.fq : ''}">All ${esc(name)} transactions</a>` : ''}`);
   if (!one || got) return;
@@ -642,15 +671,14 @@ async function finVendorSave(input) {
   if (cents == null) { toast('A dollar amount, like 450', true); input.value = finCentsField(was); return; }
   if (cents === was) return;
   const from = FIN_LINE.month + '-01', parent = finLineParent(), account = FIN.line.id;
-  if (!finLineFuture() || (b ? b.period !== 'month' : !parent)) { input.value = finCentsField(was); return; }
+  if (!finVendorEditable(b, parent)) { input.value = finCentsField(was); return; }
+  if (finLineNow() && cents < was) { toast(FIN_ONLY_RAISE, true); input.value = finCentsField(was); return; }
   input.disabled = true;
-  try {
-    const r = b ? await finAct('budget_update', {budget_id: b.id, amount: cents, effective_from: from})
-      : await finAct('budget_create', {name: vendor, period: 'month', account_id: account, vendor, parent_id: parent.id,
-        amount: cents, effective_from: from});
-    if (r.status === 'committed') toast('Saved');
-    if (FIN?.line?.id === account) void finLineLoad();
-  } catch (e) { toast(e.message, true); input.disabled = false; input.value = finCentsField(was); }
+  const state = FIN.line, name = finLineKeys().find(r => r.key === vendor)?.label || vendor;
+  const [kind, payload] = b ? ['budget_update', {budget_id: b.id, amount: cents, effective_from: from}]
+    : ['budget_create', {name, period: 'month', account_id: account, vendor, parent_id: parent.id, amount: cents, effective_from: from}];
+  await finBudgetDecide(kind, payload, {title: name, change: finBudgetChange(FIN_MONTH[finDate(from).getMonth()], was, cents), alive: () => FIN?.line === state,
+    saved: () => void finLineLoad(), undo: () => { input.disabled = false; input.value = finCentsField(was); }});
 }
 // The month a new budget starts: the month shown when it is ahead, else next month.
 const finFromField = () => `<label>From<input type="month" name="from" required min="${finNextMonth(finToday().slice(0, 7))}" value="${finLineFuture() ? FIN_LINE.month : finNextMonth(finToday().slice(0, 7))}"></label>`;
@@ -662,29 +690,24 @@ function finFromValue(form) {
 function finVendorAdd() {
   const parent = finLineParent(), account = FIN.line.id;
   if (!parent) return;
-  finDialog('Vendor budget', `<label>Vendor<input name="vendor" required maxlength="80" autocomplete="off"></label>
+  finDecideDialog('Vendor budget', `<label>Vendor<input name="vendor" required maxlength="80" autocomplete="off"></label>
     <label>Budget / mo<input name="amount" inputmode="decimal" required autocomplete="off"></label>${finFromField()}
     <label>At limit<select name="at_limit">${Object.entries(FIN_AT_LIMIT).map(([v, l]) => `<option value="${v}"${v === 'ask' ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`,
-  'Add', async form => {
+  'Add', form => {
     const vendor = form.elements.vendor.value.trim(), cents = finParseCents(form.elements.amount.value);
     if (!vendor) throw new Error('Name the vendor');
     if (cents == null) throw new Error('A dollar amount, like 450');
-    const r = await finAct('budget_create', {name: vendor, period: 'month', account_id: account, vendor, parent_id: parent.id,
-      amount: cents, effective_from: finFromValue(form), at_limit: form.elements.at_limit.value});
-    if (r.status === 'committed') toast('Saved');
-    if (FIN?.line?.id !== account) return;
     FIN_LINE.sel = vendor;
-    void finLineLoad();
-  });
+    return ['budget_create', {name: vendor, period: 'month', account_id: account, vendor, parent_id: parent.id,
+      amount: cents, effective_from: finFromValue(form), at_limit: form.elements.at_limit.value}];
+  }, 'Saved');
 }
 // A vendor budget sits under its line's budget (a budget tree starts at a line), so a line without one gets it first.
 function finLineBudgetAdd() {
   const name = FIN.line.cur?.account?.name || $('#fin-line-name')?.textContent || 'Line', account = FIN.line.id;
-  finDialog('Line budget', `<label>Budget / mo<input name="amount" inputmode="decimal" required autocomplete="off"></label>${finFromField()}`, 'Add', async form => {
+  finDecideDialog('Line budget', `<label>Budget / mo<input name="amount" inputmode="decimal" required autocomplete="off"></label>${finFromField()}`, 'Add', form => {
     const cents = finParseCents(form.elements.amount.value);
     if (cents == null) throw new Error('A dollar amount, like 450');
-    const r = await finAct('budget_create', {name, period: 'month', account_id: account, amount: cents, effective_from: finFromValue(form)});
-    if (r.status === 'committed') toast('Saved');
-    if (FIN?.line?.id === account) void finLineLoad();
-  });
+    return ['budget_create', {name, period: 'month', account_id: account, amount: cents, effective_from: finFromValue(form)}];
+  }, 'Saved');
 }
