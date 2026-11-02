@@ -40,7 +40,8 @@ def account(ctx: Ctx, who: str) -> L.Account:
 def in_lines(payload: Mapping[str, object]) -> bool:
     """Whether a request's bill lines carry a prepaid schedule (refused where the books are a provider's)."""
     lines = payload.get("lines")
-    return isinstance(lines, list) and any(isinstance(x, Mapping) and "prepaid" in x for x in lines)
+    return isinstance(lines, list) and any(isinstance(x, Mapping) and "prepaid" in x
+                                           for x in cast(list[object], lines))
 
 
 def schedule(row: Any) -> list[tuple[str, int]]:
