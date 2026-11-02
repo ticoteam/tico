@@ -340,10 +340,39 @@ def covered_day(ctx: Ctx, day: str) -> bool:
     return span is not None and day[:7] <= span[1]
 
 
+def _conn_settings(ctx: Ctx, money: Any) -> dict[str, Any]:
+    conn = SK.get(ctx.c, "fin_connections", str(money["connection_id"])) if money["connection_id"] else None
+    return dict(SK.loads(conn["settings"])) if conn is not None else {}
+
+
 def _backfilled(ctx: Ctx, money: Any) -> bool:
     """Whether the money account's connection has finished its backfill (its first opening balance is due then)."""
-    conn = SK.get(ctx.c, "fin_connections", str(money["connection_id"])) if money["connection_id"] else None
-    return conn is not None and bool(SK.loads(conn["settings"]).get("backfilled"))
+    return bool(_conn_settings(ctx, money).get("backfilled"))
+
+
+def _opened(ctx: Ctx, money: Any) -> bool:
+    """Whether the money account's first opening was made once its backfill finished (`opened` in the connection's
+    settings; a connection from before that list: whether an opening entry was ever posted)."""
+    conf = _conn_settings(ctx, money)
+    if "opened" in conf:
+        return str(money["id"]) in conf["opened"]
+    return SK.opening_ever(ctx.c, ctx.book.id, str(money["id"]))
+
+
+def mark_opened(ctx: Ctx, connection_id: str, money_ids: Sequence[str]) -> None:
+    """Record these money accounts' first opening as made, and when (with every account an older connection had
+    opened): a row Mercury had posted by then is in the balance that opening read."""
+    conn = SK.get(ctx.c, "fin_connections", connection_id)
+    if conn is None:
+        return
+    conf = dict(SK.loads(conn["settings"]))
+    had = conf.get("opened")
+    if had is None:
+        had = [str(m["id"]) for m in SK.money_accounts(ctx.c, ctx.book.id)
+               if str(m["connection_id"] or "") == connection_id and SK.opening_ever(ctx.c, ctx.book.id, str(m["id"]))]
+    conf["opened"] = sorted({*had, *money_ids})
+    conf["opened_at"] = {**dict(conf.get("opened_at") or {}), **{m: ctx.at for m in money_ids}}
+    SK.update(ctx.c, "fin_connections", connection_id, {"settings": SK.dump(conf)})
 
 
 def refresh_opening(ctx: Ctx, money_id: str) -> None:
@@ -355,23 +384,36 @@ def refresh_opening(ctx: Ctx, money_id: str) -> None:
     money = SK.get(ctx.c, "fin_money_accounts", money_id)
     if money is None or money["balance"] is None or not money["account_id"] or str(money["kind"]) == "stripe":
         return
-    if _backfilled(ctx, money) or SK.opening_entry(ctx.c, ctx.book.id, money_id) is None:
+    if _backfilled(ctx, money):
+        # Its first opening never made (no balance read when the backfill ended): made now, once, from this pass.
+        if not _opened(ctx, money):
+            open_at(ctx, money, int(money["balance"]))
+            mark_opened(ctx, str(money["connection_id"]), [money_id])
+        return
+    if SK.opening_entry(ctx.c, ctx.book.id, money_id) is None:
         return
     open_at(ctx, money, int(money["balance"]))
 
 
-def _before_opening(ctx: Ctx, money: Any, amount: int, day: str) -> None:
-    """A settled row first seen after the backfill, dated on or before the opening's day: the balance already held it, so
-    the opening gives it back and moves before it. A later row needs nothing: the balance moved with it, and so does
-    the opening's figure. Only a first sighting counts (a pending row that settles moved the balance after the opening)."""
+def _before_opening(ctx: Ctx, money: Any, t: F.FeedTxn) -> None:
+    """A settled row first seen after the opening was made that the balance it read already held (Mercury posted it by
+    then; with no time kept, one dated on or before the opening's day): the opening gives it back and
+    moves before it if need be. History arriving late and out of order (through the Events API) counts whatever its
+    date. A later row needs nothing: the balance moved with it, and so does the opening's figure. Only a first sighting
+    counts (a pending row that settles moved the balance after the opening). An opening at 0 (no entry) still moves."""
     entry = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
+    ended = str(dict(_conn_settings(ctx, money).get("opened_at") or {}).get(str(money["id"])) or "")
+    if entry is None and not ended:
+        return
+    seen = str(t.raw.get("postedAt") or t.raw.get("createdAt") or "")
+    if not (seen <= ended if ended and seen else entry is not None and t.txn_date <= str(entry["entry_date"])):
+        return
+    earlier = (dates.day(t.txn_date) - timedelta(days=1)).isoformat()
     if entry is None:
+        set_opening(ctx, money, -t.amount, earlier)
         return
     dated = str(entry["entry_date"])
-    if day > dated:
-        return
-    earlier = (dates.day(day) - timedelta(days=1)).isoformat()
-    set_opening(ctx, money, opening_amount(ctx, money, dated) - amount, min(dated, earlier))
+    set_opening(ctx, money, opening_amount(ctx, money, dated) - t.amount, min(dated, earlier))
 
 
 def shift_openings(ctx: Ctx, before: Mapping[str, int]) -> None:
@@ -440,7 +482,7 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
             and _backfilled(ctx, money)):
         # A settled row first seen now: after settling, so its status says whether the books carry it.
         if str(SK.get(ctx.c, "fin_feed_txns", fid)["status"]) not in ("covered", "ignored"):
-            _before_opening(ctx, money, t.amount, t.txn_date)
+            _before_opening(ctx, money, t)
     return fid
 
 
