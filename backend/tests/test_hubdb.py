@@ -170,7 +170,7 @@ class GrowthRethink(unittest.TestCase):
         self.addCleanup(conn.close)
         every = migrations.files()
         with unittest.mock.patch.object(migrations, "files",
-                                        lambda directory=None: [m for m in every if m.version != "0035_growth_rethink"]):
+                                        lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]):
             H.migrate(conn)
         for statement in S.SCHEMA:
             conn.execute(statement)

@@ -70,7 +70,9 @@ def restore(path):
 
 # Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
-           "gtm_versions", "gtm_drafts"}
+           "gtm_versions", "gtm_drafts",
+           # 0103_history_events moves these five logs into history_events (backend/tests/test_history_events.py).
+           "task_events", "goal_events", "market_events", "company_events", "strategy_events"}
 
 
 @pytest.fixture(scope="module")

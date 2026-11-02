@@ -32,6 +32,9 @@ SUBJECT_TYPES = ("task", "goal", "company", "strategy",
 MARKET_KINDS = ("entity", "edge", "evidence", "document")
 SOURCES = ("task_events", "goal_events", "market_events", "company_events", "strategy_events")
 
+# The sources go once copied (spelled out, so the dev-copy table check sees each one dropped for good).
+DROPS = ("DROP TABLE IF EXISTS task_events;", "DROP TABLE IF EXISTS goal_events;", "DROP TABLE IF EXISTS market_events;",
+         "DROP TABLE IF EXISTS company_events;", "DROP TABLE IF EXISTS strategy_events;")
 TABLE = ("CREATE TABLE IF NOT EXISTS history_events(\n"
          " id TEXT PRIMARY KEY,\n"
          " subject_type TEXT NOT NULL CHECK (subject_type IN (" + ", ".join(f"'{t}'" for t in SUBJECT_TYPES) + ")),\n"
@@ -67,7 +70,6 @@ def _copy(conn, table, subject_type, subject_id, kind, old, new, note, data, act
         f"created_at) SELECT CASE WHEN EXISTS (SELECT 1 FROM history_events h WHERE h.id=s.id) THEN {subject_type}||':'||s.id "
         f"ELSE s.id END, {subject_type}, {subject_id}, s.actor, {kind}, {old}, {new}, {note}, {action_id}, {via}, {data}, "
         f"coalesce(s.created_at, '') FROM \"{table}\" s ORDER BY s.rowid")
-    conn.execute(f'DROP TABLE "{table}"')
 
 
 def up(conn):
@@ -99,3 +101,5 @@ def up(conn):
         _copy(conn, "company_events", "'company'", "'company'", "s.field", "s.old", "s.new", "NULL", "NULL")
     if "strategy_events" in have:
         _copy(conn, "strategy_events", "'strategy'", "'strategy'", "s.kind", "NULL", "NULL", "NULL", "s.payload")
+    for statement in DROPS:
+        conn.execute(statement)

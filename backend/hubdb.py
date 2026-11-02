@@ -1176,8 +1176,17 @@ def _statements(script):
         yield buffer.strip()
 
 
+# The logs migration 0103 moved into history_events. A numbered step that names one is skipped on a file that already
+# has the history table (one whose version was set back, as the upgrade tests do), so the step neither fails on the
+# missing table nor brings it back empty beside the table that replaced it.
+MOVED_TO_HISTORY = re.compile(r"\b(task_events|goal_events|market_events)\b")
+
+
 def _apply(conn, script):
+    moved = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_events'").fetchone()
     for statement in _statements(script):
+        if moved and MOVED_TO_HISTORY.search(statement):
+            continue
         match = ADD_COLUMN.fullmatch(statement)
         if match:
             add_column(conn, *match.groups())
