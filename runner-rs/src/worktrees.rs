@@ -2253,6 +2253,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_unrelated_unstaged_edit_that_is_not_utf8_is_saved_and_removed() {
+        let folder = temp_folder("unrelated-bytes");
+        let mut m = merge_in_progress(&folder.0, &["file"], &[]);
+        std::fs::write(m.path.join("other"), b"edited \xff\n").unwrap();
+        let state = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap();
+        assert_eq!(state, "removed");
+        let wip = wip_branch(&Value::Object(m.row.clone()));
+        let saved = std::process::Command::new("git")
+            .arg("-C").arg(&m.remote).args(["show", &format!("{wip}:other")])
+            .output().unwrap().stdout;
+        assert_eq!(saved, b"edited \xff\n");
+    }
+
+    #[tokio::test]
     async fn a_conflicted_file_that_is_not_utf8_is_kept() {
         let folder = temp_folder("not-utf8-file");
         let mut m = merge_in_progress_bytes(&folder.0, &["file"], &[], &[], &[], |_| b"task \xff\n".to_vec(), |_| b"main \xfe\n".to_vec());

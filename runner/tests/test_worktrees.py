@@ -1445,6 +1445,17 @@ def test_a_mid_merge_tree_with_untouched_conflicts_is_saved_and_removed(trees, t
     assert '<<<<<<<' not in git(remote, 'show', f'{wip}:second')
 
 
+def test_an_unrelated_unstaged_edit_that_is_not_utf8_is_saved_and_removed(trees, tmp_path):
+    """Bytes that are not text in a file the merge does not touch survive the abort and are saved as they are."""
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path)
+    (path / 'other').write_bytes(b'edited \xff\n')
+    assert W.act(workspace, row, 'remove', os.environ.copy()) == 'removed'
+    wip = W.wip_branch(row)
+    saved = subprocess.run(['git', '-C', str(remote), 'show', f'{wip}:other'], capture_output=True, check=True).stdout
+    assert saved == b'edited \xff\n'
+
+
 def test_a_conflict_resolved_by_hand_keeps_the_merge_and_the_worktree(trees, tmp_path):
     workspace, base, remote, row, client = trees
     path = _merge_in_progress(trees, tmp_path)

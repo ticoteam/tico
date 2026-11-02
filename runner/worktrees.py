@@ -56,11 +56,11 @@ def disk_floor(workspace):
         raise ValueError(f'Not enough disk to create worktree: {usage.free / repositories.GB:.1f} GB free, needs {floor / repositories.GB:g} GB. Free space on this volume')
 
 
-def git(path, *args, env=None, check=True):
+def git(path, *args, env=None, check=True, errors='strict'):
     if args[:2] == ('worktree', 'prune') and (Path(path) / '.git' / 'worktrees').is_symlink():
         raise ValueError('Worktree registrations point outside the base clone; left as they are')
     done = isolation.run([*safe_git.prefix(path), '-C', str(path), *args], env=safe_git.environment(env), capture_output=True, text=True,
-                         stdin=subprocess.DEVNULL, timeout=120)
+                         errors=errors, stdin=subprocess.DEVNULL, timeout=120)
     if check and done.returncode:
         error = ValueError(f'Git {args[0]} failed (exit {done.returncode}); check access, network, disk space and repository state')
         if args[0] in ('push', 'fetch', 'ls-remote'):
@@ -1054,7 +1054,9 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
             if exists and git(path, 'merge-base', '--is-ancestor', branch, 'HEAD', env=env, check=False).returncode:
                 raise ValueError('Task branch has separate history; kept worktree to preserve unpushed commits')
             from . import redact
-            patch = git(path, 'diff', '--no-ext-diff', '--no-textconv', 'HEAD', env=env).stdout
+            # The secret scan reads the patch leniently: a byte that is not text must not stop the save, which commits
+            # the bytes as they are.
+            patch = git(path, 'diff', '--no-ext-diff', '--no-textconv', 'HEAD', env=env, errors='replace').stdout
             patch += ''.join((path / name).read_text(errors='replace') for name in names if name and (path / name).is_file())
             known = redact.for_turn(env, vault_values)
             possible_secret = re.search(r'-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{24,}', patch)
