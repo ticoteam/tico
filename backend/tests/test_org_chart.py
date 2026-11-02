@@ -4,7 +4,7 @@ the one rule is that you may edit yourself and whatever reports up to you (backe
 import json
 
 from backend.store import encode
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.test_api import api, as_member, get, post  # noqa: F401
 
 
 def roster(api, people):
@@ -28,6 +28,7 @@ def test_people_and_bots_move_under_people_and_bots_and_only_managers_move_them(
     roster(api, [{"id": "ana", "email": "ana@acme.example", "name": "Ana", "primary_for": ["*"]},
                  {"id": "ben", "email": "ben@acme.example", "name": "Ben", "reports_to": "ana", "primary_for": ["cpo", "product-design"]},
                  {"id": "cara", "email": "cara@acme.example", "name": "Cara", "reports_to": "ana"}])
+    as_member(api, "ben@acme.example")          # an Admin manages everyone (the fixture makes Ben one); this is about the chart
     # Ben moves Cara under himself: Cara reports to Ana, so Ben may not.
     post(api, "people/cara", {"reports_to": "ben"}, token="ben-test", expected=403)
     post(api, "people/cara", {"reports_to": "ben"})                     # the owner may

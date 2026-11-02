@@ -256,7 +256,7 @@ def test_a_new_topic_clears_the_session_like_the_manual_clear_and_marks_the_mess
     assert response.status_code == 200, response.text
     message = response.json()["message"]
     assert message["refs"].get("topic_changed") is True, "the chat shows the quiet line above this message"
-    assert session_state(api, conversation) == {"epoch": 1, "bot_epoch": 1, "thread": False}
+    assert session_state(api, conversation) == {"epoch": 1, "bot_epoch": 0, "thread": False}
 
     # Decide saw the last 3 turns, each the person's words and the bot's answer, and the new message.
     state = model.calls[0]["state"]
@@ -266,7 +266,7 @@ def test_a_new_topic_clears_the_session_like_the_manual_clear_and_marks_the_mess
 
     # The next turn starts fresh: a new epoch, and history from the new message only.
     turn = claim(api, machine)
-    assert turn["session_epoch"] == turn["bot_session_epoch"] == 1
+    assert turn["session_epoch"] == 1 and turn["bot_session_epoch"] == 0, "the chat's own session starts anew"
     assert [m["body"] for m in turn["history"]] == [UNRELATED]
     finish(api, machine, turn)
 
@@ -291,8 +291,8 @@ def test_the_topic_clear_leaves_the_same_state_as_the_manual_clear(chat):
     # The person's own Clear, from the same kind of state: each moves the same three things by one step.
     assert clear(api).status_code == 200
     after_manual = session_state(api, conversation)
-    assert after_topic == {"epoch": 1, "bot_epoch": 1, "thread": False}
-    assert after_manual == {"epoch": 2, "bot_epoch": 2, "thread": False}
+    assert after_topic == {"epoch": 1, "bot_epoch": 0, "thread": False}
+    assert after_manual == {"epoch": 2, "bot_epoch": 0, "thread": False}
 
 
 # -------------------------------------------------------------------------------- no clear
@@ -405,7 +405,7 @@ def test_a_decision_about_a_chat_that_changed_meanwhile_clears_nothing(chat, cha
     model.hold.set()                          # a confident new topic, about the chat as it was
     sender.join(5)
     assert "topic_changed" not in (sent.get("refs") or {}), "no divider"
-    expected = {**before, "epoch": 1, "bot_epoch": 1, "thread": False} if change == "cleared" else before
+    expected = {**before, "epoch": 1, "thread": False} if change == "cleared" else before
     assert session_state(api, conversation) == expected, "no clear beyond what happened meanwhile"
     with api.app.state.store.read() as c:
         kept = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='chat.topic_kept'")]
@@ -453,7 +453,7 @@ def test_a_clear_between_admission_and_history_is_not_cleared_again(chat, monkey
     monkeypatch.setattr(T, "gate", gate_then_clear)
     message = post(api, "chat/ops", {"text": UNRELATED})
     assert "topic_changed" not in (message.get("refs") or {}), "no divider"
-    assert session_state(api, conversation) == {"epoch": 1, "bot_epoch": 1, "thread": False}, "cleared once"
+    assert session_state(api, conversation) == {"epoch": 1, "bot_epoch": 0, "thread": False}, "cleared once"
     with store.read() as c:
         kept = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='chat.topic_kept'")]
     assert kept == [{"why": "changed"}]

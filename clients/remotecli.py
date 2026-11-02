@@ -93,6 +93,8 @@ def via_tool(client, args, **more):
         fields["computer"] = args.computer  # explicit null is the bot's own internet; omission only reads
     if args.fn == "computer browser-exit" and "sharing" in fields:
         fields["sharing"] = fields["sharing"] == "on"
+    if args.fn == "thread update" and fields.pop("keep_forever", False):
+        fields["retention_days"] = None  # explicit null keeps its messages for good; omission leaves the policy alone
     fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
@@ -228,15 +230,21 @@ def run(args, who=None):
         return via_tool(client,args)
     if args.cmd == "rules":
         return via_tool(client, _rules_args(args))
-    if args.cmd == "mail":
+    if args.cmd in ("mail", "connections"):
+        return via_tool(client, args)
+    if args.cmd == "thread":
         return via_tool(client, args)
     if args.cmd == "finance":
         return via_tool(client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {}))
     if args.cmd == "settings":
         return via_tool(client, args)
+    if args.cmd == "call":
+        return via_tool(client, args)
     if args.cmd in ("card", "pin"):
         return via_tool(client, args)
     if fn.startswith(("trigger relay ", "relay ", "sleep ")):
+        return via_tool(client, args)
+    if fn.startswith("peer "):                  # federation: this install's peerings and shared threads
         return via_tool(client, args)
     # The other webhook leaves of docs/webhooks.md: each runs the tool of its own name, as on the server's own shell.
     if fn.startswith(("trigger ", "notice ")) or fn == "event-types":
@@ -297,7 +305,7 @@ def run(args, who=None):
         return via_tool(client, Namespace(**fields), **more)
     if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
         return bots(client, args)
-    if fn in ("bot repo-create", "human add", "human list", "group list", "group update", "group delete", "tool list", "tool learn", "tool add", "tool update", "tool remove",
+    if fn in ("bot repo-create", "human add", "human list", "human access", "group list", "group update", "group delete", "group access", "tool list", "tool learn", "tool add", "tool update", "tool remove",
               "update create", "update redo", "update list", "update show", "update mark-read", "update reply", "update settings",
               "changelog list", "changelog mark-read",
               "needs-you start", "needs-you next", "needs-you respond", "needs-you commit", "needs-you abandon",
@@ -833,6 +841,10 @@ def run(args, who=None):
         page = client.get(f"conversations/{args.conversation}/messages", before=args.before, since=args.since)
         return {"conversation": page.get("conversation"), "messages": page.get("messages", []),
                 "has_more": bool(page.get("has_more")), "next_before": page.get("next_before")}
+    if fn == "thread link-slack":                  # the MCP tool of the same name: the CLI and MCP run one function
+        from clients import hubtools
+        return hubtools.BY_NAME["hub_thread_link_slack"]["fn"](client, {
+            "thread": args.thread, "channel": args.channel, "history": args.history, "off": args.off, "operation_id": key})
     if cmd == "automation":
         return automation(client, args)
     if cmd == "release":

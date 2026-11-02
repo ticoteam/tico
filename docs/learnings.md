@@ -7,7 +7,7 @@ button counts the updates since you last opened it.
 
 Each update shows its commit subject, who made it and when, a link to the commit on GitHub, the files it
 changed and, once the commit has been pushed, its diff. When the run that made it is known, the
-update links to its source: the task, or the message in the chat, that the bot was working on. Two
+update links to its source: the task, or the message in the thread, that the bot was working on. Two
 more views show the current `learnings.md` and `decisions.md`, its working rules first (a `## ` section whose
 heading says rules), then the newest entries: sections by the date in their heading, and dated `- ` entries by their
 `added:` or leading date. An undated part stays under the dated one above it.
@@ -58,7 +58,7 @@ Only the computer the bot is assigned to may report for it.
   must belong to the bot or its family (an original and its branches share one repository);
   anything else is ignored. Older commits show their author and date without a source.
 - **Privacy.** Anyone who can read the bot sees its memory history, as they see its files. The
-  source shows only to a reader who may open that task or chat; everyone else sees the update
+  source shows only to a reader who may open that task or thread; everyone else sees the update
   without it.
 
 Branches of a shared bot write the same repository, so a lesson one branch pushes shows in every
@@ -85,11 +85,11 @@ Slack or mail for this itself.
 
 **What is read**, newer than the last run (the first run looks back 24 hours), at most 600 items:
 
-- **Chats**: what people wrote in chats with bots. Personal rooms (your Assistant, your Librarian
-  room) are not read. An item from a chat with bots may go only to those bots.
+- **Chats**: what people wrote in threads with bots. DMs (your Assistant, your Librarian
+  DM) are not read. An item from a thread with bots may go only to those bots.
 - **Tasks**: people's comments on tasks, and the note of a task that was finished. A private task's
   items may go only to the bots that are its owner or requester.
-- **Slack**: people's messages in channels Tico is in (direct messages already arrive as chats).
+- **Slack**: people's messages in channels Tico is in (direct messages already arrive as DMs).
 - **Mail**: only mail a teammate **sent from their own mailbox** (the sender's address is a person's
   and is the mailbox's own). Inbound mail and shared mailboxes are never read. The quoted reply is
   dropped.
@@ -117,7 +117,7 @@ reports market facts with `hub market report`.
 made by the runs that worked its packet task), Docs (the Librarian's doc versions while its task was
 open) and Market (its market changes then), each change with its source and diff. A bot's changes show
 only to readers who may read that bot. A packet's text shows only when the reader may read the source
-today (the chat, the task, the mailbox, the meeting); anything else is counted as private.
+today (the thread, the task, the mailbox, the meeting); anything else is counted as private.
 
 - `POST /api/v2/learnings/run` (owner or admin, the same as Run now on Nightly learnings in Settings > System): tonight's run now; 409 when it is running or already ran.
 - `GET /api/v2/learnings?before=&limit=`: nights, newest first.

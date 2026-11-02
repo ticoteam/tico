@@ -65,7 +65,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     };
 
     await page.goto('http://tico-ui.test/');
-    await page.waitForFunction(() => location.hash === '#/updates');
+    await page.waitForFunction(() => location.hash === '#/home');
     await page.evaluate(() => location.hash = '#/overview/campus');
     const frame = page.frameLocator('#overview-frame');
     await frame.locator('body[data-scene-ready]').waitFor();

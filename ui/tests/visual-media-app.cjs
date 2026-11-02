@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 
 function wav(seconds) {
   const rate = 8000, n = rate * seconds, data = Buffer.alloc(n * 2);
@@ -43,6 +44,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     ];
     let gen = 1;
     const signed = () => gen === 1 ? messages : messages.map(m => ({...m, refs: {...m.refs, attachments: m.refs.attachments.map(a => ({...a, src: `${a.src}.${gen}`}))}}));
+    const threads = threadsFake({bot: 'editor', messages: () => signed()});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -64,8 +66,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/events') { held.push(route); return; }
-      if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c-editor', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:editor']}] : []});
-      if (p === '/api/v2/conversations/c-editor/snapshot') return json({messages: signed(), execution: null});
+      const answer = threads(p, url, req.method());
+      if (answer !== undefined) return json(answer);
       if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: [task], next_offset: null});
       if (p === '/api/v2/tasks/t1/files') return json({files: []});
       if (p === '/api/v2/tasks/t1') return json({task, comments: taskComments, events: [], children: [], parent: null, mover: true, messages: [], can_comment: true});
@@ -77,7 +79,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       refs: {task: 't1', comment: true, attachments: [A('f-cut', 'video', {width: 1280, height: 720})]}}];
 
     // ---- chat: players in the cards, from the visual address, paused; a person's clip too
-    await page.goto('https://tico-ui.test/#/bot/editor/chat');
+    await page.goto('https://tico-ui.test/#/bot/editor/dm');
     const m1 = page.locator('[data-message="m1"]');
     await m1.locator('figure.vcard audio').waitFor();
     const video = m1.locator('figure.vcard[data-kind="video"] video'), voice = m1.locator('figure.vcard[data-kind="audio"] audio');
@@ -112,7 +114,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       gen += 1;
       messages.push({id, from_actor: 'bot:editor', body: 'One more.', created: now, refs: {attachments: [A('f-more-' + id, 'audio')]}});
       const seq = 8 + gen;
-      await stream.fulfill({contentType: 'text/event-stream', body: `id: ${seq}\nevent: messages\ndata: ${JSON.stringify({seq, conversation_id: 'c-editor'})}\n\n`});
+      await stream.fulfill({contentType: 'text/event-stream', body: `id: ${seq}\nevent: messages\ndata: ${JSON.stringify({seq, thread_id: 't-dm-editor'})}\n\n`});
       await page.locator(`[data-message="${id}"] figure.vcard audio`).waitFor();
       const kept = await page.evaluate(() => { const m = document.querySelector('[data-message="m1"] figure.vcard[data-kind="audio"] audio');
         return [m.dataset.mark, m.currentTime, m.paused]; });

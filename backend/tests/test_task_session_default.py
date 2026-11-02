@@ -19,6 +19,23 @@ def test_task_turns_get_their_own_session_unless_the_bot_opts_out():
     assert sessions.session_key({"stateless": True, "session": "bot"}, "ops", None, "c1") == sessions.BOT_THREAD
 
 
+def test_a_private_task_on_session_bot_keeps_its_own_session():
+    on_bot = {"session": "bot"}
+    # A private task never shares the bot's thread, which serves the Home and public turns.
+    assert sessions.session_key(on_bot, "ops", "t1", "c1", task_private=True) == "task:t1"
+    assert sessions.session_key(on_bot, "ops", "t1", "c1", "r1", "public", task_private=True) == "task:t1"
+    # A task turn in a private thread keeps its own session as well; a non-private task in a public one shares it.
+    assert sessions.session_key(on_bot, "ops", "t1", "c1", "r1", "private") == "task:t1"
+    assert sessions.session_key(on_bot, "ops", "t1", "c1", "r1", "public") == sessions.BOT_THREAD
+    assert sessions.session_key(on_bot, "ops", "t1", "c1") == sessions.BOT_THREAD
+    # Chat with no task is unchanged: the public thread, each private thread's own, the bot thread on an older server.
+    assert sessions.session_key(on_bot, "ops", None, "c1", "r1", "public", task_private=True) == sessions.PUBLIC_THREAD
+    assert sessions.session_key(on_bot, "ops", None, "c1", "r1", "private") == "root:r1:private"
+    assert sessions.session_key(on_bot, "ops", None, "c1", task_private=True) == sessions.BOT_THREAD
+    # The server's lanes are unchanged: the turn still runs in the bot's one checkout.
+    assert sessions.lane(on_bot, "ops", "t1", "c1") == sessions.MAIN_LANE
+
+
 def test_the_old_written_bot_default_is_cleared_once(api):
     store = api.app.state.store
     def session(bot):

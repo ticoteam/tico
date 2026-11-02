@@ -52,6 +52,8 @@ class Provider:
         self.accounts, self.account_calls = None, []
         # It takes the sign-in list (backend/people_mirror.py): a list of (status, answer) to answer; None = not advertised.
         self.people, self.people_calls = None, []
+        # It mails an install's unread-threads digest (backend/oidc.py `digest`): a list of (status, answer) to answer.
+        self.digests, self.digest_calls = None, []
         self.keys = []
         self.rotate()
         provider = self
@@ -79,7 +81,9 @@ class Provider:
                                 **({"tico_accounts_endpoint": provider.issuer + "/oauth2/accounts"}
                                    if provider.accounts is not None else {}),
                                 **({"tico_people_endpoint": provider.issuer + "/oauth2/people"}
-                                   if provider.people is not None else {})})
+                                   if provider.people is not None else {}),
+                                **({"tico_digest_endpoint": provider.issuer + "/oauth2/digest"}
+                                   if provider.digests is not None else {})})
                 elif path.endswith("/keys"):
                     provider.jwks_fetches += 1
                     self.reply({"keys": [provider.jwk(kid, key) for kid, key in provider.keys]})
@@ -101,6 +105,10 @@ class Provider:
                 if urlparse(self.path).path.endswith("/oauth2/people"):
                     provider.people_calls.append(one)
                     status, answer = provider.people.pop(0)
+                    return self.reply(answer, status)
+                if urlparse(self.path).path.endswith("/oauth2/digest"):
+                    provider.digest_calls.append(one)
+                    status, answer = provider.digests.pop(0)
                     return self.reply(answer, status)
                 if urlparse(self.path).path.endswith("/oauth2/accounts"):
                     provider.account_calls.append(one)

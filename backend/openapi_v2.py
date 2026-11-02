@@ -33,6 +33,8 @@ TAGS = {
     "Changelog": "Shipped Tico releases, product announcements and the signed-in person's read state (docs/updates.md).",
     "Needs you": "What is waiting on the signed-in person: questions, tasks, approvals.",
     "Meetings": "Recorded meetings.",
+    "Calls": "Tico Meet calls (docs/meet.md): audio and screen share in a thread, a live transcript posted to it when it "
+             "ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera.",
     "Files": "What a bot creates, revises or delivers, listed on its page (docs/files.md).",
     "Pages": "HTML pages bots publish and keep current (docs/pages.md): a file with a cadence, a data date and a status line.",
     "Docs": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them.",
@@ -63,7 +65,7 @@ EVENTS_DESCRIPTION = (
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
-    "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours: read in full), "
+    "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
     "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
     "Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the "
     "browser's own `Last-Event-ID`). People only: a bot is refused with 403."
@@ -129,6 +131,12 @@ STABLE = [
     ("/api/v2/humans/{pid}", "post", "Team chart", "updatePerson", "Edit a person's profile or reports_to", None),
     ("/api/v2/humans/{pid}", "delete", "Team chart", "removePerson",
      "Remove a left person with no history for good (owner only); anyone with history stays as left", None),
+    ("/api/v2/humans/{pid}/access", "get", "Team chart", "getPersonAccess",
+     "Who may see, read and write to a person (themselves, whoever they report up to, admins; docs/permissions.md)",
+     "TeammateAccessView"),
+    ("/api/v2/humans/{pid}/access", "put", "Team chart", "setPersonAccess",
+     "Set who may see, read and write to a person; send the revision you read (409 version_conflict otherwise)",
+     "TeammateAccessView"),
     ("/api/v2/seats", "get", "Team chart", "listSeats",
      "The Recruiting seats: roles on the chart with a job description and reporting line, and no bot. A seat holds no "
      "work: a task for it is refused and its role's work stays with its manager", "SeatList"),
@@ -159,6 +167,11 @@ STABLE = [
      "Rename a group, move it under another (`parent`, empty for the top) and add or remove teammates (owners and admins)", "Group"),
     ("/api/v2/groups/{gid}", "delete", "Team chart", "deleteGroup",
      "Remove a group; the groups and teammates in it move up to its parent (owners and admins)", None),
+    ("/api/v2/groups/{gid}/access", "get", "Team chart", "getGroupAccess",
+     "Who may see, read and write to a group (its leads and admins; docs/permissions.md)", "TeammateAccessView"),
+    ("/api/v2/groups/{gid}/access", "put", "Team chart", "setGroupAccess",
+     "Set who may see, read and write to a group; send the revision you read (409 version_conflict otherwise)",
+     "TeammateAccessView"),
     ("/api/v2/org/order/{manager}", "get", "Team chart", "getReportOrder",
      "A manager's direct reports (a bot's slug or a human's id), humans and the bots the caller can see, in the "
      "chart's order", "ReportOrderView"),
@@ -620,6 +633,9 @@ STABLE = [
      "business) or its daily time", "SystemRoutineUpdate"),
     ("/api/v2/system-routines/{key}/run", "post", "Health", "runSystemRoutine",
      "The owner or an admin: run one controlled system routine once, now; 409 while it is off or already running", None),
+    ("/api/v2/threads/{thread_id}/catch-up", "post", "Conversations", "catchUpThread",
+     "What is new in a thread (scope subtree: its sub-threads too) that you may read, summarized and posted to your "
+     "Assistant DM; the newest 40 messages at most. Nothing new posts nothing", "CatchUpResult"),
 ]
 
 
@@ -672,6 +688,8 @@ SCHEMAS = {
     "ChatGoal": obj({"id": "s", "conversation_id": "s", "bot": "s", "objective": "s", "status": "s",
                      "note": "s", "set_by": "s", "set_at": "s", "updated_at": "s", "ended_at": "n"},
                     required=["id", "conversation_id", "bot", "objective", "status", "note", "set_by", "set_at", "updated_at", "ended_at"]),
+    "CatchUpResult": obj({"thread_id": "s", "scope": "s", "messages": "i", "left_out": "i", "posted": "o",
+                          "words": "s"}, required=["thread_id", "scope", "messages", "left_out"]),
     "ChatGoalResult": obj({"goal": {"anyOf": [ref("ChatGoal"), {"type": "null"}]}}, required=["goal"],
                           supported={"type": "boolean"}, commands=items({"type": "object"})),
     "Message": obj({"id": "s", "conversation_id": "s", "from_actor": "s", "to_actor": "s", "kind": "s", "body": "s",
@@ -815,6 +833,11 @@ SCHEMAS = {
     "BotAccessView": obj({"bot": "s", "see": ref("Audience"), "read": ref("Audience"), "write": ref("Audience"),
                       "revision": "i", "you": ref("Access"), "teams": items({"type": "object"})},
                      required=["bot", "see", "read", "write", "revision"]),
+    "TeammateAccessView": obj({"target": "s", "see": ref("Audience"), "read": ref("Audience"), "write": ref("Audience"),
+                               "default": {"type": "object"}, "revision": "i",
+                               "you": obj({"see": "b", "read": "b", "write": "b", "manage": "b"}),
+                               "teams": items({"type": "object"})},
+                              required=["target", "see", "read", "write", "revision"]),
     "Me": obj({"actor": "s", "role": "s", "email": "s"}),
     "Config": obj({"company_name": "s", "app_name": "s", "assistant_name": "s", "assistant_bot": "s",
                    "public_url": "s", "owner_email": "s", "version": "s",
@@ -2047,6 +2070,7 @@ STABLE.extend([
     ('/api/v2/inbound/inboxes','get','Inbound','listInboundInboxes','Company email and phone inboxes','InboundInboxes'),
     ('/api/v2/inbound/inboxes','post','Inbound','createInboundInbox','Create a free email inbox; SMS creation requires a phone approval request',None),
     ('/api/v2/inbound/inboxes/{ident}','patch','Inbound','editInboundInbox','Rename an inbox across connected interfaces and save local dependencies',None),
+    ('/api/v2/inbound/inboxes/{ident}/audience','put','Inbound','setInboundInboxAudience','An owner or admin sets who reads an inbox: company, or team with group_id (that group and the groups under it)','InboundInbox'),
     ('/api/v2/inbound/inboxes/{ident}/release','post','Inbound','releaseInboundInbox','An admin retires email or cancels phone renewal',None),
     ('/api/v2/inbound/phone-quote','get','Inbound','quoteInboundPhone','A current monthly US mobile rental quote',None),
     ('/api/v2/inbound/phone-requests','get','Inbound','listInboundPhoneRequests','An owner or admin lists phone approval requests','InboundPhoneRequests'),
@@ -2066,6 +2090,8 @@ SCHEMAS.update({
         {**obj({'connected':{'enum':[True]},'scope':{'enum':['inbox']},'company':{'$ref':'#/components/schemas/InboundConnectionCompany'}}),'additionalProperties':False},
     ]},
     'InboundCursor': obj({'cursor':'i'}),
+    'InboundInbox': obj({'inbox_id':'s','kind':'s','name':'s','address':'s','state':'s','audience':{'enum':['company','team']},
+                         'group_id':{'type':['string','null']}}),
     'InboundInboxes': obj({'inboxes':items({'type':'object'}),'configured':'b','last_sync':NUM_N,'error':'s','gaps':items({'type':'object'})}),
     'InboundMessages': obj({'messages':items({'type':'object'}),'next':{'type':['integer','null']},'cursor':'i'}),
     'InboundPhoneRequests': obj({'phone_requests':items({'type':'object'}),'next':{'type':['string','null']}}),
@@ -2085,6 +2111,20 @@ STABLE.extend([
     ('/api/v2/triggers/{trigger_id}/deliveries/{delivery}/replay','post','Triggers','replayTriggerDelivery','Run a kept call again as a new occurrence',None),
     ('/api/v2/triggers/{trigger_id}/recover','post','Triggers','recoverTrigger','Run again, under the current secret and preset, the calls refused in the last since_hours (1-720) whose body is kept; each keeps its delivery id',None),
 ])
+TAGS['Connections'] = 'Every connection in one list: who reads what it brings in, its bots and where to configure it.'
+STABLE.extend([
+    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Email & Phone inboxes, meeting '
+     'importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the '
+     'company\'s they may read. Paged with cursor','ConnectionList'),
+])
+SCHEMAS['Connection'] = obj({'id': 's', 'kind': {'enum': ['slack', 'github', 'mailbox', 'inbox', 'meetings', 'trigger',
+                                                         'webhook', 'postal', 'listening']},
+                             'name': 's', 'detail': 's', 'status': {'enum': ['on', 'off', 'waiting', 'error', 'paused']},
+                             'scope': {'enum': ['company', 'team', 'person']}, 'readers': 's',
+                             'bots': items(obj({'slug': 's', 'name': 's'})), 'more_bots': 'i', 'configure': 's',
+                             'can_configure': 'b'},
+                            required=['id', 'kind', 'name', 'status', 'scope', 'readers', 'bots', 'configure'])
+SCHEMAS['ConnectionList'] = obj({'connections': items(ref('Connection')), 'next': 'n'})
 TAGS['Webhook relay'] = 'Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py).'
 STABLE.extend([
     ('/api/v2/relay', 'get', 'Webhook relay', 'getWebhookRelay', 'The Gateway key, how many relay addresses exist, the last '
@@ -2271,9 +2311,10 @@ TAGS['Cards and pins'] = ("Tico's built-in cards and where pages and cards are p
                           "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.")
 STABLE.extend([
     ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, team:<group>, '
-     'bot:<slug>, task:<id>), each card with what it shows the caller; unreadable pages are left out', 'Place'),
-    ('/api/v2/places/{place}', 'put', 'Cards and pins', 'savePlace', 'Save a Dashboard or team page (its default cards '
-     'become pins) and a team page\'s audience', 'Place'),
+     'bot:<slug>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are '
+     'left out', 'Place'),
+    ('/api/v2/places/{place}', 'put', 'Cards and pins', 'savePlace', 'Save a Dashboard, team page or My dashboard (its '
+     'default cards become pins); a team page\'s audience sets its group\'s Read', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),
     ('/api/v2/pins', 'post', 'Cards and pins', 'addPin', 'Pin page:<file id> or card:<id> at a place: a bot its own, to '
      'its sidebar or task; a person who arranges the Dashboard or a team page there', 'Place'),
@@ -2309,19 +2350,21 @@ STABLE.extend([
     ('/api/v2/bots/{bot}/rules', 'get', 'Rules', 'getBotRules', 'A bot\'s Rules tab: its settings as sentences, then internal and external rules, each paged by its own cursor', None),
     ('/api/v2/rules/stats', 'get', 'Rules', 'getRuleCheckStats', 'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on', None),
     ('/api/v2/rules/check', 'post', 'Rules', 'checkRuleDraft', 'A bot checks a draft as the write it will be; sending that exact draft then costs no second check', None),
-    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The holds on one review task, as its reviewer or the author bot reads them: summaries, a page at a time (next_cursor)', None),
-    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output: only the author bot and the reviewer read it', None),
+    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The held writes the caller may read, as summaries, a page at a time: a review task\'s holds (task), a conversation\'s held writes (thread), or every held write the caller may read', None),
+    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer and the person a bot reports to read the rest', None),
     ('/api/v2/rule-holds/{hold_id}/keep', 'post', 'Rules', 'keepRuleHold', 'The reviewer keeps it blocked', None),
-    ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce', None),
+    ('/api/v2/rule-holds/{hold_id}/withdraw', 'post', 'Rules', 'withdrawRuleHold', 'The author takes a held write back to edit and resend it, or the person a bot reports to withdraws its post; nothing is sent', None),
+    ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce; for a person\'s write that is the rule\'s author, its editors or an admin', None),
     ('/api/v2/rule-holds/{hold_id}/appeal', 'post', 'Rules', 'appealRuleHold', 'The author bot asks the reviewer to look, with why', None),
 ])
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
-                                                        'automation_runs', 'latest_pages']},
+                                                        'automation_runs', 'latest_pages', 'needs_attention',
+                                                        'unread_threads', 'my_tasks', 'updates']},
                        'title': 's', 'heading': 's', 'name': 's', 'team_name': 's', 'settings': 'o', 'hidden': 'b',
                        'data': {'type': ['object', 'null'], 'description': 'What the card shows the caller; null when hidden'}},
                       required=['id', 'template', 'heading', 'settings', 'hidden', 'data'])
 SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
-SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bot', 'task']}, 'saved': 'b', 'can_edit': 'b',
+SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bot', 'task', 'person']}, 'saved': 'b', 'can_edit': 'b',
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
                                            'card': ref('Card'),
                                            'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated': 's', 'archived': 'b'})},
@@ -2361,6 +2404,25 @@ SCHEMAS['ComputerSubscriptionList'] = obj({
 SCHEMAS['ComputerSubscriptionResult'] = obj({
     'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 'n', 'stopped': 'i', 'sessions_reset': 'i'})
 
+TAGS['Slack links'] = ("A thread's link to a Slack channel, both ways (docs/slack.md): asked for by an admin, checked by the "
+                       "gateway, then active, suspended or refused. Admins only.")
+STABLE.extend([
+    ('/api/v2/slack/links', 'get', 'Slack links', 'listSlackLinks', 'The Slack links (of one thread with `thread`), newest first, '
+     'up to `limit` (at most 100) a page; `next_cursor` reads the next page; unlinked ones are left out', 'SlackLinkList'),
+    ('/api/v2/slack/links', 'post', 'Slack links', 'requestSlackLink', 'Ask for a thread to be linked to a Slack channel '
+     '(`#name` or its id): the gateway checks it and activates or refuses it later; `history` also brings in its earlier '
+     'messages', 'SlackLink'),
+    ('/api/v2/slack/links/{link_id}', 'delete', 'Slack links', 'unlinkSlackLink', 'Stop a Slack link: nothing more is sent '
+     'to the channel after this; answers the link, now unlinked', 'SlackLink'),
+    ('/api/v2/slack/links/{link_id}/resume', 'post', 'Slack links', 'resumeSlackLink', 'Check a suspended or refused link '
+     'again; any other state answers 409', 'SlackLink'),
+])
+SCHEMAS['SlackLink'] = obj({
+    'id': 's', 'thread_id': 's', 'channel': obj({'id': 's', 'name': 's', 'private': 'b'}),
+    'audience': 's', 'state': {'enum': ['requested', 'active', 'suspended', 'refused', 'unlinked']}, 'reason': 's',
+    'history': obj({'state': {'enum': ['off', 'pending', 'running', 'done', 'failed']}, 'count': 'i'}),
+    'linked_by': 's', 'created_at': 's', 'updated_at': 's'})
+SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink')), 'next_cursor': 'n', 'available': 'b'})
 
 # Independent reviewer cards: task closure never changes this audience or lifetime.
 TAGS['Memory tidy'] = "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
@@ -2402,6 +2464,165 @@ def _refs(node, found):
     elif isinstance(node, list):
         for value in node:
             _refs(value, found)
+
+
+TAGS['Federation'] = ("Shared threads between Tico installs through Tico HQ: this install's key, peerings (both installs "
+                      "approve, and a pause stops one) and the threads it shares (docs/federation.md).")
+STABLE.extend([
+    ('/api/v2/federation', 'get', 'Federation', 'getFederation', "This install's key id, Gateway, one page of peerings and shared threads with cursors (no key material)", None),
+    ('/api/v2/federation/keys', 'post', 'Federation', 'createFederationKey', "Make this install's federation key and register it with Tico HQ", None),
+    ('/api/v2/federation/keys/rotate', 'post', 'Federation', 'rotateFederationKey', 'A new key; the old one is retired and every peering needs approving again', None),
+    ('/api/v2/federation/peerings', 'post', 'Federation', 'requestFederationPeering', 'Ask another install to peer; an Idempotency-Key is required', None),
+    ('/api/v2/federation/peerings/{peering_id}/approve', 'post', 'Federation', 'approveFederationPeering', "Approve a peering after checking the other install's key; active once both approve", None),
+    ('/api/v2/federation/peerings/{peering_id}/pause', 'post', 'Federation', 'setFederationPeeringPause', 'The kill switch: while paused nothing crosses the peering in either direction', None),
+    ('/api/v2/federation/peerings/{peering_id}/revoke', 'post', 'Federation', 'revokeFederationPeering', 'End a peering; a new request starts over', None),
+    ('/api/v2/federation/threads/{thread_id}/installs', 'post', 'Federation', 'shareFederationThread', 'Share a thread this install owns with an active peer; it gets the thread from now on', None),
+    ('/api/v2/federation/threads/{thread_id}/installs/{install_id}', 'delete', 'Federation', 'unshareFederationThread', 'Remove an install from a thread this install owns; it gets the removal and nothing after', None),
+    ('/api/v2/federation/threads/{thread_id}/installs/{install_id}/retry', 'post', 'Federation', 'retryFederationThreadInstall', 'Send again now what another install has not taken from this thread; for whoever manages the thread', None),
+    ('/api/v2/federation/threads/{thread_id}/readers', 'post', 'Federation', 'addFederationThreadReader', 'Let a local person read a shared thread copy on this install; an admin who reads it adds readers', None),
+])
+# Threads (docs/dev/threads-contract.md §10): a thread is a conversation read through threads.view, and its messages
+# carry thread_id, root_id-free fields as _message_out writes them.
+TAGS["Threads"] = ("Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages "
+                   "in a thread. A thread the viewer may not read answers 404, never 403.")
+SCHEMAS.update({
+    "ThreadView": obj({"id": "s", "title": "s",
+                       "audience": {"type": "string", "enum": ["company", "team", "members", "task", "home", "personal",
+                                                               "participants", "meeting"]},
+                       "audience_group_id": "n", "owner_actor": "n",
+                       "parent_id": "n", "parent_message_id": "n", "root_id": "s", "path": "a", "kind": "n",
+                       "task_id": "n", "created_at": "s", "last_message_at": "n", "archived_at": "n",
+                       "last_seq": "i", "last_unread_seq": "i", "me": "o", "members": "o",
+                       "retention_days": {"type": ["integer", "null"],
+                                          "description": "Days a root keeps its messages; null keeps them for good"},
+                       "home": {"type": ["object", "null"], "description": "Only for audience home: {actor}"}},
+                      required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq"]),
+    "ThreadReactions": items(obj({"emoji": "s", "count": "i", "actors": "a"}, required=["emoji", "count", "actors"])),
+    "ThreadEarlier": obj({"home": "s", "messages": "i"}, required=["home", "messages"]),
+    "ThreadUploaded": obj({"thread": ref("ThreadView"), "message": ref("ThreadMessage")},
+                          required=["thread", "message"]),
+    "ThreadSidebar": obj({"attention": items({"type": "object"}), "threads": items(ref("ThreadView")),
+                          "dms": items({"type": "object"}), "next_cursor": "n"},
+                         required=["attention", "threads", "dms"]),
+    "ThreadSearch": obj({"hits": items(obj({"message_id": "s", "thread_id": "s", "title": "s", "from_actor": "s",
+                                            "created": "s", "excerpt": "s"},
+                                           required=["message_id", "thread_id", "excerpt"])),
+                         "next_cursor": "n"}, required=["hits", "next_cursor"]),
+    "ThreadMessage": obj({"id": "s", "conversation_id": "s", "thread_id": "s", "seq": "i", "from_actor": "s",
+                          "to_actor": "n", "kind": "s", "body": "n", "created": "s", "edited_at": "n",
+                          "revision": "i", "refs": "o", "deleted": "b", "root_id": "n", "origin_id": "n",
+                          "parent_message_id": "n", "depth": "i", "hidden": "b",
+                          "sub_thread": {"type": ["object", "null"], "description": "The sub-thread branching from this "
+                                         "message: {id, count, last_seq, unread, more}"}},
+                         required=["id", "seq", "thread_id"]),
+    "ThreadCrumb": obj({"id": "s", "title": "s"}),
+    "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items(ref("ThreadCrumb")),
+                           "messages": items({"type": "object"}), "next_cursor": "n"},
+                          required=["thread", "messages"]),
+    "ThreadMembers": obj({"members": items(obj({"actor": "s", "role": "s", "added_by": "n", "created_at": "s"},
+                                               required=["actor", "role"])),
+                          "next_cursor": "n"}, required=["members"]),
+    "ThreadMemberChange": obj({"thread_id": "s", "actor": "s", "role": "s", "removed": "b"},
+                              required=["thread_id", "actor"]),
+    "ThreadRead": obj({"thread_id": "s", "last_read_seq": "i"}, required=["thread_id", "last_read_seq"]),
+    "ThreadReadAll": obj({"threads": "i"}, required=["threads"]),
+    "ThreadFollow": obj({"thread_id": "s", "following": "b", "notify": "s"}, required=["thread_id", "following"]),
+    "ThreadMessageDeleted": obj({"id": "s", "deleted": "b", "revision": "i"}, required=["id", "deleted"]),
+})
+STABLE.extend([
+    ("/api/v2/threads", "get", "Threads", "listThreads",
+     "The viewer's sidebar, threads and DMs they may read: needs attention, then unread, then recent, one page "
+     "(`cursor`); a task's thread is listed only while it has unread for the viewer; a root's row sums its sub-threads for the viewer; with "
+     "`with=<actor>`, only the threads that teammate is a member of", "ThreadSidebar"),
+    ("/api/v2/threads", "post", "Threads", "createThread",
+     "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` "
+     "its first message is posted too", "ThreadView"),
+    ("/api/v2/threads/search", "get", "Threads", "searchThreads",
+     "Messages whose text matches every word of `q`, newest first, only in threads and messages the viewer may read", "ThreadSearch"),
+    ("/api/v2/threads/home/{actor}", "get", "Threads", "getThreadHome",
+     "A teammate's Home (`actor` in the path: bot:<slug>, human:<id> or group:<id>), made on first use; needs Read on "
+     "that teammate, else the same 404 whether or not they exist", "ThreadView"),
+    ("/api/v2/threads/dm", "get", "Threads", "openThreadDm",
+     "My DM with `with`: the open one with exactly those two, or a new one; needs Write on them (the reply-back rule "
+     "applies). `create=false` makes nothing and answers 404 `no_dm` when there is none yet", "ThreadView"),
+    ("/api/v2/threads/dm", "post", "Threads", "createThreadDm",
+     "A DM with these teammates (`members`), the open one or a new one, with an optional first message (`body`); needs "
+     "Write on each of them, and a bot's or person's first message passes the org rules", "ThreadView"),
+    ("/api/v2/threads/{thread_id}", "get", "Threads", "getThread",
+     "A thread as the viewer sees it: its unread count, read mark, what they may do and its first page of members",
+     "ThreadView"),
+    ("/api/v2/threads/{thread_id}", "patch", "Threads", "updateThread",
+     "Rename, archive or unarchive a thread, change who it is for, or set how many days a root keeps its messages (`retention_days`, null for good); its managers only", "ThreadView"),
+    ("/api/v2/threads/{thread_id}/timeline", "get", "Threads", "getThreadTimeline",
+     "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest", "ThreadTimeline"),
+    ("/api/v2/threads/{thread_id}/members", "get", "Threads", "listThreadMembers",
+     "Who a thread is for, a page at a time", "ThreadMembers"),
+    ("/api/v2/threads/{thread_id}/members", "post", "Threads", "addThreadMember",
+     "Add a member to a thread (its managers); the new member reads up to now, so the backfill is not unread", "ThreadMemberChange"),
+    ("/api/v2/threads/{thread_id}/members/{actor}", "delete", "Threads", "removeThreadMember",
+     "Remove a member from a thread (its managers)", "ThreadMemberChange"),
+    ("/api/v2/threads/{thread_id}/messages", "post", "Threads", "postThreadMessage",
+     "Post a message in a thread, or in a sub-thread with `parent_message_id`; it passes the org rules first", "ThreadMessage"),
+    ("/api/v2/threads/{thread_id}/read", "post", "Threads", "markThreadRead",
+     "Read up to `seq` in the thread; the highest mark wins, so a device that is ahead keeps its place", "ThreadRead"),
+    ("/api/v2/threads/{thread_id}/read-all", "post", "Threads", "markThreadAndSubthreadsRead",
+     "Read up to now in the thread and every sub-thread under it", "ThreadReadAll"),
+    ("/api/v2/threads/{thread_id}/follow", "put", "Threads", "followThread",
+     "Follow a thread so its messages reach the viewer (`notify`: live or digest)", "ThreadFollow"),
+    ("/api/v2/threads/{thread_id}/follow", "delete", "Threads", "unfollowThread",
+     "Stop following a thread", "ThreadFollow"),
+    ("/api/v2/messages/{message_id}", "patch", "Threads", "editMessage",
+     "Edit one's own message in a thread; the search index and the timeline follow", "ThreadMessage"),
+    ("/api/v2/messages/{message_id}", "delete", "Threads", "deleteMessage",
+     "Delete one's own message in a thread", "ThreadMessageDeleted"),
+    ("/api/v2/messages/{message_id}/reactions/{emoji}", "put", "Threads", "reactToMessage",
+     "Add my reaction to a message I read (the same emoji twice is one); answers the message's reactions", "ThreadReactions"),
+    ("/api/v2/messages/{message_id}/reactions/{emoji}", "delete", "Threads", "unreactToMessage",
+     "Remove my reaction from a message (a no-op without one); answers the message's reactions", "ThreadReactions"),
+    ("/api/v2/threads/{thread_id}/open-earlier", "post", "Threads", "openEarlierMessages",
+     "A manager of a bot opens its Home's earlier shared-room messages to the Home's readers; a bot's Home only (422 "
+     "otherwise), managers only (403)", "ThreadEarlier"),
+    ("/api/v2/uploads/threads/{thread_id}/messages", "post", "Threads", "uploadThreadMessage",
+     "A person's message with files in a thread (multipart: text, titles and the files); each file is linked to the "
+     "message, under the chat upload limit", "ThreadUploaded"),
+    ("/api/v2/threads/messages/{message_id}/task", "post", "Threads", "makeTaskFromMessage",
+     "A task from a message I read: the server copies its text and a link back, and the task is private unless the "
+     "thread is company-wide", "TaskResult"),
+])
+# Tico Meet calls (docs/meet.md): a call belongs to a thread. Joining hands back a token for audio and screen share only.
+STABLE.extend([
+    ("/api/v2/threads/{thread_id}/calls", "get", "Calls", "listCalls",
+     "The calls in a thread, newest first, a page at a time: before=<next_before> reads the next page", "CallList"),
+    ("/api/v2/threads/{thread_id}/calls", "post", "Calls", "startCall", "Start a call in a thread you can write to", "Call"),
+    ("/api/v2/calls/{call_id}", "get", "Calls", "getCall", "A call: its state, people, bots and how it ended", "Call"),
+    ("/api/v2/calls/{call_id}/join", "post", "Calls", "joinCall", "Join a call: its media URL and a token good for 5 minutes",
+     "CallJoin"),
+    ("/api/v2/calls/{call_id}/token", "post", "Calls", "refreshCallToken", "A fresh token for a call you have joined", "CallToken"),
+    ("/api/v2/calls/{call_id}/leave", "post", "Calls", "leaveCall", "Leave a call you joined", "Call"),
+    ("/api/v2/calls/{call_id}/end", "post", "Calls", "endCall", "End a call you started; its transcript is posted to the thread",
+     "Call"),
+    ("/api/v2/calls/{call_id}/action-items/retry", "post", "Calls", "retryCallActionItems",
+     "Ask again for a call's action items the Gateway could not make; the sweep makes them", "Call"),
+    ("/api/v2/calls/{call_id}/bots", "post", "Calls", "attachCallBots", "Let bots listen to a call and reply in its thread", "Call"),
+    ("/api/v2/calls/{call_id}/bots/{bot}", "delete", "Calls", "detachCallBot", "Take a bot out of a call", "Call"),
+])
+SCHEMAS.update({
+    "CallParticipant": obj({"actor": "s", "joined_at": "s", "left_at": "n", "removed_at": "n"}),
+    "CallHold": obj({"kind": {"enum": ["transcript", "action_items"]}, "reason": "s", "detail": "s",
+                     "created_at": "s"}),
+    "CallSummary": obj({"id": "s", "thread_id": "s", "title": "s", "state": {"enum": ["live", "ended"]}, "connector": "s",
+                        "started_at": "s", "ended_at": "n", "end_reason": "n"}),
+    "Call": obj({"id": "s", "thread_id": "s", "title": "s", "state": {"enum": ["live", "ended"]}, "connector": "s",
+                 "meeting_id": "s", "started_at": "s", "ended_at": "n", "end_reason": "n",
+                 "participants": items(ref("CallParticipant")), "bots": items({"type": "string"})},
+                holds={"type": "array", "items": ref("CallHold"),
+                       "description": "Posts the thread refused at the call's end. Only the connector sees them"},
+                speak_replies={"type": "boolean", "description": "Whether bots were asked to speak their replies "
+                               "on this call; off unless the call asked. Spoken replies are not sent yet"}),
+    "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n", "available": "b"}),
+    "CallJoin": obj({"call": ref("Call"), "url": "s", "expires_in": "i", "token": "s"}),
+    "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
+})
 
 
 def spec(app):
@@ -2489,6 +2710,12 @@ def spec(app):
                                 "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
                                 if granola else
                                 "1-200 characters. Reusing a key with the same body replays the first answer.")})
+        if method == "post" and path.startswith("/api/v2/calls/") and path.endswith("/token"):
+            # A refresh writes nothing, so the key is optional and ignored.
+            for param in op["parameters"]:
+                if param.get("name") == "Idempotency-Key":
+                    param["required"] = False
+                    param["description"] = "Not needed: a refresh writes nothing; the header is ignored."
         paths.setdefault(path, {})[method] = op
     used = set()
     _refs(paths, used)

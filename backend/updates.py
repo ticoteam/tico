@@ -1067,6 +1067,9 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         if not has_newer:
             c.execute("DELETE FROM update_archive_overrides WHERE state='restored' AND update_id IN "
                       "(SELECT id FROM updates WHERE bot=? AND kind=? AND day<?)", (bot, kind, day))
+        # The update's card in its author's Home (backend/thread_cards.py): one per new update; an edit keeps it.
+        from . import thread_cards
+        thread_cards.post_card(c, uid, bot, kind, day)
     H.event(c, H.bot_actor(drafted_by) if drafted_by else author_actor(bot), "update.post", uid, {"kind": kind, "day": day, **({"warning": problem} if problem else {})})
     posted = with_inputs(c, one(c, uid), meetings=is_person(bot) and reader)
     return {**posted, "warning": problem} if problem else posted
