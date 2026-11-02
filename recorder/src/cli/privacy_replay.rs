@@ -37,7 +37,9 @@ pub fn run(store: &Store, base: &str, scenario: &str) -> Result<()> {
             "lost-ack",
             "sequence-conflict",
             "pause-ack",
-            "discard-ack"
+            "discard-ack",
+            "visibility-team",
+            "visibility-private"
         ]
         .contains(&scenario),
         "Unknown replay"
@@ -54,6 +56,38 @@ pub fn run(store: &Store, base: &str, scenario: &str) -> Result<()> {
     let record = store.create("Privacy replay synthetic")?;
     let id = &record.id;
     store.state(id, "recording")?;
+    if scenario.starts_with("visibility-") {
+        let private = scenario == "visibility-private";
+        let live_id = tico.ensure_live(store, id, !private)?;
+        store.save_audio(id, Channel::Microphone, 0, 1000, &vec![0.2; 16000], 16000)?;
+        let chunk = store
+            .claim_transcription()?
+            .expect("Synthetic audio queued");
+        store.transcription_result(&chunk, "Synthetic visibility choice", "", json!({}))?;
+        store.state(id, "stopped")?;
+        tico.finish_live(store, id)?;
+        let meeting_id = store.get(id)?.deliveries[0].meeting_id.clone();
+        let path = format!("/api/v2/meetings/{meeting_id}");
+        ensure!(
+            tico.call(&path, None, "")?["private"] == private,
+            "Finalize changed visibility"
+        );
+        let reopened = Store::open(store.root())?;
+        tico.send(&reopened, id, false)?;
+        let filed = tico.call(&path, None, "")?;
+        ensure!(filed["private"] == private, "Send changed visibility");
+        ensure!(filed["review_state"] == "live", "Send did not approve");
+        tico.send(&reopened, id, false)?;
+        ensure!(
+            tico.call(&path, None, "")?["private"] == private,
+            "Repeated Send changed visibility"
+        );
+        println!(
+            "{}",
+            json!({"synthetic":true,"scenario":scenario,"live_id":live_id,"meeting_id":meeting_id,"private":private})
+        );
+        return Ok(());
+    }
     let live_id = tico.ensure_live(store, id, false)?;
     store.replace_live_words(id, "me", 0, 1000, &[word(0, "Public opening")])?;
     if scenario == "lost-ack" {
