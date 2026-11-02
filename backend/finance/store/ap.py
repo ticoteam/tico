@@ -463,6 +463,13 @@ def settled_from(c: sqlite3.Connection, from_kind: str, from_id: str) -> int:
     return int(row[0])
 
 
+def settled_to(c: sqlite3.Connection, from_kind: str, from_id: str) -> list[tuple[str, str]]:
+    """The (kind, id) of each bill or invoice a payment or feed row is applied to, not voided, oldest first."""
+    return [(str(r[0]), str(r[1])) for r in c.execute(
+        "SELECT to_kind, to_id FROM fin_settlements WHERE from_kind=? AND from_id=? AND voided_at IS NULL "
+        "ORDER BY settled_on, id", (from_kind, from_id)).fetchall()]
+
+
 def repoint_credit(c: sqlite3.Connection, old: str, new: str) -> None:
     """The credit applications a credit memo's entry made now come from its replacement entry, still applied."""
     c.execute("UPDATE fin_settlements SET from_id=?, entry_id=? WHERE from_kind='credit' AND from_id=? "

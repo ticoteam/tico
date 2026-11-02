@@ -3,7 +3,8 @@ account. The money-out row it refunds is the newest one of this amount still ope
 at least that large. The refund posts the reversal of that row's own lines, in proportion and with their tags, as a
 Stripe refund reverses its sale (stripe_post._unwind), and records the row it refunds (`refund_of`). Several rows that
 could be it, or none that fits, leave the refund new and asked, with the candidates named by id. A money-out row that
-already pays a document is not a candidate: reopening that document is not done here."""
+already pays a bill is not reopened here: money back that could refund it stays new and is asked, naming the bill, so no
+posting rule can post it as income (a vendor's refund is not income)."""
 from datetime import date, timedelta
 from typing import Any
 
@@ -27,30 +28,38 @@ def settle(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, card: Any) -> bool:
     if not found:
         return False
     fid = str(row["id"])
-    exact = [o for o, left in found if left == t.amount]
-    fitting = [o for o, left in found if left >= t.amount]
-    if exact:
+    open_found = [(o, left) for o, left, paid in found if not paid]
+    paid_found = [(o, left) for o, left, paid in found if paid and left >= t.amount]
+    if not open_found and not paid_found:
+        return False
+    exact = [o for o, left in open_found if left == t.amount]
+    fitting = [o for o, left in open_found if left >= t.amount]
+    if not paid_found and exact:
         _post(ctx, row, money, t, exact[0], card)       # the newest one of this exact amount
-    elif len(fitting) == 1:
+    elif not paid_found and len(fitting) == 1:
         _post(ctx, row, money, t, fitting[0], card)
-    else:                                              # several could be it, or none fits: a person picks
-        open_rows = [str(o["id"]) for o, left in found if left > 0]
-        banking.event(ctx, banking.CATEGORY_EVENT, fid, {"feed_id": fid, "candidates": open_rows})
+    else:                                              # several could be it, a bill's payment could be it, or none fits
+        open_rows = [str(o["id"]) for o, left in open_found if left > 0]
+        bills = sorted({to for o, _ in paid_found for kind, to in SAP.settled_to(ctx.c, "feed", str(o["id"]))
+                        if kind == "bill"})
+        banking.event(ctx, banking.CATEGORY_EVENT, fid, {"feed_id": fid, "candidates": open_rows, "bills": bills})
     return True
 
 
-def _candidates(ctx: Ctx, money: Any, t: F.FeedTxn) -> list[tuple[Any, int]]:
+def _candidates(ctx: Ctx, money: Any, t: F.FeedTxn) -> list[tuple[Any, int, bool]]:
     """The money-out rows on this account to this counterparty, dated within the window before the refund, newest
-    first, each with what it still leaves to refund in cents (its amount less the refunds already posted for it)."""
+    first, each with what it still leaves to refund in cents (its amount less the refunds already posted for it) and
+    whether a bill or invoice settled it (its payment)."""
     start = (date.fromisoformat(t.txn_date) - timedelta(days=WINDOW_DAYS)).isoformat()
-    out: list[tuple[Any, int]] = []
+    out: list[tuple[Any, int, bool]] = []
     for r in SK.refund_candidates(ctx.c, str(money["id"]), start, t.txn_date):
         if not documents.same_name(t.counterparty, str(r["counterparty"])):
             continue
-        if str(r["kind"]) in F.TRANSFER_KINDS or SAP.settled_from(ctx.c, "feed", str(r["id"])):
+        if str(r["kind"]) in F.TRANSFER_KINDS:
             continue
         refunded = sum(int(x["amount"]) for x in SK.refunds_of(ctx.c, str(r["id"])))
-        out.append((r, -int(r["amount"]) - refunded))
+        paid = SAP.settled_from(ctx.c, "feed", str(r["id"])) > 0
+        out.append((r, -int(r["amount"]) - refunded, paid))
     return out
 
 

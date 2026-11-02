@@ -6,6 +6,7 @@ from backend.finance import reads as FR
 from backend.finance.store import banking as SK
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template, store, sync_once)
+from backend.tests.test_finance_ap import _bill, _vendor
 from backend.tests.test_finance_banking import _card_for_eve, _card_use
 from backend.tests.test_finance_banking import _txn as _card_txn
 from backend.tests.test_finance_payments import _checking
@@ -14,15 +15,16 @@ LATER = "2026-10-15T12:30:00.000000Z"
 NEXT_DAY = "2026-10-16T12:30:00.000000Z"
 
 
-def _txn(raw_id: str, amount: float, day: str, counterparty: str):
+def _txn(raw_id: str, amount: float, day: str, counterparty: str, kind: str = "externalTransfer"):
     return {**MERCURY["txn_bank_fee"], "id": raw_id, "accountId": "acct-chk", "amount": amount,
-            "kind": "externalTransfer", "createdAt": f"{day}T10:00:00Z", "postedAt": f"{day}T10:00:00Z",
+            "kind": kind, "createdAt": f"{day}T10:00:00Z", "postedAt": f"{day}T10:00:00Z",
             "counterpartyName": counterparty}
 
 
-def _arrives(fake, raw_id: str, amount: float, day: str, counterparty: str = "Acme", version: int = 1) -> None:
+def _arrives(fake, raw_id: str, amount: float, day: str, counterparty: str = "Acme", version: int = 1,
+             kind: str = "externalTransfer") -> None:
     """Mercury has this transaction at this version, and an event says so."""
-    fake.txns[raw_id] = _txn(raw_id, amount, day, counterparty)
+    fake.txns[raw_id] = _txn(raw_id, amount, day, counterparty, kind)
     fake.events_list.append({"id": f"evt-{raw_id}-{version}", "resourceType": "transaction", "resourceId": raw_id,
                              "operationType": "create" if version == 1 else "update", "resourceVersion": version})
 
@@ -184,3 +186,33 @@ def test_a_card_refund_reverses_its_charge_on_the_card_budget_and_gives_the_use_
         assert _row(c, "txn-card-back") == ("posted", True, buy)
         assert _balance(c, "6100") == 0                         # the budget line is back to nothing
         assert _card_use(c, card_id, "2026-10") == 0            # and the card has its use back
+
+
+def test_money_in_that_refunds_a_row_which_paid_a_bill_stays_new_names_the_bill_and_no_rule_posts_it(books):
+    """The payment of an approved bill is settled to it, so it is no refund candidate; money back from the same
+    vendor is still asked about, with that bill named, and a posting rule for the vendor does not post it as income."""
+    fake = FakeMercury()
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        vendor = _vendor(c, "Acme")
+        bill = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 10_000}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+    _arrives(fake, "txn-paid", -100.0, "2026-10-16", kind="outgoingPayment")   # the bill's payment matches the bill
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        assert _row(c, "txn-paid")[:2] == ("posted", True)
+        assert FR.bill(c, OWNER, bill)["status"] == "paid"
+    with books.transaction() as c:
+        rule = act(c, OWNER, "rule_create", {
+            "kind": "posting", "name": "Acme income", "when": {"counterparty": {"matches": "Acme"}},
+            "outcome": {"outcome": "post", "account_id": account(c, "4000")},
+            "examples": [{"input": {"counterparty": "Acme"}, "expect": "post"}]})
+        assert rule.status == "committed", rule
+    _arrives(fake, "txn-back", 100.0, "2026-10-17")
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        back = _fid(c, "txn-back")
+        assert _row(c, "txn-back") == ("new", False, None)       # a person decides; the rule does not post it
+        assert _asked(c, back) and _asked(c, back)[0]["bills"] == [bill]
+        assert _balance(c, "4000") == 0
