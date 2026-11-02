@@ -16,7 +16,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from . import books_link
 from .core import mirror as M
@@ -429,8 +429,12 @@ def _without_classes(body: Mapping[str, Any]) -> dict[str, Any]:
     lines = body.get("lines")
     if not isinstance(lines, list):
         return dict(body)
-    kept = [{k: v for k, v in x.items() if k not in ("class", "classes")} if isinstance(x, Mapping) else x
-            for x in lines]
+    kept: list[Any] = []
+    for x in cast(list[Any], lines):
+        if isinstance(x, dict):
+            kept.append({k: v for k, v in cast(dict[str, Any], x).items() if k not in ("class", "classes")})
+        else:
+            kept.append(x)
     return {**body, "lines": kept}
 
 

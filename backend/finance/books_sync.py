@@ -5,7 +5,7 @@ no provider: the writes it would send are withheld and stay visible in the outbo
 import logging
 import threading
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from .gateway_sync import Bell
 from .core import mirror as M
@@ -34,6 +34,16 @@ def _maps(values: list[Any]) -> list[dict[str, Any]]:
     return [v for v in values if isinstance(v, dict)]
 
 
+def _dict(value: object) -> dict[str, Any]:
+    """A JSON object, as a dict of Any (empty when the value is not one)."""
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
+def _list(value: object) -> list[Any]:
+    """A JSON array, as a list of Any (empty when the value is not one)."""
+    return cast(list[Any], value) if isinstance(value, list) else []
+
+
 def _cloud(event: Mapping[str, Any]) -> bool:
     """A CloudEvents event: the spec makes its specversion a string."""
     return isinstance(event.get("specversion"), str)
@@ -45,18 +55,20 @@ def _events(provider: str, payload: object) -> list[dict[str, Any]] | None:
     CloudEvents event (an object with a specversion), a CloudEvents batch (a JSON array of them), or a cloudEvents list.
     Xero sends an events list."""
     if provider != "quickbooks":
-        found: dict[str, Any] = payload if isinstance(payload, dict) else {}
+        found = _dict(payload)
         return _maps(found["events"]) if isinstance(found.get("events"), list) else None
     if isinstance(payload, list):
-        events = _maps(payload)
-        return events if events and len(events) == len(payload) and all(_cloud(e) for e in events) else None
+        raw = _list(payload)
+        events = _maps(raw)
+        return events if events and len(events) == len(raw) and all(_cloud(e) for e in events) else None
     if not isinstance(payload, dict):
         return None
-    if isinstance(payload.get("eventNotifications"), list):
-        return _maps(payload["eventNotifications"])
-    if isinstance(payload.get("cloudEvents"), list):
-        return _maps(payload["cloudEvents"])
-    return [payload] if _cloud(payload) else None
+    found = _dict(payload)
+    if isinstance(found.get("eventNotifications"), list):
+        return _maps(found["eventNotifications"])
+    if isinstance(found.get("cloudEvents"), list):
+        return _maps(found["cloudEvents"])
+    return [found] if _cloud(found) else None
 
 
 def _realms(events: Sequence[Mapping[str, Any]]) -> set[str]:
@@ -72,9 +84,9 @@ def _realms(events: Sequence[Mapping[str, Any]]) -> set[str]:
 def _shape_of(payload: object) -> str:
     """A payload's shape for a log line: its keys or length, never its contents."""
     if isinstance(payload, dict):
-        return "an object with keys " + ", ".join(sorted(str(k) for k in payload)[:8])
+        return "an object with keys " + ", ".join(sorted(str(k) for k in _dict(payload))[:8])
     if isinstance(payload, list):
-        return f"a list of {len(payload)}"
+        return f"a list of {len(_list(payload))}"
     return type(payload).__name__
 
 
