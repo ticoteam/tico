@@ -42257,11 +42257,11 @@
         "required": [
           "author",
           "body",
+          "created_at",
           "goal_id",
           "id",
           "signal",
-          "source_actor",
-          "ts"
+          "source_actor"
         ],
         "additionalProperties": true
       },
@@ -46731,7 +46731,7 @@
           "memory_commit",
           "model",
           "reason",
-          "requester",
+          "requester_id",
           "reviewer",
           "status",
           "title"
@@ -47731,7 +47731,7 @@
           "title": {
             "type": "string"
           },
-          "bot": {
+          "bot_id": {
             "type": "string"
           },
           "bot_name": {
@@ -56622,7 +56622,7 @@
         "required": [
           "archived",
           "unread",
-          "updated_at"
+          "updated"
         ],
         "additionalProperties": true
       },

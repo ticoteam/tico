@@ -13,7 +13,11 @@ const PAGE_FULL_MIN = 240;
 const pageDay = iso => { const d = new Date(String(iso) + 'T12:00:00'); return isNaN(d) ? String(iso) : d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}); };
 const pageHref = id => PAGE_ROUTE + encodeURIComponent(id);
 // The bot's name as the rest of the app shows it (duplicates get their slug), else the server's.
-const pageBotName = x => x.bot && botRow(x.bot) ? botDisplayName(x.bot) : x.bot_name || x.bot || '';
+// A page names its bot bot_id; a Library file and a search hit name it bot.
+const pageBotName = x => {
+  const bot = x.bot_id || x.bot;
+  return bot && botRow(bot) ? botDisplayName(bot) : x.bot_name || bot || '';
+};
 // `link: false` inside a card that is itself a link: the replacing page's title without its own link.
 function pageStatusHTML(p, {link = true} = {}) {
   if (p.replaced_by_id) {

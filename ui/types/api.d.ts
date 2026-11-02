@@ -1932,7 +1932,7 @@ export type GoalCheckinView = {
   author: string;
   author_name?: string;
   body: string;
-  created_at?: string;
+  created_at: string;
   goal_id: string;
   id: string;
   kpi_id?: string | null;
@@ -2782,7 +2782,7 @@ export type MemoryTidyCard = {
   memory_commit: string;
   model: string;
   reason: string;
-  requester_id?: string;
+  requester_id: string;
   reviewer: string;
   status: "open" | "withdrawn" | "discarded" | "kept";
   title: string;
@@ -2993,7 +2993,7 @@ export type OrgModels = {
 export type Page = {
   archived: boolean;
   as_of: string | null;
-  bot?: string;
+  bot_id: string;
   bot_name: string;
   cadence: "none" | "daily" | "weekly" | "monthly";
   file_id: string;
@@ -4583,7 +4583,7 @@ export type UpdateArchive = {
 export type UpdateArchiveResult = {
   archived: boolean;
   unread: number;
-  updated?: number;
+  updated: number;
 };
 
 export type UpdateList = {

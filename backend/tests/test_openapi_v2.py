@@ -73,6 +73,15 @@ def test_served_to_the_signed_in_only_and_limited_to_the_stable_resources(api):
             assert "Idempotency-Key" in [p["name"] for p in ops["post"]["parameters"]], path
 
 
+def test_a_schema_requires_only_what_it_declares():
+    """A required name missing from properties is a rename that reached one list and not the other; no live answer
+    can show it unless a test happens to call that route."""
+    schemas = openapi_v2.generate()["components"]["schemas"]
+    wrong = {name: missing for name, schema in schemas.items() if schema.get("properties")
+             and (missing := sorted(set(schema.get("required") or ()) - set(schema["properties"])))}
+    assert not wrong
+
+
 def test_the_declared_answers_match_the_live_ones(api):
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
     by_id = {op["operationId"]: op for ops in document["paths"].values() for op in ops.values()}

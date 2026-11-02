@@ -979,7 +979,7 @@ SCHEMAS = {
     "InboundTaskResult": obj({"task": {"oneOf": [obj({"id": "s"}), {"type": "null"}]}, "created": "b", "changed": "b"}),
     "UpdateList": obj({"updates": "a", "unread": "i", "next_before": "n"}, required=["updates", "unread"]),
     "UpdateArchiveResult": obj({"updated": "i", "archived": "b", "unread": "i"},
-                                required=["updated_at", "archived", "unread"]),
+                                required=["updated", "archived", "unread"]),
     "ChangelogEntry": obj({"id": "s", "title": "s", "bullets": items({"type": "string"}), "area": "s",
                            "kind": {"type": "string", "enum": ["product", "activity"]}, "shipped_at": "s",
                            "unread": "b", "version": "s", "source": "s", "url": "s", "task_id": "s"},
@@ -1179,7 +1179,7 @@ SCHEMAS = {
                owner_name={"type": "string"}),
     "GoalCheckinView": obj({"id": "s", "goal_id": "s", "kpi_id": "n", "created_at": "s", "author": "s", "source_actor": "s", "body": "s",
                         "signal": {"type": ["string", "null"], "enum": ["on_track", "at_risk", "off_track", None]}},
-                       required=["id", "goal_id", "ts", "author", "source_actor", "body", "signal"],
+                       required=["id", "goal_id", "created_at", "author", "source_actor", "body", "signal"],
                        author_name={"type": "string"}, source_actor_name={"type": "string"}),
     "GoalProposalView": obj({"id": "s", "kind": {"enum": ["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"]},
                          "goal_id": "n", "kpi_id": "n", "payload": "o", "reason": "s", "proposed_by": "s", "proposed_at": "s",
@@ -2180,7 +2180,7 @@ STABLE.extend([
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
 SCHEMAS.update({
-    "Page": obj({"file_id": "s", "title": "s", "bot": "s", "bot_name": "s", "version": "i", "updated_at": "s",
+    "Page": obj({"file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
                  "updated_by": "n", "updated_by_name": "s",
                  "cadence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly"]},
                  "as_of": {"type": ["string", "null"], "description": "The date the data is from (YYYY-MM-DD)"},
@@ -2337,7 +2337,7 @@ SCHEMAS['MemoryTidyCard'] = obj({
     'memory_commit': 's', 'model': 's', 'cost_usd': {'type': 'number', 'description': 'Filing-ledger list-price estimate, including subscription usage.'},
     'diary': 's', 'diff': {'type': 'string', 'description': 'Checked unified diff; present on detail reads and decisions, omitted from lists.'},
     'created_at': 's', 'expires_at': 's', 'status': {'enum': ['open', 'withdrawn', 'discarded', 'kept']}, 'reason': 's', 'keep_available': 'b',
-}, required=['id', 'kind', 'bot', 'reviewer', 'requester', 'title', 'memory_commit', 'model', 'cost_usd', 'diary',
+}, required=['id', 'kind', 'bot', 'reviewer', 'requester_id', 'title', 'memory_commit', 'model', 'cost_usd', 'diary',
              'created_at', 'expires_at', 'status', 'reason', 'keep_available'])
 SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
 SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})

@@ -55,7 +55,7 @@ def test_overview_counts_bots_on_fallback_and_limited_ones_for_who_may_read_them
     assert '"primary_limited": true' in detail
 
     # Someone who cannot read the bot hears nothing about it; a reader does.
-    assert [row["bot_id"] for row in get(api, "health", token="cara-test")["on_fallback"]] == ["ops"]
+    assert [row["bot"] for row in get(api, "health", token="cara-test")["on_fallback"]] == ["ops"]
     access = get(api, "bots/ops/access")
     only_ana = {"people": ["ana"]}
     saved = api.put("/api/v2/bots/ops/access", json={"see": only_ana, "read": only_ana, "write": only_ana,
