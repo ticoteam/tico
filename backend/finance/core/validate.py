@@ -25,9 +25,10 @@ _DASHES = "\\-\u2010-\u2015\u2212"
 _GAP = re.compile(rf"[\s\u00ad\u200b-\u200d\u2060\ufeff{_DASHES}]*")
 _DASH = re.compile(rf"[{_DASHES}]")
 _WORD = re.compile(r"\w")
-# A CVC (or CVV, CSC) typed beside its three or four digits, in any sentence: `CVC 123`, `cvv2: 4567`, `security code
-# 987`, `CVC is 123`. Its digits are the code, whatever else the text says (§8.3, §13).
-_CVC_TEXT = re.compile(r"(?i)\b(?:cvc2?|cvv2?|csc|security\s+code)(?![a-z])(?:\s*(?:is|was|no\.?|number|code)\b)?"
+# A CVC (or CVV, security code) typed beside its three or four digits, in any sentence: `CVC 123`, `cvv2: 4567`,
+# `security code 987`, `CVC is 123`. Its digits are the code, whatever else the text says (§8.3, §13). A bare CSC is
+# not matched: a memo can name a year or an invoice with it (`CSC 2026`).
+_CVC_TEXT = re.compile(r"(?i)\b(?:cvc2?|cvv2?|security\s+code)(?![a-z])(?:\s*(?:is|was|no\.?|number|code)\b)?"
                        r"[\W_]{0,3}\d{3,4}(?!\d)")
 
 

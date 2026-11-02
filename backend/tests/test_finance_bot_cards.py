@@ -564,11 +564,11 @@ def test_a_card_number_is_refused_however_its_digits_are_spaced_or_followed(book
 
 def test_a_cvc_typed_as_free_text_is_refused_and_never_stored(books):
     """§8.3, §13: a CVC is never stored, logged or sent to a model, whatever sentence it is typed into."""
-    for typed in ("CVC 123", "cvc: 4567", "CVV2=123", "CVC123", "security code 987", "card CSC 321 on file",
-                  "cvc is 123"):
+    for typed in ("CVC 123", "cvc: 4567", "CVV2=123", "CVC123", "security code 987", "cvc is 123"):
         assert V.has_card_number({"memo": typed}), typed
+    # CSC alone is not a card code: a memo can name a year or an invoice with it (only CVC, CVV and security code are).
     for text in ("invoice 123 for cvc work", "CVC check passed on 3 runs", "security code 123456",
-                  "order 2026-10-31 ref 0001"):
+                 "order 2026-10-31 ref 0001", "CSC 2026"):
         assert not V.has_card_number({"memo": text}), text
     with books.transaction() as c:
         budgets = c.execute("SELECT count(*) FROM fin_budgets").fetchone()[0]
