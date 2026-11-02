@@ -206,15 +206,14 @@ async function shot(page, name) {
     assert.match(await page.locator('#dm-list .th-row-title').textContent(), /Bea/);
     await shot(page, 'sidebar-desktop');
 
-    // A message below an old thread, with another thread on screen: its row moves up with a dot, unread rows stay first.
-    // Read in the same tick: the list read that follows the event brings the fixture's rows back.
-    const moved = await page.evaluate(() => {
-      liveEmit('threads', {kind: 'activity', thread_id: 't0-sub', root_id: 't0', actor: 'human:bea', counters: {last_seq: 900}});
-      const rows = [...document.querySelectorAll('#th-list .th-row')];
-      return {titles: rows.map(r => r.querySelector('.th-row-title').textContent), dot: rows[3].querySelectorAll('.th-activity').length};
-    });
-    assert.equal(moved.titles[3], 'Thread 0', 'the row moves up, below what is unread');
-    assert.equal(moved.dot, 1);
+    // A message below an old thread, with another thread on screen: the list is read again and its row moves up with
+    // a dot, by what is under it, below what is unread.
+    listed[0].activity_seq = 900; listed[0].me = {...me(), activity: true};
+    await page.evaluate(() => liveEmit('threads', {kind: 'activity', thread_id: 't0-sub', root_id: 't0', actor: 'human:bea', counters: {last_seq: 900}}));
+    const movedUp = page.locator('#th-list .th-row').nth(3);
+    await movedUp.filter({hasText: 'Thread 0'}).waitFor({timeout: 5000});
+    assert.equal(await movedUp.locator('.th-activity').count(), 1);
+    delete listed[0].activity_seq; listed[0].me = me();
 
     // One thread: its sub-threads inline under their message, indented, deepest capped.
     await page.goto('https://tico-ui.test/#/thread/t-plan');
