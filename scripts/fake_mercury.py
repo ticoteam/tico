@@ -207,6 +207,9 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
     if method == "POST" and path == "/cards":
         return 200, new_card(body)
     if method == "POST" and path == "/recipients":
+        gaps = recipient_address_gaps(body)
+        if gaps:
+            return 400, {"message": f"address: {', '.join(gaps)} required"}
         rid = STATE.new("rcp")
         STATE.recipients[rid] = {**body, "id": rid}
         return 200, {"id": rid}
@@ -294,6 +297,20 @@ def card_spend(body: dict) -> tuple[int, dict]:
            "merchant": {"amount": amount, "currency": "USD"}}
     STATE.add_txn(txn)
     return 200, {"transaction": txn}
+
+
+ADDRESS_REQUIRED = ("address1", "city", "region", "postalCode", "country")
+
+
+def recipient_address_gaps(body: dict) -> list[str]:
+    """What a POST /recipients body lacks in the address each routing info needs. Mercury's docs: checkInfo,
+    domesticWireRoutingInfo and electronicRoutingInfo each require an address with these fields (address2 optional)."""
+    gaps: list[str] = []
+    for key in ("checkInfo", "domesticWireRoutingInfo", "electronicRoutingInfo"):
+        if key in body:
+            address = (body[key] or {}).get("address") or {}
+            gaps += [f"{key}.address.{f}" for f in ADDRESS_REQUIRED if not str(address.get(f) or "").strip()]
+    return gaps
 
 
 def in_search(txn: dict, search: str | None) -> bool:

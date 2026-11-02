@@ -63,6 +63,8 @@ BANK_FIELDS = ("account_number", "routing_number", "tax_id")
 SEALED_FIELDS = ("details_ref", "details_fp", "last4")     # what Finance keeps in their place; never sent by a caller
 TAX_FIELDS = ("tax_id_ref", "tax_id_fp", "tax_id_last4")
 REFS = ("details_ref", "tax_id_ref")
+ADDRESS_KEYS = ("address1", "address2", "city", "region", "postalCode", "country")   # Mercury's address keys (its docs)
+ADDRESS_REQUIRED = ("address1", "city", "region", "postalCode", "country")          # each routing info needs these
 
 
 def _bank_details(p: Mapping[str, object]) -> tuple[str, dict[str, Any]]:
@@ -153,6 +155,21 @@ def open_details(c: Any, ref: str) -> dict[str, Any]:
     return cast(dict[str, Any], got) if isinstance(got, dict) else {}
 
 
+def _address_check(address: Mapping[str, Any]) -> None:
+    """A payee's address takes Mercury's keys, and every method's routing info carries one (a check's mailing address,
+    a wire's or an ACH's address), so each needs the required fields. An unknown key is refused, not dropped, and each
+    value is text (address2 may be null)."""
+    unknown = sorted(str(k) for k in address if k not in ADDRESS_KEYS)
+    if unknown:
+        raise invalid(f"the address takes Mercury's keys ({', '.join(ADDRESS_KEYS)}); not {', '.join(unknown)}")
+    missing = [k for k in ADDRESS_REQUIRED if not str(address.get(k) or "").strip()]
+    if missing:
+        raise invalid(f"the address is missing {', '.join(missing)}")
+    not_text = sorted(str(k) for k, v in address.items() if v is not None and not isinstance(v, str))
+    if not_text:
+        raise invalid(f"the address fields are text: {', '.join(not_text)}")
+
+
 def recipient_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A payee and where their money goes. Changed details are a new recipient version (`replaces` the old one), so a
     changed invoice can never quietly redirect a known payee's money: the new version is unknown to the rules. The
@@ -163,8 +180,7 @@ def recipient_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     name = V.text(p, "name", 120)
     method = V.choice(p, "method", METHODS)
     address = V.obj(p.get("address") or {}, "address")
-    if method == "check" and not address:
-        raise invalid("a check needs a mailing address")
+    _address_check(address)
     digest = V.text(p, "details_fp", 128)
     last4 = V.opt_text(p, "last4", 4) or "" if method != "check" else ""
     old = None
@@ -638,8 +654,15 @@ def asked_rules(action: Any) -> set[str]:
     results, actions._rule_rows). An approval covers what it named, and nothing else."""
     if action is None:
         return set()
-    raw = json.loads(str(action["rule_results_json"] or "[]"))
-    return {str(r["rule"]) for r in raw if isinstance(r, dict) and r.get("outcome") == "needs_approval"}
+    raw: object = json.loads(str(action["rule_results_json"] or "[]"))
+    rows: list[object] = cast(list[object], raw) if isinstance(raw, list) else []
+    out: set[str] = set()
+    for r in rows:
+        if isinstance(r, dict):
+            row = cast(dict[str, object], r)
+            if row.get("outcome") == "needs_approval":
+                out.add(str(row["rule"]))
+    return out
 
 
 def approved_for(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str) -> bool:

@@ -254,7 +254,8 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "card_save": (("card_id", "str", ""), ("vendor", "str", "a vendor contact's id, or the name the vendor goes by")),
     "card_unsave": (("card_id", "str", ""), ("vendor", "str", "the vendor the card was saved on")),
     "recipient_add": (("name", "str", ""), ("method", "ach|wire|check", ""), ("account_type?", "str", ""),
-                      ("address?", "obj", "a check's mailing address (a check needs one)"),
+                      ("address", "obj", "the payee's address in Mercury's keys (every method needs one): address1, "
+                       "city, region, postalCode, country; address2 is optional"),
                       ("email?", "str", ""), ("contact_id?", "str", ""),
                       ("replaces?", "str", ""), ("money_account_id?", "str", ""),
                       ("account_number?", "str", "ach or wire: the account number, digits; sealed, never stored "

@@ -16,7 +16,7 @@ from backend.finance.store import ap as SAP
 from backend.finance.store import banking as SK
 from backend.records import store as RS
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, store)
+    ACME_ADDRESS, AT, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, store)
 
 EVE = "human:eve"
 FAY = "human:fay"
@@ -235,7 +235,8 @@ def test_an_order_past_a_hold_payment_budget_is_held_and_its_bill_waits_to_be_pa
         money = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
         rid = str(act(c, OWNER, "recipient_add", {"name": "Acme Supplies", "method": "ach",
                                                   "account_number": "000099998888",
-                                                  "routing_number": "000000000"}).result["recipient_id"])
+                                                  "routing_number": "000000000",
+                                                  "address": ACME_ADDRESS}).result["recipient_id"])
         vendor = _vendor(c, recipient_id=rid)
         po = _order(c, vendor, [_line(c, 80_000)])
         assert _status(c, po) == ("approved", "") and _state(c) == (0, 80_000, -30_000)
@@ -257,7 +258,8 @@ def test_a_queued_bill_payment_past_a_hold_payment_budget_waits_and_marking_the_
         money = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
         rid = str(act(c, OWNER, "recipient_add", {"name": "Acme Supplies", "method": "ach",
                                                   "account_number": "000099998888",
-                                                  "routing_number": "000000000"}).result["recipient_id"])
+                                                  "routing_number": "000000000",
+                                                  "address": ACME_ADDRESS}).result["recipient_id"])
         vendor = _vendor(c, recipient_id=rid)
         po = _order(c, vendor, [_line(c, 80_000)])
         bill = str(_bill(c, vendor, [{"po_line_id": _po_lines(c, po)[0], "amount": 80_000}]).result["bill_id"])

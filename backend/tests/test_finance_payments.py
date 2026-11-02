@@ -20,7 +20,8 @@ from backend.finance.store import tico as FT
 from backend.finance.actions import FinanceError
 from backend.finance.mercury import Answer
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
+    ACME_ADDRESS, AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store,
+    sync_once)
 from backend.tests.test_api import api, get, post  # noqa: F401
 
 HOURS = [f"2026-10-15T{h:02d}:30:00.000000Z" for h in range(13, 24)]
@@ -143,7 +144,8 @@ def _payee(store, fake, *, at=AT):
     """Acme Supplies by ACH, synced to Mercury."""
     with store.transaction() as c:
         made = act(c, OWNER, "recipient_add", {"name": "Acme Supplies", "method": "ach",
-                                               "account_number": "000099998888", "routing_number": "000000000"})
+                                               "account_number": "000099998888", "routing_number": "000000000",
+                                               "address": ACME_ADDRESS})
         assert made.status == "committed", made
     sync_once(store, fake, at)
     with store.read() as c:
@@ -188,13 +190,35 @@ def test_a_payee_built_from_the_recipient_help_is_accepted(books):
     """Bots build a payee from the help: its field names are the ones the code reads (bank numbers at the top level)."""
     fields = {f["name"]: f["required"] for f in FA.help("recipient_add")["fields"]}
     assert "details" not in fields and fields["account_number"] is False and fields["routing_number"] is False
-    sample = {"name": "Acme Supplies", "method": "ach", "account_number": "000099998888", "routing_number": "000000000"}
+    sample = {"name": "Acme Supplies", "method": "ach", "account_number": "000099998888", "routing_number": "000000000",
+              "address": ACME_ADDRESS}
     payload = {name: sample[name] for name in fields if name in sample}
     assert all(name in payload for name, required in fields.items() if required), fields
     connect(books, FakeMercury())
     with books.transaction() as c:
         made = act(c, OWNER, "recipient_add", payload)
         assert made.status == "committed", made
+
+
+def test_a_payees_address_takes_mercurys_keys_and_a_missing_or_unknown_field_is_refused_at_planning(books):
+    """A payee's address takes Mercury's keys, and every method's routing info needs one: a missing required field is
+    refused at planning and named, an unknown key is refused rather than dropped, and a complete address reaches
+    Mercury under those keys. Mercury refuses a body with a gap too (the fakes do the same)."""
+    fake = FakeMercury()
+    connect(books, fake)
+    base = {"name": "Acme Supplies", "method": "ach", "account_number": "000099998888", "routing_number": "000000000"}
+    short = {k: v for k, v in ACME_ADDRESS.items() if k != "region"}
+    with books.transaction() as c:
+        refused = act(c, OWNER, "recipient_add", {**base, "address": short})
+        assert refused.code == "invalid" and "region" in refused.reason, refused
+        odd = act(c, OWNER, "recipient_add", {**base, "address": {**ACME_ADDRESS, "line1": "9 Oak"}})
+        assert odd.code == "invalid" and "line1" in odd.reason, odd
+        assert c.execute("SELECT count(*) FROM fin_recipients").fetchone()[0] == 0
+    _payee(books, fake)
+    (sent,) = fake.sent("create_recipient")
+    assert sent["electronicRoutingInfo"]["address"] == ACME_ADDRESS
+    gap = FakeMercury().create_recipient({"name": "Acme", "emails": [], "checkInfo": {"address": short}})
+    assert gap.status == 400 and "region" in str(gap.body), gap
 
 
 def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_and_amount(books):
@@ -370,7 +394,8 @@ def test_a_payment_a_finance_admin_cancels_in_finance_asks_nobody(books):
 def _replace_payee(c, rid):
     """The payee's bank details change: a new recipient version replaces the old one (recipient_add with `replaces`)."""
     made = act(c, OWNER, "recipient_add", {"replaces": rid, "name": "Acme Supplies", "method": "ach",
-                                           "account_number": "000011112222", "routing_number": "000000000"})
+                                           "account_number": "000011112222", "routing_number": "000000000",
+                                               "address": ACME_ADDRESS})
     assert made.status == "committed", made
     return str(made.result["recipient_id"])
 
@@ -982,7 +1007,8 @@ def test_a_wire_needs_its_purpose_and_a_refusal_is_never_silent(books):
     connect(books, fake)
     with books.transaction() as c:
         made = act(c, OWNER, "recipient_add", {"name": "Acme Wire", "method": "wire",
-                                               "account_number": "000011112222", "routing_number": "000000000"})
+                                               "account_number": "000011112222", "routing_number": "000000000",
+                                               "address": ACME_ADDRESS})
         assert made.status == "committed", made
     sync_once(books, fake)
     with books.transaction() as c:
@@ -1023,7 +1049,8 @@ def test_a_wire_needs_its_purpose_and_a_refusal_is_never_silent(books):
 
 # ------------------------------------------------------------------------------------------------ sealed bank details
 ACCOUNT, ROUTING = "000077776666", "987654329"           # fictional (the routing number fails the ABA checksum)
-PAYEE = {"name": "Acme Parts", "method": "ach", "account_number": ACCOUNT, "routing_number": ROUTING}
+PAYEE = {"name": "Acme Parts", "method": "ach", "account_number": ACCOUNT, "routing_number": ROUTING,
+         "address": ACME_ADDRESS}
 
 
 def _plaintext_anywhere(c) -> list[str]:

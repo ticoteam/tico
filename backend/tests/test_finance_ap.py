@@ -13,7 +13,7 @@ from backend.finance import reads as FR
 from backend.finance.core import feeds as F
 from backend.finance.store import ledger as SL
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
+    ACME_ADDRESS, AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
 from backend.tests.test_finance_payments import HOURS, _checking, _payee
 
 PLAIN = "human:eve"          # a web teammate with no grants or rights
@@ -130,7 +130,8 @@ def _scheduled_today(c, ask=False) -> str:
     else:
         assert act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"}).status == "committed"
     added = act(c, OWNER, "recipient_add", {"name": "Acme Supplies", "method": "ach",
-                                            "account_number": "000099998888", "routing_number": "000000000"})
+                                            "account_number": "000099998888", "routing_number": "000000000",
+                                            "address": ACME_ADDRESS})
     assert added.status == "committed", added
     bid = _bill(c, _vendor(c, recipient_id=str(added.result["recipient_id"])),
                 [{"account_id": account(c, "6100"), "amount": 50_000}], due_date="2026-10-20")

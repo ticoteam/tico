@@ -4,7 +4,7 @@ import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -115,6 +115,19 @@ def set_manager(c: sqlite3.Connection, person: str, manager: str) -> None:
 
 # ------------------------------------------------------------------------------------------------ a fake Mercury
 MERCURY = json.loads((Path(__file__).parent / "fixtures" / "mercury" / "responses.json").read_text())
+ACME_ADDRESS = {"address1": "1 Acme Way", "city": "Springfield", "region": "IL", "postalCode": "62701", "country": "US"}
+ADDRESS_REQUIRED = ("address1", "city", "region", "postalCode", "country")
+
+
+def recipient_address_gaps(body: dict[str, Any]) -> list[str]:
+    """What a POST /recipients body lacks in the address each routing info needs (Mercury's docs; address2 optional).
+    scripts/fake_mercury.py refuses the same way."""
+    gaps: list[str] = []
+    for key in ("checkInfo", "domesticWireRoutingInfo", "electronicRoutingInfo"):
+        if key in body:
+            address = (body[key] or {}).get("address") or {}
+            gaps += [f"{key}.address.{f}" for f in ADDRESS_REQUIRED if not str(address.get(f) or "").strip()]
+    return gaps
 
 
 class FakeMercury:
@@ -231,7 +244,10 @@ class FakeMercury:
         return self._answer("card_state", (card_id, op), {})
 
     def create_recipient(self, body):
-        return self._answer("create_recipient", dict(body), {"id": f"rcp-{len(self.sent('create_recipient')) + 1}"})
+        gaps = recipient_address_gaps(body)
+        refused = self.Answer(400, {"message": f"address: {', '.join(gaps)} required"}) if gaps else None
+        made = {"id": f"rcp-{len(self.sent('create_recipient')) + 1}"}
+        return self._answer("create_recipient", dict(body), refused if refused is not None else made)
 
     def recipient(self, recipient_id):
         return self._answer("recipient", recipient_id, {"id": recipient_id})
