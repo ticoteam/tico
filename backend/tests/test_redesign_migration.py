@@ -10,6 +10,7 @@ from backend import hubdb as H
 from backend import redesign_migration as M
 from backend import rules as R
 from backend.tests.test_api import api, get, post  # noqa: F401
+from backend import usage_limits
 
 DUE = "2026-11-02T09:00:00.000000Z"
 LONG = "Sort Acme mail by sender and urgency. " * 300                   # about 11,000 characters
@@ -46,8 +47,7 @@ def rule(api, rid, event="comment", then="wake", scope=("bot", "coo"), position=
 
 def hourly(api, bot, usd):
     with db(api).transaction() as c:
-        c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES(?,?) ON CONFLICT(bot) DO UPDATE SET "
-                  "hourly_usd=excluded.hourly_usd", (bot, usd))
+        usage_limits.save_own(c, bot, {**usage_limits.own(c, bot), "hourly_usd": usd}, None)
 
 
 def first_start(api):
@@ -115,8 +115,8 @@ def test_every_object_moves_once_and_runs_from_one_system(api):
             assert made["next_due_at"] == DUE                                     # its next occurrence, once
     assert not rows(api, "SELECT id FROM rules WHERE id IN ('rule_wake','rule_note','rule_team')")
     assert decisions(api, events, targets) == before_decisions                # the same wakes, from What wakes
-    assert rows(api, "SELECT hourly_usd, per_30m_usd FROM usage_limits WHERE bot='coo'") == [
-        {"hourly_usd": None, "per_30m_usd": 0.2}]
+    with db(api).read() as c:
+        assert (usage_limits.own(c, "coo")["hourly_usd"], usage_limits.own(c, "coo")["per_30m_usd"]) == (None, 0.2)
 
     # Once: a second start (or a catch-up) changes nothing and tells nobody again.
     automations = rows(api, "SELECT id FROM automations ORDER BY id")

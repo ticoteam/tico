@@ -1020,8 +1020,8 @@ _TOKEN_CACHE = {}   # (database, threshold) -> (monotonic time, answer)
 def _token_heavy(c, threshold):
     """(bot, tokens) for bots whose uncached input tokens passed `threshold` in the last day. A run records
     `input_tokens` without its cache reads (runner-rs/src/execute.rs), so cache reads, which are cheap, do not count.
-    Both halves filter on `turns.started_at` (indexed) before summing; the sum still visits every turn of the day
-    (about 90 ms at 30,000 turns), so one answer serves every tab's Health poll for five minutes."""
+    It reads the measured segments (usage_facts, indexed on `started_at`); the sum still visits every segment of the day,
+    so one answer serves every tab's Health poll for five minutes."""
     if not threshold or threshold <= 0:
         return []
     import time
@@ -1031,12 +1031,8 @@ def _token_heavy(c, threshold):
         return hit[1]
     since = H.shift(H.now(), hours=-RECENT_HOURS)
     answer = [(r["bot"], r["n"]) for r in c.execute(
-        "SELECT bot, sum(n) AS n FROM ("
-        "SELECT t.bot, coalesce(s.input_tokens,0) AS n FROM turns t "
-        "JOIN turn_usage_segments s ON s.turn_id=t.id WHERE t.started_at>=? "
-        "UNION ALL SELECT t.bot, coalesce(t.input_tokens,0) FROM turns t "
-        "WHERE t.started_at>=? AND NOT EXISTS (SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id)) "
-        "GROUP BY bot HAVING sum(n)>? ORDER BY sum(n) DESC", (since, since, threshold))]
+        "SELECT bot_id AS bot, sum(input_tokens) AS n FROM usage_facts WHERE source='estimate' AND started_at>=? "
+        "GROUP BY bot_id HAVING sum(input_tokens)>? ORDER BY sum(input_tokens) DESC", (since, threshold))]
     _TOKEN_CACHE.clear()
     _TOKEN_CACHE[key] = (time.monotonic(), answer)
     return answer

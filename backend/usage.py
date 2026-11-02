@@ -9,7 +9,6 @@ Who sees what: the owner and the bot administrators see every bot; anyone else s
 run or own. A bot's own credentials see nothing here.
 """
 
-import json
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import Request
@@ -183,11 +182,7 @@ def save_limit(c, auth, who, bot, body, via=None):
                 raise Problem("limit", f"The company default is ${default[key]:g}; a bot's limit can be lower, not higher", 403)
     stored = usage_limits.own(c, bot)
     before, saved = _caps_of(stored), {**stored, **wanted}
-    marks = ",".join("?" * len(usage_limits.KEYS))
-    c.execute(f"INSERT INTO usage_limits(bot, {', '.join(usage_limits.KEYS)}, updated_at, updated_by) VALUES(?,{marks},?,?) "
-              "ON CONFLICT(bot) DO UPDATE SET " + ", ".join(f"{key}=excluded.{key}" for key in usage_limits.KEYS) +
-              ", updated_at=excluded.updated_at, updated_by=excluded.updated_by",
-              (bot, *(saved[key] for key in usage_limits.KEYS), H.now(), who.actor))
+    usage_limits.save_own(c, bot, saved, who.actor)
     H.event(c, who.actor, "usage.limit-set", H.bot_actor(bot), wanted)
     _audit(c, who, "spend:" + bot, before, _caps_of(usage_limits.own(c, bot)), via)
     return default, allowed
@@ -278,7 +273,6 @@ def install(app, store, auth, mutate, settings):
             from . import groups as G
             led = None if admin else G.led_groups(c, who.actor)
             allowed = own_bots(c, auth, who) | ((led_bots(c, who) & {row["id"] for row in H.bots(c)}) if led else set())
-            usage_limits.prime_own(c, allowed)
             pools = pool_views(c, default) if admin else pool_views(c, default, led) if led else None
             return {"default": default, "may_edit_default": admin, "pools": pools, "leads": sorted(led or ()),
                     "bots": {bot: limit_view(c, who, bot, default, allowed) for bot in sorted(allowed)}}
@@ -298,8 +292,7 @@ def install(app, store, auth, mutate, settings):
             counted = body.count_subscription if "count_subscription" in body.model_fields_set else stored["count_subscription"]
             value = {**{key: stored[key] for key in usage_limits.KEYS}, **amounts(c, body),
                      "count_subscription": bool(counted)}
-            c.execute("INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                      (usage_limits.KEY, json.dumps(value)))
+            usage_limits.save_default(c, value, value["count_subscription"], who.actor)
             H.event(c, who.actor, "usage.default", "company", value)
             return {"default": usage_limits.company(c)}
         return mutate(request, body, work)

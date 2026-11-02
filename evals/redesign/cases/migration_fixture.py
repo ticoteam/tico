@@ -24,6 +24,7 @@ What it makes:
 import json
 
 from ..harness import CLAUDE_ID, DANA_ID, LEAD_ID, OPENAI_ID, PRIYA_ID, RELEASE_ID, W5, Unmet
+from backend import usage_limits
 
 # The slugs the Strategy Bot and the system bots are built with (backend/strategy_bot.py SLUG, groups.SYSTEM_BOTS).
 STRATEGY, LIBRARIAN, HEALTH = "goal-manager", "librarian", "health-monitor"
@@ -125,8 +126,7 @@ def old_rows(org):
                       "updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (rule_id(name), "bot", bot, event, outcome, n,
                                                              "human:" + DANA_ID, H.now(), H.now()))
         for bot, usd in HOURLY.items():
-            c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES(?,?) ON CONFLICT(bot) DO UPDATE SET "
-                      "hourly_usd=excluded.hourly_usd", (bot, usd))
+            usage_limits.save_own(c, bot, {**usage_limits.own(c, bot), "hourly_usd": usd}, None)
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (TB.TEAM_KEY, json.dumps(TEAM_BUDGET)))
         bot, own = BOT_BUDGET
         config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0] or "{}")

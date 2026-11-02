@@ -70,12 +70,13 @@ def restore(path):
 
 # Dropped as redundant by backend/migrations/0040_prune_redundant_indexes.sql; kpis_goal goes with kpis.goal_id (0042).
 DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "kpis_goal", "tasks_private_parties"}
-# Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
 # Objects a later migration drops on purpose: 0051 replaced the queue trigger with backend/enqueue.py.
 DROPPED = {"queue_bot_message"}
+# Dropped after the renames ran on them: by backend/migrations/0035_growth_rethink.py, 0070_usage_facts.py (its rows
+# are usage facts), 0071_budget_nodes.py (its rows are budget nodes) and 0091_idempotency_one_table.py (the operation
+# bindings move into `idempotency`).
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
-           "gtm_versions", "gtm_drafts",
-           # 0091 moves the operation bindings into `idempotency` and drops these.
+           "gtm_versions", "gtm_drafts", "turn_usage_segments", "usage_limits", "usage_pools",
            "invite_sends", "github_product_repo_operations", "github_review_operations"}
 
 

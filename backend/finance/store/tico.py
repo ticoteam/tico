@@ -250,6 +250,22 @@ def bot_average_run(c: sqlite3.Connection, bot: str, since: str, most: int) -> s
     return str(row[1]) if row and int(row[0]) else None
 
 
+def record_meter(c: sqlite3.Connection, month: str, as_of: str, charged: Mapping[str, int], at: str) -> int:
+    """Keep one read of the Gateway's meter as usage facts beside the install's estimates (backend/usage_facts.py):
+    {model: month-to-date charged nanodollars}. The facts added."""
+    from ... import usage_facts
+    return int(cast(Any, usage_facts).record_meter(c, month, as_of, dict(charged), at))
+
+
+def usage_reconciled(c: sqlite3.Connection, month: str) -> dict[str, dict[str, int | None]]:
+    """{model: {estimated_nano, metered_nano, amount_nano}} of a month's Gateway-billed usage; the amount is the meter's
+    where it has read the model."""
+    from ... import usage_facts
+    found = cast(dict[str, dict[str, Any]], cast(Any, usage_facts).reconciled(c, month))
+    return {str(model): {key: (None if value is None else int(value)) for key, value in row.items()}
+            for model, row in found.items()}
+
+
 def attempt_job(c: sqlite3.Connection, attempt_id: str) -> str | None:
     row = c.execute("SELECT job_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     return str(row[0]) if row and row[0] else None
