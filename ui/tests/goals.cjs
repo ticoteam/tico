@@ -40,7 +40,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       {id: 'g-top', title: 'Grow revenue 30% this year', owner_id: 'company', parent_id: null, status: 'red', status_source: 'person', status_by_id: 'human:ana',
        status_note: 'Launch slipped', rank: 0, kpis: []},
       {id: 'g-cmo', title: 'Double organic signups', owner_id: 'bot:cmo', parent_id: 'g-top', status: 'yellow', status_source: 'auto', rank: 0, kpis: [activation, nps],
-       checkin: {id: 'c1', body: 'The onboarding email went out late.', signal: 'at_risk', source_actor: 'bot:cmo', created_at: new Date(day).toISOString()}},
+       checkin: {id: 'c1', body: 'The onboarding email went out late.', signal: 'at_risk', sender_id: 'bot:cmo', created_at: new Date(day).toISOString()}},
       {id: 'g-cmo2', title: LONG, owner_id: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: []},
       {id: 'g-gm', title: 'Every KPI read on time', owner_id: 'bot:goal-manager', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
     ];
@@ -91,7 +91,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       if (/^\/api\/v2\/kpis\/[^/]+\/readings$/.test(p) && post) return json({reading: {id: 'r-new'}});
       const link = p.match(/^\/api\/v2\/goals\/([^/]+)\/kpis$/);
       if (link && post) { goals.find(g => g.id === link[1]).kpis.push(kpi('k-link', body.name, {freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: {}}); }
-      if (/^\/api\/v2\/goals\/[^/]+\/checkins$/.test(p)) return json({checkins: [goals[1].checkin, {id: 'c0', body: 'Started the email series.', source_actor: 'bot:cmo', created_at: new Date(day - 7 * 86400000).toISOString()}]});
+      if (/^\/api\/v2\/goals\/[^/]+\/checkins$/.test(p)) return json({checkins: [goals[1].checkin, {id: 'c0', body: 'Started the email series.', sender_id: 'bot:cmo', created_at: new Date(day - 7 * 86400000).toISOString()}]});
       if (/\/status\/auto$/.test(p) && post) return json({goal: {}});
       if (/^\/api\/v2\/proposals\/[^/]+\/decide$/.test(p) && post) { needs.splice(1); return json({proposal: {}}); }
       const edit = p.match(/^\/api\/v2\/goals\/([^/]+)$/);

@@ -234,6 +234,7 @@ COLUMNS = (
     ('github_product_repo_operations', 'updated', 'updated_at', '2'),
     ('github_review_operations', 'response_json', 'response', '1'),
     ('goal_asks', 'created', 'created_at', '2'),
+    ('goal_checkins', 'source_actor', 'sender_id', '5'),
     ('goal_checkins', 'ts', 'created_at', '2b'),
     ('goal_events', 'ts', 'created_at', '2b'),
     ('goal_kpis', 'created', 'created_at', '2'),

@@ -4,10 +4,13 @@
     "attempt": "run",
     "attempt_id": "run_id",
     "from_actor_name": "sender_name",
+    "last_sync": "last_synced_at",
     "operator_name": "owner_name",
     "since": "changed_at",
+    "source_actor_name": "sender_name",
     "to_actor_name": "recipient_name",
-    "ts": "created_at"
+    "ts": "created_at",
+    "why_by": "why_by_id"
   },
   "api_fields_removed": {
     "blocked_from_status": "holds",
@@ -36,7 +39,8 @@
     "2s",
     "2b",
     "3",
-    "4"
+    "4",
+    "5"
   ],
   "columns": {
     "acceptance_json": "acceptance",
@@ -2697,6 +2701,14 @@
       "renames": {
         "snoozed_by_id": [
           "tasks"
+        ]
+      }
+    },
+    "source_actor": {
+      "kept_in": [],
+      "renames": {
+        "sender_id": [
+          "goal_checkins"
         ]
       }
     },

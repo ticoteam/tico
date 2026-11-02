@@ -42079,7 +42079,7 @@
             "type": "string",
             "description": "One line tying it to the company's vision; empty: not tied to the vision"
           },
-          "why_by": {
+          "why_by_id": {
             "type": [
               "string",
               "null"
@@ -42233,7 +42233,7 @@
           "author": {
             "type": "string"
           },
-          "source_actor": {
+          "sender_id": {
             "type": "string"
           },
           "body": {
@@ -42254,7 +42254,7 @@
           "author_name": {
             "type": "string"
           },
-          "source_actor_name": {
+          "sender_name": {
             "type": "string"
           }
         },
@@ -42264,8 +42264,8 @@
           "created_at",
           "goal_id",
           "id",
-          "signal",
-          "source_actor"
+          "sender_id",
+          "signal"
         ],
         "additionalProperties": true
       },
@@ -43036,7 +43036,7 @@
                 "type": "string",
                 "description": "One line tying it to the company's vision; empty: not tied to the vision"
               },
-              "why_by": {
+              "why_by_id": {
                 "type": [
                   "string",
                   "null"
@@ -43248,7 +43248,7 @@
                   "type": "string",
                   "description": "One line tying it to the company's vision; empty: not tied to the vision"
                 },
-                "why_by": {
+                "why_by_id": {
                   "type": [
                     "string",
                     "null"
@@ -43654,7 +43654,7 @@
               "null"
             ]
           },
-          "last_sync": {
+          "last_synced_at": {
             "type": [
               "string",
               "null"
@@ -43744,7 +43744,7 @@
           "imported_count",
           "last_error",
           "last_error_detail",
-          "last_sync",
+          "last_synced_at",
           "mode",
           "needs_signin",
           "plan_hint",
@@ -43786,7 +43786,7 @@
               null
             ]
           },
-          "last_sync": {
+          "last_synced_at": {
             "type": [
               "string",
               "null"
@@ -43876,7 +43876,7 @@
           "imported_count",
           "last_error",
           "last_error_detail",
-          "last_sync",
+          "last_synced_at",
           "mode",
           "needs_signin",
           "plan_hint",
@@ -43898,7 +43898,7 @@
               "needs_signin"
             ]
           },
-          "last_sync": {
+          "last_synced_at": {
             "type": [
               "string",
               "null"
@@ -43906,7 +43906,7 @@
           }
         },
         "required": [
-          "last_sync",
+          "last_synced_at",
           "state"
         ],
         "additionalProperties": true
@@ -45708,8 +45708,12 @@
           "source": {
             "type": "string"
           },
-          "actor": {
-            "type": "string"
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The person who recorded it; null for a bot's automatic reading"
           },
           "definition_version": {
             "type": "integer"
@@ -45723,7 +45727,7 @@
           "kpi_id": {
             "type": "string"
           },
-          "ts": {
+          "measured_at": {
             "type": "string"
           },
           "created_at": {
@@ -46856,13 +46860,13 @@
           "refs": {
             "type": "object"
           },
-          "from_name": {
+          "sender_name": {
             "type": "string",
-            "description": "Display name of from_actor, when it is a person or a bot"
+            "description": "Display name of sender_id, when it is a person or a bot"
           },
-          "to_name": {
+          "recipient_name": {
             "type": "string",
-            "description": "Display name of to_actor"
+            "description": "Display name of recipient_id"
           },
           "body_raw": {
             "type": "string",

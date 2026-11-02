@@ -144,7 +144,7 @@ def test_free_sync_dedup_private_notes_and_person_isolation(api):
     existing = import_meeting(api, notes="API notes", source="granola", external_id="not_12345678901234", private=True)
     provider.sync()
     status = api.get(BASE, headers=headers("ana-test")).json()
-    assert status["last_sync"] and status["plan_hint"] == "free" and not status["last_error"]
+    assert status["last_synced_at"] and status["plan_hint"] == "free" and not status["last_error"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM meetings").fetchone()[0] == 1
         row = c.execute("SELECT metadata FROM meetings WHERE id=?", (existing["id"],)).fetchone()

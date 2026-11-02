@@ -97,7 +97,7 @@ def test_documented_free_and_paid_sync_with_broken_meeting(api, paid):
     provider.service.transport = httpx.MockTransport(handle)
     provider.sync()
     status = api.get(BASE, headers=headers("ana-test")).json()
-    assert status["last_sync"] and status["imported_count"] == 2 and status["skipped"] == 1
+    assert status["last_synced_at"] and status["imported_count"] == 2 and status["skipped"] == 1
     assert status["plan_hint"] == ("paid" if paid else "free")
     assert status["last_error"] == "bad_response: list_meetings"
     assert len(transcript_calls) == (2 if paid else 1)

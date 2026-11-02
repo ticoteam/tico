@@ -35,7 +35,7 @@ def measure(c, goal, value):
 
 
 def checkin(c, goal, signal="at_risk", days=3):
-    c.execute("INSERT INTO goal_checkins(id, goal_id, created_at, author, source_actor, body, signal) "
+    c.execute("INSERT INTO goal_checkins(id, goal_id, created_at, author, sender_id, body, signal) "
               "VALUES(?,?,?,?,?,?,?)", (H.new_id(), goal["id"], stamp(days), "human:ben", "human:ben",
                                        "The dependency is late.", signal))
 

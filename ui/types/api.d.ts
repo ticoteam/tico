@@ -1910,7 +1910,7 @@ export type Goal = {
   updated_at: string;
   why?: string;
   why_at?: string | null;
-  why_by?: string | null;
+  why_by_id?: string | null;
 };
 
 export type GoalAction = {
@@ -1937,9 +1937,9 @@ export type GoalCheckinView = {
   goal_id: string;
   id: string;
   kpi_id?: string | null;
+  sender_id: string;
+  sender_name?: string;
   signal: "on_track" | "at_risk" | "off_track" | null;
-  source_actor: string;
-  source_actor_name?: string;
 };
 
 export type GoalCheckins = {
@@ -2086,7 +2086,7 @@ export type GoalResult = {
   updated_at: string;
   why?: string;
   why_at?: string | null;
-  why_by?: string | null;
+  why_by_id?: string | null;
 };
 };
 
@@ -2121,7 +2121,7 @@ export type GoalTree = {
   updated_at: string;
   why?: string;
   why_at?: string | null;
-  why_by?: string | null;
+  why_by_id?: string | null;
 }>;
   other_kpis: Array<Kpi>;
   owners: Record<string, unknown>;
@@ -2199,7 +2199,7 @@ export type GranolaSignIn = {
   step?: string;
   tool_error?: boolean;
 } | null;
-  last_sync: string | null;
+  last_synced_at: string | null;
   mode: string;
   needs_signin: boolean;
   plan_hint: string | null;
@@ -2223,7 +2223,7 @@ export type GranolaStatus = {
   step?: string;
   tool_error?: boolean;
 } | null;
-  last_sync: string | null;
+  last_synced_at: string | null;
   mode: "account" | "api_key" | "off";
   needs_signin: boolean;
   plan_hint: "free" | "paid" | null;
@@ -2233,7 +2233,7 @@ export type GranolaStatus = {
 };
 
 export type GranolaSync = {
-  last_sync: string | null;
+  last_synced_at: string | null;
   state: "syncing" | "recent" | "off" | "needs_signin";
 };
 
@@ -2575,7 +2575,7 @@ export type KpiReadingResult = {
 };
 
 export type KpiReadingView = {
-  actor?: string;
+  actor_id?: string | null;
   actor_name?: string;
   collected_at?: string;
   created_at?: string;
@@ -2583,6 +2583,7 @@ export type KpiReadingView = {
   evidence?: string;
   id: string;
   kpi_id?: string;
+  measured_at?: string;
   note?: string;
   period_end: string;
   period_start?: string;
@@ -2590,7 +2591,6 @@ export type KpiReadingView = {
   source?: string;
   superseded_by?: string | null;
   supersedes?: string | null;
-  ts?: string;
   value: number;
 };
 
@@ -2818,12 +2818,12 @@ export type Message = {
   created_at: string;
   deleted_at?: string | null;
   edited_at?: string | null;
-  from_name?: string;
   held?: string;
   id: string;
   in_reply_to: string | null;
   kind: string;
   recipient_id: string;
+  recipient_name?: string;
   refs: Record<string, unknown>;
   run?: {
   job_id?: string;
@@ -2831,8 +2831,8 @@ export type Message = {
   state?: "started_run" | "added_to_run";
 };
   sender_id: string;
+  sender_name?: string;
   sent_as?: SentAs;
-  to_name?: string;
   woke?: boolean;
 };
 
