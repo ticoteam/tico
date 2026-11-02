@@ -2597,7 +2597,7 @@ SCHEMAS.update({
                       "goal_id": "n", "parent_kpi_id": "n", "growth_role": "n", "stage": "n", "loop_name": "n",
                       "loop_step": NUM_N_INT,
                       "series": items(obj({"at": "n", "value": {"type": "number"}}))}),
-    "GrowthMarker": obj({"task_id": "s", "title": "s", "kind": {"enum": ["started", "finished"]},
+    "GrowthMarker": obj({"task_id": "s", "title": "s", "kind": {"enum": "started finished".split()},
                          "outcome": {"enum": ["won", "lost", "inconclusive", "dropped", None]}, "at": "s",
                          "channels": items({"type": "string"}), "goal_id": "n"}),
     "GrowthNumbers": obj({"months": items({"type": "string"}), "series": items(ref("GrowthMonth")),
