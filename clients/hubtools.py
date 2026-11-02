@@ -1317,7 +1317,10 @@ GOAL_YES = _s("The owner's plain yes to a goal read-back: turn or its message id
 def goal_read_back(api, args):
     changes = args["changes"]
     if isinstance(changes, str):
-        changes = json.loads(changes)
+        try:
+            changes = json.loads(changes)
+        except ValueError:
+            raise ValueError("changes must be a JSON array of 1 to 20 change objects") from None
     if not isinstance(changes, list) or not 1 <= len(changes) <= 20 or any(not isinstance(c, dict) for c in changes):
         raise ValueError("changes must be a JSON array of 1 to 20 change objects")
     return api.post("goals/read-back", {"changes": changes}, key=_key(args))
@@ -1344,7 +1347,10 @@ def goal_save(api, args):
         raise ValueError("path must be a goal read-back save step")
     if not args.get("on_behalf_of"):
         raise ValueError("cite the owner's plain yes with on_behalf_of")
-    body = json.loads(args["body"])
+    try:
+        body = json.loads(args["body"])
+    except ValueError:
+        raise ValueError("body must be a JSON object") from None
     if not isinstance(body, dict):
         raise ValueError("body must be a JSON object")
     return _asked(api, args).post(path.removeprefix("/api/v2/"), body, key=_key(args))
