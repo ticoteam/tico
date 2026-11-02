@@ -706,6 +706,54 @@ def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 facts=doc_facts("invoice", customer, lines, ctx))
 
 
+REMIND_STAGES = (1, 7, 30, 60, 90)      # days late, as Finance raises finance.invoice.overdue
+
+
+def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Remind the customer that a sent invoice is unpaid, once for each stage (1, 7, 30, 60 or 90 days late). The text
+    is fixed: the number, what is left, the due date and the payment link when there is one; no free text. The reminder
+    is recorded in this transaction and the email goes out after it commits, by whoever delivers it (`delivery:
+    "caller"`, as invoice_send). A paid or draft invoice, a stage already reminded and a customer with no email are
+    refused with the reason."""
+    V.only(p, ("invoice_id", "stage"))
+    inv = _doc(ctx, "invoice", V.text(p, "invoice_id", 80))
+    stage = V.integer(p, "stage", 1, 90)
+    if stage not in REMIND_STAGES:
+        raise invalid("a reminder is for 1, 7, 30, 60 or 90 days late")
+    _need_status("invoice", inv, ("sent",), "only an unpaid sent invoice is reminded")
+    left = _left("invoice", inv)
+    if left <= 0:
+        raise FinanceError(CONFLICT, f"invoice {inv['number']} is paid: nothing is left to remind about")
+    sid = str(inv["id"])
+    if _reminded(ctx, sid, stage):
+        raise FinanceError(CONFLICT, f"the {stage}-day reminder for invoice {inv['number']} was already made")
+    customer = contact_for(ctx, str(inv["customer_id"]), "invoice")
+    emails = SK.loads_list(customer["emails_json"])
+    if not emails:
+        raise FinanceError(CONFLICT, f"{customer['name']} has no email on file, so the reminder cannot be sent")
+    link = f" Pay here: {inv['payment_link']}" if inv["payment_link"] else ""
+    text = (f"Invoice {inv['number']} for {_money(left)} {ctx.book.base_currency} was due {inv['due_date']} and is "
+            f"still unpaid.{link}")
+
+    def apply(aid: str) -> Result:
+        if _reminded(ctx, sid, stage):                  # again when an approved reminder commits
+            raise FinanceError(CONFLICT, f"the {stage}-day reminder for invoice {inv['number']} was already made")
+        SAP.insert(ctx.c, "fin_invoice_reminders", {
+            "id": SL.new_id(), "invoice_id": sid, "stage": stage, "text": text, "sent_to": SK.dump(emails),
+            "action_id": aid, "created_at": ctx.at, "created_by": who})
+        return {"invoice_id": sid, "stage": stage, "status": "reminded", "delivery": "caller", "text": text,
+                "subject": f"Invoice {inv['number']} is unpaid", "to": emails, "document": document(ctx, "invoice", inv)}
+    lines = doc_lines_of(ctx, "invoice", sid)
+    return Plan(K.default_gate(ctx.org, who, "invoice_remind"),
+                f"Remind {customer['name']} that invoice {inv['number']} is {stage} days late", apply,
+                facts=doc_facts("invoice", customer, lines, ctx))
+
+
+def _reminded(ctx: Ctx, invoice_id: str, stage: int) -> bool:
+    return ctx.c.execute("SELECT 1 FROM fin_invoice_reminders WHERE invoice_id=? AND stage=?",
+                         (invoice_id, stage)).fetchone() is not None
+
+
 def invoice_write_off(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Write off what a customer will not pay: Dr the write-off line (default Other expenses) / Cr AR, accrual basis
     only (the cash view never had that income). The invoice is paid once nothing is left."""
@@ -1721,7 +1769,8 @@ next_number, money_of = _next_number, _money
 PLANNERS = {"contact_create": contact_create, "contact_update": contact_update, "bill_create": bill_create,
             "bill_update": bill_update, "bill_approve": bill_approve, "bill_schedule": bill_schedule,
             "bill_mark_paid": bill_mark_paid, "bill_void": bill_void, "invoice_create": invoice_create,
-            "invoice_send": invoice_send, "invoice_record_payment": invoice_record_payment,
+            "invoice_send": invoice_send, "invoice_remind": invoice_remind,
+            "invoice_record_payment": invoice_record_payment,
             "invoice_write_off": invoice_write_off, "invoice_void": invoice_void, "attach": attach,
             "feed_match": feed_match}
 

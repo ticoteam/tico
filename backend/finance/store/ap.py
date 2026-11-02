@@ -10,7 +10,7 @@ from ..core.ledger import name_key
 from .ledger import new_id, tagset
 
 TABLES = frozenset({"fin_contacts", "fin_vendor_aliases", "fin_bills", "fin_bill_lines", "fin_invoices", "fin_invoice_lines",
-                    "fin_attachments", "fin_settlements"})
+                    "fin_attachments", "fin_settlements", "fin_invoice_reminders"})
 DOCS = {"bill": ("fin_bills", "fin_bill_lines", "bill_id", "bill_date", "vendor_id"),
         "invoice": ("fin_invoices", "fin_invoice_lines", "invoice_id", "invoice_date", "customer_id")}
 

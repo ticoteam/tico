@@ -9,7 +9,8 @@ from .org import SYSTEM, Org
 # Every §5 kind, plus right_grant / right_revoke, which §7.4 needs and §5 does not list.
 ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "bill_create", "bill_update", "bill_approve", "bill_schedule", "bill_mark_paid", "bill_void",
-       "invoice_create", "invoice_send", "invoice_record_payment", "invoice_write_off", "invoice_void",
+       "invoice_create", "invoice_send", "invoice_remind", "invoice_record_payment", "invoice_write_off",
+       "invoice_void",
        "payment_create", "payment_cancel", "recipient_add", "card_create", "card_update_limit", "card_freeze",
        "card_unfreeze", "card_cancel", "card_resolve", "card_save", "card_unsave", "reconcile_undo",
        "connection_create", "payment_settings",
@@ -43,7 +44,7 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map",
         # phase 2: contacts, bills, invoices and attachments
         "contact_create", "contact_update", "bill_create", "bill_update", "bill_approve", "bill_schedule",
-        "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_record_payment",
+        "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_remind", "invoice_record_payment",
         "invoice_write_off", "invoice_void", "attach", "feed_match",
         # mirror mode (spec §10): a provider's books are the books
         "mirror_start", "mirror_stop", "mirror_tags", "mirror_xero_location",
@@ -72,7 +73,8 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          # phase 2: contacts are payables' or receivables' (the planner asks for the right the contact's kind needs)
          "contact_create": (R.AP, R.AR), "contact_update": (R.AP, R.AR),
          "bill_create": R.AP, "bill_update": R.AP, "bill_approve": R.AP, "bill_schedule": R.AP, "bill_mark_paid": R.AP,
-         "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
+         "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_remind": R.AR,
+         "invoice_record_payment": R.AR,
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
          "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK, "mirror_xero_location": R.BOOK,
          "prepaid_amortize": R.BOOK, "gateway_topup": R.BOOK,
@@ -314,6 +316,8 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                                                 "lines of an invoice with a sales tax line"),
                        ("payment_link?", "str", "")),
     "invoice_send": (("invoice_id", "str", "posts accounts receivable debit, income credit; returns the document"),),
+    "invoice_remind": (("invoice_id", "str", "an unpaid sent invoice"),
+                       ("stage", "int", "days late: 1, 7, 30, 60 or 90; each stage is reminded once")),
     "invoice_record_payment": (("invoice_id", "str", ""), ("amount", "minor", "may be part of what is owed"),
                                ("date?", "day", ""), ("feed_id?", "str", "the bank row it came in on"),
                                ("money_account_id?", "str", "or the money account it went to (its row links later)"),
@@ -417,6 +421,7 @@ WORDS: dict[str, str] = {
     "prepaid_amortize": "Expense one due month of a prepaid bill line, out of its prepaid asset.",
     "gateway_topup": "Top up Gateway credit from a bank account: a prepaid asset moves, no expense.",
     "invoice_create": "Draft an invoice.", "invoice_send": "Send an invoice: it posts to receivables.",
+    "invoice_remind": "Remind the customer an unpaid invoice is late (once per stage).",
     "invoice_record_payment": "Record money received on an invoice (part or all).",
     "invoice_write_off": "Write off what a customer will not pay.", "invoice_void": "Void an invoice.",
     "attach": "Attach receipts or documents to an entry, a bank or card row, a bill or an invoice.",

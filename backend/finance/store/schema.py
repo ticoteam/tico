@@ -614,9 +614,18 @@ CREATE TABLE IF NOT EXISTS fin_prepaid_postings (
   action_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (bill_line_id, month));
 """
 
+# Invoice reminders (backend/finance/documents.py invoice_remind): one row per invoice and stage (1, 7, 30, 60 or 90 days
+# late), so a stage is reminded once. The text and the address it went to are kept as the reminder was made.
+REMINDERS = """
+CREATE TABLE IF NOT EXISTS fin_invoice_reminders (
+  id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES fin_invoices(id), stage INTEGER NOT NULL CHECK (stage > 0),
+  text TEXT NOT NULL, sent_to TEXT NOT NULL, action_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  UNIQUE (invoice_id, stage));
+"""
+
 def table_names() -> list[str]:
     """Every fin_* table the migration makes."""
-    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX + PURCHASING + PREPAIDS)
+    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX + PURCHASING + PREPAIDS + REMINDERS)
 
 
 def statements(script: str) -> list[str]:
@@ -646,7 +655,7 @@ def _add_columns(c: sqlite3.Connection) -> None:
 def create(c: sqlite3.Connection) -> None:
     """Every table, index and trigger, statement by statement inside the caller's transaction (executescript would
     commit it). Idempotent: on an install made before a later phase it adds the new tables and columns too."""
-    for script in (TABLES, TAX, PURCHASING, PREPAIDS):
+    for script in (TABLES, TAX, PURCHASING, PREPAIDS, REMINDERS):
         for statement in statements(script):
             c.execute(statement)
     _add_columns(c)
@@ -794,6 +803,12 @@ def prepaids(c: sqlite3.Connection) -> None:
 def refunds(c: sqlite3.Connection) -> None:
     """Cloud migration 79: the money-out row a refund reverses (fin_feed_txns.refund_of). Idempotent: `create` adds
     whatever is missing."""
+    create(c)
+
+
+def reminders(c: sqlite3.Connection) -> None:
+    """Cloud migration 80: the invoice reminders a stage is sent once by (fin_invoice_reminders). Idempotent: `create`
+    adds whatever is missing."""
     create(c)
 
 

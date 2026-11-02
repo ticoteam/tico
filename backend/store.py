@@ -1818,6 +1818,11 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.refunds(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(79,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=80").fetchone():
+                    # Invoice reminders, one per invoice and stage (backend/finance/documents.py invoice_remind). Idempotent like 79.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.reminders(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(80,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
