@@ -422,7 +422,9 @@ turning diagnostics off clears it and hides `latest_sample`.
 
 This sustained-load flag holds new starts on that computer, including reservations that have not
 started yet. Running turns continue, and new starts resume when the flag clears
-([Turn counts](computers.md#turn-counts)).
+([Turn counts](computers.md#turn-counts)). With diagnostics on, two more holds apply: memory at **85%** or more holds
+new starts until memory is below **80%**, and a computer whose latest sample is more than two minutes old holds them
+as not reporting. A computer that has never sampled is not held for that reason.
 
 Runs carry `load_start` and `load_end` with CPU %, memory %, running turns and the sample timestamp in
 `hub run list`. Current computers take a reading at start and completion; older computers use a recent
