@@ -133,6 +133,20 @@ Strategy Bot a task citing your words. The Strategy Bot works that task in its o
 that stays yours (below) comes back to you as a proposal or a Confirm card. Bots still message it, in its goals
 session.
 
+### Goals agreed in your chat
+
+In the owner's Assistant chat, the Assistant handles goals, measures and targets itself. It saves them only on your plain yes:
+
+1. It checks the suggestions you said no to, and your reasons, before it suggests anything. It does not make the same one again.
+2. It asks up to three short questions, one at a time: what should be true, whose goal it is, and what it serves.
+3. If the goal has no number or date, it suggests one once. A "no" keeps the goal as written, and it does not ask again in that chat.
+4. It posts a read-back in your chat, listing each change and what will be saved. Nothing is saved yet.
+5. It saves when your next message is a plain yes ("yes", "ok", "go ahead", "save it"), or a yes to some changes by number ("yes to 1 and 3"). Any other reply, such as "yes, but make it 50" or "wait", saves nothing, and the Assistant writes a new read-back.
+
+A "no" to a suggestion the Assistant made, a number, a date, a measure or new wording, is recorded at once, with your words as its reason. It does not come back.
+
+A colour, done or dropped, archiving, a KPI reading, the company vision, strategy drafts and bets, and recoveries are not agreed in chat. The read-back says why. Change those on the [Goals](goals-and-kpis.md#the-goals-page) page.
+
 Before this change the owner chatted with the Strategy Bot itself. That chat stays yours as read-only history under
 **Earlier chats** on your Assistant page, and Confirm cards still waiting there moved to your Assistant chat once. If you
 hand ownership to someone else (Settings > People), that earlier chat goes with the owner seat to the new owner, and the
