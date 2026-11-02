@@ -156,7 +156,7 @@ def test_a_bot_with_an_exit_waits_for_a_runner_that_browses_through_it(api, rela
     rows, _ = held(api, server)
     assert [r["reason"] for r in rows] == ["browser_exit_update"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM attempts WHERE bot_id='ops'").fetchone()[0] == 0
         [row] = health._stuck(c, rows, set(), health_admin(api), True)
     assert "Office server" in row["why"], row
     heartbeat([BE.CAPABILITY])

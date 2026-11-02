@@ -7,6 +7,7 @@ every place that shows people the same question.
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import teammate_access as TA
 from backend.auth import Identity
 from backend.store import H, encode
@@ -28,7 +29,7 @@ def acme(api):
                   {"id": "dee", "email": "dee@acme.example"},
                   {"id": "eve", "email": "eve@acme.example"},
                   {"id": "fay", "email": "fay@acme.example"}]
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode({"people": people}),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": people}),))
         H.sync_registry(c, {}, {"people": people})
     bot(api, "counsel")
     bot(api, "analyst")
@@ -42,7 +43,8 @@ def acme(api):
 
 def who(api, name):
     if name in ("counsel", "analyst"):
-        return Identity("bot:" + name, "bot")
+        with api.app.state.store.read() as c:
+            return Identity("bot:" + H.resolve_bot(c, name)["id"], "bot")
     return api.app.state.store.settings.test_identities[name + "-test"]
 
 
@@ -176,7 +178,7 @@ def test_hub_sql_hides_unseen_people_in_participants_and_authors(acme):
     task = post(api, "tasks", {"owner": "counsel", "title": "Review the lease", "body": "Please."}, token="ana-test")
     post(api, f"tasks/{task['id']}/comments", {"text": "Clause 4 looks odd."}, token="cara-test")
     conversation = get(api, "tasks/" + task["id"], "eve-test").get("conversation_id") or task.get("conversation_id")
-    sql = f"SELECT from_actor FROM messages WHERE conversation_id='{conversation}'"
+    sql = f"SELECT sender_id FROM messages WHERE conversation_id='{conversation}'"
     before = sql_column(api, sql, "eve-test")
     assert "human:cara" in before
     set_access(api, "humans/cara", token="cara-test", see={"teams": ["legal"]}, read={"teams": ["legal"]},
@@ -185,7 +187,7 @@ def test_hub_sql_hides_unseen_people_in_participants_and_authors(acme):
     after = sql_column(api, sql, "eve-test")
     assert len(after) == len(before) and "human:cara" not in after and "" in after
     assert "human:cara" in sql_column(api, sql, "fay-test")
-    rows = sql_column(api, f"SELECT participants_json FROM conversations WHERE id='{conversation}'", "eve-test")
+    rows = sql_column(api, f"SELECT participants FROM conversations WHERE id='{conversation}'", "eve-test")
     assert all("human:cara" not in (row or "") for row in rows)
 
 
@@ -204,7 +206,7 @@ def test_see_hides_a_group_from_lists_the_chart_and_its_page(acme):
         assert all(not str(row.get("org_parent")).endswith(":legal") for row in chart["people"] + chart["bots"]) or sees
         people = api.get("/api/humans", headers=headers(token)).json()
         assert any(g["id"] == "legal" for g in people["org_groups"]) is sees, name
-        teams_json = sql_column(api, "SELECT teams_json FROM humans WHERE id='cara'", token)
+        teams_json = sql_column(api, "SELECT teams FROM humans WHERE id='cara'", token)
         assert any("legal" in (row or "") for row in teams_json) is sees, name
     with api.app.state.store.read() as c:
         assert TA.unseen(c, who(api, "eve"), api.app.state.auth) == (set(), {"legal"})
@@ -266,8 +268,8 @@ def test_botops_sets_access_with_the_rights_of_the_person_who_asked(acme):
     changed = act(api, dee, "PUT", "humans/cara/access", {**body, "revision": revision})
     assert changed.status_code == 200, changed.text
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='person.access_changed' ORDER BY rowid DESC").fetchone()
-        assert row["actor"] == "human:dee" and '"via": "botops"' in row["detail_json"]
+        row = c.execute("SELECT actor,detail FROM events WHERE action='person.access_changed' ORDER BY rowid DESC").fetchone()
+        assert row["actor"] == "human:dee" and '"via": "botops"' in row["detail"]
 
 
 def test_hiding_reaches_task_columns_events_the_stream_and_bot_rows(acme):
@@ -276,11 +278,11 @@ def test_hiding_reaches_task_columns_events_the_stream_and_bot_rows(acme):
     api, tokens = acme
     store, auth = api.app.state.store, api.app.state.auth
     with store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='counsel'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='counsel'")
     asked = post(api, "tasks", {"owner": "counsel", "title": "Review the lease", "body": "Please."}, token="cara-test")
     to_eve = post(api, "tasks", {"owner": "human:eve", "title": "Send the signed copy", "body": "Thanks."},
                   token="cara-test")
-    requesters = f"SELECT id, requester FROM tasks WHERE id IN ('{asked['id']}','{to_eve['id']}') ORDER BY id"
+    requesters = f"SELECT id, requester_id FROM tasks WHERE id IN ('{asked['id']}','{to_eve['id']}') ORDER BY id"
     actors = f"SELECT actor FROM events WHERE action='task.create' AND target='{asked['id']}'"
     assert sql_column(api, actors, "eve-test") == ["human:cara"]
     set_access(api, "humans/cara", token="cara-test", see={"teams": ["legal"]}, read={"teams": ["legal"]},
@@ -308,7 +310,7 @@ def test_hiding_reaches_task_columns_events_the_stream_and_bot_rows(acme):
     # Bot rows: Cara runs Counsel, but Eve's /api/employees does not name her.
     for name, sees in {"eve": False, "fay": True}.items():
         row = next(e for e in api.get("/api/employees", headers=headers(tokens[name])).json() if e["name"] == "counsel")
-        assert (row.get("operator") == "cara") is sees, name
+        assert (row.get("owner_id") == "cara") is sees, name
         assert any(o["id"] == "cara" for o in row.get("bot_owners") or []) is sees, name
 
 
@@ -329,14 +331,14 @@ def test_a_team_page_is_seen_by_its_groups_read_and_old_audiences_move_there(acm
     # An install from before: a narrowed page audience moves into its group's Read once, never widening it.
     set_access(api, "groups/legal", see=EVERYONE, read={"people": ["cara"]}, write={"teams": ["legal"]})
     with store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO pin_places(place, audience_json, saved, saved_by) VALUES "
+        c.execute("INSERT OR REPLACE INTO pin_places(place, audience, saved_at, saved_by) VALUES "
                   "('team:sales', ?, ?, 'human:ana')", (encode({"everyone": False, "people": ["eve"]}), H.now()))
         c.execute("DELETE FROM teammate_accesses WHERE target_type='group' AND target_id='sales'")
         TA.migrate_team_pages(c)
         sales = TA.document(c, "group:sales")
     assert sales["see"]["everyone"] and sales["read"]["people"] == ["eve"]   # on the chart as before; page narrowed
     with store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO pin_places(place, audience_json, saved, saved_by) VALUES "
+        c.execute("INSERT OR REPLACE INTO pin_places(place, audience, saved_at, saved_by) VALUES "
                   "('team:legal', ?, ?, 'human:ana'), ('team:contracts', ?, ?, 'human:ana')",
                   (encode({"everyone": False, "people": ["fay"]}), H.now(),
                    encode({"everyone": True}), H.now()))
@@ -344,7 +346,7 @@ def test_a_team_page_is_seen_by_its_groups_read_and_old_audiences_move_there(acm
         TA.migrate_team_pages(c)                    # once: the page audience is cleared
         legal, contracts = TA.document(c, "group:legal"), TA.document(c, "group:contracts")
         audits = c.execute("SELECT count(*) FROM audit_log WHERE object='group:legal:access' AND actor='system'").fetchone()[0]
-        left = c.execute("SELECT count(*) FROM pin_places WHERE audience_json IS NOT NULL").fetchone()[0]
+        left = c.execute("SELECT count(*) FROM pin_places WHERE audience IS NOT NULL").fetchone()[0]
     assert legal["see"]["everyone"]                 # See is left as it was
     assert legal["read"] == {"everyone": False, "people": [], "teams": [], "bots": []}   # {Cara} and {Fay}: nobody
     assert contracts == TA.default_document("group", "contracts")
@@ -386,16 +388,16 @@ def test_a_deleted_group_takes_its_access_with_it(acme):
     assert get(api, "humans/cara/access", "cara-test")["read"]["teams"] == ["legal"]
     assert not levels(api, "dee", "human:cara")["read"] or levels(api, "dee", "human:cara")["manage"]
     with api.app.state.store.read() as c:
-        gone = c.execute("SELECT before_json, after_json FROM audit_log WHERE object='group:sales:access' "
+        gone = c.execute("SELECT before, after FROM audit_log WHERE object='group:sales:access' "
                          "AND via='group-deleted'").fetchone()
-    assert gone and '"fay"' in gone["before_json"] and gone["after_json"] is None
+    assert gone and '"fay"' in gone["before"] and gone["after"] is None
 
 
 def test_group_catalogues_leave_out_groups_the_reader_may_not_see(acme):
     api, tokens = acme
     hide(api, "groups/legal", "cara")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='eve' WHERE bot='analyst'")
+        c.execute("UPDATE bot_config SET owner_id='eve' WHERE bot='analyst'")
     for name, sees in {"eve": False, "cara": True}.items():
         token = tokens[name]
         mine = get(api, f"humans/{name}/access", token)["teams"]             # their own Access editor
@@ -414,18 +416,18 @@ def test_hub_sql_masks_bot_identities_and_message_recipients(acme):
     post(api, f"tasks/{task['id']}/comments", {"text": "Clause 4 looks odd."}, token="dee-test")
     conversation = get(api, "tasks/" + task["id"], "ana-test")["task"]["conversation_id"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara', bot_owners_json='[\"cara\",\"ana\"]', "
-                  "created_by='human:cara', config_json=json_set(config_json,'$.reports_to','cara') WHERE bot='counsel'")
-        c.execute("UPDATE messages SET to_actor='human:cara' WHERE conversation_id=?", (conversation,))
+        c.execute("UPDATE bot_config SET owner_id='cara', bot_owners='[\"cara\",\"ana\"]', "
+                  "created_by='human:cara', config=json_set(config,'$.reports_to','cara') WHERE bot='counsel'")
+        c.execute("UPDATE messages SET recipient_id='human:cara' WHERE conversation_id=?", (conversation,))
     hide(api, "humans/cara", "dee", "fay")
     hide(api, "groups/contracts", "fay")
-    row = "SELECT operator||'|'||bot_owners_json||'|'||created_by||'|'||coalesce(team,'-') FROM bot_config " \
+    row = "SELECT owner_id||'|'||bot_owners||'|'||created_by||'|'||coalesce(team,'-') FROM bot_config " \
           "WHERE bot='counsel'"
     assert sql_column(api, row, "eve-test") == ['|["ana"]||-']
     assert sql_column(api, row, "fay-test") == ['cara|["cara","ana"]|human:cara|contracts']
-    config = sql_column(api, "SELECT config_json FROM bot_config WHERE bot='counsel'", "eve-test")[0]
+    config = sql_column(api, "SELECT config FROM bot_config WHERE bot='counsel'", "eve-test")[0]
     assert '"team"' not in config and '"reports_to"' not in config and '"Counsel"' in config
-    recipients = f"SELECT DISTINCT to_actor FROM messages WHERE conversation_id='{conversation}'"
+    recipients = f"SELECT DISTINCT recipient_id FROM messages WHERE conversation_id='{conversation}'"
     assert sql_column(api, recipients, "eve-test") == [""]
     assert sql_column(api, recipients, "fay-test") == ["human:cara"]
     assert sql_column(api, recipients, "dee-test") == ["human:cara"]      # in the conversation: known there
@@ -445,26 +447,26 @@ def test_rest_and_the_stream_leave_hidden_people_out_of_messages_and_tasks(acme)
     for name, sees in {"eve": False, "fay": True, "ben": True}.items():
         token = tokens[name]
         page = api.get(f"/api/v2/conversations/{conversation}/messages", headers=headers(token)).json()
-        authors = {m["from_actor"] for m in page["messages"]}
+        authors = {m["sender_id"] for m in page["messages"]}
         assert ("human:cara" in authors) is sees, name
         assert ("human:cara" in (page["conversation"].get("participants") or [])) is sees, name
-        assert (get(api, "tasks/" + task["id"], token)["task"]["requester"] == "human:cara") is sees, name
+        assert (get(api, "tasks/" + task["id"], token)["task"]["requester_id"] == "human:cara") is sees, name
         listed = next(t for t in get(api, "tasks?owner=counsel", token)["tasks"] if t["id"] == task["id"])
-        assert (listed["requester"] == "human:cara") is sees, name
+        assert (listed["requester_id"] == "human:cara") is sees, name
         with store.read() as c:
             sent = E.read(c, auth, who(api, name), cursor, topics=("messages",))[0]
-        streamed = {data["message"]["from_actor"] for _, _, data in sent if "message" in data}
+        streamed = {data["message"]["sender_id"] for _, _, data in sent if "message" in data}
         assert ("human:cara" in streamed) is sees, name
     # Eve asked Cara for work: a party to that task, Cara stays named to her there.
     mine = post(api, "tasks", {"owner": "human:cara", "title": "Sign the lease", "body": "Thanks."}, token="eve-test")
-    assert get(api, "tasks/" + mine["id"], "eve-test")["task"]["owner"] == "human:cara"
+    assert get(api, "tasks/" + mine["id"], "eve-test")["task"]["owner_id"] == "human:cara"
 
 
 def test_bot_metadata_leaves_out_hidden_people_and_groups_everywhere(acme):
     api, tokens = acme
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara', owner_ids_json='[\"cara\"]', "
-                  "bot_owners_json='[\"cara\"]' WHERE bot='counsel'")
+        c.execute("UPDATE bot_config SET owner_id='cara', owner_ids='[\"cara\"]', "
+                  "bot_owners='[\"cara\"]' WHERE bot='counsel'")
     hide(api, "humans/cara", "fay")
     hide(api, "groups/contracts", "fay")
     for name, sees in {"eve": False, "fay": True}.items():
@@ -473,10 +475,10 @@ def test_bot_metadata_leaves_out_hidden_people_and_groups_everywhere(acme):
         detail = get(api, "bots/counsel", token)
         chart = next(b for b in get(api, "org", token)["bots"] if b["id"] == "counsel")
         for row in (listed, detail):
-            assert (row["operator"] == "cara") is sees, name
+            assert (row["owner_id"] == "cara") is sees, name
             assert any(o["id"] == "cara" for o in row["owners"] + row["bot_owners"]) is sees, name
             assert row["team"] == ("contracts" if sees else "legal"), name
-        assert (detail.get("operator_name") is not None) is sees, name
+        assert (detail.get("owner_name") is not None) is sees, name
         assert chart["team"] == ("contracts" if sees else "legal"), name
         assert chart["department"] == ("Contracts" if sees else "Legal"), name
 

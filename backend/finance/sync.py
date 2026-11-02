@@ -54,7 +54,7 @@ def _after(at: str, seconds: float) -> str:
 
 
 def _settings(row: Any) -> dict[str, Any]:
-    return SK.loads(row["settings_json"])
+    return SK.loads(row["settings"])
 
 
 # ------------------------------------------------------------------------------------------------ connect probe
@@ -354,8 +354,8 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         cursor = next_page(page) or (str(raws[-1].get("id")) if raws else cursor)
         done = not raws or not next_page(page) and len(raws) < 500
         with store.transaction() as c:
-            SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings_json": SK.dump(
-                {**conf, "backfilled": True}) if done else row["settings_json"]})
+            SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": SK.dump(
+                {**conf, "backfilled": True}) if done else row["settings"]})
             if done:
                 # The balances read at the start of this pass and the whole feed: each account's opening balance.
                 ctx = load(c, now)
@@ -402,10 +402,10 @@ def process_inbox(store: Any, provider: Provider, cid: str, now: str) -> list[st
         waiting = SK.inbox_waiting(c, INBOX_MOST, cid, now)
         others = [str(r["id"]) for r in SK.connections(c, "mercury") if str(r["status"]) in ("active", "error")]
     for r in waiting:
-        body = SK.loads(r["payload_json"])
+        body = SK.loads(r["payload"])
         kind = str(body.get("resourceType") or "")
         owned = str(r["connection_id"] or "") == cid
-        tried = [str(x) for x in SK.loads_list(r["tried_json"])]
+        tried = [str(x) for x in SK.loads_list(r["tried"])]
         if kind != "transaction":
             with store.transaction() as c:
                 SK.inbox_done(c, str(r["id"]), "ignored", now)
@@ -468,16 +468,16 @@ def outbox(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
         due = SK.outbox_due(c, now, OUTBOX_MOST, cid)
     problems: list[str] = []
     for o in due:
-        with store.transaction() as c:
+        with store.transaction(durable=True) as c:
             if not SK.outbox_claim(c, str(o["id"]), now):
                 continue
             if str(o["op"]) == "transfer_create":
                 ctx = load(c, now)
                 fresh: list[Any] = []
                 if transfers.recheck(ctx, o, fresh):
-                    continue      # re-checked at use: cancelled or held, so nothing is sent
+                    continue      # re-checked at use: canceled or held, so nothing is sent
                 transfers.reserve(ctx, o, fresh)         # with the claim: newly applicable limits move once
-        body = SK.loads(o["payload_json"])
+        body = SK.loads(o["payload"])
         answer = _send(store, provider, str(o["op"]), body)
         with store.transaction() as c:
             problem = _record(c, o, body, answer, now)
@@ -494,7 +494,7 @@ def _cut_off(c: Any, o: Any, now: str) -> None:
     why = "the call was cut off; it may have gone through: check Mercury before trying again"
     SK.update(c, "fin_outbox", str(o["id"]), {"status": "failed", "claimed_at": None, "last_error": why,
                                               "updated_at": now})
-    body = SK.loads(o["payload_json"])
+    body = SK.loads(o["payload"])
     ctx = load(c, now)
     if op == "transfer_create":
         transfers.not_sent(ctx, body, why, unknown=True, started=o["claimed_at"])
@@ -522,8 +522,8 @@ def _send(store: Any, provider: Provider, op: str, body: Mapping[str, Any]) -> A
         if card is None:
             return Answer(200, {"skipped": "no such card"})
         if op == "card_create":
-            if str(card["status"]) == "cancelled":
-                return Answer(200, {"skipped": "cancelled before it was issued"})
+            if str(card["status"]) == "canceled":
+                return Answer(200, {"skipped": "canceled before it was issued"})
             with store.read() as c:
                 limit = cards.issue_limit(c, card)          # its allocation now, never a stale limit
             if limit <= 0:
@@ -543,14 +543,14 @@ def _sync_card(provider: Provider, card: Any) -> Answer:
     want, have = str(card["status"]), str(card["provider_status"] or "active")
     done: dict[str, object] = {}
     if want != have:
-        op = {"cancelled": "cancel", "frozen": "freeze", "active": "unfreeze"}[want]
-        if not (have == "cancelled"):
+        op = {"canceled": "cancel", "frozen": "freeze", "active": "unfreeze"}[want]
+        if not (have == "canceled"):
             got = provider.card_state(pid, op)
             if not got.ok:
                 return got
             done["status"] = want
     limit = int(card["limit_amount"] or 0)
-    if want != "cancelled" and limit > 0 and limit != int(card["provider_limit"] or 0):
+    if want != "canceled" and limit > 0 and limit != int(card["provider_limit"] or 0):
         got = provider.card_limit(pid, limit)
         if not got.ok:
             return Answer(got.status, {**got.body, "confirmed": done})
@@ -602,14 +602,14 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
             SK.update(c, "fin_recipients", str(body["recipient_id"]), {
                 "provider_recipient_id": str(answer.body.get("id") or ""), "updated_at": now})
             kept = {"recipient_id": body["recipient_id"]}
-            SK.update(c, "fin_outbox", str(o["id"]), {"payload_json": SK.dump(kept)})
+            SK.update(c, "fin_outbox", str(o["id"]), {"payload": SK.dump(kept)})
             # A payment waiting on this recipient goes in this pass (pay runs after outbox); the ring covers one paid
             # from another connection's account, whose pass may already be done.
             tico.after_commit(c, ring)
         elif op == "transfer_create":
             transfers.sent(load(c, now), body, answer.body)
         elif op == "card_create" and answer.body.get("waiting"):
-            # Not issued and not cancelled: it is issued once it has an allocation again (cards.sync).
+            # Not issued and not canceled: it is issued once it has an allocation again (cards.sync).
             SK.update(c, "fin_cards", card_id, {"sync_status": cards.WAITING, "updated_at": now,
                                                 "sync_error": "Not issued until it has an allocation"})
         elif op == "card_create" and not answer.body.get("skipped"):
@@ -691,7 +691,7 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
             continue
         if status != "queued":
             continue
-        with store.transaction() as c:
+        with store.transaction(durable=True) as c:
             ctx = load(c, now)
             row = SK.get(c, "fin_payments", pid)
             fresh: list[Any] = []
@@ -814,7 +814,7 @@ def statements(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
                     continue
     with store.transaction() as c:
         fresh = SK.get(c, "fin_connections", cid)
-        SK.update(c, "fin_connections", cid, {"settings_json": SK.dump({**_settings(fresh), "statements_at": now})})
+        SK.update(c, "fin_connections", cid, {"settings": SK.dump({**_settings(fresh), "statements_at": now})})
     return []
 
 

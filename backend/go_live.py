@@ -16,7 +16,7 @@ EXPIRY_DAYS = 7
 
 def rows(c):
     """(key, bot, record) for every waiting or failed go-live: one range read on the primary key."""
-    found = c.execute("SELECT key,value_json FROM registry_metadata WHERE key>=? AND key<?",
+    found = c.execute("SELECT key,value FROM registry_metadata WHERE key>=? AND key<?",
                       (PREFIX, PREFIX[:-1] + ";")).fetchall()
     return [(key, key[len(PREFIX):], H._json(value, {}) or {}) for key, value in found]
 
@@ -36,13 +36,14 @@ def expired(record, now):
 def fail(c, key, bot, record, code, notice):
     """Mark the go-live failed with `code`, record it, and tell the person who asked: once, since a failed record
     is skipped from then on."""
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?",
+    c.execute("UPDATE registry_metadata SET value=? WHERE key=?",
               (encode({**record, "failed": {"code": code, "at": H.now()}}), key))
     H.event(c, H.KEEPER, "bot.go_live_failed", bot, {"code": code})
     actor = str(record.get("actor") or "")
     if H.is_human(actor):
         try:
-            H.say(c, H.KEEPER, actor, notice + f" Run `hub bot go-live {bot}` again once that is fixed.", kind="notice")
+            label = (H.bot(c, bot) or {}).get("slug", bot)
+            H.say(c, H.KEEPER, actor, notice + f" Run `hub bot go-live {label}` again once that is fixed.", kind="notice")
         except H.Refused as exc:
             H.event(c, H.KEEPER, "bot.go_live_notice_refused", bot, {"reason": str(exc)[:300]})
 
@@ -60,7 +61,7 @@ def expire(c, now):
     ended = []
     for key, bot, record in rows(c):
         if not record.get("failed") and expired(record, now):
-            fail(c, key, bot, record, "expired", expire_notice(bot, record))
+            fail(c, key, bot, record, "expired", expire_notice((H.bot(c, bot) or {}).get("slug", bot), record))
             ended.append(bot)
     return ended
 

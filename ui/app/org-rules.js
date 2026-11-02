@@ -32,7 +32,7 @@ const ruHref = (tab, q = {}) => {
 // ----------------------------------------------------------------- names
 const ruGroups = () => (S.orgGroups || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
 // The Assistant and its helpers (Counsel among them) are in no bot picker (ui/app/sidebar.js isHiddenBot).
-const ruBots = () => (S.emps || []).filter(e => e.status !== 'archived' && !isHiddenBot(e.name)).map(e => ({id: e.name, name: botDisplayName(e.name)}))
+const ruBots = () => (S.emps || []).filter(e => e.status !== 'archived' && !isHiddenBot(e.id)).map(e => ({id: e.id, name: botDisplayName(e.id)}))
   .sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
 const ruPeople = () => (S.people || []).filter(p => !p.hidden && !p.archived).map(p => ({id: p.id, name: p.name || p.email || p.id}))
   .sort((a, b) => a.name.localeCompare(b.name));

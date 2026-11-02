@@ -143,7 +143,7 @@ def _key(args, suffix=""):
 # ----------------------------------------------------------------------------- identity, messages
 from clients.tico import APIError  # noqa: E402
 
-@tool("hub_whoami", "Who you are to Tico: actor, role, Computer and attempt, or the External "
+@tool("hub_whoami", "Who you are to Tico: actor, role, Computer and run, or the External "
       "agent harness (a Hermes profile) when that is what runs you.", {})
 def whoami(api, args):
     return api.get("me")
@@ -1310,7 +1310,7 @@ GOAL_YES = _s("The owner's plain yes to a goal read-back: turn or its message id
 
 @tool("hub_goal_read_back", "Tico writes and stores the read-back in the owner's Strategy Bot chat. "
                             "Saves nothing without a plain yes. "
-      "Returns message_id, text and exact method/path/body_json steps; save agreed steps with hub_goal_save. "
+      "Returns message_id, text and exact method/path/body steps; save agreed steps with hub_goal_save. "
       "Kinds: goal_create, goal_update, measure_add, target_set, measure_remove, suggestion.",
       {"changes": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 20}},
       required=("changes",), writes=True)
@@ -1323,13 +1323,13 @@ def goal_read_back(api, args):
     return api.post("goals/read-back", {"changes": changes}, key=_key(args))
 
 
-@tool("hub_goal_save", "Save one exact method/path/body_json step returned by hub_goal_read_back after the owner's plain yes. "
+@tool("hub_goal_save", "Save one exact method/path/body step returned by hub_goal_read_back after the owner's plain yes. "
       "For later steps of a new goal, created_goal is the id from its first save. On not_agreed read back again; do not retry. "
       "Also records the owner's \"no\" to a suggestion you made in chat: path /api/v2/goal-proposals/turned-down, with the "
       "suggestion's kind, goal_id, kpi_id, payload and reason as the body; the owner's words become its reason.",
       {"method": {"type": "string", "enum": ["POST"]}, "path": _s("The step's /api/v2 path"),
-       "body_json": _s("The exact body_json string, unchanged"), "created_goal": _s("First save's goal id for {new}"),
-       "on_behalf_of": GOAL_YES}, required=("method", "path", "body_json", "on_behalf_of"), writes=True)
+       "body": _s("The step's exact body string, unchanged"), "created_goal": _s("First save's goal id for {new}"),
+       "on_behalf_of": GOAL_YES}, required=("method", "path", "body", "on_behalf_of"), writes=True)
 def goal_save(api, args):
     path = args["path"]
     if "{new}" in path:
@@ -1344,9 +1344,9 @@ def goal_save(api, args):
         raise ValueError("path must be a goal read-back save step")
     if not args.get("on_behalf_of"):
         raise ValueError("cite the owner's plain yes with on_behalf_of")
-    body = json.loads(args["body_json"])
+    body = json.loads(args["body"])
     if not isinstance(body, dict):
-        raise ValueError("body_json must be a JSON object")
+        raise ValueError("body must be a JSON object")
     return _asked(api, args).post(path.removeprefix("/api/v2/"), body, key=_key(args))
 
 
@@ -3696,7 +3696,8 @@ def inbox_send(api, args):
       "BotOps acts as the person who asked, citing their message. "
       "A manager bot changes only its direct reports: their model, task model, name and description. Creating, archiving "
       "or restoring a report goes through BotOps the same way, within the weekly limit.",
-      {"slug": _s("The bot to change"), "on_behalf_of": _s("Id of the person's message to BotOps asking for it (default: the message that started this turn)"),
+      {"slug": _s("The bot to change (its slug or id)"), "on_behalf_of": _s("Id of the person's message to BotOps asking for it (default: the message that started this turn)"),
+       "new_slug": _s("Rename its slug (a label: its id, history and folder stay); not a built-in bot's"),
        "reports_to": _s("A bot slug, or human:<id>"), "display_name": _s("New display name"),
        "description": _s("New description"), "template": _s("Correct the template metadata; use hub_template_list"), "repo": _s("Its GitHub repository: <org>/bot-<slug>"),
        "shared": {"type": "boolean", "description": "Allow branches"},
@@ -3721,12 +3722,14 @@ def bot_set(api, args):
     delegated = _for_person(api)
     on_behalf = args.get("on_behalf_of") or "turn" if delegated else None
     # The bot's own revision, read as the person: BotOps may not see a bot they own but it does not.
-    row = next((b for b in api.get("bots") if (b.get("slug") or b.get("name")) == args["slug"]), None)
+    row = next((b for b in api.get("bots") if args["slug"] in (b.get("id"), b.get("slug") or b.get("name"))), None)
     if not row or row.get("revision") is None:
         row = api.get(f"bots/{args['slug']}", **({"on_behalf_of": on_behalf} if delegated else {}))
         if not row:
             raise ValueError("No bot " + args["slug"])
     change = {k: args[k] for k in ("reports_to", "display_name", "description", "template", "repo", "status", "shared", "session", "subtask_session", "task_goal", "review_model", "capture_stream", "update_subscriptions") if args.get(k) is not None}
+    if args.get("new_slug"):
+        change["slug"] = args["new_slug"]
     if args.get("app_delivery"):
         change["app_delivery"] = None if args["app_delivery"] == "off" else {"computer": args["app_delivery"], "app": "grok"}
     return api.post(f"bots/{args['slug']}/definition",
@@ -3982,7 +3985,7 @@ def org_reports_to(api, args):
         return who.post(f"humans/{quote(ref, safe='')}", {"reports_to": boss.removeprefix("human:")}, key=_key(args))
     if kind != "bot" or not ref:
         raise ValueError("Name the teammate as bot:<slug> or human:<id>")
-    row = next((b for b in api.get("bots") if (b.get("slug") or b.get("name")) == ref), None)
+    row = next((b for b in api.get("bots") if ref in (b.get("id"), b.get("slug") or b.get("name"))), None)
     if not row:
         raise ValueError("No bot " + ref)
     return who.post(f"bots/{quote(ref, safe='')}/definition",
@@ -4249,7 +4252,7 @@ def agent_pair_decline(api, args):
       {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 256,
        "description": "Omit to read, null for no limit, N for a cap"}}, ("bot",), writes=True)
 def bot_turns_at_once(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     bot = who.get(f"bots/{args['bot']}")
     if 'limit' not in args:
         return {"bot": args['bot'], "turns_at_once": bot.get('turns_at_once')}
@@ -4263,7 +4266,7 @@ def bot_turns_at_once(api, args):
       {"computer": _s("Computer id"), "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 256,
        "description": "Null for automatic, N for a count of turns at once"}}, ("computer", "limit"), writes=True)
 def computer_turns_at_once(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     return who.post(f"computers/{args['computer']}/turns-at-once", {"turns_at_once": args['limit']}, key=_key(args))
 
 
@@ -4276,7 +4279,7 @@ def computer_turns_at_once(api, args):
        "usage": {"type": "boolean", "description": "Also read the last 7 days of what went through it"}},
       ("computer",), writes=True)
 def computer_browser_exit(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     path = f"computers/{quote(str(args['computer']), safe='')}/browser-exit"
     if "sharing" in args:
         body = {"sharing": bool(args["sharing"])}
@@ -4297,7 +4300,7 @@ def computer_browser_exit(api, args):
       {"bot": _s("Bot slug"), "computer": {"type": ["string", "null"], "description": "Omit to read, a computer id "
        "from `choices`, or null for the bot's own internet"}}, ("bot",), writes=True)
 def bot_browser_exit(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     if "computer" in args:
         who.post(f"bots/{args['bot']}/browser-exit", {"runner_id": args["computer"]}, key=_key(args))
     return who.get(f"bots/{args['bot']}/browser-exit")
@@ -4308,7 +4311,7 @@ def bot_browser_exit(api, args):
       {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000,
        "description": "Omit to read, null for unlimited, 0 for off, N for an active-task cap"}}, ("bot",), writes=True)
 def bot_keep_tasks_going(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     bot = who.get(f"bots/{args['bot']}")
     if 'limit' not in args:
         return {"bot": args['bot'], "keep_tasks_going": bot.get('keep_tasks_going'), "task_flow": bot.get('task_flow')}
@@ -4518,9 +4521,9 @@ def webhook_send(api, args):
 
 
 @tool("hub_webhook_sends", "An endpoint's send log, newest first: type, subject, state (ready, sending, delivered, failed, "
-      "cancelled, withheld), attempts, last status and next attempt. Give `send` for one send with its attempts.",
+      "canceled, withheld), attempts, last status and next attempt. Give `send` for one send with its attempts.",
       {"id": _s("The endpoint id"), "send": _s("One send's id (wh_...)"),
-       "state": {"type": "string", "enum": ["ready", "sending", "delivered", "failed", "cancelled", "withheld"]},
+       "state": {"type": "string", "enum": ["ready", "sending", "delivered", "failed", "canceled", "withheld"]},
        "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "offset": {"type": "integer", "minimum": 0},
        "on_behalf_of": ON_BEHALF_OF}, required=("id",))
 def webhook_sends(api, args):
@@ -4531,7 +4534,7 @@ def webhook_sends(api, args):
     return who.get(_hook_path(args, "sends"), state=args.get("state"), limit=args.get("limit"), offset=args.get("offset"))
 
 
-@tool("hub_webhook_retry", "Send a failed, cancelled or delivered send again now (a delivered one is a resend); it keeps its id, so a receiver that already got it drops the repeat.",
+@tool("hub_webhook_retry", "Send a failed, canceled or delivered send again now (a delivered one is a resend); it keeps its id, so a receiver that already got it drops the repeat.",
       {"id": _s("The endpoint id"), "send": _s("The send's id (wh_...)"), "on_behalf_of": ON_BEHALF_OF},
       required=("id", "send"), writes=True)
 def webhook_retry(api, args):
@@ -4743,7 +4746,7 @@ def computer_summary(row):
         update.get("state"), update.get("state") or "unknown")
     level = ("offline" if not row.get("online") else "not_ready" if errors else "warnings" if warnings else "ready")
     return {"id": row.get("id"), "label": row.get("label"), "online": bool(row.get("online")),
-            "last_seen": row.get("last_seen"), "operator": row.get("operator"), "platform": row.get("platform") or "",
+            "last_seen_at": row.get("last_seen_at"), "owner_id": row.get("owner_id"), "platform": row.get("platform") or "",
             "accepts_member_bots": bool(row.get("accepts_member_bots")), "release": row.get("release") or "",
             "version": row.get("version") or "", "wanted_release": update.get("wanted_release") or "",
             "update": state, "readiness": level, "bots": len(row.get("bots") or []),
@@ -4821,7 +4824,7 @@ def computer_detail(row, section=None, offset=0):
                     result["truncated"][name] = {"shown": len(page), "total": len(items), "more": more(name, after)}
         if fits(result):
             return result
-    keep = {k: _bounded(row.get(k), 1, 50) for k in ("id", "label", "online", "last_seen", "release", "version")}
+    keep = {k: _bounded(row.get(k), 1, 50) for k in ("id", "label", "online", "last_seen_at", "release", "version")}
     if section:
         items = _computer_section(row, section) or []
         return {**keep, "section": section, "offset": offset, "total": len(items), "items": [],
@@ -4853,7 +4856,7 @@ def computers(api, args):
         if args.get("section"):
             raise ValueError("Name the computer whose section you want: `computer`")
         return {"computers": [computer_summary(r) for r in rows],
-                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_success": s.get("last_success")}
+                "services": [{"name": s.get("name"), "ok": not s.get("last_error"), "last_succeeded_at": s.get("last_succeeded_at")}
                              for s in listing.get("services") or []],
                 "detail": "One computer in full: hub_computer_list computer=<label or id>"}
     match = [r for r in rows if wanted == r.get("id")] or [
@@ -5531,7 +5534,7 @@ def status_history(api, args):
     return api.get(f"bots/{args['bot']}/history", since=args.get("since"))
 
 
-@tool("hub_run_list", "A bot's recent runs and failed or expired attempts, with end_reason, last_event_at, stalled, tokens and "
+@tool("hub_run_list", "A bot's recent runs, failed and expired ones included, each with its `state` (run.state), end_reason, last_event_at, stalled, tokens and "
       "estimated cost (`est_cost_usd`) and start/end load snapshots (`load_start`, `load_end`). Yours, and those of the bots that report to you.",
       {"bot": _s("Bot slug"), "since": _s("Window like `24h` or an ISO timestamp")}, required=("bot",))
 def turns(api, args):
@@ -5557,7 +5560,7 @@ def turns(api, args):
       "- queues.<bot>.held: jobs a wake preset holds until its release.\n"
       "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed. Never counted as queued.\n"
       "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
-      "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, attempt, current (false once the job has run a later try), state (held, cancelled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Cancelled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
+      "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, run, current (false once the job has run a later try), state (held, canceled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Canceled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
       "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
       "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).\n"
       "- exceptions[] (the engineering type's manager only; absent for anyone else): key (subject:kind), kind (stuck, run, pool, slots, backlog, outage, refusal, merge), cause and since; ticket (id, number, title, step, owner) when it is about a ticket, check (id, title, owner) when the open check below it is what stands, bot, step or tickets for the others, pr and head on a failed merge. One row per subject and kind, oldest first.",
@@ -5574,23 +5577,23 @@ def pipeline(api, args):
 
 
 @tool("hub_run_export", "Owners and engineering bots: whether a run's raw provider stream was captured, and its size. "
-      "Write the replay fixture with `hub run export <attempt> --fixture`. A bounded stderr tail is available even without a stream; streams require capture_stream on, "
-      "kept a week.", {"attempt": _s("The attempt id, from hub_run_list")}, required=("attempt",))
+      "Write the replay fixture with `hub run export <run> --fixture`. A bounded stderr tail is available even without a stream; streams require capture_stream on, "
+      "kept a week.", {"run": _s("The run id, from hub_run_list")}, required=("run",))
 def run_export(api, args):
-    return api.get(f"attempts/{args['attempt']}/capture", full="false")
+    return api.get(f"attempts/{args['run']}/capture", full="false")
 
 
-def run_export_full(api, attempt):
+def run_export_full(api, run):
     """The whole export, for the CLI to write to files; never returned into a bot's context."""
-    return api.get(f"attempts/{attempt}/capture")
+    return api.get(f"attempts/{run}/capture")
 
 
 def write_fixture(found, parent):
     """A run export as a replay fixture folder: input.json, <provider>_transcript.ndjson and output.json."""
-    folder = Path(parent) / ("replay-" + re.sub(r"[^A-Za-z0-9_-]", "", str(found["attempt"]["id"])))
+    folder = Path(parent) / ("replay-" + re.sub(r"[^A-Za-z0-9_-]", "", str(found["run"]["id"])))
     folder.mkdir(parents=True, exist_ok=True)
     provider = re.sub(r"[^a-z0-9_-]", "", str(found.get("provider") or "provider").lower()) or "provider"
-    meta = {k: found.get(k) for k in ("attempt", "provider", "truncated", "dropped_bytes", "captured")}
+    meta = {k: found.get(k) for k in ("run", "provider", "truncated", "dropped_bytes", "captured")}
     files = {"input.json": json.dumps({**found["input"], "source": meta}, indent=2, ensure_ascii=False) + "\n",
              f"{provider}_transcript.ndjson": found["transcript"].rstrip("\n") + "\n",
              "output.json": json.dumps(found["output"], indent=2, ensure_ascii=False) + "\n"}
@@ -6369,7 +6372,7 @@ def spoken(view):
         return view
     item = view.get("item")
     if isinstance(item, dict):
-        item = {k: v for k, v in item.items() if k not in ("rank", "created")}
+        item = {k: v for k, v in item.items() if k not in ("rank", "created_at")}
         clipped = False
         for field, n in SPOKEN_CLIP.items():
             if isinstance(item.get(field), str) and len(item[field]) > n:
@@ -6511,7 +6514,8 @@ def replay_show(api, args):
 # has neither the credential nor any business connecting to a team database. A person makes and
 # revokes service keys in their own shell: a new key is shown to them, never to an agent's context.
 # `hub_team_icon` streams a local image file; the JSON tool transport cannot open that path.
-SHELL_ONLY = {"hub_task_worktree_setup", "hub_bot_check", "hub_db", "hub_service_key_create",
+# `hub_bot_check_names` scans a bot's checkout on this computer (`clients/bot_names.py`): no hub, no credential.
+SHELL_ONLY = {"hub_task_worktree_setup", "hub_bot_check", "hub_bot_check_names", "hub_db", "hub_service_key_create",
               "hub_service_key_list", "hub_service_key_revoke", "hub_team_icon"}
 
 @tool("hub_task_requesters", "Internal requester contacts and counts, paged. Tokens are never listed.",

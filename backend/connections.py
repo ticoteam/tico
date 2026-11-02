@@ -105,7 +105,7 @@ def slack_rows(v):
         return []
     readers = []
     if table(v.c, "slack_channels"):
-        for (raw,) in v.c.execute("SELECT readers_json FROM slack_channels"):
+        for (raw,) in v.c.execute("SELECT readers FROM slack_channels"):
             readers += [str(r).removeprefix("bot:") for r in (H._json(raw, []) or []) if isinstance(r, str)]
     bots, more = v.bots(readers)
     status = {"off": "off", "waiting": "waiting", "connected": "on"}.get(state["state"], "error")
@@ -190,7 +190,7 @@ def meeting_rows(v):
         cfg = saved.get(source)
         if not cfg:
             continue
-        health = v.c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service=?",
+        health = v.c.execute("SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?",
                              ("recording:" + source,)).fetchone()
         state = status_of(bool(cfg.get("enabled")), health, spec["interval"], now)
         status = {"syncing": "on", "delayed": "error"}.get(state, state)

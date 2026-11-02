@@ -204,22 +204,22 @@ def seed_identities(app, count):
     from backend.auth import Identity
     store, settings = app.state.store, app.state.auth.settings
     with store.transaction() as c:
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         for i in range(count):
             token, actor, _ = distinct_viewer(i)
             kind, name = actor.split(":")
             if kind == "bot":
                 settings.test_identities[token] = Identity(actor, "bot", agent="test")
-                c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,created) VALUES(?,?,'fake',?)",
+                c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,created_at) VALUES(?,?,'fake',?)",
                           (name, name, H.now()))
-                c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                           (name, "test", "x-" + name, H.now(), "human:ana"))
             else:
                 settings.test_identities[token] = Identity(actor, "human", f"{name}@acme.example")
                 c.execute("INSERT OR IGNORE INTO humans(id,name,email) VALUES(?,?,?)",
                           (name, name, f"{name}@acme.example"))
                 roster["people"].append({"id": name, "email": f"{name}@acme.example"})
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
 
 
 def stream(port, token, query, state, started=None):

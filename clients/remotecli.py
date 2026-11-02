@@ -167,7 +167,7 @@ def product_repo_create(client, name, *, confirm=None, stdin=None, stderr=None):
     else:
         print(f"Type {preview['repository']} to create it: ", end="", file=stderr, flush=True)
         if stdin.readline().strip() != preview["repository"]:
-            raise APIError("cancelled", "Confirmation did not match; no repository was created")
+            raise APIError("canceled", "Confirmation did not match; no repository was created")
     return client.post("github/product-repos", {
         "org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
         "auto_init": preview["auto_init"], "confirmed": True,
@@ -317,8 +317,8 @@ def run(args, who=None):
     if fn == "run export":
         from clients import hubtools
         if not args.fixture:
-            return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"attempt": args.attempt})
-        found = hubtools.run_export_full(client, args.attempt)
+            return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"run": args.run})
+        found = hubtools.run_export_full(client, args.run)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
     if fn in ("task child create", "task tree", "task bulk", "task model"):
         return via_tool(client, args)
@@ -420,7 +420,7 @@ def run(args, who=None):
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "assistant":
         from clients import hubtools
-        if args.sub in ("read", "send"):
+        if args.sub in ("read", "send", "learn", "learned"):
             return via_tool(client, args)
         try:
             body = json.loads(args.body or "{}")
@@ -936,7 +936,7 @@ def bots(client, args):
             rows = listing.get("computers", []) if isinstance(listing, dict) else listing
             me = hubtools._as_person(client).get("me")
             person = str(me.get("actor") or me.get("id") or "").removeprefix("human:")
-            matches = [row for row in rows if not row.get("revoked_at") and row.get("operator") == person
+            matches = [row for row in rows if not row.get("revoked_at") and row.get("owner_id") == person
                        and args.computer in (row.get("id"), row.get("label"))]
             if len(matches) != 1:
                 raise APIError("computer", "Choose one of your computers by its id or unique label")
@@ -951,7 +951,8 @@ def bots(client, args):
                                     ("subtask_session", getattr(args, "subtask_session", None)),
                                     ("task_goal", getattr(args, "task_goal", None)),
                                     ("review_model", getattr(args, "review_model", None)),
-                                    ("capture_stream", getattr(args, "capture_stream", None))) if v is not None}
+                                    ("capture_stream", getattr(args, "capture_stream", None)),
+                                    ("new_slug", getattr(args, "new_slug", None))) if v is not None}
         if getattr(args, "subscribe_updates", None) is not None:
             picked = [p.strip() for p in args.subscribe_updates.split(",") if p.strip() and p.strip() != "none"]
             fields["update_subscriptions"] = picked
@@ -972,8 +973,9 @@ def bots(client, args):
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
-        from clients.manifest import repo_dir
-        problems = catalog.check(repo_dir(workspace, args.slug), args.slug)
+        from clients.botcopy import folder_of
+        from clients.manifest import folder_dir
+        problems = catalog.check(folder_dir(workspace, folder_of(client, args.slug), args.slug), args.slug)
         return {"ready": not problems, "problems": problems}
     if not args.template:
         raise APIError("usage", "hub bot create --template T builds the bot; --record-only only registers it")
@@ -984,10 +986,12 @@ def bots(client, args):
     path = catalog.materialize(args.template, slug, workspace, client.get("config"),
                                record.get("answers") or {},
                                display_name=args.name or chosen.get("display_name"),
-                               instructions=chosen.get("instructions"))
+                               instructions=chosen.get("instructions"),
+                               folder=(registered or {}).get("folder"))
     result = {"path": str(path), "template": args.template, "slug": slug,
               "committed": catalog.committed(path),
-              "automations": seed_automations(client if registered is None else _person(client), slug, path),
+              "automations": seed_automations(client if registered is None else _person(client), slug, path,
+                                              (registered or {}).get("id")),
               **({"registered": registered} if registered else {})}
     result["github"] = github_repository(client, slug, path)
     return result
@@ -1024,7 +1028,7 @@ def github_repository(client, slug, path):
             # A bot the server has not registered stays on this computer, as before.
             return {"skipped": exc.detail, "note": f"register the bot, then hub bot repo-create {slug} --empty"}
         if exc.code == "github_repo_exists":
-            return {"repository": "bot-" + slug, "existing": True, "note": exc.detail}
+            return {"repository": path.name, "existing": True, "note": exc.detail}
         if exc.code == "github_permission_missing":
             raise APIError(exc.code, f"Not finished: {exc.detail} The bot stays planned and its files are in {path}; "
                            "finish and commit them there as usual.", exc.status, False, exc.operation_id) from None
@@ -1051,10 +1055,11 @@ def _person(client):
     return hubtools._as_person(client)
 
 
-def seed_automations(client, slug, path):
+def seed_automations(client, slug, path, bot_id=None):
     """The template's `routines:` (older: `schedules:`) become the new bot's first automations: each a schedule (or an
     event, or a webhook trigger) and one bot turn with the routine's text. The manifest is read once, here, with its
-    playbooks already rendered; from now on they are edited in Automations."""
+    playbooks already rendered; from now on they are edited in Automations. The actor is `bot:<id>` (a bot's id is
+    its primary key; its slug is only a label), looked up by slug when the registration did not return it."""
     from clients.manifest import manifest_path, routines_of
     from clients.routines import validate_schedules
     import yaml
@@ -1063,6 +1068,12 @@ def seed_automations(client, slug, path):
         entries = validate_schedules(declared, lambda rel: (path / rel).read_text())
     except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
         return {"error": f"bot.yaml routines: {exc}"}
+    if not entries:
+        return []
+    try:
+        actor = "bot:" + (bot_id or client.get("bots/" + slug)["id"])
+    except (APIError, KeyError, TypeError) as exc:
+        return {"error": f"the bot's id for its routines: {exc}"}
     seeded = []
     for entry in entries:
         on = entry["on"] or ""
@@ -1070,8 +1081,8 @@ def seed_automations(client, slug, path):
                    {"type": "event", "name": on} if on else
                    {"type": "schedule", "cron": entry["cron"], "tz": entry["timezone"]})
         made = client.post("automations", {
-            "name": entry["title"][:120], "owner": "bot:" + slug, "enabled": entry["enabled"], "trigger": trigger,
-            "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:" + slug,
+            "name": entry["title"][:120], "owner": actor, "enabled": entry["enabled"], "trigger": trigger,
+            "steps": [{"id": "turn", "type": "bot_turn", "bot": actor,
                        "prompt": entry["instructions"] or "Do this routine's work."}]})
         seeded.append(made.get("id") or (made.get("automation") or {}).get("id"))
     return seeded
@@ -1172,7 +1183,7 @@ def integration_text(page):
         out += [f"  {q['id']:<44} {q['title']}" for q in page["queries"]]
     notes = page.get("learnings") or []
     out += ["", f"## Learnings ({len(notes)}; add one with `hub tool learn {page['service']} \"...\"`)"]
-    out += [f"  {n['created'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
+    out += [f"  {n['created_at'][:10]}  {n['actor']}: {n['text']}" for n in notes] or ["  none yet"]
     return "\n".join(out)
 
 
@@ -1335,7 +1346,7 @@ def main(args, who=None):
             print(result["text"])
         elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
             # Not an error and nothing to retry: Tico finishes it when the computer reports the repository.
-            print(f"{result.get('bot')} is placed on {result.get('computer')} and waiting for it to get the repository. "
+            print(f"{args.bot} is placed on {result.get('computer')} and waiting for it to get the repository. "
                   "Tico finishes going live (turns it on and starts its setup) when "
                   f"{result.get('computer')} has the repository; nothing needs to run again.")
         else:

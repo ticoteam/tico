@@ -196,7 +196,7 @@ def remove(c, actor, reader_id):
 
 
 def _cancel_notices(c, reader_id):
-    c.execute("UPDATE reader_notices SET status='cancelled',updated_at=? WHERE reader_id=? AND status='pending'",
+    c.execute("UPDATE reader_notices SET status='canceled',updated_at=? WHERE reader_id=? AND status='pending'",
               (H.now(), reader_id))
 
 
@@ -667,14 +667,14 @@ def tick(store):
 def _waiting(store):
     """Up to one batch of the oldest edition with notices waiting, after settling what can no longer go. The issuer doesn't
     check who it mails, so this is the check: only a reader on the list, in that audience now, with notices on, for an
-    edition still published, and anything else is cancelled. A notice a day old stops waiting, which bounds any backlog: by
+    edition still published, and anything else is canceled. A notice a day old stops waiting, which bounds any backlog: by
     then the page is what says there is news."""
     now = H.now()
     with store.transaction() as c:
         c.execute("UPDATE reader_notices SET status='failed',updated_at=? WHERE status='pending' AND created_at<?",
                   (now, H.shift(now, hours=-NOTICE_MAX_AGE_HOURS)))
         closed = transparency_of(c) == "closed"
-        c.execute("UPDATE reader_notices SET status='cancelled',updated_at=? WHERE status='pending' AND (? OR id NOT IN ("
+        c.execute("UPDATE reader_notices SET status='canceled',updated_at=? WHERE status='pending' AND (? OR id NOT IN ("
                   "SELECT n.id FROM reader_notices n JOIN readers r ON r.id=n.reader_id JOIN editions e ON e.id=n.edition_id "
                   "JOIN audiences a ON a.id=e.audience_id JOIN audience_readers ar ON ar.audience_id=a.id AND ar.reader_id=r.id "
                   "WHERE n.status='pending' AND r.removed_at IS NULL AND r.notify=1 AND a.enabled=1 AND e.status='published'))",
@@ -758,12 +758,12 @@ def _notices_retry(store, batch):
 def notices_of(c, edition_id):
     """What became of an edition's notices, for the owner: readers by state, and what the issuer said of those it took. It
     answers per request, so `limited` and `failed` here are counts it reported, not named readers."""
-    states = dict.fromkeys(("pending", "sent", "failed", "unavailable", "cancelled"), 0)
+    states = dict.fromkeys(("pending", "sent", "failed", "unavailable", "canceled"), 0)
     for row in c.execute("SELECT status,count(*) n FROM reader_notices WHERE edition_id=? GROUP BY status", (edition_id,)):
         states[row["status"]] = row["n"]
     reported = {"delivered": 0, "failed": 0, "limited": 0}
-    for row in c.execute("SELECT detail_json FROM events WHERE action='reader.notices' AND target=?", (edition_id,)):
-        detail = json.loads(row["detail_json"] or "{}")
+    for row in c.execute("SELECT detail FROM events WHERE action='reader.notices' AND target=?", (edition_id,)):
+        detail = json.loads(row["detail"] or "{}")
         reported["delivered"] += detail.get("sent", 0)
         reported["failed"] += detail.get("failed", 0)
         reported["limited"] += detail.get("limited", 0)

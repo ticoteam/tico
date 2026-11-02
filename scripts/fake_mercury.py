@@ -11,7 +11,7 @@ Control endpoints under /_fake/ are not Mercury's:
   POST /_fake/reject/<id>      the approver rejects a send-money request
   POST /_fake/card-spend       {"card", "amount", "merchant", "date"?, "pending"?}: a purchase on a card (its Mercury id,
                                last four or nickname) on the IO credit account, with its transaction.created event; a
-                               frozen or cancelled card is declined (a failed transaction), as Mercury does
+                               frozen or canceled card is declined (a failed transaction), as Mercury does
   GET  /_fake/calls            every Mercury call Tico made, in order (method, path, query, body; never the token)
 
   python3 scripts/fake_mercury.py --port 18790

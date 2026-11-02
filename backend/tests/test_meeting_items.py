@@ -67,7 +67,7 @@ def test_a_pushed_item_is_a_hub_task_with_the_meeting_it_came_from(api):
     pushed = push(api, rid, iid)
     assert pushed["pushed"] and pushed["item"]["status"] == "pushed"
     task = get(api, "tasks/" + pushed["item"]["result_ref"])["task"]
-    assert task["owner"] == "human:ben" and task["title"] == "Send Dana the pricing sheet"
+    assert task["owner_id"] == "human:ben" and task["title"] == "Send Dana the pricing sheet"
     assert "From meeting: Weekly sync" in task["body"] and "> We agreed to ship on Friday." in task["body"]
     assert f"#/meetings?meeting={rid}" in task["body"]
     # A second push is one result, not a second task.

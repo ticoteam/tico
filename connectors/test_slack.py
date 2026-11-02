@@ -163,6 +163,9 @@ OK_AUTH = (200, {}, {"ok": True, "user_id": "U0BOT", "url": "https://acme.slack.
 
 
 class DmGates(FakeSlack):
+    def test_hub_access_is_a_file_people_write_so_its_owner_key_stays_owner(self):
+        self.assertIn("ana@acme.example", slack.load_hub_access())
+
     def test_someone_outside_hub_access_is_refused_and_nothing_is_posted(self):
         rc, out, calls = self.run_cli(
             ["dm", "--as", self.slug, "--to", "lead@acme.com", "--text", "hi", "--json"],
@@ -224,6 +227,33 @@ class Workspace(unittest.TestCase):
             finally:
                 browser.PROJECTS, slack.PROJECTS = saved
 
+    def test_a_runs_own_bot_is_read_from_the_folder_the_runner_names(self):
+        # A bot made with a UUID id runs as HUB_BOT=<id> in the folder named from its first slug, which a rename keeps:
+        # bot-<HUB_BOT> is not its folder, HUB_BOT_FOLDER is. Another bot named by slug is still found by its slug.
+        import browser
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from connectors import mail
+        bot = "01a19806-0460-77a7-860b-b797cea3f270"
+        with tempfile.TemporaryDirectory() as root:
+            workspace = Path(root)
+            for folder, text in (("bot-sales-helper", "tools: [own]\n"), ("bot-ops", "tools: [ops]\n")):
+                (workspace / folder).mkdir()
+                (workspace / folder / "bot.yaml").write_text(text)
+            saved = browser.PROJECTS, slack.PROJECTS
+            browser.PROJECTS = slack.PROJECTS = workspace
+            env = {"HUB_BOT": bot, "HUB_BOT_FOLDER": "bot-sales-helper"}
+            try:
+                with mock.patch.dict(os.environ, env):
+                    self.assertEqual(slack.manifest_of(bot)[0], workspace / "bot-sales-helper" / "bot.yaml")
+                    self.assertEqual(browser.load_manifest(bot), {"tools": ["own"]})
+                    self.assertEqual(mail.repo_dir(workspace, bot), workspace / "bot-sales-helper")
+                    self.assertEqual(slack.manifest_of("ops")[0], workspace / "bot-ops" / "bot.yaml")
+                    self.assertEqual(mail.repo_dir(workspace, "ops"), workspace / "bot-ops")
+                with mock.patch.dict(os.environ, {**env, "HUB_BOT_FOLDER": "../outside"}):
+                    self.assertEqual(slack.manifest_of(bot)[0], workspace / f"bot-{bot}" / "bot.yaml")
+            finally:
+                browser.PROJECTS, slack.PROJECTS = saved
+
 
 class ChannelList(FakeSlack):
     """The channel list is the hub's (Settings > Tools > Slack); the old registry file counts only until it is imported."""
@@ -282,6 +312,15 @@ class ChannelList(FakeSlack):
                 slack.check_history_scope(manifest, "reader", refs, rows)
         with self.assertRaises(slack.Refused):                       # listed, but its reader is someone else
             slack.check_history_scope(manifest, "other-bot", ["#customer_success"], rows)
+
+    def test_a_reader_named_by_its_label_matches_the_bot_id_the_list_stores(self):
+        bot_id = "0190f2a1-7c3e-7d1a-9b2e-5f4a3c2b1a00"             # a bot made after the id/slug split
+        manifest = {"tools": [{"service": "slack", "can": ["read"], "channels": []}]}
+        rows = [{"id": "C0000000030", "name": "finance", "post": False, "readers": [bot_id], "note": ""}]
+        slack.HUB_GET = lambda path: {"stage": "active", "id": bot_id} if path == "bots/mira" else None
+        slack.check_history_scope(manifest, "mira", ["#finance"], rows)
+        with self.assertRaises(slack.Refused):                       # another bot, no id from Tico
+            slack.check_history_scope(manifest, "other-bot", ["#finance"], rows)
 
     def test_a_post_follows_the_list_and_externally_shared_channels_stay_refused(self):
         listing = (200, {}, {"ok": True, "channels": [{"id": "C0000000020", "name": "agents"}]})

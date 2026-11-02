@@ -112,7 +112,7 @@ def show(row):
     return {"id": row["id"], "peer": row["peer_install"], "direction": row["direction"], "status": row["status"],
             "approved": row["approved_at"] is not None, "paused": row["paused_at"] is not None,
             "paused_by": row["paused_by"], "peer_key_id": row["peer_key_id"], "company": row["peer_company"] or "",
-            "updated": row["updated_at"]}
+            "updated_at": row["updated_at"]}
 
 
 def new_id(prefix):

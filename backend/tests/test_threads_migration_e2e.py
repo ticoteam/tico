@@ -35,6 +35,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import demo, devcopy, task_privacy
 from backend.app import create_app
 from backend.auth import Auth, Identity, standing

@@ -284,7 +284,7 @@ fn validate_and_tag(
         if status.success() {
             break;
         }
-        rerun_cancelled(state, candidate, id)?;
+        rerun_canceled(state, candidate, id)?;
     }
     verify_run(state, candidate, id, true)?;
     unchanged(candidate)?;
@@ -301,8 +301,8 @@ fn validate_and_tag(
     );
     Ok(())
 }
-// A run a bot cancelled is rerun in place: same id, title and candidate, so the freeze stays valid. Anything else refuses.
-fn rerun_cancelled(state: &Freeze, candidate: &str, id: u64) -> Result<()> {
+// A run a bot canceled is rerun in place: same id, title and candidate, so the freeze stays valid. Anything else refuses.
+fn rerun_canceled(state: &Freeze, candidate: &str, id: u64) -> Result<()> {
     let run = gh(&["api", &format!("repos/{}/actions/runs/{id}", state.repo)])?;
     require(
         run["status"] == "completed" && run["conclusion"] == "cancelled",
@@ -312,7 +312,7 @@ fn rerun_cancelled(state: &Freeze, candidate: &str, id: u64) -> Result<()> {
     let attempt = run["run_attempt"].as_u64().unwrap_or(1);
     require(
         attempt <= 2,
-        "Release validation was cancelled after 2 reruns; no tag pushed; inspect Actions",
+        "Release validation was canceled after 2 reruns; no tag pushed; inspect Actions",
     )?;
     verify_run(state, candidate, id, false)?;
     unchanged(candidate)?;
@@ -323,7 +323,7 @@ fn rerun_cancelled(state: &Freeze, candidate: &str, id: u64) -> Result<()> {
     for _ in 0..20 {
         let run = gh(&["api", &format!("repos/{}/actions/runs/{id}", state.repo)])?;
         if run["status"] != "completed" {
-            println!("Validation run {id} was cancelled; rerunning it (rerun {attempt} of 2).");
+            println!("Validation run {id} was canceled; rerunning it (rerun {attempt} of 2).");
             return Ok(());
         }
         thread::sleep(Duration::from_secs(3));

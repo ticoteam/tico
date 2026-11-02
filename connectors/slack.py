@@ -425,9 +425,14 @@ SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
 def bot_folder(slug):
-    """The bot's folder: bot-<slug> if it exists, else emp-<slug> if that does, else bot-<slug> (this repeats clients/manifest.py)."""
+    """The bot's folder: for this run's own bot the folder the runner names (HUB_BOT_FOLDER: a bot made with a UUID id
+    is not in bot-<id>, and a rename keeps its folder), else bot-<slug> if it exists, else emp-<slug> if that does,
+    else bot-<slug> (this repeats clients/manifest.py)."""
     if not SLUG.fullmatch(slug or ""):                  # a slug is one folder name: never a path out of PROJECTS
         raise Refused(f"{slug!r} is not a bot slug")
+    own = os.environ.get("HUB_BOT_FOLDER") or ""
+    if own and SLUG.fullmatch(own) and slug.lower() == bot_from_env().lower():
+        return PROJECTS / own
     for prefix in ("bot-", "emp-"):
         if (PROJECTS / (prefix + slug)).exists():
             return PROJECTS / (prefix + slug)
@@ -527,6 +532,16 @@ def check_not_onboarding(slug):
                       "answers.")
 
 
+def _bot_names(slug):
+    """The label and the id of one bot, lowercased. A channel's readers hold bot ids (Tico stores the id the label
+    resolves to), so a bot named by its label matches them by its id. Without a Tico row only the label is known."""
+    names = {str(slug).strip().lower()}
+    row = HUB_GET(f"bots/{slug}") if slug else None
+    if isinstance(row, dict) and row.get("id"):
+        names.add(str(row["id"]).strip().lower())
+    return names
+
+
 def check_history_scope(manifest, slug, refs, channels=None):
     """Refuse a history read outside the bot's channel scope.
 
@@ -549,8 +564,9 @@ def check_history_scope(manifest, slug, refs, channels=None):
         except Refused:
             continue                                    # declared but not listed: only the words it was declared in
         allowed.update({norm_ref(channel.get("name")), norm_ref(channel.get("id"))} - {""})
+    names = _bot_names(slug)
     for channel in registry:
-        if slug in [str(r).strip().lower() for r in (channel.get("readers") or [])]:
+        if names & {str(r).strip().lower() for r in (channel.get("readers") or [])}:
             allowed.update({norm_ref(channel.get("name")), norm_ref(channel.get("id"))} - {""})
     for ref in refs:
         channel = find_registry_channel(registry, ref)

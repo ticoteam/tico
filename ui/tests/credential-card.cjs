@@ -22,8 +22,8 @@ async function open(browser, viewport, view) {
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('console', m => seen.console.push(m.text()));
   const messages = [
-    {id: 'm1', from_actor: 'human:ana', to_actor: 'bot:botops', kind: 'say', body: 'Make me a Jira bot', created: now, refs: {}},
-    {id: 'm2', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Jira Manager needs your Jira login', created: now, refs: {credential_request: 'cr1'}}];
+    {id: 'm1', sender_id: 'human:ana', recipient_id: 'bot:botops', kind: 'say', body: 'Make me a Jira bot', created_at: now, refs: {}},
+    {id: 'm2', sender_id: 'bot:botops', recipient_id: 'human:ana', kind: 'say', body: 'Jira Manager needs your Jira login', created_at: now, refs: {credential_request: 'cr1'}}];
   const snapshot = {messages, execution: null};
   await page.context().route('**/*', route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -48,7 +48,7 @@ async function open(browser, viewport, view) {
       seen.view = {...seen.view, status: 'saved', credential_id: 'c1'};
       return json(seen.view);
     }
-    if (p === '/api/v2/credential-requests/cr1/cancel') { seen.cancels++; seen.view = {...seen.view, status: 'cancelled'}; return json(seen.view); }
+    if (p === '/api/v2/credential-requests/cr1/cancel') { seen.cancels++; seen.view = {...seen.view, status: 'canceled'}; return json(seen.view); }
     return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/assistant');

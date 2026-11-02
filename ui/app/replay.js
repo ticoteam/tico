@@ -20,11 +20,11 @@ const replayIso = local => { const d = new Date(local); return isNaN(d) ? '' : d
 function replayScopeOptions(selected) {
   const opt = (value, label) => `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`;
   const groups = (S.orgGroups || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
-  const bots = (S.emps || []).filter(e => e.status !== 'planned' && e.status !== 'archived').sort((a, b) => botDisplayName(a.name).localeCompare(botDisplayName(b.name)));
+  const bots = (S.emps || []).filter(e => e.status !== 'planned' && e.status !== 'archived').sort((a, b) => botDisplayName(a.id).localeCompare(botDisplayName(b.id)));
   const people = (S.people || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
   return opt('', 'Everyone')
     + (groups.length ? `<optgroup label="Teams">${groups.map(g => opt('team:' + g.id, g.name || g.id)).join('')}</optgroup>` : '')
-    + (bots.length ? `<optgroup label="Bots">${bots.map(e => opt('bot:' + e.name, botDisplayName(e.name))).join('')}</optgroup>` : '')
+    + (bots.length ? `<optgroup label="Bots">${bots.map(e => opt('bot:' + e.id, botDisplayName(e.id))).join('')}</optgroup>` : '')
     + (people.length ? `<optgroup label="People">${people.map(p => opt('human:' + p.id, p.name || p.id)).join('')}</optgroup>` : '');
 }
 function replayStop() {

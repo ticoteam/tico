@@ -101,7 +101,7 @@ function answer(hub, method, p, url, payload) {
     return [200, {editions: aud ? hub.editions.filter(e => e.audience_id === aud && e.status === url.searchParams.get('status')) : hub.editions, next_before: null, schedule_problems: hub.scheduleProblems}];
   }
   if (p === '/api/v2/editions') return [200, {id: payload.audience_id === 'a-inv' && payload.author === 'company' ? 'e-failed' : 'e-ready'}];
-  if ((m = /^\/api\/v2\/editions\/([^/]+)\/notices$/.exec(p))) return [200, {readers: {pending: 1, sent: 2, failed: 1, unavailable: 0, cancelled: 0}, issuer: {delivered: 2, failed: 1, limited: 0}, email_available: hub.emailAvailable}];
+  if ((m = /^\/api\/v2\/editions\/([^/]+)\/notices$/.exec(p))) return [200, {readers: {pending: 1, sent: 2, failed: 1, unavailable: 0, canceled: 0}, issuer: {delivered: 2, failed: 1, limited: 0}, email_available: hub.emailAvailable}];
   if ((m = /^\/api\/v2\/editions\/([^/]+)\/publish$/.exec(p))) { const e = hub.editions.find(x => x.id === m[1]); Object.assign(e, {status: 'published', published_at: '2026-11-01'}); return [200, {...e, release_failed: hub.releaseFails}]; }
   if ((m = /^\/api\/v2\/editions\/([^/]+)$/.exec(p)) && method === 'GET') {
     const e = hub.editions.find(x => x.id === m[1]);

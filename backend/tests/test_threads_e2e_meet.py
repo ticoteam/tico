@@ -1,5 +1,6 @@
 """Tico Meet in a thread, end to end over the API with LiveKit and the Gateway faked: the call's transcript is one
 message in the thread, read by the thread's people and by nobody else. Synthetic names only (Acme, acme.example)."""
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api, headers, post  # noqa: F401
 from backend.tests.test_calls import PCM_EIGHT_SECONDS, SYNTHETIC_SPEECH, join, meet, start_call, thread  # noqa: F401
 from backend.tests.test_live_meetings import live, settle  # noqa: F401

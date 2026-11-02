@@ -137,7 +137,7 @@ def s_hold_release(org, items, judge):
     X.hook(org.client, made.body["trigger"]["url"], json.dumps(X.payload_of(attack, "in-1")).encode(),
            {"Idempotency-Key": "in-1"})
     org.store.automations.drain()
-    held_turn = org.sql("SELECT id,title,body,owner,version FROM tasks WHERE title='Held: Intake work'")
+    held_turn = org.sql("SELECT id,title,body,owner_id,version FROM tasks WHERE title='Held: Intake work'")
     held_task = X.find_task(org, "Held: Intake in-1")
     out.append(("an automation's task and its Bot turn are both held, for one model call",
                 bool(held_task) and len(held_turn) == 1 and len(judge.answers) - asked == 1,
@@ -170,8 +170,8 @@ def s_hold_release(org, items, judge):
         reply = org.api("post", f"/api/v2/tasks/{task['id']}", {"version": task["version"], "owner": bot})
         org.scheduler_pass()
         after = X.task_row(org, task["id"])
-        out.append((f"handing the held task to {bot} releases it", reply.status == 200 and after["owner"] == "bot:" + bot
-                    and X.wakes(org, bot) > woke, f"{reply.status} {after['owner']} wakes {woke}->{X.wakes(org, bot)}"))
+        out.append((f"handing the held task to {bot} releases it", reply.status == 200 and after["owner_id"] == "bot:" + bot
+                    and X.wakes(org, bot) > woke, f"{reply.status} {after['owner_id']} wakes {woke}->{X.wakes(org, bot)}"))
     return out
 
 

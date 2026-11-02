@@ -30,7 +30,7 @@ const groups = ['Leadership', 'Engineering', 'Finance', 'Marketing', 'Product'].
 const bot = (name, display_name, team, reports_to, extra = {}) => ({name, display_name, team, reports_to,
   org_parent: reports_to.startsWith('human:') ? 'p:' + reports_to.slice(6) : 'b:' + reports_to, status: 'planned',
   state: 'planned', onboarding_state: 'needs_setup', harness: 'claude', model: 'claude-opus-5-5', host: 'keeper',
-  can_chat: true, can_manage: true, my_access: {see: true, read: true, write: true}, users: [], operator: 'ana', revision: 1, ...extra});
+  can_chat: true, can_manage: true, my_access: {see: true, read: true, write: true}, users: [], owner_id: 'ana', revision: 1, ...extra});
 const TEAM = [
   bot('head-of-engineering', 'Head of Engineering', 'engineering', 'human:ana'),
   bot('qa-engineer', 'QA Engineer', 'engineering', 'head-of-engineering'),

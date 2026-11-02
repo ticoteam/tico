@@ -47,7 +47,7 @@ CREATE INDEX IF NOT EXISTS inbound_messages_inbox ON inbound_messages(inbox_id,s
 CREATE INDEX IF NOT EXISTS inbound_messages_retention ON inbound_messages(retention_removed,received_at);
 CREATE TABLE IF NOT EXISTS inbound_sync(
  singleton INTEGER PRIMARY KEY CHECK(singleton=1), cursor INTEGER NOT NULL DEFAULT 0,
- last_sync REAL, error TEXT NOT NULL DEFAULT '', gaps_json TEXT NOT NULL DEFAULT '[]');
+ last_synced_at REAL, error TEXT NOT NULL DEFAULT '', gaps TEXT NOT NULL DEFAULT '[]');
 INSERT OR IGNORE INTO inbound_sync(singleton) VALUES(1);
 '''
 
@@ -223,8 +223,8 @@ class Inbound:
                                                ' ORDER BY inbox_id LIMIT ?',(after,*values,limit+1))]
             sync = dict(c.execute('SELECT * FROM inbound_sync WHERE singleton=1').fetchone())
         # A gap names its inbox: only the inboxes this reader may read.
-        gaps = [g for g in json.loads(sync['gaps_json']) if g.get('inbox_id') not in hidden]
-        return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off,'last_sync':sync['last_sync'],'error':sync['error'],
+        gaps = [g for g in json.loads(sync['gaps']) if g.get('inbox_id') not in hidden]
+        return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off,'last_synced_at':sync['last_synced_at'],'error':sync['error'],
                 'gaps':gaps}
 
     def connection_actor(self, who, what='Inbox', code='inbox_connection', tap=False):
@@ -546,9 +546,9 @@ class Inbound:
                     # A bill emailed to the bills address waits for the drain below (backend/bills_address.py).
                     bills_address.emailed(c,item)
             # Keep cumulative gap summaries; the cursor commit and gap update are atomic with messages.
-            old = json.loads(c.execute('SELECT gaps_json FROM inbound_sync WHERE singleton=1').fetchone()[0])
+            old = json.loads(c.execute('SELECT gaps FROM inbound_sync WHERE singleton=1').fetchone()[0])
             gaps = {(g['inbox_id'],g['from'],g['to']):g for g in old+page.get('gaps',[])}
-            c.execute("UPDATE inbound_sync SET cursor=?,last_sync=?,error='',gaps_json=? WHERE singleton=1",
+            c.execute("UPDATE inbound_sync SET cursor=?,last_synced_at=?,error='',gaps=? WHERE singleton=1",
                       (through,time.time(),encode(list(gaps.values())[-100:])))
             self.expire(c)
         if kicked:self.wake_mail()

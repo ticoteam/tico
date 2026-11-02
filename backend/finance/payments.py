@@ -1,7 +1,7 @@
 """Recipients and payments (spec §9). A payment is one immutable instruction (recipient version, amount, money account,
 method, the line it posts to) with one idempotency key for its whole life, sent through Mercury's approval queue so a
 person approves in Mercury too. Lifecycle: queued → awaiting_bank_approval → submitted → settled | returned | failed |
-cancelled, plus unknown when a call timed out after it may have landed. One live payment per obligation; a live
+canceled, plus unknown when a call timed out after it may have landed. One live payment per obligation; a live
 payment keeps its hold until it settles or ends. Direct send is not built: only the owner's switch and its refusal.
 
 The planners run inside `act`; the worker steps (`recheck`, `sent`, `polled`, `found`) are what finance/sync.py runs
@@ -50,7 +50,7 @@ def _event(ctx: Ctx, name: str, pay: Any, why: str = "") -> None:
 
 def settings(c: Any, connection_id: str) -> dict[str, Any]:
     row = SK.get(c, "fin_connections", connection_id)
-    return SK.loads(row["settings_json"]) if row is not None else {}
+    return SK.loads(row["settings"]) if row is not None else {}
 
 
 # ------------------------------------------------------------------------------------------------ recipients
@@ -295,9 +295,9 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "recipient_id": str(rec["id"]), "recipient_version": int(rec["version"]),
             "money_account_id": str(bank["id"]), "amount": amount, "currency": ctx.book.base_currency,
             "method": method, "memo": memo, "obligation": obligation, "account_id": line.id,
-            "tags_json": SK.dump(tags), "mode": mode, "status": "queued",
+            "tags": SK.dump(tags), "mode": mode, "status": "queued",
             "hold_id": hold.hold_id if hold is not None else None,
-            "purpose_json": SK.dump(purpose),
+            "purpose": SK.dump(purpose),
             "next_try_at": ctx.at, "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
         tico.after_commit(ctx.c, ring)
         return {"payment_id": pid, "status": "queued"}
@@ -370,12 +370,12 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("payment_id",))
     pay = SK.get(ctx.c, "fin_payments", V.text(p, "payment_id", 80))
     if pay is None or (str(pay["created_by"]) != who and not may_write(ctx, who, str(pay["account_id"]),
-                                                                       SK.loads(pay["tags_json"]))):
+                                                                       SK.loads(pay["tags"]))):
         raise FinanceError(NOT_FOUND, "no such payment")
     status = str(pay["status"])
     if status in ("awaiting_bank_approval", "submitted"):
         if str(pay["mode"]) == "direct":
-            raise FinanceError(CONFLICT, "it was sent to Mercury directly: it cannot be cancelled here")
+            raise FinanceError(CONFLICT, "it was sent to Mercury directly: it cannot be canceled here")
         raise FinanceError(CONFLICT, "it is already in Mercury: reject it in Mercury")
     lost = status == "unknown" and bool(pay["flagged_at"]) and R.is_admin(ctx.org, who, ctx.rights(who))
     if status == "unknown" and not lost:
@@ -386,7 +386,7 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(CONFLICT, f"that payment is {status}")
 
     def apply(aid: str) -> Result:
-        if SK.update(ctx.c, "fin_payments", str(pay["id"]), {"status": "cancelled", "updated_at": ctx.at},
+        if SK.update(ctx.c, "fin_payments", str(pay["id"]), {"status": "canceled", "updated_at": ctx.at},
                      "status=?", (status,)) != 1:
             raise FinanceError(CONFLICT, "the payment moved on; check its status")
         if pay["hold_id"]:
@@ -394,7 +394,7 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         unreserve(ctx, pay)
         from .documents import payment_ended
         payment_ended(ctx, pay)                    # a bill it was paying is open again
-        return {"payment_id": str(pay["id"]), "status": "cancelled"}
+        return {"payment_id": str(pay["id"]), "status": "canceled"}
     return Plan(K.default_gate(ctx.org, who, "payment_cancel"), f"Cancel the {int(pay['amount']) / 100:.2f} payment",
                 apply)
 
@@ -438,7 +438,7 @@ def end(ctx: Ctx, pay: Any, status: str, why: str = "") -> None:
                                                       "next_try_at": None, "updated_at": ctx.at})
     if pay["hold_id"]:
         budgeting.release(ctx, str(pay["hold_id"]))
-    if status in ("failed", "cancelled"):
+    if status in ("failed", "canceled"):
         unreserve(ctx, pay)
     _event(ctx, FAILED, pay, why or status)
     from .documents import payment_ended
@@ -478,7 +478,7 @@ def own_counts(ctx: Ctx, counted_json: object, action_id: object) -> set[tuple[s
     run = SK.last_rule_run(ctx.c, str(action_id or ""))
     if run is None:
         return out
-    hits = cast(list[Any], SK.loads(run["outcome_json"]).get("hits") or [])
+    hits = cast(list[Any], SK.loads(run["outcome"]).get("hits") or [])
     for raw in hits:
         h = cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
         if h.get("outcome") == "limit" and h.get("period_key"):
@@ -487,16 +487,16 @@ def own_counts(ctx: Ctx, counted_json: object, action_id: object) -> set[tuple[s
 
 
 def unreserve(ctx: Ctx, pay: Any) -> None:
-    """A payment that failed or was cancelled gives back the counters it reserved when it was claimed to send (only
+    """A payment that failed or was canceled gives back the counters it reserved when it was claimed to send (only
     those: its action's own count stays, as any refused action's does), once: the record empties."""
-    owned = SK.loads_list(pay["counted_json"])
+    owned = SK.loads_list(pay["counted"])
     if not owned:
         return
     for raw in owned:
         if isinstance(raw, list) and len(cast(list[Any], raw)) == 3:
             rule, key, subject = cast(list[Any], raw)
             SK.uncount(ctx.c, str(rule), str(key), str(subject), int(pay["amount"]), ctx.at)
-    SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted_json": "[]"})
+    SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted": "[]"})
 
 
 def reserve(ctx: Ctx, pay: Any, hits: Sequence[G.Hit]) -> None:
@@ -504,11 +504,11 @@ def reserve(ctx: Ctx, pay: Any, hits: Sequence[G.Hit]) -> None:
     since, a new period), in the transaction that claims it to send; the payment owns them, so they move once."""
     if not hits:
         return
-    owned = [list(x) for x in SK.loads_list(pay["counted_json"])]
+    owned = [list(x) for x in SK.loads_list(pay["counted"])]
     for h in hits:
         SK.count(ctx.c, h.rule, h.period_key, h.subject, int(pay["amount"]), ctx.at)
         owned.append([h.rule, h.period_key, h.subject])
-    SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted_json": SK.dump(owned)})
+    SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted": SK.dump(owned)})
 
 
 def decided_by(ctx: Ctx, action: Any) -> str:
@@ -516,7 +516,7 @@ def decided_by(ctx: Ctx, action: Any) -> str:
     The action's own `approval_by` is the requester, never the decider."""
     approval = str(action["approval_id"] or "") if action is not None else ""
     appr = tico.approval(ctx.c, approval) if approval else None
-    return str(appr.get("decided_by") or "") if appr is not None and appr.get("decision") == "approved" else ""
+    return str(appr.get("decided_by_id") or "") if appr is not None and appr.get("decision") == "approved" else ""
 
 
 def approved_for(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str) -> bool:
@@ -540,14 +540,14 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     line in view, the recipient is still that version, payments are on, the gate rules (with their counters, less this
     payment's own, and their inputs' ages) and the budget still let it through. "" to go ahead; "wait" when it stays
     queued (the recipient is not at Mercury yet, or a person must look: it is held and asked about); else why it was
-    cancelled (a deny or a declined budget ends it and releases its hold). On "" the limits it fits that it has not
+    canceled (a deny or a declined budget ends it and releases its hold). On "" the limits it fits that it has not
     counted yet are added to `fresh`, for `reserve` once the send is claimed."""
     from . import gating
     rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
     money = SK.get(ctx.c, "fin_money_accounts", str(pay["money_account_id"]))
     action = SX.by_id(ctx.c, str(pay["action_id"] or ""))
     who = (str(action["on_behalf_of"] or "") or str(action["actor"])) if action is not None else str(pay["created_by"])
-    tags = cast(dict[str, str], SK.loads(pay["tags_json"]))
+    tags = cast(dict[str, str], SK.loads(pay["tags"]))
     line = ctx.accounts.get(str(pay["account_id"]))
     why = ""
     if str(pay["mode"]) == "direct" and SL.setting(ctx.c, DIRECT_KEY) is not True:
@@ -567,7 +567,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     elif money is None or not settings(ctx.c, str(money["connection_id"])).get("payments_enabled"):
         why = "payments were turned off for this bank connection"
     if why:
-        end(ctx, pay, "cancelled", why)
+        end(ctx, pay, "canceled", why)
         return why
     assert line is not None and rec is not None and money is not None
     amount = int(pay["amount"])
@@ -575,7 +575,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     found = gating.send_facts(ctx, who, "payment_create",
                               {**_facts(ctx, rec, amount, line.code, str(pay["obligation"] or ""), tags, money),
                                "mode": str(pay["mode"])})
-    mine = own_counts(ctx, pay["counted_json"], pay["action_id"])
+    mine = own_counts(ctx, pay["counted"], pay["action_id"])
 
     def used(rule: G.Rule, key: str, subject: str) -> int:
         have = SK.counter(ctx.c, rule.id, key, subject)[0]
@@ -583,7 +583,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     verdict = G.evaluate(gating.rules(ctx), found, datetime.fromisoformat(ctx.today).date(), used)
     if verdict.outcome == "deny":
         why = verdict.reason or "a finance rule now refuses it"
-        end(ctx, pay, "cancelled", why)
+        end(ctx, pay, "canceled", why)
         return why
     if verdict.outcome == "needs_approval" and (verdict.stale or
                                                 not approved_for(ctx, action, who, verdict.who, verdict.rule)):
@@ -600,12 +600,12 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
                 continue
             if b.at_limit == "decline":
                 why = f"it no longer fits the {b.name} budget"
-                end(ctx, pay, "cancelled", why)
+                end(ctx, pay, "canceled", why)
                 return why
             return _hold(ctx, pay, f"the {b.name} budget is over")
     elif pay["hold_id"]:
         why = "its budget hold is gone"
-        end(ctx, pay, "cancelled", why)
+        end(ctx, pay, "canceled", why)
         return why
     elif str(pay["obligation"] or "").startswith("bill:"):
         # A bill's payment holds no budget (the bill spent it): its bill's budgets are judged again as at the action,
@@ -636,7 +636,7 @@ def request_body(pay: Any, rec: Any) -> dict[str, object]:
         "recipientId": str(rec["provider_recipient_id"]), "amount": dollars(int(pay["amount"])),
         "paymentMethod": MERCURY_METHOD[str(pay["method"])], "idempotencyKey": str(pay["idempotency_key"]),
         "note": key, "externalMemo": f"{key} {memo}".strip()[:140]}
-    purpose = cast(dict[str, str], SK.loads(pay["purpose_json"]))
+    purpose = cast(dict[str, str], SK.loads(pay["purpose"]))
     if purpose.get("category"):
         body["purpose"] = {"simple": {"category": purpose["category"],
                                       **({"additionalInfo": purpose["additional_info"]}
@@ -648,7 +648,7 @@ def _accepted(ctx: Ctx, pay: Any, answer: Answer, attempts: int) -> None:
     if str(pay["mode"]) == "direct":
         # A direct send is Mercury's transaction at once (no approver): submitted, and settled when its bank row posts.
         # Its id is kept where an approval request's id goes, and the bank row matches it (banking._settle).
-        gone = str(answer.body.get("status") or "").lower() in ("failed", "blocked", "cancelled")
+        gone = str(answer.body.get("status") or "").lower() in ("failed", "blocked", "cancelled")   # Mercury's spelling
         SK.update(ctx.c, "fin_payments", str(pay["id"]), {
             "status": "submitted", "provider_request_id": str(answer.body.get("id") or answer.body.get("requestId") or ""),
             "attempts": attempts, "last_error": None, "unknown_since": None, "next_try_at": _later(ctx, 1),
@@ -661,8 +661,8 @@ def _accepted(ctx: Ctx, pay: Any, answer: Answer, attempts: int) -> None:
         "status": status, "provider_request_id": str(answer.body.get("requestId") or answer.body.get("id") or ""),
         "attempts": attempts, "last_error": None, "unknown_since": None, "next_try_at": _later(ctx, 1),
         "updated_at": ctx.at})
-    if status == "cancelled":
-        end(ctx, pay, "cancelled", "rejected in Mercury")
+    if status == "canceled":
+        end(ctx, pay, "canceled", "rejected in Mercury")
 
 
 def unknown(ctx: Ctx, pay: Any, why: str, attempts: int | None = None) -> None:
@@ -699,17 +699,17 @@ def sent(ctx: Ctx, pay: Any, answer: Answer) -> None:
 
 
 def polled(ctx: Ctx, pay: Any, answer: Answer) -> None:
-    """A request's status from Mercury. Rejected or cancelled in Mercury ends it and releases its hold; approved
+    """A request's status from Mercury. Rejected or canceled in Mercury ends it and releases its hold; approved
     becomes `submitted` until its bank transaction posts (finance/banking.py settles it)."""
-    if str(pay["status"]) in ("settled", "failed", "cancelled", "returned"):
+    if str(pay["status"]) in ("settled", "failed", "canceled", "returned"):
         return                      # its debit already settled it (or it ended) in this sweep: nothing to move back
     if not answer.ok:
         SK.update(ctx.c, "fin_payments", str(pay["id"]), {"next_try_at": _later(ctx, int(pay["attempts"]) + 1),
                                                           "attempts": int(pay["attempts"]) + 1, "updated_at": ctx.at})
         return
     status = F.request_status(answer.body.get("status"))
-    if status == "cancelled":
-        end(ctx, pay, "cancelled", f"{answer.body.get('status')} in Mercury")
+    if status == "canceled":
+        end(ctx, pay, "canceled", f"{answer.body.get('status')} in Mercury")
         return
     fields: dict[str, object] = {"next_try_at": _later(ctx, 1), "updated_at": ctx.at}
     if status and status != str(pay["status"]):
@@ -785,7 +785,7 @@ def feed_settled(ctx: Ctx, pay: Any, feed_id: str) -> None:
 
 def feed_failed(ctx: Ctx, request_id: str, status: str) -> None:
     pay = SK.payment_by_request(ctx.c, request_id)
-    if pay is not None and str(pay["status"]) not in ("returned", "failed", "cancelled"):
+    if pay is not None and str(pay["status"]) not in ("returned", "failed", "canceled"):
         if str(pay["status"]) == "settled" and pay["hold_id"]:
             SK.update(ctx.c, "fin_payments", str(pay["id"]), {"hold_id": None})
             pay = SK.get(ctx.c, "fin_payments", str(pay["id"]))

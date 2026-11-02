@@ -1,0 +1,162 @@
+{
+  "body": {
+    "actors": {
+      "human:ana": "Ana"
+    },
+    "goal": {
+      "bet_id": null,
+      "body": "",
+      "chain": [],
+      "checkins": [
+        {
+          "author": "human:ana",
+          "author_name": "Ana",
+          "body": "On plan.",
+          "created_at": "<time>",
+          "goal_id": "<goal>",
+          "id": "<id7>",
+          "kpi_id": null,
+          "sender_id": "human:ana",
+          "sender_name": "Ana",
+          "signal": "on_track"
+        }
+      ],
+      "children": [],
+      "created_at": "<time>",
+      "created_by_id": "human:ana",
+      "events": [
+        {
+          "actor": "human:ana",
+          "actor_name": "Ana",
+          "created_at": "<time>",
+          "field": "created",
+          "goal_id": "<goal>",
+          "id": "<id3>",
+          "new": "Raise activation",
+          "note": "",
+          "old": null,
+          "status_by": null,
+          "status_source": null
+        },
+        {
+          "actor": "human:ana",
+          "actor_name": "Ana",
+          "created_at": "<time>",
+          "field": "kpi",
+          "goal_id": "<goal>",
+          "id": "<id4>",
+          "new": "Activation",
+          "note": "→ 70% by Dec 31, 2099",
+          "old": null,
+          "status_by": null,
+          "status_source": null
+        },
+        {
+          "actor": "bot:goal-manager",
+          "created_at": "<time>",
+          "field": "status",
+          "goal_id": "<goal>",
+          "id": "<id5>",
+          "new": "green",
+          "note": "Activation 41% vs 40% needed on pace",
+          "old": null,
+          "status_by": "bot:goal-manager",
+          "status_source": "auto"
+        },
+        {
+          "actor": "human:ana",
+          "actor_name": "Ana",
+          "created_at": "<time>",
+          "field": "checkin",
+          "goal_id": "<goal>",
+          "id": "<id6>",
+          "new": "on_track",
+          "note": "On plan.",
+          "old": null,
+          "status_by": null,
+          "status_source": null
+        }
+      ],
+      "id": "<goal>",
+      "kpis": [
+        {
+          "archived_at": null,
+          "archived_by_id": null,
+          "auto": false,
+          "cadence": "daily",
+          "created_at": "<time>",
+          "created_by_id": "human:ana",
+          "definition": "",
+          "definition_version": 1,
+          "direction": "up",
+          "expected": 40.0,
+          "freshness": "fresh",
+          "id": "<kpi>",
+          "latest": {
+            "actor_id": "human:ana",
+            "actor_name": "Ana",
+            "collected_at": "<time>",
+            "definition_version": 1,
+            "evidence": "https://bi.example/q/1",
+            "id": "<id1>",
+            "note": "",
+            "period_end": "<time>",
+            "period_start": "<time>",
+            "quality": "measured",
+            "source": "",
+            "supersedes": null,
+            "value": 41.0
+          },
+          "link": {
+            "baseline": 40.0,
+            "baseline_at": "<time>",
+            "deadline": "2099-12-31",
+            "goal_id": "<goal>",
+            "id": "<id2>",
+            "kind": "improve",
+            "max": null,
+            "min": null,
+            "target": 70.0
+          },
+          "name": "Activation",
+          "owner_id": "human:ana",
+          "owner_name": "Ana",
+          "readings": 1,
+          "reason": "Activation 41% vs 40% needed on pace",
+          "slug": "activation",
+          "source_note": "",
+          "spark": [
+            41.0
+          ],
+          "status": "green",
+          "target_label": "→ 70% by Dec 31, 2099",
+          "unit": "%",
+          "updated_at": "<time>"
+        }
+      ],
+      "last_read_at": null,
+      "last_read_by_id": null,
+      "owner_id": "human:ana",
+      "owner_name": "Ana",
+      "parent_id": null,
+      "proposals": [],
+      "rank": 0,
+      "status": "green",
+      "status_at": "<time>",
+      "status_by_id": "bot:goal-manager",
+      "status_note": "Activation 41% vs 40% needed on pace",
+      "status_source": "auto",
+      "suggest_at": null,
+      "suggest_note": null,
+      "suggest_status": null,
+      "tasks": [],
+      "title": "Raise activation",
+      "updated_at": "<time>",
+      "why": "",
+      "why_at": null,
+      "why_by_id": null
+    }
+  },
+  "request": "GET /api/v2/goals/<goal>",
+  "status": 200
+}

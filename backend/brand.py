@@ -48,7 +48,7 @@ def published(c, n=None):
                  (n,) if n is not None else ())
     if not row:
         return None
-    return {"n": row["n"], "body": _body(_loads(row["body_json"], {})), "note": row["note"],
+    return {"n": row["n"], "body": _body(_loads(row["body"], {})), "note": row["note"],
             "published_by": row["published_by"], "published_at": row["published_at"]}
 
 
@@ -59,7 +59,7 @@ def _body(value):
 def draft(c, current=None):
     """The draft with the sections that differ from the published body, or None when there is none."""
     row = H._one(c, "SELECT * FROM brand_drafts WHERE id=1")
-    body = _loads(row["body_json"]) if row else None
+    body = _loads(row["body"]) if row else None
     if not isinstance(body, dict):
         return None
     body = _body(body)
@@ -155,7 +155,7 @@ def merge(c, actor, sections, revision=None):
     if revision is not None and revision != current_revision:
         raise Problem("stale_revision", f"The brand draft changed since it was read (revision {current_revision}); "
                       "read it again and reapply the change", 409, extra={"revision": current_revision})
-    body = _loads(row["body_json"]) if row else None
+    body = _loads(row["body"]) if row else None
     if not isinstance(body, dict):
         body = dict((published(c) or {}).get("body") or {})
     body = _body(body)
@@ -166,8 +166,8 @@ def merge(c, actor, sections, revision=None):
             body[name] = value
     body = validate(body)
     now = H.now()
-    c.execute("INSERT INTO brand_drafts (id, body_json, revision, updated_by, updated_at) VALUES (1,?,?,?,?) "
-              "ON CONFLICT(id) DO UPDATE SET body_json=excluded.body_json, revision=excluded.revision, "
+    c.execute("INSERT INTO brand_drafts (id, body, revision, updated_by, updated_at) VALUES (1,?,?,?,?) "
+              "ON CONFLICT(id) DO UPDATE SET body=excluded.body, revision=excluded.revision, "
               "updated_by=excluded.updated_by, updated_at=excluded.updated_at",
               (json.dumps(body, sort_keys=True), current_revision + 1, actor, now))
     H.event(c, actor, "brand.draft", "draft", {"sections": sorted(sections or {})})
@@ -182,9 +182,9 @@ def publish(c, actor, note=""):
         raise Problem("no_draft", "There is no brand draft to publish", 409)
     n = (current or {}).get("n", 0) + 1
     note = " ".join(str(note or "").split())[:500]
-    c.execute("INSERT INTO brand_versions (id, n, body_json, note, published_by, published_at) VALUES (?,?,?,?,?,?)",
+    c.execute("INSERT INTO brand_versions (id, n, body, note, published_by, published_at) VALUES (?,?,?,?,?,?)",
               (H.new_id(), n, json.dumps(pending["body"], sort_keys=True), note, actor, H.now()))
-    c.execute("UPDATE brand_drafts SET body_json='null', revision=revision+1, updated_by=?, updated_at=? WHERE id=1",
+    c.execute("UPDATE brand_drafts SET body='null', revision=revision+1, updated_by=?, updated_at=? WHERE id=1",
               (actor, H.now()))
     H.event(c, actor, "brand.publish", f"v{n}", {"n": n})
     H.hook(c, "brand.published", f"v{n}", lambda: {"version": n, "note": note, "published_by": actor}, actor,

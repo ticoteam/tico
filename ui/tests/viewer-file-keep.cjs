@@ -27,7 +27,7 @@ const files = {
     const page = await browser.newPage({viewport:{width:1200,height:800},serviceWorkers:'block'});
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
-    const threads = threadsFake({bot: 'legal', messages: [{id: 'm-legal', from_actor: 'bot:legal',
+    const threads = threadsFake({bot: 'legal', messages: [{id: 'm-legal', sender_id: 'bot:legal',
       body: 'The [poster](https://tico-ui.test/api/v2/files/file-big-0001) and the [lease](https://tico-ui.test/api/v2/files/file-pdf-0001).'}]});
     await page.context().route('**/*', route => {
       const url = new URL(route.request().url()), p = url.pathname;

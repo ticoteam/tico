@@ -1,0 +1,11 @@
+{
+  "_source": "GitHub REST API GET /app/installations (the fields backend/github_app.py installation() reads: id, account.login). Shaped from GitHub's public API reference, not a live capture.",
+  "installations": [
+    {
+      "id": 4242424,
+      "account": {"login": "acme", "type": "Organization"},
+      "app_slug": "acme-tico",
+      "repository_selection": "all"
+    }
+  ]
+}

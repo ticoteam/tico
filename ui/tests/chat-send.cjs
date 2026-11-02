@@ -26,7 +26,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-      if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/employees') return json([{id: 'coo', slug: 'coo', name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/assistant') return json(assistantView('c1', {messages: thread}));
       if (p === '/api/v2/conversations/c1/snapshot') return json({messages: thread, execution: null});
@@ -37,7 +37,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
         if (answer === 'html') return route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Sign in</title>'});
         if (answer === 'slow') await new Promise(r => setTimeout(r, 700));
         sends.push(text);
-        const message = {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()};
+        const message = {id: 'm' + sends.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()};
         thread.push(message);
         return json({message, fast: true});
       }

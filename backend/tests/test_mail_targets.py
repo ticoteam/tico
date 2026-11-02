@@ -19,7 +19,7 @@ def declare(api, identity, **extra):
     """Give the `inbox` bot (Ana's message bot) a gmail tool with this identity, in bot.yaml's shape."""
     tools = [{"service": "gmail", "identity": identity, "can": ["read", "draft"], **extra}]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='inbox'",
+        c.execute("UPDATE bot_config SET config=? WHERE bot='inbox'",
                   (encode({"name": "inbox", "runtime": "fake", "status": "active", "tools": tools}),))
 
 

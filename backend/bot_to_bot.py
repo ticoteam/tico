@@ -48,14 +48,17 @@ def can_wait(conn, actor, target, kind, refs, body, in_reply_to=None):
         return False
 
 
-def held_reason(msg):
+def held_reason(msg, conn=None):
     """What the sender reads when its message was held for the recipient's next run (Dev 328), else None. On
-    Oct 21 Support's escalations to DevOps were held like this and read as delivered: say it plainly."""
+    Oct 21 Support's escalations to DevOps were held like this and read as delivered: say it plainly. With `conn`
+    the recipient is named by its slug, else by its id."""
     refs = msg.get("refs") if isinstance(msg.get("refs"), dict) else {}
     if refs.get(MARK) != RULE:
         return None
     from . import hubdb as H
-    bot = H.actor_id(msg.get("to_actor") or "")
+    bot = H.actor_id(msg.get("recipient_id") or "")
+    if conn is not None:
+        bot = (H.bot(conn, bot) or {}).get("slug", bot)
     return (f"held for {bot}'s next run; nothing runs it now. Add --needs-action (needs_action: true) to wake "
             f"{bot} now, or ask with `hub question ask`.")
 
@@ -67,13 +70,16 @@ def hold(conn, msg, task_row=None):
     text = str(msg["body"] or "")
     if len(text) > H.NOTE_MAX - 400:
         text = text[:H.NOTE_MAX - 400] + "... (the rest is in the message)"
-    body = (f"Message from {H.actor_id(msg['from_actor'])} {where}, which could wait for this run "
+    sender = H.actor_id(msg["sender_id"])
+    if H.is_bot(msg["sender_id"]):
+        sender = (H.bot(conn, sender) or {}).get("slug", sender)
+    body = (f"Message from {sender} {where}, which could wait for this run "
             f"(message {msg['id']}). Act on it if it asks for something.\n\n{text}")
-    row = {"id": H.new_id(), "from_actor": msg["from_actor"], "to_actor": msg["to_actor"], "body": body,
-           "created": msg["created"], "message_id": msg["id"]}
-    conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created,message_id) VALUES "
-                 "(:id,:from_actor,:to_actor,:body,:created,:message_id)", row)
-    H.event(conn, msg["from_actor"], "message.can_wait", msg["id"], {"to": msg["to_actor"], "note": row["id"]})
+    row = {"id": H.new_id(), "from_actor": msg["sender_id"], "to_actor": msg["recipient_id"], "body": body,
+           "created_at": msg["created_at"], "message_id": msg["id"]}
+    conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES "
+                 "(:id,:from_actor,:to_actor,:body,:created_at,:message_id)", row)
+    H.event(conn, msg["sender_id"], "message.can_wait", msg["id"], {"to": msg["recipient_id"], "note": row["id"]})
     return row
 
 
@@ -100,8 +106,8 @@ def continue_backlog(conn, bot, skip=()):
                         f"{H.NOTE_WAITING_SQL} LIMIT 1", ("bot:" + bot, *skip)).fetchone()
     if not left:
         return None
-    pending = conn.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
-                           "AND j.state IN ('queued','leased') AND json_extract(m.refs_json,'$.wake')=?",
+    pending = conn.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
+                           "AND j.state IN ('queued','leased') AND json_extract(m.refs,'$.wake')=?",
                            (bot, BACKLOG)).fetchone()
     if pending:
         return None

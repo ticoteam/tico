@@ -2,6 +2,7 @@
 a release), a message outside the thread's audience never reaches its person, and a paused thread is listed only to
 the people who can manage it."""
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import threads
 from backend.auth import Identity
 from backend import hubdb as H
@@ -64,8 +65,8 @@ def hold(api, reviewer="human:ana", author="bot:finance", operation="reply", sta
     """A held write as org_rule_check stores it (its verdict and payload are not read by the list)."""
     with api.app.state.store.transaction() as c:
         hid = H.new_id()
-        c.execute("INSERT INTO org_rule_holds(id, operation, payload_json, author, destinations_json, rule_ids_json, "
-                  "verdict_json, nonce, state, reviewer, task_id, created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO org_rule_holds(id, operation, payload, author, destinations, rule_ids, "
+                  "verdict, nonce, state, reviewer, task_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                   (hid, operation, "{}", author, "[]", "[]", "{}", "nonce", state, reviewer, None, H.now()))
     return hid
 
@@ -123,7 +124,7 @@ def test_an_unread_dm_shows_only_the_message_the_person_can_read(api):
         hidden = threads.post(c, "human:cara", dm, "Ana's offer is confidential.")
         c.execute("UPDATE messages SET legacy_audience='shared:nobody', restricted=1 WHERE id=?", (hidden["id"],))
     item = needs(api, "thread_dm", token="ben-test")[0]
-    assert item["created"] == visible["created"]
+    assert item["created_at"] == visible["created_at"]
 
 
 def test_a_group_dm_is_listed_like_a_two_person_one(api):

@@ -195,7 +195,7 @@ def payment_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], r: Any)
     obligation = str(r["obligation"] or "")
     if obligation.startswith("bill:") and not bill_seen(ctx, view, cut, obligation.removeprefix("bill:")):
         return False
-    return view.everything or (account is not None and view.sees(account, SK.loads(r["tags_json"])))
+    return view.everything or (account is not None and view.sees(account, SK.loads(r["tags"])))
 
 
 def bill_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], bill_id: str) -> bool:
@@ -564,8 +564,8 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
     from .store import budgets as SB
     ctx = load(c, at)
     view = ctx.view(viewer)
-    if status and status not in ("active", "frozen", "cancelled"):
-        raise invalid("status is active|frozen|cancelled")
+    if status and status not in ("active", "frozen", "canceled"):
+        raise invalid("status is active|frozen|canceled")
     most = page_size(limit)
     marks = decode_cursor(cursor)
     after = marks[0] if marks else ""
@@ -637,7 +637,7 @@ def _access_to(ctx: Ctx, account_id: str) -> list[Row]:
 def _sync(conn: Any | None) -> Row | None:
     if conn is None:
         return None
-    settings = SK.loads(conn["settings_json"])
+    settings = SK.loads(conn["settings"])
     return {"connection_id": str(conn["id"]), "provider": str(conn["provider"]), "status": str(conn["status"]),
             "last_ok_at": conn["last_ok_at"], "last_sync_at": conn["last_sync_at"], "last_error": conn["last_error"],
             "egress_ip": settings.get("egress_ip")}
@@ -697,7 +697,7 @@ def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, gat
             rows["banks"].append(item)
     for r in conns.values():
         if str(r["purpose"]) == "payments" or str(r["provider"]) == "mercury":
-            s = SK.loads(r["settings_json"])
+            s = SK.loads(r["settings"])
             rows["payments"].append({"id": str(r["id"]), "kind": "connection", "name": str(r["name"] or r["provider"]),
                                      "provider": str(r["provider"]), "sync": _sync(r),
                                      "payments": {"mode": "approval_queue",
