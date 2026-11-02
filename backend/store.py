@@ -2050,10 +2050,6 @@ class Store:
                 from .meetings import retire_capture
                 retire_capture(c)
                 retire_health_rows(c)
-                # Messages queue their jobs in Python (backend/enqueue.py); migration 0051 dropped the trigger that did.
-                # An older release recreates it when it starts; the next start drops it again, and until then a job
-                # both make is one row (enqueue inserts OR IGNORE).
-                c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
                 if seed_market and not self.settings.test_identities:
                     from . import market as Market
                     from .blobs import Blobs

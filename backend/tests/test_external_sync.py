@@ -437,29 +437,6 @@ def room_messages_of(api, person, slug):
             ("human:" + person, bid))]
 
 
-def test_an_existing_databases_queue_trigger_is_dropped_on_start_and_app_delivery_still_queues(api):
-    """A trigger an older release left (or recreated after a rollback) is dropped by the next start; while it is there
-    a message still makes one job, since enqueue's insert ignores the row the trigger already made."""
-    from backend import store as S
-    from backend.config import Settings
-    store = api.app.state.store
-    legacy = ("CREATE TRIGGER queue_bot_message AFTER INSERT ON messages WHEN NEW.recipient_id LIKE 'bot:%' "
-              "AND COALESCE(NEW.sender_id, '') != NEW.recipient_id BEGIN INSERT INTO jobs(id,message_id,bot_id,created_at) "
-              "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
-    with store.transaction() as c:
-        c.execute(legacy)
-    sync(api, designer(messages=[]), token="cara-test")
-    computer = mac(api, bots=["grok-designer"])
-    assert deliver(api, computer["runner_id"]).status_code == 200
-    first = post(api, "chat/grok-designer", {"text": "Both would queue this."}, token="cara-test")
-    assert jobs(api) == {first["id"]: "queued"}
-    S.Store(Settings(db_path=store.settings.db_path, registry_dir=store.settings.registry_dir)).initialize(seed_market=False)
-    with store.read() as c:
-        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='queue_bot_message'").fetchone()
-    second = post(api, "chat/grok-designer", {"text": "Only enqueue queues this."}, token="cara-test")
-    assert set(jobs(api)) == {first["id"], second["id"]}
-
-
 def delivering(api):
     """Cara's Grok Bot, delivered through her ready Mac: (computer, report(messages, error))."""
     sync(api, designer(messages=[]), token="cara-test")

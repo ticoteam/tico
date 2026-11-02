@@ -64,7 +64,7 @@ def enqueue(conn, message):
         return None
     if conn.execute("SELECT " + external_bot_sql("?"), (recipient,)).fetchone()[0]:
         return None
-    conn.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)",
+    conn.execute("INSERT INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)",
                  (message["id"], message["id"], recipient[4:], message["created_at"]))
     return message["id"]
 
