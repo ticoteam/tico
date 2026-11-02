@@ -51,17 +51,21 @@ def record_providers(c: sqlite3.Connection, table: str, ids: Sequence[str]) -> d
     return {str(row[0]): str(row[1]) for row in rows}
 
 
-def record_syncs(c: sqlite3.Connection, table: str, ids: Sequence[str]) -> dict[str, tuple[str, str | None, str]]:
+def record_syncs(c: sqlite3.Connection, table: str, ids: Sequence[str]
+                 ) -> dict[str, tuple[str, str | None, str, str | None]]:
     """record_providers with the freshness of each provider's copy, in the same single query: by record id, (provider,
-    that connection's last successful sync or None, the connection's status). Same ref rule as record_providers."""
+    that connection's last successful sync or None, the connection's status, the error its last sync left or None). A
+    failed sync leaves last_ok_at alone and sets last_error; the next good sync clears it. Same ref rule as
+    record_providers."""
     if not ids:
         return {}
     marks = ",".join("?" * len(ids))
-    rows = c.execute("SELECT r.local_id, b.provider, b.last_ok_at, b.status FROM fin_external_refs r "
+    rows = c.execute("SELECT r.local_id, b.provider, b.last_ok_at, b.status, b.last_error FROM fin_external_refs r "
                      "JOIN fin_connections b ON b.id=r.connection_id "
                      f"WHERE r.local_table=? AND r.status='active' AND r.local_id IN ({marks}) ORDER BY r.created_at",
                      [table, *ids]).fetchall()
-    return {str(row[0]): (str(row[1]), None if row[2] is None else str(row[2]), str(row[3])) for row in rows}
+    return {str(row[0]): (str(row[1]), None if row[2] is None else str(row[2]), str(row[3]),
+                          str(row[4]) if row[4] else None) for row in rows}
 
 
 def mapped_refs(c: sqlite3.Connection, cid: str, table: str, ids: Sequence[str]) -> set[str]:

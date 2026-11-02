@@ -14,6 +14,11 @@ from .core.errors import NOT_AVAILABLE, NOT_FOUND, FinanceError
 from .handlers import Plan, Planner, Result
 from .store import ap as SAP
 
+# A record's files on its read: at most FILES_READ links are read, and FILES_SHOWN of those the viewer can read are
+# returned. Past that the Library holds the rest; no paging.
+FILES_READ = 200
+FILES_SHOWN = 50
+
 # The subject types a file can link to, and the table each one's id names.
 SUBJECTS = {"contact": "fin_contacts", "equipment": "equipment", "item": "items", "location": "locations"}
 
@@ -39,14 +44,24 @@ def _readable(ctx: Ctx, who: str, file_id: str) -> bool:
     return EQ.file_readable(ctx.c, who, file_id)
 
 
-def visible(c: sqlite3.Connection, viewer: str, table: str, record_id: str) -> list[dict[str, object]]:
-    """The files a record links that the viewer may read, oldest first: id (the link's, for record_file_remove),
-    file_id, added_at and added_by_id. With no check installed no file shows, since none can be read unchecked."""
+def visible(c: sqlite3.Connection, viewer: str, table: str, record_id: str) -> tuple[list[dict[str, object]], bool]:
+    """The files a record links that the viewer may read, oldest first, at most FILES_SHOWN: id (the link's, for
+    record_file_remove), file_id, added_at and added_by_id; and files_more, whether more are readable. It reads at most
+    FILES_READ links, and a file the viewer can't read does not count toward FILES_SHOWN. files_more is also true when
+    the read ran out at FILES_READ links, since later ones may be readable: the Library lists the rest. With no check
+    installed no file shows, since none can be read unchecked."""
     check = EQ.file_readable
     if check is None:
-        return []
-    return [{"id": link, "file_id": file, "added_at": at, "added_by_id": by}
-            for link, file, at, by in RS.file_links(c, table, record_id) if check(c, viewer, file)]
+        return [], False
+    links = RS.file_links(c, table, record_id, limit=FILES_READ)
+    shown: list[dict[str, object]] = []
+    for link, file, at, by in links:
+        if not check(c, viewer, file):
+            continue
+        shown.append({"id": link, "file_id": file, "added_at": at, "added_by_id": by})
+        if len(shown) > FILES_SHOWN:
+            break
+    return shown[:FILES_SHOWN], len(shown) > FILES_SHOWN or len(links) == FILES_READ
 
 
 def record_file_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
