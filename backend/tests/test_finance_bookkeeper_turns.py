@@ -32,8 +32,8 @@ def hire(api):
     store = api.app.state.store
     with store.transaction() as c:
         assert FA.ensure_setup(c, store.settings.owner_email)
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES('bookkeeper','Bookkeeper','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('bookkeeper',?,'ana')", (encode(CONFIG),))
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('bookkeeper','bookkeeper','Bookkeeper','active')")
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('bookkeeper',?,'ana')", (encode(CONFIG),))
         assert BK.grant_defaults(c)
         granted = act(c, OWNER, "view_grant", {"subject": BK.ACTOR, "what": "everything"})
         assert granted.status == "committed", granted

@@ -50,7 +50,7 @@ def asked(c: sqlite3.Connection, action_id: str, *, approval_id: str, approval_h
               "approval_to=?, rule_id=?, payload=?, updated_at=? WHERE id=?",
               (approval_id, approval_hash, requester, to, rule_id, _dump(payload), at, action_id))
     if rules is not None:
-        c.execute("UPDATE fin_actions SET rule_results_json=? WHERE id=?", (_dump(list(rules)), action_id))
+        c.execute("UPDATE fin_actions SET rule_results=? WHERE id=?", (_dump(list(rules)), action_id))
 
 
 def settled_waits(c: sqlite3.Connection, most: int) -> list[str]:

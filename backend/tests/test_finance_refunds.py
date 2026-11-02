@@ -52,7 +52,7 @@ def _bank_code(c, money_id: str) -> str:
 
 def _asked(c, fid: str) -> list[dict]:
     return [SK.loads(raw) for (raw,) in c.execute(
-        "SELECT payload_json FROM fin_events WHERE name='finance.feed.needs_category' AND subject=?", (fid,))]
+        "SELECT payload FROM fin_events WHERE name='finance.feed.needs_category' AND subject=?", (fid,))]
 
 
 def test_a_refund_reverses_its_outflow_in_full_with_the_outflows_tags(books):

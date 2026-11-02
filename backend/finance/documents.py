@@ -760,7 +760,7 @@ def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if not may_write(ctx, who, x.account_id, x.tags):
             raise denied("a line's account or tags are outside your view")
     customer = contact_for(ctx, str(inv["customer_id"]), "invoice")
-    emails = SK.loads_list(customer["emails_json"])
+    emails = SK.loads_list(customer["emails"])
     box = delivery.mailbox(ctx.c) if emails else ""
     text = _invoice_email(ctx, inv) if box else ""
 
@@ -808,7 +808,7 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if _reminded(ctx, sid, stage):
         raise FinanceError(CONFLICT, f"the {stage}-day reminder for invoice {inv['number']} was already made")
     customer = contact_for(ctx, str(inv["customer_id"]), "invoice")
-    emails = SK.loads_list(customer["emails_json"])
+    emails = SK.loads_list(customer["emails"])
     if not emails:
         raise FinanceError(CONFLICT, f"{customer['name']} has no email on file, so the reminder cannot be sent")
     box = delivery.mailbox(ctx.c)
@@ -1185,7 +1185,7 @@ def bill_ask_waiting(ctx: Ctx, bill_id: str) -> bool:
     """Whether a payment of this bill already waits for a person: a payment_create for it or a bill_mark_paid asked and
     not decided. A second ask for the same bill is refused (its waiting one settles it), not put to a person twice."""
     for row in SX.waiting(ctx.c, ("payment_create", "bill_mark_paid")):
-        body = SK.loads(str(row["payload_json"] or "{}"))
+        body = SK.loads(str(row["payload"] or "{}"))
         if str(body.get("obligation") or "") == f"bill:{bill_id}" or str(body.get("bill_id") or "").strip() == bill_id:
             return True
     return False

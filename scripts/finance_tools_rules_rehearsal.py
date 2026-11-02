@@ -313,7 +313,7 @@ class Demo:
         token = "tico_pt_" + secrets.token_urlsafe(30)
         conn = sqlite3.connect(str(self.db_path), timeout=10)
         try:
-            conn.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by) VALUES(?,?,?,?,?,?)",
+            conn.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) VALUES(?,?,?,?,?,?)",
                          (uuid.uuid4().hex, human, label, sha256(token), time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                           "human:" + human))
             conn.commit()
@@ -431,8 +431,8 @@ def fixtures(d, run, rid):
     payees and a bill."""
     fx = {"rid": rid}
     _, me = d.http("GET", "/api/v2/me", d.owner)
-    fx["owner"] = str(me.get("actor", "")) if isinstance(me, dict) else ""
-    run.check("the owner's identity is a human actor", fx["owner"].startswith("human:"), me)
+    fx["owner_id"] = str(me.get("actor", "")) if isinstance(me, dict) else ""
+    run.check("the owner's identity is a human actor", fx["owner_id"].startswith("human:"), me)
     disable_stale_rules(d, run, rid)
     _, b = d.http("GET", "/api/v2/finance/budgets", d.owner)
     fx["ai_budget"] = next((x["id"] for x in walk(b) if x.get("name") == "AI services" and x.get("id")), "")
@@ -736,7 +736,7 @@ def check5_rights(d, run, fx):
 def check6_rules(d, run, fx):
     rid = fx["rid"]
     fin_tok, fin_slug = fx["bot_tokens"]["fin"], fx["bots"]["fin"]
-    owner, ben = fx["owner"], "human:ben"
+    owner, ben = fx["owner_id"], "human:ben"
     cara = fx["cara_token"]
     _, rules = d.http("GET", "/api/v2/finance/rules", d.owner)
     have = {r.get("id") for r in walk(rules) if r.get("id")}
@@ -907,7 +907,7 @@ def check7_waivers(d, run, fx):
                                                          "lines": [{"account_id": fx["expense"], "amount": 800}]},
                  op=f"{rid}-bot-bill")
     run.check("a bot's bill waits for the owner", bill["status"] == "needs_approval" and bill["approval_id"] != ""
-              and bill["approver"] == fx["owner"], bill["raw"])
+              and bill["approver"] == fx["owner_id"], bill["raw"])
     if bill["approval_id"]:
         st, body = approve(d, bill["approval_id"], token=fx["ben_token"], note="ben tries")
         run.check("a manager cannot decide an approval that names the owner", 400 <= st < 500,
@@ -924,8 +924,8 @@ def check8_audit(d, run, fx):
     events = []
     if ids:
         marks = ",".join("?" for _ in ids)
-        events = d.rows(f"SELECT action, actor, target, ts, detail_json FROM events WHERE target IN ({marks}) "
-                        f"ORDER BY ts", ids)
+        events = d.rows(f"SELECT action, actor, target, created_at, detail FROM events WHERE target IN ({marks}) "
+                        f"ORDER BY created_at", ids)
     money = [a for a in actions if a["kind"] in ("payment_create", "card_create", "bill_create", "journal")
              and a["status"] == "committed"]
     run.check("every committed money-moving action from this run has an audit row with who and when",
@@ -934,9 +934,9 @@ def check8_audit(d, run, fx):
     for a in money[:3]:
         ev = next((e for e in events if e["target"] == a["id"]), None)
         if ev:
-            detail = json.loads(ev["detail_json"] or "{}")
+            detail = json.loads(ev["detail"] or "{}")
             run.check(f"the {a['kind']} audit row carries who, when and the status",
-                      bool(ev["actor"]) and bool(ev["ts"]) and "status" in detail, detail)
+                      bool(ev["actor"]) and bool(ev["created_at"]) and "status" in detail, detail)
     refusals = [a for a in actions if a["status"] == "denied"]
     run.check("a denied action is audited with the rule that denied it",
               refusals and all(any(e["target"] == a["id"] for e in events) for a in refusals),
@@ -946,10 +946,10 @@ def check8_audit(d, run, fx):
               bool(bot_rows) and all(a["actor"] and a["rule_id"] is not None for a in bot_rows),
               [(a["actor"], a["on_behalf_of"] or "(none: the bot acted on its own)", a["rule_id"])
                for a in bot_rows][:4])
-    rule_events = d.rows("SELECT action, actor, target, ts FROM events WHERE action LIKE 'finance.rule_%' AND ts >= ?",
-                         (fx.get("started", ""),))
+    rule_events = d.rows("SELECT action, actor, target, created_at FROM events WHERE action LIKE 'finance.rule_%' AND created_at >= ?",
+                         (fx.get("started_at", ""),))
     run.check("rule changes from this run are audited with who and when",
-              rule_events and all(e["actor"] and e["ts"] for e in rule_events),
+              rule_events and all(e["actor"] and e["created_at"] for e in rule_events),
               [(e["action"], e["actor"]) for e in rule_events][:4])
 
 
@@ -974,7 +974,7 @@ def main(argv=None):
     started = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
     holder = {}
     run.run_section("setup", lambda: holder.update(fixtures(d, run, rid)))
-    fx = dict(holder, rid=rid, started=started)
+    fx = dict(holder, rid=rid, started_at=started)
     if not fx.get("bill") or not fx.get("bot_tokens"):
         return finish(run, args.report)
     for label, fn in (("1 tool surface", check1_surface), ("2 same answer", check2_same_answer),

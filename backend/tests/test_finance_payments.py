@@ -277,15 +277,15 @@ def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_a
     sync_once(books, fake, HOURS[10])
     with books.transaction() as c:
         assert c.execute("SELECT status FROM fin_payments WHERE id=?",
-                         (again.result["payment_id"],)).fetchone()[0] == "cancelled"
+                         (again.result["payment_id"],)).fetchone()[0] == "canceled"
         assert _hold_of(c, again.result["payment_id"]) == (50_000, "released")
     assert len(fake.sent("request_send_money")) == 2
 
 
-def test_a_queued_payment_is_cancelled_here_and_one_in_mercury_ends_cancelled_when_rejected_there(books):
+def test_a_queued_payment_is_canceled_here_and_one_in_mercury_ends_canceled_when_rejected_there(books):
     """Item 2 (spec §9): payment_cancel works while a payment is queued, and ends it at once with its hold released. Once
     it is in Mercury's approval queue there is no cancel API: the cancel is refused, and a rejection in Mercury ends it
-    cancelled on the poll, releasing its hold."""
+    canceled on the poll, releasing its hold."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -312,7 +312,7 @@ def test_a_queued_payment_is_cancelled_here_and_one_in_mercury_ends_cancelled_wh
     fake.requests[next(iter(fake.requests))]["status"] = "rejected"              # rejected in Mercury's queue
     sync_once(books, fake, HOURS[2])
     with books.transaction() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert _hold_of(c, pid) == (20_000, "released")
 
 
@@ -338,7 +338,7 @@ def _approved_payment(books, fake, who, obligation):
 
 
 def test_a_payment_a_person_made_that_mercury_rejects_asks_that_person_once(books):
-    """Item 4: a payment Mercury rejects ends cancelled, and one Needs-you goes to the person who made it, naming the
+    """Item 4: a payment Mercury rejects ends canceled, and one Needs-you goes to the person who made it, naming the
     payment, its amount, its payee and the bill it was paying. The bill is open again."""
     fake = FakeMercury()
     connect(books, fake)
@@ -348,9 +348,9 @@ def test_a_payment_a_person_made_that_mercury_rejects_asks_that_person_once(book
     sync_once(books, fake, HOURS[2])
     sync_once(books, fake, HOURS[3])
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert _asks(c, f"Payment {pid} of 200.00 was rejected in Mercury") == 1
-        owner, body = c.execute("SELECT owner, body FROM tasks WHERE title=?",
+        owner, body = c.execute("SELECT owner_id, body FROM tasks WHERE title=?",
                                 (f"Payment {pid} of 200.00 was rejected in Mercury",)).fetchone()
     assert owner == "human:ben" and "Acme Supplies" in body and "bill-60" in body, (owner, body)
 
@@ -365,15 +365,15 @@ def test_a_payment_a_bot_makes_that_mercury_rejects_asks_the_finance_admin_once(
     sync_once(books, fake, HOURS[2])
     sync_once(books, fake, HOURS[3])
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
-        owners = [r[0] for r in c.execute("SELECT owner FROM tasks WHERE title LIKE ?",
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
+        owners = [r[0] for r in c.execute("SELECT owner_id FROM tasks WHERE title LIKE ?",
                                           (f"Payment {pid} of 200.00 was rejected%",))]
     assert owners == [OWNER], owners
 
 
 def test_a_payment_a_finance_admin_cancels_in_finance_asks_nobody(books):
     """Item 4: a person's cancel in Finance ends the payment with no Needs-you; only Mercury's rejection or cancel asks.
-    A cancelled queued payment is never sent."""
+    A canceled queued payment is never sent."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -386,7 +386,7 @@ def test_a_payment_a_finance_admin_cancels_in_finance_asks_nobody(books):
         assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).status == "committed"
     sync_once(books, fake, HOURS[1])
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Payment %'").fetchone()[0] == 0
     assert fake.sent("request_send_money") == []
 
@@ -400,9 +400,9 @@ def _replace_payee(c, rid):
     return str(made.result["recipient_id"])
 
 
-def test_a_queued_payment_whose_recipient_changes_is_asked_again_not_cancelled_quietly(books):
+def test_a_queued_payment_whose_recipient_changes_is_asked_again_not_canceled_quietly(books):
     """Item 3 (spec §5, §6.4 rule 1): a payment approved and queued whose recipient's details change before the send is
-    not cancelled quietly. It ends cancelled (its hold released), and the same action is asked again for the new details
+    not canceled quietly. It ends canceled (its hold released), and the same action is asked again for the new details
     of a finance admin who did not make the payment (the owner paid, so ben decides). Nothing reaches Mercury meanwhile.
     The approved new version is what the payment is then for."""
     fake = FakeMercury()
@@ -420,11 +420,11 @@ def test_a_queued_payment_whose_recipient_changes_is_asked_again_not_cancelled_q
     sync_once(books, fake, HOURS[1])
     assert fake.sent("request_send_money") == []                                 # never sent at the old details
     with books.transaction() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert _hold_of(c, pid) == (50_000, "released")
         waiting = c.execute("SELECT approval_id FROM fin_actions WHERE status='needs_approval' AND "
                             "kind='payment_create'").fetchall()
-        assert len(waiting) == 1 and waiting[0][0], "asked again for the new details, not left cancelled"
+        assert len(waiting) == 1 and waiting[0][0], "asked again for the new details, not left canceled"
         approval = str(waiting[0][0])
         H.approval_decide(c, "human:ben", approval, "approved")
         decided = FA.approval_decided(c, approval, AT)
@@ -438,7 +438,7 @@ def test_a_finance_admin_whose_payment_changes_is_not_asked_to_approve_their_own
     """Spec §6.3: an approver is never the requester. The owner, who is the finance admin, paid a vendor and then the
     vendor's details changed. The new details go to a finance admin, and the only one is the owner who asked, so nobody
     else decides: the ask fails, as a re-ask nobody else can decide does. Nothing reaches Mercury, the payment is
-    cancelled with its hold released, and no approval waits for the owner."""
+    canceled with its hold released, and no approval waits for the owner."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -452,7 +452,7 @@ def test_a_finance_admin_whose_payment_changes_is_not_asked_to_approve_their_own
     sync_once(books, fake, HOURS[1])
     assert fake.sent("request_send_money") == []
     with books.transaction() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert _hold_of(c, pid) == (50_000, "released")
         assert c.execute("SELECT count(*) FROM fin_actions WHERE status='needs_approval'").fetchone()[0] == 0
         reasons = [r[0] for r in c.execute("SELECT reason FROM fin_actions WHERE kind='payment_create' AND "
@@ -555,7 +555,7 @@ def test_an_admin_cancel_of_an_unknown_payment_ends_it_when_the_fresh_lookup_fin
         assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).status == "committed"
     sync_once(books, fake, HOURS[3])
     with books.transaction() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert _holds(c) == [(50_000, "released")]
     assert len(fake.sent("request_send_money")) == 1
 
@@ -575,13 +575,13 @@ def test_a_cancel_asked_at_the_same_instant_as_a_lookup_waits_for_the_next_sweep
         assert _holds(c) == [(50_000, "held")]
     sync_once(books, fake, HOURS[4])
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert _holds(c) == [(50_000, "released")]
 
 
 def test_an_admin_cancel_of_a_request_sent_and_no_longer_listed_finds_its_transaction_and_is_settled_once(books):
     """Item 2 (spec §9): Mercury may have sent an unknown payment's request and then stop listing it (its lists show
-    pending, approved, rejected and cancelled only). The admin's cancel is not decided by the lists alone: the account's
+    pending, approved, rejected and canceled only). The admin's cancel is not decided by the lists alone: the account's
     transactions, read back to the payment's creation, carry its key, so the payment goes on as submitted under its
     request, is never sent again, and settles on its bank row."""
     fake = FakeMercury()
@@ -612,7 +612,7 @@ def test_an_admin_cancel_of_a_request_sent_and_no_longer_listed_finds_its_transa
 
 
 def test_an_admin_cancel_waits_while_the_transactions_read_back_is_incomplete(books):
-    """Item 2: a read back that did not finish decides nothing: the payment is neither cancelled nor found, and the hold
+    """Item 2: a read back that did not finish decides nothing: the payment is neither canceled nor found, and the hold
     stays, until a whole read (the next sweep's) finds nothing and ends it."""
     fake = FakeMercury()
     connect(books, fake)
@@ -627,7 +627,7 @@ def test_an_admin_cancel_waits_while_the_transactions_read_back_is_incomplete(bo
     assert len(fake.sent("account_transactions")) == 1
     sync_once(books, fake, HOURS[4])
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert _holds(c) == [(50_000, "released")]
 
 
@@ -665,10 +665,10 @@ def test_an_admin_cancel_of_a_direct_send_whose_transaction_landed_finds_it_by_i
     assert len(fake.sent("request_send_money")) == requests_before
 
 
-def test_a_bank_debit_carrying_a_cancelled_payments_key_asks_once_and_pays_nothing_it_owes(books):
-    """Item 2: a payment a finance admin cancelled (nothing found) may still have been sent, and its debit can post
+def test_a_bank_debit_carrying_a_canceled_payments_key_asks_once_and_pays_nothing_it_owes(books):
+    """Item 2: a payment a finance admin canceled (nothing found) may still have been sent, and its debit can post
     later carrying its key. That debit asks a person once; it does not pay the bill the payment was for (reopened when
-    the payment ended), and the payment stays cancelled."""
+    the payment ended), and the payment stays canceled."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -702,16 +702,16 @@ def test_a_bank_debit_carrying_a_cancelled_payments_key_asks_once_and_pays_nothi
     sync_once(books, fake, HOURS[4])
     sync_once(books, fake, HOURS[5])
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert FR.bill(c, OWNER, bid)["status"] == "open"
         assert c.execute("SELECT entry_id FROM fin_feed_txns WHERE provider_id='txn-late'").fetchone()[0] is None
-        assert _asks(c, "Check a bank debit for cancelled payment") == 1
+        assert _asks(c, "Check a bank debit for canceled payment") == 1
     assert len(fake.sent("request_send_money")) == 1
 
 
-def test_a_debit_carrying_a_cancelled_payments_key_asks_in_a_mirror_book_too(books):
-    """Item 3: a mirror book's Mercury can still pay a cancelled payment, so the same Needs-you asks a person once. The
-    payment stays cancelled and nothing is paid here."""
+def test_a_debit_carrying_a_canceled_payments_key_asks_in_a_mirror_book_too(books):
+    """Item 3: a mirror book's Mercury can still pay a canceled payment, so the same Needs-you asks a person once. The
+    payment stays canceled and nothing is paid here."""
     fake = FakeMercury()
     connect(books, fake)
     pid, key = _unknown_and_flagged(books, fake, "bill-63")
@@ -729,8 +729,8 @@ def test_a_debit_carrying_a_cancelled_payments_key_asks_in_a_mirror_book_too(boo
                              "operationType": "create", "resourceVersion": 1})
     sync_once(books, fake, HOURS[4])
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
-        assert _asks(c, f"Check a bank debit for cancelled payment {pid}") == 1
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
+        assert _asks(c, f"Check a bank debit for canceled payment {pid}") == 1
     assert len(fake.sent("request_send_money")) == 1
 
 
@@ -1274,7 +1274,7 @@ def test_an_approval_of_changed_payee_details_covers_the_new_recipient_rule_for_
     sync_once(books, fake, HOURS[3])
     assert [b["amount"] for b in fake.sent("request_send_money")] == [500]
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE amount=50000 AND status!='cancelled'").fetchone()[0] \
+        assert c.execute("SELECT status FROM fin_payments WHERE amount=50000 AND status!='canceled'").fetchone()[0] \
             .startswith("awaiting_bank_approval")
 
 
@@ -1291,7 +1291,7 @@ def test_a_payment_past_a_budget_that_also_asks_for_its_new_recipient_names_both
                 "money_account_id": _checking(c), "amount": 15_000}
         asked = act(c, "human:ben", "payment_create", body)
         assert asked.status == "needs_approval", asked
-        what = json.loads(c.execute("SELECT result_json FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0])
+        what = json.loads(c.execute("SELECT result FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0])
         assert "over the Software budget" in what["what"] and "New recipient" in what["what"], what
         H.approval_decide(c, OWNER, asked.approval_id, "approved")
         done = FA.approval_decided(c, asked.approval_id, AT)

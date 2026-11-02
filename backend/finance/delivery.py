@@ -47,7 +47,7 @@ def subject_of(stage: int | None, number: str) -> str:
 def mailbox(c: Any) -> str:
     """The address the Bookkeeper sends from: its gmail tool in the stored bot config, with `send` in its `can`. Empty
     when it has none; then a reminder is refused and an invoice is sent without an email."""
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (BOOKKEEPER,)).fetchone()
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (BOOKKEEPER,)).fetchone()
     if row is None:
         return ""
     try:

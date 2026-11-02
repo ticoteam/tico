@@ -331,7 +331,7 @@ def test_a_feed_row_that_could_pay_two_open_bills_never_posts_and_names_both_for
         assert _balance(c, "6100") == 24_690
         assert FR.bill(c, OWNER, one)["status"] == "open" and FR.bill(c, OWNER, two)["status"] == "open"
         assert tuple(c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()) == ("new", None)
-        [(raw,)] = c.execute("SELECT payload_json FROM fin_events WHERE name='finance.feed.needs_category' "
+        [(raw,)] = c.execute("SELECT payload FROM fin_events WHERE name='finance.feed.needs_category' "
                              "AND subject=?", (fid,)).fetchall()
         assert sorted(json.loads(raw)["candidates"]) == sorted([one, two])
         [listed] = [x for x in FR.inbox(c, OWNER, kind="uncategorized")["items"] if x["feed_id"] == fid]

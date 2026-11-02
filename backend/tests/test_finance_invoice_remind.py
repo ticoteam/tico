@@ -15,7 +15,7 @@ BOX = "books@acme.example"
 def _mailbox(c) -> None:
     """The Bookkeeper's stored gmail tool that can send (what a real install is given)."""
     tools = [{"service": "gmail", "identity": BOX, "can": ["read", "send"]}]
-    c.execute("UPDATE bot_config SET config_json=? WHERE bot='bookkeeper'",
+    c.execute("UPDATE bot_config SET config=? WHERE bot='bookkeeper'",
               (json.dumps({"team": "eng", "tools": tools}),))
 
 

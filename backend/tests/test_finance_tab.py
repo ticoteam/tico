@@ -138,7 +138,7 @@ def test_an_entry_with_only_balance_sheet_lines_shows_in_transactions(books):
         assert not spent
 
 
-def test_a_budget_a_card_draws_on_says_so_until_the_card_is_cancelled(books):
+def test_a_budget_a_card_draws_on_says_so_until_the_card_is_canceled(books):
     with books.transaction() as c:
         ids = _bank(c)
         bid = str(act(c, OWNER, "budget_create", {"name": "Tools", "period": "month", "account_id": account(c, "6900"),
@@ -147,7 +147,7 @@ def test_a_budget_a_card_draws_on_says_so_until_the_card_is_cancelled(books):
         assert flag() is False
         c.execute("UPDATE fin_cards SET budget_id=? WHERE id=?", (bid, ids["eve"]))
         assert flag() is True
-        c.execute("UPDATE fin_cards SET status='cancelled' WHERE id=?", (ids["eve"],))
+        c.execute("UPDATE fin_cards SET status='canceled' WHERE id=?", (ids["eve"],))
         assert flag() is False
 
 

@@ -62,13 +62,13 @@ def _bot_rights(c):
 def _routines(api):
     """The Bookkeeper's routines as stored: any automation whose flow names the bot."""
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT trigger_type, name, flow_json FROM automations "
-                                           "WHERE deleted_at IS NULL AND flow_json LIKE '%bookkeeper%'")]
+        return [dict(r) for r in c.execute("SELECT trigger_type, name, flow FROM automations "
+                                           "WHERE deleted_at IS NULL AND flow LIKE '%bookkeeper%'")]
 
 
 def _triggers(api):
     return {r["trigger_type"] for r in _routines(api)} | {
-        m for r in _routines(api) for m in re.findall(r"finance\.[a-z_.]+", r["flow_json"])}
+        m for r in _routines(api) for m in re.findall(r"finance\.[a-z_.]+", r["flow"])}
 
 
 # ----------------------------------------------------------------------------- check 1: built, guarded
@@ -265,9 +265,9 @@ def test_c6_a_failed_sync_reaches_the_owner_without_botops(environment):
     assert sync.connection(store, None, "conn-rehearsal", at=H.shift(first, hours=2)) == "no_token"
     with store.read() as c:
         events = c.execute("SELECT count(*) FROM fin_events WHERE name='finance.sync.failed'").fetchone()[0]
-        notes = c.execute("SELECT to_actor, body FROM messages WHERE kind='notice' AND body LIKE 'Finance could not sync%'"
+        notes = c.execute("SELECT recipient_id, body FROM messages WHERE kind='notice' AND body LIKE 'Finance could not sync%'"
                           ).fetchall()
-    assert events == 1 and [n["to_actor"] for n in notes] == [owner], (events, [dict(n) for n in notes])
+    assert events == 1 and [n["recipient_id"] for n in notes] == [owner], (events, [dict(n) for n in notes])
     assert "Acme checking" in notes[0]["body"], notes[0]["body"]
 
 

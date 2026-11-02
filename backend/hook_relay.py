@@ -153,7 +153,7 @@ def forget(c: Any, trigger_id: str) -> None:
 
 def keep(c, *, relay_id, trigger_id, prefix, by):
     """HQ's relay kept as the trigger's live one, with its audit event."""
-    c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?) "
+    c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?) "
               "ON CONFLICT(relay_id) DO UPDATE SET trigger_id=excluded.trigger_id,address_prefix=excluded.address_prefix,"
               "deleted_at=NULL,hq_gone=0", (relay_id, trigger_id, prefix, by, H.now()))
     H.event(c, by, "trigger.relay_created", trigger_id, {"relay": relay_id})
@@ -167,7 +167,7 @@ def record_system(c, trigger_id: str, relay_id: str) -> bool:
     if relay_recorded(c, trigger_id, relay_id):
         return True
     c.execute("DELETE FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL", (trigger_id,))
-    c.execute("INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created,deleted_at,hq_gone) "
+    c.execute("INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at,deleted_at,hq_gone) "
               "VALUES(?,?,?,?,?,NULL,0)", (relay_id, trigger_id, "", H.KEEPER, H.now()))
     return True
 

@@ -83,17 +83,17 @@ def test_a_monthly_charge_on_an_idle_bots_card_for_three_months_is_an_unused_sub
 def test_a_card_held_by_an_archived_bot_or_one_with_no_turn_in_thirty_days_is_idle(books):  # noqa: F811
     at = "2026-11-01T00:00:00.000000Z"
     with books.transaction() as c:
-        c.execute("INSERT INTO bots(slug, state, last_turn_at) VALUES('idle', 'active', '2026-09-20T09:00:00.000000Z')")
-        c.execute("INSERT INTO bots(slug, state) VALUES('never', 'active')")
+        c.execute("INSERT INTO bots(id, slug, state, last_turn_at) VALUES('idle', 'idle', 'active', '2026-09-20T09:00:00.000000Z')")
+        c.execute("INSERT INTO bots(id, slug, state) VALUES('never', 'never', 'active')")
         c.execute("UPDATE bots SET state='archived' WHERE slug='coder'")
         c.execute("UPDATE bots SET last_turn_at='2026-10-30T09:00:00.000000Z' WHERE slug='seller'")
         for card, bot in (("card_coder", "coder"), ("card_seller", "seller"), ("card_idle", "idle"),
                           ("card_never", "never")):
             c.execute("INSERT INTO fin_cards(id, provider, holder, kind, currency, created_at, created_by) "
                       "VALUES(?, 'mercury', ?, 'standing', 'USD', ?, ?)", (card, "bot:" + bot, at, OWNER))
-        # A card someone already cancelled is not a problem to raise, whoever held it.
+        # A card someone already canceled is not a problem to raise, whoever held it.
         c.execute("INSERT INTO fin_cards(id, provider, holder, kind, currency, created_at, created_by, status) "
-                  "VALUES('card_gone', 'mercury', 'bot:coder', 'standing', 'USD', ?, ?, 'cancelled')", (at, OWNER))
+                  "VALUES('card_gone', 'mercury', 'bot:coder', 'standing', 'USD', ?, ?, 'canceled')", (at, OWNER))
         assert ST.idle_bot_cards(c, at, 30) == {"card_coder": "coder", "card_idle": "idle", "card_never": "never"}
 
 
@@ -120,7 +120,7 @@ def _bot_card_charges(c, slug: str, card: str, days: tuple[str, ...], amount: in
 
 def test_a_monthly_card_charge_on_an_archived_bots_card_is_an_unused_subscription_from_the_books(books):  # noqa: F811
     with books.transaction() as c:
-        c.execute("INSERT INTO bots(slug, state) VALUES('quiet', 'archived')")
+        c.execute("INSERT INTO bots(id, slug, state) VALUES('quiet', 'quiet', 'archived')")
         _bot_card_charges(c, "quiet", "card_quiet", PRIOR_MONTHS)
         found = [f for f in FR.watch_findings(c, OWNER, WATCH_AT) if f["kind"] == "unused_subscription"]
         assert [f["key"] for f in found] == ["unused_subscription:card_quiet:acme cloud"]
@@ -128,6 +128,6 @@ def test_a_monthly_card_charge_on_an_archived_bots_card_is_an_unused_subscriptio
 
 def test_the_same_monthly_card_charge_on_an_active_bots_card_is_not_an_unused_subscription(books):  # noqa: F811
     with books.transaction() as c:
-        c.execute("INSERT INTO bots(slug, state, last_turn_at) VALUES('busy', 'active', '2026-10-30T09:00:00.000000Z')")
+        c.execute("INSERT INTO bots(id, slug, state, last_turn_at) VALUES('busy', 'busy', 'active', '2026-10-30T09:00:00.000000Z')")
         _bot_card_charges(c, "busy", "card_busy", PRIOR_MONTHS)
         assert [f for f in FR.watch_findings(c, OWNER, WATCH_AT) if f["kind"] == "unused_subscription"] == []

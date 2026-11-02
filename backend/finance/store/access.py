@@ -79,7 +79,7 @@ def insert_grant(c: sqlite3.Connection, g: Grant, by: str, at: str) -> None:
 
 
 def set_members(c: sqlite3.Connection, grant_id: str, members: Iterable[str]) -> int:
-    return c.execute("UPDATE fin_view_grants SET members_json=? WHERE id=?",
+    return c.execute("UPDATE fin_view_grants SET members=? WHERE id=?",
                      (json.dumps(sorted(members)), grant_id)).rowcount
 
 

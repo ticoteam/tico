@@ -98,7 +98,7 @@ def amortize_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     day = open_day(ctx, f"{month}-01")
     memo = f"Prepaid {row['vendor_name'] or 'bill'} {month}" + ("" if day == f"{month}-01" else f" (dated {month}-01)")
     contact = str(row["vendor_id"] or "")
-    tags = cast(dict[str, str], SK.loads(row["tags_json"]))
+    tags = cast(dict[str, str], SK.loads(row["tags"]))
     if who != SYSTEM and not may_write(ctx, who, expense.id, tags):
         raise denied("a line's account or tags are outside your view")
     base = ctx.book.base_currency

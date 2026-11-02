@@ -3,7 +3,7 @@ import sqlite3
 from typing import Any
 
 # A prepaid line counts while its bill is entered and not voided: an entered bill keeps amortizing once it is paid.
-_LINE = ("SELECT l.id AS line_id, l.bill_id, l.account_id, l.amount, l.description, l.tags_json, "
+_LINE = ("SELECT l.id AS line_id, l.bill_id, l.account_id, l.amount, l.description, l.tags, "
          "l.prepaid_start, l.prepaid_months, b.book_id, b.status, b.vendor_id, b.number, v.name AS vendor_name "
          "FROM fin_bill_lines l JOIN fin_bills b ON b.id=l.bill_id LEFT JOIN fin_contacts v ON v.id=b.vendor_id")
 

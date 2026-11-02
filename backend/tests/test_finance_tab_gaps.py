@@ -648,5 +648,5 @@ def test_a_fault_in_the_org_revalidation_leaves_the_person_update_and_no_partial
     with store.read() as c:
         g = SA.grant(c, gid)
         assert g.status == "active" and "human:eve" in g.members
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
     assert next(p for p in people["people"] if p["id"] == "eve")["hidden"]

@@ -453,11 +453,11 @@ def cards_on_budgets(c: sqlite3.Connection, budget_ids: Sequence[str]) -> list[A
 
 
 def budgets_with_cards(c: sqlite3.Connection, budget_ids: Sequence[str]) -> set[str]:
-    """The budgets a card that isn't cancelled draws on: enforced by that card's limit (spec §8.2)."""
+    """The budgets a card that isn't canceled draws on: enforced by that card's limit (spec §8.2)."""
     if not budget_ids:
         return set()
     return {str(r[0]) for r in c.execute(f"SELECT DISTINCT budget_id FROM fin_cards WHERE budget_id IN "
-                                         f"({_marks(budget_ids)}) AND status<>'cancelled'", list(budget_ids))}
+                                         f"({_marks(budget_ids)}) AND status<>'canceled'", list(budget_ids))}
 
 
 def budget_frozen_cards(c: sqlite3.Connection, budget_ids: Sequence[str] | None) -> list[Any]:
@@ -653,9 +653,9 @@ def payments_unlinked(c: sqlite3.Connection, money_account_id: str, amount: int)
                      "ORDER BY created_at", (money_account_id, amount)).fetchall()
 
 
-def payments_cancelled(c: sqlite3.Connection, money_account_id: str, amount: int) -> list[Any]:
-    """Cancelled payments from this account for this amount: a bank debit that carries one's key was sent after all."""
-    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? AND status='cancelled' "
+def payments_canceled(c: sqlite3.Connection, money_account_id: str, amount: int) -> list[Any]:
+    """Canceled payments from this account for this amount: a bank debit that carries one's key was sent after all."""
+    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? AND status='canceled' "
                      "ORDER BY created_at", (money_account_id, amount)).fetchall()
 
 

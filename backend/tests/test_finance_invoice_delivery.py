@@ -22,7 +22,7 @@ LATER = "2026-10-16T13:00:00.000000Z"
 
 def _mailbox(c, can=("read", "send")) -> None:
     tools = [{"service": "gmail", "identity": BOX, "can": list(can)}]
-    c.execute("UPDATE bot_config SET config_json=? WHERE bot='bookkeeper'",
+    c.execute("UPDATE bot_config SET config=? WHERE bot='bookkeeper'",
               (json.dumps({"team": "eng", "tools": tools}),))
 
 
@@ -69,7 +69,7 @@ def test_a_person_yes_records_the_reminder_and_issues_a_send_approval_for_its_ex
     with books.transaction() as c:
         iid, send_id, text = _approved_reminder(c)
         appr = H.approval(c, send_id)
-        assert appr["kind"] == "send" and appr["decision"] == "approved" and appr["decided_by"] == OWNER, appr
+        assert appr["kind"] == "send" and appr["decision"] == "approved" and appr["decided_by_id"] == OWNER, appr
         payload = appr["payload"]
         assert payload["to"] == [EMAIL] and payload["cc"] == [] and payload["mailbox"] == BOX, payload
         assert payload["body_sha256"] == delivery.digest(text)

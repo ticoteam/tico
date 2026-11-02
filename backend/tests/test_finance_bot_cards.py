@@ -195,7 +195,7 @@ def test_the_hourly_look_lifts_a_cutoff_freeze_as_a_logged_system_action(books):
     with books.transaction() as c:
         assert FA.watch_documents(c, NEXT) >= 1
         assert _status(c, coder) == "active" and _status(c, seller) == "active"
-        lifts = c.execute("SELECT actor, status, payload_json FROM fin_actions WHERE kind='card_unfreeze'").fetchall()
+        lifts = c.execute("SELECT actor, status, payload FROM fin_actions WHERE kind='card_unfreeze'").fetchall()
         assert sorted((actor, status) for actor, status, _ in lifts) == [(SYSTEM, "committed")] * 2
         assert {json.loads(payload)["card_id"] for *_, payload in lifts} == {coder, seller}
     sync_once(books, fake, NEXT)
@@ -698,7 +698,7 @@ def test_a_cvc_typed_as_free_text_is_refused_and_never_stored(books):
                                                   "amount": 10_000, "at_limit": "decline"})
         assert (refused.status, refused.code, refused.reason) == ("failed", "invalid", FA.CARD_NUMBER_REFUSED)
         assert c.execute("SELECT count(*) FROM fin_budgets").fetchone()[0] == budgets
-        assert c.execute("SELECT count(*) FROM fin_actions WHERE payload_json LIKE '%CVC%'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE payload LIKE '%CVC%'").fetchone()[0] == 0
 
 
 DASHED_CARD_SHAPES =("4242-4242-4242-4242-123", "4242 4242 4242 4242-123", "4242-4242-4242-4242-7",

@@ -323,7 +323,7 @@ def _mercury_user(ctx: Ctx, p: V.Payload, holder: str, program: Any) -> tuple[st
         if len(found) == 1:
             return str(found[0]["provider_user_id"]), "the holder's email"
     row = SK.get(ctx.c, "fin_connections", connection)
-    setting = str(SK.loads(row["settings_json"] if row is not None else None).get("card_user_id") or "")
+    setting = str(SK.loads(row["settings"] if row is not None else None).get("card_user_id") or "")
     if setting:
         return setting, "the connection's card user"
     raise invalid("a Mercury user is needed to issue the card: name one (provider_user_id), or set the connection's "

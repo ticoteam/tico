@@ -14,6 +14,9 @@ from backend.finance.core.errors import CONFLICT, DENIED, INVALID, PERIOD_CLOSED
 from backend.finance.core.ledger import name_key
 from backend.finance.raw_totals import OUTSIDE
 from backend.finance.store import schema as SCH
+
+import importlib
+MIGRATION = importlib.import_module("backend.migrations.0037_finance_combined")
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
 
@@ -502,8 +505,8 @@ def test_a_reconcile_to_a_month_end_counts_no_raw_totals_from_after_it(books):
         assert (sep.result["status"], sep.result["difference"], sep.result["book_difference"]) == ("done", 0, 0), sep.result
 
 
-def test_migration_78_widens_the_feed_status_keeps_its_rows_and_runs_twice(books):
-    """Migration 78 on an install whose fin_feed_txns predates the covered status (its CHECK has no 'covered'): the
+def test_migration_0037_widens_the_feed_status_keeps_its_rows_and_runs_twice(books):
+    """Migration 0037 on an install whose fin_feed_txns predates the covered status (its CHECK has no 'covered'): the
     rebuild keeps every row and its entry_line_id, the table's triggers come back, 'covered' is accepted afterwards, and
     a second run changes nothing. Other statuses stay refused."""
     fake = FakeMercury()
@@ -522,7 +525,7 @@ def test_migration_78_widens_the_feed_status_keeps_its_rows_and_runs_twice(books
             return c.execute("SELECT id, status, amount, entry_line_id FROM fin_feed_txns ORDER BY id").fetchall()
 
         before_triggers = triggers()
-        # The table as migration 77 left it: the same columns (refund_of comes later, in migration 80), and a status
+        # The table as cloud step 77 left it: the same columns (refund_of comes later, in migration 0037), and a status
         # CHECK without 'covered'.
         current = sql()
         c.execute("DROP TABLE fin_feed_txns")
@@ -534,7 +537,7 @@ def test_migration_78_widens_the_feed_status_keeps_its_rows_and_runs_twice(books
                        ("f2", money, "p2", "2026-02-11", 900, "USD", "new", None)])
         rows = state()
 
-        SCH.covered_history(c)
+        MIGRATION.up(c)
         assert state() == rows
         assert "entry_line_id" in [r[1] for r in c.execute("PRAGMA table_info(fin_feed_txns)")]
         assert triggers() == before_triggers
@@ -544,7 +547,7 @@ def test_migration_78_widens_the_feed_status_keeps_its_rows_and_runs_twice(books
         rows = state()
         table = sql()
 
-        SCH.covered_history(c)
+        MIGRATION.up(c)
         assert state() == rows and sql() == table
         assert triggers() == before_triggers
 

@@ -340,7 +340,7 @@ def covered_day(ctx: Ctx, day: str) -> bool:
 def _backfilled(ctx: Ctx, money: Any) -> bool:
     """Whether the money account's connection has finished its backfill (its first opening balance is due then)."""
     conn = SK.get(ctx.c, "fin_connections", str(money["connection_id"])) if money["connection_id"] else None
-    return conn is not None and bool(SK.loads(conn["settings_json"]).get("backfilled"))
+    return conn is not None and bool(SK.loads(conn["settings"]).get("backfilled"))
 
 
 def refresh_opening(ctx: Ctx, money_id: str) -> None:
@@ -447,7 +447,7 @@ def _txn_of(row: Any) -> F.FeedTxn:
                      txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
                      counterparty=str(row["counterparty"]), description=str(row["description"]),
                      card_id=str(row["card_id"] or ""), request_id=str(row["request_id"] or ""),
-                     version=int(row["version"]), raw=SK.loads(row["raw_json"]))
+                     version=int(row["version"]), raw=SK.loads(row["raw"]))
 
 
 def refresh_covered(ctx: Ctx, before: Mapping[str, int]) -> None:
@@ -472,7 +472,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     if ctx.book.mode == "mirror":
         from .mirror import settle_row
         if not (t.pending or t.void or t.reversed):
-            _cancelled_debit(ctx, money, fid, t)     # a mirror's Mercury can still pay: the same ask, then mirror it
+            _canceled_debit(ctx, money, fid, t)     # a mirror's Mercury can still pay: the same ask, then mirror it
         settle_row(ctx, row, money, t)
         return
     program = str(money["kind"]) == "card_program"
@@ -514,8 +514,8 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         row = SK.get(ctx.c, "fin_feed_txns", fid)
     if str(row["status"]) == "ignored":
         return
-    if _cancelled_debit(ctx, money, fid, t):
-        return          # the payment stays cancelled and its bill stays open (payment_ended reopened it); nothing pays
+    if _canceled_debit(ctx, money, fid, t):
+        return          # the payment stays canceled and its bill stays open (payment_ended reopened it); nothing pays
     gl = gl_account(ctx, money)
     pay = SK.payment_by_request(ctx.c, t.request_id) if t.request_id else None
     if pay is None and t.amount < 0:
@@ -609,28 +609,28 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
 
 
-def _cancelled(ctx: Ctx, money: Any, t: F.FeedTxn) -> Any:
-    """A cancelled payment whose key (`tico:<key>`) this debit shows (in `note` or `externalMemo`), at the same amount
-    from the same account: Mercury sent what Finance had cancelled. None when no such payment."""
+def _canceled(ctx: Ctx, money: Any, t: F.FeedTxn) -> Any:
+    """A canceled payment whose key (`tico:<key>`) this debit shows (in `note` or `externalMemo`), at the same amount
+    from the same account: Mercury sent what Finance had canceled. None when no such payment."""
     shown = f"{t.note} {t.raw.get('externalMemo') or ''}"
-    for pay in SK.payments_cancelled(ctx.c, str(money["id"]), -t.amount):
+    for pay in SK.payments_canceled(ctx.c, str(money["id"]), -t.amount):
         if f"{payments.NOTE}{pay['idempotency_key']}" in shown:
             return pay
     return None
 
 
-def _cancelled_debit(ctx: Ctx, money: Any, fid: str, t: F.FeedTxn) -> bool:
-    """A debit that carries a cancelled payment's key: Mercury sent what Finance had cancelled. One Needs-you asks a
+def _canceled_debit(ctx: Ctx, money: Any, fid: str, t: F.FeedTxn) -> bool:
+    """A debit that carries a canceled payment's key: Mercury sent what Finance had canceled. One Needs-you asks a
     person; nothing here pays the bill. True when the debit is one (its caller then stops the normal settlement)."""
     if t.amount >= 0:
         return False
-    cut = _cancelled(ctx, money, t)
+    cut = _canceled(ctx, money, t)
     if cut is None:
         return False
     tico.needs_you(ctx.c, payments.admin_person(ctx) or ctx.org.owner,
-                   f"Check a bank debit for cancelled payment {cut['id']}",
-                   f"Bank transaction {fid} carries the key of payment {cut['id']}, which Finance cancelled: "
-                   "Mercury may have sent it after all. The payment stays cancelled and its bill stays open. "
+                   f"Check a bank debit for canceled payment {cut['id']}",
+                   f"Bank transaction {fid} carries the key of payment {cut['id']}, which Finance canceled: "
+                   "Mercury may have sent it after all. The payment stays canceled and its bill stays open. "
                    "Check Mercury before anything else.", private=True)
     return True
 
@@ -1277,10 +1277,10 @@ def connection_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise invalid("that is not a Mercury user on this connection")
 
     def apply(aid: str) -> Result:
-        settings = {k: v for k, v in SK.loads(row["settings_json"]).items() if k != "card_user_id"}
+        settings = {k: v for k, v in SK.loads(row["settings"]).items() if k != "card_user_id"}
         if user:
             settings["card_user_id"] = user
-        SK.update(ctx.c, "fin_connections", str(row["id"]), {"settings_json": SK.dump(settings), "updated_at": ctx.at})
+        SK.update(ctx.c, "fin_connections", str(row["id"]), {"settings": SK.dump(settings), "updated_at": ctx.at})
         return {"connection_id": str(row["id"]), "card_user_id": user or None}
     return Plan(K.ALLOW, f"Issue cards on {row['name']} to {user}" if user else
                 f"Clear the card user on {row['name']}", apply)

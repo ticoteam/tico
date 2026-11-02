@@ -286,17 +286,18 @@ def bot_average_run(c: sqlite3.Connection, bot: str, since: str, most: int) -> s
 
 def idle_bot_cards(c: sqlite3.Connection, at: str, days: int) -> dict[str, str]:
     """Each card a bot holds whose bot is archived, or has run no turn since `days` before `at`: card id -> the bot's
-    slug. A bot that never ran is idle; a holder with no bot row is not judged. The bot facts are the hub's (bots)."""
-    holders = {str(r[0]): str(r[1]) for r in c.execute(
-        "SELECT id, holder FROM fin_cards WHERE holder LIKE 'bot:%' AND status <> 'cancelled'")}
-    slugs = sorted({holder.split(":", 1)[1] for holder in holders.values()})
-    if not slugs:
+    slug (a holder is `bot:<id>`; the slug is what a person reads). A bot that never ran is idle; a holder with no bot
+    row is not judged. The bot facts are the hub's (bots)."""
+    holders = {str(r[0]): str(r[1]).split(":", 1)[1] for r in c.execute(
+        "SELECT id, holder FROM fin_cards WHERE holder LIKE 'bot:%' AND status <> 'canceled'")}
+    ids = sorted(set(holders.values()))
+    if not ids:
         return {}
-    facts = {str(r[0]): (str(r[1] or ""), str(r[2] or "")) for r in c.execute(
-        f"SELECT slug, state, last_turn_at FROM bots WHERE slug IN ({','.join('?' * len(slugs))})", slugs)}
     cutoff = shift(at, -days)
-    idle = {slug for slug, (state, last) in facts.items() if state == "archived" or not last or last < cutoff}
-    return {card: holder.split(":", 1)[1] for card, holder in holders.items() if holder.split(":", 1)[1] in idle}
+    idle = {str(r[0]): str(r[1] or r[0]) for r in c.execute(
+        f"SELECT id, slug, state, last_turn_at FROM bots WHERE id IN ({','.join('?' * len(ids))})", ids)
+        if str(r[2] or "") == "archived" or not r[3] or str(r[3]) < cutoff}
+    return {card: idle[bot_id] for card, bot_id in holders.items() if bot_id in idle}
 
 
 def attempt_job(c: sqlite3.Connection, attempt_id: str) -> str | None:

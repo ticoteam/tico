@@ -15,7 +15,8 @@ SCAN = ("backend", "clients", "connectors", "integrations", "scripts", "tools", 
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".venv", "venv"}
 OWNED = ("backend/finance/",)
 EXEMPT = ("scripts/finance_lint.py", "backend/tests/test_status_values.py")  # that test builds its own small tables
-EXEMPT_PREFIX = ("backend/tests/test_finance_",)
+# The migration files are the one schema authority (backend/migrations): they make and rebuild every table.
+EXEMPT_PREFIX = ("backend/tests/test_finance_", "backend/migrations/")
 READ_OK = {"fin_actions", "fin_connections"}
 WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM|ALTER\s+TABLE|"
                    r"DROP\s+(?:TABLE|INDEX|TRIGGER)(?:\s+IF\s+EXISTS)?|CREATE\s+(?:TABLE|INDEX|TRIGGER))\s+"
@@ -23,6 +24,9 @@ WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|REPLACE\s+INTO|UPDATE|DE
 READ = re.compile(r"\b(?:FROM|JOIN)\s+[\"`]?(fin_\w+)", re.IGNORECASE)
 # A Finance table named in quotes outside Finance is a list that a delete loop could run (devcopy once had one).
 NAMED = re.compile(r"[\"'`](fin_\w+)[\"'`]")
+# The schema's own lists name every table by design: the status lists the CHECKs come from, the rename tooling and the
+# test that lists every table's row model.
+NAMED_OK = ("backend/status_values.py", "scripts/cleanup/", "backend/tests/test_rows_schema.py")
 INNER = re.compile(r"(?:from|import)\s+(?:backend\.|\.+)?finance\.(core|store|handlers|budgeting|posting|context|setup)\b")
 # The migration step creates the tables through the schema module; nothing else reaches past the two doors.
 INNER_OK = {("backend/store.py", "store")}
@@ -44,7 +48,7 @@ def problems(root: Path = ROOT, files: list[Path] | None = None) -> list[str]:
             for m in READ.finditer(line):
                 if m.group(1) not in READ_OK:
                     out.append(f"{rel}:{n}: reads {m.group(1)}; go through backend/finance/reads.py")
-            for m in NAMED.finditer(line):
+            for m in NAMED.finditer(line) if not rel.startswith(NAMED_OK) else ():
                 out.append(f"{rel}:{n}: names {m.group(1)}; Finance's tables are named in backend/finance/ only")
             for m in INNER.finditer(line):
                 if (rel, m.group(1)) not in INNER_OK:

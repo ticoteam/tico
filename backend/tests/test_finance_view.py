@@ -378,7 +378,7 @@ def test_a_team_grant_ends_at_once_for_a_member_who_leaves_the_team(books):
 
 
 def _roster(c) -> dict:
-    return json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+    return json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
 
 
 def _move_on_roster(c, person: str, team: str) -> None:

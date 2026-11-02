@@ -476,7 +476,7 @@ def test_a_bill_with_a_scheduled_pay_and_a_payment_both_waiting_is_paid_once_whi
         FA.watch_documents(c, "2026-11-05T13:00:00.000000Z")         # the hourly look: pay_due on the scheduled day
     with books.transaction() as c:
         asks = c.execute("SELECT id, approval_id FROM fin_actions WHERE status='needs_approval' "
-                         "AND kind='payment_create' AND payload_json LIKE ?", (f"%{obligation}%",)).fetchall()
+                         "AND kind='payment_create' AND payload LIKE ?", (f"%{obligation}%",)).fetchall()
         paid = c.execute("SELECT COUNT(*) FROM fin_payments WHERE obligation=?", (obligation,)).fetchone()[0]
         assert paid + len(asks) == 1, (paid, asks)
         for _, approval in asks:

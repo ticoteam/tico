@@ -136,7 +136,7 @@ def test_a_raise_in_the_current_period_asks_the_budget_owner_and_a_future_one_do
 
 def _turn(c, bot, finished, cost, model="tico-medium", billing="api"):
     tid = f"t{bot}{finished}{model}"
-    c.execute("INSERT INTO turns(id, bot, started, finished, model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO turns(id, bot, started_at, finished_at, model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
               (tid, bot, finished, finished, model, cost, billing))
     return tid
 

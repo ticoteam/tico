@@ -2214,7 +2214,7 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
     # A write for a feed row (a bank, card or Stripe line) goes out only once the books are read up to now: the provider
     # may hold the entry already (their own bank feed made it after the last change read), and a copy sent would be a
     # duplicate. A read that fails holds those writes for the next pass.
-    bank = [o for o in due if int(o["attempts"]) == 0 and SK.loads(o["payload_json"]).get("feed_id")]
+    bank = [o for o in due if int(o["attempts"]) == 0 and SK.loads(o["payload"]).get("feed_id")]
     if bank:
         read = _changes(store, books, cid, now, waiting=True)
         if read:
@@ -2326,7 +2326,7 @@ def _start_reread(store: Any, cid: str, now: str, why: str) -> None:
     the cap."""
     with store.transaction() as c:
         gen = _gen_of(SX.mirror_state(c, cid)) + 1
-        SX.set_mirror_state(c, cid, {"gen": gen, "reread": {"gen": gen, "why": why, "started": now}, "backfill": {},
+        SX.set_mirror_state(c, cid, {"gen": gen, "reread": {"gen": gen, "why": why, "started_at": now}, "backfill": {},
                                      "exact": []})
 
 
@@ -2348,7 +2348,7 @@ def _sweep(store: Any, books: Books, cid: str, now: str) -> str:
         with store.transaction() as c:
             SX.reread_swept(c, [str(row[0]) for row in rows], gen)
         return ""
-    started = str(reread["started"])
+    started = str(reread.get("started_at") or now)   # a re-read begun before the key had its name starts now
     with store.transaction() as c:
         SX.set_mirror_state(c, cid, {"cursors": {feed: started for feed in books.feeds}, "changed_at": started,
                                      "exact": [], "reread": None})

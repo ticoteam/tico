@@ -448,8 +448,8 @@ def ring() -> None:
 
 def _ask_mercury(ctx: Ctx, who: str, pay: Any) -> Plan:
     """A finance admin's cancel of an unknown payment (flagged: its key was not found for UNKNOWN_ASK_MINUTES). Nothing is
-    cancelled here, since the planner cannot call Mercury: the worker looks Mercury up by the key (sync.pay), and the
-    payment ends cancelled only when a complete lookup begun after this ask finds neither a request with the key nor a
+    canceled here, since the planner cannot call Mercury: the worker looks Mercury up by the key (sync.pay), and the
+    payment ends canceled only when a complete lookup begun after this ask finds neither a request with the key nor a
     transaction with it read back to the payment's creation (not_found). A request or transaction with the key that
     turns up instead keeps it going, and it is never sent again under a fresh key (§9)."""
     if pay["cancel_asked_at"]:
@@ -563,10 +563,10 @@ def _ask_maker(ctx: Ctx, pay: Any, title: str, body: str) -> None:
 
 
 def _refused_in_mercury(ctx: Ctx, pay: Any, word: str) -> None:
-    """A payment Mercury rejected or cancelled (never a person's cancel in Finance, which ends it without a Needs-you):
-    it ends `cancelled`, so the bill it paid is owed again, and its maker or the finance admin is asked to look at it.
+    """A payment Mercury rejected or canceled (never a person's cancel in Finance, which ends it without a Needs-you):
+    it ends `canceled`, so the bill it paid is owed again, and its maker or the finance admin is asked to look at it.
     The Needs-you names the payment, the payee and the obligation it was paying."""
-    end(ctx, pay, "cancelled", f"{word} in Mercury")
+    end(ctx, pay, "canceled", f"{word} in Mercury")
     rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
     payee = str(rec["name"]) if rec is not None else "a payee"
     paying = f" for {pay['obligation']}" if pay["obligation"] else ""
@@ -654,7 +654,7 @@ def asked_rules(action: Any) -> set[str]:
     results, actions._rule_rows). An approval covers what it named, and nothing else."""
     if action is None:
         return set()
-    raw: object = json.loads(str(action["rule_results_json"] or "[]"))
+    raw: object = json.loads(str(action["rule_results"] or "[]"))
     rows: list[object] = cast(list[object], raw) if isinstance(raw, list) else []
     out: set[str] = set()
     for r in rows:
@@ -702,20 +702,20 @@ def _covers_now(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str, rec
         return True
     if rule != NEW_RECIPIENT_RULE or action is None:
         return False
-    payload = json.loads(str(action["payload_json"]))
+    payload = json.loads(str(action["payload"]))
     return str(payload.get("recipient_id") or "") == recipient_id and \
         approved_for(ctx, action, who, who_needed, RECIPIENT_RULE)
 
 
 def _asked_again(ctx: Ctx, pay: Any, action: Any, successor: Any) -> str:
-    """A queued payment whose recipient was replaced: its approval is void (§5), so it is not cancelled quietly. It ends
-    cancelled (its hold and counters released, the bill owed again), and its action waits for a finance admin's approval
+    """A queued payment whose recipient was replaced: its approval is void (§5), so it is not canceled quietly. It ends
+    canceled (its hold and counters released, the bill owed again), and its action waits for a finance admin's approval
     of the new details (§6.4 rule 1), with the new recipient version. Nothing goes to Mercury meanwhile."""
     from . import actions as FA          # lazy: actions imports this module
     why = "the recipient's details changed after it was approved"
-    body = {k: v for k, v in json.loads(str(action["payload_json"])).items() if k in CREATE_FIELDS}
+    body = {k: v for k, v in json.loads(str(action["payload"])).items() if k in CREATE_FIELDS}
     body.update({"recipient_id": str(successor["id"]), "recipient_version": int(successor["version"])})
-    end(ctx, pay, "cancelled", f"{why}; asked again")
+    end(ctx, pay, "canceled", f"{why}; asked again")
     summary = (f"Pay {int(pay['amount']) / 100:.2f} {ctx.book.base_currency} to {successor['name']} "
                "(its details changed; asked again)")
     FA.void_for_recipient(ctx, str(action["id"]), "payment_create", body, summary,
@@ -745,13 +745,13 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         SK.update(ctx.c, "fin_payments", str(pay["id"]), {"mode": "approval_queue", "updated_at": ctx.at})
         pay = SK.get(ctx.c, "fin_payments", str(pay["id"]))
     right = K.authority(ctx.org, who, "payment_create", ctx.rights(who))
-    ended = "cancelled"
+    ended = "canceled"
     if right is not None and right.outcome == "deny":
         why = "whoever asked for it no longer has the right to pay"
     elif line is None or not line.active or not may_write(ctx, who, line.id, tags):
         why = "its line is no longer in the payer's view"
     elif rec is None or str(rec["status"]) != "active" or int(rec["version"]) != int(pay["recipient_version"]):
-        # Changed details (§13) void the approval: asked again for the new version, never cancelled quietly.
+        # Changed details (§13) void the approval: asked again for the new version, never canceled quietly.
         successor = _current_version(ctx, rec) if rec is not None else None
         if successor is not None and action is not None and str(successor["id"]) != str(pay["recipient_id"]):
             return _asked_again(ctx, pay, action, successor)
@@ -992,7 +992,7 @@ def not_found(ctx: Ctx, pay: Any) -> None:
     if asked and asked < ctx.at:
         # A finance admin asked to cancel it before this sweep's complete lookups began, and they found nothing. An ask
         # at this same instant may have come after those lookups began, so the next sweep decides instead.
-        end(ctx, pay, "cancelled", f"not in Mercury when its key was looked for ({pay['cancel_asked_by']} cancelled it)")
+        end(ctx, pay, "canceled", f"not in Mercury when its key was looked for ({pay['cancel_asked_by']} canceled it)")
         return
     if asked:
         fields["next_try_at"] = ctx.at          # asked during this sweep: the next one looks again, soon
