@@ -58,8 +58,10 @@ class Stream:
         self.status = self.response.status
         self.events = queue.Queue()
         self.seen = []
+        self.reader = None
         if self.status == 200:
-            threading.Thread(target=self._read, daemon=True).start()
+            self.reader = threading.Thread(target=self._read, daemon=True)
+            self.reader.start()
         else:
             self.body = json.loads(self.response.read() or b"{}")
 
@@ -110,10 +112,14 @@ class Stream:
         return out
 
     def close(self):
+        """End the read, wait for the reader, then close: closing under a reader still in http.client's chunked read
+        makes that read raise on the file it just lost."""
         try:
             self.response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
         except (AttributeError, OSError):
             pass
+        if self.reader:
+            self.reader.join(timeout=10)
         self.conn.close()
 
 

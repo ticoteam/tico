@@ -8179,6 +8179,21 @@ HELD_OPERATOR_REVIEW_TITLE = "Review {display_name}'s unresolved interrupted run
 # The operator review's title carries the bot's display name, which is neither unique nor fixed, so its body names the
 # bot's slug too and the stall guard reads that first.
 HELD_OPERATOR_REVIEW_BOT = "Bot: {slug}."
+# A keeper-filed task about one bot says which in its body by the id, the one name a rename leaves as it is: its title is
+# for people and carries a slug or a display name (bot_review_tasks).
+BOT_REVIEW_ID = "Bot id: {id}."
+_BOT_REVIEW_ID = re.compile(r"^Bot id: (\S+)\.$", re.M)
+
+
+def bot_review_tasks(conn, bot_id, owner, title):
+    """The tasks `owner` holds about this bot, the ones still open first and then newest first: those whose body names
+    its id, and one filed before bodies did under the title the bot has now, unless its body names another bot."""
+    rows = conn.execute("SELECT id,body,status FROM tasks WHERE owner_id=? AND "
+                        "(title=? OR (requester_id=? AND instr(body,?)>0)) "
+                        "ORDER BY (status IN ('open','doing','waiting','review','ready')) DESC,created_at DESC",
+                        (owner, title, KEEPER, BOT_REVIEW_ID.format(id=bot_id))).fetchall()
+    named = ((row, _BOT_REVIEW_ID.search(str(row["body"] or ""))) for row in rows)
+    return [row for row, mark in named if not mark or mark.group(1) == bot_id]
 
 
 def held_review_bot(conn, row):
@@ -8188,14 +8203,19 @@ def held_review_bot(conn, row):
     title = str(row["title"] or "")
     if row["requester_id"] != KEEPER or not _has_table(conn, "jobs"):
         return None
-    if title.startswith(prefix) and title.endswith(suffix) and len(title) > len(prefix) + len(suffix):
+    owner_prefix, owner_suffix = "Review ", "'s unresolved interrupted runs"
+    botops_review = title.startswith(prefix) and title.endswith(suffix) and len(title) > len(prefix) + len(suffix)
+    if not botops_review and not (title.startswith(owner_prefix) and title.endswith(owner_suffix)):
+        return None
+    body = conn.execute("SELECT body FROM tasks WHERE id=?", (row["id"],)).fetchone()
+    body = str(body["body"] or "") if body else ""
+    by_id = _BOT_REVIEW_ID.search(body)
+    if by_id:
+        slug = by_id.group(1)
+    elif botops_review:
         slug = title[len(prefix):-len(suffix)]
     else:
-        owner_prefix, owner_suffix = "Review ", "'s unresolved interrupted runs"
-        if not title.startswith(owner_prefix) or not title.endswith(owner_suffix):
-            return None
-        body = conn.execute("SELECT body FROM tasks WHERE id=?", (row["id"],)).fetchone()
-        named = re.search(r"^Bot: (\S+)\.$", str(body["body"] or "") if body else "", re.M)
+        named = re.search(r"^Bot: (\S+)\.$", body, re.M)
         if named:
             slug = named.group(1)
         else:

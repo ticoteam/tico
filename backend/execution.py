@@ -5413,9 +5413,10 @@ class Execution:
         if not c.execute("SELECT 1 FROM jobs j WHERE j.bot_id=? AND j.state='uncertain' AND NOT EXISTS "
                          "(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id)",
                          (bot,)).fetchone():
-            for task in c.execute("SELECT id FROM tasks WHERE owner_id=? AND title=? "
-                                  "AND status IN ('open','doing','waiting','review','ready')",
-                                  (H.bot_actor(H.FLEET_MAINTAINER), H.HELD_REVIEW_TITLE.format(bot=(H.bot(c, bot) or {}).get("slug", bot)))).fetchall():
+            title = H.HELD_REVIEW_TITLE.format(bot=(H.bot(c, bot) or {}).get("slug", bot))
+            for task in H.bot_review_tasks(c, bot, H.bot_actor(H.FLEET_MAINTAINER), title):
+                if task['status'] not in ('open', 'doing', 'waiting', 'review', 'ready'):
+                    continue
                 H.task_update(c, H.KEEPER, task['id'], status='done', quiet=True,
                               note='Recovery decisions saved. Tico applies deferred choices when the lane frees.')
 
@@ -5880,9 +5881,7 @@ class Execution:
         title = H.HELD_REVIEW_TITLE.format(bot=label)
         did = reason or (f"used {', '.join(acted)}" if acted else "ran on a host that does not report its tool calls")
         about = f" on the task \"{task['title']}\" (owner {owner_name(c, task['owner_id'])})" if task else ""
-        review = c.execute("SELECT id,body,status FROM tasks WHERE title=? AND owner_id=? "
-                           "ORDER BY (status IN ('open','doing','waiting','review','ready')) DESC,created_at DESC "
-                           "LIMIT 1", (title, H.bot_actor(maintainer))).fetchone()
+        review = next(iter(H.bot_review_tasks(c, row['bot_id'], H.bot_actor(maintainer), title)), None)
         if review:
             if review['status'] in ('done', 'closed', 'declined'):
                 try:
@@ -5921,7 +5920,8 @@ class Execution:
                           f"rather than repeat a possible outside action.{still}\n"
                           f"Read GET bots/{label}/execution-review (the request, its tool calls and saved output), check what "
                           "already happened, then resume or dismiss each held run with POST jobs/<id>/reconcile. "
-                          "The review is done once all choices are saved; Tico applies deferred choices when the lane frees.",
+                          "The review is done once all choices are saved; Tico applies deferred choices when the lane frees.\n\n"
+                          + H.BOT_REVIEW_ID.format(id=row['bot_id']),
                           H.bot_actor(maintainer))
         except H.Refused:
             pass
@@ -5937,15 +5937,16 @@ class Execution:
             return
         display_name = bot.get('display_name') or bot.get('slug') or row['bot_id']
         title = H.HELD_OPERATOR_REVIEW_TITLE.format(display_name=display_name)
-        tasks = c.execute("SELECT id,body FROM tasks WHERE title=? AND owner_id=? AND status IN "
-                          "('open','doing','waiting','review','ready') ORDER BY created_at", (title, owner)).fetchall()
+        tasks = [t for t in H.bot_review_tasks(c, row['bot_id'], owner, title)
+                 if t['status'] in ('open', 'doing', 'waiting', 'review', 'ready')]
         boundary = ("Tico cannot show BotOps this interrupted run because only the bot's owner or operator can inspect "
                     "interrupted-run details. BotOps has made no recovery decision. Review the run through the bot's "
                     "interrupted-run review and choose only after checking what already happened.")
         named = H.HELD_OPERATOR_REVIEW_BOT.format(slug=bot.get('slug') or row['bot_id'])
+        by_id = H.BOT_REVIEW_ID.format(id=row['bot_id'])
         if tasks:
             existing = tasks[0]
-            missing = [part for part in (boundary, named) if part not in str(existing['body'] or '')]
+            missing = [part for part in (boundary, named, by_id) if part not in str(existing['body'] or '')]
             if missing:
                 body = "\n\n".join([str(existing['body'] or '').rstrip(), *missing]).strip()
                 try:
@@ -5957,7 +5958,7 @@ class Execution:
         if again:
             job_line += " The earlier review task was closed while the run remained unresolved."
         try:
-            H.task_create(c, H.KEEPER, title, boundary + job_line + "\n\n" + named, owner, private=True)
+            H.task_create(c, H.KEEPER, title, boundary + job_line + "\n\n" + named + "\n" + by_id, owner, private=True)
         except H.Refused:
             pass
 
@@ -5968,14 +5969,15 @@ class Execution:
             return
         label = (H.bot(c, row['bot_id']) or {}).get('slug', row['bot_id'])
         title = f"Find why {label}'s runs keep stopping"
-        if c.execute("SELECT 1 FROM tasks WHERE title=? AND status IN ('open','doing','waiting','review','ready')",
-                     (title,)).fetchone():
+        if any(t['status'] in ('open', 'doing', 'waiting', 'review', 'ready')
+               for t in H.bot_review_tasks(c, row['bot_id'], H.bot_actor(maintainer), title)):
             return
         # The request's words stay out, as in _hand_to_maintainer: its attempts hold them behind the usual reads.
         try:
             H.task_create(c, H.KEEPER, title,
                           f"Job {row['id']} stopped partway twice and was dismissed.\n"
-                          f"Read its attempts (`hub sql`), fix the cause, and send the request again if it still matters.",
+                          f"Read its attempts (`hub sql`), fix the cause, and send the request again if it still matters.\n\n"
+                          + H.BOT_REVIEW_ID.format(id=row['bot_id']),
                           H.bot_actor(maintainer))
         except H.Refused:
             pass

@@ -140,6 +140,40 @@ def capped(c, task):
     c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
 
 
+def test_a_bot_renamed_while_its_review_is_open_gets_no_second_review(api):
+    """The title carries the slug, so a lookup by title missed after a rename and BotOps got a second task for the bot."""
+    machine, message, first = held(api)
+    [review] = reviews(api)
+    with api.app.state.store.transaction() as c:
+        H.rename_bot(c, 'ops', 'ops-renamed')
+    with api.app.state.store.transaction() as c:
+        job = c.execute("SELECT * FROM jobs WHERE id=?", (first['job_id'],)).fetchone()
+        another = {**dict(job), 'id': 'job-after-the-rename'}
+        msg = H.message(c, message['id'])
+        api.app.state.execution._hand_to_maintainer(c, another, msg, None, ['Bash'])
+        row = H.task(c, review['id'])
+        assert H.held_review_bot(c, row) == job['bot_id']            # the stall check still reads it as this bot's
+    assert [r['id'] for r in reviews(api)] == [review['id']]
+    assert naming(api, review['id'], 'job-after-the-rename')
+
+
+def test_the_next_bot_to_take_a_renamed_bots_slug_gets_a_review_of_its_own(api):
+    """The two bots' reviews share a title, and the id in the body tells them apart."""
+    machine, message, first = held(api)
+    execution, maintainer = api.app.state.execution, H.bot_actor(H.FLEET_MAINTAINER)
+    with api.app.state.store.transaction() as c:
+        job, msg = dict(c.execute("SELECT * FROM jobs WHERE id=?", (first['job_id'],)).fetchone()), H.message(c, message['id'])
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('b-old', 'acme-ops', 'Old', 'active')")
+        execution._hand_to_maintainer(c, {**job, 'id': 'job-old', 'bot_id': 'b-old'}, msg, None, ['Bash'])
+        H.rename_bot(c, 'b-old', 'acme-support')
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('b-new', 'acme-ops', 'New', 'active')")
+        execution._hand_to_maintainer(c, {**job, 'id': 'job-new', 'bot_id': 'b-new'}, msg, None, ['Bash'])
+        rows = [dict(r) for r in c.execute("SELECT id,title,body FROM tasks WHERE owner_id=? AND title LIKE '%acme-ops%' "
+                                           "ORDER BY rowid", (maintainer,))]
+        assert [H.held_review_bot(c, H.task(c, r['id'])) for r in rows] == [None, None]    # no run of theirs is held
+    assert len(rows) == 2 and 'job-old' in rows[0]['body'] and 'job-new' in rows[1]['body']
+
+
 def test_the_stall_check_does_not_close_a_review_while_its_runs_are_still_held(api):
     machine, message, attempt = held(api)
     [review] = reviews(api)
