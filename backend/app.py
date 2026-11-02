@@ -3079,7 +3079,7 @@ def create_app(settings=None):
                 except Problem:
                     pass
         return ask_ingest.preflight(store, app.state.judge, who, body.to, title, body.text,
-                                    kind="question" if tref else "loose")
+                                    kind="question" if tref else "loose", asked=(body.refs or {}).get("questions"))
 
     def message_write(c, who, body, rc=None, ingest=None, files=None):
         """One message, as every route that sends one writes it (`/messages`, a conversation's `/messages`) and Send
@@ -5135,7 +5135,8 @@ def create_app(settings=None):
         if not body.ask or not ask_ingest.gated(who, settings.assistant_bot) or not (row := readable_task(who, tid)):
             return None
         asked = body.ask.who or (row["owner_id"] if who.actor == row["requester_id"] else row["requester_id"])
-        return ask_ingest.preflight(store, app.state.judge, who, asked, row["title"], body.text, kind="question")
+        return ask_ingest.preflight(store, app.state.judge, who, asked, row["title"], body.text, kind="question",
+                                    asked=[q.model_dump() for q in body.ask.questions])
 
     def rule_prepare_comment(store_, bot, replay):
         return comment_ingest(bot, replay["task"], M.TaskComment.model_validate(replay["body"]))

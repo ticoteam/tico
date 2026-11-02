@@ -15,6 +15,8 @@ from backend import hubdb as H
 from backend.tests.test_api import unrelated_task_managers
 from backend.tests.test_task_guest import run_on
 from backend.tests.test_task_guest import task as private_task
+from backend.tests.test_api import setup_attempt  # noqa: F401
+from backend.tests.test_file_reviews import publish
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post   # noqa: F401
 
 
@@ -1142,3 +1144,175 @@ def test_a_settings_read_that_always_fails_still_lands_a_failed_open_row(gate, m
     assert (item["outcome"], item["would"], item["reason"]) == (A.FAILED_OPEN, A.FAILED_OPEN, "error")
     assert item["ref"] == out["task"]["id"] and item["call_id"] is None
     assert not calls(api) and not model.calls
+
+
+# ---- what the model reads for a structured question (Dev 724) --------------------------------------------------
+
+DATES = [{"id": "date", "header": "Date", "question": "Which launch date do you want?",
+          "why": "It sets the venue deposit.",
+          "options": [{"label": "Nov 3", "then": "Book the venue for Nov 3", "description": "The earlier date"},
+                      {"label": "Nov 10", "then": "Book the venue for Nov 10", "recommended": True}]}]
+
+
+def model_text(model):
+    return model.calls[-1]["state"]["item"]["text"]
+
+
+def test_a_structured_task_question_carries_its_lines_and_the_task_body(gate):
+    api, model, token = gate
+    r = api.post("/api/v2/task-questions", headers=headers(token), json={
+        "on": "human:ben", "question": "Which launch date do you want?", "why": "It sets the venue deposit.",
+        "body": "Dates and venue.",
+        "options": [{"label": "Nov 3", "then": "Book Nov 3"}, {"label": "Nov 10", "then": "Book Nov 10", "recommended": True}]})
+    assert r.status_code == 200, r.text
+    assert model_text(model) == (
+        "Question: Which launch date do you want?\n"
+        "Why: It sets the venue deposit.\n"
+        "Option: Nov 3 (then: Book Nov 3)\n"
+        "Option: Nov 10 (then: Book Nov 10)\n"
+        "Recommended: Nov 10\n\n"
+        "Dates and venue.")
+    assert model.calls[-1]["state"]["item"]["title"] == "Which launch date do you want?"
+
+
+def test_a_structured_comment_ask_carries_its_lines(gate):
+    api, model, token = gate
+    tid = own_task(api, token)["id"]
+    r = api.post(f"/api/v2/tasks/{tid}/comments", headers=headers(token),
+                 json={"text": "Dates and venue.", "ask": {"questions": DATES, "who": "ben"}})
+    assert r.status_code == 200, r.text
+    assert model_text(model).startswith("Question: Which launch date do you want?\nWhy: It sets the venue deposit.\n")
+    assert model_text(model).endswith("Recommended: Nov 10\n\nDates and venue.")
+
+
+def test_a_long_task_body_is_cut_and_the_lines_and_options_survive(gate):
+    api, model, token = gate
+    r = api.post("/api/v2/task-questions", headers=headers(token), json={
+        "on": "human:ben", "question": "Which launch date do you want?", "why": "It sets the venue deposit.",
+        "body": "Long context. " * 300,
+        "options": [{"label": "Nov 3", "then": "Book Nov 3"}, {"label": "Nov 10", "then": "Book Nov 10", "recommended": True}]})
+    assert r.status_code == 200, r.text
+    text = model_text(model)
+    assert len(text) == A.MAX_TEXT
+    assert text.startswith("Question: Which launch date do you want?\nWhy: It sets the venue deposit.\n"
+                           "Option: Nov 3 (then: Book Nov 3)\nOption: Nov 10 (then: Book Nov 10)\n"
+                           "Recommended: Nov 10\n\nLong context.")
+
+
+def test_an_item_without_structured_questions_is_judged_as_before(gate):
+    api, model, token = gate
+    text = "Which venue do you want? " * 100
+    r = api.post("/api/v2/messages", headers=headers(token), json={"to": "ben", "text": text, "kind": "ask"})
+    assert r.status_code == 200, r.text
+    assert model.calls[-1]["state"]["item"]["text"] == text[:A.MAX_TEXT]
+    assert A.structured_text(None, "plain") == "plain" and A.structured_text([], "plain") == "plain"
+
+
+def test_the_largest_question_set_keeps_every_question_option_and_recommendation(gate):
+    """The schema's largest set: four questions of 300 characters, six options of 60 each, each with a why and a then.
+    The lines are never cut, so every question, option and recommended option reads, in order, with no body."""
+    qs = []
+    for q in range(1, 5):
+        options = [{"label": f"Q{q} option {o} " + "L" * 45, "then": f"Q{q} then {o} " + "T" * 100,
+                    "recommended": o == 6} for o in range(1, 7)]
+        qs.append({"question": f"Q{q} " + "Q" * 296, "why": f"Q{q} why " + "W" * 190, "options": options})
+    text = A.structured_text(qs, "Body")
+    cursor = 0
+    for q in qs:
+        for needle in [q["question"][:300], "Why: " + q["why"][:200]]:
+            cursor = text.index(needle, cursor) + len(needle)
+        for option in q["options"]:
+            cursor = text.index(f"Option: {option['label'][:60]}", cursor) + 1
+        cursor = text.index(f"Recommended: {q['options'][5]['label'][:60]}", cursor) + 1
+    assert len(text) > A.MAX_TEXT and text.count("Recommended:") == 4
+    assert "Body" not in text, "the lines are never cut to make room for a body"
+
+
+def ana_gate(api):
+    """Ana, asked by a bot's file review, with the filter On and a fake model."""
+    model = FakeModel()
+    api.app.state.judge = model
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ana", "human:ana", {"mode": "on", "budget": 10, "chores_budget": 5,
+                                             "criteria": A.DEFAULTS["criteria"]})
+    return model
+
+
+def test_a_file_review_question_is_judged_with_the_choices_it_shows(api):
+    _, _, attempt = setup_attempt(api)
+    model = ana_gate(api)
+    v1 = publish(api, attempt["token"], "# Cut one")
+    r = api.post("/api/v2/task-questions", headers=headers(attempt["token"]),
+                 json={"on": "ana", "question": "Is this cut ready?", "review": [{"file": v1["id"]}]})
+    assert r.status_code == 200, r.text
+    assert model_text(model) == ("Question: Is this cut ready?\n"
+                                 "Option: Approve (then: This version is approved)\n"
+                                 "Option: Request changes (then: Your note on what to change goes back)")
+
+
+def test_a_picked_file_review_judges_one_choice_per_file(api):
+    _, _, attempt = setup_attempt(api)
+    model = ana_gate(api)
+    v1, v2 = publish(api, attempt["token"], "# Cut one"), publish(api, attempt["token"], "# Cut two", name="cut-2.md")
+    r = api.post("/api/v2/task-questions", headers=headers(attempt["token"]),
+                 json={"on": "ana", "question": "Which cut ships?", "pick": True,
+                       "review": [{"file": v1["id"]}, {"file": v2["id"]}]})
+    assert r.status_code == 200, r.text
+    lines = model_text(model).split("\n")
+    assert lines[0] == "Question: Which cut ships?"
+    assert lines[-1].startswith("Option: Request changes")
+    assert sum(line.startswith("Option: ") and "then: This one is approved" in line for line in lines) == 2
+
+
+def test_a_task_question_replays_with_the_body_it_was_judged_with(gate):
+    """A task question's body is judged live and lives on its task, which is the bot's: Replay reads it from there."""
+    api, model, token = gate
+    body = ("Dates and venue, with the context the person needs. " * 4).strip()
+    r = api.post("/api/v2/task-questions", headers=headers(token), json={
+        "on": "human:ben", "question": "Which launch date do you want?", "why": "It sets the venue deposit.",
+        "body": body,
+        "options": [{"label": "Nov 3", "then": "Book Nov 3"}, {"label": "Nov 10", "then": "Book Nov 10", "recommended": True}]})
+    assert r.status_code == 200, r.text
+    live = model_text(model)
+    head, rest = live.split("\n\n", 1)
+    assert head.endswith("Recommended: Nov 10") and rest == body
+    out = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": H.now()[:10]},
+                   headers=headers("ben-test"))
+    assert out.status_code == 200, out.text
+    assert model_text(model) == live
+    assert model.calls[-1]["state"]["item"]["title"] == "Which launch date do you want?"
+
+
+def test_a_comment_ask_that_names_its_question_decision_replays_its_comment_not_the_task_body(gate):
+    """Only a task question is replayed with its task's body. A client can name its question `decision` on a comment,
+    which must not make Replay read the task's body in place of the comment (QA, Dev 724)."""
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "rehearsal", "budget": 10, "chores_budget": 5, "criteria": []})
+    tid = own_task(api, token)["id"]
+    decision = [dict(DATES[0], id="decision")]
+    r = api.post(f"/api/v2/tasks/{tid}/comments", headers=headers(token),
+                 json={"text": "Tell me which date.", "ask": {"questions": decision, "who": "ben"}})
+    assert r.status_code == 200, r.text
+    live = model_text(model)
+    assert live.endswith("Recommended: Nov 10\n\nTell me which date.")
+    out = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": H.now()[:10]}, headers=headers("ben-test"))
+    assert out.status_code == 200, out.text
+    assert model_text(model) == live
+    assert "Plan the November launch" not in model_text(model)
+
+
+def test_a_replayed_structured_question_judges_the_same_lines(gate):
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "rehearsal", "budget": 10, "chores_budget": 5, "criteria": []})
+    tid = own_task(api, token)["id"]
+    r = api.post(f"/api/v2/tasks/{tid}/comments", headers=headers(token),
+                 json={"text": "Tell me which date.", "ask": {"questions": DATES, "who": "ben"}})
+    assert r.status_code == 200, r.text
+    day = H.now()[:10]
+    out = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day}, headers=headers("ben-test"))
+    assert out.status_code == 200, out.text
+    assert model_text(model).endswith("Recommended: Nov 10\n\nTell me which date.")
+    assert model.calls[-1]["label"] and '"mode": "replay"' in str(calls(api)[-1])
+    assert all("Recommended" not in str(row) and "Tell me" not in str(row) for row in calls(api))
