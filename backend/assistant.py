@@ -125,7 +125,7 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         owner = str(fields.get("owner") or "").strip()
         return _mine(actor, owner) or bool(direct and (owner.startswith("human:")
                                                        or (to_bot and to_bot(owner))))
-    if "owner_id" in fields and not _mine(actor, fields["owner"]):
+    if "owner" in fields and not _mine(actor, fields["owner"]):
         return False
     return bool(owns and owns(updating.group(1), False))
 
@@ -649,7 +649,7 @@ def describe(c, method, path, body):
         # so a long or crafted field (padding, "card; amount: 9") can't push a later one out or pose as it.
         payload = row.get("payload") or {}
         detail = "; ".join(f"{field_value(k, 40)}: “{field_value(payload[k])}”" for k in approval_fields(payload))
-        return (f"{verb} the {row['kind']} approval requested by {who(row['requested_by'])}"
+        return (f"{verb} the {row['kind']} approval requested by {who(row['requested_by_id'])}"
                 + (f" ({detail})" if detail else "") + f", {age(row['created_at'])}"
                 + (f"; reason: {preview(body['note'], 120)}" if body.get("note") else ""))
 
@@ -1692,7 +1692,7 @@ def install(app, store, auth, mutate, onboarding):
                     raise Problem("forbidden", "That approval is not addressed to you", 403)
                 if row["decision"]:
                     raise Problem("conflict", f"Approval {aid} is already decided", 409)
-                if row["requested_by"] == "bot:" + bot:
+                if row["requested_by_id"] == "bot:" + bot:
                     raise Problem("own_request", "You asked for this approval yourself, so it stays the person's "
                                   "click: propose it on a card (`hub assistant propose`)", 403)
                 if row["kind"] == "support":

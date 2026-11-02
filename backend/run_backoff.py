@@ -163,7 +163,7 @@ def too_long(c, settings, row, conversation_id, aid):
     """A run failed because its session's prompt was too large to send. A thread's first such failure marks it, and its
     next claim carries `compact_first` once (`take_compact`): the runner compacts the session before it runs. A run
     that already carried it and failed the same way again has a session compaction cannot save, so it starts anew."""
-    bot = row["bot"]
+    bot = row["bot_id"]
     if c.execute("SELECT 1 FROM compact_first WHERE bot=? AND conversation_id=? AND taken_by=?",
                  (bot, conversation_id, aid)).fetchone():
         c.execute("DELETE FROM compact_first WHERE bot=? AND conversation_id=?", (bot, conversation_id))
@@ -299,7 +299,7 @@ def failed(c, settings, row, body, aid, now=None):
     now = now or H.now()
     if not fast(row, now):
         return None
-    bot = row["bot"]
+    bot = row["bot_id"]
     text = (texts(c, aid, body) or [""])[0]
     kind = error_class(text)
     error = " ".join(text.split())[:ERROR_CHARS]

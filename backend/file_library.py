@@ -321,7 +321,7 @@ class Library:
         value = self.files.view(c, who, r, caches)
         page = r["page_cadence"] is not None
         value.update(kind_label=KINDS[library_kind(r["kind"], page)], library_kind=library_kind(r["kind"], page),
-                     bot_name=known.get("bot:" + r["bot"], r["bot"]), actor_name=known.get(value.get("actor") or "", ""),
+                     bot_name=known.get("bot:" + r["bot_id"], r["bot_id"]), actor_name=known.get(value.get("actor") or "", ""),
                      page={"cadence": r["page_cadence"], "archived": bool(r["page_archived"])} if page else None,
                      archived=bool(r["archived"] or (page and r["page_archived"])),
                      pins=self._pins(c, who, r["id"], caches["task"]))
@@ -419,10 +419,10 @@ class Library:
                     break
             out.sort(key=lambda pair: (-pair[0], pair[1]["title"].casefold()))
             out = out[:limit]
-            known = names.lookup(c, {"bot:" + r["bot"] for _, r in out})
+            known = names.lookup(c, {"bot:" + r["bot_id"] for _, r in out})
             return {"results": [{"id": r["id"], "title": r["title"], "kind": r["kind"],
                                  "library_kind": library_kind(r["kind"], r["page_cadence"] is not None),
-                                 "bot": r["bot"], "bot_name": known.get("bot:" + r["bot"], r["bot"]),
+                                 "bot": r["bot_id"], "bot_name": known.get("bot:" + r["bot_id"], r["bot_id"]),
                                  "version": r["current_version"], "updated_at": r["last_activity_at"],
                                  "url": r["url"] if r["locator"] == "remote_link" else None,
                                  "page": r["page_cadence"] is not None,

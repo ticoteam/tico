@@ -350,7 +350,7 @@ def pages_for(ctx, team="", limit=5):
 
 
 def page_brief(row):
-    return {"file_id": row["id"], "title": row["title"], "bot": row["bot"], "updated_at": row["last_activity_at"],
+    return {"file_id": row["id"], "title": row["title"], "bot": row["bot_id"], "updated_at": row["last_activity_at"],
             "archived": bool(row["archived"])}
 
 
@@ -609,7 +609,7 @@ def check_item(ctx, kind, item):
         row = card_row(ctx.c, ident)
         if not row:
             raise Problem("not_found", "No such card", 404)
-        if who.role == "bot" and row["made_by"] != who.actor:
+        if who.role == "bot" and row["made_by_id"] != who.actor:
             raise Problem("forbidden", "A bot pins only cards it made", 403)
         return
     if what != "page":
@@ -754,7 +754,7 @@ def may_edit_card(ctx, row):
         return True
     places = [r[0] for r in ctx.c.execute("SELECT place FROM pins WHERE item=?", ("card:" + row["id"],))]
     if not places:
-        return row["made_by"] == ctx.who.actor
+        return row["made_by_id"] == ctx.who.actor
     for place in places:
         try:
             kind, ident = parse(ctx, place)
@@ -774,7 +774,7 @@ def card_or_404(ctx, cid):
 
 def card_readable(ctx, row):
     """A card is known to whoever made it, may edit it, or sees a place it is pinned to."""
-    if row["made_by"] == ctx.who.actor or ctx.admin:
+    if row["made_by_id"] == ctx.who.actor or ctx.admin:
         return True
     for (place,) in ctx.c.execute("SELECT place FROM pins WHERE item=?", ("card:" + row["id"],)):
         try:

@@ -156,7 +156,7 @@ class Pages:
             prime_visible(c, list(found.values()))
             cache = {}
             shown = [found[i] for i in wanted if i in found and self.files.visible(c, who, found[i], cache)]
-            known = names.lookup(c, {"bot:" + r["bot"] for r in shown} | self._authors(c, shown))
+            known = names.lookup(c, {"bot:" + r["bot_id"] for r in shown} | self._authors(c, shown))
             return {"pages": [self.view(c, who, r, self.page_of(r), cache, known) for r in shown]}
 
     @staticmethod
@@ -247,19 +247,19 @@ class Pages:
         if count >= cards.PLACE_MAX or c.execute("SELECT 1 FROM pins WHERE place=? AND item=?", (place, item)).fetchone():
             return
         c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
-                  (H.new_id(), place, item, count, "medium", "bot:" + row["bot"], H.now()))
-        cards.file_activity(c, row["id"], "bot:" + row["bot"], "pinned", place)
+                  (H.new_id(), place, item, count, "medium", "bot:" + row["bot_id"], H.now()))
+        cards.file_activity(c, row["id"], "bot:" + row["bot_id"], "pinned", place)
 
     def may_manage(self, c, who, row):
         """The maintainer bot, the owner, bot administrators and the people above the bot on the org chart archive
         and restore a page; everyone else is refused."""
         if who.role == "bot":
-            return H.actor_id(who.actor) == row["bot"]
+            return H.actor_id(who.actor) == row["bot_id"]
         if who.role == "owner":
             return True
         if who.role != "human":
             return False
-        return self.auth.bot_admin(who) or self.auth.manages(c, who, "bot", row["bot"])
+        return self.auth.bot_admin(who) or self.auth.manages(c, who, "bot", row["bot_id"])
 
     def edit(self, request, fid, body):
         who = request.state.identity

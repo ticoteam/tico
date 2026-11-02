@@ -1664,7 +1664,7 @@ def view(c, who, settings, auth, github, config):
     for row in overdue:
         why = assigned_start.reason(c, row, settings, shared, suspect)
         text = assigned_start.description(c, row, settings, why)
-        assigned.append({'task': row['id'], 'bot_id': H.actor_id(row['owner']), 'name': row['title'],
+        assigned.append({'task': row['id'], 'bot_id': H.actor_id(row['owner_id']), 'name': row['title'],
                          'reason': why, 'text': text,
                          'fixes': [_fix('Open task', '#/tasks/' + row['id'])]})
     if assigned:
@@ -1834,7 +1834,7 @@ def view(c, who, settings, auth, github, config):
             usage, errors = {}, []
             for row in c.execute("SELECT t.owner_id,l.state,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND l.state<>'removed'"):
                 detail = json.loads(row['detail'] or '{}')
-                bot = H.actor_id(row['owner'])
+                bot = H.actor_id(row['owner_id'])
                 usage[bot] = usage.get(bot, 0) + detail.get('size_mb', 0)
                 if error := current_error(row['state'], detail):
                     errors.append(_bot_name(c, bot) + ': ' + error)
@@ -2109,9 +2109,9 @@ def view(c, who, settings, auth, github, config):
         "AND e.target=tasks.id AND e.created_at>=tasks.updated_at) ORDER BY updated_at", H.ACTIVE_STATUSES)
         if row["status"] != "waiting" or H.own_stuck_blockers(c, dict(row))]
     if stalled:
-        items = [{"bot_id": H.actor_id(row["owner"]), "name": row["title"][:200], "task": row["id"],
+        items = [{"bot_id": H.actor_id(row["owner_id"]), "name": row["title"][:200], "task": row["id"],
                   "quiet_minutes": quiet_minutes(row["updated_at"]),
-                  "text": f"#{row['number'] or row['id']} {row['title'][:200]} (owner {row['owner']}): "
+                  "text": f"#{row['number'] or row['id']} {row['title'][:200]} (owner {row['owner_id']}): "
                           f"no progress for {quiet_minutes(row['updated_at'])} min; check the recovery diagnosis or record the missing dependency",
                   "fix": "hub task show " + row["id"],
                   "fixes": [_fix("Open task", "#/tasks/" + row["id"])]}

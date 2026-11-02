@@ -218,7 +218,7 @@ def new_candidates(c, at):
     recent = {r[0] for r in c.execute("SELECT DISTINCT task_id FROM stale_suggestions WHERE created_at>?",
                                       (H.shift(at, days=-SUGGEST_EVERY_DAYS),))}
     return [(row, why) for row, why in candidates(c, at)
-            if judged.get(row["id"]) != mark(row) and row["id"] not in recent and _owner_reachable(c, row["owner"])]
+            if judged.get(row["id"]) != mark(row) and row["id"] not in recent and _owner_reachable(c, row["owner_id"])]
 
 
 # ----------------------------------------------------------------------------- what Decide sees
@@ -273,7 +273,7 @@ def _apply(c, row, why, verdict, confidence, at):
         return None
     action, bot_words, person_words = SUGGEST[verdict]
     sid = H.new_id()
-    if H.is_bot(row["owner"]):
+    if H.is_bot(row["owner_id"]):
         text = f"Stale check: {why}. Suggest: {bot_words}."
         H.task_comment(c, H.KEEPER, row["id"], text, extra_refs={"stale_check": sid, "wake": "stall"})
         after = H.task(c, row["id"])
@@ -282,7 +282,7 @@ def _apply(c, row, why, verdict, confidence, at):
         after, suggest = row, person_words
     c.execute("INSERT INTO stale_suggestions(id,task_id,owner,reason,verdict,action,suggest,confidence,mark,created_at) "
               "VALUES(?,?,?,?,?,?,?,?,?,?)",
-              (sid, row["id"], row["owner"], why, verdict, action, suggest, round(confidence, 3), mark(after), at))
+              (sid, row["id"], row["owner_id"], why, verdict, action, suggest, round(confidence, 3), mark(after), at))
     _judged(c, row["id"], after, verdict, at)
     return sid
 

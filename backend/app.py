@@ -5456,7 +5456,7 @@ def create_app(settings=None):
         who = request.state.identity
         def work(c):
             row = auth.approval(c, who, aid)
-            if row["requested_by"] != who.actor or row["payload_hash"] != body.payload_hash:
+            if row["requested_by_id"] != who.actor or row["payload_hash"] != body.payload_hash:
                 raise Problem("approval", "Consume requires the requester and exact approved payload", 403)
             return H.approval_consume(c, who.actor, aid)
         return mutate(request, body, work)

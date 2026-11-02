@@ -151,7 +151,7 @@ def approve(c, actor, task_id, operation, values, approval_id=None):
     # From here the approval is checked exactly; for the Strategy Bot whatever the setting, so any id is not enough.
     expected = publication_payload(task_id, operation, values)
     row = H.approval(c, approval_id) if approval_id else None
-    if not row or row['kind'] != 'publish' or row['requested_by'] != actor or row['task_id'] != task_id \
+    if not row or row['kind'] != 'publish' or row['requested_by_id'] != actor or row['task_id'] != task_id \
             or row['payload'] != expected or row['decision'] != 'approved' or row['consumed_at']:
         H.refuse(c, actor, 'approval', 'Public changes need an exact approved publish payload; '
                  'use POST /api/v2/tasks/{id}/publication-preview')

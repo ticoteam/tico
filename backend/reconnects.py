@@ -137,7 +137,7 @@ def open(c, task_id, bot, key, service, label, person, fix, message_id=None, own
     ensure(c)
     owner = owner or H.bot_actor(bot)
     row = H.task(c, task_id) if task_id else None
-    if (not row or row["owner"] != owner or not H.is_bot(owner) or row["status"] not in H.ACTIVE_STATUSES
+    if (not row or row["owner_id"] != owner or not H.is_bot(owner) or row["status"] not in H.ACTIVE_STATUSES
             or not person or not H.task_private_readable(c, person, row)):
         return None
     found = c.execute("SELECT * FROM task_reconnects WHERE task_id=? AND key=? AND fixed_at IS NULL",
@@ -359,11 +359,11 @@ def deliver(c, task_id, why="", cleared=None):
         task_holds.refresh(c, task_id)
         return False
     if not c.execute(f"SELECT 1 FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} LIMIT 1",
-                     (task_id, row["owner"])).fetchone():
+                     (task_id, row["owner_id"])).fetchone():
         return False
-    if not H._actor_exists(c, row["owner"]) or not H.task_private_readable(c, row["owner"], row):
+    if not H._actor_exists(c, row["owner_id"]) or not H.task_private_readable(c, row["owner_id"], row):
         return False
-    owed = _claim_owed(c, task_id, row["owner"])
+    owed = _claim_owed(c, task_id, row["owner_id"])
     if not owed:
         return False
     said = " ".join(_said(c, w) for w in owed)
@@ -372,15 +372,15 @@ def deliver(c, task_id, why="", cleared=None):
         note = f"{cleared}; nothing left to wait on" if cleared else said
         step = H._one(c, "SELECT status FROM task_steps WHERE id=?", (row.get("step_id"),))
         kept = row.get("step_id") if step and step["status"] in H.ACTIVE_STATUSES and step["status"] != "waiting" else None
-        H._set_status(c, H.KEEPER, row, "open", step=kept, note=note, skip_step_wake=(row["owner"],))
+        H._set_status(c, H.KEEPER, row, "open", step=kept, note=note, skip_step_wake=(row["owner_id"],))
         c.execute("UPDATE tasks SET note=?,version=version+1 WHERE id=?", (note, row["id"]))
         row = H.task(c, row["id"])
-        H._recount(c, row["owner"])
+        H._recount(c, row["owner_id"])
     keys = [w["key"] for w in owed]
     H.event(c, H.KEEPER, "task.reconnected", row["id"], {"keys": keys, "why": why})
     head = "Reconnected" if all(w["ended"] == "fixed" for w in owed) else "Reconnect card closed"
     text = f"{head}: {row['title']}\n{said}" + (f" {cleared}." if cleared else "") + " Continue."
-    if not H._wake(c, row, row["owner"], text, refs={WAKE_REF: keys[0], "reconnects": keys},
+    if not H._wake(c, row, row["owner_id"], text, refs={WAKE_REF: keys[0], "reconnects": keys},
                    trigger="status_or_relation", source=keys[0]):
         _unclaim(c, owed)
         return False

@@ -180,10 +180,10 @@ def file_visible(c, auth, who, row, cache):
         if version["attempt_id"] and not privacy.attempt_readable(c, privacy.actor(who), version["attempt_id"],
                                                                   memo=cache):
             return False
-    if who.role == "bot" and H.actor_id(who.actor) != row["bot"] and not row["scope"].startswith("task:"):
+    if who.role == "bot" and H.actor_id(who.actor) != row["bot_id"] and not row["scope"].startswith("task:"):
         return False
     # A bot-wide file is its bot's: one cache serves files of many bots (a card's latest pages).
-    key = ("bot", row["bot"]) if row["scope"] == "bot" else row["scope"]
+    key = ("bot", row["bot_id"]) if row["scope"] == "bot" else row["scope"]
     if key not in cache:
         kind, _, ident = row["scope"].partition(":")
         try:
@@ -191,7 +191,7 @@ def file_visible(c, auth, who, row, cache):
                 auth.task(c, who, ident)
             elif kind == "conversation":
                 auth.conversation(c, who, ident)
-            elif not auth.bot_access(c, who, row["bot"])["read"]:
+            elif not auth.bot_access(c, who, row["bot_id"])["read"]:
                 raise Problem("forbidden", "private", 403)
             cache[key] = True
         except Problem:
@@ -646,7 +646,7 @@ class Files:
                     raise Problem("not_found", "File not found", 404)
                 for task in linked:
                     row = self.auth.task(c, who, task["task_id"])
-                    if (who.actor not in (row["owner"], row["requester_id"])
+                    if (who.actor not in (row["owner_id"], row["requester_id"])
                             and not (who.role == "owner" or who.role == "human" and H.can_move(c, who.actor))):
                         raise Problem("forbidden", "Only a task participant or someone who can move it archives its attachments", 403)
                 c.execute("DELETE FROM task_assets WHERE blob_id=?", (fid,))
@@ -747,7 +747,7 @@ class Files:
         provider = row["provider"] or ""
         _, label = BF.provider_of(urlsplit(row["url"] or "").hostname or "") if link else ("", "")
         task = self.task_info(c, who, row["task_id"], caches["task"])
-        value = {**({k: version[k] for k in ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")} if version else {}), "id": row["id"], "bot": row["bot"], "title": row["title"], "kind": row["kind"], "mime": row["mime"],
+        value = {**({k: version[k] for k in ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")} if version else {}), "id": row["id"], "bot": row["bot_id"], "title": row["title"], "kind": row["kind"], "mime": row["mime"],
                  "locator": row["locator"], "scope": row["scope"].partition(":")[0], "version": row["current_version"],
                  "state": row["state"], "synced": synced, "size": version["size"] if version else None,
                  "name": version["name"] if version else None,
@@ -760,7 +760,7 @@ class Files:
                  "source": "s3" if row["identity"].startswith("s3:") else "",
                  "task_id": row["task_id"] if task else None, "task_title": task["title"] if task else None,
                  "working": bool(task and task["status"] == "doing"),
-                 "github_url": self.github_url(c, row["bot"], version, caches),
+                 "github_url": self.github_url(c, row["bot_id"], version, caches),
                  "actor": last["actor"] if last else None, "action": last["action"] if last else None,
                  "first_activity_at": row["first_activity_at"], "last_activity_at": row["last_activity_at"],
                  "archived": bool(row["archived"])}
@@ -818,7 +818,7 @@ class Files:
                 out.append({"version": v["version"], "current": v["version"] == row["current_version"], "name": v["name"],
                             "size": v["size"], "mime": v["mime"], "digest": v["source_digest"] or v["digest"],
                             "actor": v["actor"], "created_at": v["created_at"], "url": f"/api/v2/files/{fid}/versions/{v['version']}",
-                            "github_url": self.github_url(c, row["bot"], v, caches),
+                            "github_url": self.github_url(c, row["bot_id"], v, caches),
                             **{k: v[k] for k in ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")}})
             return {"file": fid, "versions": out}
 

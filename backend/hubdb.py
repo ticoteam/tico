@@ -8662,7 +8662,7 @@ def withdraw_task_approvals(conn, task_id, note):
 
 def _approval_facts(row):
     """What an outgoing webhook says of an approval: who asked, what kind, which task. Never the payload."""
-    return {"id": row["id"], "kind": row["kind"], "task_id": row.get("task_id"), "requested_by": row["requested_by"],
+    return {"id": row["id"], "kind": row["kind"], "task_id": row.get("task_id"), "requested_by_id": row["requested_by_id"],
             "decision_owner": row.get("decision_owner")}
 
 

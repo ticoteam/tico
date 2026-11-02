@@ -1153,7 +1153,7 @@ class Auth:
         if decide:
             allowed = who.role in ("owner", "human") and msg["recipient_id"] == who.actor
         else:
-            allowed = who.role == "owner" or who.actor in (row["requested_by"], msg["recipient_id"])
+            allowed = who.role == "owner" or who.actor in (row["requested_by_id"], msg["recipient_id"])
         if not allowed:
             raise Problem("forbidden", "This approval is not yours", 403)
         return row

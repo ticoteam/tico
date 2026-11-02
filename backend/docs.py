@@ -437,14 +437,14 @@ class Docs:
 
     # -------------------------------------------------------------- views
     def doc_view(self, c, row, body=True, names=None):
-        names = names if names is not None else label_names(c, [row["created_by"], row["updated_by"]])
+        names = names if names is not None else label_names(c, [row["created_by_id"], row["updated_by_id"]])
         out = {"id": row["id"], "path": row["path"], "title": row["title"],
-               "updated_at": row["updated_at"], "updated_by": row["updated_by"],
-               "updated_by_name": name_of(row["updated_by"], names),
+               "updated_at": row["updated_at"], "updated_by_id": row["updated_by_id"],
+               "updated_by_name": name_of(row["updated_by_id"], names),
                "locked": bool(row["locked"]), "version": row["version"]}
         if body:
-            out.update(body=row["body"], created_by=row["created_by"], created_at=row["created_at"],
-                       created_by_name=name_of(row["created_by"], names), archived=bool(row["archived"]))
+            out.update(body=row["body"], created_by_id=row["created_by_id"], created_at=row["created_at"],
+                       created_by_name=name_of(row["created_by_id"], names), archived=bool(row["archived"]))
         return out
 
     def get_row(self, c, ref):

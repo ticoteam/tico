@@ -98,7 +98,7 @@ def wanted(conn, owner_id, at=None, reads=None):
     owned = [dict(r) for r in conn.execute("SELECT * FROM kpis WHERE archived_at IS NULL ORDER BY created_at")]
     data = K.effective_many(conn, [r["id"] for r in owned])
     for record in owned:
-        who = _acts_for(record["owner"], owner_id)
+        who = _acts_for(record["owner_id"], owner_id)
         if K.auto(record["id"]):
             continue
         state = K.assess(record, None, data.get(record["id"], []), at)
@@ -137,26 +137,26 @@ def wanted(conn, owner_id, at=None, reads=None):
         goal = G.goal(conn, p["goal_id"]) if p["goal_id"] else None
         record = K.kpi(conn, p["kpi_id"]) if p["kpi_id"] else None
         if p["kind"] == "kpi_definition":
-            decides = record and record["owner"]
+            decides = record and record["owner_id"]
         else:
-            decides = (goal and goal["owner_id"]) or (record and record["owner"])
+            decides = (goal and goal["owner_id"]) or (record and record["owner_id"])
         org = org or _org(conn)
         who = _person(conn, decides, owner_id, org)
         if who:
             # A private task still exposes its title and body to its owner. Do not file a proposal
             # naming a bot-owned goal or KPI for a person who cannot read that bot.
-            if any(H.is_bot(r["owner"]) and not _may_read(reads, who, r["owner"])
+            if any(H.is_bot(r["owner_id"]) and not _may_read(reads, who, r["owner_id"])
                    for r in (goal, record) if r):
                 continue
             item = {"kind": "proposal", "ref": p["id"], "owner": who, "proposal": p,
                     "goal_title": goal and goal["title"], "kpi_name": record and record["name"]}
             used = K.kpi(conn, (p.get("payload") or {}).get("kpi_id")) if p["kind"] == "goal_kpi" else None
-            if used and not _may_read(reads, who, used["owner"]):
+            if used and not _may_read(reads, who, used["owner_id"]):
                 continue            # they may not add a measure they may not read (goal-proposals decide)
             if used:
                 item["measure_name"] = used["name"]     # an Add a KPI that reuses a measure names it
             # A bot's goal or measure named in the ask is its activity: the ask is the person's and the Strategy Bot's.
-            if p["kind"] in GOAL_KINDS and any(H.is_bot(r["owner"]) for r in (goal, record, used) if r):
+            if p["kind"] in GOAL_KINDS and any(H.is_bot(r["owner_id"]) for r in (goal, record, used) if r):
                 item["private"] = True
             items.append(item)
     for who, goals in whys.items():

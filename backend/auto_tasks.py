@@ -166,18 +166,18 @@ def prime_waits(c, rows):
           {(tid, *H.ACTIVE_STATUSES): first.get(tid) for tid in ids})
     # Open subtasks (wait_detail), and whether one has another owner (`waiting` when starting).
     kids, other = {tid: [] for tid in ids}, set()
-    owner_of = {r['id']: r['owner'] for r in rows}
+    owner_of = {r['id']: r['owner_id'] for r in rows}
     for row in batch("SELECT t.id,t.owner_id,t.title,t.status,r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
                      "WHERE r.kind='parent' AND r.to_task IN ({m}) ORDER BY t.created_at,t.id"):
         if row['status'] is not None and row['status'] not in ('done', 'closed', 'declined'):
             kids[row['to_task']].append(row)
-        if (row['status'] in H.ACTIVE_STATUSES and None not in (row['owner'], owner_of[row['to_task']])
-                and row['owner'] != owner_of[row['to_task']]):
+        if (row['status'] in H.ACTIVE_STATUSES and None not in (row['owner_id'], owner_of[row['to_task']])
+                and row['owner_id'] != owner_of[row['to_task']]):
             other.add(row['to_task'])
     prime_rows(c, H.OPEN_CHILDREN_SQL, {(tid,): found for tid, found in kids.items()})
     prime(c, OTHER_CHILD_SQL, {(tid, owner_of[tid]): (1,) if tid in other else None for tid in ids})
     # The owner's unanswered questions about each task (wait_detail), and what answered them (answers_to).
-    asks = {(r['owner'], r['id']): [] for r in rows}
+    asks = {(r['owner_id'], r['id']): [] for r in rows}
     for part in H.chunks(sorted({owner for owner, _ in asks})):
         for row in c.execute(
                 f"SELECT m.id,m.recipient_id,m.sender_id,{H.MESSAGE_TASK_SQL} task FROM messages m "
@@ -239,7 +239,7 @@ def maybe_waiting(c, rows):
     found("SELECT DISTINCT task_id FROM task_links WHERE task_id IN ({m}) AND kind='pr' "
           "AND state IN ('open','draft','merged') AND json_extract(detail,'$.wake_once') IS NOT NULL", ids)
     # an unanswered question the owner asked about the task: owner and task are matched in Python
-    pairs = {(r['owner'], r['id']) for r in rows if r['id'] not in suspect}
+    pairs = {(r['owner_id'], r['id']) for r in rows if r['id'] not in suspect}
     for part in H.chunks(sorted({actor for actor, _ in pairs})):
         for actor, tid in c.execute(
                 f"SELECT m.sender_id,{H.MESSAGE_TASK_SQL} FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
@@ -340,7 +340,7 @@ def waiting(c, row, starting=False, *, include_next_run=True, result=False):
     # A new parent and the work someone filed beneath it may share the same bot's session.
     # Let that session coordinate its own work; another owner's child remains an awaited result.
     if starting and why == 'an open child task':
-        return bool(one(c, OTHER_CHILD_SQL, (row['id'], row['owner'])))
+        return bool(one(c, OTHER_CHILD_SQL, (row['id'], row['owner_id'])))
     return bool(why)
 
 

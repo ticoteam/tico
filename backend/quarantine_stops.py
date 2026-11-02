@@ -35,9 +35,9 @@ def stop(c, row):
     it, and return the attempt read again. A Stop already recorded (a person's, or this one) stands."""
     if row["stop_requested_at"]:
         return row
-    said = line(c, row["bot"])
+    said = line(c, row["bot_id"])
     c.execute("UPDATE attempts SET stop_requested_at=? WHERE id=? AND stop_requested_at IS NULL", (H.KEEPER, row["id"]))
-    H.event(c, H.KEEPER, "attempt.stop", row["id"], {"bot": row["bot"], "quarantine": said})
+    H.event(c, H.KEEPER, "attempt.stop", row["id"], {"bot": row["bot_id"], "quarantine": said})
     return c.execute("SELECT a.*,x.runner_id AS assigned_runner,x.generation AS assigned_generation "
                      "FROM attempts a JOIN assignments x ON x.bot=a.bot_id WHERE a.id=?", (row["id"],)).fetchone()
 
