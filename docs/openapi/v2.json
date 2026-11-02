@@ -9545,6 +9545,18 @@
               "type": "string",
               "title": "Month"
             }
+          },
+          {
+            "name": "top_n",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 20,
+              "title": "Top N"
+            }
           }
         ],
         "responses": {

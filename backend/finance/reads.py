@@ -341,12 +341,18 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
             if cell.teammate:
                 spent[cell.teammate] = spent.get(cell.teammate, 0) + cell.amount
     budget: dict[str, list[int | None]] = {}
+    budget_to_date: dict[str, list[int | None]] = {}   # the current bucket's budget up to today; None elsewhere (§4.4)
     tops = _filter_budgets(s, f)
     versions = SB.versions(c, [b.id for b in tops], made_by)
     for b in tops:
         cols = [B.in_window(b, versions[b.id], bucket, fy) for bucket in buckets]
         row = budget.setdefault(b.account_id, [None] * len(buckets))
         budget[b.account_id] = [x if y is None else (y if x is None else x + y) for x, y in zip(row, cols, strict=False)]
+        to_date = [B.in_window(b, versions[b.id], (p, min(q, today)), fy) if _column_state(p, q, today) == "current"
+                   else None for p, q in buckets]
+        row = budget_to_date.setdefault(b.account_id, [None] * len(buckets))
+        budget_to_date[b.account_id] = [x if y is None else (y if x is None else x + y)
+                                        for x, y in zip(row, to_date, strict=False)]
     projection: dict[str, list[int]] = {}
     methods: dict[str, set[str]] = {}
     if buckets:
@@ -397,6 +403,7 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                      # "Payroll (private)" with no amount (§7.5): its budget is withheld too, since a narrow
                      # filter's payroll budget can be one person's planned pay.
                      "budget": None if hidden else budget.get(account_id),
+                     "budget_to_date": None if hidden else budget_to_date.get(account_id),
                      "projection": None if hidden else projection.get(account_id),
                      "projection_method": None if hidden else _method(methods.get(account_id))})
     if view == "expenses":
@@ -501,10 +508,11 @@ def _covered(scopes: Sequence[tuple[str, str]], team: str, teammate: str) -> boo
 
 
 def _with_spend(s: _Seen, rows: list[Row]) -> list[Row]:
-    """Rows with spend in the filter, a budget or a projection, and the lines above them."""
+    """Rows with actual spend in the filter, and the lines above them. A budget or a projection alone does not keep a
+    line (spec §12: lines with no spend in the filter are hidden); private rows stay."""
     keep: set[str] = set()
     for r in rows:
-        if r["private"] or any(r.get(k) and any(cast(list[object], r[k])) for k in ("actual", "budget", "projection")):
+        if r["private"] or (r.get("actual") and any(cast(list[object], r["actual"]))):
             at = str(r["account_id"])
             while at and at not in keep:
                 keep.add(at)
@@ -1163,10 +1171,12 @@ def _data_as_of(s: _Seen, money_ids: Sequence[str]) -> tuple[str | None, bool]:
     return oldest, age > timedelta(hours=STALE_HOURS)
 
 
-def _cash(s: _Seen) -> tuple[int, list[Row], list[str]]:
-    """Cash on the books in the money accounts that hold cash (bank, Stripe) the viewer sees, total and per account."""
+def _cash(s: _Seen, money_id: str | None = None) -> tuple[int, list[Row], list[str]]:
+    """Cash on the books in the money accounts that hold cash (bank, Stripe) the viewer sees, total and per account;
+    one money account when `money_id` is given."""
     rows = [r for r in SK.money_accounts(s.ctx.c, s.ctx.book.id)
-            if r["holds_cash"] and r["account_id"] and tab.sees_money_account(s.ctx, s.view, r)]
+            if r["holds_cash"] and r["account_id"] and tab.sees_money_account(s.ctx, s.view, r)
+            and (money_id is None or str(r["id"]) == money_id)]
     sums = SK.balances(s.ctx.c, s.ctx.book.id, s.ctx.today, sorted({str(r["account_id"]) for r in rows}))
     per: list[Row] = [{"money_account_id": str(r["id"]), "name": str(r["name"]), "balance": sums.get(str(r["account_id"]), 0),
             "provider_balance": r["balance"], "balance_as_of": r["balance_as_of"]} for r in rows]
@@ -1174,11 +1184,12 @@ def _cash(s: _Seen) -> tuple[int, list[Row], list[str]]:
     return sum(sums.get(g, 0) for g in by_gl), per, [str(r["id"]) for r in rows]
 
 
-def _net_burn(c: sqlite3.Connection, viewer: str, a: date, z: date, at: str | None) -> int:
+def _net_burn(c: sqlite3.Connection, viewer: str, a: date, z: date, at: str | None) -> tuple[int, bool]:
     """Cash burn over a window: cash-basis expenses minus cash-basis income the viewer sees (financing, being on the
-    balance sheet, never counts)."""
+    balance sheet, never counts), and whether private lines (payroll) were left out of it."""
     found = pnl(c, viewer, a.isoformat(), z.isoformat(), "year", "cash", at)
-    return sum(cast(list[int], found["expense"])) - sum(cast(list[int], found["income"]))
+    burn = sum(cast(list[int], found["expense"])) - sum(cast(list[int], found["income"]))
+    return burn, bool(found["excluded"])
 
 
 def _full_months(today: date, n: int) -> tuple[date, date]:
@@ -1195,8 +1206,9 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
            teammate: str | None = None, days: int | None = None, at: str | None = None) -> Row:
     """One number for a card, a goal or a bot (§7.2), cut to the viewer like every read, with `as_of` (when it was
     worked out) and, for numbers resting on bank data, `data_as_of` and `stale`. cash: the books' balance of the cash
-    accounts the viewer sees (per account in `accounts`); burn: cash out minus cash in this month (or the window);
-    runway_months: cash over the average burn of the last 3 full months (null when nothing burns); revenue, spend: the
+    accounts the viewer sees (per account in `accounts`, or the one money account `account_id` names); burn: cash out minus cash in this month (or the window);
+    runway_months: cash over the average burn of the last 3 full months (null when nothing burns, or when the viewer sees
+    a slice rather than company expenses: `scoped`); burn and runway say `excluded` when payroll was left out; revenue, spend: the
     window (this month by default); budget_remaining / budget_pct_used: one budget; ap_due: open bills due within
     `days` (default 7, overdue included); ar_overdue: invoices at least `days` (default 1) late;
     uncategorized_count: settled rows waiting for a category (last 90 days); unreconciled_days: days since the
@@ -1219,17 +1231,21 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
     if name in ("cash", "runway_months"):
         if not (s.view.everything or s.view.balance_sheet or s.view.bs_lines):
             raise denied("cash is on the balance sheet, the owner's unless granted")
-        total, per, money_ids = _cash(s)
+        cut = account_id if name == "cash" else None
+        total, per, money_ids = _cash(s, cut)
+        if cut and not per:
+            raise FinanceError(NOT_FOUND, "no such money account")
         data_as_of, stale = _data_as_of(s, money_ids)
         base.update({"data_as_of": data_as_of, "stale": stale})
         if name == "cash":
             return {**base, "value": total, "unit": "minor", "currency": currency, "accounts": per}
         a, z = _full_months(today, RUNWAY_MONTHS)
-        burn = _net_burn(c, viewer, a, z, at)
+        burn, excluded = _net_burn(c, viewer, a, z, at)
+        scoped = not s.view.company_expenses()    # company cash over a slice's burn is no company runway
         monthly = Decimal(burn) / RUNWAY_MONTHS
-        value = None if monthly <= 0 else str((Decimal(total) / monthly).quantize(Decimal("0.1")))
+        value = None if monthly <= 0 or scoped else str((Decimal(total) / monthly).quantize(Decimal("0.1")))
         return {**base, "value": value, "unit": "months", "cash": total, "monthly_burn": int(monthly),
-                "start": a.isoformat(), "end": z.isoformat()}
+                "start": a.isoformat(), "end": z.isoformat(), "excluded": excluded, "scoped": scoped}
     if name in ("ap_due", "ar_overdue"):
         kind = "bill" if name == "ap_due" else "invoice"
         if not tab_ap.sees_side(s.ctx, s.view, kind):
@@ -1261,8 +1277,9 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
         return {**base, "value": worst or 0, "unit": "days", "data_as_of": data_as_of, "stale": stale}
     a, z = _window(start, end, s.ctx)
     if name == "burn":
-        return {**base, "value": _net_burn(c, viewer, a, z, at), "unit": "minor", "currency": currency,
-                "start": a.isoformat(), "end": z.isoformat()}
+        burn, excluded = _net_burn(c, viewer, a, z, at)
+        return {**base, "value": burn, "unit": "minor", "currency": currency, "start": a.isoformat(),
+                "end": z.isoformat(), "excluded": excluded, "scoped": not s.view.company_expenses()}
     if name == "revenue":
         found = pnl(c, viewer, a.isoformat(), z.isoformat(), "year", "accrual", at)
         return {**base, "value": sum(cast(list[int], found["income"])), "unit": "minor", "currency": currency,
@@ -1737,8 +1754,9 @@ def _closable(c: sqlite3.Connection, ctx: Ctx) -> list[str]:
     return out
 
 
-def _checklist(s: _Seen, month: str) -> Row:
-    """What stands between a month and its close, for whoever does the books."""
+def _checklist(s: _Seen, month: str, top_n: int = 20) -> Row:
+    """What stands between a month and its close, for whoever does the books. The money accounts still behind are
+    listed up to `top_n`, and the rest fold into one "Other · n" row; `count` is always the whole number."""
     ctx = s.ctx
     first = dates.month(month)
     last = dates.month_end(first)
@@ -1750,10 +1768,15 @@ def _checklist(s: _Seen, month: str) -> Row:
     behind = [{"money_account_id": str(m["id"]), "name": str(m["name"]),
                "locked_through": SK.locked_through(ctx.c, str(m["id"])) or None} for m in live
               if (SK.locked_through(ctx.c, str(m["id"])) or "") < last.isoformat()]
+    top = max(1, min(int(top_n), MAX_TOP))
+    folded = behind[top:]
+    listed = behind[:top] + ([{"key": OTHER, "label": f"Other · {len(folded)}", "count": len(folded),
+                               "money_account_id": None, "name": f"Other · {len(folded)}", "locked_through": None}]
+                             if folded else [])
     rows, more = _uncategorized(s, first, last, INBOX_EACH)
     accrual = ctx.book.basis == "accrual"
     checks: list[Row] = [
-        {"key": "reconciled", "ok": not behind, "count": len(behind), "accounts": behind,
+        {"key": "reconciled", "ok": not behind, "count": len(behind), "accounts": listed,
          "label": "Every money account reconciled through month end"},
         {"key": "uncategorized", "ok": not rows, "count": len(rows), "more": more,
          "label": "Nothing left in Other expenses or uncategorized"}]
@@ -1779,7 +1802,8 @@ def _checklist(s: _Seen, month: str) -> Row:
             "checks": checks}
 
 
-def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | None = None) -> Row:
+def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | None = None, *,
+                    top_n: int = 20) -> Row:
     """A month's close checklist (§10): reconciled through month end, nothing uncategorized, receipts matched, draft
     bills entered, and notes for accruals and budget vs actual. `ready` is what finance.period.ready fires on (the
     first two, on an open month that has ended). For teammates with finance.book, cut to their view: only the money
@@ -1787,7 +1811,7 @@ def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | N
     s = _open(c, viewer, at)
     if not R.has(s.ctx.org, viewer, R.BOOK, s.ctx.rights(viewer)):
         raise denied("the close is for teammates who do the books")
-    return {**_checklist(s, dates.month(period).isoformat()[:7]), "view_version": s.view.version}
+    return {**_checklist(s, dates.month(period).isoformat()[:7], top_n), "view_version": s.view.version}
 
 
 def ready_months(c: sqlite3.Connection, at: str | None = None) -> list[str]:

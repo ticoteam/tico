@@ -499,10 +499,11 @@ def install(app, store, auth, mutate):
                                                    account_id=account_id, team=team, teammate=teammate, days=days))
 
     @app.get("/api/v2/finance/close/{month}")
-    def finance_close(request: Request, month: str):
-        """A month's close checklist, for teammates who do the books."""
+    def finance_close(request: Request, month: str, top_n: int = Query(20, ge=1, le=200)):
+        """A month's close checklist, for teammates who do the books. The money accounts still behind are listed up to
+        `top_n`; the rest fold into "Other · n"."""
         who = viewer(request)
-        return read(lambda c: finance_reads.close_checklist(c, who.actor, month))
+        return read(lambda c: finance_reads.close_checklist(c, who.actor, month, top_n=top_n))
 
     @app.get("/api/v2/finance/action-kinds")
     def finance_action_kinds(request: Request, kind: str | None = Query(None, max_length=80)):

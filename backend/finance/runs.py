@@ -17,7 +17,7 @@ from .store import tico
 from .store import usage as SU
 from .usage import cents, nano
 
-FLOOR = 5                       # cents held for a bot with no Gateway-billed history
+FLOOR = 5                       # cents held for a bot with no token-priced history
 RECENT_RUNS = 20
 RECENT_DAYS = 30
 EXPIRES_HOURS = 12              # a run that never reports back frees its hold after this
@@ -41,7 +41,8 @@ def scope_target(bot: str) -> str:
 
 
 def size(c: sqlite3.Connection, bot: str, at: str) -> int:
-    """Cents to hold for one run of `bot`: its recent average Gateway-billed cost, never under FLOOR."""
+    """Cents to hold for one run of `bot`: its recent average token-priced cost per run (any key, not a subscription),
+    never under FLOOR."""
     average = tico.bot_average_run(c, bot, tico.shift(at, days=-RECENT_DAYS), RECENT_RUNS)
     return max(FLOOR, cents(nano(average)) if average is not None else 0)
 

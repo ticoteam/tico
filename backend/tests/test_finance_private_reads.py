@@ -705,10 +705,10 @@ def test_a_child_budget_under_a_parent_with_a_hidden_figure_gets_one_outcome_for
     assert not any(ch.isdigit() for r in gus.values() for ch in r.reason), gus
 
 
-def test_a_retroactive_budget_change_gets_one_outcome_for_a_reader_whose_figure_for_that_period_is_not_true(books):
-    """A P&L grantee with the budgets right changes Other expenses back to October, in December. Their December figure is
-    true, but October's is not, and the fit reads October: every amount gets the owner's decision and no figure. The
-    owner still gets October's true fit (its 40.00 reserve is named below 4,000)."""
+def test_a_retroactive_budget_change_is_refused_the_same_way_for_a_reader_whose_figure_for_that_period_is_not_true(books):
+    """§12: only future periods are editable. A P&L grantee with the budgets right changes Other expenses back to
+    October, in December: every amount is refused the same way for the owner and for that reader, and the reason names
+    no figure, so the reader learns nothing from which amount was refused."""
     connect(books, FakeMercury())
     with books.transaction() as c:
         budget_id = _other_budget(c, at=AT)
@@ -720,12 +720,12 @@ def test_a_retroactive_budget_change_gets_one_outcome_for_a_reader_whose_figure_
         def change(amount: int, who: str, key: str) -> FA.ActionResult:
             return act(c, who, "budget_update", {"budget_id": budget_id, "amount": amount, "effective_from": "2026-10-01"},
                        key, dry_run=True, at=DEC)
-        owner = {amount: change(amount, OWNER, f"own-{amount}") for amount in (3_999, 4_000)}
-        gus = {amount: change(amount, "human:gus", f"gus-{amount}") for amount in (3_999, 4_000, 4_001, 9_000)}
-    assert owner[3_999].status == "failed" and "40.00" in owner[3_999].reason, owner[3_999]
-    assert owner[4_000].status == "committed", owner[4_000]
-    assert {r.status for r in gus.values()} == {"needs_approval"}, {a: r.status for a, r in gus.items()}
-    assert not any(ch.isdigit() for r in gus.values() for ch in r.reason), gus
+        owner = [change(amount, OWNER, f"own-{amount}") for amount in (3_999, 4_000)]
+        gus = [change(amount, "human:gus", f"gus-{amount}") for amount in (3_999, 4_000, 4_001, 9_000)]
+    results = owner + gus
+    assert {r.status for r in results} == {"failed"}, [r.status for r in results]
+    assert {r.code for r in results} == {"invalid"} and len({r.reason for r in results}) == 1, results
+    assert not any(ch.isdigit() for r in gus for ch in r.reason), gus
 
 
 def test_every_budget_and_card_fit_gives_a_reader_who_cannot_check_one_outcome_and_no_figure(books):

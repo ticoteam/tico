@@ -191,10 +191,11 @@ def test_a_raise_that_no_longer_fits_is_asked_again_of_the_manager_not_the_paren
         assert (grow.status, grow.approver) == ("needs_approval", "human:dan")
         assert act(c, OWNER, "budget_update", {"budget_id": kids["sales"], "amount": 3_000}).status == "committed"
         H.approval_decide(c, "human:dan", grow.approval_id, "approved")
-        # No raise is needed now, so Dan's approval is void: Cara's manager decides the change itself.
+        # No raise is needed now, so Dan's approval is void. The raise is still a raise in the current period, which
+        # goes to the web budget's owner (§12), not to Cara's manager.
         again = FA.approval_decided(c, grow.approval_id, AT)
-        assert (again.status, again.approver) == ("needs_approval", "human:ben")
-        H.approval_decide(c, "human:ben", again.approval_id, "approved")
+        assert (again.status, again.approver) == ("needs_approval", OWNER)
+        H.approval_decide(c, OWNER, again.approval_id, "approved")
         done = FA.approval_decided(c, again.approval_id, AT)
         assert done is not None and done.status == "committed"
         assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_000)
@@ -467,7 +468,8 @@ def test_a_settled_hold_draws_its_allocation_down_once(books):
 def test_rollover_carries_from_the_first_version(books):
     with books.transaction() as c:
         r = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 1_000,
-                                            "rollover": "unused", "effective_from": "2025-01-01"})
+                                            "rollover": "unused", "effective_from": "2025-01-01"},
+                   at="2025-01-01T12:00:00.000000Z")
         assert r.status == "committed", r
         assert FA.budget_state(c, str(r.result["budget_id"]), AT).amount == 22_000   # Oct 2026 + 21 months unused
 
