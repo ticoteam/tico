@@ -140,7 +140,7 @@ async function restrictPerson(hub) {
 
     // Priya, phone: the company thread is in the sidebar; tapping it opens the thread with its composer, and the page
     // does not scroll sideways.
-    const priya = await pageAs(browser, hub, 'priya', {phone: true});
+    const priya = await pageAs(browser, hub, 'priya', {phone: true, reducedMotion: true});
     await priya.goto(hub.url + '/#/tasks');
     await priya.locator('#th-list .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
     assert.equal(await priya.locator('#th-list .th-row-title', {hasText: 'Pricing war room'}).count(), 0);
