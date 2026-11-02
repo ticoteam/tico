@@ -964,14 +964,14 @@ def install(app, store, auth, mutate):
                         key = (room["room_key"] if room else "") or ""
                         meeting = key.startswith(ROOM_PREFIX) and c.execute(
                             "SELECT state FROM live_meetings WHERE id=?", (key[len(ROOM_PREFIX):],)).fetchone()
-                        out.append({'bot_id': item.bot, 'task': item.task,
+                        out.append({'bot': item.bot, 'task': item.task,
                                     'status': 'open' if meeting and meeting['state'] != 'ended' else 'done'})
                     continue
                 row = c.execute("SELECT t.status FROM tasks t WHERE t.id=? AND EXISTS (SELECT 1 FROM attempts a "
                                 "WHERE a.runner_id=? AND a.bot_id=? AND a.lane=?)",
                                 (item.task, who.runner_id, item.bot, 'task:' + item.task)).fetchone()
                 if row:
-                    out.append({'bot_id': item.bot, 'task': item.task, 'status': row['status']})
+                    out.append({'bot': item.bot, 'task': item.task, 'status': row['status']})
             return {'sessions': out}
 
     @app.get('/api/v2/runners/me/worktrees')

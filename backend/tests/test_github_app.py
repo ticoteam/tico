@@ -357,13 +357,13 @@ def test_a_private_meetings_turn_gets_a_read_only_token_and_a_team_meetings_a_wr
         job = c.execute("SELECT id FROM jobs WHERE bot_id='cmo'").fetchone()["id"]
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('a1',?,'cmo','r1',1,'x','running',?,?)", (job, H.shift(H.now(), hours=1), H.now()))
-    r = api.post("/api/v2/github/token", json={"bot_id": "cmo"}, headers=auth("bot-test"))
+    r = api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("bot-test"))
     assert r.status_code == 200, r.text
     assert gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "read"
     assert {t["access"] for t in r.json()["tokens"]} == {"read"}
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE live_meetings SET visibility='team' WHERE id='m-private'")
-    r = api.post("/api/v2/github/token", json={"bot_id": "cmo"}, headers=auth("bot-test"))
+    r = api.post("/api/v2/github/token", json={"bot": "cmo"}, headers=auth("bot-test"))
     assert r.status_code == 200 and gh.of("/access_tokens")[-1][2]["permissions"]["contents"] == "write"
 
 

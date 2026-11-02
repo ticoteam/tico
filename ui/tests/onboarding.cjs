@@ -700,7 +700,7 @@ function recruitFor({department, briefing, share}) {
     assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico -e <slug> install bot/);
     await page.locator('#onb-enroll').click();
     await page.waitForFunction(() => !/<setup-file>/.test(document.querySelector('#onb-step').textContent));
-    assert.deepEqual(enrollments, [{owner_id: 'ana'}]);
+    assert.deepEqual(enrollments, [{operator: 'ana'}]);
     assert.match(await page.locator('#onb-step').textContent(), /scripts\/tico -e <slug> enroll --code-file "\$HOME\/Downloads\/tico-enrollment-ana-[a-z0-9]+\.json" --label "Ana's Mac"/);
     // A Linux or cloud server gets the installer line (compose, with the updater) with the real URL and code, and no setup file.
     await page.locator('[data-onb-kind][value=linux]').check();

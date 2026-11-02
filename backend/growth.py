@@ -592,7 +592,7 @@ def working(c, auth, who, limit=200):
     return {"items": [{"task_id": r["id"], "title": r["title"], "idea_task_id": r["idea_task_id"],
                        "idea_title": r["idea_title"],
                        "channel": r["label_channel"] or first_channel.get(r["idea_task_id"]),
-                       "assignee": r["owner"], "status": r["status"], "updated_at": r["updated_at"]} for r in rows]}
+                       "assignee": r["owner_id"], "status": r["status"], "updated_at": r["updated_at"]} for r in rows]}
 
 
 def week(c, auth, who, hidden=()):

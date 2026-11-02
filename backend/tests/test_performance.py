@@ -76,7 +76,7 @@ def test_ten_loaded_minutes_record_an_overload_that_names_what_ran_and_health_sh
     (o,) = get(api, f"computers/{rid}/performance?hours=1")["overloads"]
     assert (o["started_at"], o["ended_at"], o["last_seen_at"]) == (start, None, start + 600)
     post(api, "runners/performance", {"samples": [sample(start + 660)]}, token=r["token"])
-    assert [x["ended"] for x in get(api, f"computers/{rid}/performance?hours=1")["overloads"]] == [start + 660]
+    assert [x["ended_at"] for x in get(api, f"computers/{rid}/performance?hours=1")["overloads"]] == [start + 660]
 
 
 def test_minutes_roll_into_ten_minute_points_after_two_days_and_everything_goes_after_fourteen(api):

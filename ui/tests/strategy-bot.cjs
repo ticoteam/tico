@@ -58,7 +58,7 @@ async function open(browser, server, width = 1440) {
   return {page, errors};
 }
 const goalLines = page => page.locator('#goal-tree > li').evaluateAll(els => els
-  .map(el => `${el.dataset.owner_id || (el.classList.contains('gt-group') ? 'group:' + el.textContent.trim() : '')}@${el.style.getPropertyValue('--d')}`)
+  .map(el => `${el.dataset.owner || (el.classList.contains('gt-group') ? 'group:' + el.textContent.trim() : '')}@${el.style.getPropertyValue('--d')}`)
   .filter(l => l.startsWith('bot:') || l.startsWith('group:')));
 // Every chart node above this one, nearest first.
 const above = (page, key) => page.locator(`#tree [data-org="${key}"]`).first().evaluate(el => {

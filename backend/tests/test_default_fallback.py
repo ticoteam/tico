@@ -34,7 +34,7 @@ def test_overview_counts_bots_on_fallback_and_limited_ones_for_who_may_read_them
     post(api, f"attempts/{attempt['id']}/complete",
          {"outcome": "failed", "last_seq": 0, "limited": True, "text": "monthly spend limit"}, machine["token"])
     health = get(api, "health")
-    assert [row["bot_id"] for row in health["limited"]] == ["ops"]
+    assert [row["bot"] for row in health["limited"]] == ["ops"]
     assert health["on_fallback"] == []
 
     # A person's message is worth one try: the turn hits the limit again and runs on Codex instead.
@@ -46,12 +46,12 @@ def test_overview_counts_bots_on_fallback_and_limited_ones_for_who_may_read_them
          machine["token"])
     health = get(api, "health")
     assert health["limited"] == []
-    assert [(row["bot_id"], row["harness"]) for row in health["on_fallback"]] == [("ops", "codex")]
+    assert [(row["bot"], row["harness"]) for row in health["on_fallback"]] == [("ops", "codex")]
     with api.app.state.store.read() as c:
         began = c.execute("SELECT coalesce(started_at,created_at) FROM attempts WHERE id=?", (again["id"],)).fetchone()[0]
         detail = c.execute("SELECT detail FROM events WHERE action='attempt.fallback' AND target=?",
                            (again["id"],)).fetchone()[0]
-    assert health["on_fallback"][0]["since"] == began
+    assert health["on_fallback"][0]["changed_at"] == began
     assert '"primary_limited": true' in detail
 
     # Someone who cannot read the bot hears nothing about it; a reader does.

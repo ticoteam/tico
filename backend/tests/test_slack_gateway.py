@@ -309,7 +309,7 @@ def test_a_persons_new_thread_to_a_bot_held_since_the_roster_was_read_is_kept_an
     result = send(gateway, "please review the vendor terms", judge_answer=hold, channel=DM, kind="message")
     assert result["state"] == "routed", result
     (kept,) = result["decision"]["delivered"]
-    assert kept["bot_id"] == "legal" and kept["opened"] and result["decision"]["dropped"] == []
+    assert kept["bot"] == "legal" and kept["opened"] and result["decision"]["dropped"] == []
     assert "Your message is kept for when it is back" in kept["held"]
     assert ("until about" if held == "quarantined" else "until a person resumes it") in kept["held"]
     assert [p["text"] for p in gateway.slack.posts] == [kept["held"]] and gateway.slack.posts[0]["channel"] == DM
@@ -470,7 +470,7 @@ def test_a_channel_message_is_stored_and_reaches_the_readers_once_on_the_hourly_
     refs = json.loads(cmo["refs"])["slack"]
     assert refs["channel_name"] == "#marketing" and refs["permalink"] == f"https://acme.slack.com/archives/{MARKETING}"
     assert refs["digest"]["count"] == 1 and len(refs["digest"]["event_ids"]) == 1
-    assert [j["bot"] for j in jobs(hub)] == ["cmo", "cto", "seo"], "each reader gets one turn"
+    assert [j["bot_id"] for j in jobs(hub)] == ["cmo", "cto", "seo"], "each reader gets one turn"
     assert rows(hub, "SELECT subject,scope,participants FROM conversations ORDER BY created_at")[0] == {
         "subject": "Slack channels", "scope": "direct", "participants": '["keeper", "bot:cmo"]'}
     # The cursors moved with the delivery; nothing new means nothing sent and no turn.
@@ -527,7 +527,7 @@ def test_a_persons_message_the_model_reads_as_asking_for_nothing_still_reaches_t
     """Decide picks who gets a person's message, never whether anyone does (the Decide on Jev spec)."""
     result = send(gateway, "thanks, that's all", judge_answer=answers(asks=0.1, legal=0.9), channel=DM, kind="message")
     assert result["state"] == "routed" and [r["bot"] for r in result["decision"]["recipients"]] == ["coo"]
-    assert "asks for nothing" in result["decision"]["reason"] and [j["bot"] for j in jobs(hub)] == ["coo"]
+    assert "asks for nothing" in result["decision"]["reason"] and [j["bot_id"] for j in jobs(hub)] == ["coo"]
 
 
 def test_a_decision_outage_retries_for_ten_minutes_and_then_fails_instead_of_looping(gateway, hub):

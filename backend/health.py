@@ -1673,11 +1673,11 @@ def view(c, who, settings, auth, github, config):
                              items=assigned))
     refused = []
     for row in refused_queues(c, settings):
-        if not auth.bot_accesses(c, who, [row['bot_id']]).get(row['bot_id'], auth.FULL)['read']:
+        if not auth.bot_accesses(c, who, [row['bot']]).get(row['bot'], auth.FULL)['read']:
             continue
         msg = c.execute("SELECT m.* FROM jobs j JOIN messages m ON m.id=j.message_id "
                         "WHERE j.id=? AND j.bot_id=? AND j.state='queued' AND j.held=0",
-                        (row['job'], row['bot_id'])).fetchone()
+                        (row['job'], row['bot'])).fetchone()
         from . import task_privacy
         if not msg or not task_privacy.message_readable(c, who.actor, msg):
             continue

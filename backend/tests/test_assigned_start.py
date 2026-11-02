@@ -294,7 +294,7 @@ def test_older_same_lane_followup_does_not_hide_free_lane_refusal(api, clock):
                   (H.shift(H.now(), hours=-3), by_task[running['id']]))
         queued = by_task[task['id']]
         online = {r['id'] for r in health._online_runners(c)}
-        rows = [r for r in health._waiting(c, online, store.settings)[2] if r['bot_id'] == 'ops']
+        rows = [r for r in health._waiting(c, online, store.settings)[2] if r['bot'] == 'ops']
         assert [r['reason'] for r in rows] == ['auto_start_off']
         queue_refusals.observe(c, store.settings)
         assert queue_refusals.state(c, 'ops')['job'] == queued
@@ -444,8 +444,8 @@ def test_busy_health_ages_claim_priority_instead_of_oldest_free_job(api, clock, 
                   (H.shift(H.now(), minutes=-chat_minutes),))
         online = {r['id'] for r in health._online_runners(c)}
         _, slow, stuck = health._waiting(c, online, store.settings)
-        assert bool([r for r in stuck if r['bot_id'] == 'ops']) is expected
-        assert bool([r for r in slow if r['bot_id'] == 'ops']) is expected
+        assert bool([r for r in stuck if r['bot'] == 'ops']) is expected
+        assert bool([r for r in slow if r['bot'] == 'ops']) is expected
 
 
 def test_recovery_scan_advances_past_a_full_page_of_held_tasks_and_wraps(api, clock, monkeypatch):

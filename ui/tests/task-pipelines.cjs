@@ -94,7 +94,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
           const body = req.postDataJSON(); posted.push({path: p, body});
           if (refuseMove) { refuseMove = false; return json({error: {code: 'identity', detail: 'not yours to change'}}, 422); }
           if ('step_rank' in body) task.step_rank = body.step_rank;
-          if (body.owner_id) task.owner_id = body.owner_id.includes(':') ? body.owner_id : 'bot:' + body.owner_id;
+          if (body.owner) task.owner_id = body.owner.includes(':') ? body.owner : 'bot:' + body.owner;
           if (body.type) task.type_id = body.type;
           const type = types.find(type => type.id === task.type_id);
           const step = 'step' in body ? type.steps.find(step => step.id === body.step) : type.steps.find(step => step.status === (body.status || task.status));
@@ -288,7 +288,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('#task-body [data-task-key="tbrief"] [data-card-owner]').click();
     await page.locator('#task-card-pops .prop-pop .tl-mi', {hasText: 'Ana'}).click();
     await page.waitForFunction(() => document.querySelector('#task-body [data-task-key="tbrief"] [data-card-owner]')?.title === 'You');
-    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/brief', body: {version: 2, owner_id: 'human:ana'}});
+    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/brief', body: {version: 2, owner: 'human:ana'}});
     assert.equal(await page.evaluate(() => TASKS_ST.peek), '', 'picking an owner opens nothing');
     await page.locator('#task-body [data-task-key="tbrief"] [data-card-owner]').click();
     await page.locator('#task-card-pops .prop-pop .tl-mi', {hasText: 'Ops'}).click();

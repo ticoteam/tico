@@ -244,14 +244,14 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     });
     await page.locator('#task-stats-dialog select[data-flow-who]').selectOption('human:reviewer');
     await personFlowRead;
-    assert.equal(flowAsked.at(-1).owner_id, 'human:reviewer', 'the chart reads one person');
+    assert.equal(flowAsked.at(-1).owner, 'human:reviewer', 'the chart reads one person');
     await page.locator('#task-stats-dialog [data-days="365"]').click();
     await page.waitForFunction(() => !document.querySelector('#task-stats-dialog .flow-tile-d'), null, {timeout: 5000});   // a year has no previous period
     await page.locator('#task-stats-dialog [data-days="7"]').click();
     assert.equal(await page.locator('#task-stats-dialog .flow-people tr[data-owner="cmo"] td').nth(1).textContent(), '30');
     await page.locator('#task-stats-dialog .flow-people tr[data-owner="cmo"]').click();
     await page.waitForFunction(() => document.querySelector('#task-stats-dialog select[data-flow="owner"]').value === 'cmo');
-    assert.ok(flowAsked.some(q => q.owner_id === 'cmo' && q.days === '7'));
+    assert.ok(flowAsked.some(q => q.owner === 'cmo' && q.days === '7'));
     if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, 'task-stats.png')});
     await page.locator('#task-stats-dialog [data-close]').click();
     // A card with related tasks shows how many, like an attachment count; one without shows nothing.

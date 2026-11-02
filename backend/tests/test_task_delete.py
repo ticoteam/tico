@@ -79,7 +79,7 @@ def test_a_deleted_task_comes_back_whole_and_keeps_its_number(api):
 
     assert post(api, "tasks/41/restore", {}, token="ben-test")["restored"] == ticket["id"]
     after = get(api, "tasks/" + ticket["id"], token="ben-test")
-    for key in ("title", "body", "requester", "owner", "status", "conversation_id"):
+    for key in ("title", "body", "requester_id", "owner_id", "status", "conversation_id"):
         assert after["task"][key] == before["task"][key] if "task" in before else after[key] == before[key], key
     with store.read() as c:
         assert c.execute("SELECT number FROM tasks WHERE id=?", (ticket["id"],)).fetchone()[0] == 41

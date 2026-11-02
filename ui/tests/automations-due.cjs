@@ -66,7 +66,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
     null, {timeout: t(10000)});
   const saved = await automationNamed(page, 'New automation');
   assert.deepEqual(saved.trigger, {type: 'due', first_due: '2027-03-01', repeats: 'yearly', open_days: 21, tz: 'America/New_York'});
-  assert.equal(saved.next_due, '2027-03-01', `${tag}: the hub's next due day`);
+  assert.equal(saved.next_due_at, '2027-03-01', `${tag}: the hub's next due day`);
   assert.equal(Date.parse(saved.next_run), Date.parse('2027-02-08T05:00:00Z'), `${tag}: its task opens 21 days before, at midnight in New York`);
   assert.equal(await page.locator('.au-trig .au-c1').innerText(), 'Due Mar 1 · yearly · 21d before');
 
@@ -92,7 +92,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   const step = (await automationNamed(page, 'New automation')).steps[0];
   assert.equal(step.do, 'create_task');
   assert.equal(step.args.title, 'File the yearly report');
-  assert.equal(step.args.owner_id, 'bot:' + BOT);
+  assert.equal(step.args.owner, 'bot:' + BOT);
 
   // On: the list files it under Due date, with its words and the next due day over when the task opens.
   await page.locator('.au-hd .au-sw').check();
@@ -130,7 +130,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   // Runs for two due days (the scheduler's payload, sent by hand): each opens the bot's task due that day.
   const opened = [];
   for (const day of ['2026-10-15', '2026-11-30']) {
-    const r = await settled(page, made.id, (await ok(page, 'POST', `automations/${made.id}/run`, {input: {due_at: {due_on: day, tz: 'UTC'}}})).run);
+    const r = await settled(page, made.id, (await ok(page, 'POST', `automations/${made.id}/run`, {input: {due: {due_on: day, tz: 'UTC'}}})).run);
     assert.equal(r.status, 'ok', `${tag}: the run for ${day} (${JSON.stringify(r).slice(0, 300)})`);
   }
   const tasks = (await ok(page, 'GET', 'tasks?limit=200')).tasks || [];
@@ -140,8 +140,8 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
     assert.equal(task.owner_id, 'bot:' + BOT);
     opened.push(task);
   }
-  const plain = await ok(page, 'POST', 'tasks', {title: 'Look again at the backlog', body: 'Later', owner_id: 'bot:' + BOT,
-    due_at: '2026-10-25T12:00:00Z'});
+  const plain = await ok(page, 'POST', 'tasks', {title: 'Look again at the backlog', body: 'Later', owner: 'bot:' + BOT,
+    due: '2026-10-25T12:00:00Z'});
   const plainId = plain.id || plain.task?.id;
 
   // The occurrence tasks read as deadlines on their pages (red once past); the bot's other task still wakes.

@@ -210,7 +210,7 @@ def install_memory_history(app, store, auth, mutate):
                              "ORDER BY committed_at DESC, sha LIMIT ?", (bot, before, before, limit + 1)).fetchall()
             row = c.execute("SELECT seen_at FROM bot_memory_seen WHERE actor=? AND bot=?", (who.actor, bot)).fetchone()
             # Before a first visit, only the last few days count as new, not years of history reported at once.
-            seen, column = (row["seen_at"], "reported") if row else (H.shift(H.now(), days=-NEW_DAYS), "committed")
+            seen, column = (row["seen_at"], "reported_at") if row else (H.shift(H.now(), days=-NEW_DAYS), "committed_at")
             unseen = c.execute(f"SELECT count(*) FROM bot_memory_updates WHERE bot=? AND {column}>?",
                                (bot, seen)).fetchone()[0]
             base = commit_base(c, bot, store.settings.github_owner)

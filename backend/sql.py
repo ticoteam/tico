@@ -98,13 +98,13 @@ DERIVED = {
                sum(coalesce(outcome, '') = 'nothing_to_do') AS nothing_to_do,
                sum(outcome IS NULL) AS unknown,
                sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
-               sum(rotated_at IS NOT NULL) AS rotated,
+               sum(rotated IS NOT NULL) AS rotated,
                round(100.0 * sum(coalesce(outcome, '') = 'acted') / count(*), 1) AS acted_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
         FROM (SELECT started_at, bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
-                     outcome, did_nothing, rotated_at
+                     outcome, did_nothing, rotated
               FROM {turns} WHERE started_at IS NOT NULL
               UNION ALL
               SELECT coalesce(a.started_at, a.created_at), a.bot_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL

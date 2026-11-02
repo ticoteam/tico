@@ -70,7 +70,7 @@ class Schema(HubCase):
         published_version = H.MIGRATIONS.index(H.RUN_PURPOSE_SCHEMA) + 1
         self.conn.execute("INSERT INTO turns(id,bot,started_at,purpose) VALUES('before-rotation','cmo',?,'review PR')",
                           (H.now(),))
-        self.conn.execute("ALTER TABLE turns DROP COLUMN rotated_at")
+        self.conn.execute("ALTER TABLE turns DROP COLUMN rotated")
         self.conn.execute(f"PRAGMA user_version={published_version}")
         self.conn.commit()
         H.migrate(self.conn)
@@ -230,11 +230,11 @@ class Rule5Tasks(HubCase):
         closed = H.task_close(self.conn, CMO, row["id"], note="read")
         opened = H.task_update(self.conn, CMO, row["id"], status="open")
         self.assertEqual(opened["status"], "open")
-        for field in ("done_at", "closed_at", "closed_by"):
-            self.assertIsNone(opened[field])
+        for column, field in (("done_at", "done_at"), ("closed_at", "closed_at"), ("closed_by_id", "closed_by")):
+            self.assertIsNone(opened[column])
             event = self.conn.execute("SELECT old,new FROM task_events WHERE task_id=? AND field=? ORDER BY id DESC LIMIT 1",
                                       (row["id"], field)).fetchone()
-            self.assertEqual(event["old"], closed[field])
+            self.assertEqual(event["old"], closed[column])
             self.assertIsNone(event["new"])
         self.assertEqual(self.conn.execute("SELECT count(*) FROM tasks WHERE done_at IS NOT NULL OR closed_at IS NOT NULL").fetchone()[0], 0)
 
@@ -365,7 +365,7 @@ class Rule6Approvals(HubCase):
         self.assertEqual(appr["payload_hash"], H.payload_hash(self.SEND))
         self.assertIsNone(appr["decision"])
         decided = H.approval_decide(self.conn, ANA, appr["id"], "approved", note="go")
-        self.assertEqual((decided["decision"], decided["decided_by"]), ("approved", ANA))
+        self.assertEqual((decided["decision"], decided["decided_by_id"]), ("approved", ANA))
         self.assertTrue(H.approval_consume(self.conn, CMO, appr["id"])["consumed_at"])
         self.refused("consumed", H.approval_consume, self.conn, CMO, appr["id"])
 

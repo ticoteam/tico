@@ -184,7 +184,7 @@ def test_the_name_sticks_and_its_history_stays_attached(environment):
     logged = api.post(f"/api/v2/kpis/{kid}/readings", json={"value": 12}, headers=as_bot(api, "goal-manager"))
     assert logged.status_code == 200, logged.text
     readings = api.get(f"/api/v2/kpis/{kid}/readings", headers=signed_in()).json()["readings"]
-    assert [r["actor"] for r in readings] == ["bot:goal-manager"]
+    assert [r["actor_id"] for r in readings] == ["bot:goal-manager"]
     from backend import names
     with api.app.state.store.read() as c:
         assert names.lookup(c, {"bot:goal-manager"}) == {"bot:goal-manager": "Strategy Bot"}

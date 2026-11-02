@@ -73,7 +73,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   const errors = [], writes = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(([t, saved]) => { try { localStorage.setItem('tico.theme', t); sessionStorage.setItem('tico.settings.tab', saved); } catch {} }, [theme, tab]);
-  const me = {owner_id: {id: 'ana', role: 'owner', name: 'Ana'}, member: {id: 'sam', role: 'member', name: 'Sam'}}[as];
+  const me = {owner: {id: 'ana', role: 'owner', name: 'Ana'}, member: {id: 'sam', role: 'member', name: 'Sam'}}[as];
   Object.assign(me, {email: me.id + '@example.com', cloud: true, registered: true});
   const policy = {see: {everyone: true}, read: {everyone: true}, write: {everyone: true}};
   const bots = [

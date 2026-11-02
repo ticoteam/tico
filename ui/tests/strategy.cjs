@@ -65,7 +65,7 @@ const market = () => ({definition: {root: 'segment/cleaning'}, segments: [seg('h
 const v1 = {id: 'v-1', n: 1, status: 'published', guide: 'default',
   summary: 'Acme cleans homes and small offices in Austin at about half the usual price. Bots handle booking, scheduling and billing, so the price holds.',
   vision: 'Every home in Austin cleaned by Acme.', sections, bets: bets().filter(b => b.id !== 'b-weekly'), note: 'First version', revision: 7,
-  updated_at: '2026-10-24T09:00:00Z', updated_by: 'human:ana', published: '2026-10-24T09:00:00Z', published_by: 'human:ana'};
+  updated_at: '2026-10-24T09:00:00Z', updated_by: 'human:ana', published_at: '2026-10-24T09:00:00Z', published_by: 'human:ana'};
 
 async function open(browser, {role = 'owner', route = '#/strategy', viewport = DESKTOP, fresh = false, needs = [], more = []} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB'});  // dates read "24 Oct"
@@ -76,7 +76,7 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
     ? {draft: {id: 'v-d', n: null, status: 'draft', guide: 'default', summary: 'Acme cleans homes in Austin at half the price.', vision: '',
         sections: {serve: 'Busy households.', extra: {}}, bets: [], note: '', revision: 1}, current: null,
       bets: [{id: 'b-price', statement: 'Price at half the market.', why: '', rules_out: '', wrong_if: null, cites: [], status: 'proposed', rank: 0}]}
-    : {draft: {...v1, id: 'v-d', n: null, status: 'draft', sections: {...sections, extra: {...sections.extra}}, revision: 7, published: null, published_by: null},
+    : {draft: {...v1, id: 'v-d', n: null, status: 'draft', sections: {...sections, extra: {...sections.extra}}, revision: 7, published_at: null, published_by: null},
       current: v1, bets: bets()};
   const goals = [
     {id: 'g-top', title: 'Margin per job ≥ 30%', owner_id: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: [], why: '', bet_id: 'b-price'},
@@ -125,7 +125,7 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
       if (p === '/api/v2/strategy/publish') {
         const n = (st.current?.n || 0) + 1;
         st.current = {...st.draft, n, status: 'published', note: body.note, bets: st.bets.filter(b => b.status !== 'retired').map(b => ({...b})),
-          published: new Date().toISOString(), published_by: 'human:ana'};
+          published_at: new Date().toISOString(), published_by: 'human:ana'};
         st.draft = {...st.draft, revision: st.draft.revision + 1};
         return json(st.current);
       }
@@ -135,7 +135,7 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
       if (one) { const c = st.bets.find(x => x.id === one[1]); Object.assign(c, body); return json({bet: c, revision: ++st.draft.revision}); }
       if (p === '/api/v2/strategy/bets') { const c = {id: 'b-new', since_n: null, until_n: null, rank: st.bets.length, status: 'proposed', why: '', rules_out: '', wrong_if: null, cites: [], ...body}; st.bets.push(c); return json({bet: c, revision: ++st.draft.revision}); }
     }
-    if (p === '/api/v2/strategy/versions') return json([{n: 1, note: 'First version', published: v1.published, published_by: 'human:ana'}]);
+    if (p === '/api/v2/strategy/versions') return json([{n: 1, note: 'First version', published_at: v1.published_at, published_by: 'human:ana'}]);
     if (p === '/api/v2/strategy/versions/1') return json(v1);
     if (p === '/api/v2/goals/tree') return json({goals, owners: {}, other_kpis: [], proposals: []});
     if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});

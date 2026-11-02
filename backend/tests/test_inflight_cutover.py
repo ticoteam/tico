@@ -70,7 +70,7 @@ def test_an_approval_asked_before_the_cutover_is_one_decision_and_is_spent_once(
         H.approval_request(conn, CMO, "publish", RELEASE)
     assert again.value.rule == "duplicate" and "appr-open" in again.value.detail
     decided = H.approval_decide(conn, ANA, "appr-open", "approved")
-    assert (decided["decision"], decided["decided_by"]) == ("approved", ANA)
+    assert (decided["decision"], decided["decided_by_id"]) == ("approved", ANA)
     spent = H.approval_consume(conn, CMO, "appr-open")
     assert spent["consumed_at"] and spent["payload"] == RELEASE
     with pytest.raises(H.Refused) as twice:

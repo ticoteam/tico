@@ -93,7 +93,7 @@ def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_st
     assert [b["template"] for b in draft["bots"]] == ["coo", "product-lead", "pr-reviewer", "support", "content"]
     assert [b["title"] for b in draft["bots"]] == ["Assistant", "Head of Product", "Builder", "Support Agent",
                                                    "Content Marketer"]
-    assert sorted(g["owner_id"] for g in draft["goals"]) == sorted(b["id"] for b in draft["bots"])
+    assert sorted(g["owner"] for g in draft["goals"]) == sorted(b["id"] for b in draft["bots"])
     runs_on = [row["runs_on"] for row in extra.values()]
     assert set(runs_on) == set(sample_company.RUNS_ON) and min(runs_on.count(r) for r in set(runs_on)) >= 2
     for row in extra.values():
@@ -185,7 +185,7 @@ def test_the_bots_start_once_a_computer_runs_them(environment):
     ids = bot_ids(api)
     assert {ids[slug] for slug in ("coo", *ROLE_BOTS)} <= placed
     # Each starter task woke its bot: a job waits for the computer to claim it.
-    queued = {row["bot"] for row in rows(api, "SELECT bot_id FROM jobs WHERE state='queued'")}
+    queued = {row["bot_id"] for row in rows(api, "SELECT bot_id FROM jobs WHERE state='queued'")}
     assert {ids[slug] for slug in ("coo", *ROLE_BOTS)} <= queued
 
 

@@ -207,7 +207,7 @@ def test_answer_uses_comment_wake_rule(api, role):
         if role == "mover":
             c.execute("UPDATE humans SET teams='[\"engineering\"]' WHERE id='cara'")
         elif role in ("owner", "requester"):
-            c.execute(f"UPDATE tasks SET {role}='human:cara' WHERE id=?", (tid,))
+            c.execute(f"UPDATE tasks SET {role}_id='human:cara' WHERE id=?", (tid,))
     if role == "bot":
         machine = runner(api)
         assign(api, machine, "ops")

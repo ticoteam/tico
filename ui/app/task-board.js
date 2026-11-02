@@ -65,7 +65,7 @@ function taskBoardFocus(state, key) {
 // ---- the faces over the board: whoever has the most cards here (you first), each a toggle on the Owner filter
 const taskOwnerHit = actor => v => resolveMe(v) === actor || (!v.includes(':') && actor === 'bot:' + v);
 function taskBoardHead(items, state) {
-  const me = myActor(), chosen = state.filters?.owner_id || [];
+  const me = myActor(), chosen = state.filters?.owner || [];
   // Counted without the Owner filter, so a face stays to be turned off again.
   const all = chosen.length ? taskItems({...state, filters: {...state.filters, owner: []}, memo: null}, 'board') : items;
   const counts = new Map();
@@ -82,8 +82,8 @@ function taskBoardHead(items, state) {
   return `<div class="board-head">${faces ? `<span class="bfaces" role="group" aria-label="Owners">${faces}</span>` : ''}${focus}</div>`;
 }
 function taskBoardOwnerToggle(state, actor) {
-  const chosen = state.filters.owner_id || [], hit = taskOwnerHit(actor);
-  state.filters.owner_id = chosen.some(hit) ? chosen.filter(v => !hit(v)) : [...chosen, actor === myActor() ? 'me' : actor];
+  const chosen = state.filters.owner || [], hit = taskOwnerHit(actor);
+  state.filters.owner = chosen.some(hit) ? chosen.filter(v => !hit(v)) : [...chosen, actor === myActor() ? 'me' : actor];
   tasksFiltersChanged(state);
 }
 // Q shows only your cards (again, everyone's); X clears the faces and the blocked focus. Never while typing.
@@ -93,15 +93,15 @@ function taskBoardKeys(state, ev) {
   if (document.querySelector('dialog:modal, :popover-open')) return;
   const el = document.activeElement;
   if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))) return;
-  const key = ev.key.toLowerCase(), chosen = state.filters.owner_id || [];
+  const key = ev.key.toLowerCase(), chosen = state.filters.owner || [];
   if (key === 'q') {
     ev.preventDefault();
     const mine = chosen.length === 1 && resolveMe(chosen[0]) === myActor();
-    state.filters.owner_id = mine ? [] : ['me'];
+    state.filters.owner = mine ? [] : ['me'];
     tasksFiltersChanged(state);
   } else if (key === 'x' && (chosen.length || state.boardFocus)) {
     ev.preventDefault();          // with nothing to clear, x selects the card under the cursor as before
-    state.filters.owner_id = []; state.boardFocus = null;
+    state.filters.owner = []; state.boardFocus = null;
     tasksFiltersChanged(state);
   }
 }
@@ -349,7 +349,7 @@ function taskBoardOwnerMenu(state, button) {
   }), onPick: it => {
     const cur = tasksById(state).get(String(t.id));
     if (!cur || it.actor === cur.owner_id) return;
-    taskBoardSave(state, cur, {version: cur.version, owner: it.actor}, {owner: it.actor}, 'Not changed');
+    taskBoardSave(state, cur, {version: cur.version, owner: it.actor}, {owner_id: it.actor}, 'Not changed');
   }});
 }
 // A card as the board draws it: with its move while the server has not said otherwise (a copy no newer than the one

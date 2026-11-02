@@ -15,7 +15,7 @@ from backend.tests import test_api as T
 from backend.tests.test_api import api  # noqa: F401
 
 BASE = ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
-SEE_ONLY = ("slug", "display_name", "state", "description", "team", "operator", "reports_to", "owners",
+SEE_ONLY = ("slug", "display_name", "state", "description", "team", "owner_id", "reports_to", "owners",
             "thread_mode", "temp", "access", "bot_owners", "onboarding_state", "private_tasks_default", "stage",
            "can_complete_onboarding")
 

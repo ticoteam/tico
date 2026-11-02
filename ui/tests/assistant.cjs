@@ -68,7 +68,7 @@ function fixture() {
     description: '3 task actions, on one Confirm', proposed_via: 'assistant', body: {actions: []},
     diff: ['Plan the launch', 'Book the venue', 'Draft the post'].map(t => ({field: `Change task “${t}” (2 fields)`, new: 'close: true, note: Done'}))};
   state.enrol = {id: 'act3', summary: 'Make a one-time code to add a computer', method: 'POST', path: '/api/v2/enrollments', status: 'pending',
-    result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {owner_id: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
+    result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {operator: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
   state.view = () => ({available: true, state: 'active', bot: 'coo', name: 'Acme', can_turn_on: false, room_id: 'room1',
     messages: state.messages, has_more: false, next_before: null, execution: null, actions: {act1: state.card, act2: state.bulk, act3: state.enrol}, pending: []});
   state.reply = () => {
@@ -224,7 +224,7 @@ function fixture() {
     // Off: the page says so, and only the owner is offered the switch.
     const state = fixture();
     state.enrol = {id: 'act3', summary: 'Make a one-time code to add a computer', method: 'POST', path: '/api/v2/enrollments', status: 'pending',
-    result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {owner_id: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
+    result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {operator: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
   state.view = () => ({available: false, state: 'archived', bot: 'coo', name: 'Tico', can_turn_on: true, room_id: null,
       messages: [], has_more: false, next_before: null, execution: null, actions: {}, pending: []});
     const {page} = await open(browser, {width: 1280, height: 900}, state);
@@ -238,7 +238,7 @@ function fixture() {
     const strip = page.locator('[data-assistant-off]');
     await strip.waitFor();
     state.enrol = {id: 'act3', summary: 'Make a one-time code to add a computer', method: 'POST', path: '/api/v2/enrollments', status: 'pending',
-    result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {owner_id: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
+    result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {operator: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
   state.view = () => ({available: true, state: 'active', bot: 'coo', name: 'Tico', can_turn_on: false, room_id: 'room1',
       messages: [], has_more: false, next_before: null, execution: null, actions: {}, pending: []});
     await strip.locator('[data-turn-on]').click();

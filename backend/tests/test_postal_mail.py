@@ -432,7 +432,7 @@ def test_a_filing_that_rolls_back_keeps_its_read_on_the_cap_and_leaves_nothing_b
     post(api, "postal/items/" + row["id"] + "/retry", {})
     svc.process(ident)
     row = items(api)["441"]
-    assert row["status"] == "filed" and task(api, row["task_id"])["owner"] == "bot:finance"
+    assert row["status"] == "filed" and task(api, row["task_id"])["owner_id"] == "bot:finance"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM mail_reads WHERE item_id=?", (ident,)).fetchone()[0] == 2
         assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Bill by mail:%'").fetchone()[0] == 1

@@ -77,11 +77,11 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       if (p === '/api/v2/goals/tree') return json({goals, owners: {}, other_kpis: other, proposals: []});
       if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});
       if (p === '/api/v2/goals' && post) {
-        const goal = {id: 'g-new-' + goals.length, status: null, rank: 5, kpis: [], ...body};
+        const {owner, ...fields} = body, goal = {id: 'g-new-' + goals.length, status: null, rank: 5, kpis: [], owner_id: owner, ...fields};
         goals.push(goal); return json({goal});
       }
       if (p === '/api/v2/kpis' && !post) return json({kpis: url.searchParams.get('include_archived') === 'true' && archivedKpi.archived_at ? [archivedKpi] : []});
-      if (p === '/api/v2/kpis' && post) { other.push(kpi('k-new-' + other.length, body.name, {...body, freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: other.at(-1)}); }
+      if (p === '/api/v2/kpis' && post) { other.push(kpi('k-new-' + other.length, body.name, {...body, owner_id: body.owner, freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: other.at(-1)}); }
       if (p === '/api/v2/kpis/k-act' && !post) return json(detail);
       if (p === '/api/v2/kpis/k-retired' && !post) return json({...detail, kpi: archivedKpi, links: goals.filter(g => g.kpis.some(k => k.id === archivedKpi.id)).map(g => ({...activation.link, goal_id: g.id, goal_title: g.title})), may_edit: archivedMayEdit});
       if (p === '/api/v2/kpis/k-retired/restore' && post) { archivedKpi.archived_at = null; return json({kpi: archivedKpi}); }
@@ -95,7 +95,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       if (/\/status\/auto$/.test(p) && post) return json({goal: {}});
       if (/^\/api\/v2\/proposals\/[^/]+\/decide$/.test(p) && post) { needs.splice(1); return json({proposal: {}}); }
       const edit = p.match(/^\/api\/v2\/goals\/([^/]+)$/);
-      if (edit && post) { Object.assign(goals.find(g => g.id === edit[1]), body); return json({goal: {}}); }
+      if (edit && post) { const {owner, ...fields} = body; Object.assign(goals.find(g => g.id === edit[1]), fields, owner ? {owner_id: owner} : {}); return json({goal: {}}); }
       return json(unrouted(p));
     });
     const until = async (fn, what) => { for (const end = Date.now() + t(4000); Date.now() < end;) { if (await fn()) return; await new Promise(r => setTimeout(r, 50)); } if (!await fn()) assert.fail('timed out: ' + what); };
@@ -145,7 +145,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await fresh.locator('input[name=title]').fill('Book 20 demos a month');
     await fresh.locator('[type=submit]').click();
     await until(() => row('bot:sales').locator('.gt-goal').count().then(n => n === 1), 'sales has a goal');
-    assert.deepEqual(last(), {path: '/api/v2/goals', body: {title: 'Book 20 demos a month', owner_id: 'bot:sales'}});
+    assert.deepEqual(last(), {path: '/api/v2/goals', body: {title: 'Book 20 demos a month', owner: 'bot:sales'}});
     // Then a KPI on that goal, from the panel.
     const added = goals.at(-1).id;
     await panel.locator(`[data-gp-kpi-add="${added}"]`).click();
@@ -165,7 +165,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await panel.locator('[data-kpi-add="@page"] [type=submit]').click();
     await until(() => panel.locator('.kpi-line', {hasText: 'Reply time'}).count().then(n => n === 1), 'the KPI is under Other KPIs');
     assert.equal(last().path, '/api/v2/kpis');
-    assert.equal(last().body.owner_id, 'bot:sales');
+    assert.equal(last().body.owner, 'bot:sales');
     await panel.locator('[data-gp-close]').click();
     assert.equal(await page.locator('#goal-panel[open]').count(), 0);
 

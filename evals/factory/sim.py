@@ -385,7 +385,7 @@ class Run:
                 continue
             owned = Counter(x["owner_id"] for x in w.tickets() if not self.shipped(x))
             pick = min(pool, key=lambda b: (w.slots(b.slug), owned["bot:" + b.slug], b.slug))
-            w.update(t["id"], owner_id="bot:" + pick.slug)
+            w.update(t["id"], owner="bot:" + pick.slug)
             w.fallback("person", t["id"], f"assigned to {pick.slug} by hand")
 
     def observe(self, w, team):

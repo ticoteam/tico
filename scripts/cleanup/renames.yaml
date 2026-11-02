@@ -562,7 +562,6 @@ columns:
   trigger_bodies.headers_json: headers
   trigger_relays.created: created_at
   turns.finished: finished_at
-  turns.rotated: rotated_at
   turns.started: started_at
   updates.created: created_at
   updates.inputs_json: inputs
@@ -772,7 +771,7 @@ waves:
     scoped: {}
   "2s":
     rule: "M3 per table, common words (queued, checked, deleted...) -> <verb>_at (needs review, not applied: most sites cannot be told apart from counters, statuses and flags)"
-    count: 42
+    count: 41
     global: {}
     scoped:
       archives.imported: imported_at
@@ -816,7 +815,6 @@ waves:
       tasks.due: due_at  # tasks, deferrals, task_reminders; also a trigger type and finance documents' field
       tico_storage.changed: changed_at
       tico_storage.checked: checked_at
-      turns.rotated: rotated_at
   "2b":
     rule: "M3 per table: bare ts/at/since/until/seen -> named times (needs review, not applied)"
     count: 52

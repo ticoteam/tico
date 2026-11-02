@@ -28,7 +28,7 @@ def test_creation_is_personal_idempotent_and_requires_read_and_own_computer(api)
     branch(api, computer, expected=409)
     share(api)
     made = branch(api, computer)
-    assert (made['slug'], made['shared_from'], made['operator'], made['created']) == ('cpo-cara', 'cpo', 'cara', True)
+    assert (made['slug'], made['shared_from'], made['owner_id'], made['created']) == ('cpo-cara', 'cpo', 'cara', True)
     assert (made['repo'], made['reports_to'], made['thread_mode'], made['status']) == ('emp-cpo', 'human:cara', 'personal', 'active')
     assert made['assignment']['runner_id'] == computer['runner_id']
     assert branch(api, computer)['created'] is False

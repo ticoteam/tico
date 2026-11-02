@@ -719,8 +719,8 @@ SCHEMAS = {
                     cause={"enum": ["manual", "dependency", "stranded", "gate", "check", "worktree", None],
                            "description": "On a blocked hold: what holds it. manual is a person's or bot's move to "
                                           "Blocked; the others are Tico's own (docs/tasks.md, Holds)"}),
-    "Execution": obj({"job_id": "s", "message_id": "s", "bot": "s", "run_id": "n", "state": "s", "label": "s", "text": "s"},
-                     required=["job_id", "message_id", "bot", "run_id", "state", "label", "text", "parts"],
+    "Execution": obj({"job_id": "s", "message_id": "s", "bot_id": "s", "run_id": "n", "state": "s", "label": "s", "text": "s"},
+                     required=["job_id", "message_id", "bot_id", "run_id", "state", "label", "text", "parts"],
                      parts=items(obj({"kind": {"enum": ["progress", "reply", "tool"]}, "text": "s", "at": "s"})) | {
                          "description": "The run's pieces so far, in order, while it is leased or running (empty otherwise). "
                                         "`reply` and `progress` are what the bot wrote (`progress` when a tool call follows it); "

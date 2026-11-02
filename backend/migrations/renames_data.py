@@ -563,7 +563,6 @@ COLUMNS = (
     ('trigger_bodies', 'headers_json', 'headers', '1'),
     ('trigger_relays', 'created', 'created_at', '2'),
     ('turns', 'finished', 'finished_at', '2'),
-    ('turns', 'rotated', 'rotated_at', '2s'),
     ('turns', 'started', 'started_at', '2'),
     ('updates', 'created', 'created_at', '2'),
     ('updates', 'inputs_json', 'inputs', '1'),

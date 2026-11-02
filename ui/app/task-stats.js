@@ -30,7 +30,7 @@ function taskStatsOpen(tasks) {
     document.body.appendChild(d);
     d.addEventListener('close', () => { FLOW_ST = null; });
   }
-  const owners = tasks?.filters?.owner_id || [];
+  const owners = tasks?.filters?.owner || [];
   const labels = [...new Set((tasks?.labels || []).map(flowLabelKey).filter(Boolean))];
   const st = FLOW_ST = {days: 30, type: tasks?.type && tasks.type !== 'general' ? tasks.type : '',
     owner: owners.length === 1 ? owners[0] : '', kind: '', label: '', recurring: '', stage: 'done', unit: 'week', who: '',

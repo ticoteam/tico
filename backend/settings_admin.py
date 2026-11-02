@@ -900,7 +900,7 @@ class SettingsAdmin:
                             "FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
             return {"runner_id": row["runner_id"] if row else None,
                     "generation": row["generation"] if row else 0,
-                    "owner_id": config["owner_id"], "label": row["label"] if row else ""}
+                    "operator": config["owner_id"], "label": row["label"] if row else ""}
         if field == "definition":
             return self.definition(c, bot)
         if field == "identity":

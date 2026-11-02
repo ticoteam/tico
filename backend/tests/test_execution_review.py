@@ -148,7 +148,7 @@ def test_an_api_key_quota_refusal_holds_the_bot_and_says_billing_not_subscriptio
         status = H.status(c, 'ops')
         assert status['state'] == 'limited' and 'billing' in status['focus'] and cooling_off(c, 'ops')
     assert claim(api, machine) is None
-    issue = next(i for i in api.get('/api/status', headers=headers()).json()['health_issues'] if i['kind'] == 'bot' and i['bot_id'] == 'ops')
+    issue = next(i for i in api.get('/api/status', headers=headers()).json()['health_issues'] if i['kind'] == 'bot' and i['bot'] == 'ops')
     assert 'billing' in issue['detail'] and 'subscription' not in issue['detail']
 
 
@@ -163,7 +163,7 @@ def age_limit(api, seconds):
                 c.execute(f"UPDATE {table} SET {column}=? WHERE rowid=?", (H.shift(at, seconds=-seconds), rowid))
         for key, value in c.execute("SELECT key,value FROM registry_metadata WHERE key LIKE 'login-hold:%'").fetchall():
             hold = _json.loads(value)
-            hold.update(changed_at=H.shift(hold['changed_at'], seconds=-seconds), until=H.shift(hold['until'], seconds=-seconds))
+            hold.update(since=H.shift(hold['since'], seconds=-seconds), until=H.shift(hold['until'], seconds=-seconds))
             c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (_json.dumps(hold), key))
 
 
@@ -177,7 +177,7 @@ def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(a
         assert status['state'] == 'limited' and status['focus'].startswith('Primary fake plan usage limit at ')
         assert c.execute("SELECT count(*) FROM events WHERE action='attempt.limited' AND target=?", (attempt['id'],)).fetchone()[0] == 1
     issues = api.get('/api/status', headers=headers()).json()['health_issues']
-    issue = next(i for i in issues if i['kind'] == 'bot' and i['bot_id'] == 'ops')
+    issue = next(i for i in issues if i['kind'] == 'bot' and i['bot'] == 'ops')
     assert issue['detail'].startswith('Primary fake plan usage limit; resumes at ')
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
     # Inside the hold nothing is handed out; after it the same job comes back. Each limit in a row on the login
@@ -190,7 +190,7 @@ def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(a
     with api.app.state.store.transaction() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
         # The second limit restarted the hold even though the state did not change.
-        assert H.status(c, 'ops')['since'] > H.shift(H.now(), seconds=-5)
+        assert H.status(c, 'ops')['changed_at'] > H.shift(H.now(), seconds=-5)
     age_limit(api, 1801)
     assert claim(api, machine) is None                      # the second limit in a row holds an hour
     age_limit(api, 1800)
@@ -204,7 +204,7 @@ def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(a
         status = H.status(c, 'ops')
         assert status['state'] == 'limited' and 'third in a row' in status['focus']
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
-    issue = next(i for i in api.get('/api/status', headers=headers()).json()['health_issues'] if i['kind'] == 'bot' and i['bot_id'] == 'ops')
+    issue = next(i for i in api.get('/api/status', headers=headers()).json()['health_issues'] if i['kind'] == 'bot' and i['bot'] == 'ops')
     assert issue['detail'].startswith('Primary fake plan usage limit, three times in a row; queued work waits until ')
     assert claim(api, machine) is None
     age_limit(api, 3601)
@@ -716,7 +716,7 @@ def test_tico_s_saved_choice_for_an_update_cut_is_judged_again_when_its_lane_fre
         post(api, 'bots/ops/stop', {'run_id': attempt['id']})
     with api.app.state.store.transaction() as c:
         if since == 'stale':
-            for table, col, where in (('events', 'ts', "action LIKE 'system.update.%'"), ('attempts', 'finished_at', 'id=?')):
+            for table, col, where in (('events', 'created_at', "action LIKE 'system.update.%'"), ('attempts', 'finished_at', 'id=?')):
                 args = (attempt['id'],) if '?' in where else ()
                 for rid, ts in c.execute(f"SELECT rowid,{col} FROM {table} WHERE {where}", args).fetchall():
                     c.execute(f"UPDATE {table} SET {col}=? WHERE rowid=?", (H.shift(ts, seconds=-25 * 3600), rid))

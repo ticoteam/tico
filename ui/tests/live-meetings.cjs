@@ -68,7 +68,7 @@ async function main() {
       if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
       if (p === '/api/v2/tasks') return json({tasks: []});
       if (p === '/api/v2/setup/getting-started') return json({items: [], done: 0, total: 0, complete: true, dismissed: true, tour_seen: true, cards_dismissed: [],
-        can_build: true, owner_id: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
+        can_build: true, owner: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
       if (p === '/api/v2/live-meetings/bot-candidates') return json({bots: [{id: FINANCE, slug: 'finance', name: 'Finance', team: 'Operations'}]});
       if (p === '/api/v2/live-meetings' && method === 'GET') return json({meetings: world.meetings, count: world.meetings.length});
       if (p === '/api/v2/live-meetings' && method === 'POST') {

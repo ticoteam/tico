@@ -727,7 +727,7 @@ ALTER TABLE tasks ADD COLUMN guest TEXT;
 # Why a run left its session for a fresh one (runner-rs/src/rotate.rs; backend/run_triggers.py rotation): `tokens` or
 # `turns`, NULL for a run that resumed or started fresh for any other reason. Append to preserve existing installations.
 RUN_ROTATION_SCHEMA = """
-ALTER TABLE turns ADD COLUMN rotated_at TEXT;
+ALTER TABLE turns ADD COLUMN rotated TEXT;
 """
 
 # Whether a run resumed its provider session or started a new one, and why (`turns.session_kind` resumed|new,
@@ -1547,9 +1547,9 @@ def clear_finished_close_times(conn):
                               "WHERE status IN ('done','declined') AND closed_at IS NOT NULL"))
     for row in rows:
         conn.execute("UPDATE tasks SET closed_at=NULL, closed_by_id=NULL WHERE id=?", (row["id"],))
-        for field in ("closed_at", "closed_by"):
-            if row[field] is not None:
-                _task_event(conn, row["id"], KEEPER, field, row[field], None, "It is no longer closed")
+        for field, column in (("closed_at", "closed_at"), ("closed_by", "closed_by_id")):
+            if row[column] is not None:
+                _task_event(conn, row["id"], KEEPER, field, row[column], None, "It is no longer closed")
     return [row["id"] for row in rows]
 
 

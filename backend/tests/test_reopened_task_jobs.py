@@ -75,7 +75,7 @@ def test_reopened_job_keeps_real_gates_and_health_reports_them(api, gate):
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
                   (H.shift(H.now(), hours=-40),))
         rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2]
-                if r['bot_id'] == 'ops']
+                if r['bot'] == 'ops']
         assert [r['reason'] for r in rows] == [expected]
         assert expected in health.HELD
 

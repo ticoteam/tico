@@ -27,7 +27,7 @@ def test_overlap_wait_is_visible_and_reviewed_within_five_minutes_of_freeing(api
     with api.app.state.store.read() as c:
         mark = c.execute("SELECT detail FROM events WHERE action='job.recovery_wait' AND target=?", (attempt['id'],)).fetchone()
         assert json.loads(mark[0])['blocking_attempt'] == other['id']
-        assert json.loads(mark[0])['owner_id'] == H.KEEPER
+        assert json.loads(mark[0])['owner'] == H.KEEPER
     assert 'Tico owns recovery' in get(api, 'bots/ops/execution-review')['jobs'][0]['reason']
     assert sweep(api) == []
     with api.app.state.store.read() as c:

@@ -54,7 +54,7 @@ def test_a_name_that_resolves_to_a_private_address_is_blocked_when_read(seeded, 
     watch(seeded)
     assert check(seeded) == {"read": 1, "changed": 0, "errors": 1}
     row = get(seeded, "market/watches")["watches"][0]
-    assert row["last_status"] == "blocked" and row["checked"]
+    assert row["last_status"] == "blocked" and row["checked_at"]
     assert counts(seeded)["market_insights"] == 0
 
 

@@ -1771,7 +1771,7 @@ class HubServices:
                 person = screening.automation_person(c, values, self.flow.get("owner"), bot)
                 name = screening._name(c, bot)
             if person:
-                return {**args, "owner_id": person, "title": screening.held_title(args.get("title")),
+                return {**args, "owner": person, "title": screening.held_title(args.get("title")),
                         "body": screening.held_body(found, bot, name, body)}
             found["action"] = "warn"
         return {**args, "body": screening.warning_line(found) + "\n\n" + body}

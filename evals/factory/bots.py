@@ -107,7 +107,7 @@ class Bot:
 
     def kind_of_turn(self, task):
         w = self.world
-        if task["owner_id"] != "bot:" + self.slug or task["status"] in ("done", "closed", "declined"):
+        if task["owner"] != "bot:" + self.slug or task["status"] in ("done", "closed", "declined"):
             return "short"
         if self.role == "builder":
             step = w.board.step(w.step_of(task))
@@ -612,7 +612,7 @@ class Lead(Bot):
         target = min(peers, key=lambda o: owned[o])
         moved = 0
         for t in [t for t in here if t["owner_id"] == busiest and t["status"] == "open"][: (n - owned[target]) // 2]:
-            w.update(t["id"], token=self.token, owner_id=target)
+            w.update(t["id"], token=self.token, owner=target)
             moved += 1
         return f"moved {moved} tickets from {busiest[4:]} to {target[4:]}" if moved else f"noted the backlog on {busiest[4:]}"
 

@@ -110,7 +110,7 @@ async function open(browser, viewport, colorScheme, server) {
       return json({bot, tabs: counted, tasks: (server.tasks || TASKS).filter(t => counted.some(c => c.ids.includes(t.id)))});
     }
     if (p === '/api/v2/tasks') {
-      const who = q.get('owner') || q.get('requester'), field = q.get('owner') ? 'owner' : 'requester';
+      const who = q.get('owner') || q.get('requester'), field = q.get('owner') ? 'owner_id' : 'requester_id';
       const status = q.get('status');
       return json({tasks: (server.tasks || TASKS).filter(t => t[field] === 'bot:' + who && (!status || status === 'all' || status.split(',').includes(t.status)))});
     }

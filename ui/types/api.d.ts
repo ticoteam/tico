@@ -1060,7 +1060,7 @@ export type EventTypeList = {
 };
 
 export type Execution = {
-  bot: string;
+  bot_id: string;
   job_id: string;
   label: string;
   message_id: string;

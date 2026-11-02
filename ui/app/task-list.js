@@ -406,14 +406,14 @@ function tasksGroupsFor(items, by, state) {
   }
   if (by === 'status') {
     return taskStatusGroups(items).map(g => ({key: g.key, label: g.label, items: g.items, icon: '',
-      create: g.owner_id ? {owner: g.owner_id} : g.key === 'doing' ? {} : null}));
+      create: g.owner ? {owner_id: g.owner} : g.key === 'doing' ? {} : null}));
   }
   const byId = tasksById(state);
   for (const it of items) {
     const t = it.task;
     if (by === 'owner') {
       add('o:' + it.actor, () => ({label: actorLabel(it.actor), icon: actorFace(it.actor, 16), actor: it.actor,
-        create: {owner: actorSlug(it.actor) || it.actor}}), it);
+        create: {owner_id: actorSlug(it.actor) || it.actor}}), it);
     } else if (by === 'requester') {
       const who = taskRequester(t) || '';
       add('a:' + who, () => ({label: actorLabel(who) || 'Unknown', icon: actorFace(who, 16), actor: who, chat: chatOf(who), chatName: actorLabel(who)}), it);
@@ -424,7 +424,7 @@ function tasksGroupsFor(items, by, state) {
       const pid = taskParentId(t);
       const parent = pid && (byId.get(pid) || (t.parent && String(t.parent.id) === pid ? t.parent : null));
       add('p:' + (pid || 'none'), () => pid ? {label: parent?.title || 'Parent task', icon: '',
-        create: parent ? {parent: {id: pid, title: parent.title, owner: parent.owner_id}} : null}
+        create: parent ? {parent: {id: pid, title: parent.title, owner_id: parent.owner_id}} : null}
         : {label: 'No parent', icon: '', last: true}, it);
     } else if (by === 'tag') {
       const labels = t.labels || [];
@@ -1199,7 +1199,7 @@ function tasksMove(state, step) {
   if (state.peek && next !== state.peek) taskPeekOpen(state, next, {quick: true});
 }
 function tasksCreatePrefill(state) {
-  const owners = state.filters.owner_id || [];
+  const owners = state.filters.owner || [];
   const owner = owners.length === 1 ? resolveMe(owners[0]) : '';
   return {owner: actorSlug(owner) || owner, labels: (state.filters.tag || []).slice(0, 1)};
 }

@@ -102,7 +102,7 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
     if (p === '/api/v2/goals/tree') return json({goals: db.goals, owners: {}, other_kpis: [], proposals: []});
     if (p === '/api/v2/goals/needs-you') return json({items: []});
     if (p === '/api/v2/goals' && method === 'POST') {
-      const g = {id: 'g-' + (db.goals.length + 1), title: body.title, owner_id: body.owner_id, parent_id: body.parent_id || null, status: 'gray', rank: 9, kpis: []};
+      const g = {id: 'g-' + (db.goals.length + 1), title: body.title, owner_id: body.owner, parent_id: body.parent_id || null, status: 'gray', rank: 9, kpis: []};
       db.goals.push(g);
       return json({goal: g});
     }
@@ -112,7 +112,7 @@ async function openStrategy(browser, {viewport = PHONE, hash = '#/strategy/org',
       if (m[2] === '/status') goal.status = body.status;
       else if (m[3]) Object.assign(goal.kpis.find(k => k.id === m[3]).link, body);
       else if (m[2]) goal.kpis.push({id: 'k-' + (goal.kpis.length + 1), name: body.name, status: 'gray', link: {kind: body.kind, target: body.target ?? null, deadline: body.deadline ?? null}});
-      else Object.assign(goal, body, body.parent_id === '' ? {parent_id: null} : {});
+      else Object.assign(goal, body, body.owner ? {owner_id: body.owner} : {}, body.parent_id === '' ? {parent_id: null} : {});
       return json({goal});
     }
     return json(unrouted(p));

@@ -49,7 +49,7 @@ const {unrouted} = require('./support/routes.cjs');
       }
       if (p === '/api/v2/computers/computer-1/revoke') { writes.push({p, body: req.postDataJSON()}); computers[0].revoked_at = new Date().toISOString(); return json({revoked: true}); }
       if (p === '/api/v2/assistant/messages') { writes.push({p, body: req.postDataJSON()}); return json({}); }
-      if (p === '/api/v2/access') return json({people: [{id: 'ana', name: 'Ana', owner_id: true, role: 'owner', can_sign_in: true}], home_domain: 'example.com', allowed: [], allowed_domains: [], owner_id: {}, rules: {}});
+      if (p === '/api/v2/access') return json({people: [{id: 'ana', name: 'Ana', owner: true, role: 'owner', can_sign_in: true}], home_domain: 'example.com', allowed: [], allowed_domains: [], owner_id: {}, rules: {}});
       if (p === '/api/v2/me/tokens') return json({tokens: []});
       if (p === '/api/v2/slack/app') return json({configured: false});
       if (p === '/api/v2/meeting-importers') return json({importers: [], computers: []});

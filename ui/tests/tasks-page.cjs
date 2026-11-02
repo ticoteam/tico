@@ -170,10 +170,10 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
         if (failIds.includes(id) || conflictNextUpdate.delete(id) || body.version !== task.version)
           return json({error: {code: 'version_conflict', detail: 'Task changed; fetch it and retry your update'}}, 409);
         const {version, close, note, ...fields} = body;
-        if (fields.owner_id && !fields.owner_id.includes(':')) fields.owner_id = 'bot:' + fields.owner_id;   // as the server resolves a bot's name
-        Object.assign(task, fields, {version: task.version + 1});
+        if (fields.owner && !fields.owner.includes(':')) fields.owner = 'bot:' + fields.owner;   // as the server resolves a bot's name
+        Object.assign(task, fields, 'owner' in fields ? {owner_id: fields.owner} : {}, 'due' in fields ? {due_at: fields.due} : {}, {version: task.version + 1});
         if (close) task.status = 'closed';
-        if (fields.due_at === '') delete task.due_at;
+        if (fields.due === '') delete task.due_at;
         if (fields.type) { const type = types.find(x => x.id === fields.type); task.type_id = fields.type; task.type = type ? {id: type.id, name: type.name} : null; }
         if ('step' in fields) { const step = types.flatMap(x => x.steps).find(s => s.id === fields.step); task.step_id = fields.step || null; task.step = step || null; if (step) task.status = step.status; }
         return json({task: withRelations(task, tasks)});
@@ -671,15 +671,15 @@ async function properties(browser) {
   await page.keyboard.type('supp');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="owner"]')?.textContent.includes('Support'));
-  assert.deepEqual(taskWrites(posts).at(-1).body, {version: 4, owner_id: 'bot:support'});
+  assert.deepEqual(taskWrites(posts).at(-1).body, {version: 4, owner: 'bot:support'});
   // Due: a date picker; × clears it.
   await props.locator('[data-prop-date]').fill('2026-10-09');
   await page.waitForFunction(() => /Oct 9/.test(document.querySelector('#task-peek [data-prop="due"]')?.textContent || ''));
-  assert.match(taskWrites(posts).at(-1).body.due_at, /^2026-10-\d\dT\d\d:00:00\.000Z$/);
+  assert.match(taskWrites(posts).at(-1).body.due, /^2026-10-\d\dT\d\d:00:00\.000Z$/);
   await props.locator('[data-prop-row="due"]').hover();
   await props.locator('[data-prop-clear="due"]').click();
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="due"]')?.textContent.includes('Add due date'));
-  assert.equal(taskWrites(posts).at(-1).body.due_at, '');
+  assert.equal(taskWrites(posts).at(-1).body.due, '');
   // Tags: chips and a small + that opens an input with suggestions.
   await props.locator('[data-prop="tags"]').click();
   await page.keyboard.type('Urgent');
@@ -1227,7 +1227,7 @@ async function recheckSaves(browser) {
   await peek.locator('.prop-pop [data-prop-pick="writer"]').click();
   await page.waitForFunction(() => /Writer/.test(document.querySelector('#task-peek [data-prop="owner"]')?.textContent || ''));
   const writes = () => taskWrites(posts).filter(x => x.p.endsWith('/t-triage')).map(x => x.body);
-  assert.deepEqual(writes(), [{version: 3, status: 'waiting'}, {version: 4, owner_id: 'bot:writer'}], 'one at a time, each with the newest version');
+  assert.deepEqual(writes(), [{version: 3, status: 'waiting'}, {version: 4, owner: 'bot:writer'}], 'one at a time, each with the newest version');
   assert.equal(tasks.find(x => x.id === 't-triage').owner_id, 'bot:writer');
   releaseLists();
   // the last reload has drawn the list (the row shows the new owner)
@@ -1434,7 +1434,7 @@ async function renamedBot(browser) {
   const helper = {id, slug: 'sales-helper', name: 'sales-helper', display_name: 'Sales Helper', team: 'support', host: 'keeper', status: 'active', state: 'active', can_chat: true};
   const call = {...fixtures().find(x => x.id === 't-demo'), id: 't-call', title: 'Call the Acme lead', owner_id: 'bot:' + id};
   const {page, errors, posts} = await open(browser, {bots: [...BOTS, helper], extraTasks: [call], hash: '#/tasks?owner=bot:sales-helper&view=list'});
-  assert.deepEqual(await page.evaluate(() => TASKS_ST.filters.owner_id), ['bot:' + id], 'an old link\'s slug becomes the id');
+  assert.deepEqual(await page.evaluate(() => TASKS_ST.filters.owner), ['bot:' + id], 'an old link\'s slug becomes the id');
   assert.deepEqual(await rowKeys(page), ['tt-call']);
   assert.equal(await page.locator('[data-task-key="tt-call"] .tl-face').getAttribute('title'), 'Sales Helper');
   assert.equal(await page.locator('[data-task-key="tt-call"] .tl-face [data-av]').getAttribute('data-av'), id);
@@ -1445,7 +1445,7 @@ async function renamedBot(browser) {
   await page.locator('#task-peek [data-prop="owner"]').click();
   await page.locator(`#task-peek .prop-pop [data-prop-pick="${id}"]`).click();
   await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="owner"]')?.textContent.includes('Sales Helper'));
-  assert.equal(posts.filter(x => x.p === '/api/v2/tasks/t-checkout').at(-1).body.owner_id, 'bot:' + id);
+  assert.equal(posts.filter(x => x.p === '/api/v2/tasks/t-checkout').at(-1).body.owner, 'bot:' + id);
   assert.deepEqual(errors, []);
   await page.close();
   console.log('a bot whose id is not its slug: ok');

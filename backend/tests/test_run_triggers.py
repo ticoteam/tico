@@ -273,13 +273,13 @@ def test_a_run_that_started_a_fresh_session_says_why_and_the_week_counts_it(api,
     start(api, r, attempt)
     body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
     if case == "rotated":
-        body["rotated_at"] = {"reason": "tokens", "tokens": 612_000, "turns": 4, "limit": 400_000}
+        body["rotated"] = {"reason": "tokens", "tokens": 612_000, "turns": 4, "limit": 400_000}
     post(api, f"attempts/{attempt['id']}/complete", body, r["token"])
     row = turn(api, attempt)
-    assert row["rotated_at"] == ("tokens" if case == "rotated" else None)
+    assert row["rotated"] == ("tokens" if case == "rotated" else None)
     rows = weekly(api, where="bot='ops'")
     assert {bucket["purpose"] for bucket in rows} == {row["purpose"]}
-    assert sum(bucket["rotated_at"] for bucket in rows) == (1 if case == "rotated" else 0)
+    assert sum(bucket["rotated"] for bucket in rows) == (1 if case == "rotated" else 0)
 
 
 @pytest.mark.parametrize("session,said", [
@@ -320,7 +320,7 @@ def test_a_completion_from_an_older_runner_has_no_session_and_a_session_that_is_
     post(api, f"attempts/{attempt['id']}/complete",
          {**body, "rotated": {"reason": "turns", "tokens": 10, "turns": 9, "limit": 8}}, r["token"])
     row = turn(api, attempt)
-    assert (row["rotated_at"], row["session_kind"], row["session_why"]) == ("turns", None, None)
+    assert (row["rotated"], row["session_kind"], row["session_why"]) == ("turns", None, None)
 
 
 def test_a_persons_clear_and_a_topic_change_in_a_task_room_are_in_the_tasks_history(api):

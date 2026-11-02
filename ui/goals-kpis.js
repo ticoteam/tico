@@ -431,7 +431,7 @@ function kpiPanelHtml(d, {back = false} = {}) {
   const check = (d.checkins || [])[0];
   const list = rows.slice().reverse();
   const shown = list.slice(0, 30);
-  const editableGoals = links.filter(l => GOALS_ST && goalMayEdit({id: l.goal_id, owner: l.goal_owner, parent_id: GOALS_ST.goals.find(g => g.id === l.goal_id)?.parent_id}, GOALS_ST.goals));
+  const editableGoals = links.filter(l => GOALS_ST && goalMayEdit({id: l.goal_id, owner_id: l.goal_owner, parent_id: GOALS_ST.goals.find(g => g.id === l.goal_id)?.parent_id}, GOALS_ST.goals));
   return `<div class="tmodal-head">${back ? '<button class="ghost tmodal-x gp-back" type="button" data-kpi-back aria-label="Back">‹</button>' : ''}<span class="kpi-ptitle">${gdot(status, state.reason || k.reason)}<span class="who">${esc(k.name)}</span>${k.auto ? '' : `<span class="pill" title="Definition version">v${esc(k.definition_version)}</span>`}</span><span class="spacer"></span>
       <button class="ghost tmodal-x" type="button" data-kpi-close aria-label="Close">✕</button></div>
     <div class="tmodal-body kpi-body" data-kpi-body="${esc(k.id)}">
@@ -591,7 +591,7 @@ async function kpiOpen(id) {
   const data = await v2Get('/v2/kpis/' + encodeURIComponent(id));
   if (dlg.dataset.kpi !== id || !dlg.open) return;
   if (!data) { dlg.innerHTML = '<div class="tmodal-body"><p class="err">Could not load the KPI.</p><div class="goal-actions"><button class="ghost" type="button" data-kpi-close>Close</button></div></div>'; dlg.querySelector('[data-kpi-close]').onclick = () => dlg.close(); return; }
-  if (inPage && !GOALS_ST.panel.owner_id) GOALS_ST.panel.owner_id = data.kpi.owner_id;
+  if (inPage && !GOALS_ST.panel.owner) GOALS_ST.panel.owner = data.kpi.owner_id;
   dlg.innerHTML = kpiPanelHtml(data, {back: inPage});
   kpiPanelBind(dlg, data);
 }
@@ -716,7 +716,7 @@ function goalTreeRows(actor, depth, goals, loose, standing = '') {
   const bet = g => { const st = GOALS_ST?.strategy, c = g.bet_id && (st?.bets || []).find(x => x.id === g.bet_id); return c ? ` · ${st.label_one || 'Bet'}: ${c.statement}` : ''; };
   const goalCell = g => `<span class="gt-goal" title="${esc(g.title + (g.why || !bet(g) ? ' · Why: ' + (g.why || GOAL_NOT_TIED) : '') + bet(g))}">${gdot(g.status, goalStatusNote(g))}<span class="gt-title">${esc(g.title)}</span></span>`;
   // "+" adds a goal for this owner (a pointer's hover; a long press on a phone; the header's "+ Goal" for a keyboard).
-  const add = goalMayEdit({owner: actor}, GOALS_ST?.goals || []) ? `<span class="gt-add" data-goal-add="${esc(actor)}" aria-hidden="true" title="Add goal">+</span>` : '';
+  const add = goalMayEdit({owner_id: actor}, GOALS_ST?.goals || []) ? `<span class="gt-add" data-goal-add="${esc(actor)}" aria-hidden="true" title="Add goal">+</span>` : '';
   const row = (cls, goal, inner) => `<li class="gt-row${cls}" data-owner="${esc(actor)}"${goal ? ` data-goal="${esc(goal.id)}"` : ''} style="--d:${depth}" tabindex="0" role="button">`
     + `<span class="gt-ind" aria-hidden="true"></span>${inner}${cls.includes('gt-cont') ? '' : add}</li>`;
   const first = goals[0], words = String(standing || '').trim();
@@ -971,7 +971,7 @@ function goalUpdateHtml(g, P) {
 function goalPanelHtml(state) {
   const P = state.panel, actor = P.owner, info = goalOwnerInfo(actor);
   const goals = state.goals.filter(g => goalLive(g) && g.owner_id === actor).sort(goalRank);
-  const may = goalMayEdit({owner: actor}, state.goals);
+  const may = goalMayEdit({owner_id: actor}, state.goals);
   const other = state.other.filter(k => k.owner_id === actor);
   const finished = goalFinishedOf(state.goals, actor).length;
   const person = actor.startsWith('human:') ? (S.people || []).find(p => p.id === actor.slice(6)) : null;

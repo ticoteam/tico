@@ -91,7 +91,7 @@ def test_pipeline_cannot_remap_hidden_done_task_but_names_and_order_are_editable
     steps[0].update(status='doing', position=1)  # Empty steps may change meaning.
     post(api, 'task-types/' + typ['id'], {'steps': steps})
     after = get(api, 'tasks/' + row['id'], 'ben-test')['task']
-    for key in ('status', 'version', 'done_at', 'closed_at', 'closed_by'):
+    for key in ('status', 'version', 'done_at', 'closed_at', 'closed_by_id'):
         assert after[key] == done[key]
     assert after['step']['name'] == 'Completed'
 

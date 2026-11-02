@@ -498,6 +498,6 @@ let GOAL_OPTIONS = null;
 async function goalOptions() {
   if (GOAL_OPTIONS) return GOAL_OPTIONS;
   const r = await v2Get('/v2/goals?all=1');
-  GOAL_OPTIONS = (r?.goals || []).map(g => ({id: g.id, title: g.title, owner: g.owner_id, parent_id: g.parent_id, rank: g.rank, status: g.status}));
+  GOAL_OPTIONS = (r?.goals || []).map(g => ({id: g.id, title: g.title, owner_id: g.owner_id, parent_id: g.parent_id, rank: g.rank, status: g.status}));
   return GOAL_OPTIONS;
 }

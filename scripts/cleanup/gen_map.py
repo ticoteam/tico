@@ -160,8 +160,9 @@ NOT_ACTOR_BY = {("tasks", "carried_by"): "the attempt id that carried the task, 
                 ("meetings", "owner"): "an email, not an actor; Release 2 names it",
                 ("meetings", "recorded_by"): "an email or a runner id, not an actor; Release 2 names it",
                 ("meetings", "uploaded_by"): "an email or a runner id, not an actor; Release 2 names it"}
-# Named like a time, holds something else: left alone. task_reconnects.ended is how the card ended (fixed, cancelled, retired).
-M3_KEPT = {("task_reconnects", "ended")}
+# Named like a time, holds something else: left alone. task_reconnects.ended is how the card ended (fixed, cancelled, retired);
+# turns.rotated is why the run left its session (a reason, "tokens" or "turns").
+M3_KEPT = {("task_reconnects", "ended"), ("turns", "rotated")}
 
 WAVE3_NOTES = {("pages", "replaced_by"): "holds the replacing page's file id, not an actor"}
 # Later renames of a column an applied wave already renamed: (table, name now) -> (new, wave, why).

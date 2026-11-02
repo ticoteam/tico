@@ -159,7 +159,7 @@ def rotation(conn, turn_id, rotated):
     older one, or a run that resumed) leaves `rotated` NULL."""
     if rotated is None:
         return 0
-    return conn.execute("UPDATE turns SET rotated_at=? WHERE id=? AND finished_at IS NULL", (rotated.reason, turn_id)).rowcount
+    return conn.execute("UPDATE turns SET rotated=? WHERE id=? AND finished_at IS NULL", (rotated.reason, turn_id)).rowcount
 
 
 # Why a run started a new session, in the words a task's history uses ("Started a new session: ..."). The first six are

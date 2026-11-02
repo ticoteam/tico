@@ -119,7 +119,7 @@ def test_a_review_task_with_a_merged_pr_gets_one_stale_check_comment_to_its_bot(
     assert said == "bot:ops", "addressed to the bot that owns the task, so it is woken on it"
     # Decide saw only the title, status, step, dates, the reason and the last comments.
     state = model.calls[0]["state"]["task"]
-    assert set(state) == {"title", "status", "step", "created_at", "updated_at", "due", "reason", "comments"}
+    assert set(state) == {"title", "status", "step", "created_at", "updated_at", "due_at", "reason", "comments"}
     assert state["reason"] == "PR #12 merged Oct 16" and model.calls[0]["label"] == "stale-review@1"
     (audit,) = calls(store)
     assert audit["task"] == tid and audit["verdict"] == {"value": "update", "confidence": 0.9}

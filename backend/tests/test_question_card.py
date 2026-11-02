@@ -118,7 +118,7 @@ def test_the_card_says_what_it_holds_up_and_decide_puts_a_building_item_first(ap
     items = {i["id"]: i for i in get(api, "needs-you")["items"]}
     card, other = items[building["task"]["id"]], items[old["task"]["id"]]
     assert card["holds_up"] == {"id": item["id"], "title": "Website sales chat build", "kind": "roadmap", "step": "Building",
-                                "due": None, "soonest": None}
+                                "due_at": None, "soonest": None}
     assert other["holds_up"]["title"] == "Tidy the drafts folder" and other["holds_up"]["kind"] == "task"
     assert (card["tier"], other["tier"]) == (1, 2)
     # The why line never carries the body's ids, paths or errors; a plain first paragraph is one.
