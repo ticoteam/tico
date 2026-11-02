@@ -412,7 +412,19 @@ Each further woken bot gets a **carrier**: a keeper notice to that bot in the sa
 "wake": "thread", "reason": ...}`, no `seq`; its job starts the run, and the delivery's `carrier_id` names it.
 `jobs.message_id` stays unique. No carrier is written when the bot may not read the message (audience and the
 per-message check); the delivery is `moot`. The per-message check reads a carrier as the message it carries, and a
-claim refuses a carrier whose message is gone, moved or no longer readable (`threads.carrier_current`).
+claim refuses a carrier whose message is gone, moved or no longer readable (`threads.carrier_current`). A message
+addressed to a bot since removed from the thread is refused the same way before any grant (`threads.still_addressed`):
+its job is cancelled and its delivery `moot`. Conversations from before threads, a task's room and a task's turn
+outside a members thread are not asked.
+
+A note copied from a message (a bot's plain mention held for the bot's next run, or a mention deferred at the cap) goes
+only into a session inside its source's boundary (`threads.note_fits_run`): a private source's note goes into a private
+session of the same root, or the run started for that message. A note with no source, a public source, or a source in a
+direct room of bots only goes with any run. A run that leaves notes writes one keeper notice per root (`refs.wake:
+"thread_notes"`, `refs.carries`: the oldest note's message; never folded into a running turn), so the bot's next run
+starts at most one more in each such thread, in its own session, and the notes wait until then. `GET /api/v2/notes` shows
+a note's words only to who may read the source (`threads.note_source_shown`): a person and an external agent by their own
+rights, a bot's run by what its session holds.
 
 Every message write fans out the same way, through `post` or a legacy writer (`hubdb.say`, runner replies, old
 routes): mentions, DM members, the Home's owner, sub-thread repliers and outside destinations, under the loop guard.

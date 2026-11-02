@@ -3851,18 +3851,20 @@ def create_app(settings=None):
 
     def note_visible(c, who, row):
         # A note copied from a message is read only while its recipient still reads that message (the same check a
-        # run's claim makes, threads.revalidate_notes), whoever asks.
+        # run's claim makes, threads.revalidate_notes), whoever asks, and only by who may read that message themselves.
         from . import threads
         if not threads.note_readable(c, row, row["to_actor"]):
             return False
         # A bot sees the notes it left and the ones left for it; a person, the ones they left and
         # every note between bots whose activity they may read.
         if who.role == "bot":
-            return who.actor in (row["from_actor"], row["to_actor"])
-        if who.actor == row["from_actor"]:
-            return True
-        bots = [H.actor_id(a) for a in (row["from_actor"], row["to_actor"]) if str(a).startswith("bot:")]
-        return all(level["read"] for level in auth.bot_accesses(c, who, bots).values())
+            allowed = who.actor in (row["from_actor"], row["to_actor"])
+        elif who.actor == row["from_actor"]:
+            allowed = True
+        else:
+            bots = [H.actor_id(a) for a in (row["from_actor"], row["to_actor"]) if str(a).startswith("bot:")]
+            allowed = all(level["read"] for level in auth.bot_accesses(c, who, bots).values())
+        return allowed and threads.note_source_shown(c, auth, who, row)
 
     def note_write(c, who, body, rc=None):
         to = auth.target(c, who, body.to, need="write")

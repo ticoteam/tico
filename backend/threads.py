@@ -74,6 +74,10 @@ NOTIFY = ("live", "mentions", "digest", "muted")
 OUTSIDE_PREFIXES = ("slack:", "peer:")
 REMOTE_ACTOR = re.compile(r"^(human|bot):[^@\s]+@([^@\s]+)$")   # a federation guest: <kind>:<name>@<install>
 LOOP_GUARD_PER_HOUR = int(os.environ.get("TICO_THREAD_LOOP_GUARD") or 6)
+NOTES_PER_RUN = 50        # the notes one run carries, as H.notes_waiting's default
+NOTES_READ = 500          # waiting notes one claim looks through for those
+NOTE_WAKE = "thread_notes"  # the notice that starts a run in a thread for the notes waiting there
+NOTE_WAKE_THREADS = 20    # threads one claim starts such a run in; the rest at the bot's next run
 MIGRATION_KEY = "threads-migration"
 STRATEGY_ROOM = "ceo"           # rooms.STRATEGY_ROOM, read here without importing rooms
 EDITABLE_KINDS = ("say",)
@@ -1614,6 +1618,44 @@ def _source_readable(c, thread, message, bot):
     return task_privacy.message_readable(c, bot, message)
 
 
+def still_addressed(c, message, bot):
+    """Whether a queued message may still start `bot`'s run or join one, checked before the run gets any grant: a carrier
+    while it passes `carrier_current`, and a message addressed to the bot while the bot is still in its thread's audience,
+    so removal from a thread stops what was already queued. A conversation that predates threads and a task's own room
+    are left to the per-message check, as they were read before; so is a task's turn outside a members thread, where the
+    bot works for the task and may never have been in the chat it started in."""
+    message = dict(message or {})
+    refs = message.get("refs") or H._json(message.get("refs_json"), {}) or {}
+    if isinstance(refs, dict) and refs.get("carries"):
+        return carrier_current(c, message, bot) and (refs.get("wake") != NOTE_WAKE or _notes_wait_in(c, message, bot))
+    thread = thread_row(c, message.get("conversation_id"))
+    root = root_of(c, thread) if thread is not None else None
+    if root is None or root.get("audience") not in AUDIENCES:
+        return True
+    audience = audience_of(root)
+    if audience == "task" or (audience != "members" and H.message_task_id(message, H.conversation(c, thread["id"]))):
+        return True
+    return audience_has(c, thread, bot)
+
+
+def _notes_wait_in(c, message, bot):
+    """Whether any note still waits in a notice's thread tree: another run there may have carried them first, and a run
+    with nothing to carry costs a turn for nothing."""
+    thread = thread_row(c, message.get("conversation_id"))
+    root = root_of(c, thread) if thread is not None else None
+    return bool(root) and c.execute(
+        "SELECT 1 FROM notes n JOIN messages m ON m.id=n.message_id JOIN conversations t ON t.id=m.conversation_id "
+        f"WHERE n.to_actor=? AND coalesce(t.root_id,t.id)=? AND {H.NOTE_WAITING_SQL} LIMIT 1", (bot, root["id"])).fetchone() is not None
+
+
+def moot_delivery(c, message, bot):
+    """The delivery of a message whose job was cancelled at its claim: nothing will come of it."""
+    refs = (message or {}).get("refs") or {}
+    source = (refs.get("carries") if isinstance(refs, dict) else None) or (message or {}).get("id")
+    c.execute("UPDATE message_deliveries SET state='moot', updated_at=? WHERE message_id=? AND recipient=? "
+              "AND state IN ('pending','capped')", (_now(), source, bot))
+
+
 def note_readable(c, note, bot):
     """Whether a waiting note may still reach `bot`'s run. A deferred thread message (`message_id`) goes only while the
     bot may read its source now: a bot removed from the thread, or one whose access to the message has gone, loses it.
@@ -1641,7 +1683,117 @@ def revalidate_notes(c, bot, notes):
     return kept
 
 
-def _carrier(c, thread, message, bot, reason, rule):
+def _bots_only_room(root):
+    """A direct room with no person in it. A bot's plain message there is told to the other bot's next run whatever
+    starts it (backend/bot_to_bot.py): only those two bots and whoever reads both read it."""
+    people = root.get("participants") or []
+    return (audience_of(root) in ("participants", "personal") and bool(people)
+            and all(str(p).startswith("bot:") or p == H.KEEPER for p in people))
+
+
+def _note_source(c, note):
+    """(the source message's stored row, its thread, its root) of a note copied from a message, else Nones."""
+    mid = (note or {}).get("message_id")
+    row = c.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone() if mid else None
+    thread = thread_row(c, row["conversation_id"]) if row else None
+    return (dict(row), thread, root_of(c, thread)) if thread is not None else (None, None, None)
+
+
+def _source_private(c, source, thread, root):
+    """Whether a message must stay in its own thread's session: its thread is private, it ties to something narrower than
+    its thread (a private task, a meeting, a legacy audience), or its private task's room. A message in a bots' direct
+    room with nothing narrower goes as bot_to_bot says."""
+    if _narrower_than_thread(c, source):
+        return True
+    if _bots_only_room(root):
+        return False
+    return any(private_task_thread(c, row) or audience_class(row) == "private" for row in (thread, root))
+
+
+def note_fits_run(c, note, conv, message, run_class):
+    """Whether a waiting note may enter this run's prompt. A run's session outlives the run and answers whoever reads its
+    thread, so a note copied from a private message goes only into a private session of the same thread tree, or a run
+    started for that message. A note with no source, or a public source, goes with any run: what a company thread says
+    takes nothing from a session that reads less or more."""
+    source, thread, root = _note_source(c, note)
+    if source is None or not _source_private(c, source, thread, root):
+        return True
+    refs = (message or {}).get("refs") or {}
+    if isinstance(refs, dict) and refs.get("carries") == source["id"] and message.get("from_actor") == H.KEEPER:
+        return True
+    return run_class == "private" and root["id"] == (conv.get("root_id") or conv["id"])
+
+
+def notes_for_run(c, bot, conv, message, run_class):
+    """(the notes this run carries, the notes it leaves for their own threads) of `bot`, oldest first, each one checked
+    against its source first (revalidate_notes). Reads past a run's own batch, so private notes that wait for their own
+    thread's turn never hide the ones this run may carry."""
+    fits, left = [], []
+    for item in revalidate_notes(c, bot, H.notes_waiting(c, H.actor_id(bot), limit=NOTES_READ)):
+        if not note_fits_run(c, item, conv, message, run_class):
+            left.append(item)
+        elif len(fits) < NOTES_PER_RUN:
+            fits.append(item)
+    return fits, left
+
+
+def wake_note_threads(c, bot, notes):
+    """One run in each thread whose notes a run of `bot` had to leave, in that thread's own session, where they fit. A bot's
+    plain mention still waits for the bot's next run: this is called only at one, per thread and not per message, and a
+    thread with such a run waiting gets no other. The run it starts carries them, so it writes no further one for them.
+    Returns the notices written."""
+    written, seen = [], set()
+    for item in notes:
+        source, thread, root = _note_source(c, item)
+        if source is None or root["id"] in seen:
+            continue
+        seen.add(root["id"])
+        if len(seen) > NOTE_WAKE_THREADS:
+            break
+        if c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id "
+                     "WHERE j.bot=? AND j.state IN ('queued','leased') AND json_extract(m.refs_json,'$.wake')=? "
+                     "AND coalesce(t.root_id,t.id)=? LIMIT 1", (H.actor_id(bot), NOTE_WAKE, root["id"])).fetchone():
+            continue
+        made = _carrier(c, thread, H.message(c, source["id"]), bot, "mention", None, wake=NOTE_WAKE,
+                        body="Messages in this thread waited for your next run; they are in this run's notes.")
+        if made:
+            written.append(made)
+    return written
+
+
+def note_source_shown(c, auth, who, note):
+    """Whether whoever asks may read a note's copied words: the note is the message, so the asker reads the message. A
+    person and an external agent by their own rights. A bot's run by what its session holds: the note it carries, a public
+    one, or one in the thread tree the run was granted. A bots' direct room stays with reading both bots, as it was."""
+    source, thread, root = _note_source(c, note)
+    if not (note or {}).get("message_id"):
+        return True
+    if source is None:
+        return False
+    private = _source_private(c, source, thread, root)
+    if not private and _bots_only_room(root):
+        return True
+    v = viewer(auth, who)
+    run = v.runner_turn and who.attempt_id
+    if run and note.get("carried_by") == who.attempt_id:
+        return True
+    if run and not private:
+        return True
+    if run:
+        return _run_session(c, who.attempt_id) == (root["id"], "private")
+    return message_readable(c, v, source)
+
+
+def _run_session(c, attempt_id):
+    """(the root, private or public) a run's session belongs to, as its claim keyed it."""
+    from .execution import thread_payload
+    row = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (attempt_id,)).fetchone()
+    message = H.message(c, row["message_id"]) if row else None
+    conv = thread_payload(c, H.conversation(c, message["conversation_id"]), message) if message else None
+    return (conv["root_id"], conv["audience_class"]) if conv else (None, None)
+
+
+def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None):
     """A keeper notice to `bot` in the same thread whose job starts its run for `message`, or None when the bot may not
     read that message. No seq: no timeline, counter or SSE thread view shows it. It carries the source's provenance
     by reference: the per-message check reads a carrier as the message it carries (task_privacy.message_readable),
@@ -1649,11 +1801,11 @@ def _carrier(c, thread, message, bot, reason, rule):
     if not _source_readable(c, thread, message, bot):
         return None
     cid = _new_id()
-    refs = {"carries": message["id"], "wake": "thread", "reason": reason, "from": message.get("from_actor")}
+    refs = {"carries": message["id"], "wake": wake, "reason": reason, "from": message.get("from_actor")}
     if rule:
         refs["rule"] = rule
     author = message.get("from_actor") or ""
-    body = f"{author} in this thread: {message.get('body') or ''}"
+    body = body or f"{author} in this thread: {message.get('body') or ''}"
     legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
     c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,in_reply_to,created,"
               "origin_id,revision,restricted,legacy_audience) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1,?)",

@@ -190,7 +190,7 @@ def test_the_waiting_scan_reads_only_the_unsettled_index(api):
 
 def test_a_deferred_thread_note_the_bot_lost_access_to_is_cancelled_not_carried(api):
     # A thread message deferred into a bot's notes must not outlive the bot's access: removing the bot from the thread
-    # cancels what it would carry, and the bot's next unrelated run reads only the notes it can still read.
+    # cancels what it would carry; the one it still reads goes to a run in its own thread, not the bot's next unrelated one.
     from backend import threads
     from backend.tests.test_threads_delivery import new_thread, say
     r = setup(api)
@@ -208,7 +208,11 @@ def test_a_deferred_thread_note_the_bot_lost_access_to_is_cancelled_not_carried(
     run = claim(api, r)
     carried = [n["text"] for n in run["notes"]]
     assert not any("payroll" in text for text in carried), carried
-    assert any("Ben's note for ops" in text for text in carried), carried
+    assert not any("Ben's note for ops" in text for text in carried), carried   # private: it waits for its own thread
+    post(api, f"attempts/{run['id']}/started", {"thread_id": "t-run"}, token=r["token"])
+    post(api, f"attempts/{run['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"])
+    own = claim(api, r)
+    assert any("Ben's note for ops" in n["text"] for n in own["notes"]), own["notes"]
     with store.read() as c:
         cancelled = c.execute("SELECT cancelled_at FROM notes WHERE message_id=?", (lost_msg["id"],)).fetchone()[0]
     assert cancelled

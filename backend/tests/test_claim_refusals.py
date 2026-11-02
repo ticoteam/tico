@@ -112,7 +112,7 @@ def test_a_turn_running_when_its_bot_is_limited_takes_in_only_work_inside_the_li
 def test_a_limited_bots_turn_carries_only_next_run_work_inside_the_limit_until_released(api, monkeypatch):
     from backend import bot_to_bot
     backlog = []
-    monkeypatch.setattr(bot_to_bot, "continue_backlog", lambda c, bot: backlog.append(bot))
+    monkeypatch.setattr(bot_to_bot, "continue_backlog", lambda c, bot, skip=(): backlog.append(bot))
     machine = task_bot(api, lanes=True)
     task = new_task(api, "the check")
     child = post(api, "tasks", {"owner": "ops", "title": "review", "body": "Review it.", "next_run": True,
