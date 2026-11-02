@@ -12,6 +12,7 @@ function searchEntries() {
     const label = [...a.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
     out.push({kind: 'page', label, href: a.getAttribute('href'), icon: a.querySelector('.nav-icon')?.textContent || 'article'});
   }
+  if (cpAllowed()) out.push({kind: 'page', label: 'Company page', href: OVERVIEW_COMPANY, icon: 'newspaper'});   // a tab of Overview, with no link of its own
   for (const e of shownEmps()) {
     // label is the plain name for matching and sorting; html is the same name as shown elsewhere, flag and all
     out.push({kind: 'bot', label: String(e.display_name || '').replace(TEMP_RE, ''), html: shownName(e), temp: isTempBot(e),

@@ -153,10 +153,18 @@ function approvalFileIcon() {
   svg.append(path);
   return svg;
 }
-// Where a publish goes: a Support ticket by its number, a web address as a link, anything else as text.
-function approvalWhere(url) {
+// Where a publish goes: a Support ticket by its number, a Company page edition or stats board by its name, linked to where
+// it is run, a web address as a link, anything else as text.
+function approvalWhere(url, title) {
   const u = String(url ?? '').trim(), ticket = /^hq-ticket:(TK-[A-Za-z0-9]+)$/.exec(u);
   if (ticket) return 'Support ticket ' + ticket[1];
+  const edition = /^tico:editions\/([^/]+)\/\d+$/.exec(u);
+  if (edition || /^tico:stat-board\/[^/]+\/[^/]+$/.test(u)) {
+    const a = document.createElement('a');
+    a.href = '#/company-page' + (edition ? '?edition=' + encodeURIComponent(edition[1]) : '');
+    a.textContent = title ? String(title) : 'Company page';
+    return a;
+  }
   if (/^https?:\/\//i.test(u)) {
     try {
       const href = new URL(u);
@@ -194,10 +202,15 @@ function approvalFacts(what, p, it = {}) {
   let rows, named;
   if (what === 'publish') {
     const text = p.text == null || (typeof p.text === 'string' && !p.text.trim()) ? null : p.text;
-    rows = [['Where', typeof p.url === 'string' ? approvalWhere(p.url) : shown(p.url)],
+    rows = [['Where', typeof p.url === 'string' ? approvalWhere(p.url, p.title) : shown(p.url)],
       text == null ? ['Text', 'not included; only a hash of it is in the payload', 'muted', true]
                    : ['Text', shown(text), 'approval-text']];
     named = ['url', 'text', 'content_sha256'];
+    // A Company page edition or stats board: who it's for, and the bookkeeping stays in the exact payload.
+    if (typeof p.url === 'string' && p.url.startsWith('tico:')) {
+      rows.splice(1, 0, ['Audience', shown(p.audience)], ['Period', shown(p.period)]);
+      named.push('audience', 'period', 'audience_id', 'disclosure_revision', 'rules', 'title', 'version', 'edition_id', 'stats', 'kind');
+    }
   } else if (what === 'spend') {
     rows = [['Amount', shown(p.amount)], ['Account', shown(p.account)], ['For', shown(p.what)]];
     named = ['amount', 'account', 'what'];

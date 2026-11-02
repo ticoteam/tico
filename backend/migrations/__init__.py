@@ -40,9 +40,10 @@ from .. import hubdb as H
 DIRECTORY = Path(__file__).parent
 # The oldest user_version this server opens. Below it the schema is one this code's migrations do not bring up to date.
 MIN_BRIDGE_USER_VERSION = 71
-# The newest user_version a release wrote before hubdb's list ended at 71: step 72 is now 0030_growth_segments, guarded
-# for a file that already ran it. This server opens such a file as it is; the number never grows.
-NEWEST_USER_VERSION = 72
+# The newest user_version a release wrote before hubdb's list ended at 71: steps 72 and 73 are now 0030_growth_segments
+# and 0033_company_page, guarded for a file that already ran them. This server opens such a file as it is; the number
+# never grows.
+NEWEST_USER_VERSION = 73
 # The newest cloud_migrations version Store.initialize writes; tests/test_migrations.py keeps it in step with store.py.
 # Steps 76 and 77 came from releases made while this cleanup was open; they use today's names and run after the files.
 CLOUD_VERSION = 77

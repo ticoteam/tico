@@ -856,8 +856,9 @@ function renderTree() {
   };
   document.querySelectorAll('[data-nav]').forEach(a => {
     // More is current only for pages the bottom bar does not have its own button for.
-    const mobilePrimary = S.route === OVERVIEW || S.route === OVERVIEW_CAMPUS || S.route === UPDATES || S.route.startsWith(UPDATES + '?') || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap';
-    const isCurrent = (a.dataset.nav === 'overview' && (S.route === OVERVIEW || S.route === OVERVIEW_CAMPUS)) ||
+    const inOverview = S.route === OVERVIEW || S.route === OVERVIEW_CAMPUS || S.route === OVERVIEW_COMPANY || rdUnder(S.route, CP_ROUTE);
+    const mobilePrimary = inOverview || S.route === UPDATES || S.route.startsWith(UPDATES + '?') || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap';
+    const isCurrent = (a.dataset.nav === 'overview' && inOverview) ||
       (a.dataset.nav === 'welcome' && S.route === WELCOME) ||
       (a.dataset.nav === 'meetings' && (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?'))) ||
       (a.dataset.nav === 'mail' && (S.route === MAIL || S.route.startsWith(MAIL + '?') || S.route.startsWith(MESSAGING))) ||

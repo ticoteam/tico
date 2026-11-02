@@ -47,12 +47,13 @@ function ruActorName(actor) {
 // A Who or With as the API shows it ({everyone, all_bots, groups: [{id, name}], ...}) in words.
 function ruScopeWords(scope, empty = '—') {
   if (!scope) return empty;
-  if (scope.everyone) return 'Everyone';
-  const words = [...(scope.all_bots ? ['All bots'] : []), ...['groups', 'bots', 'people'].flatMap(k => (scope[k] || []).map(x => x.name || x.id))];
+  const outside = scope.outside_editions ? ['Outside editions'] : [];
+  if (scope.everyone) return ['Everyone', ...outside].join(', ');
+  const words = [...(scope.all_bots ? ['All bots'] : []), ...outside, ...['groups', 'bots', 'people'].flatMap(k => (scope[k] || []).map(x => x.name || x.id))];
   return words.length ? words.join(', ') : empty;
 }
 // Its ids only, as the API takes it and as the scope editor keeps it.
-const ruScopeIds = scope => ({everyone: !!scope?.everyone, all_bots: !!scope?.all_bots,
+const ruScopeIds = scope => ({everyone: !!scope?.everyone, all_bots: !!scope?.all_bots, outside_editions: !!scope?.outside_editions,
   groups: (scope?.groups || []).map(x => x.id ?? x), bots: (scope?.bots || []).map(x => x.id ?? x), people: (scope?.people || []).map(x => x.id ?? x)});
 const ruSameScope = (a, b) => JSON.stringify(ruScopeIds(a)) === JSON.stringify(ruScopeIds(b));
 
@@ -215,6 +216,7 @@ function ruScopeFacets(rules, key, field) {
     const s = r[field]; if (!s) continue;
     if (s.everyone) add('everyone', 'Everyone');
     if (s.all_bots) add('all_bots', 'All bots');
+    if (s.outside_editions) add('outside_editions', 'Outside editions');
     for (const kind of ['groups', 'bots', 'people']) for (const x of s[kind] || []) add(kind + ':' + x.id, x.name || x.id);
   }
   const cur = RU.filter[key];
@@ -226,6 +228,7 @@ const ruScopeHas = (scope, key) => {
   if (!scope) return false;
   if (key === 'everyone') return !!scope.everyone;
   if (key === 'all_bots') return !!scope.all_bots;
+  if (key === 'outside_editions') return !!scope.outside_editions;
   const [kind, id] = key.split(/:(.*)/);
   return (scope[kind] || []).some(x => x.id === id);
 };
@@ -349,7 +352,7 @@ function ruAddAllSync(group) {
 function ruWhoOptions() {
   const opt = (v, l) => `<option value="${esc(v)}">${esc(l)}</option>`;
   const groups = ruGroups(), bots = ruBots(), people = ruPeople();
-  return (settingsIsAdmin() ? opt('everyone', 'Everyone') : '') + opt('all_bots', 'All bots')
+  return (settingsIsAdmin() ? opt('everyone', 'Everyone') + opt('outside_editions', 'Outside editions') : '') + opt('all_bots', 'All bots')
     + (groups.length ? `<optgroup label="Departments">${groups.map(g => opt('groups:' + g.id, g.name || g.id)).join('')}</optgroup>` : '')
     + (bots.length ? `<optgroup label="Bots">${bots.map(b => opt('bots:' + b.id, b.name)).join('')}</optgroup>` : '')
     + (people.length ? `<optgroup label="People">${people.map(p => opt('people:' + p.id, p.name)).join('')}</optgroup>` : '');
@@ -358,6 +361,7 @@ function ruWhoFromOption(v) {
   if (!v) return null;
   if (v === 'everyone') return {everyone: true};
   if (v === 'all_bots') return {all_bots: true};
+  if (v === 'outside_editions') return {outside_editions: true};
   const [kind, id] = v.split(/:(.*)/);
   return {[kind]: [id]};
 }
@@ -467,15 +471,19 @@ document.addEventListener('keydown', ev => {
 
 // ----------------------------------------------------------------- the scope editor (Who, With)
 // Segments pick what "+ add" offers; the chips are everything chosen. Everyone (Who) is the owner's and admins' alone;
-// Anyone (With) clears it. Its state is {everyone, all_bots, groups, bots, people, seg}, ids only.
+// Anyone (With) clears it. Outside editions (Who, the owner's and admins' alone) stands apart from who else follows the
+// rule: it adds the Company page's editions, and Everyone doesn't include them. The state is
+// {everyone, all_bots, outside_editions, groups, bots, people, seg}, ids only.
 function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {}}) {
   const s = {...ruScopeIds(scope)};
   s.seg = s.everyone ? 'everyone' : s.all_bots || s.bots.length ? 'bots' : s.groups.length ? 'groups' : s.people.length ? 'people' : flags ? 'groups' : 'anyone';
   const draw = () => {
-    const segs = flags ? [['everyone', 'Everyone'], ['groups', 'Departments'], ['bots', 'Bots'], ['people', 'People']]
+    const segs = flags ? [['everyone', 'Everyone'], ['groups', 'Departments'], ['bots', 'Bots'], ['people', 'People'],
+      ...(settingsIsAdmin() || s.outside_editions ? [['outside', 'Outside editions']] : [])]
       : [['anyone', 'Anyone'], ['groups', 'Departments'], ['bots', 'Bots'], ['people', 'People']];
     const chips = [
       ...(s.all_bots ? [['all_bots', '', 'All bots']] : []),
+      ...(s.outside_editions ? [['outside_editions', '', 'Outside editions']] : []),
       ...s.groups.map(id => ['groups', id, ruGroupName(id)]), ...s.bots.map(id => ['bots', id, botDisplayName(id)]),
       ...s.people.map(id => ['people', id, ruPersonName(id)])];
     const pool = {groups: ruGroups().map(g => ({id: g.id, name: g.name || g.id})), bots: ruBots(), people: ruPeople()}[s.seg] || [];
@@ -483,10 +491,10 @@ function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {
       ...pool.filter(x => !s[s.seg].includes(x.id)).map(x => [x.id, x.name])];
     const adding = !disabled && !s.everyone && s.seg !== 'anyone' && options.length;
     host.innerHTML = `<div class="ru-seg" role="group">${segs.map(([k, label]) => {
-        const on = k === 'everyone' ? s.everyone : k === 'anyone' ? s.seg === 'anyone' : !s.everyone && s.seg === k;
-        const off = disabled || (k === 'everyone' && !settingsIsAdmin());
+        const on = k === 'everyone' ? s.everyone : k === 'outside' ? s.outside_editions : k === 'anyone' ? s.seg === 'anyone' : !s.everyone && s.seg === k;
+        const off = disabled || ((k === 'everyone' || k === 'outside') && !settingsIsAdmin());
         return `<button type="button" data-seg="${k}" aria-pressed="${on}"${off ? ' disabled' : ''}>${label}</button>`; }).join('')}</div>
-      ${s.everyone || (s.seg === 'anyone' && !chips.length) ? '' : `<div class="ru-chips">${chips.map(([k, id, label]) =>
+      ${(s.everyone && !s.outside_editions) || (s.seg === 'anyone' && !chips.length) ? '' : `<div class="ru-chips">${chips.map(([k, id, label]) =>
         `<span class="ru-chip">${esc(label)}${disabled ? '' : `<button type="button" data-unchip="${k}" data-id="${esc(id)}" aria-label="Remove ${esc(label)}">✕</button>`}</span>`).join('')}
         ${adding ? `<select class="ru-addsel" aria-label="Add"><option value="">+ add</option>${options.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select>` : ''}</div>`}`;
   };
@@ -494,6 +502,7 @@ function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {
     const seg = ev.target.closest('[data-seg]');
     if (seg && !seg.disabled) {
       const k = seg.dataset.seg;
+      if (k === 'outside') { s.outside_editions = !s.outside_editions; draw(); onChange(); return; }
       if (k === 'everyone') Object.assign(s, {everyone: true, all_bots: false, groups: [], bots: [], people: []});
       else if (k === 'anyone') Object.assign(s, {groups: [], bots: [], people: []});
       else s.everyone = false;
@@ -502,6 +511,7 @@ function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {
     const un = ev.target.closest('[data-unchip]');
     if (un) {
       if (un.dataset.unchip === 'all_bots') s.all_bots = false;
+      else if (un.dataset.unchip === 'outside_editions') s.outside_editions = false;
       else s[un.dataset.unchip] = s[un.dataset.unchip].filter(x => x !== un.dataset.id);
       draw(); onChange();
     }
@@ -514,7 +524,7 @@ function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {
     host.querySelector('.ru-addsel')?.focus();
   };
   draw();
-  return {value: () => flags ? {everyone: s.everyone, all_bots: s.all_bots, groups: s.groups, bots: s.bots, people: s.people}
+  return {value: () => flags ? {everyone: s.everyone, all_bots: s.all_bots, groups: s.groups, bots: s.bots, people: s.people, ...(s.outside_editions ? {outside_editions: true} : {})}
     : {groups: s.groups, bots: s.bots, people: s.people}};
 }
 const ruSegHTML = (name, options, value, disabled) => `<div class="ru-seg" role="group" data-ru-seg="${name}">${options.map(([k, label]) =>
@@ -601,7 +611,7 @@ async function ruRulePanel(side, id, note = '') {
   const form = side.querySelector('form'), status = form.querySelector('.ru-status');
   // A suggestion is added only with a Who: Add waits until the editor names one.
   const addOne = form.querySelector('[data-ru-accept-one]');
-  const whoSet = scope => scope.everyone || scope.all_bots || ['groups', 'bots', 'people'].some(k => scope[k].length);
+  const whoSet = scope => scope.everyone || scope.all_bots || scope.outside_editions || ['groups', 'bots', 'people'].some(k => scope[k].length);
   const who = ruScopeEditor(form.querySelector('[data-scope="who"]'), r.who, {flags: true, disabled: !edit,
     onChange: () => { if (addOne) addOne.disabled = !whoSet(who.value()); }});
   if (addOne) addOne.disabled = !whoSet(who.value());

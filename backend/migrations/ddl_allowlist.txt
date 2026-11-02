@@ -15,6 +15,7 @@ backend/check_independence.py:3
 backend/check_pools.py:6
 backend/cloud_machines.py:2
 backend/company.py:6
+backend/company_page/schema.py:31
 backend/company_storage.py:2
 backend/counsel.py:3
 backend/credential_cards.py:4

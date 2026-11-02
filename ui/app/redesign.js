@@ -145,6 +145,7 @@ function redesignRoute(r) {
   if (rdUnder(r, RD_ORG)) { pageRdOrg(); return true; }
   if (rdUnder(r, RD_BUDGET)) { pageBudget(); return true; }
   if (rdUnder(r, FIN_ROUTE)) { pageFinance(); return true; }   // ui/app/finance.js
+  if (rdUnder(r, CP_ROUTE)) { pageCompanyPage(); return true; }   // ui/app/company-page.js
   if (rdUnder(r, RD_LISTENING)) { pageRdListening(); return true; }
   // Market opens on the latest briefing.
   if (r === MARKET_ROUTE || rdUnder(r, RD_BRIEFING)) { pageRdBriefing(); return true; }
@@ -159,6 +160,7 @@ function redesignAfterRoute() {
   rdLibSync();
   financeStop();
   growthStop();
+  companyPageStop();
   finProbeOnce();   // the Finance link shows once the viewer sees something in Finance
 }
 
