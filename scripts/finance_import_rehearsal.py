@@ -263,16 +263,15 @@ class Rehearsal:
         for code, cents in totals.items():
             bucket[code] = bucket.get(code, 0) + sign * cents
 
-    def void_month(self, check: Check, number: str) -> str:
-        """The month a voided bill's reversal is dated in, read back from the books rather than assumed."""
-        today = date.today()
-        window = urllib.parse.urlencode({"start": (today - timedelta(days=40)).isoformat(),
-                                         "end": (today + timedelta(days=40)).isoformat(), "limit": 200})
+    def void_month(self, check: Check, number: str, month: str) -> str:
+        """The month a voided bill's reversal is dated in, read back from the books in the bill's own month: a void posts
+        on the bill's date (spec §4.1), or in the open period when that date is closed."""
+        window = urllib.parse.urlencode({"start": f"{month}-01", "end": _eom(month), "limit": 200})
         for row in self.demo.get(f"/api/v2/finance/transactions?{window}")["rows"]:
             is_reversal = row.get("source") == "bill" and str(row.get("memo", "")).startswith(f"Void bill {number}")
             if is_reversal and row.get("amount") == -5000:
                 return str(row["date"])[:7]
-        check.expect(False, f"no reversal for bill {number} within 40 days of today")
+        check.expect(False, f"no reversal for bill {number} in {month}")
         return ""
 
     def _by_month(self, entries: list[Entry], mapping: dict[str, Any]) -> dict[str, dict[str, int]]:
@@ -561,29 +560,37 @@ class Rehearsal:
             voided = self.demo.act("bill_void", {"bill_id": bill_id})
             c.expect(voided.get("status") == "committed", f"voiding the bill gave {voided.get('status')}: {voided.get('reason')}")
             if voided.get("status") == "committed":
-                # The reversal is dated today, not in the bill's month, so the bill's own month keeps its expense.
-                day = self.void_month(c, self.numbers[bill_id])
+                # The reversal is dated on the bill's own date, in the bill's month, which takes it back out.
+                day = self.void_month(c, self.numbers[bill_id], po)
                 if day:
+                    c.expect(day == po, f"the reversal of the voided bill is dated {day}, not {po}")
                     self._bill(day, {"6100": 5000}, -1)
                     self.verify(c, "after the bill is voided", day)
-                    self.record(7, "voided bill: reversal month", f"dated {day}", f"bill month {po} keeps its accrual expense")
+                    self.record(7, "voided bill: reversal month", f"dated {day}", f"the bill's own month {po}")
                 self.verify(c, "after the bill is voided", po)
         self.post(c, "month freed of the bill", overlap, STANDARD,
                   [(po, "Software subscriptions", 4800), (po, "Sales revenue", 9000)])
         pr = self.commit_month()
         rows_r: list[Entry] = [(pr, "Software subscriptions", 4800), (pr, "Sales revenue", 9000)]
-        self.post(c, "import, then a bill into the same month", _csv(_cells(rows_r)), STANDARD, rows_r)
+        raw_r = self.post(c, "import, then a bill into the same month", _csv(_cells(rows_r)), STANDARD, rows_r)
         bill_r = self.bill(c, pr, 5000, approve=False)
-        if bill_r:
+        if bill_r and raw_r is not None:
             res = self.demo.act("bill_approve", {"bill_id": bill_r})
             refused = c.expect(res.get("status") == "failed" and res.get("code") == "conflict",
                                f"a bill approved into a month holding raw totals gave {res.get('status')}: the expense "
                                "is counted by both the import and the bill")
             self.record(7, "bill approved into a month holding raw totals", "refused" if refused else "DOUBLE COUNT",
                         res.get("reason") or "posted")
+            # Once that month's raw entry is reversed, the same bill posts into it, once (spec §4.1).
+            raw_entry = next(item["entry_id"] for item in raw_r["result"]["months"] if item["month"] == pr)
+            self.journal_reverse(c, "undo the month's raw totals", raw_entry)
+            res = self.demo.act("bill_approve", {"bill_id": bill_r})
+            c.expect(res.get("status") == "committed",
+                     f"after the raw totals were undone, approving the bill gave {res.get('status')}: {res.get('reason')}")
             if res.get("status") == "committed":
                 self._bill(pr, {"6100": 5000}, +1)
                 self.verify(c, "after the bill posted", pr)
+                self.record(7, "bill posts once its raw month is undone", "posted", f"month {pr}")
 
     def act_check(self, check: Check, kind: str, payload: dict[str, Any], what: str) -> None:
         res = self.demo.act(kind, payload)
