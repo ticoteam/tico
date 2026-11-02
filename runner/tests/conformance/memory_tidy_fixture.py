@@ -19,6 +19,6 @@ def custody(cwd):
     if not os.environ.get('FAKE_MEMORY_TIDY'):
         return {}
     metadata = os.stat(cwd)
-    return {'packet_custody': {'uid': os.geteuid(), 'owner': metadata.st_uid,
+    return {'authority_env_names': sorted(k for k in os.environ if k.startswith(('HUB_', 'GIT_', 'GH_', 'GITHUB_', 'TICO_GITHUB_')) or k in ('TICO_CRED_SOCKET', 'SSH_AUTH_SOCK')), 'packet_custody': {'uid': os.geteuid(), 'owner': metadata.st_uid,
         'mode': stat.S_IMODE(metadata.st_mode), 'accessible': os.access(cwd, os.R_OK | os.W_OK | os.X_OK),
         'files': os.listdir(cwd)}}

@@ -1467,7 +1467,7 @@ impl Runner {
                 tidy_packet = Some(crate::memory_tidy::Packet::prepare(&self.client, &p.main_path,
                     &execution_path, &aid, turn_identity).await?);
                 // The model receives only its packet, never its Hub credentials or MCP tools.
-                env.retain(|key, _| !crate::env::RUNNER_HUB_ENV.contains(&key.as_str()));
+                crate::memory_tidy::scrub_environment(&mut env);
             }
             // What the bot kept in its AI tool's own memory moves into its repository, in whichever checkout the
             // turn runs: the bot's own or a task's worktree (crate::harness_memory). A stateless bot keeps none.

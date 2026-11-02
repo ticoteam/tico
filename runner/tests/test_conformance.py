@@ -269,6 +269,7 @@ def test_native_packet_runs_in_private_workspace_and_delivers_without_parent_tur
     assert json.loads(calls[1]["prompt"])["rules"], "verification is a separately supplied rule packet"
     assert "agent" not in json.loads(calls[0]["prompt"])
     for call in calls:
+        assert call["authority_env_names"] == [], "packet process receives no team or repository authority"
         custody = call["packet_custody"]
         assert custody == {"uid": custody["uid"], "owner": custody["uid"], "mode": 0o700,
                            "accessible": True, "files": []}, custody

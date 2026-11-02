@@ -8,6 +8,19 @@ use std::path::{Path, PathBuf};
 
 const LIMIT: usize = 64_000_000;
 
+/// Packet providers keep their model login, but receive no team or repository authority.
+pub fn scrub_environment(env: &mut crate::env::Env) {
+    env.retain(|key, _| {
+        !key.starts_with("HUB_")
+            && !key.starts_with("GIT_")
+            && !key.starts_with("GH_")
+            && !key.starts_with("GITHUB_")
+            && !key.starts_with("TICO_GITHUB_")
+            && key != crate::gitcred::SOCKET_ENV
+            && key != "SSH_AUTH_SOCK"
+    });
+}
+
 async fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     let mut command = crate::isolation::command("git");
     command
@@ -194,6 +207,43 @@ impl Drop for Packet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packet_environment_drops_repository_and_team_authority_but_keeps_model_login() {
+        let forbidden = [
+            "HUB_TOKEN",
+            "HUB_API_URL",
+            "HUB_BOT",
+            "HUB_FUTURE_KEY",
+            "TICO_CRED_SOCKET",
+            "TICO_GITHUB_TOKENS",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_VALUE_0",
+            "GIT_SSH_COMMAND",
+            "SSH_AUTH_SOCK",
+        ];
+        let mut env: crate::env::Env = forbidden
+            .iter()
+            .map(|key| (key.to_string(), "synthetic".into()))
+            .collect();
+        for key in [
+            "HOME",
+            "PATH",
+            "CODEX_HOME",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+        ] {
+            env.insert(key.into(), "synthetic-login".into());
+        }
+        scrub_environment(&mut env);
+        assert!(forbidden.iter().all(|key| !env.contains_key(*key)));
+        assert_eq!(env.len(), 5);
+        assert_eq!(env["HOME"], "synthetic-login");
+        assert_eq!(env["OPENAI_API_KEY"], "synthetic-login");
+    }
+
 
     #[test]
     fn manifest_covers_untracked_files_modes_and_symlinks_without_following_them() {
