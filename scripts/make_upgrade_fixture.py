@@ -35,6 +35,10 @@ def seed(c, bots="INSERT"):
     created = ("created_at", "created")
     keyed = "id" in {row[1] for row in c.execute("PRAGMA table_info(bots)")}   # bots gained an id in the cleanup
     for slug in ("coo", "cmo", "seo"):
+        if bots != "INSERT" and c.execute("SELECT 1 FROM bots WHERE slug=?", (slug,)).fetchone():
+            # an install's own starter bot: since the cleanup it has its own id, and the slug/id trigger aborts an
+            # INSERT OR IGNORE of id=slug (a RAISE is not a conflict OR IGNORE skips), so leave it as the install made it
+            continue
         names = _cols(c, "bots", *(["id"] if keyed else []), "slug", "display_name", "runtime", "state", created)
         # a bot's id is its slug (hubdb.new_bot_id for product bots), and actors are `bot:<id>`, so `bot:coo` resolves
         values = ([slug] if keyed else []) + [slug, slug.upper(), "codex", "active", TS]
