@@ -10,6 +10,10 @@ ONE task per teammate listing them all, so a teammate with forty of them is woke
   all its due dates, until it is fixed. The occurrences stay open, so nothing is dropped.
 - Reassigning a due date hands its open task to the new assignee (reassign); a task that cannot move closes with a note,
   and the next pass opens its occurrences again. No open task stays under the old assignee.
+- A due date on a vendor or customer opens its tasks private to the assignee, apart from the tasks for other records,
+  which stay company-visible. A Needs-you notice that names one is private too.
+- A due date whose days move or that is cleared withdraws its open occurrence (withdraw): its task closes, or stays
+  open with a note when another due date's occurrence is on it.
 """
 import json
 from datetime import datetime, timedelta, timezone
@@ -61,16 +65,18 @@ def _task_open(c: Any, task_id: str) -> bool:
     return row is not None and str(row[0]) in H.ACTIVE_STATUSES
 
 
-def candidates(c: Any, today: Any) -> tuple[dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
-    """The open occurrences that need a task, by the actor who works them, and one entry per assignee that cannot take
-    work, naming the due dates it holds. The assignee is resolved once per due date. Reads only."""
-    groups: dict[str, list[dict[str, Any]]] = {}
+def candidates(c: Any, today: Any) -> tuple[dict[tuple[str, bool], list[dict[str, Any]]], dict[str, dict[str, Any]]]:
+    """The open occurrences that need a task, by the actor who works them and whether they name a contact (a contact's
+    tasks are private, so they never share a task with the rest), and one entry per assignee that cannot take work,
+    naming the due dates it holds. The assignee is resolved once per due date. Reads only."""
+    groups: dict[tuple[str, bool], list[dict[str, Any]]] = {}
     unassigned: dict[str, dict[str, Any]] = {}
     for row in RD.live(c):
         due_date_id = str(row["id"])
         found = RD.subject(c, str(row["subject_type"]), str(row["subject_id"]))
         if found is None or not found[1]:
             continue                                   # an archived or missing record opens nothing (H10c)
+        contact = str(row["subject_type"]) == "contact"
         through = today + timedelta(days=int(row["lead_days"]))
         done = RD.completed_days(c, due_date_id)
         items: list[dict[str, Any]] = []
@@ -84,10 +90,11 @@ def candidates(c: Any, today: Any) -> tuple[dict[str, list[dict[str, Any]]], dic
         actor, why = assignee(c, str(row["assignee_id"]))
         if why:
             held = unassigned.setdefault(str(row["assignee_id"]), {"assignee": str(row["assignee_id"]), "why": why,
-                                                                   "names": []})
+                                                                   "names": [], "contact": False})
             held["names"].append(str(row["name"]))
+            held["contact"] = bool(held["contact"]) or contact
         else:
-            groups.setdefault(actor, []).extend(items)
+            groups.setdefault((actor, contact), []).extend(items)
     return groups, unassigned
 
 
@@ -96,8 +103,9 @@ def due(c: Any, at: datetime) -> bool:
     return _last(c) != RD.local_day(at, zone()).isoformat()
 
 
-def _open_for(c: Any, actor: str, items: list[dict[str, Any]], at: datetime) -> dict[str, Any]:
-    """One task for one teammate, listing its occurrences, with each occurrence linked to it."""
+def _open_for(c: Any, actor: str, items: list[dict[str, Any]], at: datetime, private: bool) -> dict[str, Any]:
+    """One task for one teammate, listing its occurrences, each linked to it. `private` keeps a task that names a
+    contact to the assignee and its requester."""
     items.sort(key=lambda i: (i["due_on"], i["name"]))
     n = len(items)
     lines = [f"- {i['name']} at {i['subject']}, due {i['due_on'].isoformat()} (due date {i['due_date_id']})"
@@ -110,16 +118,19 @@ def _open_for(c: Any, actor: str, items: list[dict[str, Any]], at: datetime) -> 
             "day's pass.")
     title = f"Due dates: {n} due"
     task = H.task_create(c, H.KEEPER, title, body, actor, due=automation_due.due_end(items[0]["due_on"], zone()),
-                         deduplicate=False, trigger="schedule", trigger_source="due_dates")
+                         deduplicate=False, trigger="schedule", trigger_source="due_dates",
+                         private=True if private else None)
     for i in items:
         RD.open_occurrence(c, i["due_date_id"], i["due_on"].isoformat(), str(task["id"]), _stamp(at))
     return {"actor": actor, "task": str(task["id"]), "occurrences": n}
 
 
-def _needs_you(c: Any, person: str, title: str, body: str) -> str | None:
-    """One Needs-you item the person owns; an open one with the same title is reused. None when they can't be given one."""
+def _needs_you(c: Any, person: str, title: str, body: str, private: bool = False) -> str | None:
+    """One Needs-you item the person owns; an open one with the same title is reused. None when they can't be given one.
+    `private` keeps it to the person and its requester, for a notice that names a contact."""
     try:
-        task: Any = H.task_create(c, H.KEEPER, title[:200], body, person, deduplicate=True)
+        task: Any = H.task_create(c, H.KEEPER, title[:200], body, person, deduplicate=True,
+                                  private=True if private else None)
     except H.Refused:
         return None
     return str(task["id"]) if isinstance(task, dict) and task.get("id") else None
@@ -138,7 +149,7 @@ def _notify(c: Any, held: dict[str, Any]) -> str | None:
     more = f"\n...and {n - LISTED} more." if n > LISTED else ""
     body = (f"{n} due date(s) are assigned to {held['assignee']}, which {held['why']}. Their occurrences stay open. "
             "Give them an active teammate (due_date_update) and the next pass opens their tasks.\n\n" + listed + more)
-    return _needs_you(c, owner, title, body)
+    return _needs_you(c, owner, title, body, bool(held["contact"]))
 
 
 def reassign(c: Any, due_date_id: str, new_actor: str, name: str) -> dict[str, list[str]]:
@@ -170,6 +181,32 @@ def reassign(c: Any, due_date_id: str, new_actor: str, name: str) -> dict[str, l
     return {"moved": moved, "closed": closed}
 
 
+def withdraw(c: Any, due_date_id: str, name: str) -> dict[str, list[str]]:
+    """Take a due date's incomplete occurrences off it, because its days moved or it was cleared (a warranty's end does
+    both). Their rows go, so the next pass opens what the due date asks for now. Each open task that carried one closes
+    with a note, unless it also holds another due date's open occurrence: that task stays open for them and gets the
+    note. Writes only through the hub's task calls."""
+    note = f"{name} changed: its open occurrence is withdrawn. The next pass opens its current one, if it has one."
+    rows = c.execute("SELECT DISTINCT task_id FROM due_date_occurrences WHERE due_date_id=? AND task_id IS NOT NULL "
+                     "AND completed_at IS NULL", (due_date_id,)).fetchall()
+    c.execute("DELETE FROM due_date_occurrences WHERE due_date_id=? AND completed_at IS NULL", (due_date_id,))
+    kept: list[str] = []
+    closed: list[str] = []
+    for (task_id,) in rows:
+        task = str(task_id)
+        if not _task_open(c, task):
+            continue
+        others = c.execute("SELECT COUNT(*) FROM due_date_occurrences WHERE task_id=? AND completed_at IS NULL",
+                           (task,)).fetchone()[0]
+        if others:
+            H.task_update(c, H.KEEPER, task, note=note)
+            kept.append(task)
+        else:
+            H.task_close(c, H.KEEPER, task, note=note)
+            closed.append(task)
+    return {"kept": kept, "closed": closed}
+
+
 def tick(c: Any, at: datetime) -> dict[str, Any] | None:
     """Run the company day's pass once: open the tasks, tell the owner of any unassignable due date, and mark the day.
     None when the day's pass already ran. Caller owns the transaction."""
@@ -179,14 +216,14 @@ def tick(c: Any, at: datetime) -> dict[str, Any] | None:
     groups, unassigned = candidates(c, today)
     tasks: list[dict[str, Any]] = []
     notices = [n for n in (_notify(c, held) for _, held in sorted(unassigned.items())) if n]
-    for actor, items in sorted(groups.items()):
+    for (actor, private), items in sorted(groups.items()):
         try:
-            tasks.append(_open_for(c, actor, items, at))
+            tasks.append(_open_for(c, actor, items, at, private))
         except H.Refused as exc:               # a rule declined the task: the owner hears why, and the pass goes on
             owner = FC.owner(c)
             detail = str(getattr(exc, "detail", "") or exc)
             if owner:
-                made = _needs_you(c, owner, f"Due dates for {actor} could not open", detail)
+                made = _needs_you(c, owner, f"Due dates for {actor} could not open", detail, private)
                 notices.extend([made] if made else [])
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
               (KEY, json.dumps(today.isoformat())))

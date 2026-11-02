@@ -1679,7 +1679,7 @@ def _renewal_task(ctx: Ctx, vendor: Any, today: date) -> None:
             "whether to renew, renegotiate or cancel.")
     try:
         task = H.task_create(ctx.c, H.KEEPER, title, body, actor, due=automation_due.due_end(cancel_by, FLOW.zone()),
-                             deduplicate=False, trigger="schedule", trigger_source="vendor_renewal")
+                             deduplicate=False, trigger="schedule", trigger_source="vendor_renewal", private=True)
     except H.Refused as exc:
         _renewal_notice(ctx, key, install, f"Vendor renewal could not open: {name}", f"{title} was refused: {exc}")
         return
@@ -1692,7 +1692,7 @@ def _renewal_notice(ctx: Ctx, key: str, install: str, title: str, body: str) -> 
     told = f"{key}:told"
     if not install or ctx.c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (told,)).fetchone() is not None:
         return
-    tico.needs_you(ctx.c, install, title[:200], body)
+    tico.needs_you(ctx.c, install, title[:200], body, private=True)     # the notice names a vendor
     ctx.c.execute("INSERT INTO registry_metadata(key, value_json) VALUES(?,'true')", (told,))
 
 
