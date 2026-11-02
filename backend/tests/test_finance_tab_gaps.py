@@ -603,3 +603,41 @@ def test_a_person_who_leaves_on_the_people_route_leaves_their_team_grant_at_once
     assert r.status_code == 200, r.text
     with store.read() as c:
         assert "human:eve" not in SA.grant(c, gid).members
+
+
+def test_a_fault_in_the_org_revalidation_leaves_the_person_update_and_no_partial_grant_change(api, monkeypatch):
+    """A Finance fault must not stop Tico's own writes (spec: a Finance fault doesn't stop bots). The revalidation a
+    roster save runs fails here after a partial change (eve leaves the grant's members and the grant is suspended). The
+    person update still commits; the partial change is rolled back, so the grant is as it was until Finance's next
+    action runs the revalidation again."""
+    import json
+
+    from backend.finance import actions as FA
+    from backend.finance import handlers
+    from backend.finance.store import access as SA
+    from backend.tests.test_finance_fixtures import _seed
+    store = api.app.state.store
+    with store.transaction() as c:
+        _seed(c)
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        grant = act(c, OWNER, "view_grant", {"subject_kind": "team", "subject": "web", "what": "expenses",
+                                             "whose": "company"})
+        assert grant.status == "committed", grant
+        gid = str(grant.result["grant_id"])
+    calls = []
+
+    def half_done(ctx):
+        calls.append(gid)
+        SA.set_members(ctx.c, gid, SA.grant(ctx.c, gid).members - {"human:eve"})
+        SA.set_grant_status(ctx.c, gid, "suspended", FA.SYSTEM, ctx.at)
+        raise RuntimeError("forced: the revalidation fails after a partial change")
+
+    monkeypatch.setattr(handlers, "suspend_unstanding", half_done)
+    r = api.post("/api/v2/people/eve", json={"left": True}, headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    assert calls == [gid]
+    with store.read() as c:
+        g = SA.grant(c, gid)
+        assert g.status == "active" and "human:eve" in g.members
+        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+    assert next(p for p in people["people"] if p["id"] == "eve")["hidden"]

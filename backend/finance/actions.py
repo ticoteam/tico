@@ -7,6 +7,7 @@ Approvals are Tico approvals with no task, kind `finance` (`spend` is kept for m
 When a decision arrives, `approval_decided` verifies the approval is the one Finance asked for, re-checks rights, view
 and budgets, consumes it, and commits, all in one transaction."""
 import json
+import logging
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -41,6 +42,7 @@ budget_state = budgeting.budget_state
 budget_for = budgeting.budget_for
 SYSTEM = O.SYSTEM
 Principal = O.Principal
+log = logging.getLogger(__name__)
 
 def bills_address_set(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     """The bills address vendors send bills to (spec §5), set or cleared (""): the settings route asks through here."""
@@ -462,10 +464,20 @@ def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]
 
 def revalidate_org(c: sqlite3.Connection, at: str | None = None) -> None:
     """Tico's org chart, membership or a grantor's view changed outside an action: write down what that did to the view
-    grants now (spec §7.5), the same revalidation an action runs. Called by Tico's roster save; a no-op until Finance
-    is set up."""
-    if is_set_up(c):
+    grants now (spec §7.5), the same revalidation an action runs. Called inside Tico's own writes (a roster save, a bot
+    edit, an archive, a recruit), so a Finance fault must not fail them: the revalidation runs in a savepoint, and a
+    fault rolls back its partial writes, logs the traceback and returns, leaving the caller's change intact. The next
+    Finance action runs the same revalidation again. A no-op until Finance is set up."""
+    if not is_set_up(c):
+        return
+    mark = _savepoint(c, "fin_revalidate")
+    try:
         handlers.suspend_unstanding(load(c, at))
+    except Exception:
+        _rollback(c, "fin_revalidate", mark)
+        log.exception("Finance could not revalidate its view grants after an org change; the change stands")
+    else:
+        _release(c, "fin_revalidate")
 
 
 def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = None) -> ActionResult | None:
