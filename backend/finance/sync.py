@@ -365,6 +365,7 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         with store.transaction() as c:
             SK.update(c, "fin_connections", cid, {"events_cursor": str(first[0].get("id")) if first else "start"})
     cursor = str(row["cursor"] or "") or None
+    repeat = False                      # the page before was all rows already taken in
     for _ in range(BACKFILL_PAGES):
         page = provider.transactions(cursor)
         if not page.ok:
@@ -375,10 +376,11 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         _ingest_all(store, cid, raws, now)
         before, cursor = cursor, next_page(page) or (str(raws[-1].get("id")) if raws else cursor)
         # The end: an empty or short last page, or (whatever Mercury's page says) a page that moves the cursor nowhere
-        # or a short page of rows already taken in, so a list that keeps naming a next page still ends. A full page
-        # already taken in (a pass cut off before its cursor was kept) goes on.
-        short = len(raws) < 500
-        done = not raws or cursor == before or short and (not next_page(page) or known == len(raws))
+        # or a second page in a row of rows already taken in, so a list that keeps naming a next page still ends. One
+        # such page alone is a pass cut off before its cursor was kept (the cursor is kept every page): it goes on.
+        seen = bool(raws) and known == len(raws)
+        done = not raws or cursor == before or not next_page(page) and len(raws) < 500 or seen and repeat
+        repeat = seen
         with store.transaction() as c:
             SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": SK.dump(
                 {**conf, "backfilled": True}) if done else row["settings"]})
