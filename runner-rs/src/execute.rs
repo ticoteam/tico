@@ -1523,7 +1523,9 @@ impl Runner {
             let gids = crate::checkout_groups::gate(paths.clone()).await;
             if let Some((uid, _)) = turn_identity {
                 crate::checkout_groups::grant(uid, &gids);
-                self.turn_git(&mut vault, &mut env, &paths)?;
+                if !packet_only {
+                    self.turn_git(&mut vault, &mut env, &paths)?;
+                }
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
             }
             let made = if session_runtime != runtime {

@@ -225,6 +225,62 @@ def reply_to(api, conversation, token="ana-test", bot="ops"):
     return next((m for m in reversed(messages) if m["from_actor"] == "bot:" + bot), None)
 
 
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+@pytest.mark.parametrize("setup", [{"git": True, "env": {"FAKE_MEMORY_TIDY": "1"}}])
+def test_native_packet_runs_in_private_workspace_and_delivers_without_parent_turn(api, computer, tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from backend import memory_tidy_runs
+    from backend.tests.test_api import put
+    from backend.tests.test_memory_tidy import snapshot
+    from backend.tests.test_memory_tidy_controls import enable, entry
+    from backend.tests.test_memory_tidy_runs import commit
+
+    repo = tmp_path / "projects" / "bot-ops"
+    snap = snapshot()
+    for name, text in snap.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    git_env = {**os.environ, "GIT_AUTHOR_NAME": "Acme", "GIT_AUTHOR_EMAIL": "ops@acme.invalid",
+               "GIT_COMMITTER_NAME": "Acme", "GIT_COMMITTER_EMAIL": "ops@acme.invalid"}
+    for args in (["add", "-A"], ["commit", "-qm", "Synthetic memory"], ["push", "-q"]):
+        subprocess.run(["git", "-C", str(repo), *args], env=git_env, check=True, capture_output=True)
+    computer.start()
+    at = datetime(2026, 11, 2, 11, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr(H, "now", lambda: at.isoformat().replace("+00:00", "Z"))
+    enable(api)
+    model = "claude:claude-sonnet-5-5" if computer.harness == "claude" else "codex:gpt-6.1-sol"
+    put(api, "system-routines/memory_tidy", {"on": True, "pilots": [entry(model=model)]})
+    with api.app.state.store.transaction() as c:
+        commit(c)
+        memory_tidy_runs.admit(c, api.app.state.store.settings, at)
+
+    def offered():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT * FROM memory_tidy_passes WHERE status='offered'").fetchone()
+    row = until(offered, "native packet's checked attachment and reviewer card", timeout=45)
+    calls = computer.prompts()
+    assert len(calls) == 2, calls
+    assert json.loads(calls[1]["prompt"])["rules"], "verification is a separately supplied rule packet"
+    assert "agent" not in json.loads(calls[0]["prompt"])
+    for call in calls:
+        custody = call["packet_custody"]
+        assert custody == {"uid": custody["uid"], "owner": custody["uid"], "mode": 0o700,
+                           "accessible": True, "files": []}, custody
+        assert call["cwd"] != str(repo) and Path(call["cwd"]).name.startswith("tico-tidy-")
+        assert not any(call["env"].get(k) for k in ("HUB_TOKEN", "HUB_API_URL", "HUB_BOT", "TICO_CRED_SOCKET"))
+        assert "Do not send to the child." not in call["prompt"] and "Outside text must not reach the child." not in call["prompt"]
+    assert row["cost_usd"] > 0
+    with api.app.state.store.read() as c:
+        assert H.task(c, row["parent_task_id"])["status"] == H.task(c, row["check_task_id"])["status"] == "closed"
+        assert c.execute("SELECT count(*) FROM memory_tidy_cards WHERE pass_id=?", (row["id"],)).fetchone()[0] == 1
+        assets = c.execute("SELECT blob_id FROM task_assets WHERE task_id=?", (row["check_task_id"],)).fetchall()
+        assert len(assets) == 1
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot='ops' AND state='queued'").fetchone(), "no parent turn"
+    download = api.get('/api/v2/files/' + assets[0]['blob_id'], headers=headers())
+    assert download.status_code == 200 and download.content, "attachment stays readable after close"
+
+
 def add_bot(api, computer, tmp_path, slug, bot=None):
     """Another bot on this computer, on the same harness and the computer's own logins (call before start)."""
     assign(api, computer.registration, slug)
