@@ -91,6 +91,48 @@ def test_the_unread_threads_card_lists_roots_with_a_dms_people_and_the_place_to_
     assert [p["actor"] for p in rows[dm["id"]]["dm_with"]] == ["human:ben"]
 
 
+# ----------------------------------------------------------------------------- Threads and DMs are paged apart
+def test_many_threads_leave_an_older_dm_on_the_first_page_and_each_list_pages_on(api):
+    old = api.post("/api/v2/threads/dm", json={"members": ["human:ben"], "body": "An old DM"}, headers=headers("ana-test"))
+    assert old.status_code == 200, old.text
+    dm = old.json().get("thread") or old.json()
+    made = [new_thread(api, title=f"Thread {i}", body="Newer") for i in range(5)]
+    first = sidebar(api, token="ana-test", limit=3)
+    assert [t["id"] for t in first["dms"]] == [dm["id"]]
+    assert len(first["threads"]) == 3 and first["next_cursor"]
+    second = sidebar(api, token="ana-test", limit=3, cursor=first["next_cursor"])
+    assert second["dms"] == [] and second["next_cursor"] is None
+    seen = [t["id"] for t in first["threads"] + second["threads"]]
+    assert len(seen) == len(set(seen)) and {t["id"] for t in made} <= set(seen)
+
+
+def test_a_long_dm_list_pages_on_its_own_and_a_page_reads_each_list_once(acme):
+    api, _ = acme
+    for peer in ("human:eve", "human:fay", "human:ben"):
+        ok(call(api, "POST", "threads/dm", "cara-test", {"members": [peer]}))
+    first = sidebar(api, token="cara-test", limit=2)
+    assert len(first["dms"]) == 2
+    second = sidebar(api, token="cara-test", limit=2, cursor=first["next_cursor"])
+    assert len(second["dms"]) == 1 and second["next_cursor"] is None
+    assert {t["id"] for t in first["dms"]}.isdisjoint(t["id"] for t in second["dms"])
+    statements = []
+    with api.app.state.store.read() as c:
+        v = threads.Viewer(api.app.state.auth, who(api, "cara"))
+        c.set_trace_callback(statements.append)
+        try:
+            threads.sidebar(c, v, limit=2)
+        finally:
+            c.set_trace_callback(None)
+    assert len([s for s in statements if "ORDER BY place, activity DESC" in s]) == 2
+
+
+def test_a_cursor_from_one_merged_page_still_reads_and_a_bad_one_is_refused(api):
+    new_thread(api, title="One", body="Hello")
+    assert sidebar(api, token="ana-test", cursor="2:0:zzz")["next_cursor"] is None
+    bad = api.get("/api/v2/threads", params={"cursor": "a|b|c"}, headers=headers("ana-test"))
+    assert bad.status_code == 422
+
+
 # ----------------------------------------------------------------------------- who a DM is with
 def dm_rows(api, token):
     listed = sidebar(api, token=token)

@@ -550,6 +550,7 @@ Thread view (`threads.view(c, viewer, row)`):
  "new_at": {"thread_id": "t_sub", "message_id": "m_1"}}                    // list rows only; see below
 ```
 
+`threads` and `dms` are ranked and paged apart, up to `limit` rows each; `next_cursor` carries a position for each.
 A list row is always a root. `me.unread` and `me.activity` sum its open subtree. `new_at` says where to open it when
 what is new starts in a sub-thread: the oldest unread message or, with nothing unread, the sub-thread with the newest
 activity (`message_id` null). A row with an open Needs attention item points at the oldest item when a sub-thread holds
