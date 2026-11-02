@@ -486,6 +486,23 @@ def test_a_correction_to_a_charge_in_a_closed_month_reverses_on_an_open_day(book
         assert _entries(c, "bank") == 3                                          # the open-day shift is no change
 
 
+def test_a_late_row_for_a_closed_month_posts_today_and_names_its_own_date_in_the_memo(books):
+    """Spec §4.1: a late item dated in a closed month posts in the open period with its original date in the description."""
+    fake = FakeMercury()
+    connect(books, fake)
+    _arrives(fake, _txn("txn-sep", "acct-chk", -15.0, "wireFee", day="2026-09-20"), 1, "evt-sep-1")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    _arrives(fake, _txn("txn-late-sep", "acct-chk", -12.0, "wireFee", day="2026-09-25"), 2, "evt-late-sep")
+    sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
+    with books.read() as c:
+        memos = [str(r[0]) for r in c.execute("SELECT memo FROM fin_entries WHERE source='bank' AND entry_date=?",
+                                              (AT[:10],))]
+        [memo] = memos                                   # the late row's one entry, today
+        assert memo.endswith("(dated 2026-09-25)"), memo
+
+
 def test_a_reconciliation_is_done_only_when_the_whole_gl_line_is_the_statement(books):
     """C17: a journal on the bank's GL line the statement doesn't have keeps the reconciliation open, though the
     statement and its feed rows agree; an outstanding row on the books is adjusted for, not a gap."""

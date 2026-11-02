@@ -590,9 +590,13 @@ def post_row(ctx: Ctx, fid: str, t: F.FeedTxn, lines: list[dict[str, object]], g
     card program maps to later (store/budgets.card_used). Every revision gets its own source id (`fresh_source`),
     so a repost is never deduped onto an earlier, reversed entry. `day` overrides the row's own open day."""
     source = "card" if t.card else "bank"
-    done = posting.post_entry(ctx.c, {"date": day or open_day(ctx, t.txn_date), "source": source,
+    when = day or open_day(ctx, t.txn_date)
+    memo = (t.counterparty or t.description)[:200]
+    if when != t.txn_date:      # a late item posts in an open period: its own date stays in the description (spec §4.1)
+        memo = f"{memo[:160]} (dated {t.txn_date})"
+    done = posting.post_entry(ctx.c, {"date": when, "source": source,
                                       "source_id": fresh_source(ctx, source, fid),
-                                      "memo": (t.counterparty or t.description)[:200],
+                                      "memo": memo,
                                       "lines": [*vendor_lines(ctx, lines), feed_line(gl_id, t.amount)]},
                               hold_ids=holds, at=ctx.at, roles={len(lines): L.MONEY_ROLE})
     if not done.get("posted"):
