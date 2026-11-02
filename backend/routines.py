@@ -79,7 +79,7 @@ def row(c, sid):
     if not auto:
         return None
     return {**dict(found), "enabled": int(auto["enabled"]), "deleted_at": auto["deleted_at"], "automation": auto["id"],
-            "next_due": auto["next_due"]}
+            "next_due_at": auto["next_due_at"]}
 
 
 def _set_moved(c, actor, auto, enabled):
@@ -109,7 +109,7 @@ def create(c, actor, bot, fields, *, key=None, at=None):
     now = stamp(at)
     event = entry["on"] or None
     due = None if event else stamp(next_due(entry["cron"], at, entry["timezone"]))
-    c.execute("INSERT INTO schedules(id,bot,routine_key,cron,event_name,title,playbook,next_due,source,updated_at) "
+    c.execute("INSERT INTO schedules(id,bot,routine_key,cron,event_name,title,playbook,next_due_at,source,updated_at) "
               "VALUES(?,?,?,?,?,?,?,?,'hub',?)",
               (sid, bot, key, entry["cron"], event, entry["title"], entry["instructions"] or DEFAULT_TEXT, due, now))
     c.execute("INSERT INTO schedule_config(schedule_id,timezone,enabled) VALUES(?,?,?)",
@@ -162,8 +162,8 @@ def update(c, actor, sid, changes, *, at=None, restore=False):
     if event:
         due = None
     else:
-        due = stamp(next_due(entry["cron"], at, entry["timezone"])) if cadence_changed else current["next_due"]
-    c.execute("UPDATE schedules SET cron=?,event_name=?,title=?,playbook=?,next_due=?,deleted_at=NULL,updated_at=? WHERE id=?",
+        due = stamp(next_due(entry["cron"], at, entry["timezone"])) if cadence_changed else current["next_due_at"]
+    c.execute("UPDATE schedules SET cron=?,event_name=?,title=?,playbook=?,next_due_at=?,deleted_at=NULL,updated_at=? WHERE id=?",
               (entry["cron"], event, entry["title"], entry["instructions"] or DEFAULT_TEXT, due, now, sid))
     enabled = current["enabled"] if changes.get("enabled") is None else (1 if changes["enabled"] else 0)
     c.execute("INSERT INTO schedule_config(schedule_id,timezone,enabled) VALUES(?,?,?) ON CONFLICT(schedule_id) "
@@ -185,7 +185,7 @@ def remove(c, actor, sid, *, at=None):
     current = row(c, sid)
     if not current:
         return None
-    c.execute("UPDATE schedules SET deleted_at=?,updated_at=?,next_due=NULL WHERE id=?", (now, now, sid))
+    c.execute("UPDATE schedules SET deleted_at=?,updated_at=?,next_due_at=NULL WHERE id=?", (now, now, sid))
     H.event(c, actor, "routine.deleted", sid, {"bot": current["bot"]})
     return row(c, sid)
 
@@ -204,7 +204,7 @@ def no_input(c, settings, schedule, local):
 
 
 def _roster(c):
-    found = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()
+    found = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
     if found:
         return P.load(json.loads(found[0]))
     return P.load({"people": H.humans(c)})
@@ -230,10 +230,10 @@ def set_declared_mailbox(c, bot, address):
     address = str(address or "").strip().lower()
     if not MAILBOX.fullmatch(address):
         raise Problem("mailbox", "That is not an email address", 422)
-    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     if not found:
         raise Problem("not_found", "Bot not found", 404)
-    config = json.loads(found["config_json"] or "{}")
+    config = json.loads(found["config"] or "{}")
     tools = [dict(t) if isinstance(t, dict) else t for t in (config.get("tools") or config.get("access") or [])]
     gmail = next((t for t in tools if isinstance(t, dict) and str(t.get("service", "")).lower() == "gmail"), None)
     if gmail is None:
@@ -242,7 +242,7 @@ def set_declared_mailbox(c, bot, address):
         gmail["identity"] = address
     config.pop("access", None)
     config["tools"] = tools
-    c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(config), bot))
+    c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(config), bot))
 
 
 def message_bot_mailboxes(c, roster=None):
@@ -259,9 +259,9 @@ def message_bot_mailboxes(c, roster=None):
         row = H.bot(c, bot)
         if not row or row["state"] == "archived":
             continue
-        found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
         try:
-            config = json.loads(found["config_json"] or "{}") if found else {}
+            config = json.loads(found["config"] or "{}") if found else {}
         except ValueError:
             config = {}
         declared = declared_mailbox(config)
@@ -305,9 +305,9 @@ def token_mailboxes(c, bot, roster=None):
     if not who:
         return []
     boxes = message_bot_mailboxes(c, roster)
-    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     try:
-        config = json.loads(found["config_json"] or "{}") if found else {}
+        config = json.loads(found["config"] or "{}") if found else {}
     except ValueError:
         config = {}
     people = P.below(who["id"], roster) if reads_reports(config, mailbox_of(who, boxes)) else [who]

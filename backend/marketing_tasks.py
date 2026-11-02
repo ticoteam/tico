@@ -45,7 +45,7 @@ def ensure(c):
         if not name:
             return None
         now = H.now()
-        c.execute("INSERT INTO task_types (id, name, created, updated) VALUES (?,?,?,?)", (TYPE_ID, name, now, now))
+        c.execute("INSERT INTO task_types (id, name, created_at, updated_at) VALUES (?,?,?,?)", (TYPE_ID, name, now, now))
     names = {r[0].lower() for r in c.execute("SELECT name FROM task_steps WHERE type_id=?", (TYPE_ID,))}
     have = {r[0] for r in c.execute("SELECT id FROM task_steps WHERE type_id=?", (TYPE_ID,))}
     for position, (key, name, status) in enumerate(STEPS):

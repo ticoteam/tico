@@ -27,7 +27,7 @@ def late_events(c, tid):
 
 def at_checkpoint(c, row):
     """The owner's last turn settled here, so the plain stall and status checks are held (wake_rules.same_state)."""
-    c.execute("UPDATE tasks SET checkpoint_state=?,checkpoint_by=?,checkpoint_at=updated WHERE id=?",
+    c.execute("UPDATE tasks SET checkpoint_state=?,checkpoint_by=?,checkpoint_at=updated_at WHERE id=?",
               (W.state_of(c, row), row["owner"], row["id"]))
 
 
@@ -37,8 +37,8 @@ def later(hours):
 
 def wakes(c, tid, to, kind):
     return [m for m in c.execute(
-        "SELECT * FROM messages WHERE to_actor=? AND json_extract(refs_json,'$.task')=? "
-        "AND json_extract(refs_json,'$.wake')=?", (to, tid, kind)).fetchall()]
+        "SELECT * FROM messages WHERE to_actor=? AND json_extract(refs,'$.task')=? "
+        "AND json_extract(refs,'$.wake')=?", (to, tid, kind)).fetchall()]
 
 
 def queued(c, message):
@@ -53,7 +53,7 @@ def test_a_quiet_ticket_at_its_checkpoint_wakes_its_owner_once_and_reaches_the_m
         assert SA.sweep(c, later(1)) == {"asked": [], "late": [], "untold": [], "failed": []}
         assert SA.sweep(c, later(2.5)) == {"asked": [row["id"]], "late": [], "untold": [], "failed": []}
         [asked] = wakes(c, row["id"], "bot:cpo", "step_status")
-        assert W.MARK not in H._json(asked["refs_json"], {}), "the status wake is not held as same_state"
+        assert W.MARK not in H._json(asked["refs"], {}), "the status wake is not held as same_state"
         assert queued(c, asked)
         # Once: later sweeps neither ask again nor tell the manager twice.
         assert SA.sweep(c, later(4.5)) == {"asked": [], "late": [row["id"]], "untold": [], "failed": []}
@@ -68,7 +68,7 @@ def test_recent_activity_waiting_and_snoozed_tickets_get_no_status_wake(api):
     with api.app.state.store.transaction() as c:
         active, waiting, snoozed = ticket(c, "Fix Cursor"), ticket(c, "Fix Muse"), ticket(c, "Fix Grok")
         # A person's comment an hour and a half in: still under two quiet hours at the sweep.
-        c.execute("UPDATE tasks SET updated=? WHERE id IN (?,?,?)",
+        c.execute("UPDATE tasks SET updated_at=? WHERE id IN (?,?,?)",
                   (later(-3), active["id"], waiting["id"], snoozed["id"]))
         H.task_comment(c, "human:ana", active["id"], "How is it going?", wake=False)
         H.task_update(c, "bot:cpo", waiting["id"], status="waiting", note="Waits on Review 1")
@@ -83,7 +83,7 @@ def test_time_away_from_work_restarts_the_clock(api):
         row = ticket(c)
         for ts in c.execute("SELECT id FROM task_events WHERE task_id=?", (row["id"],)).fetchall():
             c.execute("UPDATE task_events SET ts=? WHERE id=?", (later(-6), ts[0]))
-        c.execute("UPDATE tasks SET created=? WHERE id=?", (later(-6), row["id"]))
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (later(-6), row["id"]))
         H.task_update(c, "bot:cpo", row["id"], status="waiting", note="Held at the gate")
         H.task_update(c, "bot:cpo", row["id"], status="doing")
         back = SA.since_map(c, [H.task(c, row["id"])])[row["id"]]
@@ -169,8 +169,8 @@ def test_a_failing_first_row_does_not_stop_the_sweep_and_leaves_no_sent_marker(a
     # The first ticket in updated order raises when its status wake is written; the second is still asked.
     with api.app.state.store.transaction() as c:
         bad, good = ticket(c, "Fix the broken connection"), ticket(c, "Fix the other connection")
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (later(-3), bad["id"]))
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (later(-2), good["id"]))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (later(-3), bad["id"]))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (later(-2), good["id"]))
     failing = {"on": True}
     wake = H._wake
 
@@ -202,8 +202,8 @@ def test_a_failing_first_row_does_not_stop_the_sweep_and_leaves_no_sent_marker(a
 def test_a_late_notice_that_fails_is_rolled_back_and_the_next_ticket_is_still_told(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         bad, good = ticket(c, "Fix the broken connection"), ticket(c, "Fix the other connection")
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (later(-6), bad["id"]))
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (later(-5), good["id"]))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (later(-6), bad["id"]))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (later(-5), good["id"]))
     failing = {"on": True}
     wake = H._wake
 
@@ -257,7 +257,7 @@ def test_a_steps_own_hours_time_it_on_any_board_and_override_the_dev_default(api
     from backend import step_flow
     with api.app.state.store.transaction() as c:
         row = ticket(c)
-        c.execute("UPDATE task_steps SET flow_json=? WHERE id=?", ('{"status_hours": 6, "late_hours": 8}', row["step_id"]))
+        c.execute("UPDATE task_steps SET flow=? WHERE id=?", ('{"status_hours": 6, "late_hours": 8}', row["step_id"]))
         at_checkpoint(c, row)
         assert SA.sweep(c, later(4.5)) == {"asked": [], "late": [], "untold": [], "failed": []}, "6 h, not the default 2"
         assert SA.sweep(c, later(6.5))["asked"] == [row["id"]]

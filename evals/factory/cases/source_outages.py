@@ -21,7 +21,7 @@ def jump(w, seconds):
     # Clock travel represents a reporting computer, without replaying thousands of identical heartbeats.
     w.clock.shift(seconds)
     with w.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen=?,awake_since=NULL', (w.H.now(),))
+        c.execute('UPDATE runners SET last_seen_at=?,awake_since=NULL', (w.H.now(),))
     w.heartbeat(w.bot_slugs)
 
 
@@ -42,7 +42,7 @@ def quota(w, attempt, fallback=False):
 def fallback_setup(run, w, team):
     attempt = probe(w)
     result, until = quota(w, attempt, fallback=True)
-    saved = json.loads(w.sql('SELECT result_json FROM attempts WHERE id=?', (attempt['id'],))[0]['result_json'])
+    saved = json.loads(w.sql('SELECT result FROM attempts WHERE id=?', (attempt['id'],))[0]['result'])
     jump(w, 3660)
     resumed = w.post('jobs/claim', {'bot': BOT, 'start_places': True}, w.runner['token'])['attempt']
     run.proof = (result['outcome'] == 'interrupted' and saved['retryable'] and

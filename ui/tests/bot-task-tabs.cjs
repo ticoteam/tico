@@ -15,13 +15,13 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer'}[name], org_parent: '',
   host: 'keeper', status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}));
 const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bot:lead', requester: 'human:ana', status: 'doing',
-  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created: ago(600), updated: ago(60), ...over});
+  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
 const TASKS = [
   task('t-own', 'Ship the release notes'),
-  task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', created: ago(480)}),
+  task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', created_at: ago(480)}),
   task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: null, note: 'Waiting for the test machine', relations: {blocks: [{id: 't-qa', title: 'Run the release check', owner: 'bot:qa', status: 'doing', direction: 'in'}]}, blocked_reason: 'Waiting for the test machine', blocked_since: ago(480)}),
-  task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created: ago(30)}),
-  task('t-roadmap-done', 'Write the import spec', {status: 'done', type_id: 'roadmap', done_at: ago(1440), created: ago(3 * 1440)}),
+  task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created_at: ago(30)}),
+  task('t-roadmap-done', 'Write the import spec', {status: 'done', type_id: 'roadmap', done_at: ago(1440), created_at: ago(3 * 1440)}),
   task('t-qa', 'Run the release check', {owner: 'bot:qa', requester: 'bot:lead'}),
 ];
 const TYPES = [{id: 'general', name: 'General', steps: []}, {id: 'roadmap', name: 'Product roadmap', role: 'product-roadmap', steps: []}];
@@ -36,8 +36,8 @@ const CONDITIONS = {
 };
 const normalized = tab => tab.builtin && tab.builtin !== 'done' && !tab.conditions ? {...tab, conditions: CONDITIONS[tab.builtin]} : tab;
 const WIDGETS = ['tasks', 'updates', 'files'].map(id => ({id, hidden: false, height: null}));
-const PAGES = {'page:f1': {file_id: 'f1', title: 'Weekly numbers', bot: 'lead', updated: ago(90), archived: false},
-  'page:f2': {file_id: 'f2', title: 'Release plan', bot: 'lead', updated: ago(30), archived: false}};
+const PAGES = {'page:f1': {file_id: 'f1', title: 'Weekly numbers', bot: 'lead', updated_at: ago(90), archived: false},
+  'page:f2': {file_id: 'f2', title: 'Release plan', bot: 'lead', updated_at: ago(30), archived: false}};
 // The server's filter, for the fields these fixtures use; Ana is the viewer.
 const matches = (bot, tab, t) => (t.owner === 'bot:' + bot || t.requester === 'bot:' + bot) && tab.conditions.every(({field, value}) => {
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
@@ -82,7 +82,7 @@ async function open(browser, viewport, colorScheme, server) {
     if (p === '/api/v2/needs-you') return json({items: [], went_away: null});
     if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
     if (p === '/api/v2/updates') return json({updates: q.get('bot') === 'lead' ? [{id: 'u1', bot: 'lead', day: '2026-10-23', kind: 'daily',
-      body: 'Shipped the export fix.', read: true, created: ago(600)}] : [], missed: [], unread: 0, next_before: null, today: {}});
+      body: 'Shipped the export fix.', read: true, created_at: ago(600)}] : [], missed: [], unread: 0, next_before: null, today: {}});
     if (p === '/api/v2/task-types') return json({types: TYPES});
     const layout = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs$/);
     if (layout) {

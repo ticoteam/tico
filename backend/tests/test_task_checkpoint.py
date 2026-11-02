@@ -46,7 +46,7 @@ def test_once_a_task_session_takes_in_another_private_task_it_never_checkpoints_
 def idle(api, title, days=8):
     task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Someday."})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), days=-days), task["id"]))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-days), task["id"]))
     return task
 
 
@@ -69,7 +69,7 @@ def test_an_idle_task_gets_one_still_wanted_ask_and_an_active_one_none(api):
     assert asks_on(api, fresh["id"]) == []
     # Another week passes with nobody answering: still the one ask for this stretch.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET updated=?,stale_asked_at=? WHERE id=?",
+        c.execute("UPDATE tasks SET updated_at=?,stale_asked_at=? WHERE id=?",
                   (H.shift(H.now(), days=-8), H.shift(H.now(), days=-8), stale["id"]))
     assert ask_idle(api) == []
     assert len(asks_on(api, stale["id"])) == 1
@@ -84,7 +84,7 @@ def test_keep_restarts_the_clock_and_close_closes(api):
              {"target": {"comment": ask["id"]}, "answers": {"still_wanted": [label]}})
     with api.app.state.store.read() as c:
         kept_row, closed_row = H.task(c, kept["id"]), H.task(c, closed["id"])
-        assert kept_row["status"] == "open" and kept_row["updated"] > kept_row["stale_asked_at"]
+        assert kept_row["status"] == "open" and kept_row["updated_at"] > kept_row["stale_asked_at"]
         assert closed_row["status"] == "closed" and closed_row["closed_by"] == "human:ana"
         assert still_wanted.idle_tasks(c) == []
 

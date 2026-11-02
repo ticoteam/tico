@@ -18,5 +18,5 @@ def test_fleet_snapshot_reports_active_attempt_from_batched_live_map(api):
     assert coo["active_attempts"] >= 1
     assert coo["active_attempt"]["id"] == attempt["id"]
     # The same four fields as before the batch, which also reads each attempt's bot and created.
-    assert set(coo["active_attempt"]) == {"id", "state", "started", "lease_until"}
+    assert set(coo["active_attempt"]) == {"id", "state", "started_at", "lease_until"}
     assert not [s for s in statements if "FROM attempts WHERE bot=" in s]

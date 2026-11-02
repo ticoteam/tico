@@ -262,8 +262,8 @@ def custom_page(item):
 
 def learnings(c, service):
     return [dict(row) for row in c.execute(
-        "SELECT id, integration, actor, text, created FROM learnings "
-        "WHERE integration=? AND deleted_at IS NULL ORDER BY created DESC, id", (service,))]
+        "SELECT id, integration, actor, text, created_at FROM learnings "
+        "WHERE integration=? AND deleted_at IS NULL ORDER BY created_at DESC, id", (service,))]
 
 
 def learning_counts(c):
@@ -275,13 +275,13 @@ def add_learning(c, who, service, text):
     if privacy.private_execution(c, who):
         raise Problem("privacy", "Private task work cannot be published as a company learning", 403)
     day = H.now()[:10]
-    n = c.execute("SELECT count(*) FROM learnings WHERE actor=? AND substr(created,1,10)=?",
+    n = c.execute("SELECT count(*) FROM learnings WHERE actor=? AND substr(created_at,1,10)=?",
                   (who.actor, day)).fetchone()[0]
     if n >= LEARNINGS_PER_DAY:
         raise Problem("cap", f"{n} learnings today; the cap is {LEARNINGS_PER_DAY} a day. "
                              "Fold what you know into the page instead.", 429)
-    row = {"id": H.new_id(), "integration": service, "actor": who.actor, "text": text.strip(), "created": H.now()}
-    c.execute("INSERT INTO learnings(id, integration, actor, text, created) VALUES(:id, :integration, :actor, :text, :created)", row)
+    row = {"id": H.new_id(), "integration": service, "actor": who.actor, "text": text.strip(), "created_at": H.now()}
+    c.execute("INSERT INTO learnings(id, integration, actor, text, created_at) VALUES(:id, :integration, :actor, :text, :created_at)", row)
     H.event(c, who.actor, "learning.add", service, {"id": row["id"], "chars": len(row["text"])})
     return row
 

@@ -28,12 +28,12 @@ def api(tmp_path):
             H.sync_registry(c, bots, {"people": people})
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
                           (slug, encode(config), "product", "ana"))
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
             for slug in BOTS:
                 # Each bot connects as an external agent: its own standing credential, no runner lease.
-                c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+                c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                           (slug, "hermes", "hash-" + slug, "2026-01-01T00:00:00Z", "human:ana"))
         yield client
 
@@ -47,7 +47,7 @@ def create(api, who, body, expected=200):
 
 def to(c, actor, task_id):
     """Messages to `actor` about the task."""
-    return H._rows(c.execute("SELECT body,refs_json FROM messages WHERE to_actor=? AND json_extract(refs_json,'$.task')=?",
+    return H._rows(c.execute("SELECT body,refs FROM messages WHERE to_actor=? AND json_extract(refs,'$.task')=?",
                              (actor, task_id)))
 
 
@@ -62,7 +62,7 @@ def in_qa_ticket(c, check_title="QA: PR #412"):
 
 
 def check_notices(c, ticket_id):
-    return [m for m in to(c, "bot:cpo", ticket_id) if (H._json(m["refs_json"], {}) or {}).get("news") == "check_blocked"]
+    return [m for m in to(c, "bot:cpo", ticket_id) if (H._json(m["refs"], {}) or {}).get("news") == "check_blocked"]
 
 
 def test_waiting_qa_check_blocks_its_ticket_and_resumes_it(api):
@@ -159,10 +159,10 @@ def test_same_blocker_joins_the_open_ask_and_both_wake(api):
     with api.app.state.store.transaction() as c:
         assert second["owner"] == "bot:qa", "no second ask reaches the person"
         assert H.TR.blocker_ids(c, second["id"]) == [first["id"]]
-        assert not [m for m in to(c, "human:ana", second["id"]) if not (H._json(m["refs_json"], {}) or {}).get("quiet")]
+        assert not [m for m in to(c, "human:ana", second["id"]) if not (H._json(m["refs"], {}) or {}).get("quiet")]
         assert not c.execute("SELECT 1 FROM tasks WHERE owner='human:ana' AND id<>?", (first["id"],)).fetchone()
         assert not c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-                             "WHERE json_extract(m.refs_json,'$.task')=?", (second["id"],)).fetchone(), "quiet until the ask is done"
+                             "WHERE json_extract(m.refs,'$.task')=?", (second["id"],)).fetchone(), "quiet until the ask is done"
         H.task_update(c, "human:ana", first["id"], status="done")
         assert any(m["body"].startswith("Unblocked: Remote test run refused") for m in to(c, "bot:qa", second["id"]))
         assert any("Grant Actions write" in m["body"] for m in to(c, "bot:cpo", first["id"]))
@@ -198,7 +198,7 @@ def test_case_or_slash_different_endpoint_is_a_separate_ask(api, endpoint):
     assert same["joined"]["task"] == first["id"], "an identical path still joins its open ask"
     with api.app.state.store.transaction() as c:
         assert not H.TR.blocker_ids(c, other["task"]["id"])
-        assert any(not (H._json(m["refs_json"], {}) or {}).get("quiet")
+        assert any(not (H._json(m["refs"], {}) or {}).get("quiet")
                    for m in to(c, "human:ana", other["task"]["id"])), "a distinct endpoint reaches the person"
         assert H.task(c, first["id"])["owner"] == "human:ana"
 

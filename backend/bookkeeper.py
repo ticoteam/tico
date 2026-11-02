@@ -71,12 +71,12 @@ CREATE TABLE IF NOT EXISTS bookkeeper_watch_listed(
 
 def built(c):
     """Whether bot:bookkeeper is the built-in one: made from the bookkeeper template and not archived."""
-    row = c.execute("SELECT bc.config_json, b.state FROM bot_config bc JOIN bots b ON b.slug=bc.bot WHERE bc.bot=?",
+    row = c.execute("SELECT bc.config, b.state FROM bot_config bc JOIN bots b ON b.slug=bc.bot WHERE bc.bot=?",
                     (SLUG,)).fetchone()
     if not row or row["state"] == "archived":
         return False
     try:
-        return (json.loads(row["config_json"] or "{}") or {}).get("template") == SLUG
+        return (json.loads(row["config"] or "{}") or {}).get("template") == SLUG
     except ValueError:
         return False
 
@@ -232,7 +232,7 @@ def render_shown(items, counts):
 
 def _open_check(c, name=TITLE):
     return H._one(c, "SELECT * FROM tasks WHERE owner=? AND requester=? AND title LIKE ? "
-                     "AND status IN ('open','doing','waiting','review','ready') ORDER BY created DESC LIMIT 1",
+                     "AND status IN ('open','doing','waiting','review','ready') ORDER BY created_at DESC LIMIT 1",
                   (ACTOR, H.KEEPER, name + " (%"))
 
 

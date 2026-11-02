@@ -46,9 +46,9 @@ def mailbox_in_words(text):
 
 def reported_mailbox(c, bot):
     """The identity of the `gmail` tool the bot's computer reports from its bot.yaml, or empty."""
-    row = c.execute("SELECT r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
                     (bot,)).fetchone()
-    report = ((readiness_document(row["readiness_json"]) if row else {}).get("bots") or {}).get(bot)
+    report = ((readiness_document(row["readiness"]) if row else {}).get("bots") or {}).get(bot)
     return routines.declared_mailbox({"tools": (report or {}).get("tools") or []}) if isinstance(report, dict) else ""
 
 
@@ -63,8 +63,8 @@ def mailbox_of(c, bot, config, instructions=None):
 def owner_of(c, bot, roster, requester=None):
     """The roster person the bot belongs to: the one who asked for it, else who made it, else its only owner, else
     its operator. None when that person is not on the roster."""
-    row = c.execute("SELECT created_by,operator,bot_owners_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    owners = BA.owner_ids(row["bot_owners_json"]) if row else []
+    row = c.execute("SELECT created_by,operator,bot_owners FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    owners = BA.owner_ids(row["bot_owners"]) if row else []
     made = H.actor_id(row["created_by"]) if row and str(row["created_by"] or "").startswith("human:") else ""
     for who in (H.actor_id(requester) if str(requester or "").startswith("human:") else "", made,
                 owners[0] if len(owners) == 1 else "", str(row["operator"] or "") if row else ""):
@@ -75,9 +75,9 @@ def owner_of(c, bot, roster, requester=None):
 
 
 def _config(c, bot):
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     try:
-        return json.loads(row["config_json"] or "{}") if row else {}
+        return json.loads(row["config"] or "{}") if row else {}
     except ValueError:
         return {}
 
@@ -130,7 +130,7 @@ def backfill(c, actor="keeper"):
     roster = _roster(c)
     people = [p for p in roster["people"] if not p.get("hidden")]
     taken = {p.get("inbox_bot") for p in roster["people"] if p.get("inbox_bot")}
-    found = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (DONE,)).fetchone()
+    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (DONE,)).fetchone()
     done = set(json.loads(found[0])) if found else set()
     wanted = []
     for row in c.execute("SELECT b.slug FROM bots b WHERE b.state<>'archived' ORDER BY b.slug"):
@@ -154,6 +154,6 @@ def backfill(c, actor="keeper"):
             linked.append(bot)
             roster = _roster(c)
     if linked:
-        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+        c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                   (DONE, json.dumps(sorted(done | set(linked)))))
     return linked

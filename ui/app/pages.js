@@ -24,11 +24,11 @@ function pageStatusHTML(p, {link = true} = {}) {
   const by = String(p.updated_by || '');
   const who = by.startsWith('bot:') ? pageBotName({bot: by.slice(4), bot_name: p.updated_by_name}) : p.updated_by_name || pageBotName(p);
   const parts = [stale ? `Not updated in ${p.stale_days} day${p.stale_days === 1 ? '' : 's'}`
-    : `Updated ${esc(ago(p.updated))}${who ? ' by ' + esc(who) : ''}`];
+    : `Updated ${esc(ago(p.updated_at))}${who ? ' by ' + esc(who) : ''}`];
   if (Number.isInteger(p.version)) parts.push('v' + p.version);
   if (p.cadence && p.cadence !== 'none') parts.push(esc(p.cadence));
   if (p.as_of) parts.push('data from ' + esc(pageDay(p.as_of)));
-  return `<div class="pg-status${stale ? ' pg-stale' : ''}" title="${esc(fmt(p.updated))}">${parts.join(' · ')}</div>`;
+  return `<div class="pg-status${stale ? ' pg-stale' : ''}" title="${esc(fmt(p.updated_at))}">${parts.join(' · ')}</div>`;
 }
 
 // ----------------------------------------------------------------- the card
@@ -135,7 +135,7 @@ function pageFullHead(state) {
   const p = state.page, head = $('#pg-view .pg-head');
   if (!head) return;
   const versions = state.versions.length > 1 ? `<select class="pg-ver" aria-label="Version">${state.versions.map(v =>
-    `<option value="${v.version}"${v.version === state.shown ? ' selected' : ''}>v${v.version} · ${esc(pageDay((v.created || '').slice(0, 10)))}</option>`).join('')}</select>` : '';
+    `<option value="${v.version}"${v.version === state.shown ? ' selected' : ''}>v${v.version} · ${esc(pageDay((v.created_at || '').slice(0, 10)))}</option>`).join('')}</select>` : '';
   const items = [
     state.can.manage ? `<button type="button" role="menuitem" data-pg-act="archive">${p.archived ? 'Restore' : 'Archive'}</button>` : '',
     `<a role="menuitem" href="${API}/v2/files/${encodeURIComponent(p.file_id)}?v=${state.shown}" download>Download</a>`,
@@ -306,7 +306,7 @@ async function lfLoad(more = false) {
       const r = await get(`/v2/files/search?q=${encodeURIComponent(f.q)}&limit=50`, {fresh: true});
       if (LF !== state || seq !== state.seq) return;
       state.rows = (r.results || []).filter(h => (!f.kind || h.library_kind === f.kind) && (!f.bot || h.bot === f.bot))
-        .map(h => ({...h, last_activity_at: h.updated, hit: true}));
+        .map(h => ({...h, last_activity_at: h.updated_at, hit: true}));
       state.cursor = null;
     } else {
       const r = await get('/v2/files?' + lfApiQuery(more ? state.cursor : ''), {fresh: true});

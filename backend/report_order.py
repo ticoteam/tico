@@ -41,7 +41,7 @@ def _load(c):
 
 
 def _store(c, doc):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, encode(doc)))
 
 
@@ -156,7 +156,7 @@ def roster_saved(c, roster):
     """Before a roster is stored: each person it adds, or whose `reports_to` it changes, arrives there."""
     if not _load(c):
         return
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
     old = json.loads(row[0]) if row else {}
     before = {p.get("id"): str(p.get("reports_to") or "").strip()
               for p in (old.get("people") or []) if isinstance(p, dict)}

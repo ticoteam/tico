@@ -24,16 +24,16 @@ def test_incident_move_is_unheld_and_claimable_within_five_minutes(api):
         incident = H.task_create(c, 'bot:cpo', 'Restore sign-in', 'Repair the outage', 'bot:ops', labels=['incident'])
         c.execute('DELETE FROM jobs')
         H.task_update(c, 'bot:ops', incident['id'], status='doing')
-        job = c.execute("SELECT j.*,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
+        job = c.execute("SELECT j.*,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
                         "WHERE j.bot='cpo' ORDER BY j.rowid DESC LIMIT 1").fetchone()
         assert job is not None and job['held'] == 0 and job['state'] == 'queued'
-        assert json.loads(job['refs_json'])['rule'] == 'incident_news'
-        created = job['created']
+        assert json.loads(job['refs'])['rule'] == 'incident_news'
+        created = job['created_at']
     attempt = claim(api, r, 'cpo')
     assert attempt
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'incident-session'}, token=r['token'])
     with api.app.state.store.read() as c:
-        started = c.execute('SELECT started FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0]
+        started = c.execute('SELECT started_at FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0]
     assert (H.parse_ts(started) - H.parse_ts(created)).total_seconds() < 300
 
 
@@ -45,9 +45,9 @@ def test_stale_suggestion_and_refused_move_need_action_but_routine_review_stays_
         c.execute('DELETE FROM jobs')
         H.task_comment(c, H.KEEPER, mine['id'], 'Stale check: parent is done. Suggest: mark done.',
                        extra_refs={'stale_check': 'suggestion-1', 'wake': 'stall', 'wake_batch': 'rule'})
-        raw = c.execute("SELECT m.refs_json,j.held FROM messages m JOIN jobs j ON j.message_id=m.id "
+        raw = c.execute("SELECT m.refs,j.held FROM messages m JOIN jobs j ON j.message_id=m.id "
                         "WHERE j.bot='cpo' ORDER BY j.rowid DESC LIMIT 1").fetchone()
-        msg, job = {'refs': json.loads(raw['refs_json'])}, raw
+        msg, job = {'refs': json.loads(raw['refs'])}, raw
         assert msg['refs']['rule'] == 'task_action' and job['held'] == 0
         assert 'wake_batch' not in msg['refs']
         # Even a sweep-shaped notice cannot be held again by the enqueue trigger.
@@ -60,9 +60,9 @@ def test_stale_suggestion_and_refused_move_need_action_but_routine_review_stays_
         msg, job = sent_job(c, requested, 'bot:cpo', 'Ready for review: feature entered Review 1',
                             {'news': 'ready_for_review'})
         assert msg['refs']['rule'] == 'profile_lead_digest' and job['held'] == 1
-        W.tick(c, job['created'])
+        W.tick(c, job['created_at'])
         due = c.execute('SELECT hold_until FROM jobs WHERE id=?', (job['id'],)).fetchone()[0]
-        assert due == W.digest_time(job['created'], 9)
+        assert due == W.digest_time(job['created_at'], 9)
         # A stale suggestion about another bot's task is not an action for this recipient.
         msg, job = sent_job(c, requested, 'bot:cpo', 'Stale check for the owner', {'stale_check': 'other'})
         assert msg['refs']['rule'] == 'profile_lead_digest' and job['held'] == 1
@@ -72,7 +72,7 @@ def test_stale_suggestion_and_refused_move_need_action_but_routine_review_stays_
 def test_urgent_news_overrides_batch_rows_for_every_batching_profile(api, profile):
     with api.app.state.store.transaction() as c:
         put(c, 'cpo', profile)
-        c.execute("INSERT INTO rules(id,scope_kind,event,then_outcome,created_by,created,updated) "
+        c.execute("INSERT INTO rules(id,scope_kind,event,then_outcome,created_by,created_at,updated_at) "
                   "VALUES('batch-all','team','*','batch','human:ana',?,?)", (H.now(), H.now()))
         incident = H.task_create(c, 'bot:cpo', 'Incident: Outage', 'x', 'bot:ops')
         mine = H.task_create(c, 'bot:ops', 'Own this work', 'x', 'bot:cpo')
@@ -141,7 +141,7 @@ def test_a_named_waking_rule_keeps_its_name_and_an_urgent_comment_stays_editable
 def test_incident_type_and_plain_rule_words_are_listed(api):
     with api.app.state.store.transaction() as c:
         put(c, 'cpo', 'lead')
-        c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('incident-kind','Incident',?,?)", (H.now(), H.now()))
+        c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('incident-kind','Incident',?,?)", (H.now(), H.now()))
         task = H.task_create(c, 'bot:ops', 'Restore the server', 'x', 'bot:cpo', type='Incident')
         assert R.judge(c, H.KEEPER, 'bot:cpo', 'notice', {'task': task['id']}, 'Moved', None).rule == 'incident_news'
         rows = {r['id']: r for r in R.BUILTINS}

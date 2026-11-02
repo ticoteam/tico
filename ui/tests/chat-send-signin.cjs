@@ -75,7 +75,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
           return identity();
         }
         if (hold) await hold;
-        const message = {id: 'm' + posts.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()};
+        const message = {id: 'm' + posts.length, from_actor: 'human:ana', body: text, created_at: new Date().toISOString()};
         delivered.push(message);
         return json(keeper ? {conversation: {id: 'c1'}, message} : {run: 'fixture-run'});
       }

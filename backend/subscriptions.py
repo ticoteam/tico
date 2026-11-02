@@ -15,14 +15,14 @@ COMPUTER_LOGIN_CAPABILITY = 'computer_logins_v1'
 
 def computer_logins(runner, ready=None):
     """The runner has acknowledged the server's one-login contract and named its physical default home."""
-    ready = readiness_document(runner['readiness_json']) if ready is None else ready
-    return (COMPUTER_LOGIN_CAPABILITY in (H._json(runner['capabilities_json'], []) or [])
+    ready = readiness_document(runner['readiness']) if ready is None else ready
+    return (COMPUTER_LOGIN_CAPABILITY in (H._json(runner['capabilities'], []) or [])
             and isinstance(ready.get('computer_profile'), str))
 
 
 def login_upgrade(runner, ready=None, bot=None, runtime=None):
     """An older runner's named bot login may be a local override; never relabel it or silently change its account."""
-    ready = readiness_document(runner['readiness_json']) if ready is None else ready
+    ready = readiness_document(runner['readiness']) if ready is None else ready
     if computer_logins(runner, ready):
         return ''
     rows = ready.get('bots') or {}
@@ -67,10 +67,10 @@ def subscription_meta(c):
     if values is not None and "subscriptions.meta" in values:
         return values["subscriptions.meta"]
     out = {}
-    for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key>='subscription' "
+    for row in c.execute("SELECT key, value FROM registry_metadata WHERE key>='subscription' "
                          "AND key<'subscriptioo'"):
         try:
-            value = json.loads(row['value_json'] or '{}')
+            value = json.loads(row['value'] or '{}')
         except ValueError:
             value = {}
         out[row['key']] = value if isinstance(value, dict) else {}
@@ -135,7 +135,7 @@ def computer_profiles(c, runner, accounts):
     """The subscription profiles a computer reported, each with its runtimes; accounts only when `accounts`."""
     rows = []
     for row in c.execute('SELECT * FROM computer_profiles WHERE runner_id=? ORDER BY profile', (runner['id'],)):
-        runtimes = reported_runtimes(c, runner['id'], row['profile'], row['runtimes_json'])
+        runtimes = reported_runtimes(c, runner['id'], row['profile'], row['runtimes'])
         rows.append({'name': row['profile'], **identity(c, runner['id'], row['profile']),
                      'runtimes': runtimes if accounts else without_accounts(runtimes)})
     return rows
@@ -153,7 +153,7 @@ def profiles_by_runner(c):
         rid, profile = row['runner_id'], row['profile']
         sid = connection_id(rid, profile)
         named = meta.get(sid) or {}
-        runtimes = reported_runtimes(c, rid, profile, row['runtimes_json'], meta=meta)
+        runtimes = reported_runtimes(c, rid, profile, row['runtimes'], meta=meta)
         out.setdefault(rid, []).append({
             'name': profile, 'id': sid, 'display_name': named.get('display_name') or profile,
             'runtimes': runtimes})
@@ -201,7 +201,7 @@ def record(c, runner_id, profiles, readiness=None):
             profile = M.ComputerProfile.model_validate(row)
         except ValueError:
             continue
-        previous = c.execute('SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?',
+        previous = c.execute('SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?',
                              (runner_id, profile.name)).fetchone()
         previous = json.loads(previous[0] or '{}') if previous else {}
         runtimes = {}
@@ -224,8 +224,8 @@ def record(c, runner_id, profiles, readiness=None):
         if blocked and (signed_in is True or (signed_in is None and blocked['profile'] in valid
                                              and status.get('authenticated') == 'ready')):
             c.execute("DELETE FROM registry_metadata WHERE key=?", (f"subscription-unavailable:{bot['bot']}",))
-    stored = {r['profile']: r['runtimes_json'] for r in c.execute(
-        'SELECT profile,runtimes_json FROM computer_profiles WHERE runner_id=?', (runner_id,))}
+    stored = {r['profile']: r['runtimes'] for r in c.execute(
+        'SELECT profile,runtimes FROM computer_profiles WHERE runner_id=?', (runner_id,))}
     if stored == valid:
         return
     c.execute('DELETE FROM computer_profiles WHERE runner_id=?', (runner_id,))
@@ -264,12 +264,12 @@ def _bot_line(c, bot, ctx):
     computer = {'runner_id': runner['id'], 'label': runner['label']} if runner else None
     from . import providers
     from .shared_bots import follow
-    row = c.execute('SELECT config_json FROM bot_config WHERE bot=?', (bot,)).fetchone()
+    row = c.execute('SELECT config FROM bot_config WHERE bot=?', (bot,)).fetchone()
     config = providers.fill(ctx['providers'], follow(c, bot, json.loads(row[0] or '{}') if row else {}))
     line = {'profile': None, 'source': 'computer', 'computer': computer}
     if not runner:
         return {**line, 'signed_in': None, 'problem': ''}, config
-    return {**line, **_sign_in(runner, readiness_document(runner['readiness_json']), bot, config)}, config
+    return {**line, **_sign_in(runner, readiness_document(runner['readiness']), bot, config)}, config
 
 
 def _sign_in(runner, report, bot, config):
@@ -316,7 +316,7 @@ def connections_by_runner(c, settings, ctx=None):
 
     ctx = ctx if ctx is not None else context(c, settings)
     placed, runners = {}, {}
-    for row in c.execute("SELECT a.runner_id, a.bot, r.id, r.label, r.readiness_json, r.capabilities_json, "
+    for row in c.execute("SELECT a.runner_id, a.bot, r.id, r.label, r.readiness, r.capabilities, "
                          "r.revoked_at FROM assignments a JOIN bots b ON b.slug=a.bot "
                          "JOIN runners r ON r.id=a.runner_id "
                          "WHERE b.state<>'archived' ORDER BY a.bot"):
@@ -325,7 +325,7 @@ def connections_by_runner(c, settings, ctx=None):
     bots = [bot for group in placed.values() for bot in group]
     config_rows = {row["bot"]: row for row in load_configs(c, bots)} if bots else {}
     # A branch follows its original's config, and the original need not be placed anywhere.
-    sources = {source_of(json.loads(row["config_json"] or "{}")) for row in config_rows.values()} - {""}
+    sources = {source_of(json.loads(row["config"] or "{}")) for row in config_rows.values()} - {""}
     if missing := sorted(sources - set(config_rows)):
         config_rows.update({row["bot"]: row for row in load_configs(c, missing)})
 
@@ -338,12 +338,12 @@ def connections_by_runner(c, settings, ctx=None):
         runner = runners[rid]
         # A revoked computer is no bot's connection: its bots are listed as on none, as bot_subscription does.
         computer = None if runner["revoked_at"] else {"runner_id": runner["id"], "label": runner["label"]}
-        report = readiness_document(runner["readiness_json"])
+        report = readiness_document(runner["readiness"])
         items = []
         for bot in bot_list:
             row = config_rows.get(bot)
             config = providers.fill(ctx["providers"], follow(
-                c, bot, json.loads(row["config_json"] or "{}") if row else {}, rows=rows_of))
+                c, bot, json.loads(row["config"] or "{}") if row else {}, rows=rows_of))
             runtime = config.get("runtime")
             line = {"profile": None, "source": "computer", "computer": computer,
                     "runtime": runtime or "", "harness": config.get("harness") or ""}
@@ -361,10 +361,10 @@ def connections_by_runner(c, settings, ctx=None):
     if needed:
         for start in range(0, len(needed), 500):
             part = list(needed)[start:start + 500]
-            for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key IN ("
+            for row in c.execute("SELECT key, value FROM registry_metadata WHERE key IN ("
                                  + ",".join("?" * len(part)) + ")", part):
                 try:
-                    value = json.loads(row["value_json"] or "{}")
+                    value = json.loads(row["value"] or "{}")
                 except ValueError:
                     value = {}
                 if isinstance(value, dict) and value.get("display_name"):
@@ -407,7 +407,7 @@ def install(app, store, auth, mutate, settings, computer_rows):
             if not runner or not (who.role == 'human' or who.role == 'owner') or not (
                     auth.bot_admin(who) or runner['operator'] == H.actor_id(who.actor)):
                 raise Problem('forbidden', 'Only a computer operator or administrator can record weekly usage', 403)
-            row = c.execute('SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?',
+            row = c.execute('SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?',
                             (body.runner_id, body.profile)).fetchone()
             if not row or body.runtime not in json.loads(row[0] or '{}'):
                 raise Problem('not_found', 'Subscription runtime not found on this computer', 404)

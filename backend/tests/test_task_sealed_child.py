@@ -73,8 +73,8 @@ def test_the_owning_bots_run_hands_a_sealed_subtask_to_a_bot_that_reads_only_tha
     # The wake notice it is sent says nothing of the parent either.
     with api.app.state.store.read() as c:
         notices = [dict(m) for m in c.execute(
-            "SELECT m.body,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='finance'")]
-    assert notices and all("Zip triage" not in m["body"] and row["id"] not in (m["body"] + (m["refs_json"] or ""))
+            "SELECT m.body,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='finance'")]
+    assert notices and all("Zip triage" not in m["body"] and row["id"] not in (m["body"] + (m["refs"] or ""))
                            for m in notices), notices
 
     # History: the parent says who it went to; the subtask says who filed it, without the parent's title.
@@ -131,7 +131,7 @@ def test_done_wakes_the_parents_owner_and_no_words_reach_its_requester(api):
                                        "note": "Fixed: checked the setting first, test added."}, finance)
     with api.app.state.store.read() as c:
         jobs = {bot: [json.loads(r[1] or "{}") | {"body": r[0]} for r in c.execute(
-            "SELECT m.body,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=?", (bot,))]
+            "SELECT m.body,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=?", (bot,))]
             for bot in ("ops", "cpo")}
         assert not H.subtask_flows_up(c, H.task(c, child["id"]), H.task(c, row["id"]))
     assert any(r.get("wake") == "subtask_finished" and r["task"] == row["id"] and r.get("trigger_source") == child["id"]

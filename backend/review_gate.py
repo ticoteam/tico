@@ -47,7 +47,7 @@ def heads(c, parent, snapshots=None):
     from . import hubdb as H
     out = set()
     for pr in links(c, parent):
-        detail = (snapshots or {}).get(pr["id"]) or H._json(pr.get("detail_json"), {}) or {}
+        detail = (snapshots or {}).get(pr["id"]) or H._json(pr.get("detail"), {}) or {}
         head = str(detail.get("head_sha") or "").lower()
         if not detail.get("error") and test_receipts.SHA.fullmatch(head):
             out.add(head)
@@ -273,7 +273,7 @@ def evidence(c, row, actor, receipt_owner=None):
     from . import task_privacy as privacy
     from .read_cache import configs
     if receipt_owner is None:
-        owner = c.execute("SELECT value_json FROM registry_metadata WHERE key='owner'").fetchone()
+        owner = c.execute("SELECT value FROM registry_metadata WHERE key='owner'").fetchone()
         receipt_owner = (H._json(owner[0], {}) or {}).get("email") if owner else None
     author_cache = {}
     parents = {r["bot"]: r["reports_to"] or "" for r in configs(c)}
@@ -281,9 +281,9 @@ def evidence(c, row, actor, receipt_owner=None):
         messages = []
         authors = set()
         conv = H.conversation(c, item.get("conversation_id"))
-        for raw in c.execute("SELECT * FROM messages WHERE conversation_id=? AND deleted_at IS NULL ORDER BY created,id",
+        for raw in c.execute("SELECT * FROM messages WHERE conversation_id=? AND deleted_at IS NULL ORDER BY created_at,id",
                              (item.get("conversation_id"),)).fetchall():
-            m = {**dict(raw), "refs": H._json(raw["refs_json"], {}) or {}}
+            m = {**dict(raw), "refs": H._json(raw["refs"], {}) or {}}
             if H.message_task_id(m, conv) != item["id"] or any(m.get(k) for k in test_receipts.REMOVED):
                 continue
             if (privacy.message_readable(c, actor, m, current=True)
@@ -339,13 +339,13 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
     facts = evidence(c, row, reader or actor, receipt_owner)
     if note is not None:
         facts["note"] = note
-        facts["updated"] = H.now()
+        facts["updated_at"] = H.now()
     # CI is checked across all linked PRs before looking at any receipt.
     for pr in prs:
-        detail = snapshots.get(pr["id"], {"error": True}) if snapshots is not None else (H._json(pr.get("detail_json"), {}) or {})
+        detail = snapshots.get(pr["id"], {"error": True}) if snapshots is not None else (H._json(pr.get("detail"), {}) or {})
         head = detail.get("head_sha") or "unknown"
-        cached = H._json(pr.get("detail_json"), {}) or {}
-        changed = snapshots is not None and (pr.get("updated") or "") > detail.get("at", "") and cached.get("head_sha") != head
+        cached = H._json(pr.get("detail"), {}) or {}
+        changed = snapshots is not None and (pr.get("updated_at") or "") > detail.get("at", "") and cached.get("head_sha") != head
         if changed or detail.get("error") or not test_receipts.SHA.fullmatch(head):
             why = (detail.get("why") or "GitHub read failed" if detail.get("error")
                    else "the PR link changed while GitHub was read" if changed else "no PR head recorded")
@@ -363,7 +363,7 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
                    "A failed GitHub check attempt still blocks after a passing rerun at the same head. "
                    "Have the owner or another contributor fix the failure and push a new head, then retry the review move.")
     for pr in prs:
-        detail = snapshots[pr["id"]] if snapshots is not None else (H._json(pr.get("detail_json"), {}) or {})
+        detail = snapshots[pr["id"]] if snapshots is not None else (H._json(pr.get("detail"), {}) or {})
         head = detail["head_sha"]
         checks = detail.get("checks") or {}
         # Current all-green CI is stronger evidence than prose, but only from a fresh read: the webhook-built cache
@@ -408,14 +408,14 @@ def notify(c, actor, notice):
     if row and not source_wait:
         from .task_blocked import hold
         hold(c, row["id"], notice["text"], "gate")
-        c.execute("UPDATE tasks SET blocked_gate_json=? WHERE id=?", (
+        c.execute("UPDATE tasks SET blocked_gate=? WHERE id=?", (
             json.dumps({**{k: notice[k] for k in ("head", "kind", "pr")}, "at": H.now()}), row["id"]))
     if not row or actor == row["owner"]:
         return
     conv = H.conversation(c, row["conversation_id"])
     key = {k: notice[k] for k in ("kind", "head")}
-    if c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.task')=? "
-                 "AND json_extract(refs_json,'$.review_gate')=? LIMIT 1",
+    if c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs,'$.task')=? "
+                 "AND json_extract(refs,'$.review_gate')=? LIMIT 1",
                  (conv["id"], row["id"], json.dumps(key, sort_keys=True))).fetchone():
         return
     # A temporary GitHub failure is Tico's to retry on its timer (backend/move_retry.py) and nobody's to fix: the

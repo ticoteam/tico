@@ -37,7 +37,7 @@ NO_VERDICT = "comments"     # a check finished with no verdict: what it said is 
 HANDOFF = "handoff"
 HANDOFFS = ("verdict", "failed_check", "merge_conflict", "merge")
 # The claim's order key: a keeper hand-off before the bot's other queued jobs (backend/execution.py).
-HANDOFF_FIRST_SQL = (f"CASE WHEN m.from_actor='{H.KEEPER}' AND json_extract(m.refs_json,'$.{HANDOFF}') "
+HANDOFF_FIRST_SQL = (f"CASE WHEN m.from_actor='{H.KEEPER}' AND json_extract(m.refs,'$.{HANDOFF}') "
                      "IS NOT NULL THEN 0 ELSE 1 END")
 
 
@@ -65,7 +65,7 @@ def _prs(c, row):
 
 
 def _head(pr):
-    return str((H._json(pr.get("detail_json"), {}) or {}).get("head_sha") or "").lower()
+    return str((H._json(pr.get("detail"), {}) or {}).get("head_sha") or "").lower()
 
 
 def at_head(c, row, head):
@@ -92,7 +92,7 @@ def _checks(c, row, step):
     work, never a check, whatever its title: finished with no verdict, it is not a check's comments."""
     out = [H.task(c, cid) for cid in TR.child_ids(c, row["id"])]
     out = [t for t in out if t and H.is_bot(t.get("owner")) and (F.check_step(c, t, row) or {}).get("id") == step["id"]]
-    return sorted(out, key=lambda t: (t.get("created") or "", t["id"]))
+    return sorted(out, key=lambda t: (t.get("created_at") or "", t["id"]))
 
 
 def _verdict(check):
@@ -146,7 +146,7 @@ def after_verdict(c, check):
     # Verdicts are commonly written inside the checker turn's final tool call. The executed
     # model segments are committed by turn_finish afterwards, so this callback records an
     # immutable pending marker and leaves routing to the post-capture callback.
-    attempt = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started DESC,id DESC LIMIT 1",
+    attempt = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
                         (check["id"],)).fetchone()
     attempt_id = attempt["id"] if attempt else None
     pending = {"check_id": check["id"], "attempt_id": attempt_id, "step": name, "head": head,
@@ -175,9 +175,9 @@ def after_capture(c, check_id, head, attempt_id):
     verdict = _verdict(check or {})
     if not verdict or str(check.get("verdict_head") or _judged_head(c, check) or "").lower() != str(head or "").lower():
         return None
-    attempt = c.execute("SELECT task_id,bot,finished FROM turns WHERE id=?", (attempt_id,)).fetchone()
-    latest = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started DESC,id DESC LIMIT 1", (check_id,)).fetchone()
-    if (not attempt or attempt["task_id"] != check_id or not attempt["finished"] or
+    attempt = c.execute("SELECT task_id,bot,finished_at FROM turns WHERE id=?", (attempt_id,)).fetchone()
+    latest = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1", (check_id,)).fetchone()
+    if (not attempt or attempt["task_id"] != check_id or not attempt["finished_at"] or
             not latest or latest["id"] != attempt_id or check.get("status") != "done" or
             H.actor_id(attempt["bot"]) != H.actor_id(check.get("owner"))):
         return None
@@ -233,7 +233,7 @@ def resumed(c, task_id):
                  if _verdict(t) and H._subtask_result_parent(c, t)), None)
     if not last or (delivery(c, last) or {}).get("consumed") or not after_verdict(c, last):
         return None
-    attempt = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started DESC,id DESC LIMIT 1",
+    attempt = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
                         (last["id"],)).fetchone()
     head = str(last.get("verdict_head") or _judged_head(c, last) or "").lower()
     return after_capture(c, last["id"], head, attempt["id"]) if attempt else None
@@ -286,7 +286,7 @@ def delivery(c, check):
     marker = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
                        "ORDER BY rowid DESC LIMIT 1", (TR.parent_of(c, check["id"]) or "",)).fetchone()
     pending = H._json(marker["new"], {}) if marker else {}
-    turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started DESC,id DESC LIMIT 1",
+    turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
                      (check["id"],)).fetchone()
     waiting = turn and pending.get("check_id") == check["id"] and pending.get("attempt_id") == turn["id"]
     verdict = _verdict(check)
@@ -447,7 +447,7 @@ def timeouts(c, at=None):
     the same way. Returns the tickets moved on."""
     at = H.parse_ts(at or H.now())
     skipped = []
-    timed = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow_json LIKE '%timeout_hours%'")]
+    timed = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow LIKE '%timeout_hours%'")]
     for step in timed:
         hours = F.of(step).get("timeout_hours")
         if not hours or not F.is_check(step):

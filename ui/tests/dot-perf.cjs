@@ -20,7 +20,7 @@ const {unrouted} = require('./support/routes.cjs');
 const {SLOWDOWN} = require('./support/load.cjs');
 
 const now = new Date().toISOString();
-const msg = (id, from, body) => ({id, from_actor: from, body, refs: {}, created: now, kind: 'say'});
+const msg = (id, from, body) => ({id, from_actor: from, body, refs: {}, created_at: now, kind: 'say'});
 const IDLE_MS = 10000;
 const DOT_ANIMATED = new Set(['transform', 'opacity', 'offset', 'easing', 'composite', 'computedOffset']);
 
@@ -199,8 +199,8 @@ const round = v => Math.round(v * 10) / 10;
     // class. And the page it sees: a page with no heading, then one with a heading, so its label goes and comes back.
     const peekShows = id => page.evaluate(id => {
       document.activeElement?.blur();
-      (S.v2 ||= {}).needs = [{kind: 'ask', id, created: new Date().toISOString(),
-        ask: {id, from_actor: 'bot:coo', to_actor: 'human:ben', body: 'Ship it?', created: new Date().toISOString(), refs: {}}}];
+      (S.v2 ||= {}).needs = [{kind: 'ask', id, created_at: new Date().toISOString(),
+        ask: {id, from_actor: 'bot:coo', to_actor: 'human:ben', body: 'Ship it?', created_at: new Date().toISOString(), refs: {}}}];
       askPeek();
     }, id).then(() => page.locator('#ask-peek .ask-peek-go').waitFor());
     const heading = text => page.evaluate(text => { const h = document.querySelector('#main h1, #main h2'); h.dataset.was ??= h.textContent; h.textContent = text ?? h.dataset.was; }, text);

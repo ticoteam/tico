@@ -11,8 +11,8 @@ def task_bot(api, lanes, capability="task_lanes_v2", capacity=8, others=()):
     """`ops` keyed on tasks, assigned to a runner that does or does not advertise lanes."""
     with api.app.state.store.transaction() as c:
         for bot in ("ops", *others):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps({**config, "session": "task"}), bot))
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+            c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps({**config, "session": "task"}), bot))
     machine = runner(api)
     for bot in ("ops", *others):
         assign(api, machine, bot)
@@ -149,7 +149,7 @@ def test_a_pre_limit_lane_start_or_restore_cannot_release_the_cooldown(api, monk
         post(api, f"attempts/{two['id']}/started", {"thread_id": two["lane"]}, machine["token"])
         # A lease which lapsed while its worker continued; the runner still owns its lane.
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE attempts SET state='expired',finished=? WHERE id=?", (before, two["id"]))
+            c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (before, two["id"]))
             c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (two["job_id"],))
     monkeypatch.setattr(H, "now", lambda: H.shift(before, seconds=1))
     post(api, f"attempts/{one['id']}/started", {"thread_id": one["lane"]}, machine["token"])

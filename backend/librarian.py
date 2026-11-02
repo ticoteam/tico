@@ -35,7 +35,7 @@ def availability(c, who):
 
 def find_room(c, actor):
     row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
-                    "AND closed_at IS NULL ORDER BY created LIMIT 1", (actor, rooms.DOCS_ROOM)).fetchone()
+                    "AND closed_at IS NULL ORDER BY created_at LIMIT 1", (actor, rooms.DOCS_ROOM)).fetchone()
     return H.conversation(c, row["id"]) if row else None
 
 
@@ -150,11 +150,11 @@ def install(app, store, auth, mutate, onboarding):
         limit, offset = max(1, min(limit, 100)), max(0, offset)
         with store.read() as c:
             rows = c.execute(
-                "SELECT v.id,v.created,v.last_message_at,v.closed_at,"
+                "SELECT v.id,v.created_at,v.last_message_at,v.closed_at,"
                 "COALESCE((SELECT substr(m.body,1,160) FROM messages m WHERE m.conversation_id=v.id "
                 "AND m.from_actor=v.owner_actor ORDER BY m.rowid LIMIT 1),v.subject,'Docs') AS title "
                 "FROM conversations v WHERE v.scope='personal' AND v.owner_actor=? AND v.room_key=? "
-                "ORDER BY COALESCE(v.last_message_at,v.created) DESC,v.id DESC LIMIT ? OFFSET ?",
+                "ORDER BY COALESCE(v.last_message_at,v.created_at) DESC,v.id DESC LIMIT ? OFFSET ?",
                 (who.actor, rooms.DOCS_ROOM, limit + 1, offset)).fetchall()
             return {"conversations": [dict(row) for row in rows[:limit]],
                     "next_offset": offset + limit if len(rows) > limit else None}

@@ -25,7 +25,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS runner_versions(
  runner_id TEXT PRIMARY KEY REFERENCES runners(id), release TEXT NOT NULL DEFAULT '',
  kind TEXT NOT NULL DEFAULT '', update_state TEXT NOT NULL DEFAULT '', update_target TEXT NOT NULL DEFAULT '',
- update_error TEXT NOT NULL DEFAULT '', reported TEXT NOT NULL);
+ update_error TEXT NOT NULL DEFAULT '', reported_at TEXT NOT NULL);
 """
 
 
@@ -34,7 +34,7 @@ def ensure_schema(c):
     and the server release its owner was last told about."""
     H.add_column(c, "runner_versions", "commit_sha", "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, "runner_versions", "outdated_since", "TEXT")
-    H.add_column(c, "runner_versions", "nudged", "TEXT NOT NULL DEFAULT ''")
+    H.add_column(c, "runner_versions", "nudged_at", "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, "runner_versions", "outdated_for", "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, "runner_versions", "update_since", "TEXT")
     H.add_column(c, "runner_versions", "update_running", "INTEGER")
@@ -92,16 +92,16 @@ def record(c, runner_id, body):
     release = clean(body.release)
     update = body.update
     since = update_since(c, runner_id, update.state if update else "")
-    c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,update_error,reported,commit_sha) "
+    c.execute("INSERT INTO runner_versions(runner_id,release,kind,update_state,update_target,update_error,reported_at,commit_sha) "
               "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(runner_id) DO UPDATE SET release=excluded.release,"
               "kind=excluded.kind,update_state=excluded.update_state,update_target=excluded.update_target,"
-              "update_error=excluded.update_error,reported=excluded.reported,commit_sha=excluded.commit_sha",
+              "update_error=excluded.update_error,reported_at=excluded.reported_at,commit_sha=excluded.commit_sha",
               (runner_id, release, body.kind or "", update.state if update else "", update.target if update else "",
                update.error if update else "", H.now(), body.commit or ""))
     c.execute("UPDATE runner_versions SET update_since=?,update_running=?,update_handed_back=? WHERE runner_id=?",
               (since, update.running if update else None, update.handed_back if update else None, runner_id))
     if body.checkout is None:   # it follows the server's release now, not main: an old "behind main" note is stale
-        c.execute("UPDATE runners SET checkout_json=NULL WHERE id=?", (runner_id,))
+        c.execute("UPDATE runners SET checkout=NULL WHERE id=?", (runner_id,))
     nudge(c, runner_id)
 
 
@@ -111,7 +111,7 @@ def nudge(c, runner_id, server=None):
     first. A computer its owner pinned to a release is not nudged; its row still says Outdated.
     Returns whether a notice went out."""
     server = releases.version() if server is None else server
-    row = c.execute("SELECT v.release,v.update_error,v.update_state,v.outdated_since,v.outdated_for,v.nudged,r.label,"
+    row = c.execute("SELECT v.release,v.update_error,v.update_state,v.outdated_since,v.outdated_for,v.nudged_at,r.label,"
                     "r.operator FROM runner_versions v JOIN runners r ON r.id=v.runner_id WHERE v.runner_id=?",
                     (runner_id,)).fetchone()
     if not row:
@@ -125,10 +125,10 @@ def nudge(c, runner_id, server=None):
     if not since:
         since = now
         c.execute("UPDATE runner_versions SET outdated_since=?,outdated_for=? WHERE runner_id=?", (since, server, runner_id))
-    if (row["nudged"] == server or H.shift(since, seconds=NUDGE_AFTER_S) > now or not row["operator"]
+    if (row["nudged_at"] == server or H.shift(since, seconds=NUDGE_AFTER_S) > now or not row["operator"]
             or row["update_state"] == "pinned"):
         return False
-    c.execute("UPDATE runner_versions SET nudged=? WHERE runner_id=?", (server, runner_id))
+    c.execute("UPDATE runner_versions SET nudged_at=? WHERE runner_id=?", (server, runner_id))
     have = f"Tico {row['release']}" if releases.parse(row["release"]) else "a build that is not a Tico release"
     why = f" Its last update error: {row['update_error']}" if row["update_error"] else ""
     H.notice(c, H.KEEPER, H.human_actor(row["operator"]),

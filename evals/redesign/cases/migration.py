@@ -78,7 +78,7 @@ def items(f, key):
 
 
 def started(run):
-    return when(run.get("started"))
+    return when(run.get("started_at"))
 
 
 def fixture_ids(f):
@@ -390,7 +390,7 @@ def old_fired(org, f, at):
     from backend.scheduler import stamp
     installed(f, "routine:pr_sweep")
     with org.store.transaction() as c:
-        c.execute("UPDATE schedules SET last_fired=?, next_due=? WHERE id=?",
+        c.execute("UPDATE schedules SET last_fired_at=?, next_due_at=? WHERE id=?",
                   (stamp(at), stamp(at + dt.timedelta(hours=1)), fx(f)["routines"]["pr_sweep"]))
     return at
 
@@ -414,7 +414,7 @@ def s41_steps(org, f):
 
 def schedule_rows(org, f):
     with org.store.read() as c:
-        return {r["id"]: dict(r) for r in c.execute("SELECT id, deleted_at, next_due FROM schedules WHERE id IN (%s)" % (
+        return {r["id"]: dict(r) for r in c.execute("SELECT id, deleted_at, next_due_at FROM schedules WHERE id IN (%s)" % (
             ",".join("?" * len(ROUTINES))), tuple(fx(f)["routines"].values()))}
 
 
@@ -432,7 +432,7 @@ def routines_stopped(f):
     installed(f, *("routine:" + n for n in ROUTINES))
     found = got(f, "schedules")
     live = [n for n, sid in fx(f)["routines"].items()
-            if not (found.get(sid) or {}).get("deleted_at") or (found.get(sid) or {}).get("next_due")]
+            if not (found.get(sid) or {}).get("deleted_at") or (found.get(sid) or {}).get("next_due_at")]
     return not live, f"old routine rows still due or live: {live}"
 
 
@@ -503,7 +503,7 @@ def next_run_kept(f):
     installed(f, "routine:standup")
     setup(f, "read")
     want = nine_london(21).astimezone(UTC)
-    old, new = fx(f)["due"].get("standup"), body(f, "read").get("next_run")
+    old, new = fx(f)["due_at"].get("standup"), body(f, "read").get("next_run")
     if not old or not new:
         return False, f"routine next_due {old}, automation next_run {new}"
     return when(old) == when(new) == want, f"routine next_due {old}, automation next_run {new}, want {want.isoformat()}"
@@ -585,7 +585,7 @@ def told_count(org, f):
     mid = setup_cut(f)["migration"]
     with org.store.read() as c:
         tasks = c.execute("SELECT count(*) FROM tasks WHERE title LIKE '%Automations%'").fetchone()[0]
-        notes = c.execute("SELECT count(*) FROM messages WHERE refs_json LIKE ?", (f"%{mid}%",)).fetchone()[0]
+        notes = c.execute("SELECT count(*) FROM messages WHERE refs LIKE ?", (f"%{mid}%",)).fetchone()[0]
     return tasks + notes
 
 

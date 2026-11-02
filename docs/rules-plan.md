@@ -193,7 +193,7 @@ ahead of time so it doesn't try.
     `privacy.require_destination`. `complete` runs inside the write lock, so the Decide call must not.
   - **Live text:** while a run whose bot has matching rules is going, `conversation_execution` shows "Working" and
     tool steps, not the reply text, until the verdict says deliver. On Block or Escalate the text lives only on the
-    `org_rule_holds` row; `final_text`, `result_json`, the run log and the bot session show the one-line note. The
+    `org_rule_holds` row; `final_text`, `result`, the run log and the bot session show the one-line note. The
     privacy withhold keeps text on the attempt; this doesn't.
   - `hub message send` (`POST /api/v2/messages`, and `POST /api/v2/chat/{bot}` through the same check and write),
     task comments, task create and owner change: the routes `ask_ingest` already gates;

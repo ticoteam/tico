@@ -17,7 +17,7 @@ def bot(api, slug):
     token = slug + "-test"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) "
+        c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
                   "VALUES(?,'hermes',?,?,'human:ana')", (slug, "x-" + slug, H.now()))
     api.app.state.store.settings.test_identities[token] = Identity("bot:" + slug, "bot", agent="hermes")
     return token
@@ -52,7 +52,7 @@ def test_the_owner_writes_it_a_member_reads_it_and_the_history_says_who_and_when
                                   "description": "Tico runs a rental business with bots.\nFor landlords with 1-20 units."})
     assert saved["company"]["vision"] == "Every small landlord runs their rentals on Tico."   # one line
     assert saved["company"]["description"].endswith("For landlords with 1-20 units.")
-    assert saved["company"]["updated_by"] == "human:ana" and saved["company"]["updated"]
+    assert saved["company"]["updated_by"] == "human:ana" and saved["company"]["updated_at"]
     # A member reads both, and may not change them.
     read = get(api, "company", token="cara-test")
     assert read["company"]["vision"] == saved["company"]["vision"] and read["may_edit"] is False

@@ -44,8 +44,8 @@ from .store import H, P, Problem
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS google_connects(
  person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, state TEXT, verifier TEXT, code TEXT,
- kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, holder TEXT, started REAL, created TEXT NOT NULL,
- updated TEXT NOT NULL);
+ kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, holder TEXT, started_at REAL, created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS google_connects_state ON google_connects(state) WHERE state IS NOT NULL;
 CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen REAL NOT NULL);
 """
@@ -199,8 +199,8 @@ def require_self(who):
 def expiring(c):
     """Whether `expire` has anything to end: the status page reads without the write lock when it has not."""
     now = time.time()
-    return c.execute("SELECT 1 FROM google_connects WHERE (status IN ('signing_in','ready') AND started<?) "
-                     "OR (status IN ('finishing','revoking') AND started<?) LIMIT 1",
+    return c.execute("SELECT 1 FROM google_connects WHERE (status IN ('signing_in','ready') AND started_at<?) "
+                     "OR (status IN ('finishing','revoking') AND started_at<?) LIMIT 1",
                      (now - SIGN_IN_SECONDS, now - CLAIM_SECONDS)).fetchone()
 
 
@@ -208,24 +208,24 @@ def expire(c):
     """Sign-ins nobody finished, and claims a computer never answered, end as failures the person can read."""
     now = time.time()
     c.execute("UPDATE google_connects SET status='failed',kind='expired',state=NULL,verifier=NULL,code=NULL,"
-              "updated=? WHERE status IN ('signing_in','ready') AND started<?", (H.now(), now - SIGN_IN_SECONDS))
+              "updated_at=? WHERE status IN ('signing_in','ready') AND started_at<?", (H.now(), now - SIGN_IN_SECONDS))
     c.execute("UPDATE google_connects SET status='failed',kind='unknown',state=NULL,verifier=NULL,code=NULL,"
-              "updated=? WHERE status IN ('finishing','revoking') AND started<?", (H.now(), now - CLAIM_SECONDS))
+              "updated_at=? WHERE status IN ('finishing','revoking') AND started_at<?", (H.now(), now - CLAIM_SECONDS))
 
 
 def view(row, settings, mailbox, syncing):
     status = row["status"] if row else "none"
     out = {"configured": configured(settings), "mailbox": mailbox, "syncing": syncing, "status": status,
-           "scopes": READ_SCOPES, "can": [], "updated": row["updated"] if row else None,
+           "scopes": READ_SCOPES, "can": [], "updated_at": row["updated_at"] if row else None,
            "kind": None, "message": None, "hint": None}
     if row and status == "connected":
-        out["can"] = json.loads(row["can_json"] or "[]")
+        out["can"] = json.loads(row["can"] or "[]")
     if row and status == "failed":
         kind = row["kind"] or "error"
         message, hint = (policy_message(mailbox) if kind == "admin_policy" else MESSAGES.get(kind)
                          or (row["message"] or "Connecting failed.", row["hint"] or "Connect again."))
         out.update(kind=kind, message=message, hint=hint)
-    if row and status == "disconnecting" and (row["started"] or 0) < time.time() - STALLED_SECONDS:
+    if row and status == "disconnecting" and (row["started_at"] or 0) < time.time() - STALLED_SECONDS:
         # It stays queued, so the computer still revokes when it is back; the person can revoke at Google now.
         out.update(stalled=True, message="The computer that holds your Google access hasn't come online, so Tico "
                                          "hasn't revoked it yet.",
@@ -250,7 +250,7 @@ def claimable(c, runner_id, holds):
     return c.execute(
         "SELECT g.* FROM google_connects g LEFT JOIN runners r ON r.id=g.holder AND r.revoked_at IS NULL "
         "WHERE g.status IN ('ready','disconnecting') AND (g.holder=? OR (r.id IS NULL AND ?)) "
-        "ORDER BY g.updated LIMIT 1", (runner_id, 1 if holds or not elsewhere else 0)).fetchone()
+        "ORDER BY g.updated_at LIMIT 1", (runner_id, 1 if holds or not elsewhere else 0)).fetchone()
 
 
 def pending(c, runner_id):
@@ -300,11 +300,11 @@ def install(app, store, publisher, mutate):
                      "code_challenge_method": "S256"}
             now = H.now()
             c.execute("INSERT INTO google_connects(person_id,mailbox,status,state,verifier,code,kind,message,hint,"
-                      "runner_id,started,created,updated) VALUES(?,?,'signing_in',?,?,NULL,NULL,NULL,NULL,NULL,?,?,?) "
+                      "runner_id,started_at,created_at,updated_at) VALUES(?,?,'signing_in',?,?,NULL,NULL,NULL,NULL,NULL,?,?,?) "
                       "ON CONFLICT(person_id) DO UPDATE SET mailbox=excluded.mailbox,status='signing_in',"
                       "state=excluded.state,verifier=excluded.verifier,code=NULL,kind=NULL,message=NULL,hint=NULL,"
-                      "can_json=NULL,"
-                      "runner_id=NULL,started=excluded.started,updated=excluded.updated",
+                      "can=NULL,"
+                      "runner_id=NULL,started_at=excluded.started_at,updated_at=excluded.updated_at",
                       (pid, mailbox, state, verifier, time.time(), now, now))
             H.event(c, who.actor, "mail.google.connect.start", mailbox, {})
             return {"auth_url": AUTH_URI + "?" + urllib.parse.urlencode(query), "mailbox": mailbox}
@@ -325,11 +325,11 @@ def install(app, store, publisher, mutate):
             if error or not code:
                 kind = CALLBACK_ERRORS.get(error, "declined" if error else "error")
                 c.execute("UPDATE google_connects SET status='failed',kind=?,state=NULL,verifier=NULL,code=NULL,"
-                          "updated=? WHERE person_id=?", (kind, now, row["person_id"]))
+                          "updated_at=? WHERE person_id=?", (kind, now, row["person_id"]))
                 H.event(c, who.actor, "mail.google.connect.failed", row["mailbox"], {"kind": kind})
                 return RedirectResponse(INBOX, status_code=302)
             # The state is spent; the code waits for the computer that keeps the grant.
-            c.execute("UPDATE google_connects SET status='ready',state=NULL,code=?,updated=? WHERE person_id=?",
+            c.execute("UPDATE google_connects SET status='ready',state=NULL,code=?,updated_at=? WHERE person_id=?",
                       (code[:2000], now, row["person_id"]))
         return RedirectResponse(INBOX, status_code=302)
 
@@ -340,10 +340,10 @@ def install(app, store, publisher, mutate):
             pid = require_self(who)
             mailbox, _ = mailbox_for(c, pid)
             now = H.now()
-            c.execute("INSERT INTO google_connects(person_id,mailbox,status,started,created,updated) "
+            c.execute("INSERT INTO google_connects(person_id,mailbox,status,started_at,created_at,updated_at) "
                       "VALUES(?,?,'disconnecting',?,?,?) ON CONFLICT(person_id) DO UPDATE SET "
                       "mailbox=excluded.mailbox,status='disconnecting',state=NULL,verifier=NULL,code=NULL,kind=NULL,"
-                      "message=NULL,hint=NULL,can_json=NULL,runner_id=NULL,started=excluded.started,updated=excluded.updated",
+                      "message=NULL,hint=NULL,can=NULL,runner_id=NULL,started_at=excluded.started_at,updated_at=excluded.updated_at",
                       (pid, mailbox, time.time(), now, now))
             H.event(c, who.actor, "mail.google.disconnect", mailbox, {})
             return person_view(c, who)
@@ -367,9 +367,9 @@ def install(app, store, publisher, mutate):
             action = "connect" if row["status"] == "ready" else "disconnect"
             if action == "connect" and not configured(settings):
                 c.execute("UPDATE google_connects SET status='failed',kind='app_config',code=NULL,verifier=NULL,"
-                          "updated=? WHERE person_id=?", (H.now(), row["person_id"]))
+                          "updated_at=? WHERE person_id=?", (H.now(), row["person_id"]))
                 return {"connect": None}
-            c.execute("UPDATE google_connects SET status=?,runner_id=?,started=?,updated=? WHERE person_id=?",
+            c.execute("UPDATE google_connects SET status=?,runner_id=?,started_at=?,updated_at=? WHERE person_id=?",
                       ("finishing" if action == "connect" else "revoking", runner["id"], time.time(), H.now(),
                        row["person_id"]))
             out = {"id": row["person_id"], "action": action, "mailbox": row["mailbox"]}
@@ -388,7 +388,7 @@ def install(app, store, publisher, mutate):
                     or not row["verifier"]):
                 raise Problem("state", "No sign-in code waits for this computer to exchange", 409)
             code, verifier = row["code"], row["verifier"]
-            c.execute("UPDATE google_connects SET code=NULL,verifier=NULL,updated=? WHERE person_id=?",
+            c.execute("UPDATE google_connects SET code=NULL,verifier=NULL,updated_at=? WHERE person_id=?",
                       (H.now(), person_id))
         if not configured(settings):
             raise Problem("google_refused", "This Tico server has no Google app set up", 409,
@@ -450,8 +450,8 @@ def install(app, store, publisher, mutate):
             holder = {"connected": runner["id"], "disconnected": None}.get(body.status, row["holder"])
             # Likewise the grant the server will refresh: the new one once connected, none once revoked.
             grant_hash = {"connected": row["pending_hash"], "disconnected": None}.get(body.status, row["grant_hash"])
-            c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can_json=?,holder=?,grant_hash=?,"
-                      "pending_hash=NULL,state=NULL,verifier=NULL,code=NULL,updated=? WHERE person_id=?",
+            c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can=?,holder=?,grant_hash=?,"
+                      "pending_hash=NULL,state=NULL,verifier=NULL,code=NULL,updated_at=? WHERE person_id=?",
                       (body.status, kind if failed else None, body.message if failed else None,
                        body.hint if failed else None,
                        json.dumps(sorted(set(body.can))) if body.status == "connected" else None, holder, grant_hash,

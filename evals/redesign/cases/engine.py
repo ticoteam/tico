@@ -126,7 +126,7 @@ def ran_ok(run, sid):
 def started(run):
     """The run's start as an aware time (a naive one is read as UTC), or None when it has none."""
     try:
-        when = dt.datetime.fromisoformat(str(run.get("started") or "").replace("Z", "+00:00"))
+        when = dt.datetime.fromisoformat(str(run.get("started_at") or "").replace("Z", "+00:00"))
     except ValueError:
         return None
     return when if when.tzinfo else when.replace(tzinfo=UTC)
@@ -480,7 +480,7 @@ def counts_kept(f):
     two messages came, with its run and its drop, after the 31-day prune."""
     got(f, "day31")
     _, run = hit_run_at(f, "runs31")
-    day = str(run.get("started") or "")[:10]
+    day = str(run.get("started_at") or "")[:10]
     daily = (unwrap(body(f, "runs31")) or {}).get("daily") or []
     row = next((d for d in daily if d.get("day") == day), None)
     ok = bool(row) and row.get("runs") == 1 and row.get("dropped") == 1

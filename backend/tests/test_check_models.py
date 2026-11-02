@@ -31,10 +31,10 @@ def parent_turn(api):
     """ops on Claude, working a person's task: its claimed turn."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5",
                       fallback={"harness": "codex", "model": "gpt-6.1-sol"})
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps(config),))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
@@ -165,7 +165,7 @@ def test_a_limit_on_the_check_model_holds_the_check_alone_and_the_bot_keeps_work
     assert claim(api, machine) is None, "the check waits for Grok's reset"
     monkeypatch.setattr(H, "now", lambda: H.shift(reset, seconds=2))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
+        c.execute("UPDATE runners SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
     heartbeat(api, machine)
     again = claim(api, machine)
     assert again["task"]["id"] == sub["id"] and again["config"]["runtime"] == "grok"
@@ -239,7 +239,7 @@ def out_of_quota(api, machine, turn, resets_at=None):
 def later(api, monkeypatch, machine, at):
     monkeypatch.setattr(H, "now", lambda: at)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
+        c.execute("UPDATE runners SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
     all_ready(api, machine)
 
 
@@ -401,7 +401,7 @@ def check_held(api, check, hours=None):
     store = api.app.state.store
     with store.transaction() as c:
         if hours is not None:
-            c.execute("UPDATE attempts SET finished=? WHERE id=?", (H.shift(H.now(), hours=-hours), check["id"]))
+            c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (H.shift(H.now(), hours=-hours), check["id"]))
         return [f for f in health_monitor.findings(c, store.settings) if f["check_id"] == "check_limited"]
 
 
@@ -411,7 +411,7 @@ def queue_on(api, sub, sender, to="bot:ops", hours=0):
         conv = H.task(c, sub["id"])["conversation_id"]
         msg = H.say(c, sender, to, "One more thing on this review.", conversation_id=conv,
                     refs={"task": sub["id"], **({"needs_action": True} if H.is_bot(sender) else {})})
-        c.execute("UPDATE jobs SET created=? WHERE message_id=?", (H.shift(H.now(), hours=-hours), msg["id"]))
+        c.execute("UPDATE jobs SET created_at=? WHERE message_id=?", (H.shift(H.now(), hours=-hours), msg["id"]))
         return msg["id"]
 
 
@@ -423,7 +423,7 @@ def test_a_check_its_limit_held_twelve_hours_is_one_setup_finding_until_a_turn_g
     [found] = check_held(api, check, hours=13)
     with api.app.state.store.read() as c:
         name = H.bot(c, "ops")["display_name"]
-        since = c.execute("SELECT finished FROM attempts WHERE id=?", (check["id"],)).fetchone()[0]
+        since = c.execute("SELECT finished_at FROM attempts WHERE id=?", (check["id"],)).fetchone()[0]
     assert (found["key"], found["kind"]) == ("check_limited:" + sub["id"], "setup")
     assert found["detail"].startswith(f"{name}'s check on Grok Build (grok-4.6) has been held by its usage limit for "
                                       f"13 h (since {since[:16].replace('T', ' ')} UTC); Review PR 701 on Grok.")
@@ -457,7 +457,7 @@ def test_a_held_check_that_leaves_the_board_lets_its_queued_turn_go(api, monkeyp
         c.execute("UPDATE tasks SET status=? WHERE id=?", (status, sub["id"]))
         assert check["job_id"] in execution.hold_unrunnable(c)
         assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "cancelled"
-        event = c.execute("SELECT detail_json FROM events WHERE action='job.suppress' AND target=?",
+        event = c.execute("SELECT detail FROM events WHERE action='job.suppress' AND target=?",
                           (check["job_id"],)).fetchone()
         assert json.loads(event[0])["task_id"] == sub["id"]
         assert check["job_id"] not in execution.hold_unrunnable(c), "once"

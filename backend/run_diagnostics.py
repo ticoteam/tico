@@ -43,7 +43,7 @@ def touch(c, aid, kind=None, payload=None):
 
 def keep_stderr(c, row: AttemptRow, text):
     ensure(c, row['id'])
-    if (row['finished'] and row['finished'] < H.shift(H.now(), days=-7) or
+    if (row['finished_at'] and row['finished_at'] < H.shift(H.now(), days=-7) or
             c.execute('SELECT 1 FROM attempt_capture_drops WHERE attempt_id=?', (row['id'],)).fetchone()):
         return {'kept': False}
     value = tail(text)
@@ -55,30 +55,30 @@ def keep_stderr(c, row: AttemptRow, text):
 
 
 def reason(c, row: AttemptRow, outcome, summary=''):
-    if row['stop_requested'] and outcome != 'completed':
+    if row['stop_requested_at'] and outcome != 'completed':
         from .quarantine_stops import stopped_by
         # A quarantine's Stop reads as the quarantine, never as a lost computer or the keeper (Dev 573).
-        return stopped_by(c, row) or 'Cancelled by ' + row['stop_requested']
+        return stopped_by(c, row) or 'Cancelled by ' + row['stop_requested_at']
     if outcome in ('completed', 'ok'):
         return 'Finished'
     if row['state'] == 'expired':
-        capped = c.execute("SELECT detail_json FROM events WHERE target=? AND action=? LIMIT 1",
+        capped = c.execute("SELECT detail FROM events WHERE target=? AND action=? LIMIT 1",
                            (row['id'], CAP_EVENT)).fetchone()
         if capped:
             return scrub(json.loads(capped[0]).get('reason') or 'Ended by the server')[:500]
         return 'Computer lost or heartbeat stopped (attempt lease expired)'
-    result = json.loads(row['result_json'] or '{}')
+    result = json.loads(row['result'] or '{}')
     if result.get('text') == 'Runner restarted during execution':
         return 'Runner restarted during execution'
     # The newest terminal cause wins over a primary model that failed before a fallback succeeded.
-    events = c.execute("SELECT kind,payload_json FROM attempt_events WHERE attempt_id=? "
+    events = c.execute("SELECT kind,payload FROM attempt_events WHERE attempt_id=? "
                         "AND kind IN ('error','diagnostic') ORDER BY seq DESC LIMIT 50", (row['id'],)).fetchall()
     for ev in events:
-        p = json.loads(ev['payload_json'])
+        p = json.loads(ev['payload'])
         if p.get('end_reason'):
             return scrub(p['end_reason'])[:500]
     for ev in events:
-        p = json.loads(ev['payload_json'])
+        p = json.loads(ev['payload'])
         if p.get('runner_error'):
             continue
         if p.get('process_exit') and isinstance(p.get('exit_code'), int):
@@ -93,7 +93,7 @@ def reason(c, row: AttemptRow, outcome, summary=''):
             code = p.get('code') or ''
             return scrub('Model error' + (' (' + str(code) + ')' if code else '') + ': ' + str(err))[:500]
     for ev in events:
-        p = json.loads(ev['payload_json'])
+        p = json.loads(ev['payload'])
         if p.get('runner_error'):
             return scrub(str(p.get('error_type') or 'Runner error') + ': ' + str(p['runner_error']))[:500]
     return scrub(result.get('error') or result.get('reason') or
@@ -107,7 +107,7 @@ def finish(c, aid, outcome, summary=''):
         return
     ensure(c, aid)
     c.execute('UPDATE attempt_diagnostics SET end_reason=?,ended_at=?,stalled_at=NULL WHERE attempt_id=?',
-              (reason(c, row, outcome, summary), row['finished'] or H.now(), aid))
+              (reason(c, row, outcome, summary), row['finished_at'] or H.now(), aid))
 
 
 def restored(c, aid):
@@ -135,8 +135,8 @@ def sweep(c, at=None, listening_since=None):
               "WHERE state IN ('leased','running')")
     c.execute("UPDATE attempt_diagnostics SET stalled_at=coalesce(stalled_at,?) WHERE attempt_id IN "
               "(SELECT a.id FROM attempts a JOIN attempt_diagnostics d ON d.attempt_id=a.id "
-              "WHERE a.state IN ('leased','running') AND max(coalesce(d.heartbeat_at,a.created),"
-              "coalesce(d.last_event_at,a.created))<=?)", (at, cutoff))
+              "WHERE a.state IN ('leased','running') AND max(coalesce(d.heartbeat_at,a.created_at),"
+              "coalesce(d.last_event_at,a.created_at))<=?)", (at, cutoff))
     cap(c, at, listening_since)
     c.execute('UPDATE attempt_diagnostics SET stderr_tail=NULL,stderr_at=NULL WHERE stderr_at<?',
               (H.shift(at, days=-7),))
@@ -144,7 +144,7 @@ def sweep(c, at=None, listening_since=None):
 
 def max_run_minutes(c, bot):
     """The bot's own limit, read as the runner reads it (runner-rs execute.rs): a number or a numeric text."""
-    row = c.execute('SELECT config_json FROM bot_config WHERE bot=?', (bot,)).fetchone()
+    row = c.execute('SELECT config FROM bot_config WHERE bot=?', (bot,)).fetchone()
     try:
         return float(H._json(row[0], {}).get('max_run_minutes') or MAX_RUN_MINUTES) if row else MAX_RUN_MINUTES
     except (TypeError, ValueError):
@@ -161,15 +161,15 @@ def cap(c, at, listening_since=None):
     cap. A run whose computer still heartbeats is left to the runner's own limit."""
     cutoff = H.shift(at, seconds=-STALL_MINUTES * 60)
     now = H.now()
-    for row in c.execute("SELECT a.id,a.bot,a.started,max(a.started,coalesce(d.heartbeat_at,''),"
+    for row in c.execute("SELECT a.id,a.bot,a.started_at,max(a.started_at,coalesce(d.heartbeat_at,''),"
                          "coalesce(d.last_event_at,'')) AS seen FROM attempts a "
                          "LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
-                         "WHERE a.state IN ('leased','running') AND a.started IS NOT NULL "
+                         "WHERE a.state IN ('leased','running') AND a.started_at IS NOT NULL "
                          "AND NOT EXISTS(SELECT 1 FROM events e WHERE e.target=a.id AND e.action=?)",
                          (CAP_EVENT,)).fetchall():
         minutes = max_run_minutes(c, row['bot'])
         seen = max(row['seen'], listening_since or '')
-        if H.shift(row['started'], seconds=(minutes + MAX_RUN_GRACE_MINUTES) * 60) > at or seen > cutoff:
+        if H.shift(row['started_at'], seconds=(minutes + MAX_RUN_GRACE_MINUTES) * 60) > at or seen > cutoff:
             continue
         reason = (f'Ended by the server: no heartbeat for {STALL_MINUTES} minutes, more than '
                   f'{MAX_RUN_GRACE_MINUTES} minutes past max_run_minutes ({minutes:g} minutes)')

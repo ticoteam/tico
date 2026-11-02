@@ -87,13 +87,13 @@ The connect and detail routes return a meeting view with these top-level fields:
 `state`, `owner_actor`, `client`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `reply_cap`, `threshold`,
 `meeting_model` (the meeting's own choice as stored: `""` for the bot's own model, null to follow the company's),
 `meeting_model_effective` (what replies are set to run on now: the meeting's own choice, else the company's meeting
-model; `""` is the bot's own; not specific to a computer, see `meeting.model` for a fallback), `created`,
+model; `""` is the bot's own; not specific to a computer, see `meeting.model` for a fallback), `created_at`,
 `started_at`, `ended_at`, `imported_meeting_id`, `humans`, `bots`, `chunks`, `chat`, `notices`, and `router`.
 `notices` lists the meeting's `meeting.bot_turn_failed`, `_waiting`, `_deferred` and `_retried` events, oldest
 first, each as `{event_id,kind:"failed"|"waiting"|"deferred"|"retried",created,...payload}` (payloads below), so a
 client can say in the chat why a bot has not answered yet without replaying the event stream.
 The `router` object contains `windows`, `chat_routes`, `turns`, and `bypasses`. Each `chat_routes` item
-has `chat_id`, `status`, `outcome`, `started`, `finished`, and `trace`. Use the route-specific acknowledgments
+has `chat_id`, `status`, `outcome`, `started_at`, `finished_at`, and `trace`. Use the route-specific acknowledgments
 above for writes; the view is a snapshot, not an acknowledgment receipt.
 
 Chunk, correction, resume and human-chat writes are acknowledged once stored; routing (window and chat

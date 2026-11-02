@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS listening_destinations (
   unless TEXT,
   what TEXT,
   updated_by TEXT,
-  updated TEXT)
+  updated_at TEXT)
 """
 DESTINATION_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 MARKET_SEEDED = "listening.market_seeded"    # registry_metadata: the market destination was offered once
@@ -249,10 +249,10 @@ def save_destination(conn, settings, who, key, body):
     key, entry = check_destination(conn, settings, key, body)
     now = H.now()
     conn.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
-                 "updated_by, updated) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
+                 "updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
                  "category=excluded.category, threshold=excluded.threshold, receiver=excluded.receiver, "
                  "readers=excluded.readers, unless=excluded.unless, what=excluded.what, "
-                 "updated_by=excluded.updated_by, updated=excluded.updated",
+                 "updated_by=excluded.updated_by, updated_at=excluded.updated_at",
                  (key, entry["category"], entry["threshold"], entry["receiver"],
                   json.dumps(entry.get("readers") or []), json.dumps(entry.get("unless")), entry["what"], who.actor, now))
     H.event(conn, who.actor, "listening.destination", key, {"category": entry["category"], "receiver": entry["receiver"]})
@@ -290,7 +290,7 @@ def seed_market(conn, settings):
                 or key in destinations(settings, None, check_questions=False):
             key += "-2"
         conn.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
-                     "updated_by, updated) VALUES (?,?,?,?,?,?,?,?,?)",
+                     "updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
                      (key, "market", MARKET_DESTINATION["threshold"], MARKET_DESTINATION["receiver"], "[]", "null",
                       MARKET_DESTINATION["what"], H.KEEPER, H.now()))
         H.event(conn, H.KEEPER, "listening.destination", key, {"category": "market", "receiver": "bot:librarian", "seeded": True})
@@ -307,7 +307,7 @@ def destination_list(conn, settings):
     for key, cfg in sorted({**from_file, **saved}.items()):
         meta = {}
         if key in saved:
-            meta = H._one(conn, "SELECT updated_by, updated FROM listening_destinations WHERE key=?", (key,)) or {}
+            meta = H._one(conn, "SELECT updated_by, updated_at FROM listening_destinations WHERE key=?", (key,)) or {}
         rows.append({"key": key, "category": cfg["category"], "threshold": cfg["threshold"], "receiver": cfg["receiver"],
                      "readers": cfg.get("readers", []), "unless": cfg.get("unless"), "what": cfg.get("what", ""),
                      "source": "settings" if key in saved else "yaml", "overrides_yaml": key in saved and key in from_file,
@@ -376,7 +376,7 @@ def _judgment_row(row):
     if not row:
         return None
     out = dict(row)
-    out["scores"] = _loads(out.pop("scores_json"), {})
+    out["scores"] = _loads(out.pop("scores"), {})
     return out
 
 
@@ -510,7 +510,7 @@ def add_judgment(conn, actor, item_id, question_set, scores, dests, judged_at=No
         raise Problem("invalid", "name the question set and version, like listening-item@1", 422)
     scores = check_scores(scores)
     jid = H.new_id()
-    conn.execute("INSERT INTO listen_judgments (id, item_id, question_set, scores_json, judged_at) VALUES (?,?,?,?,?)",
+    conn.execute("INSERT INTO listen_judgments (id, item_id, question_set, scores, judged_at) VALUES (?,?,?,?,?)",
                  (jid, item_id, question_set, json.dumps(scores, sort_keys=True), judged_at or H.now()))
     scored = judgment(conn, jid)
     opened = route(conn, row, scored, dests)

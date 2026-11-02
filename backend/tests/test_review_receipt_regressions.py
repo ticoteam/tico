@@ -56,7 +56,7 @@ def test_cached_webhook_green_does_not_supply_the_receipt(api):
     # Without a fresh GitHub read the gate has only the webhook-built cache, where a skipped check reads as passing.
     task = ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.checks',json(?)) WHERE task_id=? AND kind='pr'",
                   (json.dumps({'python': 'passing'}), task['id']))
     response = move(api, task)
     assert response.status_code == 422 and 'passing test receipt' in response.text, response.text
@@ -275,7 +275,7 @@ def test_manager_chain_and_editing_person_can_supply_no_ci_receipt(api, author):
         for slug, parent in [('cpo', 'cmo'), ('cmo', 'boss')]:
             c.execute('UPDATE bot_config SET reports_to=? WHERE bot=?', (parent, slug))
         c.execute("INSERT INTO bots(slug,state) VALUES('boss','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('boss','{}','ana')")
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('boss','{}','ana')")
         if author == 'outsider':
             c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='cpo'")
         actor = {'manager': 'bot:cmo', 'grandmanager': 'bot:boss', 'person': 'human:ana', 'outsider': 'bot:cmo'}[author]
@@ -296,7 +296,7 @@ def test_written_failure_is_not_cleared_by_a_managers_same_head_rerun(api):
 def test_human_without_task_edit_rights_is_not_a_receipt_author(api):
     task = ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email,teams_json) VALUES('guest','Guest','guest@example.test','[]')")
+        c.execute("INSERT INTO humans(id,name,email,teams) VALUES('guest','Guest','guest@example.test','[]')")
         conv = H.conversation(c, task['conversation_id'])
         H._write_message(c, 'human:guest', task['owner'], f'Tests: head {HEAD}: 9 passed', conv,
                          'say', {'task': task['id'], 'quiet': True}, None, None)
@@ -307,13 +307,13 @@ def test_human_without_task_edit_rights_is_not_a_receipt_author(api):
 def test_nonparty_person_with_task_edit_rights_counts(api, permission):
     task = ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email,teams_json) VALUES('editor','Editor','editor@example.test',?)",
+        c.execute("INSERT INTO humans(id,name,email,teams) VALUES('editor','Editor','editor@example.test',?)",
                   (json.dumps(['leadership'] if permission == 'mover' else []),))
         if permission == 'owner':
             c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)",
                       (json.dumps({'email': 'editor@example.test'}),))
         elif permission == 'delegate':
-            c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,expires) VALUES(?,?,?,?)',
+            c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,expires_at) VALUES(?,?,?,?)',
                       (task['id'], 'human:editor', task['requester'], '2099-01-01T00:00:00Z'))
         H.task_comment(c, 'human:editor', task['id'], f'Tests: head {HEAD}: 9 passed', wake=False)
     response = move(api, task)
@@ -344,7 +344,7 @@ def test_head_bound_failure_inherits_test_context_without_poisoning_other_head()
 def test_null_email_receipt_author_fails_closed_without_crashing(api):
     task = ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email,teams_json) VALUES('guest','Guest',NULL,'[]')")
+        c.execute("INSERT INTO humans(id,name,email,teams) VALUES('guest','Guest',NULL,'[]')")
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)",
                   (json.dumps({'email': 'owner@acme.example'}),))
         conv = H.conversation(c, task['conversation_id'])
@@ -360,7 +360,7 @@ def test_environment_owner_receipt_counts_without_stored_owner(api, handoff):
     api.app.state.store.settings.owner_email = 'editor@acme.example'
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key='owner'")
-        c.execute("INSERT INTO humans(id,name,email,teams_json) VALUES('editor','Editor','editor@acme.example','[]')")
+        c.execute("INSERT INTO humans(id,name,email,teams) VALUES('editor','Editor','editor@acme.example','[]')")
         H.task_comment(c, 'human:editor', task['id'], f'Tests: head {HEAD}: 9 passed', wake=False)
     response = (move(api, task) if handoff == 'move' else api.post('/api/v2/tasks', headers=headers(), json={
         'owner': 'cmo', 'title': 'Review 1: PR #412', 'body': 'Check current code.',
@@ -388,9 +388,9 @@ def test_manager_receipt_in_private_child_still_requires_mover_visibility(api):
     task = ticket(api, private=False)
     with api.app.state.store.transaction() as c:
         # Ana heads every bot that reports to no one, so cmo reports to another root person she does not manage.
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         roster['people'].append({'id': 'zed', 'email': 'zed@acme.example'})
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
         c.execute("UPDATE bot_config SET reports_to='human:zed' WHERE bot='cmo'")
         c.execute("UPDATE bot_config SET reports_to='cmo' WHERE bot='cpo'")
         child = H.task_create(c, 'human:ana', 'Evidence', 'x', 'cmo', parent_id=task['id'], next_run=True)
@@ -412,7 +412,7 @@ def test_stored_owner_revokes_environment_owners_receipt_authority(api):
     task = ticket(api)
     api.app.state.store.settings.owner_email = 'former@acme.example'
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email,teams_json) VALUES('former','Former','former@acme.example','[]')")
+        c.execute("INSERT INTO humans(id,name,email,teams) VALUES('former','Former','former@acme.example','[]')")
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)",
                   (json.dumps({'email': 'current@acme.example'}),))
         conv = H.conversation(c, task['conversation_id'])

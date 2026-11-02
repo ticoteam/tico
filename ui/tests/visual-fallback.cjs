@@ -23,9 +23,9 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
   const now = new Date().toISOString();
   const MESSAGES = [
-    {id: 'm1', from_actor: 'bot:designer', body: 'A chart, a clip and a voice note.', created: now, refs: {attachments: [
+    {id: 'm1', from_actor: 'bot:designer', body: 'A chart, a clip and a voice note.', created_at: now, refs: {attachments: [
       A('f-chart', 'image', {width: 800, height: 400}), A('f-clip', 'video', {width: 640, height: 360}), A('f-note', 'audio', {duration_ms: 1000})]}},
-    {id: 'm2', from_actor: 'bot:designer', body: 'The funnel page and the logo.', created: now, refs: {attachments: [
+    {id: 'm2', from_actor: 'bot:designer', body: 'The funnel page and the logo.', created_at: now, refs: {attachments: [
       A('f-funnel', 'page', {preview_url: '/visuals/tok-f-funnel-preview'}), A('f-logo', 'svg')]}},
   ];
   const run = async ({viewport, hasTouch = false, label}) => {
@@ -65,15 +65,15 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       return json(unrouted(p));
     });
     const task = {id: 't1', title: 'Launch page', owner: 'bot:designer', requester: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
-      parts: {total: 0, done: 0}, version: 1, created: now, updated: now, body: 'Make the page.', attachments: []};
-    const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
+      parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Make the page.', attachments: []};
+    const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
       width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
     const taskFiles = [['f-tchart', 'image'], ['f-tclip', 'video'], ['f-tnote', 'audio'], ['f-tpage', 'page'], ['f-tlogo', 'svg']].map(([id, kind]) =>
       ({id, name: id + TYPES[kind][0], mime: TYPES[kind][1], current_version: 1, archived: false, versions: [tver(id, TYPES[kind][1])]}));
     const taskComments = [
-      {id: 'c1', kind: 'say', from_actor: 'bot:designer', body: 'Media attached.', created: now, answers: [],
+      {id: 'c1', kind: 'say', from_actor: 'bot:designer', body: 'Media attached.', created_at: now, answers: [],
         refs: {task: 't1', comment: true, attachments: [A('f-tchart', 'image', {width: 800, height: 400}), A('f-tclip', 'video'), A('f-tnote', 'audio')]}},
-      {id: 'c2', kind: 'say', from_actor: 'bot:designer', body: 'Page and logo attached.', created: now, answers: [],
+      {id: 'c2', kind: 'say', from_actor: 'bot:designer', body: 'Page and logo attached.', created_at: now, answers: [],
         refs: {task: 't1', comment: true, attachments: [A('f-tpage', 'page'), A('f-tlogo', 'svg')]}}];
 
     // ---- chat: media inline from the app's own address; page and SVG are Open cards

@@ -299,7 +299,7 @@ def _undone(c, change):
     leaves no mark on the task the Strategy Bot reads, so the server keeps the owner's Undo standing: the same change
     again is their proposal, not the bot's decision."""
     key = _same(change)
-    for (changes_json,) in c.execute("SELECT changes_json FROM strategy_actions WHERE "
+    for (changes_json,) in c.execute("SELECT changes FROM strategy_actions WHERE "
                                      "kind='decision' AND state='undone' "
                                      "ORDER BY undone_at DESC LIMIT ?", (UNDONE_SCAN,)):
         if any(_same(x.get("change") or {}) == key for x in (H._json(changes_json, None) or {}).get("done") or []):
@@ -450,13 +450,13 @@ def _propose(c, reason, left):
 
 def _log(c, *, kind, reason, state, done=(), left=(), goal_id=None, action_id=None):
     proposal, note = _propose(c, reason, list(left)) if left else (None, "")
-    row = {"id": action_id or H.new_id(), "created": H.now(), "actor": STRATEGY_BOT, "kind": kind,
+    row = {"id": action_id or H.new_id(), "created_at": H.now(), "actor": STRATEGY_BOT, "kind": kind,
            "reason": reason or "", "goal_id": goal_id or None, "state": state, "proposal_task": proposal,
            "note": note,
-           "changes_json": H._dump({"done": [_logged(c, x) for x in done], "left": [_logged(c, x) for x in left]})}
-    c.execute("INSERT INTO strategy_actions (id, created, actor, kind, reason, goal_id, state, proposal_task, note, "
-              "changes_json) VALUES (:id, :created, :actor, :kind, :reason, :goal_id, :state, :proposal_task, :note, "
-              ":changes_json)", row)
+           "changes": H._dump({"done": [_logged(c, x) for x in done], "left": [_logged(c, x) for x in left]})}
+    c.execute("INSERT INTO strategy_actions (id, created_at, actor, kind, reason, goal_id, state, proposal_task, note, "
+              "changes) VALUES (:id, :created_at, :actor, :kind, :reason, :goal_id, :state, :proposal_task, :note, "
+              ":changes)", row)
     H.event(c, STRATEGY_BOT, "strategy_bot." + ("decided" if kind == "decision" else "proposed"), row["id"],
             {"kind": kind, "done": len(done), "left": len(left)})
     return row["id"]
@@ -467,9 +467,9 @@ def _stored(c, action_id):
     row = H._one(c, "SELECT * FROM strategy_actions WHERE id=?", (action_id,))
     if not row:
         return None
-    changes = H._json(row.pop("changes_json"), None) or {}
+    changes = H._json(row.pop("changes"), None) or {}
     row["done"], row["left"] = changes.get("done") or [], changes.get("left") or []
-    row["undo"] = H._json(row.pop("undo_json", None), None) or None
+    row["undo"] = H._json(row.pop("undo", None), None) or None
     row["undoable"] = row["state"] == "done"
     return row
 
@@ -535,13 +535,13 @@ def receipt(row):
 
 def log(c, visible, before=None, limit=LOG_PAGE):
     """The Strategy Bot log, newest first, as a reader sees it (`visible`, their auth.task_sql): {items, next_before}.
-    Paged by `created`, then id: `next_before` is "<created>|<id>" of the page's last entry, so entries made in the
+    Paged by `created_at`, then id: `next_before` is "<created>|<id>" of the page's last entry, so entries made in the
     same instant are never skipped between pages. A bare time is read as before that time."""
     limit = max(1, min(int(limit or LOG_PAGE), LOG_PAGE))
     at, _, after_id = str(before or "").partition("|")
-    rows = c.execute("SELECT id, created FROM strategy_actions WHERE (?='' OR created<? OR "
-                     "(?!='' AND created=? AND id<?)) "
-                     "ORDER BY created DESC, id DESC LIMIT ?",
+    rows = c.execute("SELECT id, created_at FROM strategy_actions WHERE (?='' OR created_at<? OR "
+                     "(?!='' AND created_at=? AND id<?)) "
+                     "ORDER BY created_at DESC, id DESC LIMIT ?",
                      (at, at, after_id, at, after_id, limit + 1)).fetchall()
     items = [entry(c, r[0], visible) for r in rows[:limit]]
     last = rows[limit - 1] if len(rows) > limit else None
@@ -577,7 +577,7 @@ def undo(c, actor, action_id):
                 continue
             c.execute("SAVEPOINT strategy_undo")
             try:
-                did = (_unmake if item.get("made") else _restore)(c, actor, task, item, row["created"], note)
+                did = (_unmake if item.get("made") else _restore)(c, actor, task, item, row["created_at"], note)
             except H.Refused as exc:
                 c.execute("ROLLBACK TO strategy_undo")
                 c.execute("RELEASE strategy_undo")
@@ -591,7 +591,7 @@ def undo(c, actor, action_id):
     finally:
         ACTION.reset(token)
     result = {"restored": restored, "kept": kept}
-    c.execute("UPDATE strategy_actions SET state='undone', undone_at=?, undone_by=?, undo_json=? WHERE id=?",
+    c.execute("UPDATE strategy_actions SET state='undone', undone_at=?, undone_by=?, undo=? WHERE id=?",
               (H.now(), actor, H._dump(result), action_id))
     H.event(c, actor, "strategy_bot.undone", action_id, {"restored": len(restored), "kept": len(kept)})
     return action_id

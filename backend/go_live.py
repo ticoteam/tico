@@ -16,7 +16,7 @@ EXPIRY_DAYS = 7
 
 def rows(c):
     """(key, bot, record) for every waiting or failed go-live: one range read on the primary key."""
-    found = c.execute("SELECT key,value_json FROM registry_metadata WHERE key>=? AND key<?",
+    found = c.execute("SELECT key,value FROM registry_metadata WHERE key>=? AND key<?",
                       (PREFIX, PREFIX[:-1] + ";")).fetchall()
     return [(key, key[len(PREFIX):], H._json(value, {}) or {}) for key, value in found]
 
@@ -36,7 +36,7 @@ def expired(record, now):
 def fail(c, key, bot, record, code, notice):
     """Mark the go-live failed with `code`, record it, and tell the person who asked: once, since a failed record
     is skipped from then on."""
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?",
+    c.execute("UPDATE registry_metadata SET value=? WHERE key=?",
               (encode({**record, "failed": {"code": code, "at": H.now()}}), key))
     H.event(c, H.KEEPER, "bot.go_live_failed", bot, {"code": code})
     actor = str(record.get("actor") or "")

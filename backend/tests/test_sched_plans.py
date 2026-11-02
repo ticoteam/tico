@@ -104,8 +104,8 @@ def test_worktree_inventory_bot_state_matches_each_owner(api):
     c = sqlite3.connect(db, isolation_level=None)
     c.row_factory = sqlite3.Row
     now = '2026-10-29T00:00:00Z'
-    c.execute("INSERT INTO bots(slug,state,created) VALUES('wt-archived','archived',?),('wt-active','active',?)", (now, now))
-    c.execute("INSERT INTO tasks(id,title,owner,requester,status,created,updated) VALUES('wt-task','t','bot:wt-active','human:ana','open',?,?)", (now, now))
+    c.execute("INSERT INTO bots(slug,state,created_at) VALUES('wt-archived','archived',?),('wt-active','active',?)", (now, now))
+    c.execute("INSERT INTO tasks(id,title,owner,requester,status,created_at,updated_at) VALUES('wt-task','t','bot:wt-active','human:ana','open',?,?)", (now, now))
     cases = {
         'detail': ('wt-a', json.dumps({'owner': 'bot:wt-archived'}), 'human:ana'),
         'added': ('wt-b', '{}', 'bot:wt-archived'),
@@ -114,7 +114,7 @@ def test_worktree_inventory_bot_state_matches_each_owner(api):
         'human': ('wt-e', json.dumps({'owner': 'human:ana'}), 'human:ana'),
     }
     for key, (link, detail, added) in cases.items():
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,computer_id,detail_json) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,computer_id,detail) "
                   "VALUES(?,'wt-task','worktree','u','present',?,?,'wt-computer',?)", (link, added, now, detail))
     rows = {r['id']: (r['owner'], r['bot_state']) for r in worktrees.inventory(c, 'wt-computer')}
     assert rows == {'wt-a': ('bot:wt-archived', 'archived'), 'wt-b': ('bot:wt-archived', 'archived'),

@@ -97,7 +97,7 @@ def test_one_change_to_many_tasks_is_one_bulk_change_and_resets_lists(api):
     seed = post(api, "tasks", {"owner": "ben", "title": "Tag the launch work", "body": "Please."})
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO tags(id,key,label,created,updated) VALUES('tg1','launch','Launch',?,?)", (H.now(), H.now()))
+        c.execute("INSERT INTO tags(id,key,label,created_at,updated_at) VALUES('tg1','launch','Launch',?,?)", (H.now(), H.now()))
         columns = [row[1] for row in c.execute("PRAGMA table_info(tasks)") if row[1] not in ("id", "number")]
         for n in range(E.FAN_CAP + 1):
             c.execute(f"INSERT INTO tasks(id,{','.join(columns)}) SELECT ?,{','.join(columns)} FROM tasks WHERE id=?",

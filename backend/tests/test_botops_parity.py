@@ -59,8 +59,8 @@ def test_an_owner_requester_may_and_a_member_requester_may_not(api, botops):
     changed = act(api, ana, "POST", "bots/ops/model", {"model": "gpt-6.1-sol", "expected_revision": 1})
     assert changed.status_code == 200, changed.text
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='bot.model_changed' AND target='ops'").fetchone()
-        assert row["actor"] == "human:ana" and '"via": "botops"' in row["detail_json"]       # hers, via BotOps
+        row = c.execute("SELECT actor,detail FROM events WHERE action='bot.model_changed' AND target='ops'").fetchone()
+        assert row["actor"] == "human:ana" and '"via": "botops"' in row["detail"]       # hers, via BotOps
     finish(api, botops, ana)
     cara = turn(api, botops, person="cara-test", text="Use a bigger model on ops")
     # Not her bot: the server's own rule refuses, exactly as in the app.
@@ -247,8 +247,8 @@ def test_a_credential_card_stores_and_grants_without_the_value_touching_anything
     card = opened.json()
     assert card["title"] == "ops needs your Jira login"
     with api.app.state.store.read() as c:
-        message = c.execute("SELECT from_actor,to_actor,refs_json FROM messages WHERE id=?", (card["message_id"],)).fetchone()
-        assert (message["from_actor"], message["to_actor"]) == ("bot:botops", "human:ana") and card["id"] in message["refs_json"]
+        message = c.execute("SELECT from_actor,to_actor,refs FROM messages WHERE id=?", (card["message_id"],)).fetchone()
+        assert (message["from_actor"], message["to_actor"]) == ("bot:botops", "human:ana") and card["id"] in message["refs"]
     seen = get(api, f"credential-requests/{card['id']}")
     assert seen["can_save"] and seen["format"] == "you@company.com:API token" and seen["help_url"].startswith("https://")
     get(api, f"credential-requests/{card['id']}", "cara-test", expected=404)                # nobody else's
@@ -261,9 +261,9 @@ def test_a_credential_card_stores_and_grants_without_the_value_touching_anything
     with api.app.state.store.read() as c:
         cred = c.execute("SELECT id,name,env,kind FROM credentials WHERE env='JIRA_BASIC_AUTH'").fetchone()
         assert cred["name"] == "JIRA_BASIC_AUTH"
-        grants = c.execute("SELECT subject FROM credential_grants WHERE credential_id=? AND revoked IS NULL", (cred["id"],)).fetchall()
+        grants = c.execute("SELECT subject FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL", (cred["id"],)).fetchall()
         assert [g["subject"] for g in grants] == ["bot:ops"]                                # that bot alone
-        wake = c.execute("SELECT from_actor,to_actor,body,refs_json FROM messages WHERE refs_json LIKE '%credential_saved%'").fetchone()
+        wake = c.execute("SELECT from_actor,to_actor,body,refs FROM messages WHERE refs LIKE '%credential_saved%'").fetchone()
         assert (wake["from_actor"], wake["to_actor"]) == ("human:ana", "bot:botops") and "Saved your Jira login" in wake["body"]
     assert KEY not in everything(api) and "atl-SECRET" not in everything(api)
     post(api, f"credential-requests/{card['id']}/save", {"value": KEY}, expected=409)          # once
@@ -291,7 +291,7 @@ def test_a_member_stores_a_credential_for_their_own_bot_and_the_team_rule_turns_
         row = c.execute("SELECT * FROM credentials WHERE id=?", (saved["credential_id"],)).fetchone()
         assert row["created_by"] == "human:cara" and row["id"] != theirs["id"]           # another's is never replaced
         assert c.execute("SELECT revision FROM credentials WHERE id=?", (theirs["id"],)).fetchone()[0] == 1
-        assert c.execute("SELECT subject FROM credential_grants WHERE credential_id=? AND revoked IS NULL",
+        assert c.execute("SELECT subject FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL",
                          (row["id"],)).fetchall()[0][0] == "bot:jira-manager"
     post(api, f"credentials/{row['id']}/reveal", {}, "cara-test", expected=403)
     # Not for a bot she does not manage, and not at all once the owner turns the rule off.
@@ -325,7 +325,7 @@ def test_a_token_pasted_in_chat_is_stored_for_the_bot_and_taken_out_of_the_conve
     with api.app.state.store.read() as c:
         body = c.execute("SELECT body FROM messages WHERE from_actor='human:ana' AND to_actor='bot:botops'").fetchone()[0]
         assert "•••• saved as GITHUB_TOKEN" in body
-        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='bot:ops' AND revoked IS NULL").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='bot:ops' AND revoked_at IS NULL").fetchone()[0] == 1
     # A member may not store a credential, pasted or not, and the words stay as they were.
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 2}, botops["token"])
     post(api, "chat/botops", {"text": f"token for my bot: {secret}"}, "cara-test")
@@ -613,9 +613,9 @@ def test_a_later_run_acts_for_the_person_whose_open_task_it_cites_and_a_bot_run_
     changed = act(api, later, "POST", "bots/ops/model", {"model": "gpt-6.1-sol", "expected_revision": revision}, ref=task_id)
     assert changed.status_code == 200, changed.text
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='bot.model_changed' AND target='ops'").fetchone()
-        assert row["actor"] == "human:ana" and '"via": "botops"' in row["detail_json"]
-        assert json.loads(row["detail_json"])["delegation"] == {"for": "human:ana", "cited": task_id, "run": "follow_through"}
+        row = c.execute("SELECT actor,detail FROM events WHERE action='bot.model_changed' AND target='ops'").fetchone()
+        assert row["actor"] == "human:ana" and '"via": "botops"' in row["detail"]
+        assert json.loads(row["detail"])["delegation"] == {"for": "human:ana", "cited": task_id, "run": "follow_through"}
     # Still never a secret.
     leaked = act(api, later, "POST", "bots/ops/definition", {"expected_revision": revision + 1,
                                                             "config": {"api_key": "sk-live-not-for-you"}}, ref=task_id)
@@ -672,16 +672,16 @@ def test_a_model_change_checks_this_bots_own_sign_in_on_its_computer(api, botops
     assert keyless.status_code == 409 and keyless.json()["error"]["link"].endswith("/#/credentials")
     # ... and once ops holds its own key, the computer-wide "missing" (another bot's) does not block it.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO credentials(id,name,kind,env,ciphertext,nonce,created,updated,updated_by) "
+        c.execute("INSERT INTO credentials(id,name,kind,env,ciphertext,nonce,created_at,updated_at,updated_by) "
                   "VALUES('k1','OpenRouter','api_key','OPENROUTER_API_KEY',x'00',x'00',?,?,'human:ana')", (H.now(), H.now()))
-        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) "
+        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) "
                   "VALUES('g1','k1','bot:ops','human:ana',?)", (H.now(),))
     keyed = act(api, ana, "POST", "bots/ops/model", {"model": "kimi-k3", "expected_revision": revision})
     assert keyed.status_code == 200, keyed.text
     assert keyed.json()["readiness"]["can_run"] is True and keyed.json()["readiness"]["reported"] is False
     with api.app.state.store.read() as c:
         assert '"cited": "' + ana["message"]["id"] + '"' in c.execute(
-            "SELECT detail_json FROM events WHERE action='bot.model_changed' AND target='ops'").fetchone()[0]
+            "SELECT detail FROM events WHERE action='bot.model_changed' AND target='ops'").fetchone()[0]
 
 
 # ------------------------------------------------------------------ BotOps' own runs manage every bot
@@ -715,7 +715,7 @@ def test_botops_own_run_manages_other_bots_unless_the_team_limits_it_and_a_bot_a
 # ------------------------------------------------------------------ a person's request lasts while its task is open
 def _age(api, message_id, days):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-days), message_id))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-days), message_id))
 
 
 def test_a_persons_request_lends_rights_while_its_task_is_open_and_their_own_comment_counts(api, botops):
@@ -854,7 +854,7 @@ def test_a_reopened_task_and_a_request_past_the_cap_lend_nothing(api, botops):
     # Done after ten days (within the cap); BotOps moving it back to doing revives nothing.
     _age(api, ana["message"]["id"], 10)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), days=-10), task_id))
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-10), task_id))
         H.task_update(c, "bot:botops", task_id, status="done", note="Done.")
         H.task_update(c, "bot:botops", task_id, status="doing", note="Again.")
     later = _wake(api, botops)
@@ -877,12 +877,12 @@ def test_a_reopened_task_and_a_request_past_the_cap_lend_nothing(api, botops):
     finish(api, botops, claim(api, botops, "botops"))
     _age(api, ben["message"]["id"], LEND_MAX_DAYS - 1)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), days=-(LEND_MAX_DAYS - 1)), second))
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-(LEND_MAX_DAYS - 1)), second))
     within = _wake(api, botops)
     assert act(api, within, "GET", "credentials", ref=second).status_code == 200
     finish(api, botops, within)
     _age(api, ben["message"]["id"], LEND_MAX_DAYS + 1)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET created=? WHERE id=?", (H.shift(H.now(), days=-(LEND_MAX_DAYS + 1)), second))
+        c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-(LEND_MAX_DAYS + 1)), second))
     past = _wake(api, botops)
     assert act(api, past, "GET", "credentials", ref=second).status_code == 403

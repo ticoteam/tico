@@ -69,7 +69,7 @@ def private_history(conn, slug):
                     "OR t.id IN (SELECT " + H.MESSAGE_TASK_SQL + " FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=?) "
                     "OR t.id IN (SELECT v.value FROM events e JOIN attempts a ON a.id=e.target "
-                    "JOIN json_each(e.detail_json,'$.tasks') v WHERE a.bot=? AND e.action='task.next-run.carried')) LIMIT 1",
+                    "JOIN json_each(e.detail,'$.tasks') v WHERE a.bot=? AND e.action='task.next-run.carried')) LIMIT 1",
                     (actor, actor, slug, slug, slug)).fetchone())
 
 
@@ -87,9 +87,9 @@ def value(conn, slug, key, at=None, *, _privacy_checked=False):
     if key == "first_response_min":
         gaps = []
         for created, answered in conn.execute(
-                "SELECT m.created, (SELECT min(r.created) FROM messages r WHERE r.conversation_id=m.conversation_id "
-                "AND r.from_actor=? AND r.created>m.created) FROM messages m WHERE m.to_actor=? AND m.from_actor!=? "
-                "AND m.kind IN ('say','ask') AND m.created>? AND m.created<=? ORDER BY m.created DESC LIMIT 500",
+                "SELECT m.created_at, (SELECT min(r.created_at) FROM messages r WHERE r.conversation_id=m.conversation_id "
+                "AND r.from_actor=? AND r.created_at>m.created_at) FROM messages m WHERE m.to_actor=? AND m.from_actor!=? "
+                "AND m.kind IN ('say','ask') AND m.created_at>? AND m.created_at<=? ORDER BY m.created_at DESC LIMIT 500",
                 (actor, actor, actor, since, end)).fetchall():
             first, then = H.parse_ts(created), H.parse_ts(answered)
             if first and then:
@@ -101,12 +101,12 @@ def value(conn, slug, key, at=None, *, _privacy_checked=False):
         return round(100 * sum(r[0] == "approved" for r in rows) / len(rows), 1) if rows else None
     if key == "failed_runs_7d":
         return float(conn.execute("SELECT count(*) FROM attempts WHERE bot=? AND state='failed' "
-                                  "AND coalesce(finished, created)>? AND coalesce(finished, created)<=?",
+                                  "AND coalesce(finished_at, created_at)>? AND coalesce(finished_at, created_at)<=?",
                                   (slug, since, end)).fetchone()[0])
     # The estimate from each run's measured token counts (backend/usage.py).
     # A subscription run costs nothing extra, so only runs billed by the API count.
     row = conn.execute("SELECT sum(est_cost_usd), count(est_cost_usd) FROM turns "
-                       "WHERE bot=? AND started>? AND started<=? AND usage_reason IS NULL "
+                       "WHERE bot=? AND started_at>? AND started_at<=? AND usage_reason IS NULL "
                        "AND coalesce(billing, 'api') != 'subscription'",
                        (slug, since, end)).fetchone()
     return round(row[0], 4) if row and row[1] else None
@@ -122,7 +122,7 @@ def kpi(conn, kpi_id):
     return {"id": kpi_id, "slug": f"{slug}-{key}", "goal_id": "", "name": spec["name"], "unit": spec["unit"],
             "direction": spec["direction"], "cadence": "daily", "owner": H.bot_actor(slug),
             "definition": spec["definition"], "source_note": "Computed from Tico's own data", "definition_version": 1,
-            "created": None, "created_by": "keeper", "updated": None, "target": None}
+            "created_at": None, "created_by": "keeper", "updated_at": None, "target": None}
 
 
 def readings(conn, kpi_id, at=None):
@@ -143,7 +143,7 @@ def readings(conn, kpi_id, at=None):
             continue
         stamp = _stamp(end)
         out.append({"id": f"{kpi_id}@{stamp[:10]}", "kpi_id": kpi_id, "ts": stamp, "value": amount,
-                    "actor": "keeper", "source": "tico", "note": "", "created": stamp, "period_start":
+                    "actor": "keeper", "source": "tico", "note": "", "created_at": stamp, "period_start":
                     _stamp(end - timedelta(days=METRICS[key]["window"])), "period_end": stamp, "collected_at": stamp,
                     "evidence": "", "quality": "measured", "definition_version": 1, "supersedes": None,
                     "superseded_by": None})

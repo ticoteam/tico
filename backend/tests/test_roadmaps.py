@@ -179,7 +179,7 @@ def test_an_item_whose_only_engineering_link_is_blocked_by_moves_when_that_ticke
     assert _roadmap_step(api, spec) == 'Spec'
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cpo' AND body LIKE 'Unblocked: %' "
-                         "AND json_extract(refs_json,'$.task')=?", (spec['id'],)).fetchone()[0] == 1
+                         "AND json_extract(refs,'$.task')=?", (spec['id'],)).fetchone()[0] == 1
 
     # A Dev ticket finished first stays linked but blocks nothing: the item's owner hears once its last open blocker,
     # a General task, finishes.
@@ -192,7 +192,7 @@ def test_an_item_whose_only_engineering_link_is_blocked_by_moves_when_that_ticke
     post(api, 'tasks/' + last['id'], {'version': get(api, 'tasks/' + last['id'])['task']['version'], 'status': 'done'})
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cpo' AND body LIKE 'Unblocked: %' "
-                         "AND json_extract(refs_json,'$.task')=?", (mixed['id'],)).fetchone()[0] == 1
+                         "AND json_extract(refs,'$.task')=?", (mixed['id'],)).fetchone()[0] == 1
 
     # A blocker an item gains or loses moves it too: here a second, unstarted ticket.
     later = _ticket(api, dev, 'Build exports, part 2')
@@ -330,9 +330,9 @@ def test_the_ready_to_ship_step_is_added_once_right_after_building(api):
 
 
 def _notices(c, task_id):
-    return [(m['from_actor'], m['to_actor'], m['body'], json.loads(m['refs_json'])) for m in c.execute(
-        "SELECT * FROM messages WHERE json_extract(refs_json,'$.task_notice') IS NOT NULL "
-        "AND json_extract(refs_json,'$.task')=? ORDER BY created,rowid", (task_id,))]
+    return [(m['from_actor'], m['to_actor'], m['body'], json.loads(m['refs'])) for m in c.execute(
+        "SELECT * FROM messages WHERE json_extract(refs,'$.task_notice') IS NOT NULL "
+        "AND json_extract(refs,'$.task')=? ORDER BY created_at,rowid", (task_id,))]
 
 
 def test_started_blocked_and_done_notices_use_fixed_templates_and_wake_nobody(api):
@@ -344,7 +344,7 @@ def test_started_blocked_and_done_notices_use_fixed_templates_and_wake_nobody(ap
     url = 'https://github.com/acme/app/pull/7'
     with api.app.state.store.transaction() as c:
         H.task_link(c, 'human:ana', ticket['id'], url, mover=True)
-        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.head_sha',?) WHERE task_id=? AND kind='pr'",
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.head_sha',?) WHERE task_id=? AND kind='pr'",
                   ('a' * 40, ticket['id']))
         c.execute("UPDATE tasks SET note=? WHERE id=?", ('Tests: head ' + 'a' * 40 + ': 9 passed, 0 failed', ticket['id']))
         number, other_number = (H.task(c, t['id'])['number'] for t in (ticket, other))
@@ -367,7 +367,7 @@ def test_started_blocked_and_done_notices_use_fixed_templates_and_wake_nobody(ap
         assert all(refs['quiet'] and refs['ticket'] == ticket['id'] for _, _, _, refs in sent)
         # Quiet: no run is queued for the item's bot.
         assert not c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-                             "WHERE json_extract(m.refs_json,'$.task_notice') IS NOT NULL").fetchone()
+                             "WHERE json_extract(m.refs,'$.task_notice') IS NOT NULL").fetchone()
         assert [m['body'] for m in H.task_comments(c, item['id'])][-3:] == [body for _, _, body, _ in sent]
         assert not _notices(c, ticket['id'])
         # Each template, as written.
@@ -623,7 +623,7 @@ def test_cors_and_ip_limit_shared_across_actions_and_tokens_are_task_bound(api):
     assert api.delete(base + '/requesters/' + token, headers=ORIGIN).status_code == 200
     assert api.delete(base + '/requesters/' + token, headers=ORIGIN).status_code == 404
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-manager') WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
     suggested = api.post('/public/roadmaps/roadmap/suggest', json={'title': 'New idea', 'summary': 'Details'}, headers=ORIGIN)
     assert suggested.status_code == 200, suggested.text
     with api.app.state.store.read() as c:
@@ -659,7 +659,7 @@ def test_requester_contacts_follow_task_privacy_and_teammates_can_remove_themsel
     assert get(api, 'tasks/' + task['id'])['task']['size'] is None
     own = post(api, 'tasks/' + task['id'] + '/requesters', {'actor': 'human:priya'}, token='priya-test')
     with api.app.state.store.read() as c:
-        assert not c.execute('SELECT 1 FROM idempotency WHERE instr(response_json,?)>0',
+        assert not c.execute('SELECT 1 FROM idempotency WHERE instr(response,?)>0',
                              (own['requester_token'],)).fetchone()
     post(api, 'tasks/' + task['id'] + '/requesters/' + own['id'] + '/delete', {}, token='priya-test')
     assert get(api, 'tasks/' + task['id'] + '/requesters')['requester_count'] == 0
@@ -733,7 +733,7 @@ def test_roadmap_types_go_by_role_after_their_managers_change(api):
     public_setup(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_types SET manager='ops' WHERE id IN ('product-roadmap','engineering')")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-manager') WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
         F.ensure(c)     # as at a restart: a manager someone chose stays
         managers = "SELECT DISTINCT manager FROM task_types WHERE id IN ('product-roadmap','engineering')"
         assert [r[0] for r in c.execute(managers)] == ['ops']
@@ -946,7 +946,7 @@ def test_a_requester_token_withdraws_after_unlabel_disable_and_delete(api):
     assert api.delete(path + '/requesters/' + leaving, headers=ORIGIN).status_code == 404
     import hashlib
     with api.app.state.store.read() as c:
-        snapshot = c.execute('SELECT rows_json FROM task_trash WHERE task_id=?', (trashed['id'],)).fetchone()[0]
+        snapshot = c.execute('SELECT rows FROM task_trash WHERE task_id=?', (trashed['id'],)).fetchone()[0]
     assert hashlib.sha256(leaving.encode()).hexdigest() not in snapshot
     assert hashlib.sha256(staying.encode()).hexdigest() in snapshot
     # A purged trash row is past withdrawing from: it is neither read nor written.
@@ -954,7 +954,7 @@ def test_a_requester_token_withdraws_after_unlabel_disable_and_delete(api):
         c.execute("UPDATE task_trash SET purged_at='2026-01-01T00:00:00Z' WHERE task_id=?", (trashed['id'],))
     assert api.delete(path + '/requesters/' + staying, headers=ORIGIN).status_code == 404
     with api.app.state.store.transaction() as c:
-        assert c.execute('SELECT rows_json FROM task_trash WHERE task_id=?', (trashed['id'],)).fetchone()[0] == snapshot
+        assert c.execute('SELECT rows FROM task_trash WHERE task_id=?', (trashed['id'],)).fetchone()[0] == snapshot
         c.execute('UPDATE task_trash SET purged_at=NULL WHERE task_id=?', (trashed['id'],))
     post(api, 'tasks/' + trashed['id'] + '/restore', {})
     assert count(trashed['id']) == 1
@@ -963,7 +963,7 @@ def test_a_requester_token_withdraws_after_unlabel_disable_and_delete(api):
 def test_suggestions_have_an_overall_cap_and_spam_checks(api):
     public_setup(api, limit=100)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-manager') WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
     post(api, 'roadmaps/settings', {'suggestion_limit': 2})
     assert get(api, 'roadmaps/settings')['suggestion_limit'] == 2
     suggest = lambda body: api.post('/public/roadmaps/roadmap/suggest', json=body, headers=ORIGIN)
@@ -1011,7 +1011,7 @@ def test_suggestions_go_to_the_chosen_then_automatic_bot_and_never_an_archived_o
     suggest = lambda title: api.post('/public/roadmaps/roadmap/suggest', json={'title': title}, headers=ORIGIN)
     def template(bot, name):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template',?) WHERE bot=?", (name, bot))
+            c.execute("UPDATE bot_config SET config=json_set(config,'$.template',?) WHERE bot=?", (name, bot))
     def owner(response):
         assert response.status_code == 200, response.text
         return get(api, 'tasks/' + response.json()['id'])['task']['owner']
@@ -1073,15 +1073,15 @@ def test_suggestions_go_to_the_chosen_then_automatic_bot_and_never_an_archived_o
 
 def test_suggestions_receiver_order_and_states(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-manager') WHERE bot='cpo'")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-lead') WHERE bot='cmo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-manager') WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-lead') WHERE bot='cmo'")
     def receiver(chosen, **states):
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE bots SET state='active' WHERE slug IN ('cpo','cmo','ops')")
             for bot, value in states.items():
                 c.execute('UPDATE bots SET state=? WHERE slug=?', (value, bot))
-            c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('roadmaps',?) ON CONFLICT(key) "
-                      'DO UPDATE SET value_json=excluded.value_json', (json.dumps({'suggestions_bot': chosen}),))
+            c.execute("INSERT INTO registry_metadata(key,value) VALUES('roadmaps',?) ON CONFLICT(key) "
+                      'DO UPDATE SET value=excluded.value', (json.dumps({'suggestions_bot': chosen}),))
             return R.suggestions_receiver(c)
     assert receiver(None) == ('cpo', 'automatic')
     assert receiver(None, cpo='planned') == ('cpo', 'automatic')   # today's Product Manager rule, unchanged

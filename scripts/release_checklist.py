@@ -47,7 +47,7 @@ def history(task):
     for _ in range(MAX_PAGES):
         page = hub("conversation", "show", task["conversation_id"], *(["--before", before] if before else []))
         for message in page["messages"]:
-            refs = message.get("refs") or json.loads(message.get("refs_json") or "{}")
+            refs = message.get("refs") or json.loads(message.get("refs") or "{}")
             named = refs.get("task") or refs.get("task_id") or (page.get("conversation") or {}).get("task_id")
             if isinstance(named, list):
                 named = next((v for v in named if isinstance(v, str) and v.strip()), None)
@@ -89,7 +89,7 @@ def linked_tickets(slug, number):
 
 def source(task, message):
     return {"task": task["id"], "message": message.get("id"),
-            "actor": message.get("from_actor"), "created": message.get("created"),
+            "actor": message.get("from_actor"), "created_at": message.get("created_at"),
             "text": message.get("body", "")}
 
 
@@ -98,7 +98,7 @@ def owner_messages(task):
         return []
     return sorted((m for m in task.get("messages", []) if m.get("from_actor") == task.get("owner")
                    and not any(m.get(k) for k in ("deleted_at", "hidden_at", "superseded_at"))),
-                  key=lambda m: (m.get("created") or "", m.get("id") or ""))
+                  key=lambda m: (m.get("created_at") or "", m.get("id") or ""))
 
 
 def verdicts(task, role, number):
@@ -111,7 +111,7 @@ def verdicts(task, role, number):
             for match in VERDICT.finditer(message.get("body", "")):
                 if int(match[2]) == number:
                     found.append({**source(child, message), "verdict": match[1], "head": match[3]})
-    return sorted(found, key=lambda r: (r["created"] or "", r["message"] or ""))
+    return sorted(found, key=lambda r: (r["created_at"] or "", r["message"] or ""))
 
 
 def passing_test(text, head):

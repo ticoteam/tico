@@ -30,14 +30,14 @@ const TOOLS = [
   ...['acme-co/docs', 'acme-co/pricing-api'].map((name, n) => tool('github-extra-' + n, 'github', 'GitHub', {logo_key: 'github', identity: name,
     can: n ? ['read', 'write'] : ['read'], scope: {repo: name}, url: 'https://github.com/' + name, status: 'unknown', detail: 'Granted repository'})),
 ];
-const task = (id, title, extra) => ({id, title, status: 'doing', owner: 'bot:cmo', requester: 'human:ana', created: iso(-30 * hour), updated: iso(-hour), ...extra});
+const task = (id, title, extra) => ({id, title, status: 'doing', owner: 'bot:cmo', requester: 'human:ana', created_at: iso(-30 * hour), updated_at: iso(-hour), ...extra});
 const TASKS = [task('t1', 'Draft the October pricing page copy'), task('t2', 'Pull last week\'s funnel numbers from PostHog', {status: 'open'}),
   task('t3', 'Write the launch email for the new plan', {status: 'waiting'}),
   task('t4', 'Weekly report', {status: 'done', done_at: iso(-20 * hour)}), task('t5', 'Clean up UTM tags', {status: 'done', done_at: iso(-40 * hour)})];
 const ASKED = [task('a1', 'Approve the pricing page before Friday', {owner: 'human:ana', requester: 'bot:cmo'})];
-const UPDATE = {id: 'u1', bot: 'cmo', kind: 'daily', day: '2026-10-01', read: false, created: iso(-10 * hour), updated: iso(-10 * hour),
+const UPDATE = {id: 'u1', bot: 'cmo', kind: 'daily', day: '2026-10-01', read: false, created_at: iso(-10 * hour), updated_at: iso(-10 * hour),
   body: '- Drafted the pricing page copy; two headline options are on the task.\n- Funnel: sign-ups up 8% week over week.'};
-const said = (n, who, body) => ({id: 'm' + n, from_actor: who, body, created: iso((n - 9) * hour)});
+const said = (n, who, body) => ({id: 'm' + n, from_actor: who, body, created_at: iso((n - 9) * hour)});
 const CHAT = [said(1, 'human:ana', 'Where are we on the pricing page?'),
   said(2, 'bot:cmo', 'The copy is drafted, with two headline options on the task. I am pulling last week\'s funnel numbers to pick between them.'),
   said(3, 'human:ana', 'Go with the shorter headline if the numbers are close.'),

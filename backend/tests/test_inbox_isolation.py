@@ -18,9 +18,9 @@ def setup(api):
                                              {"inbox_bot": "mail2"} if p["id"] == "quinn" else {})}
                                    for p in PEOPLE["people"]]}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
         for slug in ("mail", "helper", "mail2"):
-            c.execute("INSERT OR IGNORE INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
+            c.execute("INSERT OR IGNORE INTO bot_config(bot,config,operator,repo) VALUES(?,?,?,?)",
                       (slug, "{}", "morgan", "emp-" + slug))
     return enrolled(api)
 

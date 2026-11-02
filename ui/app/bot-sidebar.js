@@ -344,7 +344,7 @@ async function botPinAddOpen(slug) {
     <div class="bot-editor-body dash-form">
       <nav class="tabs slim strat-tabs" aria-label="Kind"><a href="#" data-kind="page" class="cur">Page</a><a href="#" data-kind="card">Card</a></nav>
       <div data-pane="page">${pages.length ? `<fieldset class="dash-pick"><legend class="sr-only">Page</legend>${pages.map((p, i) => `<label class="dash-pick-row"><input type="radio" name="page" value="${esc(p.file_id)}"${i ? '' : ' checked'}>
-        <span><strong>${esc(p.title || 'Untitled')}</strong> <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated)}</span></span></label>`).join('')}</fieldset>` : '<p class="muted">No pages to add</p>'}</div>
+        <span><strong>${esc(p.title || 'Untitled')}</strong> <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated_at)}</span></span></label>`).join('')}</fieldset>` : '<p class="muted">No pages to add</p>'}</div>
       <div data-pane="card" hidden><label>Card<select name="template">${choices.templates.filter(t => t.id !== 'kpi').map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select></label>
         <label>Team<select name="team">${dashTeamOptions(choices.teams, '')}</select></label></div></div>
     <footer class="dash-form-foot"><span class="err" role="status" data-status></span><span class="spacer"></span>

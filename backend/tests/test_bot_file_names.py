@@ -57,7 +57,7 @@ def test_a_stored_needs_onboarding_row_becomes_needs_setup_and_readers_take_both
         assert c.execute("SELECT 1 FROM cloud_migrations WHERE version=45").fetchone()
         for slug, state in (("old", "needs_onboarding"), ("new", "needs_setup"), ("done", "onboarded")):
             c.execute("INSERT INTO bots(slug,display_name) VALUES(?,?)", (slug, slug))
-            c.execute("INSERT INTO bot_config(bot,config_json,operator,onboarding_state) VALUES(?,?,?,?)", (slug, "{}", "morgan", state))
+            c.execute("INSERT INTO bot_config(bot,config,operator,onboarding_state) VALUES(?,?,?,?)", (slug, "{}", "morgan", state))
         c.execute("DELETE FROM cloud_migrations WHERE version=45")             # the state a database is in before this release
     store.initialize()
     with store.read() as c:

@@ -33,7 +33,7 @@ def test_a_direct_call_wakes_the_bot_a_rule_names_and_that_bot_may_read_the_call
     with api.app.state.store.read() as c:
         assert jobs(c, "cpo") == 1
         message = c.execute("SELECT * FROM messages WHERE to_actor='bot:cpo' ORDER BY rowid DESC LIMIT 1").fetchone()
-    refs = json.loads(message["refs_json"])
+    refs = json.loads(message["refs"])
     assert message["from_actor"] == H.KEEPER and "Order 42 (order.created)" in message["body"]
     assert refs["delivery"] == "w1" and refs["rule_id"] == rule["id"] and refs["via"] == "direct"
     as_bot(api, "cpo")
@@ -54,7 +54,7 @@ def test_a_call_through_the_gateway_relay_runs_the_same_rule(api):
     wake_rule(api, trigger="shop")
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs")
-        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?)",
                   ("hr_0123456789abcdef", "shop", "https://api.tico.dev/v1/hooks/hr_0123456789abcdef", "human:ana",
                    H.now()))
     relay = hook_relay.HookRelay(api.app.state.store, api.app.state.store.settings,
@@ -66,7 +66,7 @@ def test_a_call_through_the_gateway_relay_runs_the_same_rule(api):
     assert relay.take({**item, "hq_seq": 2}, 1) == 2                   # HQ sending it twice wakes once
     with api.app.state.store.read() as c:
         assert jobs(c, "cpo") == 1
-        refs = json.loads(c.execute("SELECT refs_json FROM messages WHERE to_actor='bot:cpo' ORDER BY rowid DESC "
+        refs = json.loads(c.execute("SELECT refs FROM messages WHERE to_actor='bot:cpo' ORDER BY rowid DESC "
                                     "LIMIT 1").fetchone()[0])
         logged = c.execute("SELECT via, received_at FROM trigger_deliveries WHERE delivery='g1'").fetchone()
     assert refs["via"] == "gateway" and refs["delivery"] == "g1"
@@ -80,7 +80,7 @@ def test_a_rule_that_ignores_a_call_heard_it_so_its_maker_gets_no_unheard_note(a
     rule_row(api, by="human:ana", then="ignore", when={"trigger": "shop"})
     assert hook(api, made["url"], b'{"kind": "ping"}', {"Webhook-Id": "p1"}).status_code == 202
     with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM messages WHERE refs_json LIKE '%unheard%'").fetchone()
+        assert not c.execute("SELECT 1 FROM messages WHERE refs LIKE '%unheard%'").fetchone()
 
 
 def test_a_call_a_rule_forwards_reaches_the_outgoing_endpoint_signed(api, net):
@@ -116,7 +116,7 @@ def test_a_signed_call_through_the_gateway_relay_is_checked_accepted_and_judged_
     wake_rule(api, trigger="shop")
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs")
-        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?)",
                   ("hr_0123456789abcdef", "shop", "https://api.tico.dev/v1/hooks/hr_0123456789abcdef", "human:ana", H.now()))
     relay = hook_relay.HookRelay(api.app.state.store, api.app.state.store.settings, SimpleNamespace(state=api.app.state),
                                  api.app.state.auth)

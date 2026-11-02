@@ -29,7 +29,7 @@ async function open(browser, viewport, touch = false, {empty = false, messages =
   const page = await browser.newPage({viewport, serviceWorkers: 'block', ...(touch ? {hasTouch: true, isMobile: true} : {})});
   if (theme) await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
   const api = {errors: [], goalPosts: [], goalKeys: [], goalResults: new Map(), dropGoalOnce: false,
-    sends: [], uploads: [], created: [], goal, streamGoal: null, page, room: !empty, held: []};
+    sends: [], uploads: [], created_at: [], goal, streamGoal: null, page, room: !empty, held: []};
   const tick = setInterval(() => {
     const g = api.streamGoal, route = api.held.at(-1);
     if (!g || !route) return;
@@ -54,11 +54,11 @@ async function open(browser, viewport, touch = false, {empty = false, messages =
     if (p === '/api/issues') return json([]);
     const room = {id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']};
     if (p === '/api/v2/conversations' && req.method() === 'POST') {   // the bot's own room, made by the first goal
-      api.created.push(req.postDataJSON()); api.room = true; return json(room);
+      api.created_at.push(req.postDataJSON()); api.room = true; return json(room);
     }
     if (p === '/api/v2/conversations')
       return json({conversations: url.searchParams.get('chat_with') && api.room ? [room] : []});
-    if (p.endsWith('/snapshot')) return json({messages: messages || (empty && !api.created.length ? [] : [{id: 'm0', from_actor: 'bot:ops', body: 'Ready when you are.', created: '2026-10-01T09:00:00Z'}]), execution: null});
+    if (p.endsWith('/snapshot')) return json({messages: messages || (empty && !api.created_at.length ? [] : [{id: 'm0', from_actor: 'bot:ops', body: 'Ready when you are.', created_at: '2026-10-01T09:00:00Z'}]), execution: null});
     // Live events (ui/app/live.js): held open; a goal the stream reports goes out as the change it is, on the newest one.
     if (p === '/api/v2/events') { api.held.push(route); return; }
     if (p === '/api/v2/conversations/c1/goal') {
@@ -79,11 +79,11 @@ async function open(browser, viewport, touch = false, {empty = false, messages =
     }
     if (p === '/api/v2/uploads/chat/ops') {
       api.uploads.push(req.postDataBuffer().toString());
-      return json({conversation: {id: 'c1'}, message: {id: 'u' + api.uploads.length, from_actor: 'human:ana', body: 'With a file', created: now()}});
+      return json({conversation: {id: 'c1'}, message: {id: 'u' + api.uploads.length, from_actor: 'human:ana', body: 'With a file', created_at: now()}});
     }
     if (p === '/api/v2/chat/ops') {
       const body = req.postDataJSON(); api.sends.push(body);
-      return json({conversation: {id: 'c1'}, message: {id: 'm' + api.sends.length, from_actor: 'human:ana', body: body.text, created: now()}});
+      return json({conversation: {id: 'c1'}, message: {id: 'm' + api.sends.length, from_actor: 'human:ana', body: body.text, created_at: now()}});
     }
     return json(unrouted(p));
   });
@@ -246,13 +246,13 @@ async function phone(browser) {
 async function serverNotice(browser) {
   const t = (m, s) => `2026-10-01T09:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}Z`;
   const messages = [
-    {id: 'm1', kind: 'say', from_actor: 'human:ana', body: '/goal Produce the revised Acme summary', created: t(1, 0),
+    {id: 'm1', kind: 'say', from_actor: 'human:ana', body: '/goal Produce the revised Acme summary', created_at: t(1, 0),
      refs: {command: true, goal_action: 'set', goal_id: 'g9', goal_revision: t(1, 0), goal_objective: 'Produce the revised Acme summary'}},
-    {id: 'm2', kind: 'say', from_actor: 'human:ana', body: '/goal clear', created: t(2, 0), refs: {command: true, goal_action: 'pause', goal_id: 'g9'}},
-    {id: 'm3', kind: 'say', from_actor: 'human:ana', body: '/goal Produce the revised Acme summary', created: t(3, 0), refs: {command: true, goal_action: 'resume', goal_id: 'g9'}},
-    {id: 'm4', kind: 'say', from_actor: 'bot:ops', body: 'Summary revised and posted.', created: t(9, 0), refs: {}},
+    {id: 'm2', kind: 'say', from_actor: 'human:ana', body: '/goal clear', created_at: t(2, 0), refs: {command: true, goal_action: 'pause', goal_id: 'g9'}},
+    {id: 'm3', kind: 'say', from_actor: 'human:ana', body: '/goal Produce the revised Acme summary', created_at: t(3, 0), refs: {command: true, goal_action: 'resume', goal_id: 'g9'}},
+    {id: 'm4', kind: 'say', from_actor: 'bot:ops', body: 'Summary revised and posted.', created_at: t(9, 0), refs: {}},
     // As backend/chat_goals.py writes it: refs {chat_goal, goal_status}; a two-line objective, then the note.
-    {id: 'm5', kind: 'notice', from_actor: 'bot:ops', body: 'Goal met: Produce the revised Acme summary\nwith the Q3 numbers\nThe condition holds.', created: t(9, 5),
+    {id: 'm5', kind: 'notice', from_actor: 'bot:ops', body: 'Goal met: Produce the revised Acme summary\nwith the Q3 numbers\nThe condition holds.', created_at: t(9, 5),
      refs: {chat_goal: 'g9', goal_status: 'met'}},
   ];
   const goal = {id: 'g9', conversation_id: 'c1', bot: 'ops', objective: 'Produce the revised Acme summary\nwith the Q3 numbers', status: 'met',
@@ -295,7 +295,7 @@ async function emptyChat(browser) {
   await box.press('Escape');                                      // the menu, if open
   await box.press('Enter');
   await page.locator('#chat-goal .cg-bar').waitFor();
-  assert.deepEqual(api.created, [{participants: ['bot:ops'], kind: 'chat'}]);
+  assert.deepEqual(api.created_at, [{participants: ['bot:ops'], kind: 'chat'}]);
   assert.deepEqual(api.goalPosts, [{action: 'set', objective: 'First thing I want done'}]);
   assert.deepEqual(api.sends, [], 'the goal is not sent as plain text');
   assert.equal(await page.locator('#chat-goal .cg-text').innerText(), 'First thing I want done');
@@ -311,7 +311,7 @@ async function emptyChat(browser) {
   for (const end = Date.now() + t(10000); !again.goalPosts.length && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
   releaseGoal();                                                  // both Returns came while the save was held
   await again.page.locator('#chat-goal .cg-bar').waitFor();
-  assert.equal(again.created.length, 1);
+  assert.equal(again.created_at.length, 1);
   assert.deepEqual(again.goalPosts, [{action: 'set', objective: 'Clean up the Acme wiki'}]);
   assert.equal(again.sends.length, 0);
   assert.deepEqual(again.errors, []);
@@ -331,7 +331,7 @@ async function emptyChat(browser) {
   await box2.press('Enter');
   await refused.page.getByText("This bot's harness doesn't support goals.", {exact:true}).waitFor();
   assert.equal(await box2.inputValue(), 'Ship the Acme pricing page', 'the typed goal is kept');
-  assert.equal(refused.created.length, 1, "the bot's own room, the one its first message will use");
+  assert.equal(refused.created_at.length, 1, "the bot's own room, the one its first message will use");
   assert.deepEqual(refused.goalPosts, [], 'not set where it is refused');
   assert.equal(await refused.page.locator('#chat-composer .p-goal').getAttribute('aria-pressed'), 'true');
   await refused.page.locator('#chat-composer .p-goal').click();

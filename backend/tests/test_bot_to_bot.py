@@ -77,8 +77,8 @@ def test_a_quiet_message_is_never_lost_a_failed_run_hands_it_to_the_next_even_da
     sent = post(api, "messages", {"to": "cpo", "text": "FYI: the docs PR merged."}, token=token)
     with api.app.state.store.transaction() as c:
         old = H.shift(H.now(), days=-3)
-        c.execute("UPDATE messages SET created=? WHERE id=?", (old, sent["id"]))
-        c.execute("UPDATE notes SET created=? WHERE message_id=?", (old, sent["id"]))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (old, sent["id"]))
+        c.execute("UPDATE notes SET created_at=? WHERE message_id=?", (old, sent["id"]))
     post(api, "chat/cpo", {"text": "First"})
     first = claim(api, r, "cpo")
     assert [n["message"] for n in first["notes"] if n.get("message")] == [sent["id"]]
