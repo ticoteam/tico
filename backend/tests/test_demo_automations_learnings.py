@@ -1,13 +1,14 @@
 """Demo automations, Learnings nights and Tico release updates: built as the demo builds them, read back as Ana."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend import demo
 from backend.app import create_app
+from backend.scheduler import next_due
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
 
@@ -118,6 +119,43 @@ def test_runs_spread_over_the_week_and_some_fall_in_the_last_hour(built):
             runs, _ = runs_of(api, ids[name])
             recent += [run for run in runs if run["started_at"] >= LAST_HOUR]
         assert len(recent) >= 4
+
+
+def at_time(text):
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def occurrences_between(trigger, start, end):
+    """The schedule's own times after `start` and before `end`, worked out as the scheduler works them out."""
+    due, found = next_due(trigger["cron"], start, trigger["tz"]), []
+    while due < end:
+        found.append(due)
+        due = next_due(trigger["cron"], due, trigger["tz"])
+    return found
+
+
+def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future(built):
+    _, settings = built
+    with signed_in(settings) as api:
+        rows = api.get("/api/v2/automations?limit=100").json()["automations"]
+        enabled = {row["name"]: row["enabled"] for row in rows}
+        assert enabled["Weekday inbox sweep"] is False
+        schedules = [row for row in rows if row["enabled"] and row["trigger"]["type"] == "schedule"]
+        assert len(schedules) == 16
+        week_start = NOW - timedelta(days=7)
+        for row in schedules:
+            trigger = row["trigger"]
+            # Next is the schedule's first time after the build's now.
+            assert at_time(row["next_run"]) > NOW, row["name"]
+            assert at_time(row["next_run"]) == next_due(trigger["cron"], NOW, trigger["tz"]), row["name"]
+            due = occurrences_between(trigger, week_start, NOW)
+            assert due, row["name"]
+            runs, _ = runs_of(api, row["id"])
+            started = sorted(at_time(run["started_at"]) for run in runs if at_time(run["started_at"]) > week_start)
+            # One finished run at each of its own times this week (weekdays only for a weekday schedule).
+            assert [started_at.replace(microsecond=0) for started_at in started] == due, row["name"]
+            assert {run["status"] for run in runs if at_time(run["started_at"]) > week_start} == {"ok"}, row["name"]
+            assert row["last_run"] and at_time(row["last_run"]["started_at"]).replace(microsecond=0) == due[-1]
 
 
 def test_the_ledger_and_declined_card_tasks_are_done_and_read_by_ana(built):

@@ -482,7 +482,13 @@ class Builder:
     def history(self):
         """What the computers would have recorded: turns, each bot's status, and read receipts."""
         def work(c):
+            # The routine turns of the last week are the scheduled runs (demo_sections/schedules.py), so these are left
+            # out for those bots. The Inbox's routine is off, and its turns stay.
+            scheduled = {routine[0] for routine in D.ROUTINES} | {"goal-manager"}
+            scheduled.discard("inbox")
             for bot, hours, trigger, summary, tokens_in, tokens_out in D.TURNS:
+                if trigger == "routine" and bot in scheduled:
+                    continue
                 self.at(hours=hours)
                 task = None
                 routine = c.execute("SELECT id,title FROM schedules WHERE bot=? ORDER BY id LIMIT 1", (bot,)).fetchone() if trigger == "routine" else None
