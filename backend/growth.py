@@ -149,12 +149,12 @@ def channel_tasks(c, auth, who, slug, limit=CHANNEL_TASKS_MAX):
     """The open tasks labelled `channel:<slug>` the reader may see, the most recently updated first."""
     key = H._labels([f"channel:{slug}"])[0]
     rows = H._rows(c.execute(
-        "SELECT t.id, t.title, t.owner, t.status, t.updated_at FROM tasks t "
+        "SELECT t.id, t.title, t.owner_id, t.status, t.updated_at FROM tasks t "
         "WHERE t.status IN ('open','doing','waiting','review','ready') "
         f"AND t.id IN (SELECT id FROM tasks WHERE {auth.task_sql(c, who)}) "
         "AND t.id IN (SELECT tt.task_id FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id WHERE tg.key=?) "
         "ORDER BY t.updated_at DESC LIMIT ?", (key, limit)))
-    return [{"task_id": r["id"], "title": r["title"], "assignee": r["owner"], "status": r["status"],
+    return [{"task_id": r["id"], "title": r["title"], "assignee": r["owner_id"], "status": r["status"],
              "updated_at": r["updated_at"]} for r in rows]
 
 

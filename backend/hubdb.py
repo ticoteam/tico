@@ -7232,7 +7232,7 @@ def _marketing_outcome(conn, actor, row, step, type=None):
     other bot closes it. The board it lands on is the marketing type too: a move to another board (`type`) is not an
     outcome, whatever its step is called. The requester is told of the close as it is for any close."""
     from . import marketing_tasks as MT
-    if not step or not is_bot(actor) or actor != row["owner"]:
+    if not step or not is_bot(actor) or actor != row["owner_id"]:
         return False
     board = type_get(conn, type if type is not None else row.get("type_id") or GENERAL_TYPE)
     if not board or board["id"] != MT.TYPE_ID:
