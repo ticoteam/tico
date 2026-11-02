@@ -174,6 +174,19 @@ def test_a_release_whose_new_runner_binary_is_not_published_yet_waits_without_mo
     assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.3.0"
 
 
+def test_a_runner_binary_that_never_comes_is_a_failed_update_after_an_hour(repos):
+    public, checkout, state = repos
+    runner_release(public, checkout)
+    now = [1000.0]
+    wait = dict(version="0.3.0", which=lambda name: None, listed=lambda version: False, clock=lambda: now[0])
+    assert run_apply(checkout, state, **wait)[0]["state"] == "waiting"
+    now[0] += ru.BINARY_WAIT_S - 1
+    assert run_apply(checkout, state, **wait)[0]["state"] == "waiting"     # the wait counts from the first try
+    now[0] += 1
+    result, calls = run_apply(checkout, state, **wait)
+    assert result["state"] == "failed" and "after 60 minutes" in result["error"] and calls.restarts == 0
+
+
 def test_only_a_changed_runner_without_cargo_asks_whether_its_binary_is_published(repos):
     public, checkout, state = repos
     asked = []

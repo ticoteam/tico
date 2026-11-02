@@ -23,6 +23,7 @@ STATUS_FILE = "update-status.json"
 HEALTH_S = 180
 LOCK_WAIT_S = 10 * 60        # for another environment's update of the same checkout; under follow.rs STALE_UPDATING_S
 LOCK_FILE = "tico-update.lock"
+BINARY_WAIT_S = 3600         # for a release's runner binary published after it (binary_pending), then a failed update
 KINDS = ("mac", "linux", "docker")
 HELPERS = ("connectors", "close-calls", "importers")   # scripts/tico installs these as launchd jobs (systemd user units on Linux) beside the bot job
 
@@ -332,7 +333,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     tag = "v" + version.lstrip("v")
     version = tag[1:]
 
-    def say(state, error=""):
+    def say(state, error="", **extra):
         # A blocked checkout's message holds file names, which may look like a disk error (test_enospc.py).
         error = error if state == "blocked" else disk_error_message(error)
         disk = {}
@@ -341,7 +342,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
                 disk["disk_free"] = shutil.disk_usage(directory).free
             except OSError:
                 pass
-        write_status(directory, state=state, target=version, error=error[:300], at=clock(), **disk)
+        write_status(directory, state=state, target=version, error=error[:300], at=clock(), **disk, **extra)
         return {"state": state, "target": version, "error": error}
 
     def g(*args, timeout=60):
@@ -375,7 +376,15 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     if target != old:
         pending = binary_pending(root, old, target, version, run=run, listed=listed, which=which)
         if pending:
-            return say("waiting", pending)
+            # A waiting runner takes no new work (follow.rs drains for a pending update), so the wait has an end:
+            # a Mac build that failed is a failed update, tried again later, while the runner works on.
+            before = read_status(directory)
+            since = before.get("binary_wait_since") if before.get("state") == "waiting" and before.get("target") == version else None
+            since = since if isinstance(since, (int, float)) else clock()
+            if clock() - since >= BINARY_WAIT_S:
+                return say("failed", f"release {tag} still has no runner binary for this computer after "
+                                     f"{BINARY_WAIT_S // 60} minutes")
+            return say("waiting", pending, binary_wait_since=since)
     say("updating")
 
     def restarted_helpers():
