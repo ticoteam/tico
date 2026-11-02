@@ -230,6 +230,40 @@ def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_a
     assert len(fake.sent("request_send_money")) == 2
 
 
+def test_a_queued_payment_is_cancelled_here_and_one_in_mercury_ends_cancelled_when_rejected_there(books):
+    """Item 2 (spec §9): payment_cancel works while a payment is queued, and ends it at once with its hold released. Once
+    it is in Mercury's approval queue there is no cancel API: the cancel is refused, and a rejection in Mercury ends it
+    cancelled on the poll, releasing its hold."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+
+    def body(c, obligation):
+        return {"recipient_id": rid, "amount": 20_000, "obligation": obligation, "tags": {"team": "eng"},
+                "account_id": account(c, "6100"), "money_account_id": _checking(c)}
+    with books.transaction() as c:
+        queued = act(c, OWNER, "payment_create", body(c, "bill-20"))
+        assert queued.status == "committed" and queued.result["status"] == "queued", queued
+        assert act(c, OWNER, "payment_cancel", {"payment_id": queued.result["payment_id"]}).status == "committed"
+        assert _hold_of(c, queued.result["payment_id"]) == (20_000, "released")
+    with books.transaction() as c:
+        sent = act(c, OWNER, "payment_create", body(c, "bill-21"))
+        assert sent.status == "committed", sent
+        pid = str(sent.result["payment_id"])
+    sync_once(books, fake, HOURS[1])
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == \
+            "awaiting_bank_approval"
+        refused = act(c, OWNER, "payment_cancel", {"payment_id": pid})
+        assert refused.code == "conflict" and "reject it in Mercury" in refused.reason, refused
+        assert _hold_of(c, pid) == (20_000, "held")
+    fake.requests[next(iter(fake.requests))]["status"] = "rejected"              # rejected in Mercury's queue
+    sync_once(books, fake, HOURS[2])
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _hold_of(c, pid) == (20_000, "released")
+
+
 def _unknown_and_flagged(books, fake, obligation):
     """A payment whose send got no answer, looked for by its key for an hour: flagged for a finance admin."""
     rid = _payee(books, fake)
