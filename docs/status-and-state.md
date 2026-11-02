@@ -498,7 +498,7 @@ Already constrained by a CHECK in the base schema (values unchanged on this bran
 - `live_meetings.state`: live, paused, ended.
 - `meeting_items.status`: proposed, pushed, dismissed.
 - `org_rules.status`: suggested, active, retired. `org_rule_holds.state`: held, sent, kept.
-- `growth_channels.stage`, `growth_ideas.status`: the Growth module's stages and statuses. `growth_segments.status`: serving, testing, next, dropped.
+- `growth_channels.stage`: the Growth module's channel stages. (The idea and segment tables it used to hold are gone; see the growth rethink migration.)
 - `fin_cards.status`: active, frozen, canceled (`backend/status_values.py` enforces it with a CHECK).
 - `fin_actions.status`, `fin_bills.status`, `fin_invoices.status`, `fin_entries.status`, `fin_holds.status`, `fin_outbox.status`
   (pending, sent, failed, withheld), `fin_feed_txns.status`, `fin_periods.status`, `fin_reconciliations.status`,
