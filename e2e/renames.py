@@ -62,6 +62,18 @@ def golden_fields(rename_map, golden):
     return {**rename_map["fields"], **rename_map["golden_fields"].get(golden, {})}
 
 
+def old_columns(path):
+    """The `columns` section of a codemod's map (scripts/cleanup/renames.yaml, whose other sections are its own) read the
+    other way: {"table.new": "old"}, for writing rows into a database the server made before the rename. A rollback copy
+    is that database, so the direct rows use the names it has."""
+    columns = (yaml.safe_load(Path(path).read_text()) or {}).get("columns") or {}
+    out = {}
+    for key, new in columns.items():
+        table, _, old = str(key).partition(".")
+        out[f"{table}.{new}"] = old
+    return out
+
+
 def apply_fields(value, fields, parent=""):
     """The golden with its keys renamed (old -> new), at every depth. Values are left as they are."""
     if not fields:
