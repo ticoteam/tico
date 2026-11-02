@@ -101,7 +101,7 @@ def test_private_bot_task_reaches_one_named_person_and_nobody_else(api, requeste
     # A second, different person is refused, by the create and its dry-run in the same words.
     other = subtask(row["id"], "cara", title="Approve the zip triage plan again")
     words = refused(api, other, attempt["token"])
-    assert "already reached ben" in words
+    assert "already reached Ben" in words
     assert words in dry_run(api, other, attempt["token"])
     assert readers(api, row["id"]) == {"ben"}
 
@@ -159,7 +159,7 @@ def test_waiting_on_a_person_makes_them_the_guest_and_reassignment_ends_it(api):
     assert waiting["status"] == "waiting" and readers(api, row["id"]) == {"ben"} and readers(api, card["id"]) == {"ben"}
     r = api.post("/api/v2/tasks/" + row["id"], json={"version": waiting["version"], "status": "waiting",
                                                        "waiting_on": "cara"}, headers=headers(attempt["token"]))
-    assert r.status_code in (403, 422) and "already reached ben" in r.text, r.text
+    assert r.status_code in (403, 422) and "already reached Ben" in r.text, r.text
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:cpo", row["id"], owner="bot:cpo")
     assert readers(api, row["id"]) == set()
@@ -236,4 +236,4 @@ def test_a_question_reaches_the_guest(api):
     r = api.post("/api/v2/task-questions", json={"question": "Or should Cara decide?", "on": "cara",
                                                    "parent": row["id"], "options": [{"label": "Yes", "then": "Go with Yes"}, {"label": "No", "then": "Go with No"}]},
                  headers=headers(attempt["token"]))
-    assert r.status_code == 403 and "already reached ben" in r.text, r.text
+    assert r.status_code == 403 and "already reached Ben" in r.text, r.text

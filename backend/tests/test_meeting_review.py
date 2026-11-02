@@ -192,5 +192,5 @@ def test_a_shared_meeting_goes_to_a_uuid_bot_by_id_or_slug_as_one_task(api):
     assert approved['review_state'] == 'live' and approved['delivery']['destination'] == bot
     task = approved['delivery']['task_id']
     with api.app.state.store.read() as c:
-        assert c.execute('SELECT owner FROM tasks WHERE id=?', (task,)).fetchone()[0] == 'bot:' + bot
+        assert c.execute('SELECT owner_id FROM tasks WHERE id=?', (task,)).fetchone()[0] == 'bot:' + bot
     assert review(api, made['id'], send_to='field-helper')['delivery']['task_id'] == task

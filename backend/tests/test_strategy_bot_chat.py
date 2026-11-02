@@ -332,7 +332,7 @@ def test_the_earlier_strategy_bot_chat_stays_with_the_owner_seat_and_each_keeps_
     assert (mine["bot"], mine["room_id"], mine["earlier"]) == ("coo", hers, None)
     get(api, f"conversations/{old}/messages", ana, expected=403)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT status FROM assistant_actions WHERE id=?", (pending["action"]["id"],)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM assistant_actions WHERE id=?", (pending["action"]["id"],)).fetchone()[0] == "canceled"
         assert c.execute("SELECT count(*) FROM events WHERE action='strategy_bot.chat_moved'").fetchone()[0] == 1
 
 

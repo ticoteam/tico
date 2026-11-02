@@ -162,7 +162,7 @@ def test_a_bot_requester_may_reopen_a_task_it_closed(api):
         H.task_update(c, "bot:ops", tid, status="done", note="Drafted again.")
         H.task_close(c, "human:ana", tid, note="Published.")
         for who in ("bot:ops", "bot:cpo"):
-            with pytest.raises(H.Refused, match="ana closed this task"):
+            with pytest.raises(H.Refused, match="Ana closed this task"):
                 H.task_update(c, who, tid, note="Late note.")
             with pytest.raises(H.Refused, match="stays closed"):
                 H.task_update(c, who, tid, status="open")
