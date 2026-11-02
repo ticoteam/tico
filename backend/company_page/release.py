@@ -258,7 +258,9 @@ def _new_id():
 
 
 def _logo_bytes(c_read, settings, view):
-    """The logo's bytes, checked against its stated type, or None. A logo that can't be read never stops a release."""
+    """The logo's bytes, checked against its stated type, or None. A logo that can't be read never stops a release. It is
+    read through the server's file reader, which knows the company's own places; a reader of only the server's storage
+    would miss a logo saved there."""
     url = view["company"]["logo_url"]
     if not url:
         return None
@@ -268,7 +270,8 @@ def _logo_bytes(c_read, settings, view):
         row = c_read.execute("SELECT digest, content_type FROM blobs WHERE substr(digest,1,32)=? AND size<=? "
                              "AND content_type IN (%s)" % ",".join("?" * len(LOGO_TYPES)),
                              (digest_part, MAX_LOGO_BYTES, *LOGO_TYPES)).fetchone()
-        data = Blobs(settings).get(row["digest"])
+        reader = getattr(c_read, "blobs", None)
+        data = (reader if reader is not None else Blobs(settings)).get(row["digest"])
         return data if data.startswith(LOGO_TYPES[row["content_type"]][1]) and len(data) <= MAX_LOGO_BYTES else None
     except Exception:  # noqa: BLE001 - logged; the release goes out without the logo
         LOG.warning("company page logo could not be read", exc_info=True)

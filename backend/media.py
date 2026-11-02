@@ -456,6 +456,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     from . import task_privacy as privacy
     blobs = Blobs(store.settings)
     app.state.blobs = blobs
+    store.blobs = blobs                 # what connections carry for the company page's logo (store.Store._take)
     from .file_metadata import Metadata
     app.state.file_metadata = Metadata(store, blobs)
 

@@ -1061,6 +1061,8 @@ class WriterGate:
 class Store:
     def __init__(self, settings, recorder=None):
         self.settings = settings
+        # The server's file reader, set by the app once it has one (backend/media.py); None until then.
+        self.blobs = None
         # The flight recorder (backend/flight.py) times every statement and write transaction when one is given.
         self.recorder = recorder
         self.factory = sqlite3.Connection
@@ -2180,6 +2182,9 @@ class Store:
         if c is None:
             c = self.connect(factory=self.pooled, check_same_thread=False)
             c.pool_file = identity
+        # The server's file reader as the app has it configured now (media.install_media): work that holds only the
+        # connection reads a company page's logo through it, so one saved in the company's own places is found.
+        c.blobs = self.blobs
         c.read_cache = {}
         c.provenance_cache = self.provenance_cache
         c.roster_rows = self.roster_rows

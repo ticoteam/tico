@@ -676,6 +676,25 @@ def test_a_failed_daily_read_leaves_the_page_up(world, monkeypatch):
     assert (served(world) / "index.html").exists()
 
 
+def test_a_logo_is_read_through_the_servers_file_reader_with_the_company_places_it_is_set_to(world, monkeypatch):
+    """The server's file reader is pointed at the company's own bucket and the places before it (backend/company_storage.py),
+    so a logo saved there is found only through that reader, not through a fresh one that knows the server's storage."""
+    import backend.blobs as blobs
+    open_page(world)
+    publish(world, "e1", "First")
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 20
+    digest = hashlib.sha256(png).hexdigest()
+    with world.store.transaction() as c:
+        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) VALUES (?,?,?,?,?,?,?)",
+                  ("good", "human:o", digest, len(png), "logo", "image/png", H.now()))
+        c.execute("UPDATE company_page_settings SET logo_file_id='good'")
+    configured = blobs.Blobs(world.settings)
+    world.store.blobs = configured
+    monkeypatch.setattr(blobs.Blobs, "get", lambda self, d: png if self is configured else None)
+    release.rebuild(world.store, "logo", at=AT)
+    assert json.loads((served(world) / "data.json").read_text())["company"]["logo_url"].startswith("assets/logo-")
+
+
 def test_default_and_named_folders(world, tmp_path):
     assert release._root(world.settings) == tmp_path / "company-page-public"
     named = Settings(db_path=tmp_path / "hub.db", company_page_dir=str(tmp_path / "named"))
