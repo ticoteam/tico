@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from backend import task_rules as R
 from backend.store import H
 from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
+from backend.tests.hold_rows import set_holds
 
 AT = datetime(2026, 10, 24, 12, tzinfo=timezone.utc)
 
@@ -97,7 +98,7 @@ def test_activity_and_all_holds_protect_done_tasks(api, monkeypatch):
                     H.task_update(c, 'human:ana', t['id'], status='open')
                     H.task_update(c, 'human:ana', t['id'], status='done')
                 elif label == 'waiting': c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (t['id'],))
-                elif label == 'snoozed': c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", ((AT + timedelta(days=1)).isoformat(), t['id']))
+                elif label == 'snoozed': set_holds(c, t['id'], snoozed_until=(AT + timedelta(days=1)).isoformat())
                 elif label == 'pin': c.execute("UPDATE tasks SET labels='[\"pinned\"]' WHERE id=?", (t['id'],))
                 elif label == 'question': H.task_comment(c, 'human:ana', t['id'], 'Should this stay open?', wake=False, ask={'to': 'human:ana'})
                 else:

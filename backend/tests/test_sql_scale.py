@@ -108,7 +108,7 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
         c.executemany("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
                       "started_at,finished_at) VALUES(?1,?2,substr(?3,5),?4,0,'synthetic-'||?1,'done',?5,?5,?5,?5)", attempts)
         c.executemany("INSERT INTO attempts(id,bot_id,created_at,settled_at,message_id,task_id,trigger_kind,outcome) "
-                      "VALUES(?,?,?,?3,?,?,'message','acted')", turns)
+                      "VALUES(?,?,?,?3,?,?,'message','acted') ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,settled_at=excluded.settled_at,message_id=excluded.message_id,task_id=excluded.task_id,trigger_kind=excluded.trigger_kind,outcome=excluded.outcome", turns)
         c.executemany("INSERT OR IGNORE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", inputs)
         c.executemany("INSERT INTO events(id,created_at,actor,action,target,detail) VALUES"
                       "(lower(hex(randomblob(16))),'2026-01-01T00:00:00.000000Z','keeper','task.next-run.carried',?,?)",

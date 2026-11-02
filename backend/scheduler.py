@@ -468,7 +468,7 @@ class Scheduler:
                 for listed in ready[batch:batch + REMINDER_BATCH]:
                     with isolated(c, "reminder", listed["id"], failures):
                         row = c.execute("SELECT id,title,owner_id,due_at,conversation_id FROM tasks WHERE id=? AND due_at=? "
-                                        "AND owner_id=? AND snoozed_until IS NULL AND status IN (" +
+                                        "AND owner_id=? AND NOT " + H.SNOOZED % "tasks" + " AND status IN (" +
                                         ",".join("?" * len(H.ACTIVE_STATUSES)) + ")",
                                         (listed["id"], listed["due_at"], listed["owner_id"], *H.ACTIVE_STATUSES)).fetchone()
                         if row is None or not remind(c, dict(row), at):

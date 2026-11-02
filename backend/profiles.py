@@ -519,7 +519,7 @@ def mismatches(c):
         declared = H._json(row["config"], {}) or {}
         name, bot = name_of(declared), row["bot"]
         if name == REVIEWER:
-            tasks = H._rows(c.execute(f"SELECT * FROM tasks WHERE owner_id=? AND status IN {OPEN} LIMIT 200",
+            tasks = H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND status IN {OPEN} LIMIT 200",
                                       ("bot:" + bot,)))
             other = sum(1 for t in tasks if not is_review_task(c, t))
             if other:

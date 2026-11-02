@@ -39,6 +39,9 @@ def source_db(tmp_path):
             c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,1,'text','{}',?)",
                       (aid, at))
             c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, job))
+        # A run recorded with no lease (migration 0060): history, kept in the window, with no token to revoke.
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger) VALUES('recorded','sales',?,?,'message')",
+                  (now, now))
         c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) VALUES('t1','morgan','cli','th',?,'morgan')", (now,))
         c.execute("INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by) VALUES('k1','gh','token',?,?,'morgan')",
                   (now, now))
@@ -70,8 +73,8 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
         assert c.execute("SELECT token_hash FROM bots").fetchall() == [(None,)]
         assert c.execute("SELECT id FROM messages ORDER BY id").fetchall() == [("new",), ("ran",)]
         # The finished run stays, with its steps and inputs, and no way back in.
-        assert c.execute("SELECT id,token_hash,lease_until=finished_at FROM attempts").fetchall() == [
-            ("done", "devcopy-revoked:done", 1)]
+        assert c.execute("SELECT id,token_hash,lease_until=finished_at FROM attempts ORDER BY id").fetchall() == [
+            ("done", "devcopy-revoked:done", 1), ("recorded", None, None)]
         assert c.execute("SELECT id,state FROM jobs").fetchall() == [("ran", "completed")]
         assert c.execute("SELECT attempt_id FROM attempt_events").fetchall() == [("done",)]
         assert c.execute("SELECT attempt_id FROM attempt_inputs").fetchall() == [("done",)]

@@ -5,6 +5,7 @@ from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_assigned_start import advance, cancel, clock, sweep  # noqa: F401
 from backend.tests.test_status_reads import busy, setup
 from backend.tests.test_task_lanes import new_task, task_bot
+from backend.tests.hold_rows import set_holds
 
 
 def counted(api, monkeypatch, path, token="ana-test", trace=None):
@@ -145,8 +146,8 @@ def stuck_company(api, monkeypatch, count):
             slug, other = f"busy-{k}", f"busy-{(k + 1) % count}"
             tasks = [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner_id=? ORDER BY rowid", ("bot:" + slug,))]
             H.task_create(c, "bot:" + slug, f"Part of {slug}", "Part.", "bot:" + other, parent_id=tasks[0])
-            c.execute("UPDATE tasks SET status='waiting',blocked_since=?,blocked_kind='dependency' WHERE id=?",
-                      (H.now(), tasks[0]))
+            c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (tasks[0],))
+            set_holds(c, tasks[0], blocked_since=H.now(), blocked_kind='dependency')
             blocker = H.task_create(c, "human:ana", f"First for {slug}", "First.", "bot:" + other)
             c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) "
                       "VALUES(?,?,'blocks','human:ana',?)", (blocker["id"], tasks[3], H.now()))

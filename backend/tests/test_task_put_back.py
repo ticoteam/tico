@@ -223,7 +223,7 @@ def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_t
         c.execute("UPDATE jobs SET state='canceled'")
     assert take(api, machine)['task']['id'] == task['id']
     with api.app.state.store.read() as c:
-        counts = [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'turns')]
+        counts = [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'attempts')]
     post(api, 'tasks/' + task['id'] + '/relations', {'kind': 'blocked_by', 'task': blocker['id']})
     result = get(api, 'tasks/' + task['id'])['task']
     assert result['status'] == 'waiting' and result['step']['name'] == 'On Deck'
@@ -231,4 +231,4 @@ def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_t
         row = H.task(c, task['id'])
         resume = H._one(c, 'SELECT name FROM task_steps WHERE id=?', (row['blocked_from_step'],))
         assert resume['name'] == 'On Deck' and row['blocked_from_status'] == 'open'
-        assert [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'turns')] == counts
+        assert [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'attempts')] == counts

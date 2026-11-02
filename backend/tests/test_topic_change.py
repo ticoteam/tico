@@ -60,7 +60,7 @@ def chat(api):
     def usage(context=150_000, cached=40_000, age=30, summed=None):
         summed = summed or context or 0
         with store.transaction() as c:
-            last = c.execute("SELECT t.id FROM attempts t JOIN bot_sessions s ON s.bot_id=t.bot_id AND s.thread_id=t.thread_id "
+            last = c.execute("SELECT t.id FROM attempts t JOIN bot_sessions s ON s.bot=t.bot_id AND s.thread_id=t.thread_id "
                              "WHERE t.bot_id='ops'").fetchone()[0]
             c.execute("UPDATE attempts SET input_tokens=?,cached_tokens=?,prompt_tokens=?,settled_at=? WHERE id=?",
                       (summed - cached, cached, context, H.shift(H.now(), seconds=-age), last))

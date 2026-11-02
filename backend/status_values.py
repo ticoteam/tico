@@ -69,7 +69,8 @@ class Column:
 # Hot and growing tables use triggers; small tables use a CHECK rebuilt into the table.
 COLUMNS = (
     Column("tasks", "status", TASK_STATUSES, nullable=True),
-    Column("tasks", "blocked_from_status", TASK_STATUSES, nullable=True),
+    # The status a blocked hold returns its task to (backend/migrations/0061_task_holds.py).
+    Column("task_holds", "from_status", TASK_STATUSES, nullable=True),
     Column("jobs", "state", JOB_STATES, retired=(("cancelled", "canceled"),)),
     # NULL for a run recorded with no lease (backend/migrations/0060_turns_into_attempts.py); attempts' CHECK keeps a
     # leased run's state set.

@@ -10,6 +10,7 @@ from backend import hubdb as H
 from backend import threads as CORE
 from backend.store import encode
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.hold_rows import set_holds
 
 KB = 1024
 MARKER = "TOOL-OUTPUT-MARKER-7f3a"
@@ -295,8 +296,8 @@ def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     with store.transaction() as c:
         row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone())
         clone(c, "tasks", row, 499, title=lambda i: f"Snoozed {i}")
-        c.execute("UPDATE tasks SET snoozed_until=?, snoozed_note=? WHERE title LIKE 'Snoozed %'",
-                  (H.shift(H.now(), days=5), note))
+        for (snoozed,) in c.execute("SELECT id FROM tasks WHERE title LIKE 'Snoozed %'").fetchall():
+            set_holds(c, snoozed, snoozed_until=H.shift(H.now(), days=5), snoozed_note=note)
     board = api.get("/api/v2/tasks?brief=1&limit=500&snoozed=only", headers=headers())
     rows = board.json()["tasks"]
     assert len(rows) == 500

@@ -7,6 +7,7 @@ from backend import auto_tasks, execution, health, quiet_work
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_task_lanes import task_bot
+from backend.tests.hold_rows import set_holds
 
 
 def task_notice(api, task, refs, *, quiet=False, body="Check the runtime notice."):
@@ -96,7 +97,7 @@ def test_actionable_notice_preserves_real_gates(api, gate):
         if gate == 'resume':
             quiet_work.defer(c, 'bot:ops', task['id'], at=H.shift(H.now(), days=1))
         elif gate == 'snooze':
-            c.execute('UPDATE tasks SET snoozed_until=? WHERE id=?', (H.shift(H.now(), days=1), task['id']))
+            set_holds(c, task['id'], snoozed_until=H.shift(H.now(), days=1))
         elif gate == 'person':
             c.execute("UPDATE tasks SET waiting_on='human:ben' WHERE id=?", (task['id'],))
         elif gate == 'blocker':

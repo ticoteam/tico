@@ -73,7 +73,7 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
             assert c.execute('SELECT count(*) FROM attempts WHERE job_id=?', (first['job_id'],)).fetchone()[0] == 1
             assert not c.execute("SELECT 1 FROM jobs WHERE state='uncertain'").fetchone()
             assert not c.execute("SELECT 1 FROM bots WHERE state='quarantined'").fetchone()
-            assert not c.execute("SELECT 1 FROM tasks WHERE blocked_since IS NOT NULL").fetchone()
+            assert not c.execute("SELECT 1 FROM task_holds WHERE kind='blocked' AND released_at IS NULL").fetchone()
     at(monkeypatch, '2026-10-27T07:01:00.000000Z', api)
     ready(api, machine, ['ops', 'finance'])
     resumed = claim(api, machine)

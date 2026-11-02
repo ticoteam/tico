@@ -149,7 +149,7 @@ KEEP = frozenset((
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "memory_tidy_cards", "memory_tidy_keeps", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
     "system_runs", "tags", "task_assets",
-    "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
+    "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_holds", "task_links", "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "attempt_usage_segments", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_limits", "usage_pools", "task_caps",
@@ -343,7 +343,9 @@ def prune(c, days, keep_automations=False):
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:
-        delete("attempts", "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS)), OPEN_ATTEMPTS)
+        # A run recorded with no lease (migration 0060) has nothing open: it is history, cut by date below.
+        delete("attempts", "job_id IS NOT NULL AND (finished_at IS NULL OR state IN (%s))"
+               % ",".join("?" * len(OPEN_ATTEMPTS)), OPEN_ATTEMPTS)
     stamp = now()
     if days:
         cutoff = shift(stamp, days=-days)
@@ -365,7 +367,8 @@ def prune(c, days, keep_automations=False):
     if "runners" in present:
         c.execute("UPDATE runners SET token_hash='devcopy-revoked:'||id, revoked_at=coalesce(revoked_at,?)", (stamp,))
     if "attempts" in present:
-        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at)")
+        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at) "
+                  "WHERE job_id IS NOT NULL")
     # A row that points at one just removed goes too (attempt_events of an attempt, oauth_grants of a token):
     # repeated until no foreign key is broken by what this run removed.
     touched, frontier = set(removed), set(removed)
@@ -428,8 +431,8 @@ def build(source, dest, days=30, force=False, keep_automations=False):
         left = [t for t in emptied(c, keep_automations) if c.execute(f"SELECT 1 FROM {quote(t)} LIMIT 1").fetchone()]
         if left:
             raise SystemExit("devcopy: tables not empty after pruning: " + ", ".join(left))
-        live = c.execute("SELECT count(*) FROM attempts WHERE token_hash NOT LIKE 'devcopy-revoked:%' "
-                         "OR finished_at IS NULL").fetchone()[0] if "attempts" in tables(c) else 0
+        live = c.execute("SELECT count(*) FROM attempts WHERE job_id IS NOT NULL AND (token_hash NOT LIKE "
+                         "'devcopy-revoked:%' OR finished_at IS NULL)").fetchone()[0] if "attempts" in tables(c) else 0
         if live:
             raise SystemExit("devcopy: an unfinished or unrevoked attempt survived pruning")
         present = tables(c)

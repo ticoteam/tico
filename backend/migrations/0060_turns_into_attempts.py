@@ -56,6 +56,11 @@ SEGMENTS = """CREATE TABLE IF NOT EXISTS attempt_usage_segments (
   runtime TEXT, harness TEXT, effort TEXT, profile TEXT, est_cost_low INTEGER, gateway_key_id TEXT, install_id TEXT,
   PRIMARY KEY(attempt_id, position))"""
 
+# The tables that go once their rows have moved.
+DROP = """
+DROP TABLE IF EXISTS turn_usage_segments;
+DROP TABLE IF EXISTS turns;
+"""
 # turns column -> attempts column, for the columns that move as they are.
 MOVED = {"finished_at": "settled_at", "model": "usage_model",
          **{name: name for name in (
@@ -122,7 +127,6 @@ def _segments(conn):
     conn.execute(f"INSERT OR IGNORE INTO attempt_usage_segments (attempt_id, {', '.join(columns)}) "
                  f"SELECT s.turn_id, {', '.join('s.' + c for c in columns)} FROM turn_usage_segments s "
                  "WHERE EXISTS (SELECT 1 FROM attempts a WHERE a.id=s.turn_id)")
-    conn.execute("DROP TABLE turn_usage_segments")
 
 
 def up(conn):
@@ -147,6 +151,7 @@ def up(conn):
             _segments(conn)
         else:
             conn.execute(SEGMENTS)
-        conn.execute("DROP TABLE turns")
+        for statement in DROP.strip().splitlines():
+            conn.execute(statement)
     finally:
         conn.execute(f"PRAGMA legacy_alter_table={prior}")

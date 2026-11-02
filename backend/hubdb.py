@@ -1155,6 +1155,22 @@ def backfill_credential_uses(conn):
     conn.execute("INSERT INTO registry_metadata VALUES('credential-use-backfill',?)", (json.dumps(True),))
 
 
+# A task row with its open holds (task_holds, migration 0061) under the field names the code reads: blocked_since,
+# blocked_reason, blocked_kind (the hold's cause), blocked_from_step, blocked_from_status, blocked_gate,
+# holds_cleared_at, snoozed_until, snoozed_by_id, snoozed_note. Read it as a table: `SELECT * FROM {TASKS} tasks`.
+TASKS = ("(SELECT t.*, b.created_at AS blocked_since, b.reason AS blocked_reason, b.cause AS blocked_kind, "
+         "b.from_step_id AS blocked_from_step, b.from_status AS blocked_from_status, b.gate AS blocked_gate, "
+         "b.cleared_at AS holds_cleared_at, s.until_at AS snoozed_until, s.by_id AS snoozed_by_id, "
+         "s.reason AS snoozed_note FROM tasks t "
+         "LEFT JOIN task_holds b ON b.task_id=t.id AND b.kind='blocked' AND b.released_at IS NULL "
+         "LEFT JOIN task_holds s ON s.task_id=t.id AND s.kind='snoozed' AND s.released_at IS NULL)")
+# The tasks with an open hold of a kind: `id IN ({HELD_IDS % 'blocked'})`.
+HELD_IDS = "SELECT task_id FROM task_holds WHERE kind='%s' AND released_at IS NULL"
+# The open snooze of the task aliased `t`, for a filter: `NOT {SNOOZED % 't'}` keeps the tasks not snoozed.
+SNOOZED = ("EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=%s.id AND sh.kind='snoozed' "
+           "AND sh.released_at IS NULL)")
+
+
 def add_column(conn, table, column, declaration):
     """ALTER TABLE ... ADD COLUMN unless the column is there: SQLite has no IF NOT EXISTS for it."""
     if column not in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}:
@@ -1401,11 +1417,6 @@ def migrate(conn, adopt_legacy=False):
     # Set once a turn in the task's own session took in another private task: that session may
     # carry it from then on, so no later turn's reply becomes the checkpoint (execution.complete).
     add_column(conn, "tasks", "checkpoint_blocked", "INTEGER NOT NULL DEFAULT 0")
-    # A task snoozed until a date, and who snoozed it (backend/task_snooze.py).
-    add_column(conn, "tasks", "snoozed_until", "TEXT")
-    add_column(conn, "tasks", "snoozed_by_id", "TEXT")
-    # What the snoozer wants checked when the snooze ends, shown in the wake (backend/task_snooze.py).
-    add_column(conn, "tasks", "snoozed_note", "TEXT")
     # A review or QA child's verdict (approve|changes|pass|fail) and the pull request head it judged (record_verdict).
     add_column(conn, "tasks", "verdict", "TEXT")
     add_column(conn, "tasks", "verdict_head", "TEXT")
@@ -1422,7 +1433,6 @@ def migrate(conn, adopt_legacy=False):
     add_column(conn, "humans", "idp_issuer", "TEXT")
     add_column(conn, "humans", "idp_sub", "TEXT")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS humans_idp ON humans(idp_issuer, idp_sub) WHERE idp_sub IS NOT NULL")
-    conn.execute("CREATE INDEX IF NOT EXISTS tasks_snoozed ON tasks(snoozed_until) WHERE snoozed_until IS NOT NULL")
     # A type whose tasks change status only by moving between its steps (`_task_state`).
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
     # The Product roadmap and Dev tickets types are found by their role, never by who manages them.
@@ -2286,7 +2296,7 @@ def open_children(conn, task_id):
     parent_private = task_private(conn, task(conn, task_id))
     return [r["title"] if parent_private or not task_private(conn, r) else "a private subtask"
             for r in _rows(conn.execute(
-                "SELECT * FROM tasks WHERE id IN (" + TR.CHILD_IDS + ") "
+                f"SELECT * FROM {TASKS} tasks WHERE id IN (" + TR.CHILD_IDS + ") "
                 "AND status NOT IN ('done','closed','declined') ORDER BY created_at,id", (task_id,)))]
 
 
@@ -4001,7 +4011,7 @@ def _type_steps(conn, actor, type_id, steps):
     moving = []
     for ident in removed:
         if existing[ident]["status"] == "waiting":
-            for task in _rows(conn.execute("SELECT * FROM tasks WHERE step_id=?", (ident,))):
+            for task in _rows(conn.execute(f"SELECT * FROM {TASKS} tasks WHERE step_id=?", (ident,))):
                 target = task.get("blocked_from_step") if task.get("blocked_from_step") in working else deck
                 if not target:
                     refuse(conn, actor, "in-use", "Move tasks off this step before deleting it: no step is left for them")
@@ -4110,6 +4120,8 @@ def task_reopen_hint(conn, actor, row):
 
 def _task_state(conn, actor, row, status=None, type=None, step=None):
     """Resolve the step before checking permissions on its effective status."""
+    from . import task_holds
+    row = task_holds.with_holds(conn, row)
     typ = type_get(conn, type if type is not None else row.get("type_id") or GENERAL_TYPE)
     if not typ:
         refuse(conn, actor, "not-found", "No such task type")
@@ -4265,6 +4277,8 @@ def declared_hold(conn, actor, row, step, step_id):
 def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *, skip_step_wake=()):
     """Every task status write keeps its type and step consistent, including old runners. A task
     that enters a step joins its end; one that lands on a numbered type without a number gets one."""
+    from . import task_holds
+    row = task_holds.with_holds(conn, row)
     type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
     ts = now()
     from .task_blocked import transition
@@ -5157,7 +5171,7 @@ def descendants(conn, task_id):
     return _rows(conn.execute("WITH RECURSIVE tree(id,parent_id) AS ("
         "SELECT from_task,to_task FROM task_relations WHERE kind='parent' AND to_task=? UNION "
         "SELECT r.from_task,r.to_task FROM task_relations r JOIN tree ON r.to_task=tree.id AND r.kind='parent') "
-        "SELECT t.*,tree.parent_id FROM tasks t JOIN tree ON t.id=tree.id ORDER BY t.created_at,t.id", (task_id,)))
+        f"SELECT t.*,tree.parent_id FROM {TASKS} t JOIN tree ON t.id=tree.id ORDER BY t.created_at,t.id", (task_id,)))
 
 
 def children_summaries(conn, task_ids, visible_sql="1"):
@@ -6816,8 +6830,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             steps = type_get(conn, returned['type_id'])['steps']
             deck = next((s for s in steps if s['name'] == 'On Deck' and s['status'] == 'open'), None)
             deck = deck or next((s for s in steps if s['status'] == 'open'), None)
-            conn.execute('UPDATE tasks SET blocked_from_step=?,blocked_from_status=? WHERE id=?',
-                         (deck['id'] if deck else None, 'open', task_id))
+            from . import task_holds
+            task_holds.change(conn, task_id, "blocked", from_step_id=deck['id'] if deck else None, from_status='open')
         # A derived Blocked state can hide the requested open transition from status history.
         _task_event(conn, task_id, actor, 'queue_return', row['status'], 'open', note or '')
     if reopening:
@@ -6831,7 +6845,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         from .reconnects import access_changed as reconnects_access_changed
         reconnects_access_changed(conn, task_id)
     if person and status == "waiting":
-        conn.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=? WHERE id=? AND coalesce(blocked_kind,'')<>'manual'", ("Waiting on " + person_name(conn, person), task_id))
+        conn.execute("UPDATE task_holds SET cause='dependency',reason=? WHERE task_id=? AND kind='blocked' "
+                     "AND released_at IS NULL AND coalesce(cause,'')<>'manual'", ("Waiting on " + person_name(conn, person), task_id))
     after = task(conn, task_id) or {}
     if (after.get("title"), after.get("owner_id")) != (row["title"], row["owner_id"]):
         # The tasks it holds name it by title and owner (backend/task_holds.py).
@@ -7482,9 +7497,8 @@ def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
     from . import move_retry, review_gate
     # Its clock runs from when its last hold cleared, else from when its wait began (backend/task_holds.py): a note
     # written while it waits on nothing does not hold it back.
-    clock = "coalesce(holds_cleared_at, blocked_since, updated_at)" if "holds_cleared_at" in {
-        r[1] for r in conn.execute("PRAGMA table_info(tasks)")} else "updated_at"
-    for row in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND owner_id LIKE 'bot:%' "
+    clock = "coalesce(holds_cleared_at, blocked_since, updated_at)"
+    for row in _rows(conn.execute(f"SELECT * FROM {TASKS} tasks WHERE status='waiting' AND owner_id LIKE 'bot:%' "
                                   f"AND {clock}<=? ORDER BY {clock}", (cutoff,))):
         with isolated(conn, "sweep_stranded", row["id"]):
             if (waiting_for(conn, row) or not_yet_due(row, at)
@@ -7827,7 +7841,7 @@ def tasks_only(conn, actor):
 # carries it again, and so does one that finished without working it or saying when to (backend/quiet_work.py
 # settle); a task the bot already moved on (doing, done) is its own business by then.
 NEXT_RUN_WAITING_SQL = (
-    "t.next_run=1 AND t.status='open' AND t.snoozed_until IS NULL AND t.resume IS NULL "
+    "t.next_run=1 AND t.status='open' AND NOT " + SNOOZED % "t" + " AND t.resume IS NULL "
     "AND (t.carried_by IS NULL OR NOT EXISTS("
     "SELECT 1 FROM attempts a WHERE a.id=t.carried_by AND a.state IN ('leased','running','completed')))")
 
@@ -7853,7 +7867,7 @@ def next_run_waiting(conn, row):
 def next_run_tasks(conn, bot, exclude=None):
     """The next-run tasks waiting for `bot` (a slug), oldest first."""
     return _rows(conn.execute(
-        f"SELECT t.* FROM tasks t WHERE t.owner_id=? AND t.id IS NOT ? AND {NEXT_RUN_WAITING_SQL} "
+        f"SELECT t.* FROM {TASKS} t WHERE t.owner_id=? AND t.id IS NOT ? AND {NEXT_RUN_WAITING_SQL} "
         "ORDER BY t.created_at,t.id", ("bot:" + bot, exclude)))
 
 
@@ -7868,7 +7882,7 @@ def next_run_tasks_by(conn, bots):
     out = {bot: [] for bot in bots}
     for part in chunks(out):
         for row in _rows(conn.execute(
-                f"SELECT t.* FROM tasks t WHERE t.owner_id IN ({','.join('?' * len(part))}) AND {NEXT_RUN_WAITING_SQL} "
+                f"SELECT t.* FROM {TASKS} t WHERE t.owner_id IN ({','.join('?' * len(part))}) AND {NEXT_RUN_WAITING_SQL} "
                 "ORDER BY t.created_at,t.id", ["bot:" + bot for bot in part])):
             out[actor_id(row["owner_id"])].append(row)
     return out
@@ -7915,7 +7929,7 @@ def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
     at = now()
     cutoff = shift(at, seconds=-hours * 3600)
     rows = _rows(conn.execute(
-        "SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' "
+        f"SELECT t.* FROM {TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' "
         "AND (t.status IN ('open','doing','ready') AND coalesce(t.next_run,0)=0 AND t.updated_at<? "
         f"OR t.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) AND t.updated_at<? "
         "AND EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
@@ -8016,7 +8030,7 @@ def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
     by its own quiet subtasks (own_stuck_blockers) counts too, even `waiting`, and carries `own_blockers`."""
     at = at or now()
     rows = _rows(conn.execute(
-        "SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' "
+        f"SELECT t.* FROM {TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' "
         "AND (t.status IN ('open','doing') OR t.status='waiting' AND EXISTS "
         "(SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
         "AND t.updated_at<?" +
@@ -8087,7 +8101,7 @@ def spot_check_tasks(conn, at=None, task_ids=None):
     if not _has_table(conn, "attempts"):
         return []
     rows = _rows(conn.execute(
-        "SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' "
+        f"SELECT t.* FROM {TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' "
         "AND t.status IN ('open','doing') AND coalesce(t.private,1)=0 AND t.updated_at<?" +
         (" AND t.id IN (" + ",".join("?" * len(task_ids)) + ")" if task_ids else "") + " ORDER BY t.updated_at",
         (shift(at, seconds=-SPOT_CHECK_MINUTES * 60), *(task_ids or ()))))
@@ -8191,7 +8205,7 @@ def _setup_reminder(conn, slug):
     if not person:
         return None
     name = (bot(conn, slug) or {}).get("display_name") or slug
-    held = _rows(conn.execute("SELECT * FROM tasks WHERE owner_id=? AND status IN ('open','doing') ORDER BY created_at",
+    held = _rows(conn.execute(f"SELECT * FROM {TASKS} tasks WHERE owner_id=? AND status IN ('open','doing') ORDER BY created_at",
                               (bot_actor(slug),)))
     # The person is shown only the tasks they may read; the rest are a count.
     seen = [t for t in held if task_private_readable(conn, person, t)]
@@ -9531,7 +9545,7 @@ def notices(conn, actor, at=None):
     return rows
 
 
-TASK_SQL = "SELECT * FROM tasks WHERE id=?"
+TASK_SQL = f"SELECT * FROM {TASKS} tasks WHERE id=?"
 
 
 def prime_tasks(conn, ids, with_tags=True):
@@ -9546,7 +9560,7 @@ def prime_tasks(conn, ids, with_tags=True):
     unread = sorted(tid for tid in wanted if ("one", TASK_SQL, (tid,)) not in values)
     for part in chunks(unread):
         marks = ",".join("?" * len(part))
-        found = {row["id"]: row for row in conn.execute("SELECT * FROM tasks WHERE id IN (%s)" % marks, part)}
+        found = {row["id"]: row for row in conn.execute(f"SELECT * FROM {TASKS} tasks WHERE id IN ({marks})", part)}
         prime(conn, TASK_SQL, {(tid,): found.get(tid) for tid in part})
     for part in chunks(sorted(tid for tid in wanted if with_tags and (TASK_TAGS_SQL % "?", (tid,)) not in values)):
         marks = ",".join("?" * len(part))
@@ -9622,7 +9636,8 @@ def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, l
         where.append("id IN (SELECT value FROM json_each(?))")
         args.append(json.dumps(list(ids)))
     if snoozed in ("hide", "only"):
-        where.append("coalesce(snoozed_until,'')" + ("<=?" if snoozed == "hide" else ">?"))
+        where.append(("NOT " if snoozed == "hide" else "") + "EXISTS (SELECT 1 FROM task_holds sh WHERE "
+                     "sh.task_id=tasks.id AND sh.kind='snoozed' AND sh.released_at IS NULL AND sh.until_at>?)")
         args.append(now())
     if not tickets:
         where.append("NOT EXISTS (SELECT 1 FROM task_types WHERE task_types.id=tasks.type_id AND task_types.numbered=1)")
@@ -9661,10 +9676,11 @@ def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, l
         found = {}
         for part in chunks(ids):
             found.update((row["id"], row) for row in _rows(conn.execute(
-                f"SELECT * FROM tasks WHERE id IN ({','.join('?' * len(part))})", part)))
+                f"SELECT * FROM {TASKS} tasks WHERE id IN ({','.join('?' * len(part))})", part)))
         rows = [found[ident] for ident in ids if ident in found]
     else:
-        rows = _rows(conn.execute(sql + f" ORDER BY {ordering} LIMIT ? OFFSET ?", page))
+        rows = _rows(conn.execute(f"SELECT * FROM {TASKS} tasks" + sql[len("SELECT * FROM tasks"):]
+                                  + f" ORDER BY {ordering} LIMIT ? OFFSET ?", page))
     hydrate_task_tags(conn, rows)
     return rows
 
@@ -9673,7 +9689,9 @@ def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, l
 # predicate is this query's status list and due test, word for word, or SQLite will not use it and scans every task.
 TASKS_DUE_SQL = (
     f"SELECT id,title,owner_id,due_at,conversation_id FROM tasks WHERE status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) "
-    "AND due_at IS NOT NULL AND due_at!='' AND substr(due_at,1,10)<=? AND owner_id LIKE 'bot:%' AND snoozed_until IS NULL "
+    "AND due_at IS NOT NULL AND due_at!='' AND substr(due_at,1,10)<=? AND owner_id LIKE 'bot:%' "
+    "AND NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
+    "AND sh.released_at IS NULL) "
     "AND NOT EXISTS (SELECT 1 FROM task_reminders r WHERE r.task_id=tasks.id AND r.due_at=tasks.due_at) "
     "ORDER BY created_at,id")
 TASKS_DUE_INDEX = (
@@ -9786,7 +9804,7 @@ def tasks_asked_of(conn, actor):
     `MESSAGE_TASK_SQL=t.id`), so an ask in some other room still does not attach."""
     return _rows(conn.execute(
         "SELECT t.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        f"JOIN tasks t ON t.conversation_id=m.conversation_id AND t.id={MESSAGE_TASK_SQL} "
+        f"JOIN {TASKS} t ON t.conversation_id=m.conversation_id AND t.id={MESSAGE_TASK_SQL} "
         f"WHERE m.kind='ask' AND m.recipient_id=? AND {OPEN_ASK_SQL} "
         f"AND (t.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) "
         f"OR ({ACCEPTANCE_ASK_SQL})) "
@@ -9832,7 +9850,7 @@ def needs_you(conn, who):
     asked = [t for t in tasks_asked_of(conn, actor) if t["id"] not in seen and not TS.snoozed(t)]
     seen |= {t["id"] for t in asked}
     # A bot's task set waiting on this person: one concrete ask, its title and waiting note.
-    waited = [t for t in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND waiting_on=? "
+    waited = [t for t in _rows(conn.execute(f"SELECT * FROM {TASKS} tasks WHERE status='waiting' AND waiting_on=? "
                                             "ORDER BY created_at", (actor,))) if t["id"] not in seen and not TS.snoozed(t)]
     # A bot's task stopped on an account this person fixes (backend/reconnects.py): its card, as a wait on them.
     from . import reconnects

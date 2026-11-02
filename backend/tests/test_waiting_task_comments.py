@@ -9,6 +9,7 @@ from backend import task_relations as TR
 from backend.store import H
 from backend.tests.test_api import api, claim, post  # noqa: F401
 from backend.tests.test_task_lanes import task_bot
+from backend.tests.hold_rows import set_holds
 
 
 def finish(api, machine, attempt, text="Done."):
@@ -31,7 +32,7 @@ def park(c, tid, wait):
     if wait == "milestone":
         milestone_waits.add(c, "bot:ops", H.task(c, tid), "release:ticoteam/tico@v0.5.22")
     elif wait == "snooze":
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), hours=4), tid))
+        set_holds(c, tid, snoozed_until=H.shift(H.now(), hours=4))
 
 
 def waiting_task(api, machine, wait, requester="human:ana"):

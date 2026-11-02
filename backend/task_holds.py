@@ -12,8 +12,12 @@ of them changes (`refresh`):
 - an owner's own hold (a move to Blocked with a reason) is kept as written, and Engineering's gate, check and
   worktree holds keep their own reconciliation (backend/task_blocked.py).
 
-The stranded sweep (hubdb.sweep_stranded) counts from `holds_cleared_at` (when the last hold cleared) or
-`blocked_since` (when a wait on nothing began), never from a note: a note cannot keep a task waiting on nothing.
+The stranded sweep (hubdb.sweep_stranded) counts from the blocked hold's `cleared_at` (when the last hold cleared) or
+its `created_at` (when a wait on nothing began), never from a note: a note cannot keep a task waiting on nothing.
+
+A task's own holds, its move to Blocked and its snooze, are rows of `task_holds` (migration 0061), one open row of each
+kind; `put`, `change` and `release` below write them, and a task row read through hubdb.TASKS carries the open ones'
+fields under the names the code always read (`FIELDS`).
 """
 
 NOTHING = "Nothing tracked to wait on"
@@ -157,8 +161,7 @@ def refresh(conn, task_id, cleared=None, at=None):
     if found:
         text = words(conn, found)
         if (row.get("blocked_reason"), row.get("blocked_kind")) != (text, "dependency") or row.get("holds_cleared_at"):
-            conn.execute("UPDATE tasks SET blocked_reason=?,blocked_kind='dependency',holds_cleared_at=NULL WHERE id=?",
-                         (text[:1000], task_id))
+            change(conn, task_id, "blocked", reason=text[:1000], cause="dependency", cleared_at=None)
             task_blocked.bump(conn, row)
         return "held"
     if cleared and review_gate.engineering(conn, row) and row.get("blocked_kind") == "dependency":
@@ -182,9 +185,8 @@ def refresh(conn, task_id, cleared=None, at=None):
     if cleared or row.get("blocked_kind") != "stranded" or (row.get("blocked_reason") or "").startswith("Waiting on"):
         # Keep "Nothing left to wait on: ..." when a later note recomputes it: it still says what cleared.
         if cleared or not (row.get("blocked_reason") or "").startswith(LEFT):
-            conn.execute("UPDATE tasks SET blocked_reason=?,blocked_kind='stranded',"
-                         "holds_cleared_at=coalesce(?,holds_cleared_at) WHERE id=?",
-                         (text[:1000], at if cleared else None, task_id))
+            change(conn, task_id, "blocked", reason=text[:1000], cause="stranded",
+                   cleared_at=at if cleared else row.get("holds_cleared_at"))
             task_blocked.bump(conn, row)
     return "nothing"
 
@@ -279,7 +281,7 @@ def backfill(conn, at=None):
         return None
     at = at or H.now()
     fixed, opened = 0, {}
-    for row in H._rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND blocked_since IS NOT NULL "
+    for row in H._rows(conn.execute(f"SELECT * FROM {H.TASKS} tasks WHERE status='waiting' AND blocked_since IS NOT NULL "
                                     "ORDER BY created_at, id")):
         if not _applies(conn, row):
             continue
@@ -315,8 +317,8 @@ def backfill(conn, at=None):
     return result
 
 
-# The holds a task's API view lists (docs/tasks.md, Holds): one per kind, from the task's own columns. A blocked hold
-# is Tico's or an owner's move to Blocked (`blocked_*`), a snoozed one a snooze (`snoozed_*`); the waits a hold is
+# The holds a task's API view lists (docs/tasks.md, Holds): one per kind, from the task's open task_holds rows. A
+# blocked hold is Tico's or an owner's move to Blocked (`blocked_*`), a snoozed one a snooze (`snoozed_*`); the waits a hold is
 # made of (`waiting_on`, `worktree_waits`, `check_waits`, `milestone_waits`, `deferred`) keep their own fields.
 HOLD_KINDS = ("blocked", "snoozed")
 
@@ -359,3 +361,64 @@ def public(row, mark=None):
         found.append({"kind": "snoozed", "reason": row.get("snoozed_note"), "since": mark.get("snoozed_since"),
                       "until": row["snoozed_until"], "by": row.get("snoozed_by_id")})
     return found
+
+
+# ----------------------------------------------------------------------------- the rows (migration 0061)
+# A task's open hold of each kind is one task_holds row. Code reads a task with its holds' fields under the names
+# below (hubdb.TASKS): a hold's column -> the field a task row carries.
+FIELDS = {
+    "blocked": {"blocked_since": "created_at", "blocked_reason": "reason", "blocked_kind": "cause",
+                "blocked_from_step": "from_step_id", "blocked_from_status": "from_status", "blocked_gate": "gate",
+                "holds_cleared_at": "cleared_at"},
+    "snoozed": {"snoozed_until": "until_at", "snoozed_by_id": "by_id", "snoozed_note": "reason"},
+}
+COLUMNS = ("cause", "reason", "by_id", "until_at", "from_step_id", "from_status", "gate", "cleared_at")
+SHOWN = ("created_at", *COLUMNS)
+
+
+def open_hold(conn, task_id, kind):
+    """The task's open hold of `kind` ('blocked' or 'snoozed'), or None."""
+    row = conn.execute(f"SELECT {', '.join(SHOWN)} FROM task_holds WHERE task_id=? AND kind=? AND released_at IS NULL",
+                       (task_id, kind)).fetchone()
+    return dict(zip(SHOWN, row, strict=True)) if row is not None else None
+
+
+def put(conn, task_id, kind, at, **fields):
+    """Open a hold of `kind` on the task from `at`. A task has one open hold of each kind (task_holds_open): one already
+    open takes `at` and these fields instead, as writing the old columns again did."""
+    unknown = set(fields) - set(COLUMNS)
+    if unknown:
+        raise ValueError(f"task_holds has no {sorted(unknown)}")
+    names = ["task_id", "kind", "created_at", *fields]
+    conn.execute(f"INSERT INTO task_holds({','.join(names)}) VALUES({','.join('?' * len(names))}) "
+                 "ON CONFLICT(task_id, kind) WHERE released_at IS NULL DO UPDATE SET "
+                 + ",".join(f"{name}=excluded.{name}" for name in names[2:]),
+                 (task_id, kind, at, *fields.values()))
+
+
+def change(conn, task_id, kind, **fields):
+    """Set fields of the task's open hold of `kind`; nothing when it has none."""
+    unknown = set(fields) - set(COLUMNS)
+    if unknown:
+        raise ValueError(f"task_holds has no {sorted(unknown)}")
+    if fields:
+        conn.execute(f"UPDATE task_holds SET {','.join(f'{name}=?' for name in fields)} "
+                     "WHERE task_id=? AND kind=? AND released_at IS NULL", (*fields.values(), task_id, kind))
+
+
+def release(conn, task_id, kind, at):
+    """End the task's open hold of `kind`: it stays as history with `released_at`."""
+    conn.execute("UPDATE task_holds SET released_at=? WHERE task_id=? AND kind=? AND released_at IS NULL",
+                 (at, task_id, kind))
+
+
+def with_holds(conn, row):
+    """`row` with its open holds' fields (FIELDS), read when it came from a plain `SELECT * FROM tasks`."""
+    if row is None or "blocked_since" in row or not row.get("id"):
+        return row
+    out = {**row, **{field: None for names in FIELDS.values() for field in names}}
+    for kind, *values in conn.execute(f"SELECT kind, {', '.join(SHOWN)} FROM task_holds "
+                                      "WHERE task_id=? AND released_at IS NULL", (row["id"],)):
+        hold = dict(zip(SHOWN, values, strict=True))
+        out.update({field: hold[column] for field, column in FIELDS[kind].items()})
+    return out

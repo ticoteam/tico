@@ -82,7 +82,7 @@ def since_map(c, rows):
 def _working(c):
     timed = list(_timed_steps(c))
     return H._rows(c.execute(
-        "SELECT t.* FROM tasks t JOIN task_types y ON y.id=t.type_id WHERE (y.role=? AND t.status=?) "
+        f"SELECT t.* FROM {H.TASKS} t JOIN task_types y ON y.id=t.type_id WHERE (y.role=? AND t.status=?) "
         f"OR (t.step_id IN ({','.join('?' * len(timed))}) AND t.status NOT IN ('done','closed','declined')) "
         "ORDER BY t.updated_at", (ENGINEERING, WORKING, *timed)))
 
@@ -199,10 +199,10 @@ def _turn_items(c):
     """Working engineering tickets and the open checks below engineering tickets, still `doing`, owned by a bot."""
     from .check_pools import is_check_title
     rows = H._rows(c.execute(
-        "SELECT t.* FROM tasks t JOIN task_types y ON y.id=t.type_id WHERE y.role=? AND t.status=? "
+        f"SELECT t.* FROM {H.TASKS} t JOIN task_types y ON y.id=t.type_id WHERE y.role=? AND t.status=? "
         "AND t.owner_id LIKE 'bot:%' ORDER BY t.updated_at", (ENGINEERING, WORKING)))
     rows += [r for r in H._rows(c.execute(
-        "SELECT t.*, p.type_id AS parent_type FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
+        f"SELECT t.*, p.type_id AS parent_type FROM {H.TASKS} t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
         "JOIN tasks p ON p.id=r.to_task JOIN task_types y ON y.id=p.type_id WHERE y.role=? AND t.status=? "
         "AND t.owner_id LIKE 'bot:%' ORDER BY t.updated_at", (ENGINEERING, WORKING)))
         if is_check_title(c, {"type_id": r.pop("parent_type")}, r.get("title"))]

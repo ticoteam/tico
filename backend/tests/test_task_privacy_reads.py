@@ -414,7 +414,7 @@ def test_task_page_reads_a_fixed_number_of_statements_and_hides_private_provenan
                           ("job-" + aid, asked["id"], H.now(), aid))
                 c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                           "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + aid, aid, H.now(), H.now()))
-                c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id,exit) VALUES(?,'ops',?,?,'ok')", (aid, H.now(), parent["id"]))
+                c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id,exit) VALUES(?,'ops',?,?,'ok') ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,task_id=excluded.task_id,exit=excluded.exit", (aid, H.now(), parent["id"]))
                 H.task_comment(c, "bot:ops", parent["id"], f"Did {n}", wake=False, extra_refs={"turn_id": aid})
                 H.task_comment(c, "human:ana", parent["id"], f"See {n}", wake=False,
                                extra_refs={"see": "task:" + hidden["id"]} if n == 2 else None)
@@ -589,7 +589,7 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
         plan = " ".join(r[3] for r in c.execute(
             "EXPLAIN QUERY PLAN SELECT b.slug,(SELECT t.id FROM attempts t WHERE t.bot_id=b.slug AND t.settled_at IS NOT NULL "
             "ORDER BY t.settled_at DESC,t.id DESC LIMIT 1) FROM bots b"))
-        assert "turns_bot_finished" in plan and "TEMP B-TREE" not in plan, plan
+        assert "attempts_bot_settled" in plan and "TEMP B-TREE" not in plan, plan
 
 
 def busy(api):

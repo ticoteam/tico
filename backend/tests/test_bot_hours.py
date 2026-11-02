@@ -29,7 +29,7 @@ def runs(api):
 
 
 def run(c, rid, start, end, events=()):
-    c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger,exit) VALUES(?,?,?,?,?,?)",
+    c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,trigger,exit) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,settled_at=excluded.settled_at,trigger=excluded.trigger,exit=excluded.exit",
               (rid, "ops", B.stamp(start), B.stamp(end) if end else None, "task", "completed"))
     for seq, (at, kind) in enumerate(events, 1):
         c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)",

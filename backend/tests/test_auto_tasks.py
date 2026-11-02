@@ -4,6 +4,7 @@ import pytest
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_task_lanes import task_bot
+from backend.tests.hold_rows import set_holds
 
 
 def deck(api, n=5):
@@ -60,7 +61,7 @@ def test_default_starts_snoozed_and_blocked_skip_then_reuse_existing_wakes(api):
     finish(api, machine, first, tasks[0])
     assert take(api, machine)['task']['id'] == tasks[1]['id']
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE tasks SET snoozed_until=? WHERE id=?', (H.shift(H.now(), seconds=-1), tasks[2]['id']))
+        set_holds(c, tasks[2]['id'], snoozed_until=H.shift(H.now(), seconds=-1))
         task_snooze.wake_ended(c, H.now())
     assert take(api, machine)['task']['id'] == tasks[2]['id']
 

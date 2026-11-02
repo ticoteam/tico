@@ -13,6 +13,7 @@ from backend.store import Store
 
 TABLES = {
     rows.TaskRow: "tasks",
+    rows.TaskHoldRow: "task_holds",
     rows.AttemptRow: "attempts",
     rows.RunnerRow: "runners",
     rows.ApprovalRow: "approvals",

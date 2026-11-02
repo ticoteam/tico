@@ -316,8 +316,8 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
             clone('messages', mid, id='message-' + name, recipient_id='human:ana', **patch)
             clone('jobs', original['job_id'], id='job-' + name, message_id='message-' + name)
             clone('attempts', original['id'], id='attempt-' + name, job_id='job-' + name,
-                  token_hash='fixture-' + name, state='completed', lane='fixture-' + name)
-            clone('turns', original['id'], id='attempt-' + name, message_id='message-' + name, task_id=None)
+                  token_hash='fixture-' + name, state='completed', lane='fixture-' + name,
+                  message_id='message-' + name, task_id=None)
 
     guarded = S.guarded
     replacements = {
@@ -350,19 +350,18 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
                 conn = S.connect(store.settings.db_path, c, auth, who)
                 try:
                     answers.append({table: S.run(conn, f'SELECT id FROM {table} ORDER BY id', [], 5000, 5)['rows']
-                                    for table in ('messages', 'jobs', 'attempts', 'turns')})
+                                    for table in ('messages', 'jobs', 'attempts')})
                 finally:
                     conn.close()
         assert answers[0] == answers[1], who
-        for table in ('attempts', 'turns'):
+        for table in ('attempts',):
             expected = {'attempt-public'}
             if who.actor == 'human:ana' and not who.task_actor:
                 expected.update(('attempt-private-room', 'attempt-private-ref'))
             assert {row[0] for row in answers[1][table] if row[0].startswith('attempt-')} == expected, who
         if who.role == 'bot':
-            assert ['attempt-public'] in answers[1]['turns']
+            assert ['attempt-public'] in answers[1]['attempts']
             for name in ('private-room', 'private-ref', 'deleted', 'unknown-task'):
-                assert ['attempt-' + name] not in answers[1]['turns']
                 assert ['attempt-' + name] not in answers[1]['attempts']
 
     # Unfiltered LIMIT 1 must stop before authorizing the rest of history.
@@ -376,7 +375,7 @@ def test_history_lookups_keep_legacy_visibility_without_scanning_messages(api, w
         return message(index, *args)
 
     monkeypatch.setattr(S.ReadIndex, 'message', counted)
-    for table in ('turns', 'attempts'):
+    for table in ('attempts',):
         checked.clear()
         assert len(query(api, f'SELECT id FROM {table} LIMIT 1', world['attempt']['token'])['rows']) == 1
         assert len(checked) <= 1
@@ -623,8 +622,7 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
             clone('jobs', job, id=aid, message_id='message-asked-fixture')
         job = queued[0] if queued else aid
         clone('attempts', world['attempt']['id'], id=aid, job_id=job, token_hash='fixture-reply', state='completed',
-              lane='fixture-reply')
-        clone('turns', world['attempt']['id'], id=aid, message_id='message-asked-fixture', task_id=None)
+              lane='fixture-reply', message_id='message-asked-fixture', task_id=None)
         clone('messages', asked, id='message-reply-fixture', conversation_id=room, sender_id='bot:ops',
               recipient_id='human:ana', in_reply_to='message-asked-fixture',
               refs=json.dumps({'turn_id': aid, 'task': world['coo_task']['id'],
@@ -634,8 +632,7 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
     def seen(token):
         ids = {row[0] for row in query(api, 'SELECT id FROM messages', token)['rows']}
         assert query(api, 'SELECT count(*) FROM messages', token)['rows'] == [[len(ids)]]
-        runs = {row[0] for table in ('attempts', 'turns')
-                for row in query(api, f'SELECT id FROM {table}', token)['rows']}
+        runs = {row[0] for row in query(api, 'SELECT id FROM attempts', token)['rows']}
         return 'message-reply-fixture' in ids, aid in runs
 
     for token in callers:
@@ -674,13 +671,11 @@ def test_carried_private_tasks_and_unknown_plain_rooms_stay_hidden(api, world):
         hidden = H.task_create(c, 'human:ben', 'Hidden carried fixture', '', 'bot:finance',
                                private=True, lint=False)
     assert rows('attempts', aid) == [[aid]]
-    assert rows('turns', aid) == [[aid]]
 
     # The job message stays readable; only the carried task hides this run.
     with store.transaction() as c:
         c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, hidden['id']))
     assert rows('attempts', aid) == []
-    assert rows('turns', aid) == []
     with store.transaction() as c:
         c.execute('UPDATE tasks SET carried_by=NULL WHERE id=?', (hidden['id'],))
     assert rows('attempts', aid) == [[aid]]
@@ -690,7 +685,6 @@ def test_carried_private_tasks_and_unknown_plain_rooms_stay_hidden(api, world):
         event = H.event(c, H.KEEPER, 'task.next-run.carried', aid,
                         {'bot': 'ops', 'tasks': [hidden['id']]})
     assert rows('attempts', aid) == []
-    assert rows('turns', aid) == []
     with store.transaction() as c:
         c.execute('DELETE FROM events WHERE id=?', (event['id'],))
     assert rows('attempts', aid) == [[aid]]

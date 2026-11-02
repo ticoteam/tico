@@ -7,6 +7,7 @@ from backend import wake_rules as W
 from backend.store import H
 from backend.tests.test_api import api, get  # noqa: F401
 from backend.tests.test_dev_ticket_rules import dev_type
+from backend.tests.hold_rows import set_holds
 
 
 def ticket(c, title="Fix the connection", owner="bot:cpo", manager="coo"):
@@ -72,7 +73,7 @@ def test_recent_activity_waiting_and_snoozed_tickets_get_no_status_wake(api):
                   (later(-3), active["id"], waiting["id"], snoozed["id"]))
         H.task_comment(c, "human:ana", active["id"], "How is it going?", wake=False)
         H.task_update(c, "bot:cpo", waiting["id"], status="waiting", note="Waits on Review 1")
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (later(24), snoozed["id"]))
+        set_holds(c, snoozed["id"], snoozed_until=later(24))
         assert SA.sweep(c, later(1.5))["asked"] == []
         # Two quiet hours after the comment, the working one is asked; the waiting and snoozed ones still are not.
         assert SA.sweep(c, later(2.5))["asked"] == [active["id"]]

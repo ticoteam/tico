@@ -169,9 +169,10 @@ def live_blocker_sql(count):
 
 def live_blockers(conn, task_id, statuses):
     """Every blocker still in one of `statuses`, as task rows, oldest relation first."""
+    from . import hubdb as H
     marks = ",".join("?" * len(statuses))
     return [dict(r) for r in conn.execute(
-        "SELECT t.* FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+        f"SELECT t.* FROM task_relations r JOIN {H.TASKS} t ON t.id=r.from_task "
         f"WHERE r.to_task=? AND r.kind='blocks' AND t.status IN ({marks}) "
         "ORDER BY r.created_at, r.rowid", (task_id, *statuses))]
 

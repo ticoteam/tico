@@ -201,7 +201,7 @@ def candidates(c, at):
     go to Decide."""
     marks = ",".join("?" * len(STATUSES))
     out = []
-    for row in H._rows(c.execute(f"SELECT * FROM tasks WHERE status IN ({marks}) AND private=0 ORDER BY created_at,id",
+    for row in H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE status IN ({marks}) AND private=0 ORDER BY created_at,id",
                                  STATUSES)):
         if H.TS.snoozed(row, at) or not (H.is_bot(row["owner_id"]) or H.is_human(row["owner_id"])):
             continue

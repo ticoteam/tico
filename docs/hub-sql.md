@@ -107,7 +107,8 @@ is the bare id, without the prefix.
 
 | Table | Columns | Holds |
 |---|---|---|
-| `tasks` | `requester_id, owner_id, closed_by_id, checkpoint_by_id, snoozed_by_id` | actor string |
+| `tasks` | `requester_id, owner_id, closed_by_id, checkpoint_by_id` | actor string |
+| `task_holds` | `by_id` | actor string (who snoozed it) |
 | `messages` | `sender_id, recipient_id, answered_by_id` | actor string |
 | `conversations` | `owner_id` | actor string |
 | `goals` | `owner_id, status_by_id, last_read_by_id, why_by_id, created_by_id` | actor string (`owner_id` can also be `company`) |
@@ -143,6 +144,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `messages` | `id, conversation_id, sender_id, recipient_id, kind, body, refs, in_reply_to, created_at, delivered_at, read_at, wait_s` | `kind`: say, ask, answer, notice, steer |
 | `tasks` | `id, title, body, requester_id, owner_id, status, due_at, goal_id, conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, version, acceptance, type_id, step_id, number, step_rank, waiting_on` | `status`: open, doing, waiting, review, ready, done, closed, declined; `waiting_on` the person a waiting task waits on; `number` is the team-wide ticket number a numbered type gives (NULL until one does), `step_rank` the task's place within its step, lower first ([Tasks](tasks.md)) |
 | `task_relations` | `from_task, to_task, kind, created_by, created_at` | every task-to-task relationship, read only when both tasks are; `kind`: `parent` (from is a subtask of to), `blocks` (from blocks to), `related` (stored once, lower id first), `duplicate_of`, `follow_up` (from was split off or followed up from to). It replaces the old `tasks.parent_id` and `tasks.blocked_by`: a task's parent is `SELECT to_task FROM task_relations WHERE from_task=:task AND kind='parent'`, its subtasks `SELECT from_task ... WHERE to_task=:task AND kind='parent'`, its blockers `SELECT from_task ... WHERE to_task=:task AND kind='blocks'` |
+| `task_holds` | `id, task_id, kind, cause, reason, by_id, until_at, from_step_id, from_status, gate, cleared_at, created_at, released_at` | a task's own holds, read with their task: `kind` `blocked` (moved to Blocked; `cause`: manual, dependency, stranded, gate, check, worktree; `from_step_id`/`from_status` where clearing it returns the task) or `snoozed` (`until_at`, `by_id`). A task has at most one open hold of each kind (`released_at` NULL); a released one stays as history. It replaces the old `tasks.snoozed_*`, `tasks.blocked_*` and `tasks.holds_cleared_at` columns: the tasks snoozed now are `SELECT task_id FROM task_holds WHERE kind='snoozed' AND released_at IS NULL` |
 | `task_types` | `id, name, numbered, created_at, updated_at` | types and, in `task_steps(id, type_id, name, position, status)`, their steps; `numbered` is 1 when the type numbers its tasks |
 | `task_events` | `task_id, created_at, actor, field, old, new, note` | every change to a task |
 | `task_roles` | `task_id, role, actor, added_by, created_at` | who is on a task, by role (a short name the team chooses: `developer`, `reviewer`, `qa` ...); one actor may hold several roles on a task |

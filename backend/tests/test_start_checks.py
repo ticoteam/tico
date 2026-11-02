@@ -5,6 +5,7 @@ import contextlib
 from backend import auto_tasks, hubdb as H
 from backend.tests.test_api import api, headers, post  # noqa: F401
 from backend.tests.test_status_reads import setup
+from backend.tests.hold_rows import set_holds
 
 
 def employees(api, monkeypatch, token="ana-test"):
@@ -72,10 +73,10 @@ def test_batched_counts_match_each_tasks_own_checks(api, monkeypatch):
                       "Review change 7", "Review change 8", "Review change 9", "Review change 10")
     with store.transaction() as c:
         t = {n: by_title[f"Review change {n}"] for n in range(16)}
-        c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), days=2), t[2]))
+        set_holds(c, t[2], snoozed_until=H.shift(H.now(), days=2))
         c.execute("UPDATE tasks SET next_run=1 WHERE id=?", (t[3],))
         c.execute("UPDATE tasks SET waiting_on='human:ben' WHERE id=?", (t[4],))
-        c.execute("UPDATE tasks SET blocked_kind='manual', blocked_reason='Held for legal' WHERE id=?", (t[5],))
+        set_holds(c, t[5], blocked_kind='manual', blocked_reason='Held for legal')
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (t[6],))
         c.execute("INSERT INTO approvals(id,kind,task_id,decision,created_at) VALUES('ap-1','deploy',?,NULL,?)",
                   (t[7], H.now()))

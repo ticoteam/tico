@@ -184,7 +184,7 @@ def handed_to_people(conn, expiry, at=None):
     not a due-date routine's occurrence (its day is its deadline, whoever owns it now)."""
     marks = ",".join("?" * len(ASKED_STATUSES))
     rows = H._rows(conn.execute(
-        f"SELECT t.* FROM tasks t LEFT JOIN task_types y ON y.id=t.type_id WHERE t.status IN ({marks}) "
+        f"SELECT t.* FROM {H.TASKS} t LEFT JOIN task_types y ON y.id=t.type_id WHERE t.status IN ({marks}) "
         "AND t.owner_id LIKE 'human:%' AND t.requester_id LIKE 'bot:%' AND t.created_at<? AND coalesce(y.numbered,0)=0 "
         "AND t.occurrence IS NULL "
         "ORDER BY t.created_at", (*ASKED_STATUSES, expiry)))
