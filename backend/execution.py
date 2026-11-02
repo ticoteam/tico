@@ -3514,8 +3514,9 @@ class Execution:
         msg = H.message(c, row["message_id"])
         from . import threads
         if (not privacy.message_readable(c, "bot:" + row["bot"], msg)
-                or ((msg or {}).get("refs") or {}).get("carries") and not threads.carrier_current(c, msg, "bot:" + row["bot"])):
+                or not threads.still_addressed(c, msg, "bot:" + row["bot"])):
             c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
+            threads.moot_delivery(c, msg, "bot:" + row["bot"])
             H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
             return {"attempt": None}
         # The bot's budget and back-off: an error in them passes the bot over, and holds no run.
@@ -3764,15 +3765,19 @@ class Execution:
         if getattr(body, "next_run", False) and not check and not scope:
             from . import bot_to_bot
             from . import threads
-            # A deferred thread note goes only while the bot still reads its source: a lost one is cancelled here.
-            waiting = threads.revalidate_notes(c, "bot:" + row["bot"], H.notes_waiting(c, row["bot"]))
+            # A deferred thread note goes only while the bot still reads its source (a lost one is cancelled here), and
+            # only into a session inside its source's boundary: one that does not fit waits, and its own thread gets a run.
+            waiting, left = threads.notes_for_run(c, "bot:" + row["bot"], conv, msg,
+                                                  (conversation or {}).get("audience_class"))
+            threads.wake_note_threads(c, "bot:" + row["bot"], left)
             for item in waiting:
                 c.execute("UPDATE notes SET carried_by=? WHERE id=?", (aid, item["id"]))
             # A bot's message that waited for this run is read now; a backlog past one run's notes gets a run of its own.
             for item in bot_to_bot.carried(c, waiting, H.now()):
                 notes.append({"id": item["id"], "from": item["from_actor"], "sent": item["created"],
                               "text": item["body"], **({"message": item["message_id"]} if item.get("message_id") else {})})
-            bot_to_bot.continue_backlog(c, row["bot"])
+            if waiting:
+                bot_to_bot.continue_backlog(c, row["bot"], skip=[item["id"] for item in left])
             if notes:
                 H.event(c, H.KEEPER, "note.carried", aid, {"bot": row["bot"], "notes": [n["id"] for n in notes]})
         # What was deferred to this turn (backend/delivery.py): the session's comments and messages, written out in the
@@ -4288,10 +4293,13 @@ class Execution:
         results, comments: the claim's fence, unfenced_sql, kept them back), so no separate turn waits after it to
         read them again (Dev 543). Each joins this turn as an input given in its prompt, already acknowledged, and its
         job settles with the turn (complete); a lane's other work, a command and a redirect keep their own turns."""
+        from . import threads
         rows = c.execute("SELECT m.*,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "JOIN conversations cv ON cv.id=m.conversation_id "
                          "WHERE j.bot=? AND j.state='queued' AND j.held=0 AND j.redirect=0 AND j.id<>? "
                          "AND m.deleted_at IS NULL AND coalesce(json_extract(m.refs_json,'$.command'),0)!=1 "
+                         # A run for a thread's waiting notes carries them at its own claim, so it is never folded.
+                         f"AND coalesce(json_extract(m.refs_json,'$.wake'),'')<>'{threads.NOTE_WAKE}' "
                          f"AND {queued_task_sql()}=? ORDER BY m.rowid",
                          (row["bot"], row["id"], task_id)).fetchall()
         lines, folded = [], []
@@ -4299,6 +4307,8 @@ class Execution:
             if not privacy.message_readable(c, "bot:" + row["bot"], queued):
                 continue
             message = H.message(c, queued["id"])
+            if not threads.still_addressed(c, message, "bot:" + row["bot"]):
+                continue                    # left queued: its own claim settles it
             if lanes and job_lane(c, row["bot"], followed, message, H.conversation(c, queued["conversation_id"]),
                                   lanes, roots) != lane:
                 continue
@@ -4378,6 +4388,7 @@ class Execution:
         channel. The runner calls this endpoint only for hosts that advertise steering support.
         Re-deliver until acknowledged; a crash remains uncertain, not a new turn.
         """
+        from . import threads
         attempt = self.attempt(c, who, aid, active=not if_idle)
         if if_idle and (attempt["state"] != "running" or attempt["lease_until"] <= H.now()
                         or not self.current_owner(c, who, attempt)):
@@ -4406,6 +4417,8 @@ class Execution:
                              "WHERE j.bot=? AND j.state='queued' AND coalesce(json_extract(m.refs_json,'$.command'),0)!=1 "
                              # Queued, not steered: it goes in right after the turn (backend/delivery.py).
                              "AND coalesce(json_extract(m.refs_json,'$.delivery'),'')<>'queue' "
+                             # A run for a thread's waiting notes carries them at its own claim, so it is never folded.
+                             f"AND coalesce(json_extract(m.refs_json,'$.wake'),'')<>'{threads.NOTE_WAKE}' "
                              # A run the claim holds is not taken into a running turn until its wait ends, as the
                              # claim would not start it either.
                              "AND (j.held=0 OR (j.hold_reason=? AND j.hold_until<=?)) "
@@ -4436,6 +4449,8 @@ class Execution:
                 continue
             incoming_conversation = H.conversation(c, row["conversation_id"])
             incoming_task = work_task_id(H.message(c, row["id"]), incoming_conversation)
+            if not threads.still_addressed(c, H.message(c, row["id"]), "bot:" + attempt["bot"]):
+                continue                    # left queued: its own claim settles it
             if incoming_task and incoming_task != origin_task and row["kind"] == "notice":
                 continue                    # a new task gets its own run, even in the same bot room
             if lanes and job_lane(c, attempt["bot"], followed, H.message(c, row["id"]), incoming_conversation,
