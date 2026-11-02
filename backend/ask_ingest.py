@@ -741,17 +741,22 @@ def let_through(c, person, item_id):
 
 def outcome_counts(c, start, end):
     """For the decisions readout (backend/decide_readout.py): the gated items in the window by what the gate decided
-    ({outcome: n}, Rehearsal's would-have counted under its own key), and how many people let through."""
-    outcomes, rehearsal, let = {}, {}, 0
-    for row in c.execute("SELECT mode, outcome, would, let_through_at FROM ask_ingest_items WHERE created_at>=? AND "
-                         "created_at<?", (start, end)):
+    ({outcome: n}, Rehearsal's would-have counted under its own key), the fail-open ones by their reason
+    ({reason: n}: `below_threshold` and `no_answer` are answers the gate was not sure of; an error code is the call
+    failing or stopping, e.g. `timeout`; `covered_gone` is an item that ended since the call), and how many people let
+    through."""
+    outcomes, rehearsal, reasons, let = {}, {}, {}, 0
+    for row in c.execute("SELECT mode, outcome, would, reason, let_through_at FROM ask_ingest_items "
+                         "WHERE created_at>=? AND created_at<?", (start, end)):
         if row["mode"] == ON or row["would"] == FAILED_OPEN:
             outcomes[row["outcome"]] = outcomes.get(row["outcome"], 0) + 1
         else:
             rehearsal[row["would"]] = rehearsal.get(row["would"], 0) + 1
+        if row["would"] == FAILED_OPEN:
+            reasons[row["reason"]] = reasons.get(row["reason"], 0) + 1
         let += bool(row["let_through_at"])
     return {"outcomes": dict(sorted(outcomes.items())), "rehearsal": dict(sorted(rehearsal.items())),
-            "let_through": let}
+            "failed_open_reasons": dict(sorted(reasons.items())), "let_through": let}
 
 
 REPLAY_PAGE = 25
@@ -790,8 +795,45 @@ def replay_items(c, person, start, end, assistant_bot=None):
 
 
 def load_at(c, person, at):
-    """Roughly how full the person's plate was just before `at`: their tasks open then, snoozed ones left out."""
-    return c.execute(f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT}", (person, at, at, at, at)).fetchone()[0]
+    """(decisions, chores) as `load` counted the person's Needs you just before `at` (a replayed item's time), from
+    what the rows say then: the tasks they owned and were open, the tasks waiting on them (the last `waiting_on` change
+    before `at`), the bots' questions to them open then (on a task that was open, or loose), and the approvals waiting
+    on them. Snoozed tasks are left out as live, and chores (items under Hands needed open then) apart. Reads only.
+    Approximate where the rows do not keep a history: a question's status is read from its answer and deletion times."""
+    # The owned ones as live: off the product lane and off numbered types (`tasks(tickets=False)`).
+    owned = {r[0] for r in c.execute(
+        f"SELECT id FROM tasks WHERE {_ACTIVE_AT} AND COALESCE(lane,'company')<>'product' AND NOT EXISTS "
+        "(SELECT 1 FROM task_types ty WHERE ty.id=tasks.type_id AND ty.numbered=1)", (person, at, at, at, at))}
+    waiting = {r[0] for r in c.execute(
+        "SELECT t.id FROM tasks t WHERE t.id IN (SELECT task_id FROM task_events WHERE field='waiting_on' AND new=?) "
+        "AND t.created_at<? AND (t.done_at IS NULL OR t.done_at>?) AND (t.closed_at IS NULL OR t.closed_at>?) "
+        "AND COALESCE(t.snoozed_until,'')<=? AND (SELECT e.new FROM task_events e WHERE e.task_id=t.id AND "
+        "e.field='waiting_on' AND e.created_at<? ORDER BY e.created_at DESC LIMIT 1)=?",
+        (person, at, at, at, at, at, person))}
+    asks = c.execute(
+        f"SELECT m.id AS mid, {H.MESSAGE_TASK_SQL} AS tid FROM messages m "
+        "JOIN conversations cv ON cv.id=m.conversation_id "
+        f"LEFT JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} AND t.created_at<? AND (t.done_at IS NULL OR t.done_at>?) "
+        "AND (t.closed_at IS NULL OR t.closed_at>?) AND COALESCE(t.snoozed_until,'')<=? "
+        "WHERE m.recipient_id=? AND m.kind='ask' AND m.sender_id LIKE 'bot:%' AND m.created_at<? "
+        "AND (m.deleted_at IS NULL OR m.deleted_at>?) AND (m.superseded_at IS NULL OR m.superseded_at>?) "
+        "AND (m.expires_at IS NULL OR m.expires_at>?) AND NOT EXISTS (SELECT 1 FROM messages a WHERE "
+        "(a.id=m.answered_by_id OR (a.in_reply_to=m.id AND a.kind='answer')) AND a.created_at<? "
+        "AND (a.deleted_at IS NULL OR a.deleted_at>=?)) "
+        f"AND ({H.MESSAGE_TASK_SQL} IS NULL OR t.id IS NOT NULL)",
+        (at, at, at, at, person, at, at, at, at, at, at)).fetchall()
+    on_tasks = {r["tid"] for r in asks if r["tid"]}
+    loose = {r["mid"] for r in asks if not r["tid"]}
+    ids = owned | waiting | on_tasks | loose
+    hands = {r[0] for r in c.execute("SELECT ref FROM ask_ingest_items WHERE person=? AND outcome=? AND created_at<?",
+                                     (person, HANDS, at))}
+    chores = len(ids & hands)
+    approvals = c.execute(
+        "SELECT COUNT(*) FROM approvals a WHERE COALESCE(a.decision_owner, (SELECT m.recipient_id FROM messages m "
+        "WHERE m.id=a.message_id))=? AND COALESCE(a.ready_since, a.created_at)<? "
+        "AND (a.decided_at IS NULL OR a.decided_at>=?)",
+        (person, at, at)).fetchone()[0]
+    return len(ids) - chores + approvals, chores
 
 
 def open_items_at(c, person, at, leave_out=""):
@@ -832,10 +874,11 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
         prepared = [(it, load_at(c, person, it["created_at"]), open_items_at(c, person, it["created_at"], it["ref"]),
                      _bot_line(c, it["asker"]), _shown(c, viewer, person, it)) for it in page]
     out = []
-    for it, plate, items, asker, shown in prepared:
+    for it, (plate, chores), items, asker, shown in prepared:
         answers, _, error = _judge(store, engine, qset, own, items, asker, person_name, it["title"], it["text"],
                                    it["kind"], replay=True, asked=it["asked"])
-        would, reason = (FAILED_OPEN, error) if error else decide(answers, own["budget"], own["chores_budget"], plate, 0)
+        would, reason = (FAILED_OPEN, error) if error else decide(answers, own["budget"], own["chores_budget"], plate,
+                                                                  chores)
         out.append({"kind": it["kind"], "ref": it["ref"] if shown else None, "title": it["title"] if shown else "",
                     "private": not shown, "asker": it["asker"], "asker_name": asker, "created_at": it["created_at"],
                     "load": plate, "would": would, "reason": reason})

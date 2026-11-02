@@ -529,7 +529,8 @@ def test_the_decisions_readout_shows_calls_outcomes_and_let_throughs(gate):
     readout = get(api, "judge/readout")
     [row] = [r for r in readout["sets"] if r["set"] == A.QUESTION_SET]
     assert row["calls"] == 2
-    assert row["gate"] == {"outcomes": {A.SENT_BACK: 1, A.THROUGH: 1}, "rehearsal": {}, "let_through": 1}
+    assert row["gate"] == {"outcomes": {A.SENT_BACK: 1, A.THROUGH: 1}, "rehearsal": {}, "failed_open_reasons": {},
+                           "let_through": 1}
     assert "outcomes: sent_back 1, through 1; let through 1" in readout["text"]
 
 
@@ -1316,3 +1317,144 @@ def test_a_replayed_structured_question_judges_the_same_lines(gate):
     assert model_text(model).endswith("Recommended: Nov 10\n\nTell me which date.")
     assert model.calls[-1]["label"] and '"mode": "replay"' in str(calls(api)[-1])
     assert all("Recommended" not in str(row) and "Tell me" not in str(row) for row in calls(api))
+
+
+# ---- why each fail-open passed --------------------------------------------------------------------------------------
+
+def test_the_readout_says_why_each_fail_open_passed(gate, monkeypatch):
+    api, model, token = gate
+    model.clear = 0.5                                       # between the 0.3 and 0.7 bands: unsure, below_threshold
+    for n in range(3):
+        file(api, token, f"Venue question {n}", "Which venue?")
+    model.clear = 0.95
+    real_ask = A._ask
+    monkeypatch.setattr(A, "_ask", lambda calls, engine, state, questions, label: (None, None))   # no answer, no error
+    file(api, token, "Caterer question", "Which caterer?")
+    monkeypatch.setattr(A, "_ask", real_ask)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "human:ana", "Plan the November launch", "", "human:ben", lint=False)
+        tid = c.execute("SELECT id FROM tasks WHERE title='Plan the November launch'").fetchone()[0]
+
+    def ends_during_the_call(state, questions, label=None):   # the item it covers ends while the judge is asked
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE tasks SET status='done', done_at=? WHERE id=?", (H.now(), tid))
+        return model(state, questions, label)
+
+    model.covered = "November launch"
+    api.app.state.judge = ends_during_the_call                                 # covered_gone
+    file(api, token, "Plan the November launch, dates", "Nov 3 or Nov 10?")
+    api.app.state.judge = model
+    readout = get(api, "judge/readout")
+    [row] = [r for r in readout["sets"] if r["set"] == A.QUESTION_SET]
+    assert row["gate"] == {"outcomes": {A.FAILED_OPEN: 5}, "rehearsal": {}, "let_through": 0,
+                           "failed_open_reasons": {"below_threshold": 3, "covered_gone": 1, "no_answer": 1}}
+    assert "outcomes: failed_open 5; let through 0" in readout["text"]
+    assert "failed open, by reason: below_threshold 3, covered_gone 1, no_answer 1" in readout["text"]
+    out = json.dumps(readout)                                                  # no item text, asker or person
+    assert "Venue question" not in out and "Caterer" not in out and "November" not in out and "human:ben" not in out
+
+
+def test_with_no_fail_open_the_reasons_are_empty_and_the_counts_are_as_before(gate):
+    api, model, token = gate
+    plate(api, 15)
+    file(api, token)                                        # sent back, not a fail-open
+    readout = get(api, "judge/readout")
+    [row] = [r for r in readout["sets"] if r["set"] == A.QUESTION_SET]
+    assert row["gate"] == {"outcomes": {A.SENT_BACK: 1}, "rehearsal": {}, "failed_open_reasons": {}, "let_through": 0}
+    assert "failed open" not in readout["text"]
+
+
+# ---- the load a replay judges a past time at -----------------------------------------------------------------------
+
+def stamp(hour, minute=0):
+    """A timestamp on 2026-11-02, in the store's format."""
+    return f"2026-11-02T{hour:02d}:{minute:02d}:00.000000Z"
+
+
+@pytest.fixture
+def ben_off(api):
+    """Ben's filter off: the bots' tasks and questions reach his plate unjudged, so a plate can be built to any load."""
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "off", "budget": 10, "chores_budget": 5, "criteria": []})
+    return api, bot_token(api, "ops")
+
+
+def ask_ben(api, token, text):
+    r = api.post("/api/v2/messages", json={"to": "ben", "text": text, "kind": "ask"}, headers=headers(token))
+    assert r.status_code == 200, r.text
+
+
+def at_eight(c):
+    """Ben's open tasks and the bots' questions to him all asked at 08:00, so the plate is what it is at 10:00."""
+    c.execute("UPDATE tasks SET created_at=? WHERE owner_id='human:ben'", (stamp(8),))
+    c.execute("UPDATE messages SET created_at=? WHERE recipient_id='human:ben' AND kind='ask'", (stamp(8),))
+
+
+def test_a_replay_at_ten_counts_the_plate_the_live_gate_counts(ben_off):
+    api, token = ben_off
+    plate(api, 5)                                           # 5 open tasks
+    for n in range(30):
+        ask_ben(api, token, f"Question {n}?")               # 30 open bot questions
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == (35, 0)            # the live gate's count
+        assert A.load_at(c, "human:ben", stamp(10)) == (35, 0)
+
+
+def test_a_chore_under_hands_needed_is_left_out_of_the_replay_load(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    for n in range(3):
+        ask_ben(api, token, f"Question {n}?")
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        chore = c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1").fetchone()[0]
+        c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,message_id,mode,outcome,would,reason,load,"
+                  "call_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (H.new_id(), "human:ben", "bot:ops", "task", chore, None, "off", A.HANDS, A.HANDS, "chore", 1, None,
+                   stamp(9)))
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(10)) == (7, 1)     # 8 open items, one of them a chore
+
+
+def test_a_task_snoozed_past_the_replay_time_is_left_out(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        at_eight(c)
+        c.execute("UPDATE tasks SET snoozed_until=? WHERE owner_id='human:ben' AND id=(SELECT id FROM tasks "
+                  "WHERE owner_id='human:ben' ORDER BY created_at LIMIT 1)", (stamp(12),))
+    with api.app.state.store.read() as c:
+        assert A.load_at(c, "human:ben", stamp(10)) == (4, 0)
+
+
+def test_a_question_answered_before_the_replay_time_is_not_counted(ben_off):
+    api, token = ben_off
+    ask_ben(api, token, "Answered at nine?")
+    ask_ben(api, token, "Still open at ten?")
+    ask_ben(api, token, "Asked at half past ten?")
+    with api.app.state.store.read() as c:
+        qid = c.execute("SELECT id FROM messages WHERE body='Answered at nine?'").fetchone()[0]
+    r = api.post("/api/v2/messages", json={"to": "ops", "text": "Nov 3.", "kind": "say", "in_reply_to": qid},
+                 headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET created_at=? WHERE recipient_id='human:ben' AND kind='ask'", (stamp(8),))
+        c.execute("UPDATE messages SET created_at=? WHERE body='Asked at half past ten?'", (stamp(10, 30),))
+        c.execute("UPDATE messages SET created_at=? WHERE in_reply_to=?", (stamp(9), qid))
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT answered_by_id FROM messages WHERE id=?", (qid,)).fetchone()[0], "the answer is linked"
+        assert A.load_at(c, "human:ben", stamp(10)) == (1, 0)       # only the one still open at ten
+
+
+def test_a_product_lane_task_is_left_out_of_the_replay_load_as_live(ben_off):
+    api, token = ben_off
+    plate(api, 5)
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "human:ana", "Roadmap item", "", "human:ben", lint=False)
+        c.execute("UPDATE tasks SET lane='product' WHERE title='Roadmap item'")     # an old row, on the retired lane
+        at_eight(c)
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == (5, 0)            # the live gate leaves the product backlog off
+        assert A.load_at(c, "human:ben", stamp(10)) == (5, 0)
