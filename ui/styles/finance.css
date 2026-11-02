@@ -129,6 +129,9 @@
 .fin-tx-t td{white-space:nowrap}
 @media (max-width:640px){.fin-card-t :is(th,td):is(:nth-child(2),:nth-child(3)){display:none}}
 .fin-tx-t td.fin-cut{max-width:130px;overflow:hidden;text-overflow:ellipsis}
+/* With the rail open, every column fits at 1440, Status included. */
+.fin-split:not(:has(.fin-rail:empty)) .fin-tx-t .fin-link{max-width:140px}
+.fin-split:not(:has(.fin-rail:empty)) .fin-tx-t td.fin-cut{max-width:90px}
 .fin-tx-t td:has(.fin-cell-sel){padding-top:2px;padding-bottom:2px}
 .fin-in{width:84px;height:26px;padding:0 6px;text-align:right;font:inherit;font-variant-numeric:tabular-nums}
 .fin-grp td{padding-top:10px;font-weight:600}

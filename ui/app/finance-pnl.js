@@ -3,7 +3,7 @@
    gross profit, operating expenses and net income; Expenses keeps the expense lines, filtered to teams and teammates
    from the org chart (bots, people or both; Unattributed), with the filter's teammates spent vs budget in the rail. A cell opens the rail for its line and
    period; a future month's budget cell edits on a double-click (budget_update from that month on), and so does this
-   month's, to raise a budget it has. Saving is a dry run first: an allowed change saves, one needing approval names the
+   month's, on a budget it has. Saving is a dry run first: an allowed change saves, one needing approval names the
    approver and is sent from a small dialog. A line opens its page: by vendor, team or teammate, last month and this
    one, each vendor's budget edited in place.
    Reads: GET /api/v2/finance/pnl, /finance/budgets, /finance/lines/{account_id}. Writes: budget_create and
@@ -114,7 +114,6 @@ function finPnlClick(ev) {
     finPnlDraw(); finPnlRail();
   }
 }
-const FIN_ONLY_RAISE = 'This month can only go up';
 const finSegSet = btn => btn.parentElement.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b === btn)));
 // A popover under its button; a click outside or Escape closes it.
 function finPop(btn, pop) {
@@ -195,6 +194,7 @@ const finVal = (r, cols, i) => cols[i]?.state === 'future' ? r.projection?.[i] ?
 // A line's budget in a column, for totals: a private line's is left out, as its spend is (so totals compare like
 // with like).
 const finBudgetOf = i => r => r.private ? null : r.budget?.[i] ?? null;
+const finToDateOf = i => r => r.private ? null : r.budget_to_date?.[i] ?? null;
 // Sums over the lines shown (never over what the route left out); null when none has a figure.
 function finSum(rows, pick) {
   let any = false, total = 0;
@@ -216,8 +216,11 @@ function finPnlDraw() {
   const head = cols.map((c, i) => `<th class="${c.state === 'future' ? 'fin-p' : ''}${i === past && c.state === 'future' ? ' fin-b' : ''}">${esc(finColLabel(c, years))}${imported[i] ? `<span class="fin-tag" title="${esc(imported[i])}">Imported</span>` : ''}</th>`).join('');
   finMarksDraw($('#fin-pl-marks'), data);
   const bcol = cols[bi];
+  // The current month's budget to date, next to the full month's (§4.4).
+  const showToDate = (data.rows || []).some(r => finToDateOf(bi)(r) != null);
+  const toDateCell = v => showToDate ? `<td class="muted">${finNum(v)}</td>` : '';
   const sub = `<tr class="fin-sub-head"><th></th>${past ? `<th colspan="${past}">${cur ? 'Actual · ' + esc(finColLabel(cur, years)) + ' to date' : 'Actual'}</th>` : ''}${cols.length - past
-    ? `<th class="fin-p fin-b" colspan="${cols.length - past}">Projected</th>` : ''}<th class="fin-b" colspan="2"></th></tr>`;
+    ? `<th class="fin-p fin-b" colspan="${cols.length - past}">Projected</th>` : ''}<th class="fin-b" colspan="${showToDate ? 3 : 2}"></th></tr>`;
   const sign = r => r.type === 'income' ? 1 : -1;
   const fq = finFilterQs(state.snap).toString(), lineQs = fq ? '?' + fq : '';
   // A narrow viewer's totals leave payroll out (§7.5): they say so.
@@ -226,11 +229,11 @@ function finPnlDraw() {
   const comparing = state.view === 'company' && !!state.compare;
   const editable = (r) => !caps.viewing && !comparing && caps.may('finance.budgets') && p.period === 'month'
     && r.type === 'expense' && !r.private && finBudgetEditable(bcol, finBudgetFor(r.account_id));
-  const nums = (vals, budget, actualB, good, cls = '') => {
+  const nums = (vals, budget, actualB, good, toDate = null) => {
     const diff = budget == null || actualB == null ? null : good * (actualB - budget);
     const d = finDiff(diff);
-    return vals.map((v, i) => `<td class="${cols[i].state === 'future' ? 'fin-p' : ''}${i === past && cols[i].state === 'future' ? ' fin-b' : ''}${cls}">${finNum(v)}</td>`).join('')
-      + `<td class="fin-b">${finNum(budget)}</td><td class="${d.cls}">${d.text}</td>`;
+    return vals.map((v, i) => `<td class="${cols[i].state === 'future' ? 'fin-p' : ''}${i === past && cols[i].state === 'future' ? ' fin-b' : ''}">${finNum(v)}</td>`).join('')
+      + `<td class="fin-b">${finNum(budget)}</td>${toDateCell(toDate)}<td class="${d.cls}">${d.text}</td>`;
   };
   const line = r => {
     const vals = cols.map((c, i) => finVal(r, cols, i));
@@ -243,18 +246,18 @@ function finPnlDraw() {
     const how = FIN_PROJ[r.projection_method] ? ` title="${FIN_PROJ[r.projection_method]}"` : '';
     const cells = vals.map((v, i) => `<td data-fin-cell="${esc(r.account_id)}|${i}"${cols[i].state === 'future' ? how : ''} class="${cols[i].state === 'future' ? 'fin-p' : ''}${i === past && cols[i].state === 'future' ? ' fin-b' : ''}${sel === i ? ' fin-on' : ''}">${r.private && v == null ? '<span class="muted">—</span>' : finNum(v)}</td>`).join('');
     return `<tr class="fin-ln" style="--d:${r.depth}"><td>${name}</td>${cells}<td class="fin-b${edit ? ' fin-edit' : ''}"${edit
-      ? ` data-fin-budget="${esc(r.account_id)}" tabindex="0" aria-label="${esc(r.name)} budget, ${esc(finColLong(bcol))}"` : ''}>${r.private ? '<span class="muted">—</span>' : finNum(budget)}</td><td class="${diff.cls}">${diff.text}</td></tr>`;
+      ? ` data-fin-budget="${esc(r.account_id)}" tabindex="0" aria-label="${esc(r.name)} budget, ${esc(finColLong(bcol))}"` : ''}>${r.private ? '<span class="muted">—</span>' : finNum(budget)}</td>${toDateCell(finToDateOf(bi)(r))}<td class="${diff.cls}">${diff.text}</td></tr>`;
   };
   const total = (label, rows, cls, good) => {
     const vals = cols.map((c, i) => finSum(rows, r => r.private ? null : finVal(r, cols, i)));
     const budget = finSum(rows, finBudgetOf(bi));
-    return `<tr class="${cls}"><td>${esc(label)}</td>${nums(vals, budget, vals[bi], good)}</tr>`;
+    return `<tr class="${cls}"><td>${esc(label)}</td>${nums(vals, budget, vals[bi], good, finSum(rows, finToDateOf(bi)))}</tr>`;
   };
   const out = [];
   const income = sections.filter(s => s.top.type === 'income').flatMap(s => s.lines);
   const cogs = sections.filter(s => s.cogs).flatMap(s => s.lines);
   for (const [n, s] of sections.entries()) {
-    out.push(`<tr class="fin-sec"><td>${esc(s.top.name)}</td><td colspan="${cols.length + 2}"></td></tr>`);
+    out.push(`<tr class="fin-sec"><td>${esc(s.top.name)}</td><td colspan="${cols.length + (showToDate ? 3 : 2)}"></td></tr>`);
     out.push(...s.lines.map(line));
     out.push(total('Total ' + s.top.name.toLowerCase() + (hasPrivate(s.lines) ? excl : ''), s.lines, 'fin-subt', s.top.type === 'income' ? 1 : -1));
     const lastCogs = s.cogs && !sections.slice(n + 1).some(x => x.cogs);
@@ -262,11 +265,11 @@ function finPnlDraw() {
       const gp = i => finLess(finSide(income, r => r.private ? null : finVal(r, cols, i)), finSide(cogs, r => r.private ? null : finVal(r, cols, i)));
       const gpB = finLess(finSide(income, finBudgetOf(bi)), finSide(cogs, finBudgetOf(bi)));
       const gv = cols.map((c, i) => gp(i));
-      out.push(`<tr class="fin-subt"><td>Gross profit${hasPrivate([...income, ...cogs]) ? excl : ''}</td>${nums(gv, gpB, gv[bi], 1)}</tr>`);
+      out.push(`<tr class="fin-subt"><td>Gross profit${hasPrivate([...income, ...cogs]) ? excl : ''}</td>${nums(gv, gpB, gv[bi], 1, finLess(finSide(income, finToDateOf(bi)), finSide(cogs, finToDateOf(bi))))}</tr>`);
       const pct = i => { if (gv[i] == null) return null; const rev = finSum(income, r => r.private ? null : finVal(r, cols, i)); return rev ? Math.round(gv[i] / rev * 100) : null; };
       const pctB = (() => { const rev = finSum(income, finBudgetOf(bi)); return rev && gpB != null ? Math.round(gpB / rev * 100) : null; })();
       const pd = pctB == null || pct(bi) == null ? null : pct(bi) - pctB;
-      out.push(`<tr class="fin-pct"><td>Gross margin</td>${cols.map((c, i) => `<td class="${c.state === 'future' ? 'fin-p' : ''}${i === past && c.state === 'future' ? ' fin-b' : ''}">${pct(i) == null ? '' : pct(i) + '%'}</td>`).join('')}<td class="fin-b">${pctB == null ? '' : pctB + '%'}</td><td class="${pd == null ? '' : pd > 0 ? 'fin-good' : pd < 0 ? 'fin-bad' : 'muted'}">${pd == null ? '' : pd ? (pd > 0 ? '+' : '−') + Math.abs(pd) + ' pts' : '—'}</td></tr>`);
+      out.push(`<tr class="fin-pct"><td>Gross margin</td>${cols.map((c, i) => `<td class="${c.state === 'future' ? 'fin-p' : ''}${i === past && c.state === 'future' ? ' fin-b' : ''}">${pct(i) == null ? '' : pct(i) + '%'}</td>`).join('')}<td class="fin-b">${pctB == null ? '' : pctB + '%'}</td>${toDateCell(null)}<td class="${pd == null ? '' : pd > 0 ? 'fin-good' : pd < 0 ? 'fin-bad' : 'muted'}">${pd == null ? '' : pd ? (pd > 0 ? '+' : '−') + Math.abs(pd) + ' pts' : '—'}</td></tr>`);
     }
   }
   // The bottom line: the route's own totals for actual periods, the lines' projections for future ones.
@@ -277,12 +280,12 @@ function finPnlDraw() {
       return finLess(finSide(income, r => r.private ? null : finVal(r, cols, i)), finSide(allLines.filter(r => r.type === 'expense'), r => r.private ? null : finVal(r, cols, i)));
     });
     const netB = finLess(finSide(income, finBudgetOf(bi)), finSide(allLines.filter(r => r.type === 'expense'), finBudgetOf(bi)));
-    out.push(`<tr class="fin-tot"><td>Net income${excl}</td>${nums(net, netB, net[bi], 1)}</tr>`);
+    out.push(`<tr class="fin-tot"><td>Net income${excl}</td>${nums(net, netB, net[bi], 1, finLess(finSide(income, finToDateOf(bi)), finSide(allLines.filter(r => r.type === 'expense'), finToDateOf(bi))))}</tr>`);
   } else {
     const spent = cols.map((c, i) => c.state === 'future' ? finSum(allLines, r => r.private ? null : finVal(r, cols, i)) : data.expense?.[i] ?? null);
-    out.push(`<tr class="fin-tot"><td>Total expenses${excl}</td>${nums(spent, finSum(allLines, finBudgetOf(bi)), spent[bi], -1)}</tr>`);
+    out.push(`<tr class="fin-tot"><td>${esc(`Total expenses${excl}${finSliceLabel(state)}`)}</td>${nums(spent, finSum(allLines, finBudgetOf(bi)), spent[bi], -1, finSum(allLines, finToDateOf(bi)))}</tr>`);
   }
-  box.innerHTML = `<table class="fin-pl"><thead><tr><th class="fin-first"></th>${head}<th class="fin-b">${esc(bcol ? finColLabel(bcol, years) : '')} budget${finExcl(state.budgetsRead)}</th><th>vs budget</th></tr>${sub}</thead><tbody>${out.join('')}</tbody></table>`;
+  box.innerHTML = `<table class="fin-pl"><thead><tr><th class="fin-first"></th>${head}<th class="fin-b">${esc(bcol ? finColLabel(bcol, years) : '')} budget${finExcl(state.budgetsRead)}</th>${showToDate ? '<th>To date</th>' : ''}<th>vs budget</th></tr>${sub}</thead><tbody>${out.join('')}</tbody></table>`;
 }
 // The budgets a P&L cell sums, the way the route picks them (backend/finance/reads.py _top_budgets, _filter_budgets):
 // unfiltered, the top budgets the viewer sees; filtered to a team, those of that team and the teams under it; to a
@@ -304,6 +307,16 @@ function finScopeBudgets(accountId) {
   const ids = new Set(picked.map(b => b.id));
   return picked.filter(b => b.account_id === accountId && !(b.parent_id && ids.has(b.parent_id)));
 }
+// What a total covers when it isn't the company's (§7.5): the filter's names, or the viewer's own slice.
+function finSliceLabel(state) {
+  const p = state?.snap, caps = finCaps(), teams = (FIN?.acc || FIN_ACCESS)?.teams || [];
+  if (state?.view === 'expenses' && p && finFilterAny(p)) {
+    const names = [...p.teams.map(id => teams.find(t => t.id === id)?.name || id), ...p.mates.map(finWho),
+      ...(p.unattributed ? ['Unattributed'] : []), ...(p.who !== 'both' ? [p.who === 'bots' ? 'Bots' : 'People'] : [])];
+    return ' · ' + (names.length > 2 ? `${names.length} selected` : names.join(', '));
+  }
+  return caps && !caps.company && !caps.companyExpenses ? finOwnSlice(caps) : '';
+}
 const finFiltered = () => FIN.pnl?.view === 'expenses' && !!FIN.pnl.snap && finFilterAny(FIN.pnl.snap);
 // A team and every team under it.
 function finTeamsBelow(id) {
@@ -320,8 +333,8 @@ function finBudgetFor(accountId) {
   if (tops.length > 1 || tops[0].period !== 'month') return false;
   return tops[0];
 }
-// Which month's cell takes an edit: any future month's, a budget or a new one; this month's only to raise a budget it
-// has (§4.4 sends the raise to the budget's owner); never a past month's.
+// Which month's cell takes an edit: any future month's, a budget or a new one; this month's on a budget it has (§4.4: a
+// raise goes to the budget's owner, a cut takes the ordinary rules; the dry run says which); never a past month's.
 const finBudgetEditable = (col, b) => b !== false && (col?.state === 'future' || (col?.state === 'current' && !!b));
 // A budget edit in place, dry run first (§12): an allowed one saves and says no more, a refused one says why, and one
 // that needs approval shows the change and whom it goes to, and goes when sent. `alive` says the page is still there.
@@ -362,7 +375,6 @@ function finPnlEdit(td) {
     if (done) return; done = true;
     const cents = finParseCents(input.value);
     if (!save || cents == null || cents === was || state.busy || state.data !== data) { finPnlDraw(); return; }
-    if (col.state === 'current' && was != null && cents < was) { toast(FIN_ONLY_RAISE, true); finPnlDraw(); return; }
     input.disabled = true;
     const [kind, payload] = b ? ['budget_update', {budget_id: b.id, amount: cents, effective_from: col.start}]
       : ['budget_create', {name: row.name, period: 'month', account_id: id, amount: cents, effective_from: col.start}];
@@ -415,7 +427,7 @@ async function finPnlRail() {
     const nextAt = cols.findIndex((c, k) => k > i && c.state === 'future');
     html += `${sec && sec.top.account_id !== row.account_id ? `<div class="muted fin-sup">${esc(sec.top.name)}</div>` : ''}
       <h2>${esc(row.name)} · ${esc(finColLong(col))}</h2>
-      ${finKv(future ? 'Projected' : 'Actual', finUsd(v) + (future ? finProjTag(row.projection_method) : ''))}${finKv('Budget' + finExcl(finBudgetFor(row.account_id)?.state), finUsd(budget) + finCardLimitsTag(finBudgetFor(row.account_id)))}
+      ${finKv(future ? 'Projected' : 'Actual', finUsd(v) + (future ? finProjTag(row.projection_method) : ''))}${finKv('Budget' + finExcl(finBudgetFor(row.account_id)?.state), finUsd(budget) + finCardLimitsTag(finBudgetFor(row.account_id)))}${row.budget_to_date?.[i] != null ? finKv('Budget to date', finUsd(row.budget_to_date[i])) : ''}
       ${over == null ? '' : over > 0 ? finKv(row.type === 'income' ? 'Under' : 'Over', finUsd(over), 'fin-bad') : finKv(row.type === 'income' ? 'Over' : 'Left', finUsd(-over))}
       ${nextAt >= 0 ? finKv(finColLabel(cols[nextAt], false) + ' projected', finUsd(row.projection?.[nextAt] ?? null) + finProjTag(row.projection_method)) : ''}
       <div id="fin-by"></div>`;
@@ -547,7 +559,7 @@ const finMonthBounds = ym => { const [y, m] = ym.split('-').map(Number); return 
 const finNextMonth = ym => { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m, 1); return `${d.getFullYear()}-${finPad(d.getMonth() + 1)}`; };
 // Budgets change from a future month on, as on the P&L.
 const finLineFuture = () => FIN_LINE.month > finToday().slice(0, 7);
-// ...and this month's goes up only, on a budget it already has (finBudgetEditable).
+// ...and this month's, on a budget it already has (finBudgetEditable).
 const finLineNow = () => FIN_LINE.month === finToday().slice(0, 7);
 const finVendorEditable = (b, parent) => finLineFuture() ? (b ? b.period === 'month' : !!parent) : finLineNow() && b?.period === 'month';
 // The line's own monthly budget, which vendor budgets sit under; null when it has none (or keeps one by quarter or year).
@@ -672,7 +684,6 @@ async function finVendorSave(input) {
   if (cents === was) return;
   const from = FIN_LINE.month + '-01', parent = finLineParent(), account = FIN.line.id;
   if (!finVendorEditable(b, parent)) { input.value = finCentsField(was); return; }
-  if (finLineNow() && cents < was) { toast(FIN_ONLY_RAISE, true); input.value = finCentsField(was); return; }
   input.disabled = true;
   const state = FIN.line, name = finLineKeys().find(r => r.key === vendor)?.label || vendor;
   const [kind, payload] = b ? ['budget_update', {budget_id: b.id, amount: cents, effective_from: from}]

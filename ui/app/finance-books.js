@@ -79,7 +79,7 @@ function finBsDraw() {
         ? `<td class="fin-n">${finNum(was)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td><div class="fin-from">${from}</div></td></tr>`);
     }
     const t = totals[key], tp = prev?.totals?.[key], ch = prev && t != null && tp != null ? finDiff(t - tp) : null;
-    out.push(`<tr class="fin-subt"><td>Total ${label.toLowerCase()}</td><td class="fin-n">${finNum(t)}</td>${prev ? `<td class="fin-n">${finNum(tp)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td></td></tr>`);
+    out.push(`<tr class="fin-subt"><td>${esc(`Total ${label.toLowerCase()}${d.scoped ? finOwnSlice(finCaps()) : ''}`)}</td><td class="fin-n">${finNum(t)}</td>${prev ? `<td class="fin-n">${finNum(tp)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td></td></tr>`);
   }
   if (totals.liability != null || totals.equity != null) {
     const le = (totals.liability || 0) + (totals.equity || 0), lp = prev ? (prev.totals?.liability || 0) + (prev.totals?.equity || 0) : null;
