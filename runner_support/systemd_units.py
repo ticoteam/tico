@@ -95,18 +95,6 @@ def linger_guidance(user, run=subprocess.run):
             f"Run once: loginctl enable-linger {user}   (add sudo if it asks)")
 
 
-def restart(unit, run=subprocess.run, timeout=180):
-    """`systemctl --user restart <unit>`. Returns an error text, or "" when it restarted."""
-    try:
-        done = run(["systemctl", "--user", "restart", unit], capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return f"systemctl could not run: {type(exc).__name__}"
-    if done.returncode:
-        lines = (done.stderr or done.stdout or "").strip().splitlines()
-        return lines[-1] if lines else f"systemctl exited {done.returncode}"
-    return ""
-
-
 def is_installed(unit, unit_dir=None):
     return (Path(unit_dir) if unit_dir else user_unit_dir()).joinpath(unit).is_file()
 

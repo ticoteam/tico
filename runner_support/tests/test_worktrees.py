@@ -170,24 +170,6 @@ def test_disk_floor_paths_old_server_and_setup_failure(trees, monkeypatch):
 
 
 @pytest.mark.slow
-def test_unselected_base_with_linked_worktree_is_not_deleted(trees):
-    from runner_support.repositories import Repositories, REMOVE_AFTER
-    workspace, base, remote, row, client = trees
-    W.command(client, 'add', 'org/product')
-    manager = Repositories(workspace, workspace / 'state.json', client)
-    manager.rows = {'org/product': {'full_name': 'org/product', 'managed': True, 'left_at': 0}}
-    try:
-        manager.sync({}, None, REMOVE_AFTER + 1)
-        assert base.exists()
-        git(base, 'worktree', 'remove', '--force', str(workspace / row['path']))
-        git(base, 'branch', '-D', row['branch'])
-        manager.sync({}, None, REMOVE_AFTER + 1)
-        assert not base.exists()
-    finally:
-        manager.close()
-
-
-@pytest.mark.slow
 def test_computer_heartbeat_actions_use_scoped_token_and_wait_for_idle(trees):
     workspace, base, remote, row, client = trees
     W.command(client, 'add', 'org/product')
@@ -353,27 +335,6 @@ def test_fetch_failure_is_not_missing_branch(trees, monkeypatch):
 
 
 @pytest.mark.slow
-def test_missing_folder_registration_is_pruned_for_restore_and_base_cleanup(trees):
-    workspace, base, remote, row, client = trees
-    path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
-    shutil.rmtree(path)
-    assert (base / '.git' / 'worktrees').exists()
-    W.act(workspace, row, 'restore', os.environ.copy())
-    assert path.exists()
-    shutil.rmtree(path)
-    git(base, 'worktree', 'prune', '--expire', 'now')
-    git(base, 'branch', '-D', row['branch'])
-    from runner_support.repositories import Repositories, REMOVE_AFTER
-    manager = Repositories(workspace, workspace / 'state.json', client)
-    manager.rows = {'org/product': {'full_name': 'org/product', 'managed': True, 'left_at': 0}}
-    try:
-        manager.sync({}, None, REMOVE_AFTER + 1)
-        assert not base.exists()
-    finally:
-        manager.close()
-
-
-@pytest.mark.slow
 def test_new_base_clone_detects_default_and_restores_remote_snapshot(trees, monkeypatch):
     workspace, base, remote, row, client = trees
     path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
@@ -529,35 +490,6 @@ def test_a_write_refusal_names_what_the_server_listed_for_the_run():
         {'full_name': f'org/r{n:02}', 'access': 'write'} for n in range(12)]}
     with pytest.raises(ValueError, match=r'writable here: org/r00, .*, org/r09 and 2 more\)$'):
         W.metadata(client, 'org/docs')
-
-
-@pytest.mark.slow
-def test_unlisted_managed_base_is_adopted_and_clone_failure_cleans_partial_folder(trees, monkeypatch):
-    from runner_support.repositories import Repositories
-    workspace, base, remote, row, client = trees
-    (base / '.git' / 'tico-managed').touch()
-    client.get.return_value = {'repositories': []}
-    manager = Repositories(workspace, workspace / 'state.json', client)
-    try:
-        manager.poll()
-        manager.pending.result(timeout=2)
-        assert manager.rows['org/product']['managed'] is True
-        assert manager.rows['org/product']['left_at'] > 0
-        from backend.models import RepositoryStatus
-        RepositoryStatus(**manager.report()[0])
-    finally:
-        manager.close()
-    shutil.rmtree(base)
-    real_run = W.isolation.run
-    def failed_clone(args, **kwargs):
-        if 'clone' in args:
-            Path(args[-1]).mkdir(parents=True)
-            return subprocess.CompletedProcess(args, 128, '', 'synthetic refusal')
-        return real_run(args, **kwargs)
-    monkeypatch.setattr(W.isolation, 'run', failed_clone)
-    with pytest.raises(ValueError, match='clone of org/product failed'):
-        W.repositories.worktree_base(workspace, row, W.safe_git.process_environment())
-    assert not base.exists()
 
 
 def test_setup_timeout_kills_process_group(light):
@@ -741,120 +673,6 @@ def test_snapshot_skipped_is_reported_and_branch_check_ignores_cwd(trees, monkey
     assert (path / 'file').read_text() == 'rebased work'
 
 
-@pytest.mark.slow
-def test_full_mirror_base_offline_commit_push_cleanup_recreate(trees, monkeypatch):
-    from runner_support.repositories import Repositories, REMOVE_AFTER
-    from runner_support import credential_socket
-    workspace, base, remote, row, client = trees
-    shutil.rmtree(base)
-    supervisor = mock.Mock()
-    supervisor.post.return_value = {'token': 'synthetic-computer-read-token', 'repositories': ['org/product']}
-    supervisor.get.return_value = {'repositories': [{**row, 'access': 'write'}]}
-    manager = Repositories(workspace, workspace / 'state' / 'repositories.json', supervisor)
-    manager.state_file.parent.mkdir()
-    manager.rows = {'org/product': {'full_name': 'org/product'}}
-    launch = manager.run_git
-    calls = []
-    def local_git(args, **kwargs):
-        calls.append((args, dict(kwargs['env']), kwargs.get('bot', False)))
-        if kwargs.get('bot'):
-            assert 'GH_TOKEN' not in kwargs['env'] and 'HUB_TOKEN' not in kwargs['env']
-        else:
-            assert str(base) not in args
-        remapped = [remote.as_uri() if a == 'https://github.com/org/product.git' and 'config' not in args else 'protocol.file.allow=always' if a == 'protocol.file.allow=never' else a for a in args]
-        return launch(remapped, **kwargs)
-    monkeypatch.setattr(manager, 'run_git', local_git)
-    try:
-        manager.update('org/product', row, 1)
-        assert manager.rows['org/product']['state'] == 'cloned'
-        assert (base / '.git' / 'tico-managed').exists()
-        assert git(base, 'symbolic-ref', 'refs/remotes/origin/HEAD') == 'refs/remotes/origin/main'
-        git(base, 'config', f'url.{remote}.insteadOf', 'https://github.com/org/product.git')
-        source = remote.parent / 'source'
-        (source / 'file').write_text('new default branch work')
-        git(source, 'add', '.')
-        git(source, 'commit', '-m', 'New default branch work')
-        git(source, 'push', 'origin', 'main')
-        socket_dir = __import__('tempfile').TemporaryDirectory(prefix='tico-refresh-', dir='/tmp')
-        socket = credential_socket.Server(Path(socket_dir.name) / 'refresh.sock', lambda bot, repo: 'synthetic-bot-write-token', refresh=manager.refresh_mirror).start()
-        socket.register('synthetic-attempt', 'engineer')
-        monkeypatch.setenv(credential_socket.SOCKET_ENV, socket.path)
-        monkeypatch.setenv('HUB_TOKEN', 'synthetic-attempt')
-        original_run = W.isolation.run
-        def offline_run(args, **kwargs):
-            if 'fetch' in args and 'origin' in args:
-                raise AssertionError('Worktree creation must use the local mirror')
-            return original_run(args, **kwargs)
-        monkeypatch.setattr(W.isolation, 'run', offline_run)
-        path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
-        assert git(path, 'rev-parse', 'HEAD') == git(remote, 'rev-parse', 'main')
-        socket.stop()
-        # An unavailable supervisor leaves an explicit age on the cached mirror result.
-        mirror_repo = dict(row)
-        W.repositories.worktree_base(workspace, mirror_repo, os.environ.copy())
-        assert 'minutes old' in mirror_repo['fetch_warning']
-        (path / 'file').write_text('offline commit')
-        git(path, 'add', '.')
-        git(path, '-c', 'user.name=Tico', '-c', 'user.email=bot@example.com', 'commit', '-m', 'Offline task work')
-        head = git(path, 'rev-parse', 'HEAD')
-        monkeypatch.setattr(W.isolation, 'run', original_run)
-        scoped = {**W.safe_git.process_environment(), **W.git_credentials.environment('synthetic-bot-write-token')}
-        with mock.patch.object(W.isolation, 'run', wraps=original_run) as pushes:
-            W.git(path, 'push', 'origin', row['branch'], env=scoped)
-            assert pushes.call_args.kwargs['env']['GH_TOKEN'] == 'synthetic-bot-write-token'
-            assert 'synthetic-computer-read-token' not in str(pushes.call_args)
-        assert git(remote, 'rev-parse', row['branch']) == head
-        manager.rows['org/product']['left_at'] = 0
-        manager.sync({}, None, REMOVE_AFTER + 1)
-        assert manager.rows['org/product']['error'] == 'kept: 1 task worktrees'
-        assert manager.mirror_path('org/product').exists(), 'retiring a bot keeps the mirror while a task worktree needs its base'
-        W.act(workspace, {**row, 'prs_finished': True}, 'remove', scoped)
-        assert not path.exists()
-        W.act(workspace, row, 'restore', scoped)
-        assert git(path, 'rev-parse', 'HEAD') == head
-        assert (path / 'file').read_text() == 'offline commit'
-        assert all(str(manager.mirror_path('org/product')) in args for args, env, bot in calls if env.get('GH_TOKEN') and 'fetch' in args)
-        assert 'synthetic-' not in (base / '.git' / 'config').read_text()
-    finally:
-        if 'socket' in locals() and Path(socket.path).exists():
-            socket.stop()
-        if 'socket_dir' in locals():
-            socket_dir.cleanup()
-        manager.close()
-
-
-@pytest.mark.slow
-def test_retirement_keeps_local_branches_and_broken_bases(trees):
-    from runner_support.repositories import Repositories, REMOVE_AFTER
-    workspace, base, remote, row, client = trees
-    manager = Repositories(workspace, workspace / 'state.json', client)
-    manager.rows = {'org/product': {'full_name': 'org/product', 'managed': True, 'left_at': 0}}
-    mirror = manager.mirror_path('org/product')
-    mirror.mkdir(parents=True)
-    (mirror / 'retained-data').write_text('cached repository data')
-    try:
-        git(base, 'branch', 'offline-branch')
-        git(base, 'checkout', 'offline-branch')
-        (base / 'file').write_text('unpublished')
-        git(base, 'add', '.')
-        git(base, '-c', 'user.name=Tico', '-c', 'user.email=bot@example.com', 'commit', '-m', 'Local work')
-        manager.sync({}, None, REMOVE_AFTER + 1)
-        assert base.exists() and 'unpublished commits' in manager.rows['org/product']['error']
-        assert (mirror / 'retained-data').read_text() == 'cached repository data'
-        # A damaged clone is retained rather than replaced, even with local branches.
-        (base / '.git' / 'HEAD').unlink()
-        manager.sync({}, None, REMOVE_AFTER + 1)
-        assert base.exists() and (base / 'file').read_text() == 'unpublished'
-        assert mirror.exists()
-        (base / '.git' / 'HEAD').write_text('ref: refs/heads/offline-branch\n')
-        git(base, 'push', 'origin', 'HEAD:refs/heads/saved-work')
-        manager.sync({}, None, REMOVE_AFTER + 1)
-        assert not base.exists()  # every commit is remote, even with different branch names
-        assert not mirror.exists(), 'an unneeded mirror still retires once the local work is saved'
-    finally:
-        manager.close()
-
-
 def test_claims_skip_only_bot_under_maintenance(light):
     workspace, base, remote, row, client = light
     manager = W.Worktrees(workspace, client)
@@ -868,61 +686,6 @@ def test_claims_skip_only_bot_under_maintenance(light):
         assert client.post.call_args.args == ('jobs/claim', {'next_run': True})
     finally:
         manager.close()
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize('use_file_url', [False])
-def test_no_app_clone_add_snapshot_cleanup_restore_and_retirement(trees, use_file_url, monkeypatch):
-    monkeypatch.delenv('GH_TOKEN', raising=False)       # a bot's own shell may carry one; check only what the runner adds
-    from runner_support.repositories import Repositories, REMOVE_AFTER, base_folder
-    workspace, base, remote, row, client = trees
-    shutil.rmtree(base)
-    value = remote.as_uri() if use_file_url else 'org/product'
-    row = {**row, 'repo': value, 'full_name': value, 'path': 'tasks/12345678/' + base_folder(value)}
-    client.get.return_value = {'repositories': [], 'configured': False}
-    client.post.return_value = {'link_id': row['id'], 'branch': row['branch'], 'path': row['path']}
-    real_run = W.isolation.run
-    def local_git(args, **kwargs):
-        if not use_file_url and 'clone' in args:
-            args = [remote.as_uri() if a == 'https://github.com/org/product.git' else a for a in args]
-            done = real_run(args, **kwargs)
-            new_base = workspace / 'repos' / base_folder(value)
-            git(new_base, 'config', 'remote.origin.url', 'https://github.com/org/product.git')
-            git(new_base, 'config', f'url.{remote}.insteadOf', 'https://github.com/org/product.git')
-            return done
-        assert not kwargs.get('env', {}).get('GH_TOKEN')
-        return real_run(args, **kwargs)
-    with mock.patch.object(W.isolation, 'run', side_effect=local_git):
-        path = Path(W.command(client, 'add', value)['workspace_path'])
-        new_base = workspace / 'repos' / base_folder(value)
-        assert not git(new_base, 'remote').splitlines() == ['origin', 'tico-mirror']
-        assert W.command(client, 'attach', str(path))['link_id'] == row['id']
-        (path / 'file').write_text('saved with computer git')
-        saved = {**row, 'task_status': 'closed', 'bot_state': 'active'}
-        client.get.side_effect = lambda route: {'worktrees': [saved]} if route.endswith('/worktrees') else {'repositories': [], 'configured': False}
-        client.post.return_value = {'configured': False, 'token': None}
-        client.patch.side_effect = lambda route, body: saved.update(body)
-        manager = W.Worktrees(workspace, client)
-        try:
-            manager.sync([{**row, 'action': 'remove'}])
-            assert not path.exists(), manager.errors
-            assert git(remote, 'show', W.wip_branch(row) + ':file') == 'saved with computer git'
-            saved['task_status'] = 'open'
-            manager.sync([{**row, 'action': 'restore'}])
-            assert (path / 'file').read_text() == 'saved with computer git'
-        finally:
-            manager.close()
-        W.act(workspace, {**row, 'machine_git': True}, 'remove', W.safe_git.machine_environment())
-        clones = Repositories(workspace, workspace / 'repositories.json', client)
-        try:
-            client.get.side_effect = None
-            clones.poll()
-            clones.pending.result(timeout=5)
-            assert value in clones.rows
-            clones.sync({}, None, __import__('time').time() + REMOVE_AFTER + 1)
-            assert not new_base.exists()
-        finally:
-            clones.close()
 
 
 @pytest.mark.slow

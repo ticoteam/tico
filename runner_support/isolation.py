@@ -87,38 +87,3 @@ def mkdir(path, mode=0o700):
     return path
 
 
-def bot_state(default):
-    """Where per-turn host state lives: `default` (inside the runner's own state) unless isolated,
-    where the supervisor's state directory is closed to bot code, so it is a bot-owned directory."""
-    if not enabled():
-        return Path(default)
-    return mkdir(Path(os.environ.get("HOME") or "/home/runner") / ".tico-host")
-
-
-def turn_dir():
-    """A directory a turn can read files the supervisor prepared for it (vault files)."""
-    base = Path(os.environ.get("TICO_RUNNER_TURN_DIR") or "/run/tico-runner/turn")
-    base.mkdir(mode=0o755, parents=True, exist_ok=True)
-    return base
-
-
-def adopt(*paths):
-    """Give the bot user anything under `paths` that root made: a secret file someone wrote with
-    `docker exec` (root by default) or a login run as root. Cheap; never follows symlinks."""
-    who = identity()
-    if not who:
-        return
-    for path in paths:
-        try:
-            stats = os.lstat(path)
-            if stats.st_uid != who[0]:
-                os.chown(path, *who, follow_symlinks=False)
-            if not os.path.isdir(path) or os.path.islink(path):
-                continue
-            for root, dirs, files in os.walk(path):
-                for name in (*dirs, *files):
-                    child = os.path.join(root, name)
-                    if os.lstat(child).st_uid != who[0]:
-                        os.chown(child, *who, follow_symlinks=False)
-        except OSError:
-            pass
