@@ -311,7 +311,7 @@ def view(c, auth, who):
     return {**({"draft": mine} if editor else {}), "current": published, "bets": listed,
             "label": guide(gid)["bets_label"], "label_one": guide(gid)["bet_label"], "may_edit": editor,
             "website": website(c),
-            "goals_by_bet": {bid: [{k: g[k] for k in ("id", "title", "owner", "status")} for g in rows[:GOALS_SHOWN]]
+            "goals_by_bet": {bid: [{k: g[k] for k in ("id", "title", "owner_id", "status")} for g in rows[:GOALS_SHOWN]]
                              for bid, rows in linked.items()},
             # goals_by_bet is a sample; a retire's "N goals serve it" needs every live goal the caller may read.
             "live_by_bet": {bid: sum((g.get("status") or "") not in ("done", "dropped") for g in rows)

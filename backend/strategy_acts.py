@@ -218,7 +218,7 @@ def describe(c, change, caller):
     do = change.get("do")
     row = H.task(c, change.get("task_id") or "") if change.get("task_id") else None
     if do == "create":
-        return f'New task for {caller.name(change.get("owner_id", ""))}: "{change.get("title", "")}"'
+        return f'New task for {caller.name(change.get("owner", ""))}: "{change.get("title", "")}"'
     if do == "reorder":
         return f"Move {TASK} to the top of {caller.name((row or {}).get('owner_id', ''))}'s queue"
     if do == "reassign":
@@ -247,15 +247,15 @@ def _check(c, change, caller):
     if do not in ACTIONS:
         return f"a change is {'|'.join(ACTIONS)}", None
     if do in ("create", "reassign"):
-        owner = H.resolve_actor(c, str(change.get("owner_id") or "").strip()) or str(change.get("owner_id") or "")
+        owner = H.resolve_actor(c, str(change.get("owner") or "").strip()) or str(change.get("owner") or "")
         if H.is_human(owner):
-            change["owner_id"] = owner
+            change["owner"] = owner
             return "a task for a person stays the person's to give", "person_task"
         if not H.is_bot(owner) or not H.bot(c, H.actor_id(owner)) or not caller.sees(owner):
             # A bot the Strategy Bot can't see is answered as one that isn't there, in its own words, and `change` keeps
             # them: nothing it writes back (the receipt, the proposal) tells the two apart.
             return f"no bot {change.get('owner_id') or '(none named)'} to give the task to", None
-        change["owner_id"] = owner
+        change["owner"] = owner
         what = "a new task" if do == "create" else TASK
         if why := caller.give(owner, change.get("task_id") if do == "reassign" else None):
             return f"giving {what} to {caller.name(owner)} stays the owner's: {why}", None
@@ -264,23 +264,23 @@ def _check(c, change, caller):
         change["body"] = str(change.get("body") or "").strip()[:8000]
         if not change["title"]:
             return "a new task needs a title", None
-        if not caller.would_read(change["owner_id"], STRATEGY_BOT):
+        if not caller.would_read(change["owner"], STRATEGY_BOT):
             return f"a new task for {_name(c, change['owner_id'])} would be out of the Strategy Bot's sight", None
-        return _keeps_private(c, change["owner_id"], "a new task") or _offline(c, change["owner_id"]), None
+        return _keeps_private(c, change["owner"], "a new task") or _offline(c, change["owner"]), None
     if row and H.is_human(row["owner_id"]):
         return f"{TASK} is a person's task, so it stays theirs", "person_task"
     if not _bot_task(c, change.get("task_id")):
         return "name a live bot task (a finished or private one can't be changed)", None
-    if do == "reassign" and change["owner_id"] == row["owner_id"]:
+    if do == "reassign" and change["owner"] == row["owner_id"]:
         return f"{TASK} is already {caller.name(row['owner_id'])}'s", None
-    if do == "reassign" and not caller.would_read(change["owner_id"], row["requester_id"], row.get("private") or 0):
+    if do == "reassign" and not caller.would_read(change["owner"], row["requester_id"], row.get("private") or 0):
         # A new owner drops the guest (task_update), so the task is read as it would be then.
         return f"giving {TASK} to {_name(c, change['owner_id'])} would put it out of the Strategy Bot's sight", None
-    if do == "reassign" and (private := _keeps_private(c, change["owner_id"], TASK)):
+    if do == "reassign" and (private := _keeps_private(c, change["owner"], TASK)):
         return private, None
     if do == "close":
         change["note"] = " ".join(str(change.get("note") or "").split())[:1000]
-    return _offline(c, row["owner_id"]) or (_offline(c, change["owner_id"]) if do == "reassign" else None), None
+    return _offline(c, row["owner_id"]) or (_offline(c, change["owner"]) if do == "reassign" else None), None
 
 
 # How many undone decisions a new one is checked against: Undo is rare, so this reaches back months.
@@ -292,8 +292,8 @@ def _same(change):
     by its task (and, for a reassign, the bot it goes to)."""
     do = change.get("do")
     if do == "create":
-        return do, change.get("owner_id"), " ".join(str(change.get("title") or "").lower().split())
-    return do, change.get("task_id"), change.get("owner_id") if do == "reassign" else None
+        return do, change.get("owner"), " ".join(str(change.get("title") or "").lower().split())
+    return do, change.get("task_id"), change.get("owner") if do == "reassign" else None
 
 
 def _undone(c, change):
@@ -309,7 +309,7 @@ def _undone(c, change):
     return None
 
 
-FIELDS = ("status", "step_id", "step_rank", "owner", "rank", "note", "closed_at", "closed_by", "version", "private",
+FIELDS = ("status", "step_id", "step_rank", "owner_id", "rank", "note", "closed_at", "closed_by_id", "version", "private",
           "guest")
 
 
@@ -331,14 +331,14 @@ def _apply(c, change, goal_id, reason):
         made = H.task_create(c, STRATEGY_BOT, change["title"],
                              (change["body"] + "\n\n" if change["body"] else "") +
                              f"Made by the {strategy_bot.name(c)} on its own: {reason}",
-                             change["owner_id"], goal_id=goal_id or None, lane="company")
+                             change["owner"], goal_id=goal_id or None, lane="company")
         return {"task_id": made["id"], "made": True, "before": None, "after": _snapshot(H.task(c, made["id"]))}
     row = H.task(c, change["task_id"])
     before = _snapshot(row)
     if do == "reorder":
         H.task_update(c, STRATEGY_BOT, row["id"], rank=H._queue_end(c, row["owner_id"], top=True), mover=True, quiet=True)
     elif do == "reassign":
-        H.task_update(c, STRATEGY_BOT, row["id"], owner=change["owner_id"], mover=True)
+        H.task_update(c, STRATEGY_BOT, row["id"], owner=change["owner"], mover=True)
     else:
         H.task_close(c, H.KEEPER, row["id"], change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}")
         c.execute("UPDATE tasks SET closed_by_id=? WHERE id=?", (STRATEGY_BOT, row["id"]))
@@ -648,7 +648,7 @@ def _unmake(c, actor, task, item, since, note):
     if task["status"] == "closed":
         note(f"{TASK}, which it made, was closed since")
         return None
-    for field in ("owner", "status", "note", "words"):
+    for field in ("owner_id", "status", "note", "words"):
         who = _changed_since(c, task, item["after"], field, since)
         if who:
             note(f"{TASK}, which it made, was changed since by {_name(c, who)}, so it stays open")
@@ -663,7 +663,7 @@ def _restore(c, actor, task, item, since, note):
     """Put back each field the decision changed that nobody changed since, in one write; returns what was put back."""
     before, after = item["before"], item["after"]
     back = []
-    for field in ("owner", "status", "rank", "note"):
+    for field in ("owner_id", "status", "rank", "note"):
         if _value(before, field) == _value(after, field):
             continue
         who = _changed_since(c, task, after, field, since)
@@ -674,13 +674,13 @@ def _restore(c, actor, task, item, since, note):
     if "owner_id" in back and task.get("guest") and task["guest"] != before.get("guest"):
         # A new owner drops the guest (task_update): a guest given the task since keeps it, so its owner stays, with
         # its place in that owner's queue.
-        back = [f for f in back if f not in ("owner", "rank")]
+        back = [f for f in back if f not in ("owner_id", "rank")]
         note(f"{TASK} has a guest now, so its owner stays")
     if not back:
         return None
     put = {}
     if "owner_id" in back:
-        put["owner_id"] = before["owner_id"]
+        put["owner"] = before["owner_id"]
         # A new owner otherwise puts it at the bottom of their queue: the place goes back too, or stays as it is now.
         put["rank"] = before["rank"] if "rank" in back else task["rank"]
     elif "rank" in back:

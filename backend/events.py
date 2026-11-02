@@ -730,7 +730,7 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
         # Before /started, a newly created bot has never written a status. Project only its current
         # wait, without manufacturing status history or copying private task content into a stored row.
         row = {"bot": slug, "state": "waiting_bot", "focus": "", "task_id": None,
-               "since": live["created_at"], "last_turn_at": None, "last_result": None, "next_due": None,
+               "since": live["created_at"], "last_turn_at": None, "last_result": None, "next_due_at": None,
                "open_tasks": 0, "needs_human": 0, "updated_at": live["created_at"]}
     row = privacy.status(c, who, row, **(inputs or {}))
     row["bot_state"] = (H.bot(c, row["bot"]) or {}).get("state")

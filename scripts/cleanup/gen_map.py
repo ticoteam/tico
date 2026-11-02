@@ -174,7 +174,24 @@ WAVE3_SPECIAL = {
     ("runners", "operator"): "owner_id",
     ("enrollments", "operator"): "owner_id",
 }
-API_FIELDS = {"attempt_id": "run_id", "attempt": "run"}
+API_FIELDS = {"attempt_id": "run_id", "attempt": "run", "from_actor_name": "sender_name",
+              "to_actor_name": "recipient_name", "operator_name": "owner_name",
+              "ts": "created_at", "at": "created_at", "since": "changed_at"}
+# A renamed column's old name the API still says for something else (a hand-built key, a count, a table outside wave 3).
+API_KEPT = ["actor", "bot", "last_run", "next", "queued", "state", "status_by", "updated_by"]
+# Where one golden says a name differently from the rest (forms: e2e/renames.py).
+GOLDEN_FIELDS = {
+    "bot_files": {".bot": "bot_id"},
+    "events": {"bot!status": "bot_id", "status.bot": "bot"},
+    "goal_detail": {"latest.actor": "actor_id", "goal.status_by": "status_by_id"},
+    "goals": {"status_by": "status_by_id", ".owner": "owner"},
+    "kpi_readings": {"actor": "actor_id", "ts": "measured_at"},
+    "kpis": {"actor": "actor_id"},
+    "pages": {"bot": "bot_id"},
+    "task_detail": {"execution.bot": "bot_id"},
+}
+# Keys an answer gained: a conversation's owner_id now gets a display name, as every owner_id does.
+GOLDEN_ADDED = {"conversations": ["conversations.owner_name"], "messages": ["conversation.owner_name"]}
 
 
 def load_schema(sql_path):
@@ -322,6 +339,12 @@ def render_yaml(columns, notes, waves, collisions, by_scope):
         lines.append(f"  {table}.{old}: {new}" + (f"  # {note}" if note else ""))
     lines += ["values: {}", "api_fields:"]
     lines += [f"  {k}: {v}" for k, v in API_FIELDS.items()]
+    lines.append(f"api_kept: [{', '.join(API_KEPT)}]")
+    lines.append("golden_fields:")
+    lines += [f"  {name}: {{{', '.join(f'{q(k)}: {v}' for k, v in fields.items())}}}"
+              for name, fields in GOLDEN_FIELDS.items()]
+    lines.append("golden_added:")
+    lines += [f"  {name}: [{', '.join(keys)}]" for name, keys in GOLDEN_ADDED.items()]
     lines.append("waves:")
     for wave in ("1", "2", "2s", "2b", "3"):
         glob, scoped = by_scope[wave]

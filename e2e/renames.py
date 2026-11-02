@@ -6,6 +6,10 @@ YAML with these sections:
     tables:     {old_table: new_table}      a table renamed
     api_fields: {old_key: new_key}          as `fields`: an API name that is no column's name
     api_kept:   [key, ...]                  a column's old name the API still says somewhere: not derived into `fields`
+    golden_fields: {golden: {old: new}}     as `fields`, for one golden that says a name differently from the rest;
+                                            "parent.key" is the key under that parent, ".key" the key at the top,
+                                            "key!other" the key unless the object also has `other`
+    golden_added: {golden: [parent.key]}    keys a fresh answer gained, left out before comparing with an old golden
 A renamed column renames the API field of its name, so `fields` also takes every column's old name, unless columns of
 that name went different ways or `api_kept` keeps it. scripts/cleanup/renames.yaml has more sections, about the codemod
 itself (its base, its waves); they say nothing about the goldens.
@@ -18,8 +22,9 @@ import yaml
 
 ENV = "TICO_E2E_RENAME_MAP"
 SECTIONS = ("fields", "columns", "tables")
-CODEMOD_SECTIONS = {"base", "applied_waves", "values", "waves", "collisions", "api_fields", "api_kept"}
-EMPTY = {section: {} for section in SECTIONS}
+CODEMOD_SECTIONS = {"base", "applied_waves", "values", "waves", "collisions", "api_fields", "api_kept", "golden_fields",
+                    "golden_added"}
+EMPTY = {**{section: {} for section in SECTIONS}, "golden_fields": {}, "golden_added": {}}
 
 
 def load(path):
@@ -34,6 +39,8 @@ def load(path):
                 raise ValueError(f"{path}: {section}.{old} must map to a different non-empty name")
     out["fields"] = {**_column_fields(out["columns"], data.get("api_kept") or ()), **(data.get("api_fields") or {}),
                      **out["fields"]}
+    out["golden_fields"] = data.get("golden_fields") or {}
+    out["golden_added"] = data.get("golden_added") or {}
     return out
 
 
@@ -50,12 +57,37 @@ def active():
     return load(path) if path else EMPTY
 
 
-def apply_fields(value, fields):
+def golden_fields(rename_map, golden):
+    """The keys one golden's names go through."""
+    return {**rename_map["fields"], **rename_map["golden_fields"].get(golden, {})}
+
+
+def apply_fields(value, fields, parent=""):
     """The golden with its keys renamed (old -> new), at every depth. Values are left as they are."""
     if not fields:
         return value
     if isinstance(value, dict):
-        return {fields.get(k, k): apply_fields(v, fields) for k, v in value.items()}
+        return {_new_key(k, value, parent, fields): apply_fields(v, fields, k) for k, v in value.items()}
     if isinstance(value, list):
-        return [apply_fields(v, fields) for v in value]
+        return [apply_fields(v, fields, parent) for v in value]
+    return value
+
+
+def _new_key(key, node, parent, fields):
+    if f"{parent}.{key}" in fields:
+        return fields[f"{parent}.{key}"]
+    for old, new in fields.items():
+        if old.startswith(key + "!") and old[len(key) + 1:] not in node:
+            return new
+    return fields.get(key, key)
+
+
+def drop_added(value, keys, parent=""):
+    """A fresh answer without the keys it gained ("parent.key"), to compare it with a golden from before them."""
+    if not keys:
+        return value
+    if isinstance(value, dict):
+        return {k: drop_added(v, keys, k) for k, v in value.items() if f"{parent}.{k}" not in keys}
+    if isinstance(value, list):
+        return [drop_added(v, keys, parent) for v in value]
     return value

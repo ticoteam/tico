@@ -179,7 +179,7 @@ def validate_identity(c, who):
         if (not row or row["state"] not in ("leased", "running") or row["lease_until"] <= H.now()
                 or row["assigned_runner"] != who.runner_id
                 or row["assigned_generation"] != row["generation"]
-                or H.bot(c, row["bot"])["state"] != "active"):
+                or H.bot(c, row["bot_id"])["state"] != "active"):
             raise Problem("stale_lease", "Execution ownership expired; stop work and reconnect", 409)
 
 

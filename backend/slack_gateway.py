@@ -275,7 +275,7 @@ def completion_result(c, notice):
     """The result a task-done notice reports: the owner's newest comment on the task that has visuals, written before
     the notice and after the task's previous done or declined notice (a reopened task's earlier visuals are not this
     result), or None. A comment is what the task page shows, so the link lands on it."""
-    task_id, owner = notice["refs"]["task"], notice["refs"]["task_completion"]["owner_id"]
+    task_id, owner = notice["refs"]["task"], notice["refs"]["task_completion"]["owner"]
     since = c.execute("SELECT MAX(created_at) FROM messages WHERE id<>? AND created_at<=? AND deleted_at IS NULL "
                       "AND json_extract(refs,'$.task')=? AND json_extract(refs,'$.task_completion') IS NOT NULL",
                       (notice["id"], notice["created_at"], task_id)).fetchone()[0] or ""
@@ -304,7 +304,7 @@ def admitted(acl, email):
     if not email or "@" not in email:
         return False
     acl = acl if isinstance(acl, dict) else {}
-    if email == str(acl.get("owner_id") or "").strip().lower():
+    if email == str(acl.get("owner") or "").strip().lower():
         return True
     if email in {str(e or "").strip().lower() for e in acl.get("allowed") or []}:
         return True
@@ -1312,7 +1312,7 @@ class Gateway:
                 continue
             with self.store.transaction() as c:
                 completion = json.loads(message["refs"])["task_completion"]
-                owner = completion["owner_id"]
+                owner = completion["owner"]
                 who = H.human(c, owner) if H.is_human(owner) else H.bot(c, owner)
                 name = (who or {}).get("name") or (who or {}).get("display_name") or H.actor_id(owner)
                 title = message["body"].splitlines()[0]

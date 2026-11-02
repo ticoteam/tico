@@ -823,7 +823,7 @@ SCHEMAS = {
                required=["id", "slug", "display_name", "state", "owners", "access"]),
     "BotDetail": obj({"id": {"type": "string", "description": "The bot's stable id (its slug for a bot made before ids, else a UUIDv7); the slug is a renameable label"}, "slug": "s", "display_name": "s", "description": "s", "state": "s", "online": "b", "queued": "i",
                       "status": {"type": ["object", "null"]}, "reports_to": "n", "reports_to_name": "s",
-                      "owner_id": "n", "operator_name": "s", "team": "n", "owners": "a", "goals": "s",
+                      "owner_id": "n", "owner_name": "s", "team": "n", "owners": "a", "goals": "s",
                       "keep_tasks_going": {"type": ["integer", "null"]}, "turns_at_once": {"type": ["integer", "null"]},
                       "task_flow": ref("TaskFlow"),
                       "access": ref("Access"), "onboarding_state": "s", "template": "s", "template_version": "s",

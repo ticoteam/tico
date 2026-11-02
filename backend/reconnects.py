@@ -272,7 +272,7 @@ def _standing(c, wait):
     take the wake now: the card stays open for a later fix or the task's next move)."""
     H = _H()
     row = H.task(c, wait["task_id"])
-    if (not row or row["status"] not in H.ACTIVE_STATUSES or row["owner_id"] != wait["owner_id"]
+    if (not row or row["status"] not in H.ACTIVE_STATUSES or row["owner_id"] != wait["owner"]
             or any((H.bot(c, slug) or {}).get("state") in (None, "archived") for slug in {wait["bot"], H.actor_id(row["owner_id"])})):
         return "gone"
     if not H._actor_exists(c, row["owner_id"]) or not H.task_private_readable(c, row["owner_id"], row):

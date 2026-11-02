@@ -71,7 +71,7 @@ def _first_due(c: sqlite3.Connection, rule_id: str | None) -> tuple[date, str] |
     rows: list[Any] = _D.live_rows(c, [rule_id])
     if not rows:
         return None
-    return date.fromisoformat(str(rows[-1]["first_due"])), str(rows[-1]["repeats"])
+    return date.fromisoformat(str(rows[-1]["first_due_on"])), str(rows[-1]["repeats"])
 
 
 def _due_after(due: tuple[date, str], end: date) -> str | None:

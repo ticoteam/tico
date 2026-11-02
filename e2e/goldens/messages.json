@@ -10,7 +10,8 @@
       "id": "<conversation>",
       "kind": "chat",
       "last_message_at": "<time>",
-      "owner_actor": "human:ana",
+      "owner_id": "human:ana",
+      "owner_name": "Ana",
       "participant_names": [
         "Ana",
         "ops"
@@ -27,7 +28,7 @@
     "has_more": false,
     "messages": [
       {
-        "answered_by": null,
+        "answered_by_id": null,
         "body": "Plan the launch.",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
@@ -35,14 +36,14 @@
         "delivered_at": "<time>",
         "edited_at": null,
         "expires_at": null,
-        "from_actor": "human:ana",
-        "from_actor_name": "Ana",
         "hidden_at": null,
         "id": "<chat_message>",
         "in_reply_to": null,
         "kind": "say",
         "public": 0,
         "read_at": null,
+        "recipient_id": "bot:ops",
+        "recipient_name": "ops",
         "refs": {
           "rule": "person_message"
         },
@@ -51,13 +52,13 @@
           "run_id": "<id1>",
           "state": "started_run"
         },
+        "sender_id": "human:ana",
+        "sender_name": "Ana",
         "superseded_at": null,
-        "to_actor": "bot:ops",
-        "to_actor_name": "ops",
         "wait_s": null
       },
       {
-        "answered_by": null,
+        "answered_by_id": null,
         "body": "Add the budget.",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
@@ -65,24 +66,24 @@
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
-        "from_actor": "human:ana",
-        "from_actor_name": "Ana",
         "hidden_at": null,
         "id": "<reply_message>",
         "in_reply_to": null,
         "kind": "say",
         "public": 0,
         "read_at": null,
+        "recipient_id": "bot:ops",
+        "recipient_name": "ops",
         "refs": {
           "rule": "person_message"
         },
+        "sender_id": "human:ana",
+        "sender_name": "Ana",
         "superseded_at": null,
-        "to_actor": "bot:ops",
-        "to_actor_name": "ops",
         "wait_s": null
       },
       {
-        "answered_by": null,
+        "answered_by_id": null,
         "body": "Third note.",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
@@ -90,24 +91,24 @@
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
-        "from_actor": "human:ana",
-        "from_actor_name": "Ana",
         "hidden_at": null,
         "id": "<direct_message>",
         "in_reply_to": null,
         "kind": "say",
         "public": 0,
         "read_at": null,
+        "recipient_id": "bot:ops",
+        "recipient_name": "ops",
         "refs": {
           "rule": "person_message"
         },
+        "sender_id": "human:ana",
+        "sender_name": "Ana",
         "superseded_at": null,
-        "to_actor": "bot:ops",
-        "to_actor_name": "ops",
         "wait_s": null
       },
       {
-        "answered_by": null,
+        "answered_by_id": null,
         "body": "Draft the launch plan: done. Drafted.",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
@@ -115,16 +116,17 @@
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
-        "from_actor": "keeper",
         "hidden_at": null,
         "id": "<id2>",
         "in_reply_to": null,
         "kind": "notice",
         "public": 0,
         "read_at": null,
+        "recipient_id": "human:ana",
+        "recipient_name": "Ana",
         "ref_tasks": {
           "<task>": {
-            "owner": "bot:ops",
+            "owner_id": "bot:ops",
             "owner_name": "ops",
             "status": "closed",
             "title": "Draft the launch plan"
@@ -135,13 +137,12 @@
           "task": "<task>",
           "task_report": "done"
         },
+        "sender_id": "keeper",
         "superseded_at": null,
-        "to_actor": "human:ana",
-        "to_actor_name": "Ana",
         "wait_s": null
       },
       {
-        "answered_by": null,
+        "answered_by_id": null,
         "body": "Started task: Check the vendor list",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
@@ -149,16 +150,17 @@
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
-        "from_actor": "keeper",
         "hidden_at": null,
         "id": "<id3>",
         "in_reply_to": null,
         "kind": "notice",
         "public": 0,
         "read_at": null,
+        "recipient_id": "human:ana",
+        "recipient_name": "Ana",
         "ref_tasks": {
           "<open_task>": {
-            "owner": "bot:ops",
+            "owner_id": "bot:ops",
             "owner_name": "ops",
             "status": "open",
             "title": "Check the vendor list"
@@ -169,13 +171,12 @@
           "task": "<open_task>",
           "task_started": true
         },
+        "sender_id": "keeper",
         "superseded_at": null,
-        "to_actor": "human:ana",
-        "to_actor_name": "Ana",
         "wait_s": null
       },
       {
-        "answered_by": null,
+        "answered_by_id": null,
         "body": "Write the plan",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
@@ -183,24 +184,24 @@
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
-        "from_actor": "human:ana",
-        "from_actor_name": "Ana",
         "hidden_at": null,
         "id": "<id4>",
         "in_reply_to": null,
         "kind": "say",
         "public": 0,
         "read_at": null,
+        "recipient_id": "bot:ops",
+        "recipient_name": "ops",
         "refs": {
           "rule": "person_message"
         },
+        "sender_id": "human:ana",
+        "sender_name": "Ana",
         "superseded_at": null,
-        "to_actor": "bot:ops",
-        "to_actor_name": "ops",
         "wait_s": null
       },
       {
-        "answered_by": null,
+        "answered_by_id": null,
         "answers": [
           "<chat_message>"
         ],
@@ -211,14 +212,14 @@
         "delivered_at": null,
         "edited_at": null,
         "expires_at": null,
-        "from_actor": "bot:ops",
-        "from_actor_name": "ops",
         "hidden_at": null,
         "id": "<id5>",
         "in_reply_to": "<chat_message>",
         "kind": "say",
         "public": 0,
         "read_at": null,
+        "recipient_id": "human:ana",
+        "recipient_name": "Ana",
         "refs": {
           "answers": [
             "<chat_message>"
@@ -237,9 +238,9 @@
           "took_s": "<volatile>",
           "tool_calls": 0
         },
+        "sender_id": "bot:ops",
+        "sender_name": "ops",
         "superseded_at": null,
-        "to_actor": "human:ana",
-        "to_actor_name": "Ana",
         "wait_s": null
       }
     ],

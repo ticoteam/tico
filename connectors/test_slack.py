@@ -158,6 +158,9 @@ OK_AUTH = (200, {}, {"ok": True, "user_id": "U0BOT", "url": "https://acme.slack.
 
 
 class DmGates(FakeSlack):
+    def test_hub_access_is_a_file_people_write_so_its_owner_key_stays_owner(self):
+        self.assertIn("ana@acme.example", slack.load_hub_access())
+
     def test_someone_outside_hub_access_is_refused_and_nothing_is_posted(self):
         rc, out, calls = self.run_cli(
             ["dm", "--as", self.slug, "--to", "lead@acme.com", "--text", "hi", "--json"],

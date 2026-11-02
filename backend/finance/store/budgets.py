@@ -11,7 +11,7 @@ from .ledger import new_id
 def _budget(r: Any) -> Budget:
     return Budget(id=r["id"], book_id=r["book_id"], name=r["name"], period=r["period"], account_id=r["account_id"] or "",
                   catch_all=bool(r["catch_all"]), team=r["team"], teammate=r["teammate"], vendor=r["vendor_key"],
-                  parent_id=r["parent_id"] or "", owner=r["owner_id"], warn_pct=int(r["warn_pct"]), at_limit=r["at_limit"],
+                  parent_id=r["parent_id"] or "", owner=r["owner"], warn_pct=int(r["warn_pct"]), at_limit=r["at_limit"],
                   rollover=r["rollover"], active=bool(r["active"]), created_at=r["created_at"])
 
 

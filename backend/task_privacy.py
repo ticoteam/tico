@@ -709,7 +709,7 @@ COPIED_WORDS = 12
 
 
 def _person_on(row):
-    return next((row[k] for k in ("requester", "owner", "guest") if row.get(k) and H.is_human(row[k])), None)
+    return next((row[k] for k in ("requester_id", "owner_id", "guest") if row.get(k) and H.is_human(row[k])), None)
 
 
 def _person_name(c, person):
@@ -1200,7 +1200,7 @@ def status_inputs(c, bots):
                 if party in actors:
                     out[H.actor_id(party)]["tasks"].append(t)
         # Who asked is read alongside, to sort the rows, and left out of the rows `status` is given.
-        for m in c.execute(APPROVALS_SQL.format(by=", a.requested_by AS by_", match=marks), actors):
+        for m in c.execute(APPROVALS_SQL.format(by=", a.requested_by_id AS by_", match=marks), actors):
             out[H.actor_id(m["by_"])]["approvals"].append({k: m[k] for k in m.keys() if k != "by_"})
         for m in c.execute(ASKS_SQL.format(marks), actors):
             out[H.actor_id(m["sender_id"])]["asks"].append(m)

@@ -48,10 +48,11 @@ def test_v2_responses_match_the_goldens(api, live):  # noqa: F811
     differences = []
     for name in sorted(captured):
         golden = json.loads((GOLDENS / f"{name}.json").read_text())
-        golden = {**golden, "body": renames.apply_fields(golden["body"], rename_map["fields"])}
-        if golden != captured[name]:
+        golden = {**golden, "body": renames.apply_fields(golden["body"], renames.golden_fields(rename_map, name))}
+        fresh = {**captured[name], "body": renames.drop_added(captured[name]["body"], rename_map["golden_added"].get(name))}
+        if golden != fresh:
             old = json.dumps(golden, indent=2, sort_keys=True, ensure_ascii=False).splitlines()
-            new = json.dumps(captured[name], indent=2, sort_keys=True, ensure_ascii=False).splitlines()
+            new = json.dumps(fresh, indent=2, sort_keys=True, ensure_ascii=False).splitlines()
             diff = "\n".join(list(difflib.unified_diff(old, new, "golden " + name, "fresh " + name, lineterm=""))[:60])
             differences.append(f"--- {name}\n{diff}")
     assert not differences, "\n\n".join(differences)

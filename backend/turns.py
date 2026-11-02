@@ -312,7 +312,7 @@ def annotate(c, auth, who, messages):
     who_marks = ",".join("?" * len(actors))
 
     def owner_of(actor, at):
-        return next((aid for aid, t in turns.items() if "bot:" + t["bot"] == actor and t["from"] <= at <= t["to"]), None)
+        return next((aid for aid, t in turns.items() if "bot:" + t["bot_id"] == actor and t["from"] <= at <= t["to"]), None)
 
     did = {aid: [] for aid in turns}
     for row in c.execute(f"SELECT * FROM tasks WHERE requester_id IN ({who_marks}) AND created_at BETWEEN ? AND ?",

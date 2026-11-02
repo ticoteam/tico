@@ -6,11 +6,11 @@
     "kpis": [
       {
         "archived_at": null,
-        "archived_by": null,
+        "archived_by_id": null,
         "auto": false,
         "cadence": "daily",
         "created_at": "<time>",
-        "created_by": "human:ana",
+        "created_by_id": "human:ana",
         "definition": "",
         "definition_version": 1,
         "direction": "up",
@@ -23,7 +23,7 @@
         ],
         "id": "<kpi>",
         "latest": {
-          "actor": "human:ana",
+          "actor_id": "human:ana",
           "actor_name": "Ana",
           "collected_at": "<time>",
           "definition_version": 1,
@@ -38,7 +38,7 @@
           "value": 41.0
         },
         "name": "Activation",
-        "owner": "human:ana",
+        "owner_id": "human:ana",
         "owner_name": "Ana",
         "readings": 1,
         "reason": "Activation 41%",

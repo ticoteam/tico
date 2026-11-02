@@ -627,7 +627,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
             c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), row['id']))
         if action and (action == 'remove' or row['repo'] and row['branch']):
             actions.append({'link_id': row['id'], 'action': action, 'branch': row['branch'], 'path': row['path'],
-                            'task_id': row['task_id'], 'repo': row['repo'], 'owner_id': H.actor_id(row['owner_id']),
+                            'task_id': row['task_id'], 'repo': row['repo'], 'owner': H.actor_id(row['owner_id']),
                             'prs_finished': bool(prs) and finished, **({'release': True} if released else {}),
                             **({'cleanup_retry_generation': detail['cleanup_retry_generation']}
                                if action == 'remove' and detail.get('cleanup_retry_generation') else {})})
@@ -672,14 +672,14 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
     suffix = ''
     if existing and not attaching and existing['task_id'] == task['id']:
-        owner = json.loads(existing['detail'] or '{}').get('owner_id', task['owner_id'])
+        owner = json.loads(existing['detail'] or '{}').get('owner', task['owner_id'])
         if owner != task['owner_id'] and existing['state'] != 'removed':
             suffix = '-' + ((H.bot(c, bot) or {}).get('slug') or bot)   # a folder name people read: the slug now
             path = relative(path + suffix)
             canonical = unicodedata.normalize('NFC', path).casefold()
             existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
     if existing:
-        owner = json.loads(existing['detail'] or '{}').get('owner_id', task['owner_id'])
+        owner = json.loads(existing['detail'] or '{}').get('owner', task['owner_id'])
         if existing['task_id'] != task['id'] or existing['path'] != path or owner != task['owner_id'] and existing['state'] != 'removed':
             raise Problem('worktree_path', 'This worktree belongs to another task', 409)
         if existing['state'] != 'removed':

@@ -428,8 +428,8 @@ def guarded(c, auth, who, inner, function, columns=None):
         "blobs": blob_gate + " AND (" + ("" if bot else f"owner={me} OR ") +
                  "id IN (SELECT blob_id FROM message_assets) OR id IN (SELECT blob_id FROM task_assets) "
                  "OR id IN (SELECT blob_id FROM media_assets))",
-        "archives": "1" if owner_id else "0" if bot else f"owner={me}",
-        "connector_snapshots": "1" if owner_id else "0" if bot else f"owner={q(person)}",
+        "archives": "1" if owner else "0" if bot else f"owner={me}",
+        "connector_snapshots": "1" if owner else "0" if bot else f"owner={q(person)}",
         "service_jobs": "1" if owner else "0" if bot else f"requested_by={me}",
         # Mail copies are read through /api/v2/mail. SQL stays owner-only.
         "mail_mailboxes": "1" if owner else "0",

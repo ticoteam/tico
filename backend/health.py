@@ -561,7 +561,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
     # (backend/wake_presets.py). Which bots are looked at is every job the claim reads, held ones never: Pipeline counts a
     # held job behind an interrupted run as dead, and work held on purpose is not stuck.
     split = pipeline_stats.queue_counts(c, [r["id"] for r in c.execute("SELECT id FROM bots")])
-    queued = {r["bot"]: (r["n"], r["oldest"]) for r in c.execute(
+    queued = {r["bot_id"]: (r["n"], r["oldest"]) for r in c.execute(
         "SELECT bot_id, count(*) n, min(created_at) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot_id")}
     asked = {r["bot"]: r["oldest"] for r in c.execute(
         "SELECT j.bot_id, min(j.created_at) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
@@ -580,7 +580,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
     busy, running, turns = set(), {}, {}
     for r in c.execute("SELECT id,bot_id,runner_id,coalesce(started_at,created_at) since FROM attempts "
                        "WHERE state IN ('leased','running') ORDER BY since"):
-        busy.add(r["bot"])
+        busy.add(r["bot_id"])
         running[r["runner_id"]] = running.get(r["runner_id"], 0) + 1
         turns.setdefault(r["runner_id"], []).append(r)
     # A computer running as many turns as it takes holds the rest back on purpose: queued, not stuck.
@@ -612,7 +612,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
         return holding[runner_id]
     # A turn waiting for its shared login is busy, not stuck, unless what holds the login is no run Tico knows.
     from .login_waits import unknown_holder
-    orphaned = {r["bot"] for rows in turns.values() for r in rows if unknown_holder(c, r["id"])}
+    orphaned = {r["bot_id"] for rows in turns.values() for r in rows if unknown_holder(c, r["id"])}
     waiting, slow, stuck = [], [], []
     # The whole queue, not the next three jobs: queued_reasons reads every queued message.
     aged_bots = [slug for slug in queued if slug in assigned]

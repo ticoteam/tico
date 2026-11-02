@@ -37,8 +37,8 @@ def test_messages_and_task_asks_have_display_names(api, named_data):
     assert inbox['actors']['human:ana'] == inbox['actor_name'] == 'Ana'
     assert inbox['actors']['bot:ops'] == 'Operations'
     message = next(m for m in inbox['messages'] if m['id'] == named_data['ask']['id'])
-    assert message['from_actor_name'] == 'Operations'
-    assert message['to_actor_name'] == 'Ana'
+    assert message['sender_name'] == 'Operations'
+    assert message['recipient_name'] == 'Ana'
     notice = next(m for m in inbox['notices'] if m['id'] == named_data['notice']['id'])
     assert notice['body'] == 'New task from Operations: Review the plan'
     assert notice['body_raw'] == 'New task from bot:ops: Review the plan'
@@ -48,6 +48,6 @@ def test_messages_and_task_asks_have_display_names(api, named_data):
     tasks = result.json()
     task = next(t for t in tasks['tasks'] if t['id'] == named_data['task']['id'])
     assert task['owner_name'] == 'Operations' and task['requester_name'] == 'Ana'
-    assert task['ask']['from_actor_name'] == 'Operations'
-    assert task['ask']['to_actor_name'] == 'Ana'
+    assert task['ask']['sender_name'] == 'Operations'
+    assert task['ask']['recipient_name'] == 'Ana'
     assert tasks['actors']['bot:ops'] == 'Operations' and tasks['actors']['human:ana'] == 'Ana'

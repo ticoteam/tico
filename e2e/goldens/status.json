@@ -4,14 +4,14 @@
       {
         "bot": "ops",
         "bot_state": "active",
+        "changed_at": "<time>",
         "focus": "",
         "last_result": null,
         "last_stop": null,
         "last_turn_at": "<time>",
         "needs_human": 1,
-        "next_due": null,
+        "next_due_at": null,
         "open_tasks": 1,
-        "since": "<time>",
         "state": "idle",
         "task_id": "",
         "updated_at": "<time>"

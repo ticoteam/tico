@@ -1668,7 +1668,7 @@ def checkpoint_safe(c, aid, task):
 
 
 # A drained bot (a deploy finishing its running turns, or a person's pause) is given no new work.
-DRAINING_SQL = "EXISTS(SELECT 1 FROM bot_control ctl WHERE ctl.bot=a.bot_id AND ctl.draining=1)"
+DRAINING_SQL = "EXISTS(SELECT 1 FROM bot_control ctl WHERE ctl.bot=a.bot AND ctl.draining=1)"
 
 
 # What a Finance hook may raise that must not hold a bot's work: its own refusals and a bug in it.
@@ -2135,7 +2135,7 @@ def bot_refusal(c, settings, runner_id, bot):
 
 
 RUNNER_SQL = "SELECT * FROM runners WHERE id=?"
-CLAIM_CONFIG_SQL = (f"SELECT bc.config,{DRAINING_SQL.replace('a.bot_id', 'bc.bot')} draining "
+CLAIM_CONFIG_SQL = (f"SELECT bc.config,{DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
                     "FROM bot_config bc WHERE bc.bot=?")
 
 
@@ -2162,7 +2162,7 @@ def prime_claimables(c, bots, first=3):
     for part in H.chunks(sorted(set(bots))):
         marks = ",".join("?" * len(part))
         found = {r["bot"]: r for r in c.execute(
-            f"SELECT bc.bot,bc.config,{DRAINING_SQL.replace('a.bot_id', 'bc.bot')} draining FROM bot_config bc "
+            f"SELECT bc.bot,bc.config,{DRAINING_SQL.replace('a.bot', 'bc.bot')} draining FROM bot_config bc "
             f"WHERE bc.bot IN ({marks})", part)}
         prime(c, CLAIM_CONFIG_SQL, {(s,): found.get(s) for s in part})
         prime(c, readiness.CONFIG_SQL, {(s,): found.get(s) for s in part})
@@ -2803,14 +2803,14 @@ class Execution:
                     until = H.shift(heard, seconds=self.store.settings.lease_seconds)
                     c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
                     H.event(c, H.KEEPER, "attempt.lease-held", row["id"],
-                            {"bot": row["bot"], "lapsed": row["lease_until"], "heard_at": heard, "lease_until": until})
+                            {"bot": row["bot_id"], "lapsed": row["lease_until"], "heard_at": heard, "lease_until": until})
                     continue
                 grace = next((g for g in graces if row["lease_until"] <= g[1]), None)
                 if grace and not row["already_graced"] and row["id"] not in overdue:
                     served_at, _, until = grace
                     c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
                     H.event(c, H.KEEPER, "attempt.lease-grace", row["id"],
-                            {"bot": row["bot"], "lapsed": row["lease_until"], "lease_until": until,
+                            {"bot": row["bot_id"], "lapsed": row["lease_until"], "lease_until": until,
                              "served_at": served_at})
                     continue
                 # A start that reported a tool call or a push did run something: like a running turn, it may have
@@ -2846,9 +2846,9 @@ class Execution:
                     if tries >= PRE_START_TRIES:
                         computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
                         label = (computer["label"] if computer else None) or "its Computer"
-                        bot = H.bot(c, row["bot"])
-                        name = (self.store.settings.assistant_name if row["bot"] == self.store.settings.assistant_bot
-                                else (bot["display_name"] if bot else None)) or row["bot"]
+                        bot = H.bot(c, row["bot_id"])
+                        name = (self.store.settings.assistant_name if row["bot_id"] == self.store.settings.assistant_bot
+                                else (bot["display_name"] if bot else None)) or row["bot_id"]
                         version = c.execute("SELECT release FROM runner_versions WHERE runner_id=?",
                                             (row["runner_id"],)).fetchone()
                         remedy = ("update its Tico" if version and runner_versions.incompatible(version["release"])
@@ -2861,7 +2861,7 @@ class Execution:
                         if job:
                             msg = H.message(c, job["message_id"])
                             if H.is_human(msg["sender_id"]):
-                                H.say(c, "bot:" + row["bot"] if bot else H.KEEPER, msg["sender_id"], reason, kind="notice",
+                                H.say(c, "bot:" + row["bot_id"] if bot else H.KEEPER, msg["sender_id"], reason, kind="notice",
                                       conversation_id=msg["conversation_id"], in_reply_to=msg["id"],
                                       refs={"turn_id": row["id"]})
                 for job in jobs:
@@ -2875,18 +2875,18 @@ class Execution:
                     if job:
                         self.stopped(c, row, job["conversation_id"], held=held_back)
                 elif state == "canceled":
-                    settle_status(c, row["bot"], "idle", "", claimed=row["created_at"])
+                    settle_status(c, row["bot_id"], "idle", "", claimed=row["created_at"])
                 elif row["state"] == "leased" and state == "queued":
-                    settle_status(c, row["bot"], "idle", "Last run didn't start; it is back in the queue",
+                    settle_status(c, row["bot_id"], "idle", "Last run didn't start; it is back in the queue",
                                   claimed=row["created_at"], stop=row["id"])
                 elif state == 'uncertain' and jobs and retry_facts(c, {
                         **dict(next((j for j in jobs if j['id'] == row['job_id']), jobs[0])),
-                        'bot': row['bot'], 'attempt_id': row['id'], 'created_at': row['created_at']
+                        'bot': row['bot_id'], 'attempt_id': row['id'], 'created_at': row['created_at']
                 }, row['started_at'], H.now())['safe']:
-                    settle_status(c, row['bot'], 'idle', 'Resuming after a lost lease; waiting for its computer',
+                    settle_status(c, row['bot_id'], 'idle', 'Resuming after a lost lease; waiting for its computer',
                                   claimed=row['created_at'], stop=row['id'])
-                elif H.bot(c, row["bot"]):
-                    settle_status(c, row["bot"], "crashed",
+                elif H.bot(c, row["bot_id"]):
+                    settle_status(c, row["bot_id"], "crashed",
                                   reason if state == "failed" else "One run stopped; saved for later",
                                   claimed=row["created_at"], stop=row["id"])
                 H.event(c, H.KEEPER, "attempt.expired", row["id"], {"job_state": state})
@@ -3012,8 +3012,8 @@ class Execution:
         bots = []
         # A selected-job recheck must not classify unrelated queued bots while
         # holding the writer. Resolve its current bot, state and hold here.
-        queued = ("a.bot_id=(SELECT bot_id FROM jobs WHERE id=? AND state='queued' AND held=0)" if job_id is not None else
-                  "EXISTS(SELECT 1 FROM jobs j WHERE j.bot_id=a.bot_id AND j.state='queued' AND j.held=0)")
+        queued = ("a.bot=(SELECT bot_id FROM jobs WHERE id=? AND state='queued' AND held=0)" if job_id is not None else
+                  "EXISTS(SELECT 1 FROM jobs j WHERE j.bot_id=a.bot AND j.state='queued' AND j.held=0)")
         for row in c.execute(f"SELECT a.bot,bc.config,{DRAINING_SQL} draining FROM assignments a "
                              "JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot "
                              "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?) "
@@ -3069,7 +3069,7 @@ class Execution:
         for i, row in enumerate(candidates):
             if failed is not None and failed.full():
                 break               # CLAIM_HOLDS jobs are held by this claim: it picks no more
-            if row["id"] in skip or (failed is not None and row["bot"] in failed.bots):
+            if row["id"] in skip or (failed is not None and row["bot_id"] in failed.bots):
                 continue
             if i % PRIME_QUEUED == 0 and len(candidates) > 1:
                 # A backlog the claim passes over (lane held, check model, budget) is checked again on every claim, a
@@ -3085,14 +3085,14 @@ class Execution:
                     continue        # left queued for a runner that continues its thread: this one would start it afresh
                 if not private_lanes and private_job(c, row):
                     continue        # a private meeting's turn waits for a runner that keeps it out of the bot's checkout
-                why = job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live, runner=runner)
+                why = job_refusal(c, row, followed[row["bot_id"]], ready, busy, lanes, roots, live, runner=runner)
                 if why != "unreadable":
                     # The bot's checks ran for this job without raising: the back-off their last failure started ends.
-                    self.check_backoff.pop(row["bot"], None)
+                    self.check_backoff.pop(row["bot_id"], None)
                 if why is None:
                     # The job's own login hold: an error reading it holds this job alone. The bot's login as a whole is
                     # checked once per bot, in claim_refusal, where an error passes the bot over.
-                    waiting = login_refusal(c, self.store.settings, runner["id"], row["bot"], followed[row["bot"]],
+                    waiting = login_refusal(c, self.store.settings, runner["id"], row["bot_id"], followed[row["bot_id"]],
                                             row["id"], subscription_context)
                     if not waiting:
                         return row
@@ -3104,7 +3104,7 @@ class Execution:
                 if failed is None or storage_error(exc) or scope == "team":
                     raise
                 if scope:
-                    failed.bot(row["bot"], exc)
+                    failed.bot(row["bot_id"], exc)
                     continue
                 report("claim", row["id"], exc)
                 failed.job(row["id"], type(exc).__name__)
@@ -3658,7 +3658,7 @@ class Execution:
                     continue
                 c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, item["id"]))
                 # How to say "not now" with a time to come back, rather than in the reply's words (quiet_work).
-                carried.append({**{k: item.get(k) for k in ("id", "title", "body", "requester", "created_at")},
+                carried.append({**{k: item.get(k) for k in ("id", "title", "body", "created_at")}, "requester": item.get("requester_id"),
                                 "if_not_now": quiet_work.HINT.format(id=item["id"])})
             if carried:
                 H.event(c, H.KEEPER, "task.next-run.carried", aid,
@@ -3811,11 +3811,11 @@ class Execution:
             # never started has no result worth that: the sweep requeues or fails it as before.
             self.expire(c, attempt_ids=[aid])
             row = read()
-        if not privacy.attempt_readable(c, "bot:" + row["bot"], aid):
+        if not privacy.attempt_readable(c, "bot:" + row["bot_id"], aid):
             raise Problem("stale_lease", "Task access expired; stop this attempt", 409)
         if (row["state"] in ("leased", "running") and row["lease_until"] > H.now()
                 and row["assigned_runner"] == who.runner_id and row["assigned_generation"] == row["generation"]
-                and H.bot(c, row["bot"])["state"] == "quarantined"):
+                and H.bot(c, row["bot_id"])["state"] == "quarantined"):
             # A quarantine stops this turn the way a person's Stop does, rather than refusing its runner as if the
             # computer were lost (Dev 573): the renewal answers stop, and the turn ends with the quarantine's reason.
             row = quarantine_stops.stop(c, row)
@@ -5466,7 +5466,7 @@ class Execution:
             with isolated(c, "hold_unrunnable", row["id"]):
                 # A chat room carries notices for many tasks: one kept per task, not per room.
                 msg = H.message(c, row["message_id"])
-                key = (row["bot"], msg["conversation_id"],
+                key = (row["bot_id"], msg["conversation_id"],
                        H.message_task_id(msg, H.conversation(c, msg["conversation_id"])))
                 if key in newest:
                     held.append(row["id"])

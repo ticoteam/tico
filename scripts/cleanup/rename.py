@@ -713,7 +713,9 @@ class PyFile:
     # A request's, a tool's or a command's input: `owner` and `bot` there take a name or an id, so they keep the role
     # name (the row they end up in has owner_id).
     INPUT_RECEIVERS = {"args", "arguments", "kwargs", "params", "body", "payload", "query", "request", "inputs",
-                       "input", "form", "req", "tool_args", "fields", "patch", "changes", "update", "updates"}
+                       "input", "form", "req", "tool_args", "fields", "patch", "changes", "update", "updates",
+                       "change", "action", "raw", "pl", "sets", "entry", "document", "acl", "conversion", "journal",
+                       "operation", "completion", "data"}
     INPUT_KEYWORDS = {"json", "body", "data", "params"}
 
     def _test_body_key(self, node):

@@ -1042,7 +1042,7 @@ def seed(conn, document, resolve):
     such a goal is skipped and tried again at the next start."""
     added = []
     for entry in (document or {}).get("goals") or []:
-        gid, owner = str(entry.get("id") or "").strip(), resolve(entry.get("owner_id"))
+        gid, owner = str(entry.get("id") or "").strip(), resolve(entry.get("owner"))
         if not gid or not owner or goal(conn, gid):
             continue
         parent = str(entry.get("parent") or "").strip() or None

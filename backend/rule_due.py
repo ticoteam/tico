@@ -119,7 +119,7 @@ def state(row, satisfied, today, window=WINDOW_DAYS):
     occurrences inside the window (overdue or due soon)."""
     horizon = today + timedelta(days=window)
     opened, latest, beyond = [], None, None
-    for day in occurrences(parse_date(row["first_due"]), row["repeats"], horizon):
+    for day in occurrences(parse_date(row["first_due_on"]), row["repeats"], horizon):
         if day > horizon:
             beyond = day
             break
@@ -136,7 +136,7 @@ def state(row, satisfied, today, window=WINDOW_DAYS):
     elif latest is not None:
         current, status = latest, "satisfied"
     else:
-        current, status = beyond or parse_date(row["first_due"]), "upcoming"
+        current, status = beyond or parse_date(row["first_due_on"]), "upcoming"
     return {"due_on": current.isoformat(), "status": status, "open": len(opened),
             "open_days": [day.isoformat() for day in opened[:OPEN_DAYS]]}
 
@@ -190,7 +190,7 @@ def window(row, days):
 
 
 def views(c, rows, today=None):
-    """Each due date's view, with its status today: {id, rule_id, first_due, repeats, timezone, owner, routine_id,
+    """Each due date's view, with its status today: {id, rule_id, first_due_on, repeats, timezone, owner, routine_id,
     task_days, ended_on, retired_at, due_on, status, open, history}. `rows` are rule_due_dates rows. `task_days` is the
     linked routine's lead time (None with no routine). A list reads this; a detail reads `detail`."""
     statuses = _status_rows(c, [r["id"] for r in rows])
@@ -202,8 +202,8 @@ def views(c, rows, today=None):
         now = today or local_today(row["timezone"])
         current = state(row, satisfied, now, window(row, days))
         out.append({
-            "id": row["id"], "rule_id": row["rule_id"], "first_due": row["first_due"], "repeats": row["repeats"],
-            "timezone": row["timezone"], "owner_id": row["owner_id"], "routine_id": row["routine_id"],
+            "id": row["id"], "rule_id": row["rule_id"], "first_due_on": row["first_due_on"], "repeats": row["repeats"],
+            "timezone": row["timezone"], "owner": row["owner"], "routine_id": row["routine_id"],
             "task_days": days.get(row["routine_id"] or ""),
             "ended_on": row["ended_on"], "retired_at": row["retired_at"],
             "due_on": current["due_on"], "status": current["status"], "open": current["open"],
@@ -313,7 +313,7 @@ def satisfy(c, actor, row, due_on=None, via="person", task_id=None):
         target = parse_date(current["due_on"])
     else:
         target = parse_date(due_on, "due_on")
-        if not is_occurrence(parse_date(row["first_due"]), row["repeats"], target):
+        if not is_occurrence(parse_date(row["first_due_on"]), row["repeats"], target):
             raise Problem("validation", f"{target.isoformat()} is not an occurrence of this due date", 422)
         if target.isoformat() in satisfied:
             raise Problem("conflict", f"{target.isoformat()} is already satisfied", 409)
@@ -390,7 +390,7 @@ def _occurrence_row(c, task):
     except ValueError:
         return None, None
     row = one(c, task.get("rule_due_id")) if task.get("rule_due_id") else None
-    if not row or row["retired_at"] or not is_occurrence(parse_date(row["first_due"]), row["repeats"], day):
+    if not row or row["retired_at"] or not is_occurrence(parse_date(row["first_due_on"]), row["repeats"], day):
         return None, None
     if not linked(c, row, routine):
         return None, None

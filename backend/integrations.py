@@ -308,7 +308,7 @@ def install_integrations(app, store, auth, mutate):
 
     def named(c, page):
         """`owner: owner` is a role, so a shipped page never names anyone; serve the company owner's name."""
-        if str(page.get("owner_id", "")).strip().lower() != "owner":
+        if str(page.get("owner", "")).strip().lower() != "owner":
             return page
         row = c.execute("SELECT name FROM humans WHERE id=?", (auth.owner_id(c),)).fetchone() if auth.owner_id(c) else None
         return page | {"owner_id": (row and row["name"]) or store.settings.owner_email or "owner"}

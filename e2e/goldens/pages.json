@@ -6,11 +6,11 @@
       {
         "archived": false,
         "as_of": null,
-        "bot": "ops",
+        "bot_id": "ops",
         "bot_name": "ops",
         "cadence": "weekly",
         "file_id": "<page>",
-        "replaced_by": null,
+        "replaced_by_id": null,
         "replaced_by_title": null,
         "src": null,
         "stale_days": null,

@@ -255,7 +255,7 @@ def state_of(conn, task_row):
         if not row:
             return None
         parts = {
-            "task": [row.get(k) for k in ("status", "step_id", "owner", "requester", "waiting_on", "snoozed_until",
+            "task": [row.get(k) for k in ("status", "step_id", "owner_id", "requester_id", "waiting_on", "snoozed_until",
                                            "version")],
             "relations": [list(r) for r in conn.execute(
                 "SELECT r.kind, r.from_task, r.to_task, t.status FROM task_relations r JOIN tasks t ON t.id="

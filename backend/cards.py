@@ -535,7 +535,7 @@ def default_pins(kind, ident):
 def pin_view(ctx, pin, files_cache):
     """A pin as its reader gets it, or None when it shows them nothing: a page they may not read leaves no trace."""
     from . import files as F
-    out = {k: pin.get(k) for k in ("id", "item", "position", "size", "made_by")}
+    out = {k: pin.get(k) for k in ("id", "item", "position", "size", "made_by_id")}
     if pin.get("card") is not None:
         return {**out, "card": card_view(ctx, pin["card"])}
     kind, _, ident = (pin["item"] or "").partition(":")

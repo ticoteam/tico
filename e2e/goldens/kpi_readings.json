@@ -5,10 +5,10 @@
     },
     "kpi": {
       "archived_at": null,
-      "archived_by": null,
+      "archived_by_id": null,
       "cadence": "daily",
       "created_at": "<time>",
-      "created_by": "human:ana",
+      "created_by_id": "human:ana",
       "definition": "",
       "definition_version": 1,
       "direction": "up",
@@ -18,7 +18,7 @@
       "loop_name": null,
       "loop_step": null,
       "name": "Activation",
-      "owner": "human:ana",
+      "owner_id": "human:ana",
       "owner_name": "Ana",
       "parent_kpi_id": null,
       "slug": "activation",
@@ -30,7 +30,7 @@
     },
     "readings": [
       {
-        "actor": "human:ana",
+        "actor_id": "human:ana",
         "actor_name": "Ana",
         "collected_at": "<time>",
         "created_at": "<time>",
@@ -38,6 +38,7 @@
         "evidence": "https://bi.example/q/1",
         "id": "<id1>",
         "kpi_id": "<kpi>",
+        "measured_at": "<time>",
         "note": "",
         "period_end": "<time>",
         "period_start": "<time>",
@@ -45,7 +46,6 @@
         "source": "",
         "superseded_by": null,
         "supersedes": null,
-        "ts": "<time>",
         "value": 41.0
       }
     ]

@@ -603,7 +603,7 @@ def draft_facts(c, author, kind, day):
         "SELECT m.title, m.notes FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
         "WHERE m.review_state='live' AND mc.deleted_at IS NULL AND json_extract(m.metadata,'$.kind')='meeting' "
         "AND coalesce(json_extract(m.metadata,'$.private'),0)=0 AND trim(m.notes)<>'' AND m.created_at>=? AND ("
-        "lower(m.owner_id)=? OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.calendar.attendees')) "
+        "lower(m.owner)=? OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.calendar.attendees')) "
         "WHERE lower(trim(value))=?) OR EXISTS (SELECT 1 FROM json_each(json_extract(m.metadata,'$.participants')) "
         "WHERE lower(trim(json_extract(value,'$.email')))=?)) ORDER BY m.created_at DESC LIMIT ?",
         (since, email, email, email, MEETINGS_MAX)).fetchall() if email else []

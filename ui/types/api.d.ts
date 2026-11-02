@@ -410,8 +410,8 @@ export type BotDetail = {
   onboarding_ready?: Record<string, unknown> | null;
   onboarding_state?: string;
   online?: boolean;
-  operator_name?: string;
   owner_id?: string | null;
+  owner_name?: string;
   owners: Array<unknown>;
   queued?: number;
   reports_to?: string | null;

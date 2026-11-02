@@ -856,7 +856,7 @@ def _route_human_chat(app, rid, chat_id):
         c.execute("INSERT INTO live_meeting_chat_routes(meeting_id,chat_id,status,outcome,trace,started_at) "
                   "VALUES(?,?,'deciding','',?,?)",
                   (rid, chat_id, encode({"decision_input": decision_input}), stamp))
-        threshold, owner_actor = meeting["threshold"], meeting["owner_id"]
+        threshold, owner_actor = meeting["threshold"], meeting["owner_actor"]
     outcome = _decision(app, decision_input, decision_input["bots"], threshold, owner_actor)
     with store.transaction() as c:
         route = c.execute("SELECT status FROM live_meeting_chat_routes WHERE meeting_id=? AND chat_id=?",
@@ -1008,7 +1008,7 @@ def _run_windows(app, rid, *, final=False):
             decision_input = _decision_input(c, rid, source_key=f"window:{index}", source_kind="transcript",
                                              window_index=index, transcript=included, bots=bots)
         outcome = _decision(app, decision_input, decision_input["bots"],
-                            meeting["threshold"], meeting["owner_id"])
+                            meeting["threshold"], meeting["owner_actor"])
         with app.state.store.transaction() as c:
             current = c.execute("SELECT status FROM live_meeting_windows WHERE meeting_id=? AND window_index=?",
                                 (rid, index)).fetchone()
@@ -1028,7 +1028,7 @@ def _run_windows(app, rid, *, final=False):
             trace = {**outcome["trace"], "selected": [r["bot"] for r in selected], "skipped": skipped,
                      "chunk_range": _chunk_range(included)}
             if outcome["trace"].get("model"):
-                H.event(c, meeting["owner_id"], "judge.call", "live-meeting-route@1", {
+                H.event(c, meeting["owner_actor"], "judge.call", "live-meeting-route@1", {
                     "label": "live-meeting-route@1", "questions": len(bots), "types": ["noul"],
                     "ms": outcome["trace"].get("ms"), "model": outcome["trace"].get("model"),
                     **(outcome["trace"].get("audit") or {}),
@@ -1414,7 +1414,7 @@ def install_live_meetings(app, store, auth, write):
             human_only(who)
             auth.domain(who)
             meeting = _require_read(c, auth, who, rid)
-            if meeting["visibility"] == "private" and who.actor != meeting["owner_id"]:
+            if meeting["visibility"] == "private" and who.actor != meeting["owner_actor"]:
                 raise Problem("forbidden", "Only the person who connected a private meeting can attach bots", 403)
             if meeting["state"] not in ("live", "paused"):
                 raise Problem("meeting_state", "Bots can only be attached to a live or paused meeting", 409)

@@ -812,14 +812,14 @@ def edit_due(c, auth, who, due_text, body):
     _check_manage(c, auth, who, rule["who"])
     changes = {}
     if body.get("first_due") is not None:
-        changes["first_due"] = D.parse_date(body["first_due"], "first_due").isoformat()
+        changes["first_due_on"] = D.parse_date(body["first_due"], "first_due").isoformat()
     if body.get("repeats") is not None:
         changes["repeats"] = D.parse_repeats(body["repeats"])
     if body.get("timezone") is not None:
         changes["timezone"] = D.parse_zone(body["timezone"])
     if body.get("owner") is not None:
         changes["owner"] = owner_actor(c, body["owner"])
-        if changes["owner"] != row["owner_id"]:
+        if changes["owner"] != row["owner"]:
             # A changed owner passes the same test as a new one; an owner kept as it is is never asked again.
             _check_due_owner(c, auth, who, rule, changes["owner"])
     from . import rule_due_routine as RR
@@ -827,7 +827,7 @@ def edit_due(c, auth, who, due_text, body):
     if days is RR.UNCHANGED:
         days = RR.current_days(c, row)
     before = D.views(c, [row])[0]
-    replaced = changes.get("first_due", row["first_due"]) != row["first_due"] or \
+    replaced = changes.get("first_due_on", row["first_due_on"]) != row["first_due_on"] or \
         changes.get("repeats", row["repeats"]) != row["repeats"]
     if replaced:
         new_id = D.restart(c, who.actor, row, changes)
@@ -872,7 +872,7 @@ def satisfy_due(c, auth, who, due_text, due_on=None):
     if row["retired_at"] or row["ended_on"]:
         raise Problem("not_found", f"There is no due date {due_text}", 404)
     rule = _get(c, row["rule_id"])
-    if who.actor != row["owner_id"] and (who.role == "bot" or not may_manage(c, auth, who, rule["who"])):
+    if who.actor != row["owner"] and (who.role == "bot" or not may_manage(c, auth, who, rule["who"])):
         raise Problem("forbidden", "Only the due date's owner, or whoever can edit the rule, marks it satisfied", 403)
     day = D.satisfy(c, who.actor, row, due_on, via="person")
     _audit(c, who.actor, rule["id"], None, {"due": row["id"], "satisfied": day}, who)
@@ -1033,12 +1033,12 @@ def due_list(c, auth, who, args):
         manage = may_manage(c, auth, who, rule["who"], ctx)
         rows.append({"id": found["id"], "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"],
                                                  "source": ctx["sources"].get(rule["source_id"])},
-                     "due_on": found["due_on"], "repeats": found["repeats"], "owner_id": found["owner_id"],
-                     "first_due": found["first_due"], "timezone": found["timezone"],
+                     "due_on": found["due_on"], "repeats": found["repeats"], "owner": found["owner"],
+                     "first_due_on": found["first_due_on"], "timezone": found["timezone"],
                      "routine_id": found["routine_id"], "task_days": found["task_days"],
                      "status": found["status"], "open": found["open"],
                      "history": found["history"],
-                     "can_edit": manage, "can_satisfy": manage or who.actor == found["owner_id"]})
+                     "can_edit": manage, "can_satisfy": manage or who.actor == found["owner"]})
     rows.sort(key=lambda r: (r["due_on"], r["id"]))
     page, nxt = _page(rows, args.get("cursor"), _limit(args.get("limit"), 100, DUE_LIST_MAX))
     return {"due": page, "next_cursor": nxt}
@@ -1056,7 +1056,7 @@ def due_show(c, auth, who, due_id):
     manage = live and may_manage(c, auth, who, rule["who"])
     return {**D.detail(c, row), "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"],
                                          "status": rule["status"]},
-            "can_edit": manage, "can_satisfy": manage or (live and who.actor == row["owner_id"])}
+            "can_edit": manage, "can_satisfy": manage or (live and who.actor == row["owner"])}
 
 
 def counts(c, auth, who):

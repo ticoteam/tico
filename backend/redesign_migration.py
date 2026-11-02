@@ -125,7 +125,7 @@ def _zone():
 
 def _mirror(name, owner, key, controls, source, words=""):
     """A read-only built-in automation that shows something Tico still runs from its own table."""
-    return {"name": name[:120], "owner_id": owner, "builtin": True, "readonly": True, "enabled": bool(controls.get("on", True)),
+    return {"name": name[:120], "owner": owner, "builtin": True, "readonly": True, "enabled": bool(controls.get("on", True)),
             "trigger": {"type": "event", "name": "tico.builtin." + key},
             "steps": [], "controls": controls, "source": source, **({"description": words[:500]} if words else {})}
 

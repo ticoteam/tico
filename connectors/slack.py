@@ -765,7 +765,7 @@ def load_hub_access(path=HUB_ACCESS_FILE):
     """registry/hub-access.yaml -> the set of company human emails a bot may DM."""
     data = load_yaml(path, "registry/hub-access.yaml")
     emails = []
-    owner = str(data.get("owner_id") or "").strip().lower()
+    owner = str(data.get("owner") or "").strip().lower()
     if owner:
         emails.append(owner)
     for e in (data.get("allowed") or []):

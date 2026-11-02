@@ -390,7 +390,7 @@ def reading_brief(r):
     if not r:
         return None
     keep = ("id", "value", "period_start", "period_end", "collected_at", "quality", "evidence", "note", "source",
-            "actor", "definition_version", "supersedes")
+            "actor_id", "definition_version", "supersedes")
     return {k: r.get(k) for k in keep}
 
 
@@ -399,9 +399,9 @@ def view(record, rows, links=None, at=None):
     sparkline, and (for a goal's line) the link with its target and the status against it."""
     newest = latest(rows)
     state = assess(record, links, rows, at)
-    base = {**{k: record.get(k) for k in ("id", "slug", "name", "definition", "unit", "direction", "cadence", "owner",
-                                          "source_note", "definition_version", "created_at", "created_by", "updated_at",
-                                          "archived_at", "archived_by")},
+    base = {**{k: record.get(k) for k in ("id", "slug", "name", "definition", "unit", "direction", "cadence", "owner_id",
+                                          "source_note", "definition_version", "created_at", "created_by_id", "updated_at",
+                                          "archived_at", "archived_by_id")},
             "auto": auto(record["id"]), "latest": reading_brief(newest), "readings": len(rows),
             "freshness": state["freshness"], "spark": spark(rows)}
     if links is not None:

@@ -248,7 +248,7 @@ def install(app, store, auth, mutate, settings):
         if p["kind"] != "goal_kpi":
             return False
         used = K.kpi(c, pl["kpi_id"]) if pl.get("kpi_id") else None
-        named = H.resolve_actor(c, str(pl.get("owner_id") or "")) or ""
+        named = H.resolve_actor(c, str(pl.get("owner") or "")) or ""
         return bool(used and used["owner_id"] in hidden) or bool(named) and named in hidden
 
     def reason_view(c, who, p, hidden):
@@ -592,7 +592,7 @@ def install(app, store, auth, mutate, settings):
             wanted = GA.wanted(c, auth.owner_id(c), reads=GA.readers(c, auth))
             # Red and stale KPIs are the asker's; a proposal shows to everyone who may decide it, with the task
             # only for the one it is asked of.
-            items = [i for i in wanted if i["kind"] != "proposal" and i["owner_id"] == who.actor]
+            items = [i for i in wanted if i["kind"] != "proposal" and i["owner"] == who.actor]
             asked = {i["ref"]: i for i in wanted if i["kind"] == "proposal"}
             hidden, editor = hidden_owners(c, who), company_editor(who)
             for p in G.proposals(c, "pending"):
@@ -726,9 +726,9 @@ def install(app, store, auth, mutate, settings):
         if kind == "goal_create":
             fields_of(n, raw, (*GR.GOAL_FIELDS, "measure", "target"))
             title = plain(raw.get("title"))
-            if not title or not raw.get("owner_id"):
+            if not title or not raw.get("owner"):
                 raise Problem("validation", f"Change {n}: a new goal needs a title and an owner", 422)
-            owner = goal_owner(c, who, raw["owner_id"])
+            owner = goal_owner(c, who, raw["owner"])
             parent = goal_or_404(c, raw["parent_id"]) if raw.get("parent_id") else None
             bet = raw.get("bet_id") or None
             if bet and not S.bet(c, bet):
@@ -763,10 +763,10 @@ def install(app, store, auth, mutate, settings):
                 if title != row["title"]:
                     sets["title"] = title
                     said.append(f"title was {q(row['title'])}, now {q(title)}")
-            if raw.get("owner_id") is not None:
-                owner = goal_owner(c, who, raw["owner_id"])
+            if raw.get("owner") is not None:
+                owner = goal_owner(c, who, raw["owner"])
                 if owner != row["owner_id"]:
-                    sets["owner_id"] = owner
+                    sets["owner"] = owner
                     said.append(f"owner was {owner_name(c, row['owner_id'])}, now {owner_name(c, owner)}")
             if raw.get("parent_id") is not None:
                 parent = goal_or_404(c, raw["parent_id"]) if raw["parent_id"] else None
@@ -1085,7 +1085,7 @@ def install(app, store, auth, mutate, settings):
                     if record:
                         refuse_exposed(c, {**row, "owner_id": owner}, record["owner_id"])
             return {"goal": goal_view(c, who, G.update(c, who.actor, gid, title=body.title, body=body.body,
-                                               parent_id=body.parent_id, owner_id=owner, rank=body.rank,
+                                               parent_id=body.parent_id, owner=owner, rank=body.rank,
                                                top=body.top, bet_id=body.bet_id))}
         return mutate(request, body, work)
 

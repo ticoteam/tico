@@ -450,7 +450,7 @@ class Files:
         staged = isinstance(data, Staged)
         size = data.size if staged else len(data)
         with self.store.read() as c:
-            bot = self.writer_bot(c, who, str(fields.get("bot_id") or ""))
+            bot = self.writer_bot(c, who, str(fields.get("bot") or ""))
         source = str(fields.get("source") or "")
         relative = str(fields.get("path") or "").replace("\\", "/").strip("/")
         if relative and (".." in relative.split("/") or relative.startswith("/")):

@@ -122,13 +122,13 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     privacy.prime_attempts(c, [row["id"] for row in found])
     prime_attempt_details(c, [row["id"] for row in found])
     for row in found:
-        if not (readable.get(row["bot"]) or {}).get("read"):
+        if not (readable.get(row["bot_id"]) or {}).get("read"):
             continue
         message = H.message(c, row["message_id"])
         if not message:
             continue
         try:
-            auth.run_conversation(c, who, row["bot"], message)
+            auth.run_conversation(c, who, row["bot_id"], message)
             privacy.require_message(c, who, message)
             privacy.require_attempt(c, who, row["id"])
         except Problem:
@@ -139,7 +139,7 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
             result = {}
         reason = (login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message")
                   or ("Lease expired before completion" if row["state"] == "expired" else "Attempt failed before completion"))
-        rows.append({"id": row["id"], "bot": row["bot"],
+        rows.append({"id": row["id"], "bot": row["bot_id"],
                      "started_at": row["started_at"] or row["created_at"], "finished_at": row["finished_at"],
                      "exit": row["state"], "message_id": row["message_id"], "failure_reason": str(reason),
                      **attempt_details(c, {"id": row["id"], "finished_at": row["finished_at"]})})
@@ -449,7 +449,7 @@ def machine(c, bot):
     detail = as_served(c, bot, document, detail)
     return {"online": online, "awake": awake, "ready": online and detail.get("ready") is True,
             "readiness": detail,
-            "machine": {**{k: row[k] for k in ("runner_id", "generation", "label", "operator", "last_seen_at",
+            "machine": {**{k: row[k] for k in ("runner_id", "generation", "label", "owner_id", "last_seen_at",
                                                          "platform", "version")}, **screen_listing(row)}}
 
 
@@ -1368,7 +1368,7 @@ def fold_reconnects(items):
             first[key] = it
             continue
         first[key].setdefault("folded", []).append({k: it.get(k) for k in (
-            "id", "title", "owner", "kind", "person_ask", "note", "status", "due")})
+            "id", "title", "owner_id", "kind", "person_ask", "note", "status", "due_at")})
         gone.add(str(it["id"]))
     return [it for it in items if str(it["id"]) not in gone] if gone else items
 
@@ -1396,7 +1396,7 @@ def fold_related(items, c, me):
     for tid, it in waits.items():
         if len(claims.get(tid, ())) == 1:
             claims[tid][0].setdefault("folded", []).append({k: it.get(k) for k in (
-                "id", "title", "owner", "kind", "person_ask", "note", "status", "due")})
+                "id", "title", "owner_id", "kind", "person_ask", "note", "status", "due_at")})
             gone.add(tid)
     return [it for it in items if str(it["id"]) not in gone]
 
@@ -1733,7 +1733,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             items.append(item)
     for msg in privacy.readable_messages(c, privacy.actor(who), H.loose_asks_to(c, who.actor)):
         msg["refs"] = H._json(msg.get("refs"), {}) or {}
-        ask = {k: msg[k] for k in ("id", "from_actor", "to_actor", "body", "created_at", "conversation_id", "refs")}
+        ask = {k: msg[k] for k in ("id", "sender_id", "recipient_id", "body", "created_at", "conversation_id", "refs")}
         item = {"kind": "ask", "id": msg["id"], "message_id": msg["id"], "title": _clip(msg["body"], 160),
                 "first_line": (msg["body"] or "").split("\n")[0], "body": msg["body"], "requester_id": msg["sender_id"],
                 "origin_actor": msg["sender_id"], "conversation_id": msg["conversation_id"],
@@ -1926,7 +1926,7 @@ def fleet_snapshot(c, auth, identity, task_view):
         if (not dict(m).get("deleted_at") and not dict(m).get("deleted") and
                 index.message(m["id"], m["conversation_id"], m["refs"], m["in_reply_to"]) and
                 (not m["attempt_id"] or index.attempt(m["attempt_id"]))):
-            queued[m["bot"]] = queued.get(m["bot"], 0) + 1
+            queued[m["bot_id"]] = queued.get(m["bot_id"], 0) + 1
     # One pass for every live attempt: the per-bot SELECT below used to pay once per writable bot.
     now = H.now()
     live_by_bot = {}
@@ -1972,7 +1972,7 @@ def fleet_snapshot(c, auth, identity, task_view):
         if not relevant:
             continue
         tasks.append({k: row.get(k) for k in
-                      ("id", "title", "owner", "requester", "status", "due", "note", "updated_at")})
+                      ("id", "title", "owner_id", "requester_id", "status", "due_at", "note", "updated_at")})
     items = needs_items(c, auth, principal, task_view)
     return {"actor": principal.actor, "as_of": H.now(), "bots": bots, "tasks": tasks,
             "needs_you": items,

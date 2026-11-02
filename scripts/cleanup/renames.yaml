@@ -600,6 +600,25 @@ values: {}
 api_fields:
   attempt_id: run_id
   attempt: run
+  from_actor_name: sender_name
+  to_actor_name: recipient_name
+  operator_name: owner_name
+  ts: created_at
+  at: created_at
+  since: changed_at
+api_kept: [actor, bot, last_run, next, queued, state, status_by, updated_by]
+golden_fields:
+  bot_files: {.bot: bot_id}
+  events: {"bot!status": bot_id, status.bot: bot}
+  goal_detail: {latest.actor: actor_id, goal.status_by: status_by_id}
+  goals: {status_by: status_by_id, .owner: owner}
+  kpi_readings: {actor: actor_id, ts: measured_at}
+  kpis: {actor: actor_id}
+  pages: {bot: bot_id}
+  task_detail: {execution.bot: bot_id}
+golden_added:
+  conversations: [conversations.owner_name]
+  messages: [conversation.owner_name]
 waves:
   "1":
     rule: "M2: every *_json column drops the suffix (stored encoding unchanged)"

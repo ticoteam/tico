@@ -61,20 +61,20 @@ def sync(c, settings):
     counts = {}
     for row in queued:
         config = H._json(row['config'], {}) or {}
-        primary = execution.login_key(c, settings, row['runner_id'], row['bot'], config)
-        last = execution.last_limit(c, row['bot'])
+        primary = execution.login_key(c, settings, row['runner_id'], row['bot_id'], config)
+        last = execution.last_limit(c, row['bot_id'])
         ended = login_holds.for_attempt(c, last['id']) if last else {}
         keys = set()
         if ended:
             keys.add((ended['runner_id'], ended.get('profile') or '', ended['runtime']))
-        if not execution.fallback_choice(c, settings, row['runner_id'], row['bot'], config):
+        if not execution.fallback_choice(c, settings, row['runner_id'], row['bot_id'], config):
             keys.add(primary)
         for key in keys:
             counts[key] = counts.get(key, 0) + row['n']
     for row in queued:
         # Reuse wake batching's history/digest carrier; retries retain their own jobs and checkpoints.
-        if execution.cooling_off(c, row['bot']):
-            batch_waiters(c, row['bot'])
+        if execution.cooling_off(c, row['bot_id']):
+            batch_waiters(c, row['bot_id'])
     for (raw,) in c.execute('SELECT value FROM registry_metadata WHERE key LIKE ?', (login_holds.PREFIX + '%',)).fetchall():
         hold = H._json(raw, {}) or {}
         if not isinstance(hold, dict) or not hold.get('runner_id') or not hold.get('runtime'):

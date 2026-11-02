@@ -133,7 +133,7 @@ def test_librarian_docs_and_messages_change_only_ticos_terms_through_writes_upgr
     for path, _, want in cases:
         message = shown[made[path.name]["message"]]
         assert message["body"] == want, path.name
-        assert message["from_actor_name"] == "Librarian" and message["to_actor_name"] == "Ana Example", path.name
+        assert message["sender_name"] == "Librarian" and message["recipient_name"] == "Ana Example", path.name
 
 
 def _repair_markers(api):
@@ -260,8 +260,8 @@ def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named
             assert message["body"] == sent[message["id"]], url
             assert "body_raw" not in message, url
             if named_door:
-                assert message["from_actor_name"] == "Operations", url
-                assert message["to_actor_name"] == "Ana Example", url
+                assert message["sender_name"] == "Operations", url
+                assert message["recipient_name"] == "Ana Example", url
         shown = next(m for m in inbox["notices"] if m["id"] == notice["id"])
         if named_door:
             assert inbox["actors"] == {"bot:ops": "Operations", "human:ana": "Ana Example"}, url

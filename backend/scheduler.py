@@ -758,7 +758,7 @@ class Scheduler:
                         from . import task_privacy
                         job_ids = [row["job_id"] for row in c.execute(
                             "SELECT j.id AS job_id,j.bot_id,m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'")
-                            if not task_privacy.message_readable(c, "bot:" + row["bot"], row, current=True)]
+                            if not task_privacy.message_readable(c, "bot:" + row["bot_id"], row, current=True)]
                     for job_id in job_ids:
                         with locked("drop_unreadable:" + job_id) as c:
                             self.execution.drop_unreadable(c, job_ids=[job_id])

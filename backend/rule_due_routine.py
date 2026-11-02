@@ -38,15 +38,15 @@ def task_days_of(body, key="task_days"):
 
 def _flow(row, rule_text, days, before=None):
     title = " ".join(str(rule_text or "").split())
-    owner = "person:" + row["owner_id"][6:] if row["owner_id"].startswith("human:") else row["owner_id"]
-    trigger = {"type": "due", "first_due": row["first_due"], "repeats": row["repeats"], "open_days": days,
+    owner = "person:" + row["owner"][6:] if row["owner"].startswith("human:") else row["owner"]
+    trigger = {"type": "due", "first_due": row["first_due_on"], "repeats": row["repeats"], "open_days": days,
                "tz": row["timezone"], "rule_due_id": row["id"]}
     step = {"id": STEP_ID, "type": "action", "do": "create_task",
-            "args": {"title": title[:TITLE_MAX], "owner_id": row["owner_id"]}}
+            "args": {"title": title[:TITLE_MAX], "owner": row["owner"]}}
     name = title if len(title) <= NAME_MAX else title[:NAME_MAX - 1].rstrip() + "…"
     # A new routine starts on; one already linked keeps its state, so an edit never resumes a paused one.
     enabled = bool(before.get("enabled", True)) if before else True
-    return {**(before or {}), "name": name, "owner_id": owner, "trigger": trigger, "steps": [step], "enabled": enabled,
+    return {**(before or {}), "name": name, "owner": owner, "trigger": trigger, "steps": [step], "enabled": enabled,
             "builtin": False}
 
 

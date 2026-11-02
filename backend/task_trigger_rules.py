@@ -8,6 +8,7 @@ import logging
 from contextlib import contextmanager
 
 from . import hubdb as H
+from .migrations import renames
 
 TRIGGERS = ("task.created", "task.step_changed", "task.done", "task.declined", "task.closed")
 CONDITIONS = ("type", "step", "tag", "owner", "requester")
@@ -162,7 +163,7 @@ def _run(conn, item, rule, params):
         if action not in ACTIONS or rule["then_outcome"] != R.ACTION:
             raise ValueError("unsupported Action")
         values = {"event": item["event"], "actor": item["actor"], "task": {
-            k: row.get(k) for k in ("id", "title", "body", "note", "status", "owner", "requester", "type_id", "step_id")}}
+            k: row.get(renames.current_column("tasks", k)) for k in ("id", "title", "body", "note", "status", "owner", "requester", "type_id", "step_id")}}
         if action in R.EVENT_RUNNERS:
             revision = f"task-rule:{rule['id']}:{item['event']}:{item['revision']}"
             result = R.EVENT_RUNNERS[action](conn, rule["id"], by, params, values, event=item["event"],

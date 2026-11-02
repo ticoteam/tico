@@ -162,9 +162,9 @@ const AU_DOTS = {ok: 'ok', empty: 'ok', skipped: 'ok', failed: 'fail', waiting: 
 function auNextHTML(a) {
   if (a.enabled === false || !a.next_run) return '—';
   const at = new Date(a.next_run).getTime(), age = at > Date.now() ? auAge(a.next_run, true) : 'now';
-  if (auKind(a) === 'due' && a.next_due) {
-    const far = Date.parse(a.next_due) - Date.now() > 330 * 864e5;   // the year only once it could be mistaken
-    return `<span class="au-nx"><span class="au-nx-d">Due ${esc(auDay(a.next_due, far))}</span><span>${age === 'now' ? 'opens now' : 'opens in ' + esc(age)}</span></span>`;
+  if (auKind(a) === 'due' && a.next_due_at) {
+    const far = Date.parse(a.next_due_at) - Date.now() > 330 * 864e5;   // the year only once it could be mistaken
+    return `<span class="au-nx"><span class="au-nx-d">Due ${esc(auDay(a.next_due_at, far))}</span><span>${age === 'now' ? 'opens now' : 'opens in ' + esc(age)}</span></span>`;
   }
   return age === 'now' ? 'due' : 'in ' + esc(age);
 }

@@ -213,7 +213,7 @@ def tico_item(release):
     else:
         action, reason = False, TICO_REASONS[2]
     return {"id": f"tico:v{version}", "feed": "tico", "category": "tico", "template": "", "version": version,
-            "published": published, "summary": summary, "files": "",
+            "published_at": published, "summary": summary, "files": "",
             "source_url": f"{REPO}/blob/v{version}/CHANGELOG.md", "version_url": f"{REPO}/releases/tag/v{version}",
             "action": action, "reason": reason}
 
@@ -260,7 +260,7 @@ def template_item(entry, template):
     listed = clean(", ".join(files[:FILES_LISTED]) + (f" and {len(files) - FILES_LISTED} more"
                                                       if len(files) > FILES_LISTED else ""), 400)
     return {"id": "template:" + entry_id, "feed": "templates:" + template, "category": "templates",
-            "template": template, "version": revision[:12], "published": published,
+            "template": template, "version": revision[:12], "published_at": published,
             "summary": clean(entry.get("title") or entry.get("summary"), SUMMARY_MAX) or revision[:12], "files": listed,
             "source_url": TEMPLATE_PAGE.format(template=template), "version_url": f"{REPO}/commit/{revision}",
             "action": action, "reason": reason}

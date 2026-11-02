@@ -35094,7 +35094,7 @@
               "null"
             ]
           },
-          "operator_name": {
+          "owner_name": {
             "type": "string"
           },
           "team": {

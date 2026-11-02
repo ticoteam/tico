@@ -318,7 +318,7 @@ def check(flow):
     _check_trigger(flow.get("trigger"))
     counts = [0, False]
     _check_steps(flow.get("steps", []), "steps", set(), 0, counts)
-    return {**flow, "owner_id": owner, "enabled": flow.get("enabled", True) is not False,
+    return {**flow, "owner": owner, "enabled": flow.get("enabled", True) is not False,
             "builtin": flow.get("builtin") is True, "steps": flow.get("steps", [])}
 
 
@@ -501,7 +501,7 @@ ACTION_ARGS = {
     "label": {"name": "the label (or tag); a Gmail system label such as STARRED stays as it is"},
     "create_task": {"title": "required: the task's title",
                     "body": "the task's text",
-                    "owner_id": "a person id or a bot slug (default the automation's owner)",
+                    "owner": "a person id or a bot slug (default the automation's owner)",
                     "due": "a date (YYYY-MM-DD) for the task; a due-date trigger's due day by default"},
     "assign": {"owner": "required: a person id or a bot slug",
                "text": "a note on the change (or note)"},

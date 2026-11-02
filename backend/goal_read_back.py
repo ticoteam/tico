@@ -206,8 +206,8 @@ def canonical(c, path, body, actor):
         data = _model(path)(**body).model_dump()
     except (ValidationError, TypeError):
         return None
-    if data.get("owner_id"):
-        data["owner_id"] = owner_actor(c, data["owner_id"], actor)
+    if data.get("owner"):
+        data["owner"] = owner_actor(c, data["owner"], actor)
     return data
 
 

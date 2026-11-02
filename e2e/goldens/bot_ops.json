@@ -13,7 +13,7 @@
       "generation": 1,
       "label": "Test Mac",
       "last_seen_at": "<time>",
-      "operator": "ana",
+      "owner_id": "ana",
       "revoked_at": null,
       "runner_id": "<id1>"
     },
@@ -45,8 +45,8 @@
     "notes": 0,
     "onboarding_state": "",
     "online": true,
-    "operator": "ana",
-    "operator_name": "Ana",
+    "owner_id": "ana",
+    "owner_name": "Ana",
     "owners": [
       {
         "email": "ana@acme.example",
@@ -88,13 +88,13 @@
     "state": "active",
     "status": {
       "bot": "ops",
+      "changed_at": "<time>",
       "focus": "",
       "last_result": null,
       "last_turn_at": "<time>",
       "needs_human": 1,
-      "next_due": null,
+      "next_due_at": null,
       "open_tasks": 1,
-      "since": "<time>",
       "state": "idle",
       "task_id": "",
       "updated_at": "<time>"

@@ -400,7 +400,7 @@ async function auMoreAct(what) {
   auMenuClose();
   const a = AU.cur, state = AU;
   if (what === 'versions') { auEdOpen({kind: 'versions'}); return; }
-  if (what === 'run') { auEdOpen({kind: 'run', text: auSample(a.trigger, a.next_due)}); return; }
+  if (what === 'run') { auEdOpen({kind: 'run', text: auSample(a.trigger, a.next_due_at)}); return; }
   if (what !== 'delete' || a.builtin || !confirm(`Delete ${a.name}?`)) return;
   try {
     await writeRequest('DELETE', auApi(a.id));

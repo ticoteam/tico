@@ -98,13 +98,13 @@ def _action_error(c, action):
     if do not in ACTIONS:
         return f"an action is {'|'.join(ACTIONS)}"
     if do == "create":
-        owner = str(action.get("owner_id") or "").strip()
+        owner = str(action.get("owner") or "").strip()
         if H.is_human(owner) or (H.resolve_actor(c, owner) or "").startswith("human:"):
             return "a task for a person stays the person's to make; the Strategy Bot proposes tasks for bots only"
         actor = _bot(c, owner)
         if not actor:
             return f"no bot {owner or '(none named)'} to give the task to"
-        action["owner_id"] = actor
+        action["owner"] = actor
         action["title"] = _text(action.get("title"), 300)
         action["body"] = str(action.get("body") or "").strip()[:8000]
         if not action["title"]:
@@ -137,7 +137,7 @@ def _title(c, task_id):
 def describe(c, action):
     """One action in plain words."""
     if action["do"] == "create":
-        return f'New task for {_name(c, action["owner_id"])}: "{action["title"]}"'
+        return f'New task for {_name(c, action["owner"])}: "{action["title"]}"'
     if action["do"] == "reorder":
         row = H.task(c, action["task_id"]) or {}
         return f'Move {_title(c, action["task_id"])} to the top of {_name(c, row.get("owner_id", ""))}\'s queue'
@@ -146,7 +146,7 @@ def describe(c, action):
 
 def offline(c, action):
     """Why the bot this action reaches can't take it now, in plain words, or None."""
-    owners = [action["owner_id"]] if action["do"] == "create" else \
+    owners = [action["owner"]] if action["do"] == "create" else \
         [(H.task(c, action.get(k)) or {}).get("owner_id") for k in ("task_id", "first", "then") if action.get(k)]
     for owner in owners:
         state = (H.bot(c, H.actor_id(owner or "")) or {}).get("state") if owner else None
@@ -218,7 +218,7 @@ def _apply(c, action, goal_id, approver, proposal_id):
         made = H.task_create(c, STRATEGY_BOT, action["title"],
                              (action["body"] + "\n\n" if action["body"] else "") +
                              f"Suggested by the {strategy_bot.name(c)} to recover a goal; approved by {who}.",
-                             action["owner_id"], goal_id=goal_id or None, lane="company")
+                             action["owner"], goal_id=goal_id or None, lane="company")
         return {"task_id": made["id"]}
     if action["do"] == "reorder":
         row = H.task(c, action["task_id"])

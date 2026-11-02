@@ -1719,11 +1719,11 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
 
     heir = "bot:" + successor if successor else H.human_actor(config["owner_id"])
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-    for field in ("owner", "requester"):
-        for task in c.execute(f"SELECT id FROM tasks WHERE {field}=? AND status IN ({marks})",
+    for field, column in (("owner", "owner_id"), ("requester", "requester_id")):
+        for task in c.execute(f"SELECT id FROM tasks WHERE {column}=? AND status IN ({marks})",
                               ("bot:" + bot, *H.ACTIVE_STATUSES)).fetchall():
             H._task_event(c, task["id"], actor, field, "bot:" + bot, heir, "Its bot was removed")
-            c.execute(f"UPDATE tasks SET {field}=?,updated_at=?,version=version+1 WHERE id=?",
+            c.execute(f"UPDATE tasks SET {column}=?,updated_at=?,version=version+1 WHERE id=?",
                       (heir, ts, task["id"]))
     H._recount(c, "bot:" + bot)
     H._recount(c, heir)

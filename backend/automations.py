@@ -159,17 +159,18 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
     last = c.execute("SELECT id, status, started_at, finished_at FROM automation_runs WHERE automation_id=? "
                      "ORDER BY started_at DESC LIMIT 1", (row["id"],)).fetchone()
     from . import redesign_migration
+    flow["owner_id"] = flow.pop("owner")
     out = {"id": row["id"], **flow, "version": row["version"], "created_at": row["created_at"],
-           "created_by": row["created_by"], "updated_at": row["updated_at"], "last_run": dict(last) if last else None,
+           "created_by_id": row["created_by_id"], "updated_at": row["updated_at"], "last_run": dict(last) if last else None,
            "kind": AO.kind_of(flow),
            # Wake rules that name a step their type does not have: they never fire until one is changed.
            "problems": redesign_migration.wake_problems(c, row["id"], flow) if flow.get("wakes") else []}
     if flow["trigger"]["type"] == "schedule":
-        out["next_run"] = row["next_due"] or _iso(_due(flow["trigger"], datetime.now(timezone.utc)))
+        out["next_run"] = row["next_due_at"] or _iso(_due(flow["trigger"], datetime.now(timezone.utc)))
     if flow["trigger"]["type"] == "due":
         # next_due is the next due day (a date); next_run is when its run starts.
-        day = _due_day(row["next_due"])
-        out["next_due"], out["next_run"] = (None, None) if not day else (
+        day = _due_day(row["next_due_at"])
+        out["next_due_at"], out["next_run"] = (None, None) if not day else (
             day.isoformat(), _iso(D.fire_at(day, D.open_days_of(flow["trigger"]), D.zone_of(flow["trigger"]))))
     if flow.get("enabled") is False:
         # Paused, not just off: the run guard turned it off and nobody has changed it since.
@@ -777,7 +778,7 @@ LISTENING_PROMPT = ("A listening match for Market ({{listening.destination}}): {
 def briefing_flow(cron="0 7 * * *", tz=None, prompt=BRIEFING_PROMPT):
     """`Market briefing`: the Librarian's turn writes it; the run posts what it wrote to Market and Updates."""
     from .redesign_migration import _zone
-    return {"name": "Market briefing", "owner_id": "bot:" + LIBRARIAN,
+    return {"name": "Market briefing", "owner": "bot:" + LIBRARIAN,
             "trigger": {"type": "schedule", "cron": cron, "tz": tz or _zone()},
             "steps": [{"id": "brief", "type": "bot_turn", "bot": "bot:" + LIBRARIAN, "prompt": prompt},
                       {"id": "post", "type": "action", "do": "post_update", "args": {"to": ["market", "updates"]}}]}
@@ -801,7 +802,7 @@ def _market_builtins(c, settings=None):
     from . import listening
     dests = listening.destinations(settings, c, check_questions=False) if settings is not None else listening.stored(c)
     for key in sorted(k for k, cfg in dests.items() if cfg.get("receiver") == "bot:" + LIBRARIAN):
-        out.append({"key": LISTENING_KEY + key, "name": f"Market listening · {key}"[:120], "owner_id": "bot:" + LIBRARIAN,
+        out.append({"key": LISTENING_KEY + key, "name": f"Market listening · {key}"[:120], "owner": "bot:" + LIBRARIAN,
                     "trigger": {"type": "listening", "destination": key},
                     "steps": [{"id": "update", "type": "bot_turn", "bot": "bot:" + LIBRARIAN, "prompt": LISTENING_PROMPT}]})
     return out
@@ -1010,7 +1011,7 @@ def _absorbed(c, row):
 def _bot_away(c, row):
     """Why a schedule owned by a bot that is not active (paused, being set up) is passed over until it is back, as the
     routine scheduler passed over its routines, or None."""
-    owner = flow_of(row).get("owner_id") or ""
+    owner = flow_of(row).get("owner") or ""
     found = H.bot(c, owner[4:]) if owner.startswith("bot:") else None
     return f"its bot is {found.get('state')}" if found and found.get("state") != "active" else None
 
@@ -1138,7 +1139,7 @@ def turn_source(c):
                     (refs.get("automation_run"),)).fetchone() if refs.get("automation_run") else None
     if not run:
         return None
-    out = {"turn": {"attempt": attempt, "bot_id": found["bot_id"], "task": refs.get("task")},
+    out = {"turn": {"attempt": attempt, "bot": found["bot_id"], "task": refs.get("task")},
            "automation": run["automation_id"], "run": refs["automation_run"]}
     try:
         heard = (json.loads(run["state"] or "{}").get("payload") or {}).get("listening")
@@ -2130,7 +2131,7 @@ def due_input(trigger, day):
 
 def _next_due_day(row, trigger, at):
     """The routine's next due day not yet queued (its cursor), or None when none is left."""
-    return _due_day(row["next_due"]) if row["next_due"] is not None else D.start(trigger, at)
+    return _due_day(row["next_due_at"]) if row["next_due_at"] is not None else D.start(trigger, at)
 
 
 def _same_trigger(c, aid, version, trigger):

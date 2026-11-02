@@ -43,6 +43,10 @@ A rename codemod passes its old-to-new map as YAML (`--rename-map PATH`):
     columns: {"table.old_col": new_col}  # a column renamed in place; the table is named by its old name
     tables:  {old_table: new_table}      # a table renamed
 
+`scripts/cleanup/renames.yaml` is such a map, with more sections (`api_fields`, `api_kept`, `golden_fields`; see
+`renames.py`). To prove a codemod changed only names, run the goldens of the commit before it through its map:
+`python3 scripts/cleanup/check_goldens.py REF` compares them with the goldens in the working tree.
+
 `fields` renames the golden side before comparing, so the contract passes only when the renamed code still returns the
 same data under the new key. `columns` and `tables` do the same for the upgrade's before-state. Without a map, the
 kinds compare as they are on main. The map is read by `renames.py`; a malformed map is refused before any kind runs.

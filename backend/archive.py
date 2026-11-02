@@ -95,5 +95,5 @@ def install_archives(app, store):
             row = c.execute("SELECT * FROM archives WHERE source=?", (source,)).fetchone()
             if not row or not authorized(request.state.identity, row):
                 raise Problem("not_found", "Archive not found or unavailable to this account", 404)
-            return {**{k: row[k] for k in ("source", "digest", "imported", "owner", "kind")},
+            return {**{k: row[k] for k in ("source", "digest", "imported_at", "owner", "kind")},
                     "content": json.loads(row["payload"])}

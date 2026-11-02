@@ -173,7 +173,7 @@ def prime(conn, rows):
                                       "ORDER BY created_at DESC" % ",".join("?" * len(part)), (*part, FIELD)):
                 for wanted, last in outcomes.items():
                     if event["new"] in wanted:
-                        last.setdefault(event["task_id"], {k: event[k] for k in ("ts", "old", "new")})
+                        last.setdefault(event["task_id"], {k: event[k] for k in ("created_at", "old", "new")})
         for wanted, last in outcomes.items():
             seed(conn, _last_sql(wanted), {(tid, FIELD, *wanted): last.get(tid) for tid in ids})
         runs = sorted({aid for row in rows for aid in (row.get("carried_by"), (condition(row) or {}).get("run"))

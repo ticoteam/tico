@@ -1,5 +1,7 @@
 """The rename map the e2e kinds read (e2e/renames.py): its shape is checked, and a rename applied to a golden or a
 before-state makes the comparison pass only when the new names are the ones the code now uses."""
+from pathlib import Path
+
 import pytest
 
 from e2e import renames
@@ -8,12 +10,43 @@ from e2e.preserve import _combine, _digest, compare
 
 def test_a_map_takes_the_three_sections_and_nothing_else(tmp_path):
     path = tmp_path / "map.yaml"
-    path.write_text("fields: {task_id: work_id}\ncolumns: {\"tasks.owner\": owner_actor}\ntables: {bots: bot_rows}\n")
-    assert renames.load(path) == {"fields": {"task_id": "work_id"}, "columns": {"tasks.owner_id": "owner_actor"},
-                                  "tables": {"bots": "bot_rows"}}
+    path.write_text("fields: {task_id: work_id}\ncolumns: {\"tasks.title\": heading}\ntables: {bots: bot_rows}\n")
+    assert renames.load(path) == {"fields": {"task_id": "work_id", "title": "heading"}, "columns": {"tasks.title": "heading"},
+                                  "tables": {"bots": "bot_rows"}, "golden_fields": {}, "golden_added": {}}
     empty = tmp_path / "empty.yaml"
     empty.write_text("")
     assert renames.load(empty) == renames.EMPTY
+
+
+def test_a_column_renames_its_api_field_unless_its_names_went_apart_or_the_api_kept_it(tmp_path):
+    path = tmp_path / "map.yaml"
+    path.write_text("columns: {a.owner: owner_id, a.ts: created_at, b.ts: measured_at, a.bot: bot_id}\n"
+                    "api_kept: [bot]\napi_fields: {ts: created_at}\ngolden_fields: {readings: {ts: measured_at}}\n"
+                    "base: abc\nwaves: {}\n")
+    loaded = renames.load(path)
+    assert loaded["fields"] == {"owner": "owner_id", "ts": "created_at"}
+    assert renames.golden_fields(loaded, "readings") == {"owner": "owner_id", "ts": "measured_at"}
+    assert renames.golden_fields(loaded, "tasks") == loaded["fields"]
+
+
+def test_a_field_can_be_named_under_its_parent():
+    body = {"bot": 1, "files": [{"bot": 2}], "execution": {"bot": 3}}
+    assert renames.apply_fields(body, {".bot": "bot_id", "execution.bot": "bot_id"}) == {
+        "bot_id": 1, "files": [{"bot": 2}], "execution": {"bot_id": 3}}
+
+
+def test_a_field_can_be_left_alone_where_the_object_has_another_key():
+    body = [{"bot": 1}, {"bot": 2, "status": {}}]
+    assert renames.apply_fields(body, {"bot!status": "bot_id"}) == [{"bot_id": 1}, {"bot": 2, "status": {}}]
+
+
+def test_a_key_the_answer_gained_is_left_out_only_under_its_parent():
+    body = {"owner_name": 1, "rows": [{"owner_name": 2, "id": 3}]}
+    assert renames.drop_added(body, ["rows.owner_name"]) == {"owner_name": 1, "rows": [{"id": 3}]}
+
+
+def test_the_codemod_map_can_be_read():
+    assert renames.load(Path(__file__).resolve().parents[2] / "scripts/cleanup/renames.yaml")["fields"]
 
 
 @pytest.mark.parametrize("text", ["colums: {a: b}\n", "fields: {a: a}\n", "fields: {a: ''}\n", "tables: {a: 3}\n"])

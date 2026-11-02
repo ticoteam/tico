@@ -88,4 +88,7 @@ def worktree(row):
     """A worktree link row with its stored `detail` text as `detail_json` and its time columns under their old names."""
     if not isinstance(row, dict) or "detail" not in row:
         return row
-    return _times("task_links", {("detail_json" if k == "detail" else k): v for k, v in row.items()})
+    out = _times("task_links", {("detail_json" if k == "detail" else k): v for k, v in row.items()})
+    if "owner_id" in out:
+        out["owner"] = out["owner_id"]
+    return out

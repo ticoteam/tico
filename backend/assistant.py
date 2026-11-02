@@ -1351,7 +1351,7 @@ async def fast_bot_today(api, who, bots, slug):
     since = H.shift(H.now(), hours=-24)
     updates = await api.get("updates", bot=bot["id"], limit=10) or {}
     recent = [u for u in updates.get("updates") or [] if str(u.get("created_at") or "") >= since]
-    tasks = await api.get("tasks", owner_id=bot["id"], limit=100) or {}
+    tasks = await api.get("tasks", owner=bot["id"], limit=100) or {}
     touched = [t for t in tasks.get("tasks") or [] if str(t.get("updated_at") or "") >= since]
     lines, links = [], []
     for u in recent[:3]:

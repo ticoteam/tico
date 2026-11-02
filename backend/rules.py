@@ -990,7 +990,7 @@ def _message_values(conn, task, message):
     out = {"event": event, "text": str(message.get("body") or ""), "actor": str(message.get("actor") or ""),
            "to": H.actor_id(message.get("target") or "")}
     if task:
-        out["task"] = {key: task.get(key) for key in ("id", "title", "status", "owner", "requester", "step_id")}
+        out["task"] = {key: task.get(renames.current_column("tasks", key)) for key in ("id", "title", "status", "owner", "requester", "step_id")}
     return out
 
 

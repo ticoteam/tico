@@ -3601,7 +3601,7 @@ def task_private_readable(conn, actor, row):
         return True
     from .task_rights import private_subjects
     inherited = private_subjects(conn, actor)
-    if any(row[k] in inherited for k in ("owner", "requester")):
+    if any(row[k] in inherited for k in ("owner_id", "requester_id")):
         return True
     if "guest" not in row:
         row = _one(conn, "SELECT guest FROM tasks WHERE id=?", (row["id"],)) or {}
@@ -5161,7 +5161,7 @@ def pr_state(links):
 def task_tree(conn, task_id, visible_ids=None):
     rows = descendants(conn, task_id)
     # A review or QA child's verdict rides along, so the parent's Subtasks list shows it (ui/app/task-code.js).
-    nodes = {r["id"]: {**{k: r[k] for k in ("id", "title", "status", "owner")},
+    nodes = {r["id"]: {**{k: r[k] for k in ("id", "title", "status", "owner_id")},
                        "verdict": r.get("verdict"), "verdict_head": r.get("verdict_head")} for r in rows}
     links = {}
     if nodes:
@@ -6257,7 +6257,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                    if all(task_private_readable(conn, reader, item) for reader in readers)
                    and (private or not dedicated or not task_private(conn, item))]
     reconcile = {"with_actor": actor, "active": [
-        {k: item.get(k) for k in ("id", "title", "status", "owner", "requester")} for item in related
+        {k: item.get(k) for k in ("id", "title", "status", "owner_id", "requester_id")} for item in related
     ], "guidance": "Check for overlap. Reuse shared work; keep distinct decisions and deliverables separate."} if related else None
     if started_in:
         _task_started(conn, task(conn, row["id"]), started_in)
@@ -6577,7 +6577,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         number = None               # sent back unchanged
     wanted = [k for k, v in (("lane", lane), ("number", number)) if v is not None]
     if not is_bot(actor) and labels is not None and not any(
-            is_bot(row[k]) and task_represents(conn, actor, row[k]) for k in ("owner", "requester")):
+            is_bot(row[k]) and task_represents(conn, actor, row[k]) for k in ("owner_id", "requester_id")):
         wanted.insert(1, "labels")  # a person who is not a mover changes no label, as before
     if wanted and not mover:
         refuse(conn, actor, "identity",
@@ -6707,11 +6707,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if status == "done":
         sets.append("done_at=:done_at")
         args["done_at"] = ts
-    cleared = {"done": ("closed_at", "closed_by"), "declined": ("done_at", "closed_at", "closed_by")}.get(
-        status, ("done_at", "closed_at", "closed_by") if status in ACTIVE_STATUSES else ())
+    cleared = {"done": ("closed_at", "closed_by_id"), "declined": ("done_at", "closed_at", "closed_by_id")}.get(
+        status, ("done_at", "closed_at", "closed_by_id") if status in ACTIVE_STATUSES else ())
     for field in cleared:
         if row.get(field) is not None:
-            _task_event(conn, task_id, actor, field, row[field], None, note or "")
+            _task_event(conn, task_id, actor, field.removesuffix("_id"), row[field], None, note or "")
             sets.append(field + "=NULL")
     # A reopened check judges again; record any new verdict after the reopen event starts its cycle.
     reopening = row["status"] in ("done", "closed", "declined") and status in ACTIVE_STATUSES
@@ -6877,7 +6877,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             if not linked and _one(conn, "SELECT 1 FROM sqlite_master WHERE name='slack_events'"):
                 linked = _one(conn, "SELECT 1 FROM slack_events WHERE actor=? "
                               "AND state IN ('routed','recorded') LIMIT 1", (after["requester_id"],))
-            refs = {"task_completion": {"status": status, "owner_id": after["owner_id"],
+            refs = {"task_completion": {"status": status, "owner": after["owner_id"],
                     "note": str(note or "").splitlines()[0] if note else "",
                     "notify": bool(not quiet and row["status"] != status and not duplicate
                                    and linked and person.get("notify_slack_task_done") is not False)}}
@@ -6942,7 +6942,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if not closing_step:
         _parent_finished(conn, after, row["status"], actor, told=subtask_told, wake=wake_others)
     if asked_in:
-        after = {**after, "asked_in": {k: asked_in[k] for k in ("id", "title", "owner")}}
+        after = {**after, "asked_in": {k: asked_in[k] for k in ("id", "title", "owner_id")}}
     return {**after, "warnings": plain} if plain else after
 
 
@@ -8843,7 +8843,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
            "state": live if live is not None else (old or {}).get("state") or "idle",
            "focus": focus if focus is not None else (old or {}).get("focus") or "",
            "task_id": task_id if task_id is not None else (old or {}).get("task_id"),
-           "since": ts if (not old or live not in (None, old["state"])) else old["changed_at"],
+           "changed_at": ts if (not old or live not in (None, old["state"])) else old["changed_at"],
            "last_turn_at": (old or {}).get("last_turn_at"),
            "last_result": (old or {}).get("last_result"),
            "next_due_at": (old or {}).get("next_due_at"), "updated_at": ts}
@@ -8865,7 +8865,7 @@ def status_result(conn, actor, bot_slug, last_result=None, last_turn_at=None, ne
     if not status(conn, slug):
         status_set(conn, actor, slug, state="idle")
     for field, value in (("last_result", last_result), ("last_turn_at", last_turn_at),
-                         ("next_due", next_due)):
+                         ("next_due_at", next_due)):
         if value is not None:
             conn.execute(f"UPDATE bot_status SET {field}=?, updated_at=? WHERE bot=?",
                          (value, now(), slug))

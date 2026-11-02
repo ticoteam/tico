@@ -3,7 +3,7 @@
     "actors": {
       "bot:ops": "ops"
     },
-    "bot": "ops",
+    "bot_id": "ops",
     "can_manage": true,
     "files": [
       {

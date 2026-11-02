@@ -38,7 +38,7 @@ def check(c, who, auth, settings):
     seen = auth.bot_accesses(c, who)
     since = H.shift(H.now(), hours=-FAILING_HOURS)
     stuck_before = H.shift(H.now(), hours=-STUCK_SETUP_HOURS)
-    failed = {r["bot"]: r["n"] for r in c.execute(
+    failed = {r["bot_id"]: r["n"] for r in c.execute(
         "SELECT bot_id, count(*) n FROM attempts WHERE state IN ('failed','expired') AND finished_at>? GROUP BY bot_id", (since,))}
     assigned = {r["bot"]: (r["runner_id"], r["label"]) for r in c.execute(
         "SELECT a.bot,a.runner_id,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE r.revoked_at IS NULL")}

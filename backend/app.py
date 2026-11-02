@@ -1156,7 +1156,7 @@ def create_app(settings=None):
         if c is not None and hold_marks is None:
             hold_marks = task_holds.marks(c, [row])
         value["holds"] = task_holds.public(row, (hold_marks or {}).get(row["id"]))
-        for field in ("snoozed_until", "snoozed_by", "snoozed_note", "blocked_since", "blocked_reason", "blocked_kind",
+        for field in ("snoozed_until", "snoozed_by_id", "snoozed_note", "blocked_since", "blocked_reason", "blocked_kind",
                       "blocked_from_step", "blocked_from_status", "blocked_gate"):
             value.pop(field, None)
         if not value.get("occurrence"):
@@ -2341,7 +2341,7 @@ def create_app(settings=None):
 
     # What a caller who may only see a bot is told about it: its name, role, who runs it and who it
     # reports to. Its status, machine, queue and configuration are its activity, which is Read.
-    SEE_ONLY = ("slug", "display_name", "state", "description", "team", "operator", "reports_to", "owners",
+    SEE_ONLY = ("slug", "display_name", "state", "description", "team", "owner_id", "reports_to", "owners",
                 "thread_mode", "temp", "access", "bot_owners", "onboarding_state", "private_tasks_default", "stage",
                 "can_complete_onboarding")
 
@@ -2496,7 +2496,7 @@ def create_app(settings=None):
                 reports_bot = H.bot(c, reports) or {}
                 value["reports_to_name"] = reports_bot.get("display_name") or reports_bot.get("slug") or reports
             if value.get("owner_id"):
-                value["operator_name"] = (H.human(c, value["owner_id"]) or {}).get("name") or value["owner_id"]
+                value["owner_name"] = (H.human(c, value["owner_id"]) or {}).get("name") or value["owner_id"]
             return value
 
     @app.get("/api/v2/org")
@@ -4458,7 +4458,7 @@ def create_app(settings=None):
                     gate = ask_ingest.apply(c, verdict)
                     ask_ingest.record(c, verdict, gate, task_id)
                     if gate["acts"]:
-                        fields["owner_id"] = None
+                        fields["owner"] = None
                 elif verdict["kind"] == "wait" and row["owner_id"] == who.actor and \
                         row.get("waiting_on") != verdict["person"] and \
                         H.resolve_actor(c, body.waiting_on) == verdict["person"]:
@@ -4474,13 +4474,13 @@ def create_app(settings=None):
                 gates.append(gate)
             if "size" in body.model_fields_set and body.size is None:
                 fields["clear_size"] = True
-            if fields.get("owner_id") and body.owner:
+            if fields.get("owner") and body.owner:
                 new_owner = auth.target(c, who, body.owner, need="write")
                 if new_owner != row["owner_id"]:
                     task_caps.check(c, who.actor, new_owner)
             after = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
                                   receipt_owner=Access.load_owner(c, settings)["email"], public_allowance=allowance)
-            if fields.get("owner_id") and body.owner and new_owner != row["owner_id"]:
+            if fields.get("owner") and body.owner and new_owner != row["owner_id"]:
                 task_caps.record(c, task_id, who.actor, new_owner)
             warnings = after.get("warnings")
             for verdict, gate in waits:

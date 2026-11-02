@@ -13,7 +13,8 @@
         "id": "<conversation>",
         "kind": "chat",
         "last_message_at": "<time>",
-        "owner_actor": "human:ana",
+        "owner_id": "human:ana",
+        "owner_name": "Ana",
         "participant_names": [
           "Ana",
           "ops"
@@ -33,7 +34,7 @@
         "id": "<id1>",
         "kind": "notice",
         "last_message_at": "<time>",
-        "owner_actor": null,
+        "owner_id": null,
         "participant_names": [
           "ops",
           "Ana"
@@ -53,7 +54,7 @@
         "id": "<id2>",
         "kind": "task",
         "last_message_at": "<time>",
-        "owner_actor": null,
+        "owner_id": null,
         "participant_names": [
           "Ana",
           "ops"
@@ -73,7 +74,7 @@
         "id": "<id3>",
         "kind": "task",
         "last_message_at": "<time>",
-        "owner_actor": null,
+        "owner_id": null,
         "participant_names": [
           "Ana"
         ],
@@ -91,7 +92,7 @@
         "id": "<id4>",
         "kind": "notice",
         "last_message_at": "<time>",
-        "owner_actor": null,
+        "owner_id": null,
         "participant_names": [
           "keeper",
           "Ana"

@@ -41,7 +41,7 @@ function auQuestionIds(s) {
 }
 const auActionArgs = s => {
   const a = s.args || {};
-  const who = a.owner_id || a.to || a.bot;
+  const who = a.owner || a.to || a.bot;
   return who ? 'to ' + auActorName(String(who).includes(':') ? who : 'bot:' + who) : a.label || a.endpoint || '';
 };
 
