@@ -78,3 +78,11 @@ def live_months(c: sqlite3.Connection, book_id: str, first: str, last: str) -> l
                      "AND e.source_id<'raw_totals:'||b.id||';' WHERE e.book_id=? AND e.source='import' "
                      "AND e.status='posted' AND e.reverses_id IS NULL AND substr(e.entry_date, 1, 7) BETWEEN ? AND ? "
                      "ORDER BY month", (book_id, first, last)).fetchall()
+
+
+def live_span(c: sqlite3.Connection, book_id: str) -> tuple[str, str] | None:
+    """The first and the last month (YYYY-MM) holding a standing raw-totals entry, or None when there is none."""
+    row = c.execute("SELECT min(substr(entry_date, 1, 7)), max(substr(entry_date, 1, 7)) FROM fin_entries WHERE "
+                    "book_id=? AND source='import' AND status='posted' AND reverses_id IS NULL AND "
+                    "source_id>='raw_totals:' AND source_id<'raw_totals;'", (book_id,)).fetchone()
+    return (str(row[0]), str(row[1])) if row is not None and row[1] else None

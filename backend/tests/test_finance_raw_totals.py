@@ -265,3 +265,24 @@ def test_a_grantee_without_payroll_detail_learns_nothing_from_an_import(books):
                                                    "full_detail": ["human:dan"]}).status == "committed"
         again = act(c, "human:dan", "import_raw_totals", jan, "dan-replay-detail")
         assert again.result["already_imported"] is True and again.result["batch_id"] == batch
+
+
+def test_a_posting_dated_in_a_raw_totals_month_is_refused_until_its_raw_entry_is_reversed(books):
+    """§4.1: a bill or journal dated in a month holding live raw totals is refused by the posting path itself. The raw
+    entry's reversal, the raw import and every other reversal still post, and the refused bill posts once it is undone."""
+    with books.transaction() as c:
+        r = act(c, OWNER, "import_raw_totals", _body())
+        assert r.status == "committed", r.reason
+        feb = next(m["entry_id"] for m in r.result["months"] if m["month"] == "2026-02")
+        vendor = str(act(c, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor"}).result["contact_id"])
+        bill = str(act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-02-10", "lines": [
+            {"account_id": account(c, "6100"), "amount": 5_000}]}).result["bill_id"])
+        before = _count(c, "fin_entries")
+        approved = act(c, OWNER, "bill_approve", {"bill_id": bill})
+        stray = act(c, OWNER, "journal", {"date": "2026-02-20", "memo": "stray", "lines": [
+            {"account_id": account(c, "6900"), "amount": 10_000}, {"account_id": account(c, "1000"), "amount": -10_000}]})
+        for refused in (approved, stray):
+            assert refused.status == "failed" and refused.code == CONFLICT and "raw totals" in refused.reason
+        assert _count(c, "fin_entries") == before
+        assert act(c, OWNER, "journal", {"reverses": feb}).status == "committed"
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
