@@ -81,8 +81,14 @@ def delivery(c: Any, preset: str, body: Mapping[str, object]) -> str:
 
 
 def pass_once(store: Any, vault: object, settings: Any, *, now: str) -> list[str]:
-    """One pass over this install's books connection, when its book is a provider's. Returns what the pass recorded.
-    A webhook waiting means the change feed is read now; the events it waited on are done once that read lands."""
+    """One pass: the Gateway relays of the books connections that lack one are made first (books_link.ensure_relays), then
+    the books pass runs. Returns what the pass recorded."""
+    return books_link.ensure_relays(store, vault, settings, now=now) + _sync_pass(store, vault, settings, now=now)
+
+
+def _sync_pass(store: Any, vault: object, settings: Any, *, now: str) -> list[str]:
+    """The books pass for this install's books connection, when its book is a provider's. A webhook waiting means the
+    change feed is read now; the events it waited on are done once that read lands."""
     from ..hook_relay import link_of
     with store.read() as c:
         book = SL.book(c)

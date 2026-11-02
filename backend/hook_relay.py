@@ -146,6 +146,25 @@ def forget(c, trigger_id):
     c.execute("UPDATE trigger_relays SET deleted_at=? WHERE trigger_id=? AND deleted_at IS NULL", (H.now(), trigger_id))
 
 
+def keep(c, *, relay_id, trigger_id, prefix, by):
+    """HQ's relay kept as the trigger's live one, with its audit event."""
+    c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?) "
+              "ON CONFLICT(relay_id) DO UPDATE SET trigger_id=excluded.trigger_id,address_prefix=excluded.address_prefix,"
+              "deleted_at=NULL,hq_gone=0", (relay_id, trigger_id, prefix, by, H.now()))
+    H.event(c, by, "trigger.relay_created", trigger_id, {"relay": relay_id})
+
+
+def keep_answer(c, answer, *, trigger_id, by):
+    """HQ's answer to a relay this install asked for (`POST relays`), kept as the trigger's live relay. False, and nothing
+    kept, when the answer is not one this install can use."""
+    relay_id = str(answer.get("relay_id") or "")
+    prefix = _prefix(str(answer.get("address") or ""), relay_id)
+    if not RELAY.fullmatch(relay_id) or not prefix:
+        return False
+    keep(c, relay_id=relay_id, trigger_id=trigger_id, prefix=prefix, by=by)
+    return True
+
+
 def clean_wake_url(value):
     """The address HQ will be asked to knock on: https, a host, no user or password, one line. None turns it off."""
     if value is None:
@@ -526,10 +545,7 @@ class HookRelay:
             elif existing:
                 pass                                # the same HQ relay (a concurrent retry with the same key): keep it
             else:
-                c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?) "
-                          "ON CONFLICT(relay_id) DO UPDATE SET trigger_id=excluded.trigger_id,address_prefix=excluded.address_prefix,"
-                          "deleted_at=NULL,hq_gone=0", (relay_id, trigger_id, prefix, who.actor, H.now()))
-                H.event(c, who.actor, "trigger.relay_created", trigger_id, {"relay": relay_id})
+                keep(c, relay_id=relay_id, trigger_id=trigger_id, prefix=prefix, by=who.actor)
                 tico_notices.ensure(c, self.owner(c))      # HQ made this install's Tico Team relay with its first
         if extra:
             self.ask(link, "POST", f"relays/{extra}/delete", {}, "forget:" + extra, quiet=True)

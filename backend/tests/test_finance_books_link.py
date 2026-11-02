@@ -680,3 +680,70 @@ def test_a_replacement_waits_for_a_refresh_at_hq_and_the_newer_pair_is_the_one_k
     with books.read() as c:
         assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-2"   # the replacement is last
         assert SX.books_status(c, cid) == "active"
+
+
+RELAY_ID = "hr_0123456789abcdef"
+
+
+def _relay_asks(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, Any, Any]]:
+    """HQ's relay endpoint in place of the network: every ask is recorded and answered with one relay."""
+    asks: list[tuple[str, str, Any, Any]] = []
+
+    def call(link: object, method: str, path: str, body: Any = None, idempotency: Any = None, **_: Any) -> dict[str, Any]:
+        asks.append((method, path, body, idempotency))
+        return {"relay_id": RELAY_ID, "address": f"https://hooks.tico.dev/{RELAY_ID}"}
+    monkeypatch.setattr(hook_relay.Link, "call", call)
+    monkeypatch.setattr(hook_relay, "link_of", lambda c, vault, settings: LINK)
+    return asks
+
+
+def test_connecting_makes_the_books_trigger_that_takes_intuit_or_xero_calls(books, monkeypatch):
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))
+    cid = _claimed(books, T._VAULT[0])
+    with books.read() as c:
+        row = c.execute("SELECT preset, consumer, deleted_at FROM triggers WHERE id=?", (cid,)).fetchone()
+    assert row is not None and tuple(row) == ("intuit", "finance", None)
+
+
+def test_the_books_pass_asks_hq_for_each_connections_relay_once_and_keeps_it(books, monkeypatch):
+    vault = T._VAULT[0]
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))
+    cid = _claimed(books, vault)
+    asks = _relay_asks(monkeypatch)
+    assert books_link.ensure_relays(books, vault, None, now=AT) == []
+    assert books_link.ensure_relays(books, vault, None, now=AT) == []     # the relay is kept: no second ask
+    assert asks == [("POST", "relays", {"trigger_id": cid, "name": "QuickBooks"}, "books-relay:" + cid)]
+    with books.read() as c:
+        kept = c.execute("SELECT relay_id FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL", (cid,)).fetchall()
+    assert [row[0] for row in kept] == [RELAY_ID]
+
+
+def test_a_relayed_intuit_call_for_the_connection_is_kept_on_its_trigger(books, monkeypatch):
+    from backend import triggers
+    vault = T._VAULT[0]
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))
+    cid = _claimed(books, vault)
+    _relay_asks(monkeypatch)
+    books_link.ensure_relays(books, vault, None, now=AT)
+    body = json.dumps({"type": "tico.finance.webhook", "provider": "quickbooks", "company_id": COMPANY, "external_id": "evt-9",
+                       "payload": {"eventNotifications": [{"realmId": "123"}]}}).encode()
+    with books.transaction() as c:
+        got = triggers.receive(c, cid, body, {"content-type": "application/json"}, secret=None, via="gateway",
+                               delivery_id="relay-9", vault=None)
+    assert got.outcome == "accepted"
+    with books.read() as c:
+        assert c.execute("SELECT count(*) FROM fin_inbox").fetchone()[0] == 1
+
+
+def test_disconnecting_takes_the_connections_trigger_and_relay_with_it(books, monkeypatch):
+    vault = T._VAULT[0]
+    hq = HQ(claim=[tokens("acc-1", "ref-1")], disconnect=[books_link.ReconnectRequired("reconnect_required")])
+    monkeypatch.setattr(books_link, "_call", hq)
+    cid = _claimed(books, vault)
+    _relay_asks(monkeypatch)
+    books_link.ensure_relays(books, vault, None, now=AT)
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    with books.read() as c:
+        assert c.execute("SELECT deleted_at IS NOT NULL FROM triggers WHERE id=?", (cid,)).fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL",
+                         (cid,)).fetchone()[0] == 0

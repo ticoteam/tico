@@ -31,7 +31,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Mapping, cast
 
-from ..hook_relay import Failed, Link, Stop
+from ..hook_relay import Failed, Link, Stop, forget as forget_relay, keep_answer
+from ..triggers import digest
 from .core import mirror as M
 from .store import mirror as SX
 from .store import tico
@@ -44,6 +45,7 @@ VAULT_TRIES = 2                       # the claimed pair is written to the vault
 FLOWS = "finance-books-flows"         # the consents this install started, by flow id, until HQ sends the browser back
 FLOW_S = 1800                         # seconds a started consent may wait for its return
 LABEL = {"quickbooks": "QuickBooks", "xero": "Xero"}
+PRESET = {"quickbooks": "intuit", "xero": "xero"}      # a books connection's provider -> the preset of its trigger (§3.4)
 REASON = re.compile(r"[a-z_]{1,40}")  # HQ's reason, kept only when it is a plain code
 # HQ answers these by code, and each is a reason the caller acts on or shows (a 409 is not always a reconnect).
 REASONS = ("access_expired", "connected_elsewhere", "revoke_failed")
@@ -370,10 +372,54 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
             SX.books_connection_insert(c, cid=cid, provider=provider, name=name, by=by, at=now)
             SX.set_books_settings(c, cid, {"provider": provider, "company_id": company_id,
                                           "realm_id": tokens.realm_id, "tenant_id": tokens.tenant_id})
+        _keep_trigger(c, cid, provider=provider, by=by, now=now)
         SX.set_connection_status(c, cid, "reconnect", "vault_pending", now)
     with _lock(cid):
         _keep_claimed(store, cid, tokens, provider=provider, by=by, now=now)
     return cid
+
+
+def _keep_trigger(c: Any, cid: str, *, provider: str, by: str, now: str) -> None:
+    """The books connection's Tico trigger (spec §3.4): a Finance trigger, `consumer` finance, whose Intuit or Xero calls
+    HQ relays to this install over the Gateway. It has the connection's id. Made with the connection, and made again for
+    a connection that predates it, or whose trigger was removed."""
+    c.execute("INSERT INTO triggers(id,name,kind,secret_hash,created_by,created_at,updated_at,preset,consumer) "
+              "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,preset=excluded.preset,"
+              "consumer=excluded.consumer,signing_secret=NULL,deleted_at=NULL,updated_at=excluded.updated_at",
+              (cid, LABEL.get(provider, provider), "webhook", digest(secrets.token_urlsafe(24)), by, now, now,
+               PRESET[provider], "finance"))
+
+
+def ensure_relays(store: Any, vault: object, settings: Any, *, now: str) -> list[str]:
+    """Each books connection's Gateway relay, which HQ delivers its Intuit or Xero calls to (spec §3.4). It is asked of HQ
+    outside any transaction, and tried again on each books pass until HQ takes it, so a connection made while HQ could not
+    be reached, or from before this, gets its relay then. Nothing is asked without a Gateway key. Returns what failed."""
+    from ..hook_relay import link_of
+    with store.read() as c:
+        missing = [(cid, provider) for cid, provider, _ in SX.books_connections(c)
+                   if c.execute("SELECT 1 FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL",
+                                (cid,)).fetchone() is None]
+        link = link_of(c, vault, settings) if missing else None
+        owners = {cid: SX.connection_owner(c, cid) for cid, _ in missing}
+    if not missing or link is None:
+        return []
+    problems: list[str] = []
+    for cid, provider in missing:
+        label = LABEL.get(provider, provider)
+        with store.transaction() as c:
+            _keep_trigger(c, cid, provider=provider, by=owners[cid], now=now)
+        try:
+            answer = link.call("POST", "relays", {"trigger_id": cid, "name": label}, "books-relay:" + cid)
+        except Stop:
+            problems.append(f"The Tico Gateway does not accept this server's key, so the {label} relay was not made")
+            continue
+        except Failed as failed:
+            problems.append(f"The Tico Gateway did not take the {label} relay ({failed.code})")
+            continue
+        with store.transaction() as c:
+            if not keep_answer(c, answer, trigger_id=cid, by=owners[cid]):
+                problems.append(f"The Tico Gateway gave an answer for the {label} relay this server cannot use")
+    return problems
 
 
 def _keep_claimed(store: Any, cid: str, tokens: Tokens, *, provider: str, by: str, now: str) -> None:
@@ -513,6 +559,16 @@ def disconnect_books(store: Any, vault: object, link: Link, cid: str, provider: 
                 tico.drop_credential(c, str(books[key]))
         SX.set_books_settings(c, cid, {"access": "", "refresh": "", "expires_at": ""})
         SX.disconnect(c, cid, now)
+        _drop_trigger(c, cid, now=now)
+
+
+def _drop_trigger(c: Any, cid: str, *, now: str) -> None:
+    """The connection's trigger goes with it: what HQ relayed to it, its seen ids, and its Gateway relay (HQ is told of that
+    by the relay loop, so no network call waits in this write)."""
+    c.execute("UPDATE triggers SET deleted_at=?,updated_at=? WHERE id=? AND deleted_at IS NULL", (now, now, cid))
+    c.execute("DELETE FROM trigger_bodies WHERE trigger_id=?", (cid,))
+    c.execute("DELETE FROM trigger_seen WHERE trigger_id=?", (cid,))
+    forget_relay(c, cid)
 
 
 # ------------------------------------------------------------------------------------------------ the routes' calls
