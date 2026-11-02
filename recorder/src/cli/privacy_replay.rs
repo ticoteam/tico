@@ -68,9 +68,16 @@ pub fn run(store: &Store, base: &str, scenario: &str) -> Result<()> {
         tico.finish_live(store, id)?;
         let meeting_id = store.get(id)?.deliveries[0].meeting_id.clone();
         let path = format!("/api/v2/meetings/{meeting_id}");
+        // The server's pending import defaults to Team until review. The live meeting is
+        // the authority for the choice that Send must preserve when it approves that import.
         ensure!(
-            tico.call(&path, None, "")?["private"] == private,
-            "Finalize changed visibility"
+            tico.call(&format!("/api/v2/live-meetings/{live_id}"), None, "")?["visibility"]
+                == if private { "private" } else { "team" },
+            "Live visibility changed before Send"
+        );
+        ensure!(
+            tico.call(&path, None, "")?["review_state"] == "pending",
+            "Finalize published before Send"
         );
         let reopened = Store::open(store.root())?;
         tico.send(&reopened, id, false)?;

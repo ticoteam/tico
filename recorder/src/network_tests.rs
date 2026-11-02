@@ -2156,12 +2156,19 @@ fn title_only_item_needs_confirmation_after_each_edit_before_any_task_post() {
 }
 
 #[test]
-fn live_send_preserves_filed_visibility_and_retries_frozen_approval_after_restart() {
+fn live_send_preserves_live_visibility_and_retries_frozen_approval_after_restart() {
     for source in ["live", "legacy-live"] {
         for private in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let store = Store::open(dir.path()).unwrap();
             let record = transcript(&store, "Synthetic visibility choice");
+            store
+                .update_context(&record.id, |context| {
+                    context.live_id = "live-fixture".into();
+                    context.live_state = "ended".into();
+                    Ok(())
+                })
+                .unwrap();
             store
                 .delivery(
                     &record.id,
@@ -2177,7 +2184,11 @@ fn live_send_preserves_filed_visibility_and_retries_frozen_approval_after_restar
             let who = json!({"actor":"human:test"});
             let (tico, seen, worker) = server(vec![
                 Some(who.clone()),
-                Some(json!({"id":"filed-fixture","private":private})),
+                // Finalize's pending import has private=false even for a private live meeting.
+                // Send must ask the live source, never use that pending import's default.
+                Some(
+                    json!({"id":"live-fixture","visibility":if private {"private"} else {"team"}}),
+                ),
                 None,
                 Some(who.clone()),
                 Some(json!({"id":"filed-fixture","private":private,"review_state":"live"})),
@@ -2193,7 +2204,10 @@ fn live_send_preserves_filed_visibility_and_retries_frozen_approval_after_restar
             tico.send(&reopened, &record.id, false).unwrap();
             worker.join().unwrap();
             let calls = seen.lock().unwrap();
-            assert_eq!(calls[1].0, "GET /api/v2/meetings/filed-fixture HTTP/1.1");
+            assert_eq!(
+                calls[1].0,
+                "GET /api/v2/live-meetings/live-fixture HTTP/1.1"
+            );
             assert!(
                 calls[2]
                     .0
@@ -2215,6 +2229,13 @@ fn live_send_refuses_unknown_privacy_before_approval() {
     let store = Store::open(dir.path()).unwrap();
     let record = transcript(&store, "Synthetic unknown visibility");
     store
+        .update_context(&record.id, |context| {
+            context.live_id = "live-fixture".into();
+            context.live_state = "ended".into();
+            Ok(())
+        })
+        .unwrap();
+    store
         .delivery(
             &record.id,
             &Delivery {
@@ -2228,7 +2249,7 @@ fn live_send_refuses_unknown_privacy_before_approval() {
         .unwrap();
     let (tico, seen, worker) = server(vec![
         Some(json!({"actor":"human:test"})),
-        Some(json!({"id":"filed-fixture"})),
+        Some(json!({"id":"live-fixture"})),
     ]);
     let error = tico.send(&store, &record.id, false).unwrap_err();
     worker.join().unwrap();
