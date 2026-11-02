@@ -3,10 +3,11 @@
 It appears when Finance is set up: a new install builds it with the other required helpers, and an install from
 before it gets it at the next start (`ensure`, after Finance's own setup). It is a helper outside the org chart.
 
-Its Finance rights come with the hire, once (`finance.actions.grant_defaults`: finance.book, ap, ar, pay and cards),
-recorded by one `bookkeeper.rights_granted` event so a later revoke sticks. Its view is not granted for it: the owner
-is asked once, with one task, to let it see the books (spec §7.5: the owner grants it Everything; payroll's private
-lines stay private either way).
+Its Finance rights come with the hire, once (`finance.actions.grant_defaults`: finance.book, ap, ar, pay, cards and
+rules), recorded by one `bookkeeper.rights_granted` event so a later revoke sticks. An install built before rules was
+a default gets that one right at the next start, once (`bookkeeper.rights_version`, RIGHTS_VERSION). Its view is not
+granted for it: the owner is asked once, with one task, to let it see the books (spec §7.5: the owner grants it
+Everything; payroll's private lines stay private either way).
 
 Its work comes two ways. Events that need an answer on the day are routines in its bot.yaml: finance.bill.due_soon,
 finance.invoice.overdue and finance.period.ready, one task each. Everything that arrives in volume or is a standing
@@ -91,14 +92,32 @@ def _owner(c, auth):
     return "human:" + pid if pid else ""
 
 
+RIGHTS_VERSION = 2          # 1: book, ap, ar, pay and cards; 2: and rules (spec 7.4)
+
+
+def _has_event(c, action):
+    return c.execute("SELECT 1 FROM events WHERE action=? LIMIT 1", (action,)).fetchone() is not None
+
+
 def grant_defaults(c):
-    """The Bookkeeper's Finance rights, once per install: a later revoke is not undone. The rights granted now."""
+    """The Bookkeeper's Finance rights, once per install: a later revoke is not undone. The rights granted now.
+    A built-in Bookkeeper from before RIGHTS_VERSION 2 is granted the one right it lacks (finance.rules) and nothing
+    else: a right it was given and later lost stays lost."""
     from .finance import actions as FA
-    if not built(c) or c.execute("SELECT 1 FROM events WHERE action='bookkeeper.rights_granted' LIMIT 1").fetchone():
+    from .finance.core import rights as R
+    if not built(c):
         return []
-    added = FA.grant_defaults(c, ACTOR)
-    H.event(c, H.KEEPER, "bookkeeper.rights_granted", SLUG, {"rights": added})
-    return added
+    if not _has_event(c, "bookkeeper.rights_granted"):
+        added = FA.grant_defaults(c, ACTOR)
+        H.event(c, H.KEEPER, "bookkeeper.rights_granted", SLUG, {"rights": added, "version": RIGHTS_VERSION})
+        H.event(c, H.KEEPER, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
+        return added
+    if not _has_event(c, "bookkeeper.rights_version"):
+        added = FA.grant_defaults(c, ACTOR, [R.RULES])
+        H.event(c, H.KEEPER, "bookkeeper.rights_granted", SLUG, {"rights": added, "version": RIGHTS_VERSION})
+        H.event(c, H.KEEPER, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
+        return added
+    return []
 
 
 def ask_for_view(c, owner):

@@ -9,7 +9,9 @@ from pathlib import Path
 import pytest
 
 from backend import bookkeeper as BK
+from backend.finance import actions as FA
 from backend.finance import reads as FR
+from backend.finance.core import kinds as K
 from backend.tests.test_bookkeeper import DEFAULT_RIGHTS, built, check, checks, ensure
 from backend.tests.test_mcp import call, rpc
 from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
@@ -110,9 +112,16 @@ def test_c2_the_bot_is_not_offered_approvals_group_edits_or_archive(environment)
     assert not set(NEVER_OFFERED) & _names(api, _token(api))
 
 
-def test_c2_rule_create_is_refused_without_finance_rules(environment):
+def test_c2_rule_create_is_refused_once_finance_rules_is_revoked(environment):
+    """The default Bookkeeper holds finance.rules and may propose a rule (turns test: needs_approval); without it a
+    rule_create is refused before anything is written."""
     api = built(environment)
     ensure(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        owner = "human:" + api.app.state.auth.owner_id(c)
+        assert FA.act(c, owner, "right_revoke", {"teammate": BK.ACTOR, "right": "finance.rules"},
+                      "revoke-rules").status == "committed"
     err, out = call(api, "hub_finance_act", {"kind": "rule_create", "operation_id": "rule-1", "payload": {}},
                     token=_token(api))
     assert out.get("status") == "denied" and "finance.rules" in out.get("reason", ""), out
@@ -126,11 +135,15 @@ def test_c2_close_period_by_the_bot_is_not_committed(environment):
     assert out.get("status") != "committed", out
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: AGENT.md step 4 tells the Bookkeeper to propose posting rules with "
-                   "rule_create, but its default rights (spec 7.4) lack finance.rules, so the step is refused")
 def test_c2_the_instructions_only_ask_for_actions_its_default_rights_allow(environment):
-    agent = (TEMPLATE / "AGENT.md").read_text()
-    assert "rule_create" not in agent or "finance.rules" in DEFAULT_RIGHTS
+    """Every action kind the instructions name with a backticked literal needs a right the default Bookkeeper holds."""
+    text = "\n".join(p.read_text() for p in INSTRUCTIONS)
+    named = {k for k in re.findall(r"`([a-z]+_[a-z_]+)`", text) if k in K.NEEDS}
+    assert named, "the instructions name no action kind at all"
+    for kind in sorted(named):
+        need = K.NEEDS[kind]
+        needed = {need} if isinstance(need, str) else set(need)
+        assert needed & DEFAULT_RIGHTS, (kind, sorted(needed))
 
 
 # ----------------------------------------------------------------------------- check 3: triggers and quiet runs
@@ -228,5 +241,5 @@ def test_c5_the_bot_holds_pay_but_cannot_decide_an_approval(environment):
     ensure(api)
     with api.app.state.store.read() as c:
         rights = _bot_rights(c)
-    assert "finance.pay" in rights and "finance.rules" not in rights
+    assert "finance.pay" in rights
     assert "hub_approval_approve" not in _names(api, _token(api))

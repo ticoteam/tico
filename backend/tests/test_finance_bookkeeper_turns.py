@@ -106,10 +106,7 @@ def test_categorize_turn(api):
     assert not err and deposit["feed_id"] not in {r["feed_id"] for r in left["items"]}, left
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: rule_create needs finance.rules, which the default Bookkeeper does not hold "
-                   "(backend/finance/core/kinds.py NEEDS rule_create -> R.RULES; backend/bookkeeper.py grants book, ap, ar, "
-                   "pay, cards). AGENT.md step 4 proposes a posting rule when a pattern repeats.")
-def test_gap_categorize_proposes_a_posting_rule(api):
+def test_categorize_proposes_a_posting_rule(api):   # AGENT.md step 4: a pattern repeats, so propose a rule
     token = hire(api)
     err, out = ask(api, token, "rule_create", {
         "kind": "posting", "name": "Mercury fees", "when": {"counterparty": "Mercury"},

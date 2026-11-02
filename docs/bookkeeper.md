@@ -11,8 +11,10 @@ install from before it gets it at the next start. Pausing or archiving it is res
 
 ## What it may do
 
-It comes with finance.book, ap, ar, pay and cards, granted once. Revoking one in Finance → Access sticks. It is never a
-finance admin and never changes views, rights, payment settings or bank connections.
+It comes with finance.book, ap, ar, pay, cards and rules, granted once. Revoking one in Finance → Access sticks. An
+install from before rules was a default gets that one right at its next start. It may propose a posting rule, and a
+person approves each one. It is never a finance admin and never changes views, rights, payment settings or bank
+connections.
 
 It sees only what its Finance view covers. The owner gets one task, "Let the Bookkeeper see the books", to give it
 Everything in Finance → Access. Payroll's private lines stay private either way.

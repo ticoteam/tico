@@ -9,7 +9,7 @@ kind: helper
 icon: receipt_long
 default: true
 when: "Built in: keeps the books. Categorizes bank and card rows, enters bills, schedules payments, reminds customers, reconciles, prepares the monthly close and writes the monthly report, all through Finance's own actions and approvals."
-summary: "Operational accounting, not strategy. Tico checks the Finance work queue in plain code every hour and gives the Bookkeeper one task only when there is something to do: rows to categorize, bills to enter, bills due, overdue invoices, receipts, failed syncs or a month ready to close. It acts only through the hub_finance tools, as itself, with finance.book, ap, ar, pay and cards; every payment and the close still go to a person under the company's rules."
+summary: "Operational accounting, not strategy. Tico checks the Finance work queue in plain code every hour and gives the Bookkeeper one task only when there is something to do: rows to categorize, bills to enter, bills due, overdue invoices, receipts, failed syncs or a month ready to close. It acts only through the hub_finance tools, as itself, with finance.book, ap, ar, pay, cards and rules; it proposes posting rules, and a person approves each one. Every payment and the close still go to a person under the company's rules."
 owns:
   - Categorizing bank and card rows, posting rules first, and proposing a posting rule when a pattern repeats
   - Entering bills from the bills address and uploads, and scheduling them per their terms

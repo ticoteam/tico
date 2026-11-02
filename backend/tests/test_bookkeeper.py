@@ -18,7 +18,7 @@ from backend.tests.test_onboarding import draft, environment, machine, signed_in
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper"
 DIGEST = "a" * 64
-DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards"}
+DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.rules"}
 PDF = b"%PDF-1.4 Acme invoice 1042"
 
 
@@ -73,6 +73,28 @@ def test_it_is_built_once_outside_the_org_chart_with_exactly_its_default_rights(
     check(api)
     with store.read() as c:
         assert "finance.pay" not in rights(c)
+
+
+def test_an_install_from_before_rules_gets_that_one_right_once(environment):
+    """An install built before finance.rules was a default has the five rights and no rights_version event. Its next
+    start grants rules once, and a later revoke of rules sticks."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        owner = "human:" + api.app.state.auth.owner_id(c)
+        assert FA.act(c, owner, "right_revoke", {"teammate": BK.ACTOR, "right": "finance.rules"}, "revoke-rules").status == "committed"
+        c.execute("DELETE FROM events WHERE action='bookkeeper.rights_version'")
+    ensure(api)
+    with store.read() as c:
+        assert rights(c) == DEFAULT_RIGHTS
+        assert c.execute("SELECT count(*) FROM events WHERE action='bookkeeper.rights_version'").fetchone()[0] == 1
+    with store.transaction() as c:
+        owner = "human:" + api.app.state.auth.owner_id(c)
+        assert FA.act(c, owner, "right_revoke", {"teammate": BK.ACTOR, "right": "finance.rules"}, "revoke-rules-again").status == "committed"
+    ensure(api)
+    with store.read() as c:
+        assert "finance.rules" not in rights(c)
 
 
 def test_an_empty_queue_is_a_quiet_check_and_news_opens_one_private_task_once(environment):

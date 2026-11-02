@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEMO = os.environ.get("BOOKKEEPER_REHEARSAL_DEMO", "http://127.0.0.1:18831")
 BOOKKEEPER = "bookkeeper"
 ACTOR = "bot:bookkeeper"
-DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards"}
+DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.rules"}
 TESTS = ["backend/tests/test_finance_bookkeeper_rehearsal.py", "backend/tests/test_bookkeeper.py",
          "backend/tests/test_finance_bookkeeper_turns.py"]
 TITLES = {1: "built path and guards", 2: "tools and refusals", 3: "triggers and quiet runs",
