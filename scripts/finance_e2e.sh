@@ -15,8 +15,9 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 PY="${PYTHON:-python3}"
-FAKE_PORT=18790
-DEMO_PORT=18766
+# Other ports for a second stack on the same computer: FINANCE_FAKE_PORT=18852 FINANCE_DEMO_PORT=18851.
+FAKE_PORT="${FINANCE_FAKE_PORT:-18790}"
+DEMO_PORT="${FINANCE_DEMO_PORT:-18766}"
 
 "$PY" scripts/fake_mercury.py --port "$FAKE_PORT" &
 FAKE_PID=$!

@@ -13,6 +13,8 @@ Control endpoints under /_fake/ are not Mercury's:
                                last four or nickname) on the IO credit account, with its transaction.created event; a
                                frozen or cancelled card is declined (a failed transaction), as Mercury does
   GET  /_fake/calls            every Mercury call Tico made, in order (method, path, query, body; never the token)
+  POST /_fake/expire           from now on every Mercury call answers 401 (the token has expired), until /_fake/renew
+  POST /_fake/renew            Mercury calls answer again
 
   python3 scripts/fake_mercury.py --port 18790
 """
@@ -51,6 +53,7 @@ class State:
         self.cards: list[dict] = []
         self.recipients: dict[str, dict] = {}
         self.calls: list[dict] = []
+        self.expired = False
 
     def new(self, prefix: str) -> str:
         self.seq += 1
@@ -120,7 +123,7 @@ class Handler(BaseHTTPRequestHandler):
         with STATE.lock:
             STATE.calls.append({"method": method, "path": path, "query": {k: v[0] for k, v in q.items()},
                                 "body": body or None})
-            if not self.headers.get("Authorization", "").startswith("Bearer "):
+            if not self.headers.get("Authorization", "").startswith("Bearer ") or STATE.expired:
                 return self.reply(401, {"message": "Unauthorized"})
             status, answer = mercury(method, path, q, body)
         self.reply(status, answer)
@@ -129,6 +132,9 @@ class Handler(BaseHTTPRequestHandler):
         with STATE.lock:
             if method == "GET" and name == "calls":
                 return self.reply(200, {"calls": STATE.calls})
+            if method == "POST" and name in ("expire", "renew"):
+                STATE.expired = name == "expire"
+                return self.reply(200, {"expired": STATE.expired})
             if method == "POST" and name == "txn":
                 status, answer = add_txn(body)
                 return self.reply(status, answer)
