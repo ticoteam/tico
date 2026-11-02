@@ -289,15 +289,18 @@ def _bars(stat, points):
 
 def _line(stat, points):
     width, height = 600, 140
-    segments = _segments(points, width, 8, height - 16, center=True)
+    segments = _segments(points, width, 8, height - 16)
     area = ""
     if len(segments) == 1 and len(segments[0]) == len(points):
         line = segments[0]
         area = f'<polygon class="area" points="{line[0][0]:g},{height} {_coords(line)} {line[-1][0]:g},{height}"></polygon>'
     lines = "".join(f'<polyline vector-effect="non-scaling-stroke" points="{_coords(s)}"></polyline>' for s in segments)
+    # The chart stretches to the column, which would make a circle an oval: a zero-length round stroke stays round.
+    end = _coords([segments[-1][-1]] * 2)
+    dot = f'<polyline class="dot" vector-effect="non-scaling-stroke" points="{end}"></polyline>'
     values = "".join(f"<div><dt>{_e(p[0])}</dt><dd>{_e(p[3])}</dd></div>" for p in points)
     return (f'<svg class="line" role="img" aria-label="{_alt(stat, points)}" viewBox="0 0 {width} {height}" width="100%" '
-            f'height="{height}" preserveAspectRatio="none">{area}{lines}</svg><dl class="vals">{values}</dl>')
+            f'height="{height}" preserveAspectRatio="none">{area}{lines}{dot}</svg><dl class="vals">{values}</dl>')
 
 
 def _previous(points):
@@ -309,13 +312,23 @@ def _previous(points):
     return f"vs {points[-2][3]} {joiner} {points[-2][0]}"
 
 
+def _repeats_period(stat):
+    """Whether the as-of day falls in the period the stat's header already names, so saying it adds nothing."""
+    when, period = _date(stat.get("as_of")), _period(stat.get("period"))
+    if when is None:
+        return False
+    month = MONTHS[when.month - 1]
+    named = (f"{month} {when.year}", f"{month} {when.day}, {when.year}", f"Q{(when.month + 2) // 3} {when.year}")
+    return period in named or _date(period) == when
+
+
 def _freshness(stat, year):
     stat = _map(stat)
     as_of = _day(stat.get("as_of"), year)
-    text = f"As of {as_of}" if as_of else ""
+    text = f'<span class="as-of">As of {_e(as_of)}</span>' if as_of else ""
     if stat.get("stale") is True:
-        return f'<span class="stale">Out of date</span>{" · " + _e(text) if text else ""}'
-    return _e(text)
+        return f'<span class="stale">Out of date</span>{" · " + text if text else ""}'
+    return "" if _repeats_period(stat) else text
 
 
 def _note(stat, year):
@@ -329,10 +342,12 @@ def _hero(stat, year):
     if _plottable(points):
         chart = _bars(stat, points) if stat.get("chart") == "bars" else _line(stat, points)
     previous = _previous(points)
+    note = _note(stat, year)
+    note = f'<div class="note">{note}</div>' if note else ""
     return (f'<div class="hero"><div class="hero-head"><div class="hero-num"><div class="stat-label">{_e(stat.get("label"))} '
             f'<span>· {_e(_period(stat.get("period")))}</span></div><div class="big">{_e(stat.get("display"))}</div>'
             + (f'<div class="sub">{_e(previous)}</div>' if previous else "")
-            + f'</div><div class="note">{_note(stat, year)}</div></div>{chart}</div>')
+            + f'</div>{note}</div>{chart}</div>')
 
 
 def _tile(stat, year):
