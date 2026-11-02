@@ -20,6 +20,7 @@ from .store import H, P, Problem
 from .usage_records import RUNS
 from .subscription_identity import usage_label
 
+# A subscription run is its computer's subscription; a run with no lease (from before leases) names only its profile.
 DIMENSIONS = {"harness": "coalesce(t.harness, '')", "model": "coalesce(t.model, '')",
               "effort": "coalesce(t.effort, '')", "subscription": "CASE WHEN t.billing='subscription' AND coalesce(t.profile, '') != '' "
               "THEN coalesce((SELECT 'subscription:' || json_array(a.runner_id, t.profile) FROM attempts a WHERE a.id=t.id AND a.runner_id IS NOT NULL), "

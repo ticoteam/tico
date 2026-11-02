@@ -140,7 +140,7 @@ def test_bot_and_member_reads_stay_under_five_seconds_on_production_sized_histor
 
 
 def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
-    """The fast SQL gates only settle rows early: every caller reads the same messages, turns and attempts as when the
+    """The fast SQL gates only settle rows early: every caller reads the same messages and attempts as when the
     per-row privacy functions decide each one, denied private tasks, unreadable rooms and run provenance included."""
     from backend import sql as S
     from backend.auth import Identity
