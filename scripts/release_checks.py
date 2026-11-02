@@ -188,7 +188,7 @@ def edge_networks(ranges=EDGE):
         remove()
 
 
-ISOLATION_FILE = 'runner/tests/test_isolation_docker.py'
+ISOLATION_FILE = 'runner_support/tests/test_isolation_docker.py'
 PARTS = ('product', 'python', 'browser', 'desktop')
 # The desktop app's own tests, among them its updater installing from a company feed served by this checkout's
 # publisher and download routes (app/tests/update_hub.py). Building them needs WebKitGTK's development files.

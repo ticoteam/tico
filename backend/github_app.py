@@ -2,7 +2,7 @@
 
 The owner registers the app with GitHub's manifest flow (nothing to copy by hand), installs it on the
 org, and from then on the hub mints short-lived installation tokens scoped to one bot repository.
-Runners fetch that token per turn (runner/git_credentials.py); no long-lived personal token is used.
+Runners fetch that token per turn (runner_support/git_credentials.py); no long-lived personal token is used.
 
 The app's private key and secrets are encrypted at rest and are never returned by any endpoint or
 written to a log. See docs/github-app.md.
