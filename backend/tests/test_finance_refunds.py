@@ -242,3 +242,43 @@ def test_a_row_with_a_refund_posted_against_it_cannot_be_recategorized_or_ignore
         assert _balance(c, "6900") == 0                          # the charge and its reversal still net to nothing
         assert _balance(c, "6000") == 0
         assert _row(c, "txn-back") == ("posted", True, buy)
+
+
+def _refund_then_charge_back(books, fake) -> tuple[str, str]:
+    """A 100 charge posted to 6900, then 100 back from the same merchant refunding it: (charge id, refund id)."""
+    connect(books, fake)
+    sync_once(books, fake)
+    _arrives(fake, "txn-buy", -100.0, "2026-10-16")
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        buy = _fid(c, "txn-buy")
+        assert act(c, OWNER, "categorize", {"feed_id": buy, "account_id": account(c, "6900"),
+                                            "tags": {"teammate": "human:ana"}}).status == "committed"
+    _arrives(fake, "txn-back", 100.0, "2026-10-17")
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        back = _fid(c, "txn-back")
+        assert _row(c, "txn-back") == ("posted", True, buy)
+    return buy, back
+
+
+def test_a_refund_row_a_person_moves_to_another_account_stops_refunding_its_charge(books):
+    """Moved by a person, the refund row no longer reverses the charge where it was posted: its refund_of is cleared, so
+    the charge has nothing refunded against it and its left-to-refund is right again."""
+    fake = FakeMercury()
+    buy, back = _refund_then_charge_back(books, fake)
+    with books.transaction() as c:
+        moved = act(c, OWNER, "categorize", {"feed_id": back, "account_id": account(c, "6000")})
+        assert moved.status == "committed", moved
+        assert _row(c, "txn-back")[2] is None
+        assert not SK.refunds_of(c, buy)
+
+
+def test_a_refund_row_a_person_ignores_stops_refunding_its_charge(books):
+    fake = FakeMercury()
+    buy, back = _refund_then_charge_back(books, fake)
+    with books.transaction() as c:
+        ignored = act(c, OWNER, "categorize", {"feed_id": back, "ignore": True})
+        assert ignored.status == "committed", ignored
+        assert _row(c, "txn-back")[2] is None
+        assert not SK.refunds_of(c, buy)

@@ -700,6 +700,13 @@ def unpost_row(ctx: Ctx, row: Any, memo: str) -> None:
     documents.feed_gone(ctx, str(row["id"]), [str(e["id"]) for e in [entry, *later] if e is not None])
 
 
+def _set_aside_refund(ctx: Ctx, row: Any) -> None:
+    """A refund row a person moves or ignores no longer reverses its charge where that was posted, so its refund_of goes:
+    the charge's left-to-refund is then right again (refunds.py)."""
+    if row["refund_of"]:
+        SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"refund_of": None, "updated_at": ctx.at})
+
+
 def undo(ctx: Ctx, row: Any) -> None:
     """A row the provider cancelled, failed or reversed: its hold is released and its entry reversed (for a card, the
     reversal gives its use back in the period it posts in, as the books do)."""
@@ -788,6 +795,7 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 ignore_feed(ctx, row)
             else:
                 undo(ctx, row)
+            _set_aside_refund(ctx, row)
             return {"feed_id": str(row["id"]), "status": "ignored"}
         return Plan(K.default_gate(ctx.org, who, "categorize"), "Ignore a feed row", ignore,
                     facts={"amount": abs(amount), "counterparty": str(row["counterparty"])})
@@ -811,6 +819,7 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                   description=str(row["description"]), card_id=str(row["card_id"] or ""))
 
     def apply(aid: str) -> Result:
+        _set_aside_refund(ctx, row)
         if mirrored:
             from .mirror import write_feed
             return write_feed(ctx, row, account, tags, gl, by=who, action_id=aid)
