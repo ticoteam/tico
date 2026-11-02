@@ -423,6 +423,10 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     if covered_day(ctx, t.txn_date):    # covered history (§4.1): no route posts it, Stripe, card or Gateway alike
         if row["entry_id"]:
             _unpost(ctx, row, "its month holds raw totals")
+        if row["hold_id"]:    # a hold made while the row was pending: the row posts nothing, so the hold goes with it
+            budgeting.release(ctx, str(row["hold_id"]))
+            SB.void_settled(ctx.c, str(row["hold_id"]), ctx.at)
+            SK.update(ctx.c, "fin_feed_txns", fid, {"hold_id": None, "updated_at": ctx.at})
         if str(row["status"]) != "ignored":
             SK.update(ctx.c, "fin_feed_txns", fid, {"status": "covered", "entry_id": None, "entry_line_id": None,
                                                      "updated_at": ctx.at})

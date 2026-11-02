@@ -266,6 +266,33 @@ def test_a_voided_authorization_releases_its_hold(books):
         assert _entries(c, "card") == 0
 
 
+def test_a_hold_made_while_pending_is_released_when_its_covered_row_settles(books):
+    """A card authorization holds while its row is pending. If the row's month then takes raw totals, the settled row
+    is covered history (§4.1) and posts nothing, so its hold is released with it rather than left against the budget."""
+    fake = FakeMercury()
+    connect(books, fake)
+    _card_for_eve(books, fake)
+    sync_once(books, fake)
+    # Dated in March: an opening balance made today (October) would itself block an October import (source sync).
+    pending = {**MERCURY["txn_card_pending"], "createdAt": "2026-03-14T18:01:02Z"}
+    settled = {**MERCURY["txn_card_posted"], "createdAt": "2026-03-14T18:01:02Z", "postedAt": "2026-03-15T09:00:00Z"}
+    _arrives(fake, pending, 1, "evt-0001")
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        assert _card_holds(c) == [(4_250, "held")]
+    march = "month,line,amount,team\n2026-03,Software subscriptions,1000,web\n"
+    with books.transaction() as c:
+        imported = act(c, OWNER, "import_raw_totals", {"csv": march, "basis": "cash",
+                                                       "mapping": {"Software subscriptions": "6100"}})
+        assert imported.status == "committed", imported.reason
+    _arrives(fake, settled, 2, "evt-0002")
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        assert _card_holds(c) == [(4_250, "released")]
+        assert tuple(c.execute("SELECT status, hold_id, entry_id FROM fin_feed_txns").fetchone()) == ("covered", None, None)
+        assert _entries(c, "card") == 0
+
+
 def test_reconciliation_difference_lock_and_undo(books):
     fake = FakeMercury()
     fake.balances["acct-chk"] = 485.0                  # the fee and the deposit are all checking ever held
