@@ -1,5 +1,6 @@
-"""Demo threads and org rules: the Home threads with their sub-thread, the company thread, Ana's DM, the three rules and
-Ben's suggestion, and the one draft a rule held for Ben (written nowhere; its review task waits for Ben)."""
+"""Demo threads and org rules: the Home threads with their sub-thread, the company thread, Ana's DMs (the Assistant and
+pricing), the three rules and Ben's suggestion, and the one draft a rule held for Ben (written nowhere; its review task
+waits for Ben, and Ana, the owner, can review it too)."""
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -64,14 +65,18 @@ def test_the_refund_draft_is_held_for_ben_and_written_nowhere(built):
     held = next(m for m in CONTENT["messages"] if m.get("held"))
     assert held["say"] not in [m["body"] for m in care]
     with sqlite3.connect(settings.db_path) as db:
-        hold = db.execute("SELECT state, reviewer, task_id, json_extract(verdict, '$.outcome') "
+        hold = db.execute("SELECT id, state, reviewer, task_id, json_extract(verdict, '$.outcome') "
                           "FROM org_rule_holds").fetchall()
     assert len(hold) == 1
-    state, reviewer, task_id, outcome = hold[0]
+    hold_id, state, reviewer, task_id, outcome = hold[0]
     assert (state, reviewer, outcome) == ("held", "human:ben", "escalate")
-    # Ben reviews it, so Ana (the demo's only sign-in) sees the review task that names the hold.
+    # Ben reviews it, and so does Ana, the owner (the demo's only sign-in): she lists the hold and reads its text.
     with signed_in(settings) as api:
+        listed = api.get("/api/v2/rule-holds").json()["holds"]
+        read = api.get(f"/api/v2/rule-holds/{hold_id}").json()
         task = api.get(f"/api/v2/tasks/{task_id}").json()["task"]
+    assert [(h["id"], h["reviewer"], h["can_send"]) for h in listed] == [(hold_id, "human:ben", True)]
+    assert read["text"] == held["say"] and read["nonce"]
     assert task["owner_id"] == "human:ben"
     assert task["title"] == "Rule review"
 
@@ -98,22 +103,42 @@ def test_the_company_thread_and_ana_assistant_dm_show(built):
     assert CONTENT["threads"]["all"]["title"] in titles
 
 
+def test_ana_and_pricing_talk_through_the_december_price(built):
+    _, settings = built
+    said = [m["say"] for m in sorted((m for m in CONTENT["messages"] if m["in"] == "pricing"), key=lambda m: -m["ago"])]
+    with signed_in(settings) as api:
+        dm = api.get("/api/v2/threads/dm", params={"with": "bot:pricing", "create": "false"})
+        assert dm.status_code == 200
+        bodies = [m["body"] for m in timeline(api, dm.json()["id"])]
+    assert bodies[-len(said):] == said
+
+
 def test_the_seed_is_deterministic(built, tmp_path_factory):
     _, settings = built
     second = demo.build(tmp_path_factory.mktemp("demo-threads-rules-again"), now=NOW)
     assert _content(settings.db_path) == _content(second.db_path)
 
 
+# The rest of the core seed and the other sections also write rows whose presence depends on what ran before them in the
+# process (the bots' profile notices at the real clock, a Finance tax deadline rule). So this compares only what this
+# section writes: its messages, its conversations on the demo clock (NOW and the days before), its rules and its holds.
+DEMO_CLOCK_CUTOFF = "2026-10-01"
+
+
 def _content(path):
     """What the seed writes for threads and rules. Thread ids are not compared: the threads module makes its own
-    (uuid4, by design, backend/threads.py `_new_id`), so only the rows' text, times and rules are the same each build."""
+    (uuid4, by design, backend/threads.py `_new_id`), so only the rows' text, times and rules are the same."""
+    says = [m["say"] for m in CONTENT["messages"]]
+    texts = [item["text"] for item in CONTENT["rules"]] + [CONTENT["suggestion"]["text"]]
     with sqlite3.connect(path) as db:
         return {
-            "messages": db.execute("SELECT body, created_at, kind, sender_id, recipient_id FROM messages "
-                                   "ORDER BY created_at, body").fetchall(),
+            "messages": db.execute(f"SELECT body, created_at, kind, sender_id, recipient_id FROM messages "
+                                   f"WHERE body IN ({','.join('?' * len(says))}) ORDER BY created_at, body",
+                                   says).fetchall(),
             "conversations": db.execute("SELECT subject, audience, kind, owner_id, created_at, last_message_at "
-                                        "FROM conversations ORDER BY created_at, subject").fetchall(),
-            "rules": db.execute("SELECT id, text, status, who, if_broken, reviewer, suggested_by FROM org_rules "
-                                "ORDER BY id").fetchall(),
+                                        "FROM conversations WHERE created_at < ? ORDER BY created_at, subject",
+                                        (DEMO_CLOCK_CUTOFF,)).fetchall(),
+            "rules": db.execute(f"SELECT id, text, status, who, if_broken, reviewer, suggested_by FROM org_rules "
+                                f"WHERE text IN ({','.join('?' * len(texts))}) ORDER BY id", texts).fetchall(),
             "holds": db.execute("SELECT id, author, reviewer, state, created_at FROM org_rule_holds").fetchall(),
         }

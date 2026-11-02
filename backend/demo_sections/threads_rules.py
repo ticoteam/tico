@@ -26,7 +26,7 @@ CONTENT = {
         "finance": {"home": "bot:finance-lead"},
         "all": {"title": "This week", "by": "human:ana"},
         "coo": {"dm": ["human:ana", "bot:coo"]},
-        "support": {"dm": ["human:ben", "bot:support-lead"]},
+        "pricing": {"dm": ["human:ana", "bot:pricing"]},
     },
     "messages": [
         # Operations
@@ -115,7 +115,7 @@ CONTENT = {
          "say": "Holiday email goes to the 6,200 customers who opted in, Wednesday at 10 am. The draft is ready for review."},
         {"in": "growth", "ago": 12, "by": "human:cara",
          "say": "Good. Pick the clips by Friday, and send the email plan to Ana."},
-        # Finance: one price decision waits for Ana
+        # Finance
         {"in": "finance", "ago": 120, "by": "bot:bookkeeper",
          "say": "October books are closed. Two lens supplier invoices still need a purchase order match."},
         {"in": "finance", "ago": 100, "by": "bot:accounts-payable",
@@ -124,14 +124,13 @@ CONTENT = {
          "say": "Four business invoices are past due, $3,410 in total. Reminders went out Monday."},
         {"in": "finance", "ago": 40, "by": "bot:spend-watcher",
          "say": "Ads spend is 8% under plan for the month. Nothing to change yet."},
-        {"in": "finance", "ago": 30, "by": "bot:pricing",
-         "say": "Proposal: raise Home Pro from $449 to $479 for December. Last season it sold through with three weeks of stock left. Needs Ana's OK."},
-        {"in": "finance", "ago": 26, "by": "bot:pricing",
-         "say": "Margin at $479 is 41%, against 38% at $449, after the lens supplier's new cost."},
-        {"in": "finance", "ago": 20, "by": "human:ana",
-         "say": "Not yet. Show me sell-through for the last two Decembers first."},
-        {"in": "finance", "ago": 16, "by": "bot:pricing",
-         "say": "Sell-through: 88% of December stock sold at $449 in both years. Holding the proposal until you decide."},
+        # Ana and pricing: the December price for Home Pro
+        {"in": "pricing", "ago": 30, "by": "bot:pricing",
+         "say": "Raise Home Pro from $449 to $479 for December? On bigmarket.example Home Pro lists at $449 today, and the nearest two-unit kit lists at $489. Last two Decembers 88% of stock sold at $449, with three weeks left. At $479 margin is 41%, against 38% at $449 after the lens supplier's new cost."},
+        {"in": "pricing", "ago": 26, "by": "human:ana",
+         "say": "If bigmarket keeps Home Pro at $449, do we still sell through at $479?"},
+        {"in": "pricing", "ago": 25, "by": "bot:pricing",
+         "say": "Probably about 4 points less, to about 84%. The extra margin still comes out ahead, so I still recommend it. Holding the change until you say yes."},
         # The company thread
         {"in": "all", "ago": 130, "by": "human:ana",
          "say": "This week: Storefront units reach the warehouse Friday morning. Ben has the delivery date for the retail partner."},
@@ -142,19 +141,10 @@ CONTENT = {
         # Ana and the Assistant
         {"in": "coo", "ago": 7, "by": "human:ana", "say": "What needs me today?"},
         {"in": "coo", "ago": 6, "by": "bot:coo",
-         "say": "Two things. Home Pro's December price is waiting on your OK. The refund over $100 is held for Ben under the refund rule, so it is not yours to decide."},
-        {"in": "coo", "ago": 4, "by": "human:ana", "say": "Send me the sell-through numbers."},
+         "say": "Two things. Home Pro's December price is waiting on your OK, and pricing's case is in your DM with pricing. The refund over $100 is held for Ben under the refund rule, so it is not yours to decide."},
+        {"in": "coo", "ago": 4, "by": "human:ana", "say": "What is the refund hold, exactly?"},
         {"in": "coo", "ago": 3, "by": "bot:coo",
-         "say": "Posted in the Finance thread: 88% of December stock sold at $449 in both years."},
-        # Ben and customer care
-        {"in": "support", "ago": 10, "by": "human:ben",
-         "say": "What is the $180 draft from support? I see a hold."},
-        {"in": "support", "ago": 9, "by": "bot:support-lead",
-         "say": "Support drafted a refund for the cracked-lens customer. Anything over $100 goes to you under the refund rule, so it is held. Nothing was sent."},
-        {"in": "support", "ago": 8, "by": "human:ben",
-         "say": "Keep the lens replacement and drop the refund. I will call the customer."},
-        {"in": "support", "ago": 7, "by": "bot:support-lead",
-         "say": "Understood. I will draft a replacement-only reply for you to send."},
+         "say": "A $180 cracked-lens refund draft from support. Over $100 goes to Ben under the refund rule, so it is held for him. Nothing was sent to the customer."},
     ],
 }
 
