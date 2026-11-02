@@ -205,7 +205,7 @@ def test_the_leak_check_flags_numbers_names_and_links_not_in_the_facts():
     assert found("Revenue reached $120,000.", "The team shipped in October 2026.") == {}
     assert found("Revenue reached $130,000.") == {"numbers": ["130,000"], "names": [], "links": []}
     # The dates in the facts don't make their digits allowed: a day's "1" is not a million.
-    assert found("Revenue hit $1m.")["numbers"] == ["1"]
+    assert found("Revenue hit $1m.")["numbers"] == ["1m"]
     assert found("We signed Globex this month.")["names"] == ["Globex"]
     assert found("Globex renewed.")["names"] == ["Globex"]            # a name at a sentence's start is still a name
     assert found("Dana Reyes joined.")["names"] == ["Dana", "Reyes"]
@@ -218,7 +218,7 @@ def test_the_leak_check_flags_numbers_names_and_links_not_in_the_facts():
     # A day of the period is a date after a month's name, and only there.
     assert found("We shipped on October 31.") == {}
     assert found("We added 31 seats.")["numbers"] == ["31"]
-    assert found("Revenue hit $10m.")["numbers"] == ["10"]
+    assert found("Revenue hit $10m.")["numbers"] == ["10m"]
 
 
 
@@ -227,7 +227,7 @@ def test_times_and_ids_in_the_facts_do_not_make_figures_allowed():
     """A clock reading or an id in the facts would allow its digits, so a figure would pass only at some hours."""
     facts = {"stats": [{"as_of": "2026-11-02T01:23:45.000Z", "id": "4b5cb1b2-fe2c-4de8-bdb2-d086f4c6d008",
                         "updated": "00:01:30", "display": "$120,000"}]}
-    assert E.leak_findings("t", plain_sections("Revenue hit $1m."), facts, START, END)["numbers"] == ["1"]
+    assert E.leak_findings("t", plain_sections("Revenue hit $1m."), facts, START, END)["numbers"] == ["1m"]
 
 
 def test_a_sentence_copied_from_an_approved_update_is_not_news_and_a_year_month_title_is_not_a_figure():
@@ -246,7 +246,7 @@ def test_a_source_allows_its_counts_and_plain_words_but_not_money_names_links_or
     assert E.leak_findings("t", plain_sections("Routed 31 requests; 28 were finished."), FACTS, START, END,
                            sources=[routed]) == {}
     money = "Cash is $8m and margin is 40%."
-    assert E.leak_findings("t", plain_sections(money), FACTS, START, END, sources=[money])["numbers"] == ["8", "40"]
+    assert E.leak_findings("t", plain_sections(money), FACTS, START, END, sources=[money])["numbers"] == ["8m", "40%"]
     mid_name = "We closed a deal with Stripe."
     assert E.leak_findings("t", plain_sections(mid_name), FACTS, START, END,
                            sources=["Routed 31 requests; we closed a deal with Stripe."])["names"] == ["Stripe"]
@@ -272,13 +272,27 @@ def test_a_sentence_start_word_in_a_source_is_a_name_unless_it_reads_as_an_ordin
                            sources=["Growth came in. The growth held."]) == {}
 
 
+def test_a_money_figure_is_checked_against_the_facts_and_a_source_count_never_allows_it():
+    """"8 requests" in a source allows a plain 8, not "$8m": a money, percent or magnitude figure must be in the facts,
+    and "$8m" and "148k" are compared as the numbers they stand for."""
+    source = "We closed 8 requests. Cash is $8m."
+    assert E.leak_findings("t", plain_sections("We closed 8 requests."), FACTS, START, END, sources=[source]) == {}
+    assert E.leak_findings("t", plain_sections("Cash is $8m."), FACTS, START, END,
+                           sources=[source])["numbers"] == ["8m"]
+    facts = {"stats": [{"display": "$118k"}]}
+    assert E.leak_findings("t", plain_sections("Cash is $118k."), facts, START, END) == {}
+    assert E.leak_findings("t", plain_sections("Cash is $118,000."), facts, START, END) == {}
+    assert E.leak_findings("t", plain_sections("We have $148k."), FACTS, START, END,
+                           unseen=[148000.0])["numbers"] == ["148k"]
+
+
 def test_a_leak_holds_a_draft_and_a_clean_edit_by_a_person_releases_it(page):
     page.answer = {**GOOD, "sections": {**GOOD["sections"], "highlights": ["We signed Globex for $900k."]}}
     edition = page.draft()
     assert edition["status"] == "held"
     full = get(page.api, f"editions/{edition['id']}")
     leak = next(c for c in full["checks"] if c["kind"] == "leak")
-    assert leak["outcome"] == "flagged" and "Globex" in leak["detail"]["names"] and "900" in leak["detail"]["numbers"]
+    assert leak["outcome"] == "flagged" and "Globex" in leak["detail"]["names"] and "900k" in leak["detail"]["numbers"]
     assert post(page.api, f"editions/{edition['id']}/approval", {}, expected=409)["error"]["code"] == "conflict"
     r = page.api.patch(f"/api/v2/editions/{edition['id']}", headers=headers(),
                        json={"sections": plain_sections("Revenue reached $120,000.")})

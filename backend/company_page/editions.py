@@ -238,8 +238,20 @@ NOT_FIGURES = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})
 
 
 UNSEEN_MIN = 10
-MONEY = re.compile(r"[$€£]\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?%"
-                   r"|\d[\d,]*(?:\.\d+)?(?:[kKmMbB]\b|\s(?:thousand|million|billion)\b)", re.I)
+MAGNITUDE = r"(?:\s?(?:[kmb]|thousand|million|billion)\b)"
+MONEY = re.compile(rf"[$€£]\s?\d[\d,]*(?:\.\d+)?{MAGNITUDE}?|\d[\d,]*(?:\.\d+)?\s?%"
+                   rf"|\d[\d,]*(?:\.\d+)?{MAGNITUDE}", re.I)
+SCALE = {"k": 10**3, "thousand": 10**3, "m": 10**6, "million": 10**6, "b": 10**9, "billion": 10**9}
+
+
+def _figure(token):
+    """The number a money, percent or magnitude figure stands for: "$8m" is 8000000, "148k" is 148000, "40%" is 40."""
+    body = re.sub(r"[$€£%,\s]", "", token).lower()
+    unit = next((u for u in SCALE if body.endswith(u)), "")
+    try:
+        return _number(str(Decimal(body[:len(body) - len(unit)]) * SCALE.get(unit, 1)))
+    except InvalidOperation:
+        return body
 
 
 IRREGULAR_PAST = frozenset("""built sent made ran won lost wrote began held kept met paid set got took gave found led cut
@@ -282,13 +294,17 @@ def leak_findings(title, sections, facts, period_start, period_end, names=(), so
     # Dates, times and ids in the facts are not figures: "2026-10-01" or "00:01:30" would otherwise make "1" an allowed
     # number, and which one is there depends on when the check runs.
     corpus = NOT_FIGURES.sub(" ", " ".join(strings))
-    numbers = {_number(n) for n in NUMBER.findall(corpus)} | _period_years(period_start, period_end)
+    # A money, percent or magnitude figure is allowed only by the facts, as the number it stands for; a plain count may
+    # also come from a source (below), and the period's year is always plain.
+    facts_numbers = {_number(n) for n in NUMBER.findall(corpus)} | {_figure(t) for t in MONEY.findall(corpus)}
+    numbers = facts_numbers | _period_years(period_start, period_end)
     words = {w.lower().removesuffix("'s").removesuffix("’s") for w in WORD.findall(corpus)}
     links = {m.lower() for m in LINK.findall(corpus)}
     # Under ten a value is an ordinary count, which any text may say; only larger ones identify a hidden figure.
     hidden = {float(v) for v in unseen if abs(v) >= UNSEEN_MIN}
     # The approved updates an edition is drafted from are what the page may say, so a sentence copied from one is not
-    # news to the check. Their own dates and times are not figures, as in the facts.
+    # news to the check. Their own dates and times are not figures, as in the facts. A source's plain counts allow only
+    # plain counts: its money and percent figures are left out, so "8 requests" never allows "$8m".
     for source in sources:
         plain = NOT_FIGURES.sub(" ", LINK.sub(" ", source or ""))
         numbers |= {_number(n) for n in NUMBER.findall(MONEY.sub(" ", plain))}
@@ -305,8 +321,13 @@ def leak_findings(title, sections, facts, period_start, period_end, names=(), so
             if link.lower() not in links:
                 add("links", link)
         text = NOT_FIGURES.sub(" ", LINK.sub(" ", text))     # "2026-10" in a title is a date, not the figure "10"
+        figures = list(MONEY.finditer(text))
+        for m in figures:
+            value = _figure(m.group())
+            if value not in facts_numbers or float(value) in hidden:
+                add("numbers", re.sub(r"[$€£\s]", "", m.group()).rstrip(",."))
         for m in NUMBER.finditer(text):
-            if _is_date(text, m.start(), m.group()):
+            if any(f.start() <= m.start() < f.end() for f in figures) or _is_date(text, m.start(), m.group()):
                 continue
             value = _number(m.group())
             if value not in numbers or float(value) in hidden:
