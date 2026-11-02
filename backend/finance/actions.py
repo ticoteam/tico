@@ -618,6 +618,12 @@ def note_view_as(c: sqlite3.Connection, owner: str, target: str) -> None:
     tico.audit(c, owner, "finance.view_as", target, {})
 
 
+def note_export(c: sqlite3.Connection, viewer: str, kind: str, year: int | None) -> None:
+    """An export is made for whoever downloads it and recorded in events with that viewer (spec §7.5). Exports are not
+    stored, so there is no copy to expire; a stored export would expire after 7 days."""
+    tico.audit(c, viewer, "finance.export", kind, {"year": year})
+
+
 def full_read_lines(c: sqlite3.Connection, viewer: str, at: str | None = None) -> list[str]:
     """The private accounts whose detail a viewer other than the owner reads in full (spec §7.5). The owner's own reads
     are not logged; nothing is logged before Finance is set up."""

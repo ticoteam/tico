@@ -97,6 +97,14 @@ def install(app, store, auth, mutate):
         except finance.FinanceError as e:
             raise problem(e) from None
 
+    def record_export(actor, kind, year):
+        """A CSV export is recorded in events for whoever it was made for (spec §7.5)."""
+        try:
+            with store.transaction() as c:
+                finance.note_export(c, actor, kind, year)
+        except finance.FinanceError as e:
+            raise problem(e) from None
+
     def as_viewer(request, view_as):
         """The caller, or for the owner the teammate they view Finance as (audited). A request by someone other than
         the owner who reads private lines in full is written to events (spec §7.5), once per request."""
@@ -446,6 +454,7 @@ def install(app, store, auth, mutate):
         """The sales tax workpaper as CSV, the same lines as on screen."""
         actor = as_viewer(request, view_as)
         body = read(lambda c: finance_reads.sales_tax_csv(c, actor, year))
+        record_export(actor, "sales-tax", year)
         return Response(body, media_type="text/csv; charset=utf-8", headers={
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": 'attachment; filename="sales-tax-%s.csv"' % (year or "this-year")})
@@ -465,6 +474,7 @@ def install(app, store, auth, mutate):
         """The 1099 workpaper as CSV, the same lines as on screen."""
         actor = as_viewer(request, view_as)
         body = read(lambda c: finance_reads.form_1099_csv(c, actor, year))
+        record_export(actor, "1099", year)
         return Response(body, media_type="text/csv; charset=utf-8", headers={
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": 'attachment; filename="1099-%s.csv"' % (year or "this-year")})

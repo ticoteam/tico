@@ -9,7 +9,7 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.actions import FinanceError
 from backend.finance.store import banking as SK
-from backend.tests.test_api import api, get  # noqa: F401
+from backend.tests.test_api import api, get, headers  # noqa: F401
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
 from backend.tests.test_finance_tab import _bank
 
@@ -501,3 +501,19 @@ def test_a_full_read_of_a_private_line_by_someone_else_is_written_to_events(api)
     with store.read() as c:
         rows = c.execute("SELECT actor, target FROM events WHERE action='finance.private_read'").fetchall()
     assert [tuple(r) for r in rows] == [("human:eve", private)]
+
+
+def test_a_csv_export_is_recorded_for_whoever_it_was_made_for(api):
+    """Spec 7.5: exports record who they were made for. The sales tax CSV the owner downloads leaves a row naming the
+    owner and the export; nothing is stored, so there is no copy to expire."""
+    from backend.finance import actions as FA
+    from backend.tests.test_finance_fixtures import _seed
+    store = api.app.state.store
+    with store.transaction() as c:
+        _seed(c)
+        assert FA.ensure_setup(c, store.settings.owner_email)
+    r = api.get("/api/v2/finance/tax/sales-tax.csv?year=2026", headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    with store.read() as c:
+        rows = c.execute("SELECT actor, target FROM events WHERE action='finance.export'").fetchall()
+    assert [tuple(x) for x in rows] == [("human:ana", "sales-tax")]
