@@ -1,7 +1,9 @@
 """Public releases: immutable folders of rendered files behind a `current` symlink that swaps atomically.
 
 Rendered files are the only way public content leaves the install. A router in another container reads them, so folders
-are 0755, files 0644, the link is relative, and nothing in them is a secret.
+are 0755, files 0644, the link is relative, and nothing in them is a secret. A release is complete on its own: its
+fonts and logo are inside it, so serving it never reaches the company's server, and the router needs nothing outside
+this folder. On a cell, settings.company_page_dir sits inside the one folder the router mounts read-only.
 
 Ordering is the point of rebuild(). Files are rendered with no lock held. The swap then happens inside the database's
 write transaction, after reading the view once more and finding it unchanged, so:
@@ -18,7 +20,6 @@ import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 
 from . import render
 
@@ -71,10 +72,10 @@ def _settings_of_connection(c):
     except Exception:  # noqa: BLE001, S110 - a bad or partial environment means the fallback, never a failed take-back
         pass
     environ = os.environ
-    return SimpleNamespace(db_path=Path(path) if path else None, company_page_dir=environ.get("TICO_COMPANY_PAGE_DIR", ""),
-                           reader_origin=environ.get("TICO_READER_ORIGIN", ""),
-                           company_name=environ.get("TICO_TEAM_NAME", "") or environ.get("TICO_COMPANY_NAME", "")
-                           or DEFAULT_COMPANY_NAME)
+    return Settings(db_path=Path(path), company_page_dir=environ.get("TICO_COMPANY_PAGE_DIR", ""),
+                    reader_origin=environ.get("TICO_READER_ORIGIN", ""),
+                    company_name=environ.get("TICO_TEAM_NAME", "") or environ.get("TICO_COMPANY_NAME", "")
+                    or DEFAULT_COMPANY_NAME)
 
 
 # ------------------------------------------------------------------------------------------------- the view model
@@ -224,8 +225,18 @@ def _fsync_dir(path):
 
 
 def _mkdir(path):
+    """Every folder this makes is 0755 whatever the server's umask, because the router runs as someone else and reads
+    them through its own mount. A folder that already exists and isn't this user's stays as its owner set it."""
+    missing, walk = [], path
+    while not walk.exists():
+        missing.append(walk)
+        walk = walk.parent
     path.mkdir(parents=True, exist_ok=True)
-    os.chmod(path, 0o755)      # whatever the server's umask: the router runs as someone else
+    for made in {path, *missing}:
+        try:
+            os.chmod(made, 0o755)
+        except PermissionError:
+            LOG.debug("company page folder %s keeps its owner's mode", made)
 
 
 def _write(path, data):

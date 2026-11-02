@@ -675,3 +675,108 @@ def test_logo_is_copied_when_its_bytes_are_an_image_and_dropped_otherwise(world,
         c.execute("UPDATE company_page_settings SET logo_file_id='svg'")
     with world.store.read() as c:
         assert release.public_view(c, AT, world.settings)["company"]["logo_url"] == ""
+
+
+class References(HTMLParser):
+    """Everything a page asks the browser to fetch or link to on its own origin."""
+
+    def __init__(self, text):
+        super().__init__(convert_charrefs=True)
+        self.found, self.in_style = set(), False
+        self.feed(text)
+
+    def handle_starttag(self, tag, attrs):
+        self.in_style = tag == "style"
+        attrs = dict(attrs)
+        assert not (tag == "script" and "src" in attrs) and not (tag == "link" and attrs.get("rel") == "stylesheet")
+        for name in ("src", "href", "poster", "data"):
+            value = attrs.get(name)
+            if value and tag != "article" and not (tag == "link" and attrs.get("rel") == "canonical") and not value.startswith(("#", "?", "https://")):
+                self.found.add(value)
+
+    def handle_data(self, data):
+        if self.in_style:
+            self.found |= set(re.findall(r"url\(([^)]+)\)", data))
+
+
+def with_logo(world, monkeypatch):
+    png = b"\x89PNG\r\n\x1a\n" + b"x" * 20
+    with world.store.transaction() as c:
+        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) VALUES ('good','human:o',?,?,'logo','image/png',?)",
+                  (hashlib.sha256(png).hexdigest(), len(png), H.now()))
+        c.execute("UPDATE company_page_settings SET logo_file_id='good'")
+    import backend.blobs as blobs
+    monkeypatch.setattr(blobs.Blobs, "get", lambda self, d: png)
+
+
+def assert_self_contained(folder):
+    wanted = References((folder / "index.html").read_text()).found
+    assert any("fonts/" in w for w in wanted) and any("logo-" in w for w in wanted) and "feed.xml" in wanted
+    for name in wanted:
+        target = (folder / name).resolve()
+        assert target.is_file() and target.is_relative_to(folder.resolve()), name
+
+
+def test_a_release_holds_everything_its_page_refers_to(world, monkeypatch):
+    open_page(world)
+    publish(world, "e1", "First")
+    with_logo(world, monkeypatch)
+    release.rebuild(world.store, "first", at=AT)
+    assert_self_contained(served(world))
+
+
+@pytest.mark.parametrize("way_out", ["closed", "retract"])
+def test_a_release_with_nothing_public_holds_no_assets(world, monkeypatch, way_out):
+    open_page(world)
+    publish(world, "e1", "First")
+    with_logo(world, monkeypatch)
+    release.rebuild(world.store, "first", at=AT)
+    old = (world.root / "current").resolve()
+    wanted = References((old / "index.html").read_text()).found
+    with world.store.transaction() as c:
+        c.execute("UPDATE company_page_settings SET transparency='closed'" if way_out == "closed"
+                  else "UPDATE editions SET status='retracted'")
+        release.rebuild(c, way_out, at=AT)
+    assert not old.exists() and list(served(world).iterdir()) == []
+    for name in wanted:
+        assert not (world.root / "current" / name).exists(), name
+    assert not list(world.root.rglob("*.woff2")) and not list(world.root.rglob("logo-*"))
+
+
+def test_a_retract_that_leaves_a_page_keeps_it_whole_and_drops_the_old_files(world, monkeypatch):
+    open_page(world)
+    publish(world, "e1", "Keeper", "2026-10-01T00:00:00Z")
+    publish(world, "e2", "Gone", "2026-10-02T00:00:00Z")
+    with_logo(world, monkeypatch)
+    release.rebuild(world.store, "first", at=AT)
+    old = (world.root / "current").resolve()
+    with world.store.transaction() as c:
+        c.execute("UPDATE editions SET status='retracted' WHERE id='e2'")
+        release.rebuild(c, "retract", at=AT)
+    assert not old.exists()
+    assert_self_contained(served(world))
+
+
+def test_the_router_needs_only_the_folder_it_mounts(world, monkeypatch, tmp_path):
+    """On a cell the router mounts one folder read-only, at another path, and sees nothing above it."""
+    world.settings.company_page_dir = str(tmp_path / "cell" / "pages" / "acme")
+    world.root = tmp_path / "cell" / "pages" / "acme"
+    open_page(world)
+    publish(world, "e1", "First")
+    with_logo(world, monkeypatch)
+    old = os.umask(0o077)
+    try:
+        release.rebuild(world.store, "first", at=AT)
+    finally:
+        os.umask(old)
+    assert not (tmp_path / "company-page-public").exists()
+    assert stat_module.S_IMODE(os.stat(tmp_path / "cell").st_mode) == 0o755     # folders it had to make on the way
+    for path in world.root.rglob("*"):
+        if path.is_symlink():
+            assert path.name == "current" and not os.path.isabs(os.readlink(path))
+        elif path.is_file() and path.suffix in (".html", ".json", ".xml"):
+            assert str(tmp_path) not in path.read_text()
+    mounted = tmp_path / "mount" / "elsewhere"
+    mounted.parent.mkdir()
+    shutil.move(str(tmp_path / "cell" / "pages"), str(mounted))
+    assert_self_contained(mounted / "acme" / "current")
