@@ -1203,9 +1203,16 @@ where
                 return Err(WtErr::msg("kept: unpushed commits; push them to free this worktree"));
             }
         } else if dirty {
-            let mut names_text = git(&path, env, &["diff", "HEAD", "--name-only", "-z"], true).await?.stdout;
-            names_text += &git(&path, env, &["ls-files", "--others", "--exclude-standard", "-z"], true).await?.stdout;
-            let names: Vec<&str> = names_text.split('\0').filter(|n| !n.is_empty()).collect();
+            // Names come from the raw bytes: a lossy name is not the file on disk, so its body would go unscanned.
+            let mut names_raw = git(&path, env, &["diff", "HEAD", "--name-only", "-z"], true).await?.raw;
+            names_raw.extend(git(&path, env, &["ls-files", "--others", "--exclude-standard", "-z"], true).await?.raw);
+            let mut names: Vec<&str> = Vec::new();
+            for raw_name in names_raw.split(|byte| *byte == 0).filter(|n| !n.is_empty()) {
+                let Ok(name) = std::str::from_utf8(raw_name) else {
+                    return Err(WtErr::msg("kept: a changed or untracked file name is not valid UTF-8; nothing was saved, committed or pushed"));
+                };
+                names.push(name);
+            }
             let skipped: Vec<String> = names
                 .iter()
                 .filter(|n| {
