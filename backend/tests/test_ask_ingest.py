@@ -1283,6 +1283,25 @@ def test_a_task_question_replays_with_the_body_it_was_judged_with(gate):
     assert model.calls[-1]["state"]["item"]["title"] == "Which launch date do you want?"
 
 
+def test_a_comment_ask_that_names_its_question_decision_replays_its_comment_not_the_task_body(gate):
+    """Only a task question is replayed with its task's body. A client can name its question `decision` on a comment,
+    which must not make Replay read the task's body in place of the comment (QA, Dev 724)."""
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "rehearsal", "budget": 10, "chores_budget": 5, "criteria": []})
+    tid = own_task(api, token)["id"]
+    decision = [dict(DATES[0], id="decision")]
+    r = api.post(f"/api/v2/tasks/{tid}/comments", headers=headers(token),
+                 json={"text": "Tell me which date.", "ask": {"questions": decision, "who": "ben"}})
+    assert r.status_code == 200, r.text
+    live = model_text(model)
+    assert live.endswith("Recommended: Nov 10\n\nTell me which date.")
+    out = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": H.now()[:10]}, headers=headers("ben-test"))
+    assert out.status_code == 200, out.text
+    assert model_text(model) == live
+    assert "Plan the November launch" not in model_text(model)
+
+
 def test_a_replayed_structured_question_judges_the_same_lines(gate):
     api, model, token = gate
     with api.app.state.store.transaction() as c:

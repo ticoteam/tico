@@ -724,6 +724,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             ask["questions"][0]["question"] = said_text
         if topic:
             ask["topic"] = topic
+        # Set here, after the request's ask is checked: a client cannot send it (the ask model forbids extra fields),
+        # so Replay can tell a task question from a comment ask (ask_ingest._judged_text).
+        ask["task_question"] = True
         if review:
             ask["review"] = {"files": review, **({"pick": True} if body.pick else {})}
             ask["attachments"] = attachments

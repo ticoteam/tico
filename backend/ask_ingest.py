@@ -294,12 +294,13 @@ def structured_text(questions, text):
     return f"{head}\n\n{body[:room]}" if room > 0 and body else head
 
 
-def _judged_text(questions, message_text, task):
-    """What a question was judged with, as replayed. A task question (its one question is `decision`, as hubdb's
-    open-question check reads it) was judged with the body its task was filed with, which the ask message does not
-    carry: the question's line stands in for a body that was not given. Any other question judged its message text."""
+def _judged_text(refs, message_text, task):
+    """What a question was judged with, as replayed. A task question (`refs.task_question`, set by the server when it
+    writes the question) was judged with the body its task was filed with, which the ask message does not carry: the
+    question's line stands in for a body that was not given. Any other question judged its message text."""
+    questions = refs.get("questions")
     first = questions[0] if isinstance(questions, list) and questions and isinstance(questions[0], dict) else {}
-    if not task or not str(first.get("id") or "").startswith("decision"):
+    if not task or refs.get("task_question") is not True:
         return message_text
     body = str(task.get("body") or "")
     return "" if body.strip() == str(first.get("question") or "").strip() else body
@@ -780,11 +781,11 @@ def replay_items(c, person, start, end, assistant_bot=None):
         task = H.task(c, tid) if tid else None
         title = (task or {}).get("title", "") if tid else ""
         body = str(m.get("body") or "")
-        asked = H._json(m.get("refs_json"), {}) or {}
+        refs = H._json(m.get("refs_json"), {}) or {}
         out.append({"kind": "question" if tid else "loose", "ref": tid or m["id"], "asker": m["from_actor"],
                     "title": title or body.strip().split("\n")[0][:300],
-                    "text": _judged_text(asked.get("questions"), body, task),
-                    "asked": asked.get("questions"), "created": m["created"]})
+                    "text": _judged_text(refs, body, task),
+                    "asked": refs.get("questions"), "created": m["created"]})
     return sorted(out, key=lambda it: it["created"])
 
 
