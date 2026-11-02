@@ -239,3 +239,38 @@ def test_task_threads_do_not_crowd_out_real_threads_and_each_page_reads_on(api):
         seen += [t["id"] for t in page["threads"]]
         cursor = page["next_cursor"]
     assert sorted(seen) == sorted(t["id"] for t in real)
+
+
+# ----------------------------------------------------------------------------- the followed set does not multiply the work
+def sidebar_statements(api, token, **params):
+    """The statements one sidebar read runs, and the page it returns."""
+    statements = []
+    with api.app.state.store.read() as c:
+        v = threads.Viewer(api.app.state.auth, who(api, token.removesuffix("-test")))
+        c.set_trace_callback(statements.append)
+        try:
+            listed = threads.sidebar(c, v, **params)
+        finally:
+            c.set_trace_callback(None)
+    return statements, listed
+
+
+def test_the_statements_of_a_sidebar_page_stay_flat_as_a_viewer_follows_more_threads(api):
+    for i in range(2):
+        ok_company = api.post("/api/v2/threads", json={"title": f"Company {i}", "audience": "company", "body": "hi"},
+                              headers=headers("ana-test"))
+        assert ok_company.status_code == 200, ok_company.text
+    sidebar_statements(api, "ben-test", limit=2)  # warm: the roster is read once per process
+    few, _ = sidebar_statements(api, "ben-test", limit=2)
+    for i in range(30):
+        made = api.post("/api/v2/threads", json={"title": f"Watched {i}", "audience": "company", "body": "hi"},
+                        headers=headers("ana-test"))
+        assert made.status_code == 200, made.text
+        followed = api.put(f"/api/v2/threads/{made.json()['id']}/follow", json={"notify": "live"},
+                           headers=headers("ben-test"))
+        assert followed.status_code == 200, followed.text
+    many, listed = sidebar_statements(api, "ben-test", limit=2)
+    assert len(listed["threads"]) == 2
+    # The 30 followed threads add a handful of statements (the readable check of the candidates a page skips, bounded
+    # by its fetch window), never one per followed thread.
+    assert len(many) - len(few) < 10, (len(few), len(many))
