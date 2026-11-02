@@ -69,7 +69,7 @@ wrote in your own Assistant chat in the last 30 minutes, and the owner's rule "A
 The task opens with your words quoted.
 For the Strategy Bot and the Librarian the event `assistant.asked_helper` records it (with `helper`, `for` and
 `cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy or goal
-change stays the owner's: the Strategy Bot proposes it on a Confirm card, and only the owner can confirm. A task for any other bot that cites your words is refused
+change stays the owner's: the Strategy Bot proposes it on a Confirm card, and only the owner can confirm. The exception is a goal, measure or target the owner agrees in their own chat, saved on a plain yes ([Goals agreed in your chat](strategy-bot.md#goals-agreed-in-your-chat)). A task for any other bot that cites your words is refused
 (`422 request_id`). A person's post to the Strategy Bot's chat (`POST /api/v2/chat/goal-manager`) lands in their
 Assistant chat instead.
 
