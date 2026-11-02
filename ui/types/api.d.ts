@@ -1109,9 +1109,12 @@ export type Equipment = {
   installed_on?: string | null;
   kind: "owned" | "customer";
   location_id?: string | null;
+  location_name?: string | null;
   make: string;
   model: string;
   name: string;
+  next_due_on?: string | null;
+  next_due_status?: string | null;
   photo_file_id?: string | null;
   serial: string;
   source?: string;
@@ -2934,7 +2937,9 @@ export type Location = {
   kind: string;
   name: string;
   next_due_on?: string | null;
+  next_due_status?: string | null;
   parent_id?: string | null;
+  parent_name?: string | null;
   source?: string;
   stale?: boolean;
 };
