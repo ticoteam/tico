@@ -9,7 +9,7 @@ from backend.finance import reads as FR
 from clients import hubtools
 from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, spend, store, sync_once)
 
 OCT = ("2026-10-01", "2026-10-31")
 
@@ -100,3 +100,30 @@ def test_the_current_month_shows_its_budget_to_date_beside_the_full_month(books)
         assert software["budget"] == [None, 5_000]
         assert software["budget_to_date"][0] is None
         assert 0 < software["budget_to_date"][1] < 5_000
+
+
+def test_a_past_period_budget_amount_is_refused_on_create_and_update(books):
+    """§12: only future periods are editable, so an amount dated into a closed past period is refused."""
+    with books.transaction() as c:
+        past = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000,
+                                               "effective_from": "2026-09-01"})
+        assert past.code == "invalid" and "past period" in past.reason
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000})
+        assert made.status == "committed", made.reason
+        again = act(c, OWNER, "budget_update", {"budget_id": budget(c, "Software"), "amount": 6_000,
+                                                "effective_from": "2026-09-01"})
+        assert again.code == "invalid" and "past period" in again.reason
+
+
+def test_a_raise_in_the_current_period_asks_the_budget_owner_and_a_future_one_does_not(books):
+    """§4.4 and §12: a current-period raise goes through the budget owner's approval; a raise for a future period is
+    the ordinary change."""
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000})
+        assert made.status == "committed", made.reason
+        bid = budget(c, "Software")
+        assert act(c, OWNER, "budget_update", {"budget_id": bid, "owner": "human:ben"}).status == "committed"
+        raise_now = act(c, OWNER, "budget_update", {"budget_id": bid, "amount": 6_000})
+        assert (raise_now.status, raise_now.approver) == ("needs_approval", "human:ben")
+        later = act(c, OWNER, "budget_update", {"budget_id": bid, "amount": 7_000, "effective_from": "2026-11-01"})
+        assert later.status == "committed", later.reason
