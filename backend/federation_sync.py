@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from . import federation as F
 from . import federation_envelope as E
 from . import federation_threads as T
+from . import threads as CORE
 from . import hubdb as H
 from . import org_rule_check as OR
 from . import screening
@@ -204,7 +205,7 @@ def home_message(c, vault, thread, row, now):
     existing = c.execute("SELECT * FROM federation_items WHERE origin_id=? AND revision=?", (origin, revision)).fetchone()
     if existing:
         return dict(existing)
-    if row["restricted"]:
+    if withheld(c, row["message_id"]):
         return None
     actor = E.qualify(row["actor"], home) if row["actor"] else ""
     if E.install_of(actor) != home:                  # a message numbered by another install is never signed here
@@ -229,6 +230,23 @@ def home_message(c, vault, thread, row, now):
     return item
 
 
+def withheld(c, message_id):
+    """Whether a message must stay in this install. `restricted` only asks for the per-message check (a reply, a file, a
+    ref that might name a task), so most flagged messages are fine to send: what is withheld is what a reader with no
+    standing could not read (the rule the thread's history is shown by), or any message of a thread tied to a private
+    task. Only the message's text and its author leave, so the check covers what does."""
+    row = c.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
+    if row is None:
+        return True
+    message = dict(row)
+    if not message["restricted"]:
+        return False
+    conv = c.execute("SELECT * FROM conversations WHERE id=?", (message["conversation_id"],)).fetchone()
+    if conv is not None and CORE.private_task_thread(c, dict(conv)):
+        return True
+    return CORE._narrower_than_thread(c, message)
+
+
 def _local(actor, me):
     """A person or bot of this install. The keeper is the system, not a person: its notes are never federated."""
     return bool(actor) and not actor.startswith("keeper") and E.install_of(E.qualify(actor, me)) == me
@@ -248,14 +266,14 @@ def subtrees(c, me, limit):
         top = thread["subtree_seq"]
         for message in T.outside_subtree(c, root, thread["subtree_seq"], limit):
             top = max(top, message["seq"])
-            if message["restricted"] or message["deleted_at"] or not _local(message["from_actor"], me):
+            if withheld(c, message["id"]) or message["deleted_at"] or not _local(message["from_actor"], me):
                 continue
             for recipient in peers:
                 T.queue_outside(c, message, recipient, message["conversation_id"], root)
         if top != thread["subtree_seq"]:
             c.execute("UPDATE federation_threads SET subtree_seq=?, updated_at=? WHERE id=?", (top, stamp(), thread["id"]))
         for message in T.outside_edited(c, root, limit):
-            if message["restricted"] or not _local(message["from_actor"], me):
+            if withheld(c, message["id"]) or not _local(message["from_actor"], me):
                 continue
             for recipient in peers:
                 T.queue_outside(c, message, recipient, message["conversation_id"], root)
@@ -276,7 +294,8 @@ def stage(c, vault, now, limit=100):
         delivery = row["id"]
         target = (row["recipient"] or "").removeprefix("peer:")
         thread = thread_local(c, row["thread_id"]) if row["thread_id"] else None
-        if thread is None or row["message_kind"] not in MESSAGE_KINDS or row["restricted"] or not _local(row["actor"], me):
+        if thread is None or row["message_kind"] not in MESSAGE_KINDS or withheld(c, row["message_id"]) \
+                or not _local(row["actor"], me):
             T.settle(c, delivery, "moot")
             continue
         if thread["home_install"] == me:
@@ -1042,7 +1061,7 @@ def staged_payload(c, row, me):
     if cur is None or not cur["thread_id"]:
         return None
     thread = thread_local(c, cur["thread_id"])
-    if (thread is None or thread["home_install"] == me or cur["restricted"] or cur["origin_install"]
+    if (thread is None or thread["home_install"] == me or withheld(c, cur["message_id"]) or cur["origin_install"]
             or cur["message_kind"] not in MESSAGE_KINDS):
         return None
     actor = E.qualify(cur["actor"], me) if cur["actor"] else ""
