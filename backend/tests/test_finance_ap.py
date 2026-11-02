@@ -1166,3 +1166,19 @@ def test_marked_paid_from_a_disconnected_checking_account_goes_through_clearing_
         done = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": _checking(c)})
         assert done.status == "committed" and done.result["from"] == "account", done
         assert _balance(c, "1050") == -5_000
+
+
+def test_marked_paid_from_a_checking_account_never_connected_goes_through_clearing(books):
+    """Spec §4.3: marked paid with no connected account, a payment goes through clearing, as it does for a disconnected
+    one. A never-connected account has no bank row coming either, so its own line is not credited."""
+    with books.transaction() as c:
+        money = SL.new_id()
+        c.execute("INSERT INTO fin_money_accounts(id, book_id, kind, name, provider, account_id, created_at, created_by) "
+                  "VALUES(?,?,?,?,?,?,?,?)", (money, SL.book(c).id, "bank", "Checking", "mercury",  # type: ignore[union-attr]
+                                             account(c, "1000"), AT, OWNER))
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 5_000}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        cash = _balance(c, "1000")
+        done = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": money})
+        assert done.status == "committed" and done.result["from"] == "account", done
+        assert (_balance(c, "1050"), _balance(c, "1000") - cash) == (-5_000, 0)
