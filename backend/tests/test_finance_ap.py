@@ -1037,3 +1037,26 @@ def test_an_explicit_zero_pays_nothing_of_a_bill(books):
             got = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "account_id": account(c, "1000"), "amount": amount})
             assert (got.status, got.code) == ("failed", "invalid"), got
         assert _settled(c, "fin_bills", bid) == before
+
+
+def test_a_voided_document_reverses_on_its_own_date_and_a_closed_date_rolls_to_the_open_period(books):
+    """§4.1: a void reverses on the document's own date. Only a date in a closed period moves to the current open one
+    (AT is 2026-10-15), so a September bill's and invoice's reversals stay in September and an August bill's rolls."""
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        bill = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 5_000}], day="2026-09-10")
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+        customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
+        inv = str(act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-09-12", "lines": [
+            {"account_id": account(c, "4000"), "amount": 7_000}]}).result["invoice_id"])
+        assert act(c, OWNER, "invoice_send", {"invoice_id": inv}).status == "committed"
+        assert act(c, OWNER, "bill_void", {"bill_id": bill}).status == "committed"
+        assert act(c, OWNER, "invoice_void", {"invoice_id": inv}).status == "committed"
+        assert [r[0] for r in c.execute("SELECT entry_date FROM fin_entries WHERE memo LIKE 'Void %' "
+                                        "ORDER BY entry_date").fetchall()] == ["2026-09-10", "2026-09-12"]
+        august = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 3_000}], day="2026-08-10")
+        assert act(c, OWNER, "bill_approve", {"bill_id": august}).status == "committed"
+        assert act(c, OWNER, "close_period", {"month": "2026-08"}).status == "committed"
+        assert act(c, OWNER, "bill_void", {"bill_id": august}).status == "committed"
+        assert [r[0] for r in c.execute("SELECT entry_date FROM fin_entries WHERE memo LIKE 'Void bill %' AND "
+                                        "entry_date>'2026-09-30' ORDER BY entry_date").fetchall()] == ["2026-10-15"]
