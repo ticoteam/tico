@@ -163,14 +163,14 @@ class GrowthRethink(unittest.TestCase):
         self.path = Path(self.dir.name) / "hub.db"
 
     def before_rethink(self):
-        """The file as the release before the rethink left it: every migration before it, and the strategy tables
-        store.py makes at startup."""
+        """The file as the release before the rethink left it: every migration before it (none after it: a later file
+        makes the runner refuse the rethink as out of order), and the strategy tables store.py makes at startup."""
         conn = sqlite3.connect(self.path, isolation_level=None)
         conn.row_factory = sqlite3.Row
         self.addCleanup(conn.close)
         every = migrations.files()
         with unittest.mock.patch.object(migrations, "files",
-                                        lambda directory=None: [m for m in every if m.version != "0035_growth_rethink"]):
+                                        lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]):
             H.migrate(conn)
         for statement in S.SCHEMA:
             conn.execute(statement)

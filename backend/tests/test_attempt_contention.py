@@ -227,6 +227,7 @@ def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                       "VALUES(?,?,?,'bot:ops','notice','Synthetic finished task',?,?)",
                       (f'obsolete-{i}', f'room-{i}', H.KEEPER, H.now(), encode({'task': f'task-{i}'})))
+            enqueue_stored(c, f'obsolete-{i}')
     assert post(api, 'jobs/claim', {}, computer['token'])['attempt'] is None
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM jobs WHERE state='canceled'").fetchone()[0] == execution.CLAIM_MAINTENANCE
