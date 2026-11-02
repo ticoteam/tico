@@ -135,6 +135,32 @@ async function dismissRunnerCard(page) {
   }
 }
 
+// A click that fails says what sits at the control's centre, so a phone-only failure shows what covers it (no screenshot needed).
+async function clickOrExplain(page, selector, label) {
+  try {
+    await page.locator(selector).first().click({timeout: 10000});
+  } catch {
+    const info = await page.evaluate(sel => {
+      const el = document.querySelector(sel);
+      if (!el) return 'no element';
+      const r = el.getBoundingClientRect(), hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return JSON.stringify({rect: [r.x, r.y, r.width, r.height].map(Math.round), disabled: el.disabled,
+        hit: hit ? hit.tagName + '.' + String(hit.className).slice(0, 60) : 'none', hitText: hit ? hit.textContent.trim().slice(0, 60) : ''});
+    }, selector).catch(e => 'evaluate failed: ' + String(e.message).split('\n')[0]);
+    throw new Error(`${label} click failed (${selector}): ${info}`);
+  }
+}
+
+// Whether a hold listed for a thread holds this text. The list omits the text; the hold's own view (its author reads it) has it.
+async function heldWithText(hub, threadId, text) {
+  const {holds} = await api(hub, 'dana', 'GET', `/v2/rule-holds?thread=${threadId}`);
+  for (const h of holds) {
+    const view = await api(hub, 'dana', 'GET', `/v2/rule-holds/${h.id}`);
+    if (JSON.stringify(view).includes(text)) return true;
+  }
+  return false;
+}
+
 const shell = (page, route, waitFor = '#main') => async () => {
   await page.goto(page.url().split('#')[0] + route);
   await page.locator(waitFor).first().waitFor({state: 'attached', timeout: WAIT});
@@ -399,27 +425,25 @@ async function messageMenu(page, text, item) {
       await step(page, 'held message', phone, name, async () => {
         await shell(page, `#/thread/${S.plan.id}`, '.thv-composer')();
         await page.locator('.thv-composer .p-text').fill(HELD);
-        await page.locator('.thv-composer .p-send').click();
+        await clickOrExplain(page, '.thv-composer .p-send', 'held send');
         await sleep(2500);
         await snap(page, 'held-message', phone);
-        // Through the API: the post is held (listed for this thread as a hold on its text) and nothing reached the timeline.
-        const holds = await api(hub, 'dana', 'GET', `/v2/rule-holds?thread=${S.plan.id}`);
-        assert.ok(JSON.stringify(holds).includes(HELD), 'the person\'s message is held: ' + JSON.stringify(holds).slice(0, 300));
+        // Through the API: the post is held (a hold of this thread has its text) and nothing reached the timeline.
+        assert.ok(await heldWithText(hub, S.plan.id, HELD), 'the person\'s message is held in this thread');
         const timeline = await api(hub, 'dana', 'GET', `/v2/threads/${S.plan.id}/timeline`);
         assert.ok(!JSON.stringify(timeline).includes(HELD), 'the held message is not in the thread timeline');
       });
       await step(page, 'held edit', phone, name, async () => {
         await messageMenu(page, 'Price list draft v1', 'Edit');
         await page.locator('[data-message]', {hasText: 'Price list draft v1'}).first().locator('textarea').first().fill(HELD);
-        await page.locator('[data-th-edit-save]').first().click();
+        await clickOrExplain(page, '[data-th-edit-save]', 'held edit save');
         await sleep(2500);
         await snap(page, 'held-edit', phone);
         // Through the API: the edit is held, so the draft keeps its text and the new text is not in the timeline.
         const timeline = await api(hub, 'dana', 'GET', `/v2/threads/${S.plan.id}/timeline`);
         assert.ok(JSON.stringify(timeline).includes('Price list draft v1'), 'the draft keeps its text after a held edit');
         assert.ok(!JSON.stringify(timeline).includes(HELD), 'the held edit is not in the thread timeline');
-        const holds = await api(hub, 'dana', 'GET', `/v2/rule-holds?thread=${S.plan.id}`);
-        assert.ok(JSON.stringify(holds).includes(HELD), 'the held edit is listed as a hold');
+        assert.ok(await heldWithText(hub, S.plan.id, HELD), 'the held edit is listed as a hold');
       });
     });
 
