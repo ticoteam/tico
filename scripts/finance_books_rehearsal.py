@@ -967,10 +967,20 @@ class Rehearsal:
                   s4 == 200 and over_done and int(over.get("actual") or 0) == SOFTWARE_OCT_BEFORE + B3 + B4
                   and int(over.get("remaining") or 0) < 0, f"actual={over.get('actual')} remaining={over.get('remaining')}")
         bill4 = self.local_doc("/finance/bills", "R-BILL-4") or {}
-        sp, dry = self.act("bill_mark_paid", {"bill_id": str(bill4.get("id", "")), "amount": B4, "date": DAY,
-                                              "account_id": ids["checking_account"]}, dry_run=True)
-        res.check("paying that bill over a hold_payment limit waits for a person",
-                  sp == 200 and dry.get("status") == "needs_approval", f"dry run: {dry.get('status')} {dry.get('reason') or ''}")
+        pay_over = {"bill_id": str(bill4.get("id", "")), "amount": B4, "date": DAY, "account_id": ids["checking_account"]}
+        # The owner is the person who decides a hold_payment, so the owner's own over-limit payment commits (actions.py
+        # _approver). A bot's payment of the same bill is a request a person must approve: it waits.
+        sp, dry = self.act("bill_mark_paid", pay_over, dry_run=True)
+        res.check("the owner's own payment over a hold_payment limit commits (the owner decides)",
+                  sp == 200 and dry.get("status") == "committed", f"dry run: {dry.get('status')} {dry.get('reason') or ''}")
+        grant_status, _ = self.act("view_grant", {"subject_kind": "teammate", "subject": "bot:bookkeeper",
+                                                  "what": "everything"})
+        from backend.finance import actions as FA
+        with self.store.transaction() as c:
+            bot = FA.act(c, "bot:bookkeeper", "bill_mark_paid", pay_over, "rehearsal-bot-pay-over-limit", dry_run=True)
+        res.check("a bot's payment of that bill over a hold_payment limit waits for a person",
+                  grant_status == 200 and bot.status == "needs_approval",
+                  f"grant HTTP {grant_status}; dry run as bot: {bot.status} {bot.reason or ''}")
         expected = moved(before, qbo_budget_delta())
         res.check("the P&L and the balance sheet match the two budget bills to the cent",
                   self.settle(lambda: self.totals() == expected, 90), f"want {expected} got {self.totals()}")

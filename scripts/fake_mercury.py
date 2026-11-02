@@ -81,9 +81,19 @@ STATE = State()
 
 
 def balances() -> dict:
-    """The fixture's accounts, with each balance moved by the transactions posted since the fake started. The fixture's
+    """The fixture's accounts, with each balance moved by the transactions posted since the fake started."""
+    return moved_accounts(FIXTURES["accounts"])
+
+
+def credit_balances() -> dict:
+    """The IO credit account, moved the same way as the bank accounts: a card spend moves what is owed (GET /credit)."""
+    return moved_accounts(FIXTURES["credit"])
+
+
+def moved_accounts(fixture: dict) -> dict:
+    """A fixture's accounts, with each balance moved by the transactions posted since the fake started. The fixture's
     balance already holds the seed transactions, so the opening is that less the seed, and a fresh fake reads the fixture."""
-    accounts = copy.deepcopy(FIXTURES["accounts"])
+    accounts = copy.deepcopy(fixture)
     for acct in accounts["accounts"]:
         acct_id = acct["id"]
         seed = sum(float(FIXTURES[k]["amount"]) for k in SEED_TXNS if str(FIXTURES[k].get("accountId")) == acct_id)
@@ -180,7 +190,7 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
     if method == "GET" and path == "/accounts":
         return 200, balances()
     if method == "GET" and path == "/credit":
-        return 200, FIXTURES["credit"]
+        return 200, credit_balances()
     if method == "GET" and path == "/users":
         return 200, FIXTURES["users"]
     if method == "GET" and path == "/transactions":

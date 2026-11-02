@@ -36,6 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_PORT = 18811
 FAKE_PORT = 18812
+BANK_ID, CARD_ID = "acct-chk", "credit-io"       # the fake bank's checking and IO credit accounts (fake_mercury.py)
 DEMO_HOST = "127.0.0.1"
 OWNER_EMAIL = "ana@acme.example"
 APPROVER = "ben@acme.example"
@@ -267,6 +268,36 @@ def wait_for(fn, seconds: float, every: float = 2.0):
 
 def committed(out: dict) -> bool:
     return out.get("_http") == 200 and out.get("status") == "committed"
+
+
+def reconciled(out: dict) -> bool:
+    """A reconcile that committed and closed the account's statement (status done), not one left open."""
+    return committed(out) and (out.get("result") or {}).get("status") == "done"
+
+
+def fake_balance_on(fake: "Fake", account_id: str, day: str) -> float:
+    """The fake bank's balance at the end of `day`: its live balance less every transaction it posted after that day.
+    The bank's own answer, not the sum of rows Tico holds, so a reconcile that disagrees with it is a real difference."""
+    live = None
+    for listing in ("/api/v1/accounts", "/api/v1/credit"):
+        _, listed = fake.call("GET", listing, auth=True)
+        found = [a for a in (listed or {}).get("accounts") or [] if a.get("id") == account_id]
+        if found:
+            live = float(found[0]["currentBalance"])
+            break
+    if live is None:
+        raise StepError(f"fake Mercury has no account {account_id}")
+    later, after = 0.0, None
+    for _ in range(200):
+        path = "/api/v1/transactions?limit=500" + (f"&start_after={after}" if after else "")
+        _, out = fake.call("GET", path, auth=True)
+        for t in out.get("transactions") or []:
+            if str(t.get("accountId")) == account_id and str(t.get("createdAt") or "")[:10] > day:
+                later += float(t["amount"])
+        after = (out.get("page") or {}).get("nextPage")
+        if not after:
+            break
+    return round(live - later, 2)
 
 
 def feed_rows(api: Api, q: str) -> list[dict]:
@@ -701,6 +732,10 @@ def run_step5(ctx: Context) -> None:
     paid = api.act("invoice_record_payment", {"invoice_id": inv, "amount": 100000, "date": f"{PAST_MONTH}-20",
                                               "money_account_id": chk})
     ctx.check(step, "a $1,000.00 part payment is recorded against it", committed(paid), describe(paid))
+    # The customer's money reaches the bank the same day, so the checking statement holds it too (the books record the
+    # receipt on the checking line; a receipt the bank never saw would leave the reconcile open by its amount).
+    dep = ctx.fake.call("POST", "/_fake/txn", {"amount": 1000.00, "counterparty": "REH CUSTOMER", "date": f"{PAST_MONTH}-20"})
+    ctx.check(step, "the customer's $1,000.00 reaches the bank the same day", dep[0] == 200, f"HTTP {dep[0]}")
     part = status_of(api.get(f"finance/invoices/{inv}"), inv)
     ctx.check(step, "the invoice shows as part paid", "partial" in str(part), f"status {part}")
     late = api.act("invoice_create", {"customer_id": customer, "number": "REH-INV-2", "invoice_date": "2026-09-01",
@@ -893,23 +928,38 @@ def run_step8(ctx: Context) -> None:
                        else r.get("money_account")) for r in feed_all})[:6]
     ctx.check(step, "October's bank rows for Acme Checking are found", bool(feed),
               f"{len(feed)} rows; money_account values {seen}")
-    statement = sum(int(r.get("amount") or 0) for r in feed)
+    # The statement is the bank's own ending balance on October 31 (the fake's live balance less what it posted after),
+    # and the reconcile opens at the set opening (da7253f35), so the books must agree with the bank for it to close.
+    def reconcile_line(out: dict) -> str:
+        res = out.get("result") or {}
+        return (f"{describe(out)} | status {res.get('status')} difference {res.get('difference')} "
+                f"book_difference {res.get('book_difference')} outstanding {res.get('outstanding')}")
+
+    bank_of = {"Mercury IO": CARD_ID}
+    names = {str(r["money_account"]["id"]): str(r["money_account"].get("name"))
+             for r in feed_all if isinstance(r.get("money_account"), dict)}
     rec = api.act("reconcile", {"money_account_id": chk, "statement_end": f"{PAST_MONTH}-31",
-                                "statement_balance": statement, "cleared": [r["id"] for r in feed],
-                                "opening_balance": 0})
-    ctx.check(step, "October's bank rows reconcile to the statement balance", committed(rec), describe(rec))
+                                "statement_balance": round(fake_balance_on(ctx.fake, BANK_ID, f"{PAST_MONTH}-31") * 100),
+                                "cleared": [r["id"] for r in feed]})
+    ctx.check(step, "October's bank rows reconcile to the bank's ending balance (status done)", reconciled(rec),
+              reconcile_line(rec))
     # The close needs every active money account with October rows reconciled (reads.py _checklist), not only Acme's.
     others = sorted({account_of(r) for r in feed_all if account_of(r) and account_of(r) != chk})
     for other in others:
         rows = [r for r in feed_all if account_of(r) == other and str(r.get("date") or "") <= f"{PAST_MONTH}-31"]
-        if not rows:
+        label = names.get(other, other[:8])
+        if not rows or label not in bank_of:
+            ctx.check(step, f"October's bank rows for the money account {label} reconcile to the bank's balance",
+                      False, f"no bank id known for {label} ({len(rows)} rows)")
             continue
-        total = sum(int(r.get("amount") or 0) for r in rows)
+        # A card statement shows what is owed, as a positive amount; Mercury's credit balance is the negative of that.
+        sign = -1 if bank_of[label] == CARD_ID else 1
         more = api.act("reconcile", {"money_account_id": other, "statement_end": f"{PAST_MONTH}-31",
-                                     "statement_balance": total, "cleared": [r["id"] for r in rows],
-                                     "opening_balance": 0})
-        ctx.check(step, f"October's bank rows for the money account {other[:8]} reconcile to the statement balance",
-                  committed(more), describe(more))
+                                     "statement_balance": round(sign * fake_balance_on(ctx.fake, bank_of[label],
+                                                                                       f"{PAST_MONTH}-31") * 100),
+                                     "cleared": [r["id"] for r in rows]})
+        ctx.check(step, f"October's bank rows for the money account {label} reconcile to the bank's balance",
+                  reconciled(more), reconcile_line(more))
     closed = api.act("close_period", {"month": PAST_MONTH})
     behind = []
     if not committed(closed):
@@ -987,17 +1037,22 @@ def run_step10(ctx: Context) -> None:
     step, api = "10 raw import", ctx.api
     acct = account_ids(api)
     mapping = {"Revenue": acct["Revenue"], "Software": acct["Software"], "Other": acct["Other expenses"]}
-    csv_text = "month,line,amount\n2026-09,Revenue,1500000\n2026-09,Software,420000\n2026-09,Other,250000\n"
+    # Raw totals post only to months with no transactions (the demo has activity from September on), so this imports
+    # into May, an empty month, and checks the closed-month refusal on April, closed while it has no itemized rows.
+    empty, closed_empty = "2026-05", "2026-04"
+    csv_text = f"month,line,amount\n{empty},Revenue,1500000\n{empty},Software,420000\n{empty},Other,250000\n"
     imp = api.act("import_raw_totals", {"csv": csv_text, "basis": "accrual", "mapping": mapping,
-                                        "source_name": "REH invented September sheet"})
-    ctx.check(step, "an invented September P&L is imported as totals", committed(imp), describe(imp))
-    pnl = api.get("finance/pnl", start="2026-09-01", end="2026-09-30")
-    ctx.check(step, "the imported figures are labelled Imported on the September P&L",
+                                        "source_name": "REH invented May sheet"})
+    ctx.check(step, "an invented May P&L is imported as totals (an empty month)", committed(imp), describe(imp))
+    pnl = api.get("finance/pnl", start=f"{empty}-01", end=f"{empty}-31")
+    ctx.check(step, "the imported figures are labelled Imported on the May P&L",
               "imported" in json.dumps(pnl).lower(), json.dumps(pnl)[:160])
-    refused = api.act("import_raw_totals", {"csv": f"month,line,amount\n{PAST_MONTH},Revenue,100\n",
+    shut = api.act("close_period", {"month": closed_empty})
+    ctx.check(step, "April closes with no itemized rows", committed(shut), describe(shut))
+    refused = api.act("import_raw_totals", {"csv": f"month,line,amount\n{closed_empty},Revenue,100\n",
                                             "basis": "accrual", "mapping": mapping,
                                             "source_name": "REH closed-month check"})
-    ctx.check(step, "an import into the closed October is refused (period_closed)",
+    ctx.check(step, "an import into the closed April (no itemized rows) is refused (period_closed)",
               refused.get("status") != "committed" and refused.get("code") == "period_closed", describe(refused))
 
 
