@@ -1003,3 +1003,22 @@ def test_a_copy_to_ben_never_reuses_another_members_slack_dm(gateway, hub):
     gateway.deliver()
     assert rows(hub, "SELECT channel FROM slack_posts WHERE message_id=?", shared)[0]["channel"] == MARKETING
     assert any(post["channel"] == MARKETING for post in gateway.slack.posts)
+
+
+def test_a_copy_to_a_member_of_a_native_dm_with_no_inbound_yet_is_delivered_and_a_non_member_gets_nothing(gateway, hub):
+    """A native DM keeps its other people in thread membership, not in participants_json. Its Slack DM has no inbound
+    message yet: a copy to a member goes to that DM, and a copy to someone who is not a member is cancelled."""
+    from backend import threads
+    with hub.transaction() as c:
+        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben", "human:cara"])["id"]
+        c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed) "
+                  "VALUES('D0BEN','','legal',?,'2000-01-01T00:00:00Z',NULL)", (tid,))
+        to_ben = threads.post(c, "bot:legal", tid, "Ben, the draft.", kind="say", to_actor="human:ben")["id"]
+        to_cara = threads.post(c, "bot:legal", tid, "Cara, the draft.", kind="say", to_actor="human:cara")["id"]
+        threads.remove_member(c, "human:ana", tid, "human:cara")
+    gateway.mirror()
+    gateway.deliver()
+    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", to_ben)[0]["state"] == "sent"
+    assert any(post["channel"] == "D0BEN" and "Ben, the draft." in post["text"] for post in gateway.slack.posts)
+    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", to_cara)[0]["state"] == "cancelled"
+    assert not any("Cara, the draft." in post["text"] for post in gateway.slack.posts)

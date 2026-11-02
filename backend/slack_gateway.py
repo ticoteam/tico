@@ -1366,23 +1366,23 @@ class Gateway:
         and fits the person it is addressed to), or None."""
         for mapped in c.execute("SELECT channel,thread_ts FROM slack_threads WHERE conversation_id=? AND bot=? "
                                 "AND created<? ORDER BY created", (row["conversation_id"], row["bot"], row["created"])):
-            if self.dm_fits(c, mapped["channel"], str(row["to_actor"] or "")):
+            if self.dm_fits(c, mapped["channel"], str(row["to_actor"] or ""), row["conversation_id"]):
                 return dict(mapped)
         return None
 
-    def dm_fits(self, c, channel, person):
-        """Whether a Slack channel may carry a copy to `person` (an actor id). A shared channel carries anyone's. A DM is
-        its person's: the humans whose verified messages arrived in it are exactly that person; a DM with none yet is
-        matched by its threads' participant lists, as im_channel reads them."""
+    def dm_fits(self, c, channel, person, conversation_id):
+        """Whether a Slack channel may carry a copy to `person` (an actor id) from this conversation. A shared channel
+        carries anyone's. A DM is its person's: the humans whose verified messages arrived in it are exactly that
+        person; a DM with none yet is its thread's member, as threads.legacy_participants reads who a thread names
+        (a native DM's other people are thread members, not participants_json rows)."""
         if not str(channel or "").startswith("D"):
             return True
         actors = {r[0] for r in c.execute("SELECT DISTINCT actor FROM slack_events WHERE channel=? AND actor LIKE 'human:%' "
                                           "AND state IN ('routed','recorded')", (channel,))}
         if actors:
             return actors == {person}
-        return c.execute("SELECT 1 FROM slack_threads t JOIN conversations v ON v.id=t.conversation_id "
-                         "WHERE t.channel=? AND v.participants_json LIKE ? LIMIT 1",
-                         (channel, '%"' + person + '"%')).fetchone() is not None
+        from . import threads
+        return person in threads.legacy_participants(c, H.conversation(c, conversation_id))
 
     def task_completions(self):
         """Completion notices use the same durable post queue, sent by the Tico app."""
