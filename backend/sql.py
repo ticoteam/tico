@@ -128,7 +128,7 @@ DERIVED = {
 # (backend/outcome_stats.py). Each groups by week and fixed names (status, proposer, bot, tool) and carries no text, no
 # id and no person: a proposal's owner, a call's person and its token label never leave the base row.
 GRANTED = {
-    # Assistant and BotOps proposals per week, proposer and status (pending, running, done, failed, cancelled,
+    # Assistant and BotOps proposals per week, proposer and status (pending, running, done, failed, canceled,
     # expired); `share_pct` is that status's share of its week and proposer.
     "assistant_action_weekly": (("assistant_actions",), """
         SELECT week, proposer, status, actions,

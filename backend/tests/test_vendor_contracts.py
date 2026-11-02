@@ -6,7 +6,8 @@ sender (its checkout is read-only here) or the vendor's public API reference. No
 renames a field shows up only when someone re-derives the fixture. Each assertion checks a value, not just that a key
 exists: a renamed key reads as zero or empty and fails here.
 
-Granola's recorded shapes are covered by test_granola_recorded_shapes.py. No network: block_outside_network is on.
+Granola's recorded shapes are covered by test_granola_recorded_shapes.py. QuickBooks and Xero, which read
+Finance's core layer, are in test_finance_vendor_contracts.py. No network: block_outside_network is on.
 """
 import contextlib
 import hashlib
@@ -20,8 +21,6 @@ import pytest
 
 from backend import company_billing, github, tico_storage
 from backend.finance import stripe_sync
-from backend.finance.core import mirror as M
-from backend.finance.core import qbo, xero
 from backend.finance.mercury import Answer
 from backend.github_app import GitHubApp
 from backend.tests.live import block_outside_network
@@ -124,43 +123,6 @@ def test_a_stripe_refusal_is_said_without_echoing_the_body():
     assert got == {}
     assert "refused the key" in why
     assert "sk_test" not in why
-
-
-# -- QuickBooks Online: entity rows (backend/finance/core/qbo.py records) ----------------------------------------------
-
-def test_a_quickbooks_account_is_read_by_its_entity_fields():
-    [made] = qbo.records("Account", [recorded("quickbooks_answers.json")["account"]])
-    assert (made.code, made.name, made.type, made.subtype, made.active) == ("1100", "Checking", "asset", "bank", True)
-    assert (made.ext.kind, made.ext.external_id, made.ext.revision) == ("Account", "35", "0")
-
-
-def test_a_quickbooks_vendor_is_a_vendor_with_its_email():
-    [made] = qbo.records("Vendor", [recorded("quickbooks_answers.json")["vendor"]])
-    assert (made.kind, made.name, made.emails, made.active) == ("vendor", "Acme Supplies", ("billing@acme.example",), True)
-    assert (made.ext.kind, made.ext.external_id, made.ext.revision) == ("Vendor", "56", "1")
-
-
-def test_a_quickbooks_change_feed_deletion_keeps_only_its_identity():
-    [made] = qbo.records("Vendor", [recorded("quickbooks_answers.json")["deleted_vendor"]])
-    assert isinstance(made, M.Ext)
-    assert (made.kind, made.external_id, made.revision, made.deleted) == ("Vendor", "57", "2", True)
-
-
-# -- Xero: contacts (backend/finance/core/xero.py contact_record, records) --------------------------------------------
-
-def test_a_xero_contact_is_a_supplier_with_its_email():
-    row = recorded("xero_answers.json")["contact"]
-    made = xero.contact_record(row)
-    assert (made.kind, made.name, made.emails, made.active) == ("vendor", "Acme Supplies", ("billing@acme.example",), True)
-    assert (made.ext.kind, made.ext.external_id) == ("Contact", "5c1f8a0e-7d4b-4c3e-9b1e-2a6f0c9d8e71")
-    assert "2024-11-01" in made.ext.revision     # UpdatedDateUTC read from Xero's /Date(ms+0000)/ form
-    [via_page] = xero.records("parties", [row], lambda name: "")
-    assert via_page == made
-
-
-def test_an_archived_xero_contact_is_inactive():
-    row = dict(recorded("xero_answers.json")["contact"], ContactStatus="ARCHIVED")
-    assert xero.contact_record(row).active is False
 
 
 # -- Slack: the Web API call and its error (connectors/slack.py call, slack_error) ------------------------------------

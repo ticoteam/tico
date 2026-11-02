@@ -41,7 +41,7 @@ Retired spellings on this branch:
 
 | Retired | Current | Columns |
 |---|---|---|
-| `cancelled` | `canceled` | `jobs.state`, `webhook_sends.state`, `fin_payments.status`, `fin_transfers.status` |
+| `cancelled` | `canceled` | `jobs.state`, `webhook_sends.state`, `fin_payments.status`, `fin_transfers.status`, `assistant_actions.status` (stored rows are mapped at startup) |
 | `needs_onboarding` | `needs_setup` | `bot_config.onboarding_state` (migration 45 rewrote stored rows; this maps any stale row) |
 
 Readers of `bot_config.onboarding_state` still accept `needs_onboarding` for one release (`backend/statuses.py`).
@@ -523,7 +523,7 @@ Without a CHECK (not constrained here; values are whatever the code writes):
 
 Spellings still outside the stable set:
 
-- `cancelled` in `fin_cards.status`, `assistant_actions.status`, `automation_mail_actions.state`, `slack_posts.state`,
+- `cancelled` in `fin_cards.status`, `automation_mail_actions.state`, `slack_posts.state`,
   `bot_tool_requests.state`, `credential_requests.status`, `model_logins.state`, `service_jobs.state`, `worktree_waits.state`,
   `bot_transitions.state` (the lifecycle constant), `reconnects.ended`, and in the finance provider's own status strings and
   feed rows. Each means the same thing as `canceled`; none is changed.
