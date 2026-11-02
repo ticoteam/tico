@@ -478,11 +478,12 @@ def test_migration_78_widens_the_feed_status_keeps_its_rows_and_runs_twice(books
             return c.execute("SELECT id, status, amount, entry_line_id FROM fin_feed_txns ORDER BY id").fetchall()
 
         before_triggers = triggers()
-        # The table as migration 77 left it: the same columns, and a status CHECK without 'covered'.
+        # The table as migration 77 left it: the same columns (refund_of comes later, in migration 80), and a status
+        # CHECK without 'covered'.
         current = sql()
         c.execute("DROP TABLE fin_feed_txns")
-        c.execute(current.replace("'ignored','covered'", "'ignored'"))
-        assert "'covered'" not in sql() and "entry_line_id" in sql()
+        c.execute(current.replace("'ignored','covered'", "'ignored'").replace(", refund_of TEXT", ""))
+        assert "'covered'" not in sql() and "entry_line_id" in sql() and "refund_of" not in sql()
         c.executemany("INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, status, "
                       "created_at, created_by, entry_line_id) VALUES(?,?,?,?,?,?,?,'2026-02-10T00:00:00Z','bot',?)",
                       [("f1", money, "p1", "2026-02-10", -1_500, "USD", "posted", "L1"),

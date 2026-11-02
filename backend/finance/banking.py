@@ -1081,11 +1081,13 @@ def _book_gap(ctx: Ctx, money: Any, end: str, cleared: set[str], statement: int)
     return statement - balance
 
 
-def _bank_opening(ctx: Ctx, money: Any) -> int:
-    """The bank's balance before the account's first settled row: the provider's balance less every settled row, covered
-    history included. A first reconciliation clears from here, so its cleared total is the bank's own."""
-    total, _ = SK.settled_total(ctx.c, str(money["id"]), str(money["kind"]))
-    return int(money["balance"]) - total
+def _raw_on_line(ctx: Ctx, money: Any) -> int:
+    """What the live raw-totals entries put on this money account's GL line, counted once against the lowest-id money
+    account on that line (as opening_figure counts it)."""
+    book, gl = ctx.book.id, str(money["account_id"] or "")
+    if not gl or SK.money_on_line(ctx.c, book, gl) != str(money["id"]):
+        return 0
+    return SR.line_movement(ctx.c, book, gl)
 
 
 def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -1117,19 +1119,19 @@ def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     else:
         ids = sorted(window)
     if last is None:
-        # A first reconciliation opens at the bank's balance before its first settled row, unless one is typed.
+        # A first reconciliation opens at the account's set opening balance (spec §4.1: set once when its backfill
+        # finishes, never recomputed from a later balance, so a row the feed drops shows as a difference), plus what the
+        # raw totals put on its GL line. A covered row is already in that opening, so it adds nothing here.
         typed = V.opt_amount(p, "opening_balance")
         if typed is not None:
             opening = _signed(money, typed)
-        elif money["balance"] is not None:
-            opening = _bank_opening(ctx, money)
         else:
-            opening = opening_amount(ctx, money, end)
+            opening = opening_amount(ctx, money, end) + _raw_on_line(ctx, money)
     else:
         if "opening_balance" in p:
             raise invalid("the opening balance is the last reconciliation's")
         opening = int(last["cleared_total"])
-    total = opening + sum(int(window[i]["amount"]) for i in ids)
+    total = opening + sum(int(window[i]["amount"]) for i in ids if str(window[i]["status"]) != "covered")
     difference = _signed(money, shown) - total
     book_gap = _book_gap(ctx, money, end, set(ids), _signed(money, shown))
     waiting, waiting_total = SK.feed_outstanding(ctx.c, str(money["id"]), end)
