@@ -51,8 +51,8 @@ jobs:
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::version must be vX.Y.Z"; exit 1; }
           { echo "sha=$SHA"; echo "previous=$PREVIOUS"; echo "version=$VERSION"; } >> "$GITHUB_OUTPUT"
 
-  # The runner and screen relay for every platform, built once and clean from the candidate: no build cache, so a
-  # poisoned cache entry can never reach a release. Linux builds are static (musl): the images, Linux checkouts and
+  # The runner and screen relay for every platform, built once from the candidate. Linux builds are clean (no build cache);
+  # macOS builds reuse compiled dependencies from a cache only main writes (Chris, Nov 2). Linux builds are static (musl): the images, Linux checkouts and
   # the gate all run these same files. On-demand VMs, so an interruption never leaves a half-built release.
   native-linux:
     needs: candidate
@@ -61,7 +61,7 @@ jobs:
         include:
           - {arch: x64, name: linux-x86_64, target: x86_64-unknown-linux-musl}
           - {arch: arm64, name: linux-arm64, target: aarch64-unknown-linux-musl}
-    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-${{ matrix.arch }}/spot=false
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-${{ matrix.arch }}/spot=false
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -119,14 +119,26 @@ jobs:
         with:
           ref: ${{ needs.candidate.outputs.sha }}
           persist-credentials: false
+      - name: Install Rust
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
+      # Chris, Nov 2: cache the macOS builds' compiled dependencies (not our own crates: rust-cache drops workspace
+      # artifacts). Keyed on Cargo.lock, toolchain and target; only Release validation runs on main write it.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            runner-rs -> target
+            relay-rs -> target
+          key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build tico-runner and tico-screen-relay
         env:
           TARGET: ${{ matrix.target }}
           NAME: ${{ matrix.name }}
           TICO_VERSION: ${{ needs.candidate.outputs.version }}
         run: |
-          rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
-          # Two crates with their own target directories, built side by side (no shared cache); both must succeed.
+          # Two crates with their own target directories, built side by side (dependencies from the rust cache above); both must succeed.
           (cd runner-rs && cargo build --release --locked --target "$TARGET") & runner=$!
           (cd relay-rs && cargo build --release --locked --target "$TARGET") & relay=$!
           status=0
@@ -221,29 +233,41 @@ jobs:
       actions: read   # product watches this run's image builds; every part watches the Linux binary build
     # The gate needs 35 GiB free (Docker images, browsers, Rust targets); the default RunsOn disk leaves about 10.
     # On demand, not Spot: a reclaimed VM would fail the one validation a release waits on.
-    # Python and product run on 8 vCPUs (their tests fill them); browser and desktop on 4.
+    # Every part runs on 4 vCPUs (common on-demand sizes start fast); more shards, not bigger VMs, for speed.
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {name: product, part: product, shard: '', workers: '4', runner: 8cpu-linux-x64}
+          - {name: product, part: product, shard: '', workers: '2', runner: 4cpu-linux-x64}
           - {name: browser-1, part: browser, shard: '1/4', workers: '2', runner: 4cpu-linux-x64}
           - {name: browser-2, part: browser, shard: '2/4', workers: '2', runner: 4cpu-linux-x64}
           - {name: browser-3, part: browser, shard: '3/4', workers: '2', runner: 4cpu-linux-x64}
           - {name: browser-4, part: browser, shard: '4/4', workers: '2', runner: 4cpu-linux-x64}
-          - {name: python-1, part: python, shard: '1/12', workers: '8', runner: 8cpu-linux-x64}
-          - {name: python-2, part: python, shard: '2/12', workers: '8', runner: 8cpu-linux-x64}
-          - {name: python-3, part: python, shard: '3/12', workers: '8', runner: 8cpu-linux-x64}
-          - {name: python-4, part: python, shard: '4/12', workers: '8', runner: 8cpu-linux-x64}
-          - {name: python-5, part: python, shard: '5/12', workers: '8', runner: 8cpu-linux-x64}
-          - {name: python-6, part: python, shard: '6/12', workers: '8', runner: 8cpu-linux-x64}
-          - {name: python-7, part: python, shard: '7/12', workers: '8', runner: 8cpu-linux-x64}
-          - {name: python-8, part: python, shard: '8/12', workers: '8', runner: 8cpu-linux-x64}
-          - {name: python-9, part: python, shard: '9/12', workers: '8', runner: 8cpu-linux-x64}
-          - {name: python-10, part: python, shard: '10/12', workers: '8', runner: 8cpu-linux-x64}
-          - {name: python-11, part: python, shard: '11/12', workers: '8', runner: 8cpu-linux-x64}
-          - {name: python-12, part: python, shard: '12/12', workers: '8', runner: 8cpu-linux-x64}
+          - {name: python-1, part: python, shard: '1/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-2, part: python, shard: '2/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-3, part: python, shard: '3/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-4, part: python, shard: '4/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-5, part: python, shard: '5/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-6, part: python, shard: '6/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-7, part: python, shard: '7/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-8, part: python, shard: '8/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-9, part: python, shard: '9/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-10, part: python, shard: '10/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-11, part: python, shard: '11/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-12, part: python, shard: '12/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-13, part: python, shard: '13/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-14, part: python, shard: '14/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-15, part: python, shard: '15/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-16, part: python, shard: '16/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-17, part: python, shard: '17/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-18, part: python, shard: '18/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-19, part: python, shard: '19/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-20, part: python, shard: '20/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-21, part: python, shard: '21/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-22, part: python, shard: '22/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-23, part: python, shard: '23/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-24, part: python, shard: '24/24', workers: '4', runner: 4cpu-linux-x64}
           # The Linux desktop app updating from a company feed; on its own VM, beside the longer product part.
           - {name: desktop, part: desktop, shard: '', workers: '2', runner: 4cpu-linux-x64}
     runs-on: runs-on=${{ github.run_id }}/runner=${{ matrix.runner }}/volume=80gb/spot=false/extras=s3-cache

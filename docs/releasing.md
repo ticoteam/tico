@@ -244,8 +244,8 @@ slow tests and every browser script, and release candidate validation covers tha
 ## Hosted release validation
 
 Prefer the manual **Release validation** workflow for the full gate so builds and tests do not compete with bots or
-interactive work. Its gate jobs run in parallel on ephemeral RunsOn Linux VMs in Tico's own AWS account (8-vCPU for the
-Python shards and product, 4-vCPU for browser and desktop), with read-only repository permissions and no production,
+interactive work. Its gate jobs run in parallel on ephemeral RunsOn Linux VMs in Tico's own AWS account (4-vCPU for every
+part), with read-only repository permissions and no production,
 AWS or provider credentials. It cannot tag, publish or deploy.
 
 ```sh
@@ -266,7 +266,7 @@ frozen can check that candidate without changing it. The candidate's `scripts/re
 It can also run one slice of the gate (`--part product|browser|python|desktop`, with `--shard K/N` splitting the Python test
 files, or the browser scripts, into N groups balanced by the times in `scripts/test-timings.json`; refresh the browser
 times with `--record-browser-timings` from a validation's browser logs). The hosted workflow selects product, four browser
-shards, twelve Python shards and desktop. Every part starts with the candidate and runs its setup while the Linux
+shards, 24 Python shards and desktop. Every part starts with the candidate and runs its setup while the Linux
 binaries build; each waits for them before its tests. Only product needs the images and waits for the image builds;
 without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
 part runs the Tauri app's tests on Linux, among them a company app updating from a feed this candidate publishes
