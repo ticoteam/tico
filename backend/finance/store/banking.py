@@ -452,6 +452,12 @@ def recipient_current(c: sqlite3.Connection, recipient_id: str) -> Any:
     return c.execute("SELECT * FROM fin_recipients WHERE id=?", (recipient_id,)).fetchone()
 
 
+def recipient_replacing(c: sqlite3.Connection, recipient_id: str) -> Any:
+    """The newest version that replaced this recipient's (its details changed), if any."""
+    return c.execute("SELECT * FROM fin_recipients WHERE replaces_id=? ORDER BY version DESC LIMIT 1",
+                     (recipient_id,)).fetchone()
+
+
 def recipients(c: sqlite3.Connection, most: int) -> list[Any]:
     return c.execute("SELECT * FROM fin_recipients WHERE status='active' ORDER BY name, id LIMIT ?", (most,)).fetchall()
 

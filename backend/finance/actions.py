@@ -60,7 +60,7 @@ CARD_NUMBER_REFUSED = V.CARD_NUMBER_REFUSED
 STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal after this long is an expiry
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.
-RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check"})
+RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check", "recipient_version"})
 
 
 @dataclass(frozen=True)
@@ -446,7 +446,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         ctx.deciding = True
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
         now_to = _decider(ctx, row, gate, p.who)
-        if now_to and (now_to != row["approval_to"] or _drifted(body, plan)):
+        if payments.moved(body, plan.resolved) or (now_to and (now_to != row["approval_to"] or _drifted(body, plan))):
             # The person who decides this changed since it was asked (a new manager, a finance approver named), or the
             # planner would now fix a value differently from the approved one (a parent raise that moved). When nobody
             # needs to decide it any more, it runs below with the plan as it now stands.
@@ -487,6 +487,8 @@ def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body:
         approver = _decider(ctx, row, gate, p.who)
     except FinanceError as e:
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.named)
+    if payments.moved(body, plan.resolved):
+        approver = payments.admin_person(ctx)           # new payment details are a finance admin's to approve (§6.4)
     if not approver:
         return _close(ctx, row, "failed", DENIED, "nobody else decides this now; ask again")
     fresh = {**body, **plan.resolved}

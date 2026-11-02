@@ -264,6 +264,36 @@ def test_a_queued_payment_is_cancelled_here_and_one_in_mercury_ends_cancelled_wh
         assert _hold_of(c, pid) == (20_000, "released")
 
 
+def _replace_payee(c, rid):
+    """The payee's bank details change: a new recipient version replaces the old one (recipient_add with `replaces`)."""
+    made = act(c, OWNER, "recipient_add", {"replaces": rid, "name": "Acme Supplies", "method": "ach",
+                                           "account_number": "000011112222", "routing_number": "000000000"})
+    assert made.status == "committed", made
+    return str(made.result["recipient_id"])
+
+
+def test_a_pending_approval_is_void_once_its_recipient_details_change(books):
+    """Item 4 (spec §5): an approval's payload hash includes the recipient-details version. Changed details between the
+    ask and the decision void it: the payment is asked again for the new details, and is not paid on the old approval."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        _rule(c, OWNER, "Payments ask", {"kind": "payment_create"}, {"outcome": "needs_approval", "who": "owner"},
+              [{"input": {"kind": "payment_create"}, "expect": "needs_approval"}])
+        asked = act(c, "human:ben", "payment_create", {"recipient_id": rid, "amount": 20_000, "obligation": "bill-41",
+                                                 "tags": {"team": "eng"}, "account_id": account(c, "6100"),
+                                                 "money_account_id": _checking(c)})
+        assert asked.status == "needs_approval" and asked.approval_id, asked
+        first = str(asked.approval_id)
+        _replace_payee(c, rid)
+        H.approval_decide(c, OWNER, first, "approved")
+        again = FA.approval_decided(c, first, AT)
+        assert again.status == "needs_approval" and again.approval_id and again.approval_id != first, again
+        assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
+
+
 def _unknown_and_flagged(books, fake, obligation):
     """A payment whose send got no answer, looked for by its key for an hour: flagged for a finance admin."""
     rid = _payee(books, fake)

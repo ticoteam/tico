@@ -244,13 +244,18 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         from .transfers import plan_internal     # lazy: transfers imports this module
         return plan_internal(ctx, who, p)
     V.only(p, ("recipient_id", "amount", "money_account_id", "memo", "obligation", "account_id", "tags", "mode",
-               "purpose"))
+               "purpose", "recipient_version"))       # the version an approval was asked for (Plan.resolved)
     mode = V.choice(p, "mode", ("approval_queue", "direct"), "approval_queue")
     if mode == "direct" and SL.setting(ctx.c, DIRECT_KEY) is not True:
         raise FinanceError(NOT_AVAILABLE, "direct send is off for this company")
     rec = SK.get(ctx.c, "fin_recipients", V.text(p, "recipient_id", 80))
     if rec is None:
         raise FinanceError(NOT_FOUND, "no such recipient")
+    # An approval being decided follows a replaced recipient to its current version: the decision then sees the new
+    # details and asks again (actions.approval_decided). Anyone else is told to pay the current version.
+    followed = _current_version(ctx, rec) if ctx.deciding and str(rec["status"]) == "replaced" else None
+    if followed is not None:
+        rec = followed
     if str(rec["status"]) != "active":
         raise FinanceError(CONFLICT, "that recipient's details changed; pay its current version")
     if mode == "direct" and not known(ctx, str(rec["id"])):
@@ -304,7 +309,26 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     return Plan(gate,
                 f"Pay {amount / 100:.2f} {ctx.book.base_currency} to {rec['name']} by {method}"
                 f"{' for ' + obligation if obligation else ''}", apply,
-                facts={**_facts(ctx, rec, amount, line.code, obligation, tags, bank), "mode": mode})
+                facts={**_facts(ctx, rec, amount, line.code, obligation, tags, bank), "mode": mode},
+                # The recipient version the approval is for (§5): a changed one voids it (actions.approval_decided).
+                resolved={"recipient_version": int(rec["version"]),
+                          **({"recipient_id": str(rec["id"])} if followed is not None else {})})
+
+
+def _current_version(ctx: Ctx, rec: Any) -> Any:
+    """The active version that replaced this recipient, following replacements (a change is a new version, §13). None
+    when the chain ends without an active one."""
+    for _ in range(100):
+        if rec is None or str(rec["status"]) != "replaced":
+            break
+        rec = SK.recipient_replacing(ctx.c, str(rec["id"]))
+    return rec if rec is not None and str(rec["status"]) == "active" else None
+
+
+def moved(body: Mapping[str, object], resolved: Mapping[str, object]) -> bool:
+    """Whether the recipient an approval was asked for has been replaced since (its details changed): the approval is
+    void, and the payment is asked again for the new details (§5, §6.4 rule 1)."""
+    return "recipient_id" in resolved and str(resolved["recipient_id"]) != str(body.get("recipient_id") or "")
 
 
 def _facts(ctx: Ctx, rec: Any, amount: int, code: str, obligation: str, tags: Mapping[str, str], bank: Any
