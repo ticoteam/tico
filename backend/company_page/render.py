@@ -517,14 +517,28 @@ def _hash(text):
     return "'sha256-" + base64.b64encode(hashlib.sha256(text.encode("utf-8")).digest()).decode() + "'"
 
 
-def _document(view, body, title, description, canonical="", preview=False):
+# A preview stays on the page: a link out would replace it inside the app's frame.
+PREVIEW_SCRIPT = "document.addEventListener('click',e=>{if(e.target.closest('a[href]:not([data-older])'))e.preventDefault()},true);"
+
+
+def _preview_theme(css, theme):
+    """The app's own light or dark choice wins over the computer's, so the preview matches the app around it. Anything
+    else leaves the page following the computer, as it always does for a reader."""
+    if theme not in ("dark", "light"):
+        return css
+    dark_rules = "all" if theme == "dark" else "not all"
+    return css.replace("@media (prefers-color-scheme:dark)", f"@media {dark_rules}").replace("color-scheme:light dark", f"color-scheme:{theme}")
+
+
+def _document(view, body, title, description, canonical="", preview=False, scheme=""):
     company = _map(view.get("company"))
     accent = accent_of(company.get("accent"))
     theme = f":root{{--accent:{accent};--on-accent:{_on_accent(accent)}}}"
     css, script = _template("page.css"), _template("page.js")
     # The preview's images and fonts are inline (see _inline_fonts and logo_of); a release's come from its own folder.
     if preview:
-        css = _inline_fonts(css)
+        css = _preview_theme(_inline_fonts(css), scheme)
+        script += PREVIEW_SCRIPT
     img, font = ("'self' data:", "data:") if preview else ("'self'", "'self'")
     policy = ("default-src 'none'; "
               f"style-src {_hash(theme)} {_hash(css)}; script-src {_hash(script)}; img-src {img}; font-src {font}; "
@@ -563,9 +577,10 @@ def _url(company):
     return text.rstrip("/") + "/"
 
 
-def page(view, preview=False):
+def page(view, preview=False, theme=""):
     """The whole page. Stats sit above updates; the newest update is open, and it reads with no script at all. The owner's
-    preview passes `preview`: its logo and fonts arrive as data URIs, which a release never carries."""
+    preview passes `preview`: its logo and fonts arrive as data URIs, which a release never carries, and `theme` can set
+    it light or dark."""
     view = _map(view)
     company = _map(view.get("company"))
     updated = _date(company.get("updated_at"))
@@ -587,7 +602,7 @@ def page(view, preview=False):
               + (f'<span>Updated {_e(stamp)}</span>' if stamp else "") + "</div></header>")
     body = f'<div class="wrap">{header}{_stats(view, year)}{_updates(view, year)}{_footer()}</div>'
     title = f"{name}: {mission}" if name and mission else (name or mission)
-    return _document(view, body, title, mission or name, _url(company), preview=preview)
+    return _document(view, body, title, mission or name, _url(company), preview=preview, scheme=theme)
 
 
 def signed_out(view):

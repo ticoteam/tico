@@ -6445,6 +6445,16 @@
               "default": "",
               "title": "Audience"
             }
+          },
+          {
+            "name": "theme",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Theme"
+            }
           }
         ],
         "responses": {

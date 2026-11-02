@@ -835,3 +835,21 @@ def test_the_router_needs_only_the_folder_it_mounts(world, monkeypatch, tmp_path
     mounted.parent.mkdir()
     shutil.move(str(tmp_path / "cell" / "pages"), str(mounted))
     assert_self_contained(mounted / "acme" / "current")
+
+
+def test_a_preview_follows_the_apps_theme_and_a_release_never_does():
+    view = {"company": {"name": "Acme"}, "audience": {"kind": "public", "name": "Public"}, "stats": [], "updates": []}
+    follows = render.page(view, preview=True)
+    assert "prefers-color-scheme:dark" in follows and "color-scheme:light dark" in follows
+    assert render.page(view, preview=True, theme="nonsense") == follows
+    dark = render.page(view, preview=True, theme="dark")
+    assert "prefers-color-scheme" not in dark and "@media all{:root{--bg:#0f1217" in dark and "color-scheme:dark;" in dark
+    light = render.page(view, preview=True, theme="light")
+    assert "prefers-color-scheme" not in light and "@media not all{:root{--bg:#0f1217" in light and "color-scheme:light dark" not in light
+    assert "prefers-color-scheme:dark" in render.page(view, theme="dark"), "a reader's page follows the reader's computer"
+
+
+def test_a_preview_keeps_its_links_in_the_page_and_a_release_does_not():
+    view = {"company": {"name": "Acme"}, "audience": {"kind": "public", "name": "Public"}, "stats": [], "updates": []}
+    assert render.PREVIEW_SCRIPT in render.page(view, preview=True)
+    assert render.PREVIEW_SCRIPT not in render.page(view)

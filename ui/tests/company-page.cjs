@@ -1,5 +1,5 @@
-// The Company page section (ui/app/company-page.js) against a fake hub: Acme (acme.example). Hidden from a member, by
-// link and by address; shown to an admin. Transparency warns before Open and says what stops being visible before
+// The Company page (ui/app/company-page.js) against a fake hub: Acme (acme.example). Overview's tab shows owners and admins
+// the page in a sandboxed frame, a share panel and Manage; a member has no tab and no way in by address. The section: Transparency warns before Open and says what stops being visible before
 // anything is taken away, and sends nothing on Cancel. The queue puts a held edition first with its reason. Approve shows
 // only to the person an approval is addressed to and goes through the approvals API. Override needs a note. Text from a
 // bot's update is escaped. A held stat says why. Removing a reader says emails can't be recalled. With no sign-in
@@ -66,7 +66,7 @@ function fakeHub(opts) {
   const hub = {settings: {transparency: 'closed', slug: opts.noSlug || opts.noDomain ? null : 'acme', accent: null, logo_file_id: null, company_name: 'Acme', reader_origin: origin, page_domain: domain, address: origin, public_live: false},
     emailAvailable: opts.noEmail !== true, scheduleProblems: opts.scheduleProblems || [], releaseFails: !!opts.releaseFails, tightenedCount: opts.tightened || 0,
     signIn: opts.privateOn === false ? {available: false, reason: 'No sign-in provider is set up (OIDC), so private audiences are off'} : {available: true, reason: ''},
-    editions: opts.noEditions ? [] : EDITIONS(), audiences: structuredClone(AUDIENCES), stats: opts.noEditions ? [] : structuredClone(STATS),
+    editions: opts.noEditions ? [] : EDITIONS(), audiences: opts.noAudiences ? [] : structuredClone(AUDIENCES), previews: [], stats: opts.noEditions ? [] : structuredClone(STATS),
     readers: opts.noEditions ? [] : [{id: 'r1', email: 'rita@acme.example', name: 'Rita Vale', notify: true, audiences: [{id: 'a-board', name: 'Board', kind: 'board'}, {id: 'a-inv', name: 'Investors', kind: 'investors'}]}, {id: 'r2', email: 'sam@acme.example', name: null, notify: false, audiences: [{id: 'a-inv', name: 'Investors', kind: 'investors'}]}],
     invites: [{id: 'i1', state: 'open', created_at: '2026-10-20', expires_at: '2026-12-20'}, {id: 'i2', state: 'used', created_at: '2026-10-01', expires_at: '2026-11-01', used_at: '2026-10-02'}, {id: 'i3', state: 'revoked', created_at: '2026-09-01', expires_at: '2026-10-01', revoked_at: '2026-09-02'}],
     rules: {'a-board': [{data_class: 'revenue', ref_id: '', mode: 'show', lag_days: 0, rounding: null}, {data_class: 'cash_runway', ref_id: '', mode: 'delayed', lag_days: 45, rounding: null}],
@@ -154,6 +154,7 @@ async function open(browser, {viewer = 'ana', viewport = DESKTOP, hash = '#/comp
     if (p === '/api/v2/needs-you') return json({items: [], version: 'v0', count: 0, next: null});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/finance/access') return json({error: {code: 'off', detail: 'off'}}, 404);
+    if (p === '/api/v2/company-page/preview' && !hub.fail.has(p)) { hub.previews.push(url.search); return route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Acme</title><p>No updates yet.</p>'}); }
     const a = answer(hub, method, p, url, payload);
     if (a) return json(a[1], a[0]);
     return json(method === 'GET' ? unrouted(p) : {});
@@ -163,6 +164,7 @@ async function open(browser, {viewer = 'ana', viewport = DESKTOP, hash = '#/comp
   if (ready) await page.locator('#cp-readers .cp-sec-ready, #cp-readers header').first().waitFor();
   return {page, hub, errors, natives, close: () => context.close()};
 }
+const tabLabels = page => page.locator('.dash-tabs a').allInnerTexts();
 const loaded = page => page.waitForFunction(() => !document.querySelector('#cp-page .skel'));
 const flat = async (page, what) => {
   const info = await page.evaluate(() => {
@@ -197,20 +199,35 @@ async function shotPart(page, id, name) {
     const {page, hub, errors, close} = await open(browser, {viewer: 'erin', ready: false});
     await page.locator('.cp-head').waitFor();
     await page.waitForSelector('a[data-nav="updates"]');
-    assert.equal(await page.locator('a[data-nav="company-page"]').count(), 0, 'no link for a member');
     assert.match(await page.locator('#main').innerText(), /Owners and admins only/);
     assert.deepEqual(hub.reads, [], 'a member asks the server for nothing here');
     await shot(page, 'denied-1280');
     assert.deepEqual(errors, []);
     await close();
+    // Overview as it always was: no tab, no way in by address, and search doesn't offer it.
+    const tab = await open(browser, {viewer: 'erin', hash: '#/overview', ready: false});
+    assert.deepEqual(await tabLabels(tab.page), ['Dashboard', 'Campus']);
+    assert.equal(await tab.page.evaluate(() => searchEntries().some(x => x.label === 'Company page')), false);
+    await tab.page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
+    await tab.page.locator('#cp-tab-body .empty-state').waitFor();
+    assert.equal(await tab.page.locator('.cp-frame, [data-cp-preview], [data-cp-share], [data-cp-manage]').count(), 0, 'no frame, no controls');
+    assert.deepEqual(await tabLabels(tab.page), ['Dashboard', 'Campus']);
+    assert.deepEqual(tab.hub.reads, [], 'a member asks the server for nothing here');
+    assert.deepEqual(tab.hub.previews, []);
+    assert.deepEqual(tab.errors, []);
+    await tab.close();
   }
-  // An admin: the link shows, and a server that says no is the same line. The server is the one that decides.
+  // An admin: the tab shows, and a server that says no is the same line. The server is the one that decides.
   {
-    const {page, close} = await open(browser, {viewer: 'cara', hubOpts: {denied: true}, ready: false});
-    await page.locator('a[data-nav="company-page"]').waitFor();
-    assert.match(await page.locator('a[data-nav="company-page"]').innerText(), /Company page/);
+    const {page, hub, close} = await open(browser, {viewer: 'cara', hubOpts: {denied: true}, ready: false});
     await page.locator('#cp-page .empty-state').waitFor();
     assert.match(await page.locator('#cp-page').innerText(), /Owners and admins only/);
+    await page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
+    await page.locator('#cp-tab-body .empty-state').waitFor();
+    assert.deepEqual(await tabLabels(page), ['Dashboard', 'Campus', 'Company page']);
+    assert.equal(await page.locator('.cp-frame').count(), 0, 'no frame');
+    assert.equal(await page.locator('.cp-tab-acts').isVisible(), false, 'no controls');
+    assert.deepEqual(hub.previews, []);
     await close();
   }
 
@@ -218,7 +235,8 @@ async function shotPart(page, id, name) {
   {
     const {page, hub, errors, natives, close} = await open(browser);
     await loaded(page);
-    assert.ok(await page.locator('a[data-nav="company-page"]').evaluate(a => a.classList.contains('cur')), 'the link is current');
+    assert.equal(await page.locator('a[data-nav="company-page"]').count(), 0, 'no sidebar link');
+    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Overview stays lit');
     const parts = await page.locator('#cp-page > section').evaluateAll(s => s.map(x => x.id));
     assert.deepEqual(parts, ['cp-transparency', 'cp-editions', 'cp-audiences', 'cp-disclosure', 'cp-stats', 'cp-readers', 'cp-preview'], 'the parts, in order');
 
@@ -598,6 +616,137 @@ async function shotPart(page, id, name) {
       await shotPart(failed.page, 'editions', `error-editions-${w}-${theme}`);
       await shotPart(failed.page, 'readers', `readers-email-off-${w}-${theme}`);
       await failed.close();
+    }
+  }
+  // Overview's tab: the page in a sandboxed frame, the share panel, Manage and back.
+  {
+    const {page, hub, errors, natives, close} = await open(browser, {hash: '#/overview', theme: 'dark', ready: false});
+    assert.deepEqual(await tabLabels(page), ['Dashboard', 'Campus', 'Company page']);
+    assert.equal(await page.evaluate(() => searchEntries().find(x => x.label === 'Company page')?.href), '#/overview/company-page', 'search finds it');
+    await page.locator('.dash-tabs a', {hasText: 'Company page'}).click();
+    const frame = page.locator('iframe.cp-frame');
+    await frame.waitFor();
+    assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts', 'the frame gets no origin');
+    assert.match(await frame.getAttribute('src'), /\/api\/v2\/company-page\/preview\?audience=a-board&theme=dark$/, 'the first audience on, in the app\'s theme');
+    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Overview stays lit');
+    assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Company page');
+    const pick = page.locator('.cp-tab-acts select');
+    await pick.selectOption('a-pub');
+    await page.waitForFunction(() => document.querySelector('iframe.cp-frame')?.src.includes('audience=a-pub'));
+
+    // Sharing: Closed by default with no address. Open still warns, and the address is a link only once the page is live.
+    // The vendored icon font has no share glyph, so a ligature would render as a clipped letter.
+    assert.equal(await page.locator('[data-cp-share] svg').count(), 1);
+    assert.equal(await page.locator('[data-cp-share]').evaluate(b => b.textContent.trim()), '');
+    await page.locator('[data-cp-share]').click();
+    const panel = page.locator('dialog.cp-share');
+    await panel.locator('[data-cp-reader="r1"]').waitFor();
+    assert.equal(await panel.locator('[data-cp-level] [data-v="closed"]').getAttribute('aria-checked'), 'true');
+    assert.equal(await panel.locator('.cp-address').count(), 0);
+    assert.equal(await panel.locator('.cp-look').count(), 0, 'accent and logo stay in Manage');
+    assert.equal(await panel.locator('[data-cp-new-invite]').count(), 1, 'invite links are here');
+    await panel.locator('[data-cp-level] [data-v="open"]').click();
+    const sure = page.locator('dialog.cp-dlg:not(.cp-share)');
+    assert.match(await sure.innerText(), /public internet/);
+    assert.equal(hub.writes.length, 0, 'nothing is sent before the answer');
+    await sure.locator('button[type=submit]').click();
+    await panel.locator('[data-cp-not-live]').waitFor();
+    assert.deepEqual(hub.writes.at(-1), ['PATCH', '/api/v2/company-page', {transparency: 'open'}]);
+    assert.equal(await panel.locator('a.cp-address, [data-cp-copy]').count(), 0, 'not a link until it is live');
+    hub.settings.public_live = true;
+    await panel.locator('[data-close]').click();
+    await panel.waitFor({state: 'detached'});
+
+    // Manage opens the section, and it leads back.
+    await page.locator('[data-cp-manage]').click();
+    await page.locator('#cp-page').waitFor();
+    assert.equal(await page.evaluate(() => location.hash), '#/company-page');
+    await page.locator('#cp-readers [data-cp-reader="r1"]').waitFor();
+    assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate(a => a.classList.contains('cur')), 'Overview stays lit');
+    await page.locator('[data-cp-view]').click();
+    await frame.waitFor();
+    assert.match(await frame.getAttribute('src'), /audience=a-pub/, 'the audience chosen holds');
+
+    // The live address copies.
+    await page.evaluate(() => { window.__copied = []; Object.defineProperty(navigator, 'clipboard', {value: {writeText: async t => { window.__copied.push(t); }}}); });
+    await page.locator('[data-cp-share]').click();
+    await panel.locator('a.cp-address').waitFor();
+    await panel.locator('[data-cp-copy]').click();
+    await page.waitForFunction(() => window.__copied.length);
+    assert.deepEqual(await page.evaluate(() => window.__copied), ['https://open.acme.example']);
+    await panel.locator('[data-close]').click();
+
+    // A deep link from Needs you still lands on its edition.
+    await page.evaluate(h => { location.hash = h; }, '#/company-page?edition=e-pub');
+    await page.locator('dialog.cp-ed [data-ed-body] .cp-read').waitFor();
+    assert.match(await page.locator('dialog.cp-ed').innerText(), /September update/);
+    assert.deepEqual(natives, [], 'no native dialogs');
+    assert.deepEqual(errors, []);
+    await close();
+  }
+  // Nothing set up: the page's own empty state in the frame, or with no audience one line and the icon. A preview that
+  // fails is one line with Retry, never an error in the frame.
+  {
+    const bare = await open(browser, {hash: '#/overview/company-page', hubOpts: {noEditions: true}, ready: false});
+    await bare.page.locator('iframe.cp-frame').waitFor();
+    await bare.page.frameLocator('iframe.cp-frame').locator('p').waitFor();
+    assert.deepEqual(bare.errors, []);
+    await bare.close();
+    const none = await open(browser, {hash: '#/overview/company-page', hubOpts: {noAudiences: true}, ready: false});
+    await none.page.locator('#cp-tab-body .empty-state').waitFor();
+    assert.equal(await none.page.locator('.cp-frame, .cp-tab-acts select').count(), 0);
+    assert.ok(await none.page.locator('[data-cp-share]').isVisible());
+    assert.equal(await none.page.locator('[data-cp-preview]').isVisible(), false, 'no frame, nothing to label');
+    assert.deepEqual(none.errors, []);
+    await none.close();
+    const broken = await open(browser, {hash: '#/overview/company-page', hubOpts: {fail: ['/api/v2/company-page/preview']}, ready: false});
+    await broken.page.locator('#cp-tab-body [data-cp-retry]').waitFor();
+    assert.equal(await broken.page.locator('.cp-frame').count(), 0, 'no frame');
+    assert.equal(await broken.page.locator('[data-cp-preview]').isVisible(), false, 'no frame, nothing to label');
+    broken.hub.fail.clear();
+    await broken.page.locator('#cp-tab-body [data-cp-retry]').click();
+    await broken.page.locator('iframe.cp-frame').waitFor();
+    assert.ok(await broken.page.locator('[data-cp-preview]').isVisible(), 'the frame is back, and so is the label');
+    assert.deepEqual(broken.errors, []);
+    await broken.close();
+  }
+  // Each size and theme: the frame fills what the tabs leave and is the only thing that scrolls.
+  for (const viewport of [DESKTOP, PHONE]) {
+    const w = viewport.width;
+    for (const theme of ['light', 'dark']) {
+      const {page, errors, close} = await open(browser, {viewport, theme, hash: '#/overview/company-page', ready: false});
+      await page.locator('iframe.cp-frame').waitFor();
+      await flat(page, `the tab at ${w}`);
+      const fit = await page.evaluate(() => {
+        const main = document.querySelector('#main'), box = document.querySelector('iframe.cp-frame').getBoundingClientRect(), holder = main.getBoundingClientRect();
+        return {extra: main.scrollHeight - main.clientHeight, gapBelow: holder.bottom - box.bottom, gapRight: holder.right - box.right, gapLeft: box.left - holder.left};
+      });
+      assert.ok(fit.extra <= 1, `one scrollbar at ${w} ${JSON.stringify(fit)}`);
+      assert.ok(Math.abs(fit.gapBelow) <= 1 && Math.abs(fit.gapRight) <= 1 && Math.abs(fit.gapLeft) <= 1, `the frame fills at ${w} ${JSON.stringify(fit)}`);
+      // The label sits beside the picker on one row, and stays on the app's side of the frame.
+      const besidePicker = () => page.evaluate(() => {
+        const box = el => el.getBoundingClientRect(), label = box(document.querySelector('[data-cp-preview]')), pick = box(document.querySelector('.cp-tab-acts select')), last = box(document.querySelector('[data-cp-manage]'));
+        return {besides: label.right <= pick.left, sameRow: Math.abs((label.top + label.bottom) / 2 - (pick.top + pick.bottom) / 2) <= 2, left: label.left, right: last.right, clear: document.documentElement.clientWidth};
+      });
+      const row = await besidePicker();
+      assert.ok(row.besides && row.sameRow && row.left >= 0 && row.right <= row.clear, `the label fits at ${w} ${JSON.stringify(row)}`);
+      assert.equal(await page.frameLocator('iframe.cp-frame').locator('[data-cp-preview]').count(), 0);
+      if (viewport === PHONE && theme === 'light') {
+        // A narrower phone and a long audience name: the picker gives way, the label and the controls stay.
+        await page.setViewportSize({width: 360, height: viewport.height});
+        await page.evaluate(() => { document.querySelector('.cp-tab-acts select').selectedOptions[0].textContent = 'Series B lead investors and observers'; });
+        const tight = await besidePicker();
+        assert.ok(tight.besides && tight.sameRow && tight.left >= 0 && tight.right <= tight.clear, `the label fits a long name at 360 ${JSON.stringify(tight)}`);
+        await flat(page, 'a long audience name at 360');
+        await page.setViewportSize(viewport);
+      }
+      await shot(page, `tab-${w}-${theme}`);
+      await page.locator('[data-cp-share]').click();
+      await page.locator('dialog.cp-share [data-cp-reader="r1"]').waitFor();
+      await flat(page, `the share panel at ${w}`);
+      await shot(page, `tab-share-${w}-${theme}`);
+      assert.deepEqual(errors, []);
+      await close();
     }
   }
   await browser.close();

@@ -109,7 +109,6 @@ function redesignNavCurrent(nav) {
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
   if (nav === 'growth') return rdUnder(r, GR_ROUTE);
   if (nav === 'finance') return rdUnder(r, FIN_ROUTE);
-  if (nav === 'company-page') return rdUnder(r, CP_ROUTE);
   if (nav === 'rules') return rdUnder(r, RULES_ROUTE);
   if (nav.startsWith('rules-')) return rdUnder(r, RULES_ROUTE) && ruTabOf(r) === nav.slice(6);
   return false;
@@ -163,7 +162,6 @@ function redesignAfterRoute() {
   growthStop();
   companyPageStop();
   finProbeOnce();   // the Finance link shows once the viewer sees something in Finance
-  cpNavSync();      // the Company page link shows to owners and admins only
 }
 
 // The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view; Brand opens

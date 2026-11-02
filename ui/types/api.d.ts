@@ -6123,6 +6123,7 @@ export type GetCompanyPageResponse = unknown;
 /** GET /api/v2/company-page/preview */
 export type GetCompanyPreviewParams = {
   audience?: string;
+  theme?: string;
 };
 export type GetCompanyPreviewBody = never;
 export type GetCompanyPreviewResponse = string;

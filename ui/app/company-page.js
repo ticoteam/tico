@@ -1,7 +1,8 @@
-/* ui/app/company-page.js — The Company page section for owners and admins (docs/company-page.md): one screen with
-   Transparency, Editions, Audiences, Disclosure, Stats, Readers and Preview, in that order. Each part loads and fails on
-   its own. The server decides every right; this file only hides what the viewer can't use. The reader's page itself is
-   not drawn here: Preview opens what the server renders.
+/* ui/app/company-page.js — The Company page for owners and admins (docs/company-page.md). Overview's Company page tab
+   shows the page itself, with sharing behind one icon; its Manage goes to the section, one screen with Transparency,
+   Editions, Audiences, Disclosure, Stats, Readers and Preview, in that order. Each part loads and fails on its own. The
+   server decides every right; this file only hides what the viewer can't use. The reader's page itself is not drawn
+   here: the tab and Preview show what the server renders.
    Reads and writes: /api/v2/company-page, /api/v2/audiences, /api/v2/editions, /api/v2/readers (backend/company_page).
    An approval decision goes through /api/v2/approvals like every other one.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -44,19 +45,6 @@ const CP_GROUPS = {kpi: 'KPIs', pnl_line: 'P&L lines'};
 
 // ----------------------------------------------------------------- who sees it
 const cpAllowed = () => S.me?.role === 'owner' || S.me?.bot_admin === true;
-// The link shows to owners and admins only, under Finance.
-function cpNavSync() {
-  const nav = $('#side .side-scroll'); if (!nav) return;
-  const link = nav.querySelector('a[data-nav="company-page"]');
-  if (!cpAllowed()) { if (link) { link.remove(); renderTree(); } return; }
-  if (link) return;
-  const a = Object.assign(document.createElement('a'), {className: 'nav-link', href: CP_ROUTE,
-    innerHTML: '<span class="nav-icon" aria-hidden="true">newspaper</span>Company page'});
-  a.dataset.nav = 'company-page';
-  const after = nav.querySelector('a[data-nav="finance"]') || nav.querySelector('a[data-nav="growth"]') || nav.querySelector('a[data-nav="strategy"]');
-  if (after) after.after(a); else nav.prepend(a);
-  renderTree();
-}
 
 // ----------------------------------------------------------------- small pieces
 const cpList = (r, key) => Array.isArray(r) ? r : Array.isArray(r?.[key]) ? r[key] : [];
@@ -122,14 +110,16 @@ function cpDialog(title, body, save, onSave, {danger = false, wide = false} = {}
 const cpConfirm = (title, line, label, work, opts = {danger: true}) => cpDialog(title, `<p class="cp-line">${esc(line)}</p>`, label, async () => { await work(); }, opts);
 
 // ----------------------------------------------------------------- the page
+const cpNewState = () => ({err: {}, pick: {}, groups: {}, audiences: null, disclosure: {}, editions: null, editionsNext: null, readers: null, readersNext: null,
+  stats: null, available: [], projection: {}, invites: {}, settings: null, scheduleProblems: [], emailAvailable: true, releaseFailed: null, timer: null, mq: matchMedia(PHONE), onMq: null});
 function pageCompanyPage() {
   cpTeardown();
   const main = $('#main');
   main.classList.add('strategy-layout', 'company-layout');
-  const head = '<div class="strat-head rd-strat-head cp-head"><h1>Company page</h1></div>';
-  if (!cpAllowed()) { main.innerHTML = head + cpEmpty('Owners and admins only'); return; }
-  const state = CP = {err: {}, pick: {}, groups: {}, audiences: null, disclosure: {}, editions: null, editionsNext: null, readers: null, readersNext: null,
-    stats: null, available: [], projection: {}, invites: {}, settings: null, scheduleProblems: [], emailAvailable: true, releaseFailed: null, timer: null, mq: matchMedia(PHONE), onMq: null};
+  const title = '<div class="strat-head rd-strat-head cp-head"><h1>Company page</h1>';
+  if (!cpAllowed()) { main.innerHTML = title + '</div>' + cpEmpty('Owners and admins only'); return; }
+  const head = title + `<span class="spacer"></span><a class="strat-sub" href="${OVERVIEW_COMPANY}" data-cp-view>View page</a></div>`;
+  const state = CP = cpNewState();
   main.innerHTML = head + `<div id="cp-page" class="cp-page">${CP_PARTS.map(([id]) => `<section class="card cp-sec" id="cp-${id}">${cpSection(id, '', skelRows(2, {dot: false}))}</section>`).join('')}</div>`;
   state.onMq = () => { if (CP === state) cpDraw('disclosure'); };
   state.mq.addEventListener('change', state.onMq);
@@ -146,7 +136,7 @@ function cpTeardown() {
   CP.mq.removeEventListener('change', CP.onMq);
   CP = null;
 }
-function companyPageStop() { if (CP && !rdUnder(S.route || '', CP_ROUTE)) cpTeardown(); }
+function companyPageStop() { if (CP && S.route !== OVERVIEW_COMPANY && !rdUnder(S.route || '', CP_ROUTE)) cpTeardown(); }
 
 // One part's read: its failure stays in that part, with Retry. A 403 on the settings means the whole page is not theirs.
 // The queue can narrow to one audience's published updates: where a tightened rule's line leads.
@@ -225,6 +215,7 @@ function cpClick(ev) {
   if (d.cpRetry) return void (d.cpRetry === 'audiences' ? cpLoadAudienceParts(CP) : cpLoad(CP, d.cpRetry));
   if (d.v && b.closest('[data-cp-level]')) return cpChooseLevel(d.v);
   if ('cpAddress' in d) return void cpEditAddress();
+  if ('cpCopy' in d) return void cpCopyAddress(b);
   if (d.cpEdition) return void cpOpenEdition(d.cpEdition);
   if ('cpDraft' in d) return cpDraftNow();
   if ('cpEditionsMore' in d) return void cpMore('editions');
@@ -289,11 +280,16 @@ function cpTransparency() {
   // Open with nothing approved to show answers not found: the address isn't offered as a link until it reaches a page.
   const address = level === 'closed' || !url ? ''
     : level === 'open' && s.public_live !== true ? `<span class="cp-address" data-cp-not-live>${shown}</span><span class="cp-level-note">Nothing public yet</span>`
-    : `<a class="cp-address" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${shown}<span class="nav-icon" aria-hidden="true">open_in_new</span></a>`;
+    : `<a class="cp-address" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${shown}<span class="nav-icon" aria-hidden="true">open_in_new</span></a>${cpBtn('data-cp-copy', 'Copy link')}`;
   // An install with its own reader address has nothing to set here. With a page domain, the address is what Open needs first.
   const set = !s.reader_origin && s.page_domain ? cpBtn('data-cp-address', s.slug ? 'Change address' : 'Set address') : '';
   const note = noWhere ? '<p class="cp-note" data-cp-no-address>This install has no page address (TICO_READER_ORIGIN)</p>' : privateOn ? '' : cpPrivateOff();
-  return cpSection('transparency', '', `<div class="cp-level">${seg}${address}${set}</div>${note}${cpLook(s)}`);
+  return cpSection('transparency', '', `<div class="cp-level">${seg}${address}${set}</div>${note}${CP.tab ? '' : cpLook(s)}`);
+}
+async function cpCopyAddress(button) {
+  const host = button.closest('dialog');
+  try { await navigator.clipboard.writeText(CP.settings.address); toast('Copied', false, null, host ? {host} : {}); }
+  catch { toast('Could not copy', true, null, host ? {host} : {}); }
 }
 // The page's accent and logo. An accent is hex only; a logo is a png, jpeg or webp, read and checked by the server.
 function cpLook(s) {
@@ -1021,4 +1017,88 @@ function cpPreview() {
   if (!CP.audiences.length) return cpSection('preview', '', cpEmpty('Add an audience first'));
   return cpSection('preview', '', `<div class="cp-previews">${CP.audiences.map(a =>
     `<a class="ghost small cp-preview" href="${API}/v2/company-page/preview?audience=${cpId(a.id)}" target="_blank" rel="noopener noreferrer" data-cp-preview="${esc(a.id)}">${esc(a.name)}<span class="nav-icon" aria-hidden="true">open_in_new</span></a>`).join('')}</div>`);
+}
+
+// ----------------------------------------------------------------- Overview's Company page tab
+// The page itself, in the server's sandboxed preview. The picker's choice holds while the app stays open.
+let CP_TAB_AUDIENCE = '';
+// Which audience opens: the one the page's level puts in front of people, or the first one turned on.
+function cpTabAudience(state) {
+  const list = state.audiences || [], on = list.filter(a => a.enabled !== false && a.enabled !== 0);
+  const front = state.settings?.transparency === 'open' ? list.find(a => a.kind === 'public') : on.find(a => a.kind !== 'public');
+  return (list.find(a => a.id === CP_TAB_AUDIENCE) || front || on[0] || list[0])?.id || '';
+}
+// The app's own light or dark choice wins over the computer's; a browser following the computer leaves it to the frame.
+function cpPreviewSrc(id) {
+  const theme = document.documentElement.dataset.theme;
+  return `${API}/v2/company-page/preview?audience=${cpId(id)}${theme === 'dark' || theme === 'light' ? `&theme=${theme}` : ''}`;
+}
+function pageOverviewCompany() {
+  cpTeardown();
+  const main = $('#main'), allowed = cpAllowed();
+  main.classList.add('overview-layout');
+  // The frame can hold unapproved stats under the badge readers see, and its contents stay exactly what a reader gets,
+  // so the app says which one this is.
+  const acts = !allowed ? '' : `<span class="cp-tab-acts" hidden><span class="cp-tab-preview" data-cp-preview hidden>Preview</span><span class="cp-tab-pick" data-cp-tab-pick></span>
+    <button type="button" class="ghost cp-share-btn" data-cp-share aria-label="Share" aria-haspopup="dialog" title="Share"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M8 7.5l4-4 4 4"/><path d="M8 11H6v9.5h12V11h-2"/></svg></button>
+    <a class="cp-manage" href="${CP_ROUTE}" data-cp-manage>Manage</a></span>`;
+  main.innerHTML = `<section class="overview-page cp-tab" aria-label="Company page"><div class="overview-tabs"><h1>Overview</h1>${dashTabsHTML('company')}${acts}</div>
+    <div class="cp-tab-body" id="cp-tab-body">${allowed ? skelRows(4, {dot: false}) : cpEmpty('Owners and admins only')}</div></section>`;
+  if (!allowed) return;
+  const state = CP = {...cpNewState(), tab: true};
+  main.querySelector('[data-cp-share]').onclick = cpShareOpen;
+  $('#cp-tab-body').addEventListener('click', ev => { if (ev.target.closest('[data-cp-retry]')) void cpTabLoad(state); });
+  void cpTabLoad(state);
+}
+async function cpTabLoad(state) {
+  const body = $('#cp-tab-body');
+  await cpLoad(state, 'transparency');
+  if (CP !== state) return;
+  if (state.err.transparency?.status === 403) { body.innerHTML = cpEmpty('Owners and admins only'); return; }
+  document.querySelector('.cp-tab-acts').hidden = false;
+  await cpLoad(state, 'audiences');
+  if (CP !== state) return;
+  void cpLoad(state, 'readers');
+  if (state.err.audiences) { body.innerHTML = cpFail('audiences', state.err.audiences); return; }
+  state.pick.frame = cpTabAudience(state);
+  cpTabPick(state);
+  await cpTabFrame(state);
+}
+function cpTabPick(state) {
+  const slot = document.querySelector('[data-cp-tab-pick]'), list = state.audiences || [];
+  slot.innerHTML = list.length > 1 ? `<select aria-label="Audience">${cpAudOptions(list, state.pick.frame)}</select>` : '';
+  const pick = slot.querySelector('select');
+  if (pick) pick.onchange = () => { state.pick.frame = CP_TAB_AUDIENCE = pick.value; void cpTabFrame(state); };
+}
+// A sandboxed frame can't report how its load went, so the answer is read here first: a failure is one line with Retry,
+// never an error page inside the frame.
+async function cpTabFrame(state) {
+  const id = state.pick.frame, src = id && cpPreviewSrc(id), body = $('#cp-tab-body');
+  const label = document.querySelector('[data-cp-preview]');
+  if (!id) { label.hidden = true; body.innerHTML = cpEmpty('No audiences yet'); return; }
+  let failure = null;
+  try { const r = await fetch(src, {cache: 'no-store'}); if (!r.ok) failure = {status: r.status, message: 'Did not load'}; }
+  catch { failure = {message: 'Did not load'}; }
+  if (CP !== state || state.pick.frame !== id) return;
+  label.hidden = !!failure;
+  body.innerHTML = failure ? `<div class="cp-tab-line">${cpFail('frame', failure)}</div>`
+    : `<iframe class="cp-frame" title="Company page" sandbox="allow-scripts" referrerpolicy="no-referrer" src="${esc(src)}"></iframe>`;
+}
+// Who can see it: the level, the address, the readers and invite links. The same parts the section draws, so they read,
+// warn and fail alike.
+function cpShareOpen() {
+  document.querySelectorAll('dialog.cp-share').forEach(d => d.close());
+  const dlg = document.createElement('dialog');
+  dlg.className = 'tmodal cp-dlg cp-share';
+  dlg.setAttribute('aria-label', 'Share');
+  dlg.innerHTML = `<div class="tmodal-head"><b>Share</b><span class="spacer"></span><button type="button" class="ghost tmodal-x" data-close aria-label="Close">✕</button></div>
+    <div class="tmodal-body cp-share-body"><section class="cp-sec" id="cp-transparency"></section><section class="cp-sec" id="cp-readers"></section></div>`;
+  document.body.appendChild(dlg);
+  dlg.querySelector('[data-close]').onclick = () => dlg.close();
+  dlg.onclose = () => dlg.remove();
+  const body = dlg.querySelector('.cp-share-body');
+  body.addEventListener('click', cpClick);
+  body.addEventListener('change', cpChange);
+  cpDraw('transparency'); cpDraw('readers');
+  dlg.showModal();
 }
