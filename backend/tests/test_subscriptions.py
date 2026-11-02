@@ -81,7 +81,7 @@ def test_server_rejection_blocks_only_matching_profile(api):
     post(api, 'runners/heartbeat', body, token=r['token'])
     with api.app.state.store.transaction() as c:
         Execution.mark_rejected(c, r['runner_id'], 'codex', 'Unauthorized', 'one')
-        report = json.loads(c.execute('SELECT readiness FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
+        report = json.loads(c.execute('SELECT readiness FROM runners_with_state WHERE id=?', (r['runner_id'],)).fetchone()[0])
     assert report['bots']['ops']['ready'] is False
     assert report['bots']['cpo']['ready'] is True
     assert report['runtimes']['codex']['authenticated'] == 'ready'
@@ -99,7 +99,7 @@ def test_a_refused_bot_key_marks_only_that_bot_and_a_computer_refusal_marks_ever
 
     def report():
         with api.app.state.store.transaction() as c:
-            return json.loads(c.execute('SELECT readiness FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
+            return json.loads(c.execute('SELECT readiness FROM runners_with_state WHERE id=?', (r['runner_id'],)).fetchone()[0])
 
     with api.app.state.store.transaction() as c:
         Execution.mark_rejected(c, r['runner_id'], 'pi', 'Unauthorized', None, 'alpha')

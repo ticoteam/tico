@@ -141,7 +141,7 @@ def test_connect_needs_a_computer_that_is_online_up_to_date_and_has_the_tool(api
     m = computer(api, label="Good")
     assert post(api, "model-subscriptions/connect", start)["runner_id"] == m["runner_id"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-10), m["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-10), m["runner_id"]))
     assert get(api, "model-subscriptions")["connect"] == ["codex_login"]
 
 

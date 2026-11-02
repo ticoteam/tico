@@ -18,6 +18,7 @@ from backend import hubdb as H
 from backend.config import Settings
 
 BOT_IDS = importlib.import_module("backend.migrations.0012_bot_ids")
+BOT_SETTINGS = importlib.import_module("backend.migrations.0100_bot_settings")
 
 EMPLOYEES = {
     "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex"},
@@ -35,6 +36,14 @@ NEW_BOTS_DDL = """CREATE TABLE IF NOT EXISTS bots (
   id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
   cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
   state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);"""
+
+# runners as store.SCHEMA made it before migration 0106 split off its heartbeat state
+OLD_RUNNERS_DDL = """CREATE TABLE IF NOT EXISTS runners(
+ id TEXT PRIMARY KEY, label TEXT NOT NULL, owner_id TEXT NOT NULL REFERENCES humans(id),
+ token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT,
+ revoked_at TEXT, platform TEXT, version TEXT, capacity INTEGER NOT NULL DEFAULT 4,
+ readiness TEXT NOT NULL DEFAULT '{}', capabilities TEXT NOT NULL DEFAULT '[]',
+ awake_since TEXT, checkout TEXT, restart_requested_at TEXT, readiness_at TEXT);"""
 
 # The 14 foreign keys into bots: 11 in store.SCHEMA, bot_tool_requests, bot_files and chat_goals.
 CHILD_TABLES = ("bot_config", "bot_control", "bot_transitions", "settings_changes", "bot_session_epochs",
@@ -62,6 +71,9 @@ def _old_shape_database(path):
             unittest.mock.patch.object(migrations, "apply", lambda conn, directory=None: None):
         conn = H.connect(path)
     conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(OLD_RUNNERS_DDL)
+    # Today's store triggers name bot_settings, which only its migration makes (v0.5 had none, so no foreign key).
+    conn.execute(BOT_SETTINGS.TABLE.replace(" REFERENCES bots(id)", ""))
     for schema in (store.SCHEMA, bot_tools.SCHEMA, files.SCHEMA):
         conn.executescript(schema.replace("REFERENCES bots(id)", "REFERENCES bots(slug)"))
     return conn

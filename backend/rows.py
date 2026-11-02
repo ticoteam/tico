@@ -101,29 +101,34 @@ class AttemptRow(TypedDict):
 
 
 class RunnerRow(TypedDict):
-    """One `runners` row (SELECT *)."""
+    """One `runners` row (SELECT *): the computer's identity and its owner's settings."""
     id: str
     label: str
     owner_id: str
     token_hash: str
     created_at: str
-    last_seen_at: str | None
     revoked_at: str | None
     platform: str | None
-    version: str | None
-    capacity: int
-    readiness: str
-    capabilities: str
-    awake_since: str | None
-    checkout: str | None
     restart_requested_at: str | None
-    readiness_at: str | None
     accepts_member_bots: int
     screen: str
     screen_default_pending: int
     performance: str
-    restart_since: str | None
     turns_at_once: int | None
+
+
+class RunnerStateRow(TypedDict):
+    """One `runner_states` row (SELECT *): what the computer's heartbeats and samples report."""
+    runner_id: str
+    last_seen_at: str | None
+    awake_since: str | None
+    version: str | None
+    capacity: int
+    readiness: str
+    readiness_at: str | None
+    capabilities: str
+    checkout: str | None
+    restart_since: str | None
     memory_hold: int
     last_sampled_at: int | None
 

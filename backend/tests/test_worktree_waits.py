@@ -21,7 +21,7 @@ def turn_on(c, task_id):
 def setup_wait(api, tid, readiness=READY):
     """The bot's turn works on `tid`, and the bot already holds LIMIT worktrees on another task."""
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps(readiness),))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps(readiness),))
         turn_on(c, tid)
         filler = H.task_create(c, 'human:ana', 'Earlier work', 'Older worktrees', 'bot:cmo')
         c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
@@ -310,7 +310,7 @@ def test_old_computers_keep_the_old_answer_and_health_and_the_task_show_the_wait
     assert 'wait' not in refused and 'Oldest idle: ' in refused['detail'] and 'End your turn' not in refused['detail']
     assert not rows(api, 'SELECT * FROM worktree_waits')
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps(READY),))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps(READY),))
     wait = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']['wait']
     shown = api.get(f'/api/v2/tasks/{tid}', headers=auth()).json()['task']['worktree_waits']
     assert shown == [{'id': wait['id'], 'repo': 'Acme/product', 'state': 'waiting', 'since': wait['since'],

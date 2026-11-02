@@ -163,7 +163,7 @@ def _computers(c, runners_online, settings, limits=None):
     default = providers.default_runtime(providers.load(c, settings))
     wanted = {default} - {""}
     for r in c.execute("SELECT r.id,r.label,r.last_seen_at,r.platform,r.readiness,coalesce(nullif(h.name,''),r.owner_id) "
-                       "AS owner_id FROM runners r LEFT JOIN humans h ON h.id=r.owner_id WHERE r.revoked_at IS NULL "
+                       "AS owner_id FROM runners_with_state r LEFT JOIN humans h ON h.id=r.owner_id WHERE r.revoked_at IS NULL "
                        "ORDER BY r.label"):
         document = readiness_document(r["readiness"])
         runtimes = document.get("runtimes") or {}
@@ -211,7 +211,7 @@ def _computers(c, runners_online, settings, limits=None):
 
 def _mail_key_exposed(c):
     """Labels of the computers that report holding the mail key where their bots can read it."""
-    return [r["label"] for r in c.execute("SELECT label,readiness FROM runners WHERE revoked_at IS NULL ORDER BY label")
+    return [r["label"] for r in c.execute("SELECT label,readiness FROM runners_with_state WHERE revoked_at IS NULL ORDER BY label")
             if readiness_document(r["readiness"]).get("mail_key") == "exposed"]
 
 
@@ -237,7 +237,7 @@ def _reported(c, prefix, limit=200):
     out = []
     hosting = {(a["bot"], a["runner_id"]) for a in c.execute(
         "SELECT a.bot,a.runner_id FROM assignments a JOIN bots b ON b.id=a.bot WHERE b.state<>'archived'")}
-    for r in c.execute("SELECT id,readiness FROM runners WHERE revoked_at IS NULL"):
+    for r in c.execute("SELECT id,readiness FROM runners_with_state WHERE revoked_at IS NULL"):
         for bot, row in ((readiness_document(r["readiness"]).get("bots")) or {}).items():
             if (bot, r["id"]) not in hosting:
                 continue                  # a computer that no longer hosts the bot has nothing to publish for it
@@ -315,7 +315,7 @@ def _missing_tool_credentials(c, online_ids):
     """Tool and Computer names only, for online assignments with effective credentials missing."""
     from .bot_tools import granted, service_name
     out = set()
-    for row in c.execute("SELECT a.bot,r.id,r.label,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    for row in c.execute("SELECT a.bot,r.id,r.label,r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                          "JOIN bots b ON b.id=a.bot WHERE b.state<>'archived' AND r.revoked_at IS NULL"):
         if row["id"] not in online_ids:
             continue
@@ -345,7 +345,7 @@ def missing_repositories(c, online_ids):
     """(bot, computer, why) for the active bots whose online computer says it has no repository for them.
     `why` is the runner's own sentence naming the cause (not on GitHub, GitHub refused, a clone failed)."""
     out = []
-    for r in c.execute("SELECT a.bot,r.id,r.label,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    for r in c.execute("SELECT a.bot,r.id,r.label,r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                        "JOIN bots b ON b.id=a.bot WHERE b.state='active' AND r.revoked_at IS NULL ORDER BY a.bot"):
         report = (readiness_document(r["readiness"]).get("bots") or {}).get(r["bot"])
         if r["id"] in online_ids and isinstance(report, dict) and report.get("repository_present") is False:
@@ -445,7 +445,7 @@ def repository_fix(c, bot, label, github_owner=""):
     app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     address = repo_url(repo, (app["org"] if app else "") or github_owner) or config.get("repo_url") or repo
     repository = str(address).rstrip("/").removesuffix(".git").removeprefix("https://github.com/")
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?",
                     (bot,)).fetchone()
     report = ((readiness_document(row[0]).get("bots") or {}).get(bot) or {}) if row else {}
     path = report.get("repository") or "<projects>/" + repo.rstrip("/").split("/")[-1].removesuffix(".git")
@@ -456,7 +456,7 @@ def repository_fix(c, bot, label, github_owner=""):
 def _member_bots_beside_shared_keys(c):
     """Computers whose `_shared.env` holds keys every bot there receives, and that also host bots members
     created: a member's bot instructions could ask a run for them."""
-    runners = [r for r in c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL ORDER BY label")
+    runners = [r for r in c.execute("SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL ORDER BY label")
                if readiness_document(r["readiness"]).get("shared_env")]
     out, members = [], {}
     if runners:
@@ -511,7 +511,7 @@ def silent_computers(c, minutes=SILENT_MINUTES):
     rows = c.execute(
         f"SELECT r.id, r.label, r.owner_id, r.last_seen_at, sum(CASE WHEN NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
         "count(j.id) n, group_concat(DISTINCT a.bot) bots "
-        "FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.id=a.bot AND b.state='active' "
+        "FROM runners_with_state r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.id=a.bot AND b.state='active' "
         "JOIN jobs j ON j.bot_id=a.bot AND j.state='queued' AND j.held=0 "
         "LEFT JOIN messages m ON m.id=j.message_id LEFT JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE r.revoked_at IS NULL AND r.last_seen_at < ? GROUP BY r.id ORDER BY r.last_seen_at",
@@ -569,7 +569,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
         "SELECT j.bot_id, min(j.created_at) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
         "WHERE j.state='queued' AND m.sender_id LIKE 'human:%' GROUP BY j.bot_id")}
     assigned = {r["bot"]: (r["runner_id"], r["label"], r["readiness"]) for r in c.execute(
-        "SELECT a.bot, a.runner_id, r.label, r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+        "SELECT a.bot, a.runner_id, r.label, r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
         "WHERE r.revoked_at IS NULL")}
     # A starter bot still waiting for its first setup holds its work on purpose: not slow (`unfinished_setup` warns
     # once the hold is old).
@@ -588,7 +588,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
     # A computer running as many turns as it takes holds the rest back on purpose: queued, not stuck.
     from . import start_places
     held_now = start_places.held_totals(c)
-    full = {r["id"] for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL")
+    full = {r["id"] for r in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL")
             if held_now.get(r["id"], 0) >= start_places.turn_limit(r)}
     # A computer due an update keeps claiming for a while, then claims nothing until its running turns end and it
     # updates (runner-rs follow.rs blocks_claims): its queued work waits on that, not on a Tico bug.
@@ -596,7 +596,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
         "SELECT runner_id,update_target FROM runner_versions WHERE update_state IN ('waiting','updating')")}
     # A requested Restart holds new work while running turns finish or reach the drain cap; older runners first
     # keep claiming for a while. Every heartbeat names the restart until it happens.
-    restarting = {r["id"] for r in c.execute("SELECT id FROM runners WHERE restart_since IS NOT NULL AND revoked_at IS NULL")}
+    restarting = {r["id"] for r in c.execute("SELECT id FROM runners_with_state WHERE restart_since IS NOT NULL AND revoked_at IS NULL")}
     documents = {}      # one parse per computer, and only for bots with queued work: Health is polled by every tab
 
     def report_for(slug, where):
@@ -856,7 +856,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     # Each offline computer's last check-in, read once for every bot waiting on one (not one read per bot).
     offline = sorted({row["runner_id"] for row in rows if row["reason"] == "computer_offline"})
     seen_at = {r["id"]: r["last_seen_at"] for r in c.execute(
-        f"SELECT id,last_seen_at FROM runners WHERE id IN ({','.join('?' * len(offline))})", offline)} if offline else {}
+        f"SELECT id,last_seen_at FROM runners_with_state WHERE id IN ({','.join('?' * len(offline))})", offline)} if offline else {}
     # Every quarantined bot's quarantine record, read together for its explanation (quarantine_display.explanation).
     H.prime_quarantines(c, [row["bot"] for row in rows if row["reason"] == "quarantined"])
     # Every stuck bot's configuration and operator, read together for its harness check and quarantine

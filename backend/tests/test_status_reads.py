@@ -121,7 +121,7 @@ def busy(api, machine, first, count, live=1):
                          task_id=first_task)
     ready(api, machine, ["ops", "doc-updater", *slugs])
     with store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=100")
+        c.execute("UPDATE runner_states SET capacity=100")
     for slug in slugs[:live]:
         attempt = claim(api, machine, slug)
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + slug}, machine["token"])

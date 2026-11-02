@@ -40,7 +40,7 @@ def capabilities(c, auth, conv):
     bot = bots[0]
     config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
     runtime, _ = providers.bot_choice(c, auth.settings, json.loads(config[0] or "{}") if config else {})
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
     report = readiness_document(row[0]) if row else {}
     detail = bot_readiness(row[0], bot) if row else {}

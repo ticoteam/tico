@@ -26,7 +26,7 @@ def prepared(api, gh):
         for name, kind in columns.items():
             if name not in have:
                 c.execute(f'ALTER TABLE task_links ADD COLUMN {name} {kind}')
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps({'schema_version': 1, 'bots': {}, 'worktrees': True}),))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps({'schema_version': 1, 'bots': {}, 'worktrees': True}),))
         task = H.task_create(c, 'human:ana', 'Build product', 'Implement product', 'bot:cmo')
         c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         other = H.task_create(c, 'human:ana', 'Other work', 'Implement docs', 'bot:cpo')
@@ -50,11 +50,11 @@ def test_create_permissions_limit_old_computer_and_attach(prepared):
     assert post(api, path, {'repo': 'Acme/product'}).status_code == 403
     put(api, 'bots/cmo/repositories', {'mode': 'all', 'all_access': 'write'})
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness='{}' WHERE id='r1'")
+        c.execute("UPDATE runner_states SET readiness='{}' WHERE runner_id='r1'")
     response = post(api, path, {'repo': 'Acme/product'})
     assert response.status_code == 409 and 'Update this computer' in response.text
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps({'schema_version': 1, 'bots': {}, 'worktrees': True}),))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps({'schema_version': 1, 'bots': {}, 'worktrees': True}),))
     response = post(api, path, {'repo': 'Acme/product'}, 'bot-test')
     assert response.status_code == 200, response.text
     link = response.json()

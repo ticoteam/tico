@@ -489,7 +489,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
                 raise Problem("env", f"{body.env} is a setting of the computer or of Tico, not a credential a bot can be given", 422)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
-            place = c.execute("SELECT r.last_seen_at,r.label FROM assignments a JOIN runners r ON r.id=a.runner_id "
+            place = c.execute("SELECT r.last_seen_at,r.label FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                               "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
             if not place:
                 raise Problem("no_computer", "That bot is not on a computer, so there is no secrets file to read", 409)

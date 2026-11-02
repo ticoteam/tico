@@ -166,7 +166,7 @@ def test_a_limit_on_the_check_model_holds_the_check_alone_and_the_bot_keeps_work
     assert claim(api, machine) is None, "the check waits for Grok's reset"
     monkeypatch.setattr(H, "now", lambda: H.shift(reset, seconds=2))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
+        c.execute("UPDATE runner_states SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
     heartbeat(api, machine)
     again = claim(api, machine)
     assert again["task"]["id"] == sub["id"] and again["config"]["runtime"] == "grok"
@@ -240,7 +240,7 @@ def out_of_quota(api, machine, turn, resets_at=None):
 def later(api, monkeypatch, machine, at):
     monkeypatch.setattr(H, "now", lambda: at)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
+        c.execute("UPDATE runner_states SET last_seen_at=NULL,awake_since=NULL")   # the computer stayed in touch meanwhile
     all_ready(api, machine)
 
 

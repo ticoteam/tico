@@ -66,7 +66,8 @@ the view (`no such column`). `bot_control.claim_task`, the one task a bot's clai
 multiple statements are refused; `EXPLAIN QUERY PLAN` is allowed.
 
 Reserved, never readable through SQL: `credentials`, `credential_keys`, `credential_grants`,
-`idempotency` (stored request and response bodies), `runners` (credential hashes),
+`idempotency` (stored request and response bodies), `runners` (credential hashes) with `runner_states`
+and the `runners_with_state` view,
 `human_tokens` (personal API token hashes), `service_keys` and `service_key_tasks` (service keys,
 [service-keys.md](service-keys.md)), `enrollments`, `session_epochs`, `bot_session_epochs`, `settings_changes`, `backup_verified_blobs`, every
 `_litestream_*` table and every `sqlite_*` internal other than `sqlite_master`.

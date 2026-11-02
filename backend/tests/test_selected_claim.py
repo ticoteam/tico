@@ -89,7 +89,7 @@ def test_selected_claim_rechecks_changes_after_read_and_takes_the_next_job(api, 
                 elif change == 'readiness':
                     readiness = json.loads(target['readiness'])
                     readiness['bots']['ops']['ready'] = False
-                    writer.execute('UPDATE runners SET readiness=? WHERE id=?',
+                    writer.execute('UPDATE runner_states SET readiness=? WHERE runner_id=?',
                                    (encode(readiness), machine['runner_id']))
                 else:
                     # A currently active turn fences the bot even when it was

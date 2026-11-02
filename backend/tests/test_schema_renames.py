@@ -5,6 +5,7 @@ before the renames (schema 71), with a few rows written under the old column nam
 column, keeps the rows, keeps every index, rewrites every trigger and view so it still works, and a second boot
 changes nothing."""
 
+import importlib
 import json
 import re
 import sqlite3
@@ -76,6 +77,8 @@ RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_ch
 # Columns a later migration moved out of their table after the renames ran on them: 0100_bot_settings moves
 # bot_config.config into bot_settings (backend/tests/test_bot_settings.py).
 MOVED_COLUMNS = {("bot_config", "config")}
+# Moved from runners to runner_states by backend/migrations/0106_runner_states.py after the renames named them.
+RUNNER_STATE = {name for name, _ in importlib.import_module("backend.migrations.0106_runner_states").STATE}
 
 
 @pytest.fixture(scope="module")
@@ -109,12 +112,13 @@ def test_every_column_has_its_new_name_and_the_rows_kept_their_values(upgraded):
     for table, old, renamed, _wave in COLUMNS:
         if old not in before["columns"].get(table, ()) or table in RETIRED:
             continue
-        have = columns(conn, table)
         renamed = NEW.get((table, renamed), renamed)
+        have = columns(conn, "runner_states" if table == "runners" and renamed in RUNNER_STATE else table)
         if (table, renamed) in MOVED_COLUMNS:
             assert renamed not in have and old not in have, (table, old, renamed)
             continue
         assert renamed in have and old not in have, (table, old, renamed)
+    assert conn.execute("SELECT readiness FROM runners_with_state WHERE id='runner-1'").fetchone()[0] == '{"ok":true}'
     task = conn.execute("SELECT * FROM tasks WHERE id='task-1'").fetchone()
     assert json.loads(task[new("tasks", "labels_json")]) == ["launch"]
     assert json.loads(task[new("tasks", "acceptance_json")]) == ["it ships"]

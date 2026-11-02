@@ -883,12 +883,12 @@ def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
                                   "model": "gpt-6.1-sol" if mode == "named" else "claude-sonnet-5-5"}
             BS.write(c, 'ops', config)
         if mode in ("absent", "uninstalled"):
-            ready = json.loads(c.execute("SELECT readiness FROM runners WHERE id=?", (m["runner_id"],)).fetchone()[0])
+            ready = json.loads(c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (m["runner_id"],)).fetchone()[0])
             if mode == "absent":
                 ready["runtimes"].pop("codex")
             else:
                 ready["runtimes"]["codex"]["installed"] = False
-            c.execute("UPDATE runners SET readiness=? WHERE id=?", (encode(ready), m["runner_id"]))
+            c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (encode(ready), m["runner_id"]))
         if mode == "incomplete_named":
             config = BS.read(c, 'ops')
             config["fallback"] = {"harness": "claude"}
@@ -940,10 +940,10 @@ def test_automatic_subscription_fallback_precedes_gateway(api, monkeypatch):
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     give(api, m, "codex", sid)
     with api.app.state.store.transaction() as c:
-        ready = json.loads(c.execute("SELECT readiness FROM runners WHERE id=?", (m["runner_id"],)).fetchone()[0])
+        ready = json.loads(c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (m["runner_id"],)).fetchone()[0])
         ready["isolated"] = True
         ready["runtimes"]["pi"] = {"installed": True, "authenticated": "missing"}
-        c.execute("UPDATE runners SET readiness=? WHERE id=?", (encode(ready), m["runner_id"]))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (encode(ready), m["runner_id"]))
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     assert turn["config"].get("gateway_fallback")
@@ -992,7 +992,7 @@ def test_live_primary_survives_unused_automatic_login_changes_but_active_fallbac
     on(api, "ops", "claude", "claude-sonnet-5-5")
     m = machine(api, signed_in=True)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capabilities=? WHERE id=?",
+        c.execute("UPDATE runner_states SET capabilities=? WHERE runner_id=?",
                   (encode([MS.CAPABILITY, "model_subscription_activation_v1"]), m["runner_id"]))
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     give(api, m, "codex", sid)
@@ -1036,7 +1036,7 @@ def test_automatic_login_is_rechecked_at_activation(api, blocked):
     on(api, "ops", "claude", "claude-sonnet-5-5")
     m = machine(api, signed_in=True)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capabilities=? WHERE id=?",
+        c.execute("UPDATE runner_states SET capabilities=? WHERE runner_id=?",
                   (encode([MS.CAPABILITY, "model_subscription_activation_v1"]), m["runner_id"]))
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     give(api, m, "codex", sid)
@@ -1063,7 +1063,7 @@ def test_upfront_values_keep_restart_fence_for_legacy_automatic_and_new_named_fa
     give(api, m, "codex", sid)
     if named:
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE runners SET capabilities=? WHERE id=?",
+            c.execute("UPDATE runner_states SET capabilities=? WHERE runner_id=?",
                       (encode([MS.CAPABILITY, MS.ACTIVATION_CAPABILITY]), m["runner_id"]))
             config = BS.read(c, 'ops')
             config["fallback"] = {"harness": "codex", "model": "gpt-6.1-sol"}

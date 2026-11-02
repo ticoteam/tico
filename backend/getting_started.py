@@ -70,7 +70,7 @@ def change_state(c, who, body):
 # ------------------------------------------------------------------ live checks
 def _online_runners(c):
     since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
-    return c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL "
+    return c.execute("SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL "
                      "AND last_seen_at>? ORDER BY last_seen_at DESC", (since,)).fetchall()
 
 

@@ -43,7 +43,7 @@ def test_busy_install_routes(api, monkeypatch):
                 c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE id=?", (f'attempt-{i}', mid))
         # Distinct task lanes leave real work for concurrent claims. The heartbeat
         # reports every checkout, as a busy runner does, rather than an empty inventory.
-        c.execute('UPDATE runners SET capacity=200,capabilities=? WHERE id=?',
+        c.execute('UPDATE runner_states SET capacity=200,capabilities=? WHERE runner_id=?',
                   (encode([execution.LANES, execution.ROOTS]), computer['runner_id']))
         for i in range(197, 200):
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "

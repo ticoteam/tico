@@ -182,9 +182,9 @@ class Reads:
         from .shared_bots import _json, source_of
         self.c = c
         bots = list(dict.fromkeys(bots))
-        self.configs = self._rows(f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN ({{}})', bots)
+        self.configs = self._rows(f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN ({{marks}})', bots)
         sources = {source_of(_json(row['config'])) for row in self.configs.values()} - {''} - set(self.configs)
-        self.configs.update(self._rows(f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN ({{}})', sorted(sources)))
+        self.configs.update(self._rows(f'SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN} WHERE bot IN ({{marks}})', sorted(sources)))
         self.chosen = {bot: [] for bot in bots}
         for part in H.chunks(bots):
             for r in c.execute('SELECT bot,full_name,access FROM bot_repo_access WHERE bot IN (%s) ORDER BY bot,full_name'
@@ -198,9 +198,10 @@ class Reads:
         self._enabled = self._bot_repos = self._all = None
 
     def _rows(self, sql, keys):
+        """`sql` names its IN list `{marks}` (it may hold other braces: the declaration's SQL does)."""
         out = {}
         for part in H.chunks(keys):
-            out.update((r[0], r) for r in self.c.execute(sql.format(','.join('?' * len(part))), part))
+            out.update((r[0], r) for r in self.c.execute(sql.replace('{marks}', ','.join('?' * len(part))), part))
         return out
 
     def enabled(self, name):

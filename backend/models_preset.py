@@ -173,7 +173,7 @@ def as_served(c, bot, ready, check, settings=None):
 def computer_of(c, bot):
     """The readiness document of the computer `bot` is on, or {}."""
     from .store import readiness_document
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
     return readiness_document(row[0]) if row else {}
 
@@ -201,7 +201,7 @@ def card(c, settings=None):
     if of(record) != RECOMMENDED:
         return None
     documents = [readiness_document(row[0]) for row in
-                 c.execute("SELECT readiness FROM runners WHERE revoked_at IS NULL ORDER BY id").fetchall()]
+                 c.execute("SELECT readiness FROM runners_with_state WHERE revoked_at IS NULL ORDER BY id").fetchall()]
     if all(any(signed_in(d, runtime) for d in documents) for runtime in SUBSCRIPTION_RUNTIMES):
         return None
     lines = [SIGN_IN_LINE] + ([] if any(runs_gateway(d) for d in documents) else [NOT_ISOLATED_LINE])

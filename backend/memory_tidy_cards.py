@@ -70,7 +70,7 @@ SUMMARY_FIELDS = ('id', 'bot', 'reviewer', 'memory_commit', 'model', 'cost_usd',
 def ready_runner(c, bot):
     if c is None:
         return None
-    row = c.execute("SELECT r.id,r.capabilities FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.id,r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
     return row['id'] if row and 'memory_tidy_keep_v1' in json.loads(row['capabilities']) else None
 
