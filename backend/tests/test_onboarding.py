@@ -177,6 +177,44 @@ def test_setup_lays_out_each_picked_role_once_as_a_recruiting_seat_and_creates_n
     assert _states(api)["botops"] == _states(api)["coo"] == "active"     # the built-ins work from day one
 
 
+def test_the_default_marketing_chart_hires_the_writer_first_and_moves_it_under_the_head_when_the_head_is_hired(environment):
+    """ticket e9c84fc5: setup's Marketing chart is Content Marketer under Head of Marketing, which reports to the owner.
+    While the head's seat is still Recruiting, hiring the writer used to fail with "Reports-to bot was not found". Now the
+    writer is hired under the owner and says so until the head is hired; hiring the head moves it under the new bot."""
+    api = environment(catalog_dir=Settings.catalog_dir)
+    machine(api)
+    picks = {"head-of-marketing": {"template": "marketing-lead", "display_name": "Head of Marketing",
+                                   "reports_to": "human:morgan"},
+             "content-marketer": {"template": "content", "display_name": "Content Marketer",
+                                  "reports_to": "head-of-marketing"}}
+    assert draft(api, selected=picks).status_code == 200
+    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    head, = [seat for seat in seats(api) if seat["title"] == "Head of Marketing"]
+    writer, = [seat for seat in seats(api) if seat["title"] == "Content Marketer"]
+    assert head["reports_to"] == "human:morgan" and writer["reports_to"] == "seat:" + head["id"]
+
+    def recruit_and_hire(seat, template):
+        offered = api.post(f"/api/v2/seats/{seat['id']}/recruit", json={}, headers=signed_in())
+        assert offered.status_code == 200, offered.text
+        assert template in [candidate["template"] for candidate in offered.json()["candidates"]]
+        hired = api.post(f"/api/v2/seats/{seat['id']}/hire", json={"template": template}, headers=signed_in())
+        assert hired.status_code == 200, hired.text
+        return hired.json()
+
+    def definition_reports_to(hired):
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (hired["bot"],)).fetchone()[0]
+
+    assert api.get(f"/api/v2/seats/{writer['id']}", headers=signed_in()).json()["reports_now"]["until"] == "Head of Marketing"
+    writing = recruit_and_hire(writer, "content")
+    assert writing["reports_to"] == "human:morgan" and definition_reports_to(writing) == "human:morgan"
+    leading = recruit_and_hire(head, "marketing-lead")
+    assert definition_reports_to(leading) == "human:morgan"
+    assert definition_reports_to(writing) == leading["bot"]          # moved when the head was hired, as placed
+    assert seats(api) == []
+
+
 def test_the_inbox_manager_turned_on_in_setup_is_a_message_bot_linked_to_the_owner_not_a_seat(environment):
     """A message bot (`kind: helper`) serves one person and is never on the chart: setup makes the bot, reporting to
     the owner and linked to their mailbox (docs/starter-bots.md), while a role picked beside it is still a seat."""
