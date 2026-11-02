@@ -1057,6 +1057,14 @@ def guard_write(c, who, path, auth):
         raise Problem("privacy", PRIVATE_MEETING_REFUSAL, 403)
     if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run"):
         return
+    native = re.fullmatch(r"/api/v2/threads/([^/]+)/messages", path)
+    if native:
+        # The native message route: admitted only into the run's own private task thread (private_thread_destination).
+        from . import threads
+        thread = threads.thread_row(c, native[1])
+        if thread is None:
+            raise Problem("not_found", "Thread not found", 404)
+        return private_thread_destination(c, who, thread)
     if path == "/api/v2/task-questions":
         return              # a private task of its own, to a person question_party lets read the run's work (media.py)
     if path.startswith(("/api/v2/files/", "/api/v2/messages",
@@ -1076,6 +1084,23 @@ def guard_write(c, who, path, auth):
         if counsel.run_read(c, who):
             return          # Counsel's suggestions from its own read task; the route checks each (counsel.private_suggestion)
     raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
+
+
+PRIVATE_THREAD_REFUSAL = "Private task work posts only in its own private task's thread"
+
+
+def private_thread_destination(c, who, thread):
+    """A private run's write into a thread (a post or an edit) stays in its own private task's thread: the root's task
+    is the one private task the run carries, and no private meeting. Thread readers of a task thread are the readers of
+    its task, so nothing reaches anyone who cannot read the run's work. Refused otherwise. One check for the native
+    message route (guard_write) and for an edit (threads.edit_message). A run that is not private, or no run, passes."""
+    if who is None or not getattr(who, "attempt_id", None) or not private_execution(c, who):
+        return
+    root = H.conversation(c, thread.get("root_id") or thread["id"]) or thread
+    own = root.get("task_id")
+    carried = {tid for tid in attempt_tasks(c, who.attempt_id) if H.task_private(c, _task(c, tid))}
+    if not own or carried != {own} or private_meetings(c, meeting_sources(c).attempt(who.attempt_id)):
+        raise Problem("privacy", PRIVATE_THREAD_REFUSAL, 403)
 
 
 def tag_readable(c, who, row):

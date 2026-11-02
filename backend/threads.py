@@ -326,6 +326,7 @@ def ensure(c):
             continue            # built by migrate, after the backfill (building them first is slow, and it stalls)
         c.execute(statement)
     _scrub_audits(c)
+    _neutral_titles(c)
 
 
 AUDIT_SCRUB_KEY = "threads-audit-scrub"
@@ -2290,6 +2291,47 @@ def sub_thread_title(body):
     return cut.rstrip(" ,.;:-") + "…"
 
 
+def sub_thread_title_for(message):
+    """The title a new sub-thread of `message` is stored with. A parent some readers of its thread may not read (a
+    restricted message, or one kept for its old readers) gives no title: the stored title would show its first line to
+    everyone who reads the sub-thread, through every read path."""
+    if message.get("restricted") or message.get("legacy_audience"):
+        return ""
+    return sub_thread_title(message.get("body"))
+
+
+def _derived_title(c, message_id, title):
+    """Whether `title` is a sub-thread title its parent message gives: that message's first line, now or in an earlier
+    revision of it (a sub-thread keeps the title it was made with after an edit)."""
+    lines = {sub_thread_title(body) for (body,) in c.execute(
+        "SELECT substr(body, 1, 2000) FROM messages WHERE id=? UNION ALL SELECT substr(body, 1, 2000) FROM "
+        "message_revisions WHERE message_id=? AND body IS NOT NULL", (message_id, message_id))}
+    return title in lines
+
+
+def _shown_title(c, v, row):
+    """A thread's stored title as the viewer may read it. A title that is its parent message's first line shows only to
+    a viewer who reads that parent message; any other title is the thread's own and shows as stored."""
+    title = row.get("subject") or ""
+    parent_id = row.get("parent_message_id")
+    if not title or not parent_id or not _derived_title(c, parent_id, title):
+        return title
+    parent = H.message(c, parent_id, include_deleted=True)
+    return title if v is not None and parent and message_readable(c, v, parent) else ""
+
+
+def _neutral_titles(c):
+    """Stored sub-thread titles that are their parent's first line, where that parent is hidden from some readers (a
+    restricted message, or one with a legacy audience), are cleared: a stored title reaches SQL and search too. Run on
+    every start and after the migration's backfill, which sets those flags. Idempotent."""
+    rows = c.execute("SELECT s.id, s.subject, s.parent_message_id FROM conversations s JOIN messages m "
+                     "ON m.id=s.parent_message_id WHERE COALESCE(s.subject,'')<>'' AND (m.restricted<>0 OR "
+                     "m.legacy_audience IS NOT NULL)").fetchall()
+    for thread_id, title, parent_id in rows:
+        if _derived_title(c, parent_id, title):
+            c.execute("UPDATE conversations SET subject='' WHERE id=?", (thread_id,))
+
+
 def sub_thread(c, principal, parent_message_id):
     """The message's sub-thread, made if it has none. Two starts at once make one: the loser reads the winner's row
     (the parent_message_id index is unique)."""
@@ -2306,7 +2348,7 @@ def sub_thread(c, principal, parent_message_id):
     import sqlite3
     try:
         c.execute("SAVEPOINT threads_sub_thread")
-        row = _insert_thread(c, actor, title=sub_thread_title(parent_message.get("body")), audience=None,
+        row = _insert_thread(c, actor, title=sub_thread_title_for(parent_message), audience=None,
                              parent=parent, parent_message_id=parent_message_id,
                              kind=parent.get("kind") or "chat", owner_actor=None)
         for outside in _outside(c, root_of(c, parent)["id"]):        # an outside destination follows its root's replies
@@ -2950,9 +2992,18 @@ def edit_message(c, principal, message_id, body):
     thread = thread_row(c, message["conversation_id"])
     if v is not None and not can_post(c, v, thread):
         raise Problem("forbidden", "You can read this thread but not post in it", 403)
+    # A private run's edit may only put its words in its own private task's thread (the same check as its post): a
+    # company message it wrote earlier cannot carry them. The edit keeps the run's provenance: the message is restricted
+    # (its per-message check applies) and the event names the run.
+    from . import task_privacy
+    private = v is not None and task_privacy.private_execution(c, v.who)
+    if private:
+        task_privacy.private_thread_destination(c, v.who, thread)
+        c.execute("UPDATE messages SET restricted=1 WHERE id=?", (message_id,))
     H.path_mentioned(c, actor, "message", text, thread.get("task_id"))
     revision, _, warnings = _revise(c, message, actor, body=text)
-    _event(c, actor, "message.edited", message_id, {"thread": thread["id"], "revision": revision})
+    _event(c, actor, "message.edited", message_id, {"thread": thread["id"], "revision": revision,
+                                                     **({"attempt": v.who.attempt_id} if private else {})})
     _audit(c, actor, "message:" + message_id, _audited(message, message.get("revision")), _audited(text, revision))
     edited = H.message(c, message_id)
     return {**edited, "warnings": warnings} if warnings else edited
@@ -3034,7 +3085,7 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None):
     row = thread_row(c, row)
     root = root_of(c, row)
     path = [p for p in str(row.get("path") or f"/{row['id']}/").split("/") if p]
-    out = {"id": row["id"], "title": row.get("subject") or "", "audience": audience_of(root),
+    out = {"id": row["id"], "title": _shown_title(c, v, row), "audience": audience_of(root),
            "audience_group_id": root.get("audience_group_id"), "owner_actor": root.get("owner_actor"),
            "parent_id": row.get("parent_id"), "parent_message_id": row.get("parent_message_id"),
            "root_id": row.get("root_id") or row["id"], "path": path, "kind": row.get("kind"),
@@ -3068,17 +3119,20 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None):
     return out
 
 
-def breadcrumb(c, row):
+def breadcrumb(c, v, row):
+    """The thread's path from its root, each title as `v` may read it (`_shown_title`)."""
+    v = _as_viewer(v)
     ids = [p for p in str(row.get("path") or f"/{row['id']}/").split("/") if p]
-    names = {r["id"]: r["subject"] or "" for r in c.execute(
-        "SELECT id, subject FROM conversations WHERE id IN (%s)" % ",".join("?" * len(ids)), ids)} if ids else {}
+    names = {r["id"]: _shown_title(c, v, dict(r)) for r in c.execute(
+        "SELECT id, subject, parent_message_id FROM conversations WHERE id IN (%s)" % ",".join("?" * len(ids)), ids)} \
+        if ids else {}
     return [{"id": i, "title": names.get(i, "")} for i in ids]
 
 
 def get(c, v, thread_id):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
-    return {**view(c, v, row), "breadcrumb": breadcrumb(c, row)}
+    return {**view(c, v, row), "breadcrumb": breadcrumb(c, v, row)}
 
 
 def _message_out(m):
@@ -3275,7 +3329,7 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
         size += bytes_of
         pages.append(rows_of)
     next_cursor = pages[-1][0]["seq"] if more and pages else None
-    return {"thread": {**view(c, v, row), **_earlier(c, v, row)}, "breadcrumb": breadcrumb(c, row),
+    return {"thread": {**view(c, v, row), **_earlier(c, v, row)}, "breadcrumb": breadcrumb(c, v, row),
             "messages": [r for rows_of in reversed(pages) for r in rows_of], "next_cursor": next_cursor}
 
 
@@ -3585,6 +3639,8 @@ def _migrate(c):
         c.execute("INSERT INTO registry_metadata(key,value_json) VALUES(?,?)",
                   (MIGRATION_KEY, json.dumps({"at": now, "seq": c.execute(
                       "SELECT value FROM sequences WHERE name='messages'").fetchone()[0]})))
+    with _chunk(c):
+        _neutral_titles(c)      # the backfill sets the flags that decide a sub-thread's title
 
 
 def _backfill_messages(c, install, now):
