@@ -150,3 +150,48 @@ def test_a_connected_book_backfills_from_quickbooks_and_its_pnl_reads_by_locatio
     queried = {str(call["query"].get("query", "")).split()[3] for call in calls
                if call["method"] == "GET" and "query" in call["query"] and "FROM" in call["query"].get("query", "")}
     assert {"Item", "Department", "Class"} <= queried
+
+
+def test_an_item_made_here_is_created_in_quickbooks_and_given_its_id(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    made = client.send("item.create", {"name": "Gadget", "kind": "service", "active": True, "income": "Account:12",
+                                       "sku": "", "price": None, "day": "2026-10-10"}, "item:gadget")
+    assert made.ok and made.external_id, made
+    stored = _read(fake_quickbooks, "SELECT * FROM Item STARTPOSITION 1 MAXRESULTS 10")["QueryResponse"]["Item"]
+    assert [row["Name"] for row in stored] == ["Widget", "Gadget"]
+
+
+def test_an_update_names_its_record_moves_its_sync_token_and_a_stale_one_is_refused(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    body = {"ext": "Item:40", "revision": "0", "name": "Widget Pro", "kind": "service", "active": True,
+            "income": "", "sku": "", "price": None}
+    first = client.send("item.update", body, "item:update-1")
+    assert first.ok and first.external_id == "40" and first.revision == "1", first
+    stale = client.send("item.update", body, "item:update-2")
+    assert not stale.ok and stale.final, stale
+    stored = _read(fake_quickbooks, "SELECT * FROM Item STARTPOSITION 1 MAXRESULTS 10")["QueryResponse"]["Item"]
+    assert [(row["Id"], row["Name"], row["SyncToken"]) for row in stored] == [("40", "Widget Pro", "1")]
+
+
+def test_a_delete_removes_the_record_it_names_and_creates_no_other(fake_quickbooks):
+    _fake(fake_quickbooks, "POST", "/_fake/seed", {**SEED, "Bill": [{"Id": "80", "SyncToken": "0",
+                                                                    "TxnDate": "2026-10-10", "Line": []}]})
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    gone = client.send("bill.void", {"ext": "Bill:80", "revision": "0"}, "bill:void-80")
+    assert gone.ok, gone
+    bills = _read(fake_quickbooks, "SELECT * FROM Bill STARTPOSITION 1 MAXRESULTS 10")["QueryResponse"]
+    assert bills.get("Bill", []) == []
+
+
+def test_a_query_answers_only_the_rows_its_where_clause_names(fake_quickbooks):
+    inactive = {"Id": "41", "SyncToken": "0", "Name": "Bad debt", "Type": "NonInventory", "Active": False}
+    _fake(fake_quickbooks, "POST", "/_fake/seed", {**SEED, "Item": [*SEED["Item"], inactive]})
+    named = _read(fake_quickbooks, "SELECT * FROM Item WHERE Active IN (true,false) AND Name = 'Bad debt' "
+                                   "MAXRESULTS 10")["QueryResponse"]["Item"]
+    assert [row["Id"] for row in named] == ["41"]
+    widget = _read(fake_quickbooks, "SELECT * FROM Item WHERE Name = 'Widget' MAXRESULTS 10")["QueryResponse"]["Item"]
+    assert [row["Id"] for row in widget] == ["40"]
+    count = _read(fake_quickbooks, "SELECT COUNT(*) FROM Item WHERE Name = 'Widget'")["QueryResponse"]["totalCount"]
+    assert count == 1

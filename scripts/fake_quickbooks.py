@@ -1,6 +1,6 @@
 """A stand-in for QuickBooks Online's API for end-to-end runs on a developer's computer: stdlib only, on 127.0.0.1, in
-memory. It answers the calls backend/finance/qbo.py makes (query paging and counts, CDC, creates by RequestId, and the
-journal delete), in the shapes that client parses. Point Tico at it with TICO_QUICKBOOKS_BASE=http://127.0.0.1:<port>.
+memory. It answers the calls backend/finance/qbo.py makes (query paging, WHERE and counts, CDC, creates and updates by
+RequestId and Id, deletes and voids with SyncToken), in the shapes that client parses. Point Tico at it with TICO_QUICKBOOKS_BASE=http://127.0.0.1:<port>.
 Nothing here reaches the network.
 
 Control endpoints under /_fake/ are not QuickBooks':
@@ -17,17 +17,20 @@ Control endpoints under /_fake/ are not QuickBooks':
 """
 import argparse
 import json
+import re
 import sys
 import threading
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Item", "Department", "Class", "PurchaseOrder", "Estimate",
             "Invoice", "Bill", "BillPayment", "Payment")
 CREATE = {"account": "Account", "vendor": "Vendor", "customer": "Customer", "journalentry": "JournalEntry",
           "purchaseorder": "PurchaseOrder", "estimate": "Estimate", "invoice": "Invoice", "bill": "Bill",
-          "billpayment": "BillPayment", "payment": "Payment"}
+          "billpayment": "BillPayment", "payment": "Payment", "item": "Item", "department": "Department",
+          "creditmemo": "CreditMemo"}
 LOCK = threading.Lock()
 STATE: dict[str, object] = {}
 
@@ -43,9 +46,17 @@ def _rows(entity: str) -> list[dict[str, object]]:
     return STATE["books"].setdefault(entity, [])  # type: ignore[union-attr,return-value]
 
 
-def _fault(message: str) -> tuple[int, dict[str, object]]:
-    return 400, {"Fault": {"Error": [{"Message": message, "Detail": message, "code": "2010"}],
+def _fault(message: str, code: str = "2010") -> tuple[int, dict[str, object]]:
+    return 400, {"Fault": {"Error": [{"Message": message, "Detail": message, "code": code}],
                            "type": "ValidationFault"}}
+
+
+def _stale() -> tuple[int, dict[str, object]]:
+    return _fault("Stale Object Error: the record changed after it was read (SyncToken)", "5010")
+
+
+def _missing() -> tuple[int, dict[str, object]]:
+    return _fault("Object Not Found", "610")
 
 
 def _balanced(lines: object) -> bool:
@@ -61,15 +72,58 @@ def _balanced(lines: object) -> bool:
     return total == 0
 
 
+def _conditions(sql: str) -> list[tuple[str, str, str]]:
+    """The WHERE conditions of a query as (field, operator, value text), joined by AND: `Name = 'x' AND Active IN (...)`."""
+    found = re.search(r"\sWHERE\s+(.*?)(?=\s+STARTPOSITION\s|\s+MAXRESULTS\s|$)", sql)
+    if found is None:
+        return []
+    out: list[tuple[str, str, str]] = []
+    for part in re.split(r"\s+AND\s+", found.group(1).strip()):
+        clause = re.fullmatch(r"(\w+)\s+(=|IN)\s+(.+)", part)
+        if clause is None:
+            raise ValueError(part)
+        out.append((clause[1], clause[2], clause[3]))
+    return out
+
+
+def _value(text: str) -> Any:
+    text = text.strip()
+    if text.startswith("(") and text.endswith(")"):
+        return [_value(x) for x in text[1:-1].split(",")]
+    if len(text) >= 2 and text[0] == text[-1] == "'":
+        return text[1:-1].replace("\\'", "'")
+    return {"true": True, "false": False}.get(text, text)
+
+
+def _text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _matches(row: dict[str, object], field: str, op: str, wanted: Any) -> bool:
+    have = _text(row.get(field))
+    if op == "IN":
+        return have in {_text(x) for x in wanted}
+    return have == _text(wanted)
+
+
 def query(sql: str) -> tuple[int, dict[str, object]]:
     parts = sql.split()
     entity = parts[3]
+    try:
+        wanted = [(field, op, _value(text)) for field, op, text in _conditions(sql)]
+    except ValueError as e:
+        return _fault(f"not a query the fake answers: {e}")
+    rows = [row for row in _rows(entity) if all(_matches(row, f, op, value) for f, op, value in wanted)]
     if parts[1] == "COUNT(*)":
-        return 200, {"QueryResponse": {"totalCount": len(_rows(entity))}}
+        return 200, {"QueryResponse": {"totalCount": len(rows)}}
     start = int(parts[parts.index("STARTPOSITION") + 1]) if "STARTPOSITION" in parts else 1
-    size = int(parts[parts.index("MAXRESULTS") + 1]) if "MAXRESULTS" in parts else 1000
-    rows = _rows(entity)[start - 1:start - 1 + size]
-    return 200, {"QueryResponse": {entity: rows, "startPosition": start, "maxResults": len(rows)}}
+    size = int(parts[parts.index("MAXRESULTS") + 1]) if "MAXRESULTS" in parts else 100      # QuickBooks' default page
+    page = rows[start - 1:start - 1 + size]
+    return 200, {"QueryResponse": {entity: page, "startPosition": start, "maxResults": len(page)}}
 
 
 def cdc(entities: str) -> tuple[int, dict[str, object]]:
@@ -109,12 +163,14 @@ def _complete(made: dict[str, object], entity: str) -> None:
 def create(path: str, body: dict[str, object], request_id: str, operation: str) -> tuple[int, dict[str, object]]:
     if request_id and request_id in STATE["by_request"]:  # type: ignore[operator]
         return STATE["by_request"][request_id]  # type: ignore[index,return-value]
-    if path == "journalentry" and operation == "delete":
-        answer = _delete(str(body.get("Id", "")), str(body.get("SyncToken", "")))
+    entity = CREATE.get(path)
+    if entity is None:
+        return 404, {"Fault": {"Error": [{"Message": "no such entity"}], "type": "ValidationFault"}}
+    if operation in ("delete", "void"):
+        answer = _remove(entity, str(body.get("Id", "")), str(body.get("SyncToken", "")), operation)
+    elif body.get("Id"):
+        answer = _update(entity, body)
     else:
-        entity = CREATE.get(path)
-        if entity is None:
-            return 404, {"Fault": {"Error": [{"Message": "no such entity"}], "type": "ValidationFault"}}
         if entity == "JournalEntry" and not _balanced(body.get("Line")):
             return _fault("Journal entry does not balance")
         made = {**body, "Id": str(STATE["next_id"]), "SyncToken": "0"}
@@ -127,15 +183,45 @@ def create(path: str, body: dict[str, object], request_id: str, operation: str) 
     return answer
 
 
-def _delete(entry_id: str, token: str) -> tuple[int, dict[str, object]]:
-    rows = _rows("JournalEntry")
+def _revision(row: dict[str, object]) -> str:
+    return str(row.get("SyncToken", "0"))
+
+
+def _next_revision(row: dict[str, object]) -> str:
+    return str(int(_revision(row)) + 1)
+
+
+def _update(entity: str, body: dict[str, object]) -> tuple[int, dict[str, object]]:
+    """A write that names a record's Id updates it (QuickBooks does not make a second one). Its SyncToken must be the
+    record's, or the write is stale; a sparse write sets only the fields it names, and the record moves to its next
+    SyncToken."""
+    for row in _rows(entity):
+        if str(row.get("Id")) != str(body["Id"]):
+            continue
+        if _revision(row) != str(body.get("SyncToken", "")):
+            return _stale()
+        row.update({k: v for k, v in body.items() if k not in ("Id", "SyncToken", "sparse")})
+        row["SyncToken"] = _next_revision(row)
+        return 200, {entity: dict(row)}
+    return _missing()
+
+
+def _remove(entity: str, entry_id: str, token: str, operation: str) -> tuple[int, dict[str, object]]:
+    """A delete removes the record it names (and answers it as deleted). A void keeps the record with a zero total, as
+    QuickBooks does. Either needs the record's current SyncToken."""
+    rows = _rows(entity)
     for row in rows:
-        if str(row["Id"]) == entry_id:
-            if str(row["SyncToken"]) != token:
-                return _fault("Stale object: SyncToken does not match")
-            rows.remove(row)
-            return 200, {"JournalEntry": {"Id": entry_id, "status": "Deleted"}}
-    return _fault("Object not found")
+        if str(row.get("Id")) != entry_id:
+            continue
+        if _revision(row) != token:
+            return _stale()
+        if operation == "void":
+            row["TotalAmt"] = 0
+            row["SyncToken"] = _next_revision(row)
+            return 200, {entity: dict(row)}
+        rows.remove(row)
+        return 200, {entity: {"Id": entry_id, "status": "Deleted"}}
+    return _missing()
 
 
 class Handler(BaseHTTPRequestHandler):
