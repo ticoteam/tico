@@ -293,7 +293,9 @@ def _previous(points):
     """The period before the latest, in words, so a stat reads without its chart."""
     if len(points) < 2 or points[-2][3] == "—":
         return ""
-    return f"vs {points[-2][3]} in {points[-2][0]}"
+    # A day in the period's name makes it a date, which reads "on Oct 29, 2026"; a month alone reads "in Sep 2026".
+    joiner = "on" if re.search(r"\b\d{1,2}\b", points[-2][0]) else "in"
+    return f"vs {points[-2][3]} {joiner} {points[-2][0]}"
 
 
 def _freshness(stat, year):
@@ -340,14 +342,15 @@ def _tile(stat, year):
 
 
 def _pnl(stats):
-    """P&L lines as one table, the last three periods any line reports."""
+    """P&L lines as one table, the last three periods any line reports. Period labels are short ("Oct"), so they can't
+    be sorted: the order is the series' own, with the longest series as the reference."""
+    series = [[_text(_map(p).get("period")) for p in _list(stat.get("series"))] for stat in stats]
     periods = []
-    for stat in stats:
-        for point in _list(stat.get("series")):
-            period = _text(_map(point).get("period"))
+    for labels in sorted(series, key=len, reverse=True):
+        for period in labels:
             if period and period not in periods:
                 periods.append(period)
-    periods = sorted(periods)[-3:]
+    periods = periods[-3:]
     head = "".join(f'<th scope="col">{_e(_short_period(p))}</th>' for p in periods)
     rows = []
     for stat in stats:
@@ -549,7 +552,7 @@ def page(view):
             '<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13"><rect x="3" y="7" width="10" height="7" rx="1.5"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path></svg>')
     stamp = _day(company.get("updated_at"))
     header = (f'<header><div class="top">{_brand(company)}<div class="tools">{tools}</div></div>'
-              f'<h1>{_e(mission or name)}</h1><div class="meta"><span class="badge">{mark}{_e(badge_label(view))}</span>'
+              f'<h1>{_e(mission or "Company updates")}</h1><div class="meta"><span class="badge">{mark}{_e(badge_label(view))}</span>'
               + (f'<span>Updated {_e(stamp)}</span>' if stamp else "") + "</div></header>")
     body = f'<div class="wrap">{header}{_stats(view, year)}{_updates(view, year)}{_footer()}</div>'
     title = f"{name}: {mission}" if name and mission else (name or mission)

@@ -175,12 +175,12 @@ def view_model(c, audience, stats, updates, next_before=None, badge="private", s
             "stats": clean_stats, "updates": clean_updates, "next_before": next_before}
 
 
-def _whole_stream(c, audience_id):
+def _whole_stream(c, audience_id, company_name=""):
     """Every published update for the audience, walking the stream's pages, up to what one static page may hold."""
     from . import editions
     found, before, size = [], None, 0
     while len(found) < MAX_PUBLIC_UPDATES:
-        batch = list(editions.stream(c, [audience_id], before=before, limit=STREAM_PAGE))
+        batch = list(editions.stream(c, [audience_id], before=before, limit=STREAM_PAGE, company_name=company_name))
         for update in batch:
             size += len(json.dumps(update, default=str))
             if size > MAX_PUBLIC_UPDATE_BYTES or len(found) >= MAX_PUBLIC_UPDATES:
@@ -210,7 +210,8 @@ def public_view(c, at, settings=None):
     stats = []
     if stats_module.board_approved(c, row["id"]) is True:
         stats = list((stats_module.project(c, row["id"], at) or {}).get("stats") or [])
-    updates = _whole_stream(c, row["id"])
+    company = settings or _settings_of_connection(c)
+    updates = _whole_stream(c, row["id"], company.company_name)     # the company's own updates carry its name, as on the board
     if not stats and not updates:
         return {}
     sources = _sources_of_stats(c, [s for s in stats if isinstance(s.get("id"), str)])

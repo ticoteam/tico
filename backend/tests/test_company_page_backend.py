@@ -1,6 +1,7 @@
 """The Company page's backend seams: what the mission discloses, the edge's route allowlist, and the switch's side effects.
 Acme is the fictional company. Each test stands for a way something could leave the install that the owner did not allow."""
 import json
+import re
 from datetime import datetime, timezone
 
 from backend import company
@@ -89,9 +90,39 @@ def test_a_public_board_yes_puts_the_public_page_up_when_it_is_recorded(page):  
         A.seed(c)
         S.set_transparency(c, OWNER, "open")
         D.set_rule(c, "human:ana", "public", "kpi", mode="show")
+    assert get(page.api, "company-page")["public_live"] is False     # open, but nothing approved to show yet
     page.decide(post(page.api, "audiences/board/stats/approval", {})["approval"])
     assert "board approved" not in page.rebuilds
     page.decide(post(page.api, "audiences/public/stats/approval", {})["approval"])
     assert page.rebuilds.count("board approved") == 1
     served = release._served(page.store.settings)
     assert [s["label"] for s in served["stats"]] == ["Revenue"]
+    assert get(page.api, "company-page")["public_live"] is True
+
+
+def test_the_pnl_keeps_the_series_order_and_the_last_three_periods_across_a_year_end():
+    """Period labels are short ("Oct"), so sorting them puts Aug after Jul and Oct in the middle. The table reads the
+    series' own order, and the last three of it are the ones shown."""
+    def line(label, periods):
+        return {"label": label, "group": "pnl", "series": [{"period": p, "display": p.upper()} for p in periods]}
+    months = ["Aug", "Sep", "Oct", "Nov"]
+    html = render._pnl([line("Revenue", months), line("Spend", months[1:])])
+    assert re.findall(r'<th scope="col">([^<]+)</th>', html) == ["Sep", "Oct", "Nov"]
+    assert "AUG" not in html
+    across = render._pnl([line("Revenue", ["Nov", "Dec", "Jan"])])
+    assert re.findall(r'<th scope="col">([^<]+)</th>', across) == ["Nov", "Dec", "Jan"]
+
+
+def test_a_public_update_names_the_company_as_the_board_does(page, monkeypatch):  # noqa: F811
+    """The public page and the board read one source the same way: the company's own name, not a fallback."""
+    from backend.company_page import editions as E
+    seen = []
+    real = E.stream
+
+    def spy(c, audience_ids, **kw):
+        seen.append(kw.get("company_name"))
+        return real(c, audience_ids, **kw)
+    monkeypatch.setattr(E, "stream", spy)
+    with page.store.transaction() as c:
+        release._whole_stream(c, "board", "Acme")
+    assert seen and seen[0] == "Acme"
