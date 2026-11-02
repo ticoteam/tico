@@ -183,6 +183,8 @@ a.th-who:hover{text-decoration:underline}
 
 @media (max-width:760px){
   .thread-page{max-width:none}
+  /* the title needs the room: the mark before it says private or public, and the phone icon says call */
+  .thv-aud,.thv-call-word{display:none}
   .th-msg{padding-left:calc(4px + var(--d) * 16px)}
   .th-sub::before{left:calc(var(--d) * 16px - 6px)}
   .th-subhead{margin-left:calc(4px + var(--d) * 16px)}

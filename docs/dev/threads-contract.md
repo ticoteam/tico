@@ -593,8 +593,18 @@ Thread view (`threads.view(c, viewer, row)`):
  "last_seq": 4411, "last_unread_seq": 4400,
  "home": {"actor": "bot:legal"},                 // audience=home only
  "me": {"member": true, "following": true, "notify": "live", "last_read_seq": 4400, "unread": 3,
-        "activity": true, "can_post": true, "can_manage": true}}
+        "activity": true, "can_post": true, "can_manage": true},
+ "dm_with": [{"actor": "human:bea", "name": "Bea"}], "dm_with_count": 1,   // DM roots: the others, at most 4 named
+ "new_at": {"thread_id": "t_sub", "message_id": "m_1"}}                    // list rows only; see below
 ```
+
+`threads` and `dms` are ranked and paged apart, up to `limit` rows each; `next_cursor` carries a position for each.
+A list row is always a root. `me.unread` and `me.activity` sum its open subtree. `new_at` says where to open it when
+what is new starts in a sub-thread: the oldest unread message or, with nothing unread, the sub-thread with the newest
+activity (`message_id` null). A row with an open Needs attention item points at the oldest item when a sub-thread holds
+it. No `new_at`: open the root. Following a sub-thread lists its root. `dm_with` names only those the reader may be told
+about: everyone, for someone in the DM; only the teammates they may see, for anyone else. `name` can be empty for a bot
+with no display name.
 
 | Route | Service function |
 |---|---|

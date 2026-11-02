@@ -308,7 +308,8 @@ def needs_attention(ctx, s):
 def thread_rows(ctx, limit):
     """The reader's unread threads, from core's sidebar (`threads.sidebar`, docs/dev/threads-contract.md §10), most
     recent first: [{id, title, unread, activity, updated}]. A root row speaks for its subtree, and other bots' posts
-    (activity alone) are not unread. The sidebar lists only threads the reader may read."""
+    (activity alone) are not unread. The sidebar lists only threads the reader may read. A DM's row says who it is with
+    and a row with something new in a sub-thread says where, as the sidebar's own rows do."""
     from . import threads
     viewer = threads.viewer(ctx.auth, ctx.who)
     data = threads.sidebar(ctx.c, viewer, limit=50)
@@ -318,7 +319,8 @@ def thread_rows(ctx, limit):
         if t.get("id") and me.get("unread") and t["id"] not in {r["id"] for r in rows}:
             rows.append({"id": t["id"], "title": t.get("title") or "", "unread": int(me.get("unread") or 0),
                          "activity": bool(me.get("activity")), "updated": t.get("last_message_at"),
-                         "seq": t.get("activity_seq") or t.get("last_seq") or 0})
+                         "seq": t.get("activity_seq") or t.get("last_seq") or 0, "audience": t.get("audience"),
+                         **{k: t[k] for k in ("dm_with", "dm_with_count", "new_at") if t.get(k) is not None}})
     rows.sort(key=lambda r: r["seq"], reverse=True)
     return [{k: v for k, v in r.items() if k != "seq"} for r in rows[:limit]]
 

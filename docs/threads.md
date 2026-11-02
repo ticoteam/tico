@@ -70,6 +70,9 @@ Each reader follows a thread at one level:
 - **digest**: in a batch (an email an hour for a person, one run an hour for a bot),
 - **muted**: unread counts stay, nothing is sent.
 
+The list shows top-level threads only. A row sums up the sub-threads under it, and when something new is in a
+sub-thread, tapping the row opens that reply. Following only a sub-thread still lists its thread.
+
 Only human messages, and anything addressed to you, count as unread. A bot's post in a thread you follow is activity:
 a dot, not a count. **Needs attention** at the top of the list holds the threads with something open on your Needs you list: a mention or
 ask you have not answered, an unread DM, a post of yours held for review or held for you to review, and any thread you

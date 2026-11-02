@@ -198,15 +198,13 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   .bot-back-arrow{display:inline-flex;align-items:center;justify-content:center;order:0;flex:none;width:30px;height:32px;margin-left:-6px;border:0;background:none;color:var(--ink);font-size:28px;line-height:var(--lh-none);cursor:pointer}
   .bot-switch button{padding:5px 8px}
 }
-.bot-switch .bt-icon{display:none}
 @media (max-width:760px){
   .bot-top{flex-wrap:nowrap}
   #bot-tool-strip{display:none}               /* no room beside the name; the Tools card under More lists them */
   .bot-top>.bot-goal{display:none}            /* the Goals card leads More on a phone */
+  /* words, not icons: Home and DM look alike as icons, and these four are the way around a bot on a phone */
   .bot-top .bot-switch{margin-left:auto;border:0;background:none;padding:0;gap:0}
-  .bot-switch button{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;border-radius:8px}
-  .bot-switch .bt-label{display:none}
-  .bot-switch .bt-icon{display:inline;font-size:20px}
+  .bot-switch button{min-height:40px;padding:0 7px;border-radius:8px;font-size:var(--t-sm);white-space:nowrap}
   .bot-switch button.cur{background:var(--surface2);color:var(--ink)}
 }
 @media (max-width:760px){

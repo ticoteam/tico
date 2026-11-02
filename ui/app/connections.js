@@ -159,7 +159,7 @@ async function cnPeersSection(view) {
   let fed = {};
   const draw = () => {
     const f = fed.federation || {}, key = f.key;
-    keyLine.innerHTML = !f.gateway ? '<span class="muted">Connect the Tico Gateway first</span> · <a href="#/settings/gateway">Gateway</a>'
+    keyLine.innerHTML = !f.gateway ? '<a href="#/settings/gateway">Connect the Tico Gateway first</a>'
       : `<span class="muted">ID</span> <span class="mono" data-cn-install>${esc(f.install || '')}</span>
         <span class="muted">· Key</span> ${key ? `<span class="mono" data-cn-fingerprint>${esc(key.key_id)}</span>${
           key.registered ? '' : ' <button type="button" class="ghost small" data-cn-key>Register</button>'}`

@@ -236,6 +236,7 @@ function threadMenuOpen(view, button) {
   const items = [
     manage && ['rename', 'Rename'],
     manage && root && t.audience !== 'home' && !threadIsDm(t) && ['share', 'Who can read'],
+    manage && root && !['task', 'meeting'].includes(t.audience) && ['keep', 'Keep messages'],
     t.me?.following ? ['unfollow', 'Unfollow'] : ['follow', 'Follow'],
     ['notify', 'Notifications'],
     ['catchup', 'Catch up'],
@@ -251,6 +252,7 @@ function threadMenuOpen(view, button) {
         if (title == null || !title.trim()) return;
         view.thread = {...t, ...(await patch(path, {title: title.trim()}))};
       } else if (key === 'share') { threadShareOpen(view); return; }
+      else if (key === 'keep') { threadKeepOpen(view); return; }
       else if (key === 'notify') { threadNotifyOpen(view, button); return; }
       else if (key === 'catchup') { await threadCatchUp(t); return; }
       else if (key === 'earlier') { await threadEarlierOpen(view, view.id); return; }
@@ -302,6 +304,28 @@ function threadShareOpen(view) {
     try {
       const r = await patch(thvPath(t.id), {audience, audience_group_id: audience === 'team' ? form.elements.namedItem('group')?.value || null : null});
       view.thread = {...t, ...r}; threadsPut(view.thread); thvDraw(view);
+      dlg.close();
+    } catch (e) { form.querySelector('[data-status]').textContent = e.message; }
+  };
+  dlg.showModal();
+}
+
+// How long a thread keeps its messages (PATCH retention_days; null keeps them). A length set some other way stays listed.
+function threadKeepOpen(view) {
+  const t = view.thread, now = t.retention_days ?? '';
+  const lengths = [['', 'Keep forever'], [30, '30 days'], [90, '90 days'], [365, '1 year']];
+  if (!lengths.some(([days]) => days === now)) lengths.push([now, `${now} days`]);
+  const dlg = threadDialog('thread-keep', 'Keep messages');
+  dlg.innerHTML = `<form>${threadDialogHead('Keep messages')}<div class="dash-form"><select name="days" aria-label="Keep messages">${
+    lengths.map(([days, label]) => `<option value="${days}"${days === now ? ' selected' : ''}>${label}</option>`).join('')}</select></div>${threadDialogFoot('Save')}</form>`;
+  threadDialogWire(dlg);
+  const form = dlg.querySelector('form');
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const days = form.elements.namedItem('days').value;
+    try {
+      const r = await patch(thvPath(t.id), {retention_days: days ? Number(days) : null});
+      view.thread = {...t, retention_days: days ? Number(days) : null, ...r}; thvDraw(view);
       dlg.close();
     } catch (e) { form.querySelector('[data-status]').textContent = e.message; }
   };

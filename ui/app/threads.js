@@ -16,8 +16,9 @@ const threadHref = t => THREAD_ROUTE + encodeURIComponent(typeof t === 'string' 
 window.threadHref = threadHref;
 const threadIsDm = t => t?.audience === 'personal' || t?.audience === 'participants';
 const threadPrivate = t => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience);
-// The other members of a DM, newest server first; the viewer is left out.
-const threadOthers = t => (t?.members || []).map(m => typeof m === 'string' ? m : m?.actor).filter(a => a && a !== myActor());
+// The other people in a DM: `dm_with` on a thread view, or a members list read for it. The viewer is left out.
+const threadOthers = t => (t?.dm_with || (Array.isArray(t?.members) ? t.members : t?.members?.members) || [])
+  .map(m => typeof m === 'string' ? m : m?.actor).filter(a => a && a !== myActor());
 const actorGroup = a => String(a || '').startsWith('group:') ? String(a).slice(6) : '';
 const groupName = id => (S.orgGroups || []).find(g => g.id === id)?.name || titleCase(id);
 // A teammate's name for any actor: bot, person or group.
@@ -33,10 +34,16 @@ function threadTitle(t) {
   if (!t) return '';
   if (String(t.title || '').trim()) return String(t.title).trim();
   if (t.audience === 'home' && t.home?.actor) return actorName(t.home.actor);
-  const others = threadOthers(t);
-  if (others.length) return others.slice(0, 3).map(actorName).join(', ') + (others.length > 3 ? ` +${others.length - 3}` : '');
-  return t.parent_id ? 'Sub-thread' : 'Untitled';
+  const others = threadOthers(t), total = Number(t.dm_with_count) || others.length;
+  // The server's name, for someone in this DM the viewer's people list leaves out.
+  const name = a => t.dm_with?.find(m => m.actor === a)?.name || actorName(a);
+  if (others.length) return others.slice(0, 3).map(name).join(', ') + (total > 3 ? ` +${total - 3}` : '');
+  return t.parent_id ? 'Sub-thread' : threadIsDm(t) ? 'Direct message' : 'Untitled';
 }
+// Where a row opens: its root, or the sub-thread holding what is new (a reply there may be pages up the root's timeline).
+const threadRowHref = t => !t?.new_at?.thread_id ? threadHref(t)
+  : threadHref(t.new_at.thread_id) + (t.new_at.message_id ? '?m=' + encodeURIComponent(t.new_at.message_id) : '');
+window.threadRowHref = threadRowHref;
 // The mark before a title: the owner's avatar for a Home, the other member's for a DM, else public or private.
 function threadMarkHTML(t, size = 18) {
   if (t?.audience === 'home' && t.home?.actor) return actorAvatar(t.home.actor, size);
@@ -58,7 +65,7 @@ function threadRowHTML(t, {attention = false} = {}) {
   const title = threadTitle(t);
   const tail = n ? `<span class="nav-badge th-count" aria-label="${n} unread">${n > 99 ? '99+' : n}</span>`
     : threadActivity(t) ? '<span class="th-activity" title="Activity" aria-label="Activity"></span>' : '';
-  return `<li><a class="th-row${n ? ' unread' : ''}${attention ? ' attn' : ''}${cur ? ' cur' : ''}" href="${threadHref(t)}" data-thread="${esc(t.id)}"${cur ? ' aria-current="page"' : ''}>
+  return `<li><a class="th-row${n ? ' unread' : ''}${attention ? ' attn' : ''}${cur ? ' cur' : ''}" href="${esc(threadRowHref(t))}" data-thread="${esc(t.id)}"${cur ? ' aria-current="page"' : ''}>
     ${threadMarkHTML(t)}<span class="th-row-title">${esc(title)}</span>${attention ? '<span class="th-attn" title="Needs attention" aria-label="Needs attention"></span>' : ''}${tail}</a></li>`;
 }
 

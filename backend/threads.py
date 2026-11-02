@@ -1511,8 +1511,10 @@ def unsolicited_today(c, author, person):
                      (person, H.now()[:10], author)).fetchone()[0]
 
 
-def _dm_members(c, root):
-    members = [r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (root["id"],))]
+def _dm_members(c, root, rows=None):
+    members = (rows if rows is not None
+               else [r[0] for r in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (root["id"],))])
+    members = list(members)
     audience = audience_of(root)
     # A DM's member rows are all of it. A special room has none: its owner and its bot are its people.
     if audience == "personal" and root.get("room_key"):
@@ -2732,6 +2734,8 @@ def unread(c, v, thread_id, *, follower=None):
     return {"unread": n, "activity": True}
 
 
+# How many of a DM's other people a thread view names; a title shows three and counts the rest.
+DM_WITH_SHOWN = 4
 # The threads of a root that are not archived or closed, with the viewer's mark in each (`_subtree_mark`): what its row
 # in a list sums up.
 _SUBTREE = "conversations s LEFT JOIN thread_followers f ON f.thread_id=s.id AND f.actor={me} "
@@ -2746,7 +2750,9 @@ def _subtree_mark(c, v):
 
 def subtree_summaries(c, v, root_ids):
     """Per root, for this viewer, from the counters of its whole subtree (contract §5): {root id: {"unread",
-    "activity", "activity_seq", "last_message_at"}}. Asked of the rows a page lists, so its cost follows the page."""
+    "activity", "activity_seq", "last_message_at"}}, and `new_at` when what is new starts in a sub-thread: the oldest
+    unread message, else the sub-thread with the newest activity. A reply under an old parent may be pages up the root's
+    timeline, so a row opens the place itself. Asked of the rows a page lists, so its cost follows the page."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     out = {}
     subtree, mark = _SUBTREE.format(me="?"), _subtree_mark(c, v)
@@ -2757,12 +2763,21 @@ def subtree_summaries(c, v, root_ids):
                            f"AND {_SUBTREE_OPEN} GROUP BY s.root_id", (v.actor, *part)):
             out[r["root"]] = {"unread": 0, "activity": bool(r["active"]), "activity_seq": int(r["seq"] or 0),
                               "last_message_at": r["at"]}
-        for r in c.execute(f"SELECT s.root_id AS root, COUNT(*) AS n FROM {subtree}JOIN messages m ON "
+        for r in c.execute(f"SELECT s.root_id AS root, s.id AS thread, MAX(s.last_seq) FROM {subtree}WHERE s.root_id IN "
+                           f"({marks}) AND {_SUBTREE_OPEN} AND s.last_seq>{mark} GROUP BY s.root_id",
+                           (v.actor, *part)):
+            if r["thread"] != r["root"] and r["root"] in out:
+                out[r["root"]]["new_at"] = {"thread_id": r["thread"], "message_id": None}
+        # With one MIN in the select, SQLite takes the bare columns from that row: the oldest unread message.
+        for r in c.execute(f"SELECT s.root_id AS root, COUNT(*) AS n, MIN(m.seq), s.id AS thread, m.id AS message "
+                           f"FROM {subtree}JOIN messages m ON "
                            f"m.conversation_id=s.id AND m.seq>{mark} WHERE s.root_id IN ({marks}) "
                            f"AND {_SUBTREE_OPEN} AND s.last_unread_seq>{mark} AND {unread_message_sql()} "
                            "GROUP BY s.root_id", (v.actor, *part, v.actor, v.actor)):
             if r["root"] in out:
                 out[r["root"]]["unread"] = r["n"]
+                out[r["root"]]["new_at"] = (None if r["thread"] == r["root"]
+                                            else {"thread_id": r["thread"], "message_id": r["message"]})
     return out
 
 
@@ -2981,9 +2996,40 @@ def apply_revision(c, origin, *, body=None, deleted=False):
 
 
 # ----------------------------------------------------------------------------- views
-def view(c, principal, row, *, follower=None, summary=None):
+def dm_with(c, v, rows):
+    """{root id: {"dm_with": [{"actor", "name"}], "dm_with_count"}} for the DMs among `rows`: who else is in each, for its
+    title. One read of each table however many DMs a page lists. A reader who is not in a DM is told only of the
+    teammates they may see (teammate_access.Known.members); a person in it may name everyone in it, so the name comes
+    from here, for someone their people list leaves out."""
+    roots = [thread_row(c, r) for r in rows]
+    roots = [r for r in roots if audience_of(r) in ("personal", "participants") and not r.get("parent_id")]
+    stored = {r["id"]: [] for r in roots}
+    for part in H.chunks(list(stored)):
+        for r in c.execute("SELECT thread_id, actor FROM thread_members WHERE thread_id IN (%s)"
+                           % ",".join("?" * len(part)), part):
+            stored[r["thread_id"]].append(r["actor"])
+    known, mine, others = v.known(c), set(v.member_names(c)), {}
+    for root in roots:
+        people = _dm_members(c, root, stored[root["id"]])
+        if not mine.intersection(stored[root["id"]]) and not mine.intersection(people):
+            people = known.seen(people)
+        others[root["id"]] = [a for a in people if a != v.actor]
+    shown = {a for people in others.values() for a in people[:DM_WITH_SHOWN]}
+    names = {}
+    for part in H.chunks(sorted(a[6:] for a in shown if a.startswith("human:"))):
+        names.update(("human:" + r[0], r[1]) for r in c.execute(
+            "SELECT id, name FROM humans WHERE id IN (%s)" % ",".join("?" * len(part)), part))
+    for part in H.chunks(sorted(a[4:] for a in shown if a.startswith("bot:"))):
+        names.update(("bot:" + r[0], r[1]) for r in c.execute(
+            "SELECT slug, display_name FROM bots WHERE slug IN (%s)" % ",".join("?" * len(part)), part))
+    return {root: {"dm_with": [{"actor": a, "name": names.get(a) or ""} for a in people[:DM_WITH_SHOWN]],
+                   "dm_with_count": len(people)} for root, people in others.items()}
+
+
+def view(c, principal, row, *, follower=None, summary=None, dm=None):
     """A thread as `principal` reads it. `summary` (subtree_summaries) makes `me.unread` and `me.activity` the whole
-    subtree's, as a root row in a list shows them, in place of this thread's own."""
+    subtree's, as a root row in a list shows them, in place of this thread's own, and adds `new_at`. `dm` is this row's
+    entry from `dm_with`, for a list that read them together."""
     v = _as_viewer(principal)
     row = thread_row(c, row)
     root = root_of(c, row)
@@ -3015,6 +3061,10 @@ def view(c, principal, row, *, follower=None, summary=None):
                      "following": bool(f and f["following"]), "notify": f["notify"] if f else "live",
                      "last_read_seq": f["last_read_seq"] if f else 0, "unread": u["unread"],
                      "activity": u["activity"], "can_post": can_post(c, v, row), "can_manage": can_manage(c, v, row)}
+        if summary and not only_old and summary.get("new_at"):
+            out["new_at"] = summary["new_at"]
+        if out["audience"] in ("personal", "participants") and not row.get("parent_id"):
+            out.update(dm or dm_with(c, v, [root]).get(root["id"]) or {})
     return out
 
 
@@ -3232,14 +3282,16 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
 def _attention_roots(c, v):
     """{root id: extra row fields}: the roots of what waits on the viewer in Needs attention (thread_attention: open
     mentions and asks, unread DMs, held messages), and every root they are in whose bots' wakes the loop guard holds
-    (`capped`): a person's post there lets them go."""
+    (`capped`): a person's post there lets them go. `new_at` says where the oldest item is, when a sub-thread holds it."""
     from . import thread_attention
     roots = {}
     for item in thread_attention.items(c, None, v, with_capped=False):
         place = item.get("conversation_id") or item.get("thread_id")
         thread = thread_row(c, place) if place else None
         if thread is not None:
-            roots.setdefault(thread.get("root_id") or thread["id"], {})
+            root = thread.get("root_id") or thread["id"]
+            roots.setdefault(root, {}).setdefault("new_at", None if thread["id"] == root else {
+                "thread_id": thread["id"], "message_id": item.get("message_id")})
     for row in capped(c, v):
         root = thread_row(c, row["root_id"])
         if root is not None and _involved(c, v, root):
@@ -3255,11 +3307,40 @@ def _history_only_roots(c, v):
     return sorted({root for root, _ in _legacy_homes(c).values() if legacy_reader_only(c, v, {"id": root})})
 
 
+# A list the cursor has finished; `next_cursor` is the threads' position, "|", the DMs' position.
+_SIDEBAR_DONE = "-"
+
+
+def _sidebar_positions(cursor):
+    """(threads, DMs), each None to start, _SIDEBAR_DONE when finished or (place, seq, id). A cursor from before the lists
+    were paged apart holds one position, and both lists rank by the same order, so it stands for each."""
+    if not cursor:
+        return None, None
+    parts = str(cursor).split("|")
+    if len(parts) == 1:
+        parts *= 2
+    if len(parts) != 2:
+        raise Problem("cursor", "Unknown cursor", 422)
+    out = []
+    for part in parts:
+        if part == _SIDEBAR_DONE:
+            out.append(part)
+            continue
+        try:
+            at_place, at_seq, at_id = part.split(":", 2)
+            out.append((int(at_place), int(at_seq), at_id))
+        except ValueError:
+            raise Problem("cursor", "Unknown cursor", 422) from None
+    return tuple(out)
+
+
 def sidebar(c, v, *, cursor=None, limit=50):
     """The roots the viewer follows or belongs to, and the public ones, ranked before they are paged (spec §1): what
-    needs their attention first, then what is unread for them, then the rest, each newest activity first. A root row
-    speaks for its whole subtree, for this viewer (`subtree_summaries`). `attention` is the page's rows with an open
-    Needs attention item; `threads` and `dms` split the whole page. `cursor` is the `next_cursor` of the page before."""
+    needs their attention first, then what is unread for them, then the rest, each newest activity first. Following a
+    sub-thread lists its root. A root row speaks for its whole subtree, for this viewer (`subtree_summaries`), and a
+    sub-thread is never a row of its own. `threads` and `dms` are ranked and paged apart, up to `limit` rows each, so
+    someone with many threads still gets their DMs: one query each, whatever the page holds. `attention` is the page's
+    rows with an open Needs attention item. `cursor` is the `next_cursor` of the page before."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     readable = readable_sql(c, v, "r")
@@ -3289,48 +3370,65 @@ def sidebar(c, v, *, cursor=None, limit=50):
     where = ["r.parent_id IS NULL", "r.archived_at IS NULL", "r.closed_at IS NULL",
              f"(r.audience IN ('company','team') OR r.owner_actor=:me OR {is_needing} OR EXISTS (SELECT 1 FROM "
              f"thread_members m WHERE m.thread_id=r.id AND m.actor IN ({marks})) OR EXISTS (SELECT 1 FROM "
-             "thread_followers f WHERE f.thread_id=r.id AND f.actor=:me AND f.following=1) OR EXISTS (SELECT 1 FROM "
+             f"thread_followers f JOIN conversations s ON s.id=f.thread_id WHERE s.root_id=r.id AND f.actor=:me "
+             f"AND f.following=1 AND {_SUBTREE_OPEN}) OR EXISTS (SELECT 1 FROM "
              f"{_PARTICIPANTS.format(r='r')} WHERE value=:me))", readable]
-    after = ""
-    if cursor:
-        try:
-            at_place, at_seq, at_id = str(cursor).split(":", 2)
-            args.update(at_place=int(at_place), at_seq=int(at_seq), at_id=at_id)
-        except ValueError:
-            raise Problem("cursor", "Unknown cursor", 422) from None
-        after = ("WHERE place>:at_place OR (place=:at_place AND (activity<:at_seq OR "
-                 "(activity=:at_seq AND id<:at_id))) ")
-    sql = (f"SELECT * FROM (SELECT r.*, {activity} AS activity, {place} AS place FROM conversations r WHERE "
-           + " AND ".join(where) + f") {after}ORDER BY place, activity DESC, id DESC LIMIT :fetch")
-    rows = []
-    more = False
-    for r in c.execute(sql, args):
-        r = dict(r)
-        if not thread_readable(c, v, r["id"]):
-            continue
-        if len(rows) >= limit:
-            more = True
-            break
-        rows.append(r)
-    summaries = subtree_summaries(c, v, [r["id"] for r in rows])
-    found, budget = [], MAX_PAGE_BYTES
-    for r in rows:
-        summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
-        item = view(c, v, r, summary=summary)
-        item["activity_seq"] = r["activity"]
-        if r["id"] not in history and summary.get("last_message_at"):
-            item["last_message_at"] = summary["last_message_at"]
-        budget -= len(json.dumps(item, default=str))
-        if budget < 0:
-            more = True
-            break
-        found.append((r, item))
-    tail = found[-1] if found else None
-    items = [item for _, item in found]
-    return {"attention": [{**item, **needing[r["id"]]} for r, item in found if r["place"] == 0],
-            "threads": [t for t in items if t["audience"] not in ("personal", "participants")],
-            "dms": [t for t in items if t["audience"] in ("personal", "participants")],
-            "next_cursor": f"{tail[0]['place']}:{tail[1]['activity_seq']}:{tail[1]['id']}" if more and tail else None}
+    positions = _sidebar_positions(cursor)
+    is_dm = f"COALESCE(r.audience,{_derived_audience('r')}) IN ('personal','participants')"
+
+    def section(test, position):
+        """One list's rows, ranked and paged by its own position, and whether more follow."""
+        if position == _SIDEBAR_DONE:
+            return [], False
+        after, at = "", {}
+        if position:
+            at_place, at_seq, at_id = position
+            at = {"at_place": at_place, "at_seq": at_seq, "at_id": at_id}
+            after = ("WHERE place>:at_place OR (place=:at_place AND (activity<:at_seq OR "
+                     "(activity=:at_seq AND id<:at_id))) ")
+        sql = (f"SELECT * FROM (SELECT r.*, {activity} AS activity, {place} AS place FROM conversations r WHERE "
+               + " AND ".join([*where, test]) + f") {after}ORDER BY place, activity DESC, id DESC LIMIT :fetch")
+        rows = []
+        for r in c.execute(sql, {**args, **at}):
+            r = dict(r)
+            if not thread_readable(c, v, r["id"]):
+                continue
+            if len(rows) >= limit:
+                return rows, True
+            rows.append(r)
+        return rows, False
+
+    listed = [section(f"NOT {is_dm}", positions[0]), section(is_dm, positions[1])]
+    every = [r for rows, _ in listed for r in rows]
+    summaries = subtree_summaries(c, v, [r["id"] for r in every])
+    dms = dm_with(c, v, every)
+
+    def items_of(rows, more):
+        """Each row as its list shows it, up to half a page's bytes, so a long list leaves the other room; and its next
+        position."""
+        found, budget = [], MAX_PAGE_BYTES // 2
+        for r in rows:
+            summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
+            item = view(c, v, r, summary=summary, dm=dms.get(r["id"]))
+            item["activity_seq"] = r["activity"]
+            if needing.get(r["id"], {}).get("new_at"):
+                item["new_at"] = needing[r["id"]]["new_at"]
+            if r["id"] not in history and summary.get("last_message_at"):
+                item["last_message_at"] = summary["last_message_at"]
+            budget -= len(json.dumps(item, default=str))
+            if budget < 0:
+                more = True
+                break
+            found.append((r, item))
+        tail = found[-1] if found else None
+        return found, f"{tail[0]['place']}:{tail[1]['activity_seq']}:{tail[1]['id']}" if more and tail else _SIDEBAR_DONE
+
+    (threads_found, threads_next), (dms_found, dms_next) = items_of(*listed[0]), items_of(*listed[1])
+    attention = sorted(((r, item) for r, item in threads_found + dms_found if r["place"] == 0),
+                       key=lambda pair: (pair[1]["activity_seq"], pair[1]["id"]), reverse=True)
+    return {"attention": [{**needing[r["id"]], **item} for r, item in attention],
+            "threads": [item for _, item in threads_found], "dms": [item for _, item in dms_found],
+            "next_cursor": None if threads_next == dms_next == _SIDEBAR_DONE else f"{threads_next}|{dms_next}"}
 
 
 # ----------------------------------------------------------------------------- outside destinations (other tracks)

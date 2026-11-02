@@ -84,10 +84,12 @@ const timeline = {
 };
 const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'human:di': 'h-di', 'group:ops': ''};
 
+// What a block below changes for the pages it opens: DM rows as the server sends them, and a server with calls off.
+let dmRows = null, callsOff = false;
 async function open(browser, who, {phone = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
-  const seen = {errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], earlier: [], withdrawn: []};
+  const seen = {errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], earlier: [], withdrawn: [], patches: []};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
   // A stand-in media client: rooms connect after a moment and remember whether their microphone is on.
@@ -124,7 +126,7 @@ async function open(browser, who, {phone = false} = {}) {
       org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}, {id: 'legal', name: 'Legal', my_access: {see: true, read: true, write: false}}]});
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/events') return route.abort();
-    if (p === '/api/v2/threads' && method === 'GET') return json({attention: bob ? [] : attention, threads: bob ? [] : listed, dms: bob ? [] : [dm], next_cursor: null});
+    if (p === '/api/v2/threads' && method === 'GET') return json({attention: bob ? [] : attention, threads: bob ? [] : listed, dms: bob ? [] : dmRows || [dm], next_cursor: null});
     const home = p.match(/^\/api\/v2\/threads\/home\/(.+)$/);
     if (home) {
       const actor = decodeURIComponent(home[1]); seen.homes.push(actor);
@@ -137,7 +139,13 @@ async function open(browser, who, {phone = false} = {}) {
     if (tl && timeline[tl[1]]) return json(timeline[tl[1]]());
     const one = p.match(/^\/api\/v2\/threads\/([^/]+)\/read$/);
     if (one) { seen.reads.push(one[1]); seen.readSeqs.push(one[1] + ':' + JSON.parse(req.postData() || '{}').seq); return json({ok: true}); }
-    if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return json({calls: [], next_before: null});
+    if (/^\/api\/v2\/threads\/[^/]+\/calls$/.test(p)) return callsOff ? json({error: {code: 'meet_unavailable'}}, 503) : json({calls: [], next_before: null});
+    const settings = p.match(/^\/api\/v2\/threads\/([^/]+)$/);
+    if (settings && method === 'PATCH') {
+      const body = JSON.parse(req.postData() || '{}');
+      seen.patches.push(body);
+      return json({...timeline[settings[1]]().thread, ...body});
+    }
     const send = p.match(/^\/api\/v2\/threads\/([^/]+)\/messages$/);
     if (send && method === 'POST') {
       const body = JSON.parse(req.postData() || '{}'); seen.posts.push(body);
@@ -567,6 +575,100 @@ async function shot(page, name) {
     await shot(page, 'new-dm-phone');
     assert.deepEqual(seen.errors, []);
     await page.close();
+  }
+  // ---- Ana at phone width: the way around a bot and a person, rows as the server sends them, a thread's settings.
+  {
+    dmRows = [
+      {id: 't-zed', title: '', audience: 'personal', last_seq: 9, last_unread_seq: 9, me: me(), dm_with: [{actor: 'human:zed', name: 'Zed Stone'}], dm_with_count: 1},
+      {id: 't-group', title: '', audience: 'personal', last_seq: 8, last_unread_seq: 8, me: me(),
+        dm_with: [{actor: 'human:bea', name: 'Bea'}, {actor: 'human:cy', name: 'Cy'}, {actor: 'human:di', name: ''}, {actor: 'bot:ops', name: 'Ops'}], dm_with_count: 6},
+      {id: 't-none', title: '', audience: 'personal', last_seq: 7, last_unread_seq: 7, me: me(), dm_with: [], dm_with_count: 0},
+    ];
+    timeline['t-zed'] = () => ({thread: dmRows[0], breadcrumb: [], next_cursor: null, messages: [msg('z1', 1, 'human:zed', 'Got a minute?', {thread_id: 't-zed'})]});
+    listed[11].new_at = {thread_id: 't-sub', message_id: 's2'};
+    const {page, seen} = await open(browser, 'ana', {phone: true});
+
+    // Home and DM by name in the top line, each switching the page, and all of it on the screen.
+    await page.goto('https://tico-ui.test/#/bot/ops');
+    const tabs = page.locator('#btabs [data-bt]');
+    await tabs.first().waitFor();
+    assert.deepEqual((await tabs.allInnerTexts()).slice(0, 2), ['Home', 'DM']);
+    for (const width of [390, 320]) {
+      await page.setViewportSize({width, height: 700});
+      for (const box of await tabs.evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) assert.ok(box.right <= width && box.height >= 36, `a tab at ${width}: ` + JSON.stringify(box));
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= width, 'no sideways scroll at ' + width);
+    }
+    await page.setViewportSize({width: 390, height: 844});
+    await shot(page, 'bot-tabs-phone');
+    await page.locator('#btabs [data-bt="dm"]').tap();
+    await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector('#btabs [data-bt="dm"]').getAttribute('aria-selected') === 'true');
+    await page.locator('#btabs [data-bt="home"]').tap();
+    await page.waitForFunction(() => document.querySelector('#btabs [data-bt="home"]').getAttribute('aria-selected') === 'true');
+    await page.getByText('Weekly numbers are in the doc.').waitFor();
+
+    // A person's page starts a DM with them; your own does not offer one.
+    await page.goto('https://tico-ui.test/#/person/bea');
+    await page.locator('#person-dm').tap();
+    assert.equal(await page.locator('#thread-new input[value="human:bea"]').isChecked(), true, 'the DM starts with this person');
+    await page.keyboard.press('Escape');
+    await page.goto('https://tico-ui.test/#/person/ana');
+    await page.locator('#ptabs').waitFor();
+    assert.equal(await page.locator('#person-dm').count(), 0);
+
+    // A DM's row has no members list: its title is who the server says it is with, or a plain name when none may be told.
+    await page.goto('https://tico-ui.test/#/threads?view=dms');
+    await page.locator('.threads-page [data-thread="t-zed"]').waitFor();
+    assert.deepEqual(await page.locator('.threads-page .th-row-title').allInnerTexts(), ['Zed Stone', 'Bea, Cy, Di +3', 'Direct message']);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390);
+    await shot(page, 'dm-rows-phone');
+    // The name has room on a phone, next to Start call and Members.
+    await page.locator('.threads-page [data-thread="t-zed"]').tap();
+    await page.locator('.thv-title', {hasText: 'Zed Stone'}).waitFor();
+    assert.ok((await page.locator('.thv-title').boundingBox()).width >= 100, 'the title is not squeezed');
+    await shot(page, 'dm-head-phone');
+
+    // A root whose new reply is in a sub-thread opens that reply.
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('.threads-page [data-thread="t11"]').first().tap();
+    await page.waitForFunction(() => location.hash === '#/thread/t-sub?m=s2');
+    await page.locator('.th-msg.th-focus[data-mid="s2"]').waitFor();
+    delete listed[11].new_at;
+
+    // A manager sets how long a thread keeps its messages, forever until they say otherwise.
+    await page.goto('https://tico-ui.test/#/thread/t-plan');
+    const keep = async () => {
+      await page.locator('[data-thv-menu]').tap();
+      await page.locator('.thv-pop').getByText('Keep messages').tap();
+      return page.locator('#thread-keep select');
+    };
+    const select = await keep();
+    assert.equal(await select.inputValue(), '', 'forever by default');
+    await shot(page, 'keep-messages-phone');
+    await select.selectOption('90');
+    await page.locator('#thread-keep [type=submit]').tap();
+    await page.waitForFunction(() => !document.querySelector('#thread-keep')?.open);
+    assert.deepEqual(seen.patches, [{retention_days: 90}]);
+    assert.equal(await (await keep()).inputValue(), '90');
+    await select.selectOption('');
+    await page.locator('#thread-keep [type=submit]').tap();
+    await page.waitForFunction(() => !document.querySelector('#thread-keep')?.open);
+    assert.deepEqual(seen.patches[1], {retention_days: null});
+
+    // Calls off: the owner is told where to set them up, and nobody gets a control that cannot work.
+    callsOff = true;
+    await page.goto('https://tico-ui.test/#/thread/t-sub');
+    await page.locator('a.thv-call-note').waitFor();
+    assert.match(await page.locator('a.thv-call-note').getAttribute('href'), /docs\/meet\.md/);
+    assert.equal(await page.locator('[data-call]').count(), 0);
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+    const member = await open(browser, 'bob', {phone: true});
+    await member.page.goto('https://tico-ui.test/#/thread/t-sub');
+    await member.page.locator('.thv-title').waitFor();
+    await member.page.waitForLoadState('networkidle');
+    assert.equal(await member.page.locator('.thv-call-note, [data-call]').count(), 0);
+    await member.page.close();
+    dmRows = null; callsOff = false;
   }
   {
     const {page} = await open(browser, 'bob', {phone: true});

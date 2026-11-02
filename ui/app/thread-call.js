@@ -47,10 +47,11 @@ function callHeadHTML(view) {
   if (!t || !info || info.none) return '';
   if (CALL?.threadId === view.id) return '<span class="thv-call-note thv-call-on" role="status">In call</span>';
   if (info.removed) return '<span class="thv-call-note muted">Removed from call</span>';
-  if (info.off) return '<span class="thv-call-note muted">Calls are off</span>';
+  // Calls are set up in the server's environment, so only the owner can do anything about it.
+  if (info.off) return S.me?.role === 'owner' ? `<a class="thv-call-note" href="${GH}/blob/main/docs/meet.md#self-hosting" target="_blank" rel="noopener noreferrer">Set up calls</a>` : '';
   const icon = '<span class="nav-icon" aria-hidden="true">call</span>';
-  if (info.call) return `<button type="button" class="ghost small thv-call" data-call="join">${icon}Join</button>`;
-  return t.me?.can_post ? `<button type="button" class="ghost small thv-call" data-call="start">${icon}Start call</button>` : '';
+  if (info.call) return `<button type="button" class="ghost small thv-call" data-call="join" aria-label="Join call">${icon}<span class="thv-call-word">Join</span></button>`;
+  return t.me?.can_post ? `<button type="button" class="ghost small thv-call" data-call="start" aria-label="Start call">${icon}<span class="thv-call-word">Start call</span></button>` : '';
 }
 async function callAction(view, kind) {
   const id = view.id, info = CALL_THREADS.get(id) || {};
