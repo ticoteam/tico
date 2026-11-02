@@ -3575,6 +3575,10 @@ class Execution:
                                    who.runner_id, row["id"], live_ref.get("turn_id"))
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot_id"]) if task else None
+        if check and check.get('memory_pass'):
+            from . import memory_tidy_runs
+            if not memory_tidy_runs.before_start(c, self.store.settings, task['id'], H.parse_ts(H.now())):
+                return {"attempt": None}
         released_notice = bool(task and auto_tasks.notice_releases(c, task, msg))
         if (task and task['owner_id'] == 'bot:' + row['bot_id']
                 and not auto_tasks.refusal(c, task, followed, woken=True, message=msg)
@@ -3642,6 +3646,9 @@ class Execution:
         # runners/assignments resolves it: the runner starts exactly what this says.
         record = providers.load(c, self.store.settings)
         config = providers.fill(record, followed)
+        if check and check.get('memory_pass') and c.execute(
+                'SELECT 1 FROM memory_tidy_passes WHERE check_task_id=?', (task['id'],)).fetchone():
+            config = {**config, 'memory_tidy_packet': True}
         # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
         # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
         here = readiness_document(runner["readiness"])

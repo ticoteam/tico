@@ -34,6 +34,7 @@ connect_file = "auth.json"
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]
+packet_only = true
 terminal_login = ["login"]
 api_keys = "computer"
 api_key_login = ["login", "--with-api-key"]
