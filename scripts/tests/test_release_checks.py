@@ -358,6 +358,8 @@ def test_native_test_files_include_tests_that_borrow_a_native_test_modules_helpe
     assert release_checks.native_test_files(names) == {'backend/tests/test_uses.py', 'backend/tests/test_uses_too.py'}
 
 
-def test_the_screen_relay_borrowers_are_native():
-    names = ['backend/tests/test_screen.py', 'backend/tests/test_browser_exit_relay.py', 'backend/tests/test_api.py']
-    assert release_checks.native_test_files(names) == set(names[:2])
+def test_the_screen_relay_borrowers_and_scripts_tico_runs_are_native():
+    # v0.5.59's first validation: test_systemd_units runs scripts/tico install, which needs the runner binary.
+    names = ['backend/tests/test_screen.py', 'backend/tests/test_browser_exit_relay.py',
+             'runner/tests/test_systemd_units.py', 'backend/tests/test_api.py', 'backend/tests/test_selected_claim.py']
+    assert release_checks.native_test_files(names) == set(names[:3])
