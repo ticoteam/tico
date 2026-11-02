@@ -447,6 +447,25 @@ def test_an_admin_cancel_of_an_unknown_payment_ends_it_when_the_fresh_lookup_fin
     assert len(fake.sent("request_send_money")) == 1
 
 
+def test_a_cancel_asked_at_the_same_instant_as_a_lookup_waits_for_the_next_sweep(books):
+    """Item 4 (spec §9): a cancel asked at the same instant as a sweep may have come after that sweep's lookup by key
+    began, so the lookup finding nothing does not end the payment then. The next sweep, whose complete lookup comes
+    after the ask, ends it, with its hold released."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, _ = _unknown_and_flagged(books, fake, "bill-11")
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_cancel", {"payment_id": pid}, at=HOURS[3]).status == "committed"
+    sync_once(books, fake, HOURS[3])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "unknown"
+        assert _holds(c) == [(50_000, "held")]
+    sync_once(books, fake, HOURS[4])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _holds(c) == [(50_000, "released")]
+
+
 def test_a_409_with_the_request_is_accepted_and_a_cut_off_send_is_unknown(books):
     """B: a 409 that carries the request stores its id and status. A: a payment claimed and never recorded (the
     worker stopped mid-call) becomes unknown, never sent again; a cancel can't take a claimed payment back."""

@@ -860,8 +860,9 @@ def not_found(ctx: Ctx, pay: Any) -> None:
     there)."""
     fields: dict[str, object] = {"next_try_at": _later(ctx, 2), "updated_at": ctx.at}
     asked = str(pay["cancel_asked_at"] or "")
-    if asked and asked <= ctx.at:
+    if asked and asked < ctx.at:
         # A finance admin asked to cancel it before this sweep's complete lookup by its key began, and it found nothing.
+        # An ask at this same instant may have come after that lookup began, so the next sweep decides instead.
         end(ctx, pay, "cancelled", f"not in Mercury when its key was looked for ({pay['cancel_asked_by']} cancelled it)")
         return
     if asked:
