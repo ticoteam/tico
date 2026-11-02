@@ -287,7 +287,7 @@ def classify(exc, kind):
     name = type(exc).__name__
     if kind == "postgres":
         if name in ("QueryCanceled", "LockNotAvailable"):
-            return "timeout", "the statement ran past the timeout and was cancelled"
+            return "timeout", "the statement ran past the timeout and was canceled"
         if name in ("ReadOnlySqlTransaction", "InsufficientPrivilege") or "data-modifying" in text:
             return "read_only", text.splitlines()[0]
     elif kind == "mysql":

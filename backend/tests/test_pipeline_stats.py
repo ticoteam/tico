@@ -193,7 +193,7 @@ def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
     assert (row["job"], row["run"], row["current"], row["state"], row["decision"], row["by"], row["by_kind"],
             row["note"]) == (attempt["job_id"], attempt["id"], True, "canceled", "dismiss", "bot:botops", "botops",
                              DEV_563_NOTE)
-    assert row["label"].startswith("Cancelled: dismissed by BotOps at ") and row["label"].endswith("Z, " + DEV_563_NOTE)
+    assert row["label"].startswith("Canceled: dismissed by BotOps at ") and row["label"].endswith("Z, " + DEV_563_NOTE)
 
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE job_recovery SET decision='resume', actor='human:ana', note='Run it again after all, please.' "
@@ -241,7 +241,7 @@ def test_a_decisions_note_is_left_out_for_a_reader_who_cannot_open_the_runs_conv
     assert row["note"] == DEV_563_NOTE and row["label"].endswith(DEV_563_NOTE)
     [row] = stats(api, token="cara-test")["queues"]["ops"]["decisions"]
     assert (row["job"], row["decision"], row["by_kind"], row["note"]) == (attempt["job_id"], "dismiss", "botops", None)
-    assert row["label"].startswith("Cancelled: dismissed by BotOps at ") and row["label"].endswith("Z")
+    assert row["label"].startswith("Canceled: dismissed by BotOps at ") and row["label"].endswith("Z")
 
 
 def test_job_queues_privacy_checks_messages_in_one_batch(api, monkeypatch):

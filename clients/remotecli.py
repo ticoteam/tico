@@ -161,7 +161,7 @@ def product_repo_create(client, name, *, confirm=None, stdin=None, stderr=None):
     else:
         print(f"Type {preview['repository']} to create it: ", end="", file=stderr, flush=True)
         if stdin.readline().strip() != preview["repository"]:
-            raise APIError("cancelled", "Confirmation did not match; no repository was created")
+            raise APIError("canceled", "Confirmation did not match; no repository was created")
     return client.post("github/product-repos", {
         "org": preview["org"], "name": preview["name"], "visibility": preview["visibility"],
         "auto_init": preview["auto_init"], "confirmed": True,

@@ -596,13 +596,13 @@ function reconnectCardHTML(m) {
   const r = m.refs.reconnect, fix = r.fix || {}, status = r.status || 'open', fixed = status === 'fixed', mine = r.person === myActor();
   const head = `<div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.sender_id)}</span><span class="spacer"></span><time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>`;
   const wrap = inner => `<div class="tcomment tmsg bot" data-message="${esc(m.id || '')}">${head}${inner}</div>`;
-  // A retired card asks nothing: its request is cancelled, so it shows Not needed, never a card to save.
+  // A retired card asks nothing: its request is canceled, so it shows Not needed, never a card to save.
   if (r.service === 'secret' && mine && m.refs.credential_request && status !== 'retired') {
     return wrap(`<div data-credential-host="${esc(m.refs.credential_request)}"><div class="cc-done">Loading the card…</div></div>`);
   }
   let act = '';
   if (fixed) act = `<span class="rc-done">${r.service === 'secret' ? 'Saved' : 'Reconnected'}</span>`;
-  else if (status !== 'open') act = `<span class="muted">${status === 'cancelled' ? 'Cancelled' : 'Not needed'}</span>`;
+  else if (status !== 'open') act = `<span class="muted">${status === 'canceled' ? 'Canceled' : 'Not needed'}</span>`;
   else if (!mine) act = `<span class="muted">Waiting on ${esc(actorLabel(r.person) || 'a person')}</span>`;
   else if (r.service === 'google') act = '<button type="button" class="primary" data-reconnect-google>Reconnect Google</button>';
   else if (r.service === 'login' && typeof harnessCaps === 'function' && harnessCaps(fix.runtime).browser_sign_in) {

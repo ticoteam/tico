@@ -69,11 +69,13 @@ COMMIT_KINDS = SIDE_KINDS + ("remove",)
 LIFETIME = 15 * 60
 FINISH_SECONDS = 2 * 60
 # `finishing`: a switch signed in on the side (or a new key was checked) and the runner is putting it in place. It can
-# no longer be cancelled; the runner waits for the server to take that report before it moves anything, so a cancel
+# no longer be canceled; the runner waits for the server to take that report before it moves anything, so a cancel
 # that came first wins.
 ACTIVE = ("requested", "starting", "waiting", "finishing")
 ACTIVE_SQL = "state IN ('requested','starting','waiting','finishing')"
-TERMINAL = ("signed_in", "signed_out", "done", "failed", "cancelled", "expired")
+TERMINAL = ("signed_in", "signed_out", "done", "failed", "canceled", "expired")
+# The runner wire keeps its spelling: runners in the field stop on "cancelled" in a report's answer (runner-rs/src/login.rs).
+WIRE_STATE = {"canceled": "cancelled"}
 ORDER = {state: i for i, state in enumerate(("requested", "starting", "waiting", "finishing", "signed_in", "failed"))}
 ORDER.update(signed_out=ORDER["signed_in"], done=ORDER["signed_in"])
 # The verdicts each kind may end with; any other is refused as the runner's mistake.
@@ -250,7 +252,7 @@ def _queue(c, who, runner, runtime, profile, kind, what):
 def start(c, who, rid, runtime, profile="", auth=None, switch=False, to=""):
     """Sign `runtime` in on a computer: its own login, the only one (a named `profile` is refused). `switch` signs in to another
     account in place: the runner signs in on the side and puts the new login in place only once it has finished, so
-    a cancelled or failed switch leaves the old login working. `to="subscription"` is the same switch for the
+    a canceled or failed switch leaves the old login working. `to="subscription"` is the same switch for the
     computer's own login running on an API key: once the subscription is in place the key goes, and stays off."""
     if to and (switch or profile):
         raise Problem("kind", "Switch to subscription is for the computer's own login, on its own", 422)
@@ -610,14 +612,14 @@ def cancel(c, who, rid, lid, auth=None):
     row = _login(c, rid, lid)
     if row["state"] == "finishing":
         if row["kind"] == "remove":
-            raise Problem("state", "It is already being removed, so it can't be cancelled now", 409)
+            raise Problem("state", "It is already being removed, so it can't be canceled now", 409)
         what = "key" if row["kind"] in KEY_JOBS else "account"
-        raise Problem("state", f"The new {what} is already being put in place, so it can't be cancelled now", 409)
+        raise Problem("state", f"The new {what} is already being put in place, so it can't be canceled now", 409)
     if row["kind"] in KEY_JOBS and row["state"] in ACTIVE:
         from .computer_keys import discard
         discard(c, lid)
     if row["state"] in ACTIVE:
-        c.execute("UPDATE model_logins SET state='cancelled', url='', user_code='', pending_code=NULL, updated_at=? "
+        c.execute("UPDATE model_logins SET state='canceled', url='', user_code='', pending_code=NULL, updated_at=? "
                   "WHERE id=?", (H.now(), lid))
         H.event(c, who.actor, "runner.login.cancel", rid, {"runtime": row["runtime"]})
     return view(_login(c, rid, lid))
@@ -641,7 +643,7 @@ def report(c, runner_id, lid, body, settings=None):
     sweep(c)
     row = c.execute("SELECT * FROM model_logins WHERE id=?", (lid,)).fetchone()
     if row["state"] in TERMINAL:
-        return {"state": row["state"]}
+        return {"state": WIRE_STATE.get(row["state"], row["state"])}
     if body.state in ("signed_in", "signed_out", "done") and body.state not in VERDICTS[row["kind"]]:
         raise Problem("state", f"A {row['kind'].replace('_', ' ')} does not end {body.state.replace('_', ' ')}", 422)
     if body.state == "finishing" and row["kind"] not in (*COMMIT_KINDS, *KEY_JOBS):
@@ -656,7 +658,7 @@ def report(c, runner_id, lid, body, settings=None):
             H.event(c, "runner:" + runner_id, "runner.login.failed", runner_id, {"runtime": row["runtime"]})
             return {"state": "failed"}
     if body.state == "finishing" and row["state"] != "finishing":
-        # From here it cannot be cancelled, and it has a little time of its own to finish in.
+        # From here it cannot be canceled, and it has a little time of its own to finish in.
         c.execute("UPDATE model_logins SET expires_at=MAX(expires_at, ?) WHERE id=?",
                   (H.shift(H.now(), seconds=FINISH_SECONDS), lid))
         if row["kind"] == "use_key":

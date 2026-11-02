@@ -76,7 +76,7 @@ const strategyLevelName = (v, level) => v.levels.find(lv => lv.level === level)?
 // because it stays the owner's, newest first, with the reason. Only the owner reads it (the page shows it to them
 // alone) and only the owner sees Undo, which asks once before it puts the tasks back. What Undo couldn't restore stays
 // on the entry in plain words. The entries loaded so far, every page of them, are kept on the host: asking to Undo an
-// older entry, cancelling, or the Undo itself redraws them in place instead of going back to the first page.
+// older entry, canceling, or the Undo itself redraws them in place instead of going back to the first page.
 let STRATEGY_LOG_UNDO = null;
 const STRATEGY_LOG_STATE = {done: '', proposed: 'Proposed to you', undone: 'Undone'};
 const strategyBotLogShown = () => S.me?.role === 'owner';

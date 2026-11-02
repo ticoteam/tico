@@ -112,7 +112,7 @@ def test_a_new_key_that_fails_its_check_is_deleted_and_the_old_one_stays(environ
     call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-third-0123456789"}, expected=409)
     report(api, box, bad["id"], "failed", "OpenAI refused the key")
     assert fetch(api, box)["credentials"][0]["value"] == "sk-proj-good-key-0123456789"
-    # Cancelled or run out of time: deleted the same way.
+    # Canceled or run out of time: deleted the same way.
     late = call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-late-key-0123456789"})
     call(api, "POST", f"runners/{rid}/logins/{late['id']}/cancel", {})
     with api.app.state.store.read() as c:
@@ -125,7 +125,7 @@ def test_a_new_key_that_fails_its_check_is_deleted_and_the_old_one_stays(environ
     assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": "sk-proj-agreed-0123456789",
                                                "source": "computer"}]
     late = call(api, "POST", f"runners/{rid}/logins/{agreed['id']}/cancel", {}, expected=409)
-    assert "can't be cancelled now" in late["error"]["detail"]
+    assert "can't be canceled now" in late["error"]["detail"]
     report(api, box, agreed["id"], "done")
     assert fetch(api, box)["credentials"][0]["value"] == "sk-proj-agreed-0123456789"
     with api.app.state.store.read() as c:
@@ -170,7 +170,7 @@ def test_a_cleared_key_is_not_signed_back_in_by_the_shared_key(environment):
 
 
 def test_switch_to_subscription_keeps_the_key_it_runs_on_and_is_refused_once_the_key_is_cleared(environment):
-    """#1298: a cancelled Switch to subscription leaves the key in use and the computer reading ready on it. After Clear
+    """#1298: a canceled Switch to subscription leaves the key in use and the computer reading ready on it. After Clear
     key there is no login to keep, so a switch (a page drawn before the clear) is refused rather than run as a plain
     sign-in whose cancel would read "The API key is still in use" on a computer with no login; Sign in is the way."""
     api = setup(environment)
@@ -513,14 +513,14 @@ def test_switch_to_subscription_then_to_an_api_key_and_the_next_turn_has_the_key
     assert listed(api, box)["keys"]["codex"]["preview"] == "sk-…789"
 
 
-def test_a_switch_to_an_api_key_that_is_cancelled_fails_or_runs_out_leaves_the_subscription(environment):
+def test_a_switch_to_an_api_key_that_is_canceled_fails_or_runs_out_leaves_the_subscription(environment):
     from backend.store import H
     api = setup(environment)
     box = on_subscription(api)
     rid = box["runner_id"]
     body = {"runtime": "codex", "secret": "sk-proj-switched-0123456789", "switch": True}
-    cancelled = call(api, "POST", f"runners/{rid}/keys", body)
-    call(api, "POST", f"runners/{rid}/logins/{cancelled['id']}/cancel", {})
+    canceled = call(api, "POST", f"runners/{rid}/keys", body)
+    call(api, "POST", f"runners/{rid}/logins/{canceled['id']}/cancel", {})
     untouched(api, box)
     # Failed, after its commit point too: the computer undid what it changed, and Tico has nothing to undo.
     refused = call(api, "POST", f"runners/{rid}/keys", body)

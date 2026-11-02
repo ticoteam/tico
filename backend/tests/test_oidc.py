@@ -701,7 +701,7 @@ def test_sign_in_off_stops_an_address_move_and_the_account_being_remembered(sign
 
 @pytest.fixture
 def mirror(monkeypatch):
-    """The people mirror's state, reset for one test; any timer it armed is cancelled afterwards."""
+    """The people mirror's state, reset for one test; any timer it armed is canceled afterwards."""
     monkeypatch.setattr(people_mirror, "_auth", None)
     monkeypatch.setattr(people_mirror, "_timer", None)
     monkeypatch.setattr(people_mirror, "_next_allowed", 0.0)

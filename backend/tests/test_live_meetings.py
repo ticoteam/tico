@@ -336,7 +336,7 @@ def test_joined_human_can_remove_bot_and_revoke_queued_turn_access(live):
         event = c.execute("SELECT payload FROM live_meeting_events WHERE meeting_id=? "
                           "AND type='meeting.bot_left'", (mid,)).fetchone()
     assert json.loads(event["payload"]) == {
-        "bot": "ops", "removed_by": "human:ben", "cancelled_turns": [turn["id"]],
+        "bot": "ops", "removed_by": "human:ben", "canceled_turns": [turn["id"]],
         "reason": "meeting_only_access_revoked"}
     denied = live.get("/api/v2/live-meetings/" + mid, headers=headers("ops-live"))
     assert denied.status_code == 403

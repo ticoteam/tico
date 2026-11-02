@@ -375,6 +375,8 @@ COLUMNS = (
     ('model_logins', 'updated', 'updated_at', '2'),
     ('model_subscriptions', 'created', 'created_at', '2'),
     ('model_subscriptions', 'updated', 'updated_at', '2'),
+    ('notes', 'cancelled_at', 'canceled_at', '4'),
+    ('notes', 'cancelled_by', 'canceled_by', '4'),
     ('notes', 'created', 'created_at', '2'),
     ('oauth_clients', 'created', 'created_at', '2'),
     ('oauth_clients', 'redirect_uris_json', 'redirect_uris', '1'),

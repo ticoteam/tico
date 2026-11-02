@@ -1009,7 +1009,7 @@ def test_only_the_pending_release_step_marks_a_blocker_merged(prepared):
     assert started.status_code == 200, started.text
 
 
-def test_an_obsolete_pending_reservation_is_cancelled_without_touching_a_checkout(prepared):
+def test_an_obsolete_pending_reservation_is_canceled_without_touching_a_checkout(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     assert link['state'] == 'pending' and link['checkout_state'] == 'queued'
@@ -1021,8 +1021,8 @@ def test_an_obsolete_pending_reservation_is_cancelled_without_touching_a_checkou
     assert actions == []
     with api.app_state.store.read() as c:
         row = c.execute('SELECT state,detail FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
-    assert row['state'] == 'removed' and json.loads(row['detail'])['removed_by'] == 'cancelled'
-    assert [e['reason'] for e in released_events(api, tid)] == ['pending cancelled']
+    assert row['state'] == 'removed' and json.loads(row['detail'])['removed_by'] == 'canceled'
+    assert [e['reason'] for e in released_events(api, tid)] == ['pending canceled']
 
 
 def test_a_pending_tree_with_a_checkout_on_disk_is_removed_the_normal_way_when_its_task_closes(prepared):

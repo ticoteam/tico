@@ -340,7 +340,7 @@ def test_a_slack_reply_delivered_after_the_switch_went_off_is_held_as_a_draft_ta
         held = dict(c.execute("SELECT state, error FROM slack_posts").fetchone())
         task = c.execute("SELECT owner_id, title FROM tasks WHERE title LIKE 'Draft reply:%'").fetchone()
         state = json.loads(c.execute("SELECT saved_state FROM automation_runs WHERE id='run_s'").fetchone()[0])
-    assert held == {"state": "cancelled", "error": "send_off"} and dict(task) == {"owner_id": "human:ana",
+    assert held == {"state": "canceled", "error": "send_off"} and dict(task) == {"owner_id": "human:ana",
                                                                                    "title": "Draft reply: On it"}
     assert state["steps"][0]["outputs"]["detail"] == "send_off"
 
@@ -358,11 +358,11 @@ def test_a_run_that_fails_cancels_its_unclaimed_mail_and_a_late_result_changes_n
     # The mail computer is off for a day: the tick gives up on the run.
     automations.tick(api.app.state.store, datetime.now(timezone.utc) + timedelta(days=1, hours=1))
     run = last_run(api, aid)
-    assert run["status"] == "failed" and run["steps"][0]["outputs"]["detail"] == "cancelled: the run failed"
+    assert run["status"] == "failed" and run["steps"][0]["outputs"]["detail"] == "canceled: the run failed"
     assert claim(api, computer.token)["actions"] == []           # back online: nothing to send
     assert computer.worker.mail_action_tick() == 0 and computer.gmail.sent == []
     late = post(api, f"automations/mail-actions/{mid}/result", {"ok": True, "detail": "sent"}, computer.token)
-    assert late["state"] == "cancelled"
+    assert late["state"] == "canceled"
 
 
 @pytest.mark.parametrize("ok", [True, False])
@@ -385,7 +385,7 @@ def test_a_late_mail_report_after_its_held_run_was_dropped_is_recorded_and_the_r
     assert step["outputs"]["detail"] == ("sent" if ok else "no such thread")
 
 
-def test_a_lease_that_runs_out_after_its_run_failed_is_cancelled_not_queued(api, computer):
+def test_a_lease_that_runs_out_after_its_run_failed_is_canceled_not_queued(api, computer):
     automate(api, SEND)
     computer.sync()
     action, = claim(api, computer.token)["actions"]
@@ -395,7 +395,7 @@ def test_a_lease_that_runs_out_after_its_run_failed_is_cancelled_not_queued(api,
         assert claim(api, computer.token)["actions"] == []
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM automation_mail_actions WHERE id=?", (action["id"],)).fetchone()[0] == \
-            "cancelled"
+            "canceled"
 
 
 def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, computer):

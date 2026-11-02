@@ -408,7 +408,7 @@ def test_a_held_runs_decision_shows_beside_its_state_with_who_when_and_the_note(
                                "at": "2026-10-26T09:50:45.103088Z", "note": DEV_563_NOTE}
     from backend.run_view import decision_label
     assert decision_label(run["decision"], lambda a: "BotOps") == (
-        "Cancelled: dismissed by BotOps at 09:50Z, " + DEV_563_NOTE)
+        "Canceled: dismissed by BotOps at 09:50Z, " + DEV_563_NOTE)
 
     # The label is read from the decision record each time, never copied onto the job: a later decision shows.
     with api.app.state.store.transaction() as c:

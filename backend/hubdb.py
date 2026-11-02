@@ -1466,10 +1466,10 @@ def migrate(conn, adopt_legacy=False):
     conn.execute("CREATE INDEX IF NOT EXISTS bot_file_versions_pending ON bot_file_versions(blob_id) "
                  "WHERE media_state='pending'")
     # Quiet notes (`hub note`): a line left for a bot's next run, asking nothing. `carried_by` is
-    # the attempt that took it there; a cancelled note never goes.
+    # the attempt that took it there; a canceled note never goes.
     conn.execute("CREATE TABLE IF NOT EXISTS notes(id TEXT PRIMARY KEY, from_actor TEXT NOT NULL, "
                  "to_actor TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, carried_by TEXT, "
-                 "cancelled_at TEXT, cancelled_by TEXT)")
+                 "canceled_at TEXT, canceled_by TEXT)")
     conn.execute("CREATE INDEX IF NOT EXISTS notes_to_created ON notes(to_actor, created_at)")
     # A bot-to-bot message that could wait (backend/bot_to_bot.py) rides to the next run as a note linked to it.
     add_column(conn, "notes", "message_id", "TEXT")
@@ -1478,7 +1478,7 @@ def migrate(conn, adopt_legacy=False):
     # Both indexes hold unsettled rows only, so they stay small however many notes a bot has been sent.
     add_column(conn, "notes", "settled_at", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS notes_waiting ON notes(to_actor, created_at, id) "
-                 "WHERE cancelled_at IS NULL AND settled_at IS NULL")
+                 "WHERE canceled_at IS NULL AND settled_at IS NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS notes_unsettled_carried ON notes(carried_by) "
                  "WHERE carried_by IS NOT NULL AND settled_at IS NULL")
     # A deferred item and its deadline (backend/delivery.py). No foreign keys: a row outlives a deleted task or
@@ -3176,7 +3176,7 @@ def librarian_text(body):
 # read from the stored references. It needs no job or note, so it holds for an external harness's inbox (hermes,
 # openclaw and the rest get no job without a delivery computer, and a waking bot-to-bot message gets no carry-note)
 # and on a hub database without Store's job queue. A record that settles a message later only ever removes it:
-# a job finished or cancelled (a duplicate wake), or carry-notes that are no longer waiting.
+# a job finished or canceled (a duplicate wake), or carry-notes that are no longer waiting.
 
 
 def _held_queue_drains(actor, target, refs_json):
@@ -3205,13 +3205,13 @@ def _held_queue_settled_sql(conn):
     """SQL true for a stored message a later record says resume will not hand over, on whichever tables exist."""
     settled = []
     if _has_table(conn, "jobs"):
-        # A runner-delivered bot gets a held message only through its job, so one finished or cancelled (a
+        # A runner-delivered bot gets a held message only through its job, so one finished or canceled (a
         # duplicate wake) is never handed over. An external harness's inbox still holds it whatever its job did.
         from .store import EXTERNAL_BOT_SQL
         settled.append("(NOT " + EXTERNAL_BOT_SQL.replace("NEW.", "m.") + " AND EXISTS(SELECT 1 FROM jobs j "
                        "WHERE j.message_id=m.id) AND NOT EXISTS(SELECT 1 FROM jobs j "
                        "WHERE j.message_id=m.id AND j.state NOT IN ('completed','canceled')))")
-    waiting = NOTE_WAITING_SQL if _has_table(conn, "attempts") else "n.cancelled_at IS NULL"
+    waiting = NOTE_WAITING_SQL if _has_table(conn, "attempts") else "n.canceled_at IS NULL"
     settled.append("(EXISTS(SELECT 1 FROM notes n WHERE n.message_id=m.id) AND NOT EXISTS(SELECT 1 FROM notes n "
                    f"WHERE n.to_actor=m.recipient_id AND n.message_id=m.id AND {waiting}))")
     return " OR ".join(settled)
@@ -5828,7 +5828,7 @@ def _withdraw_queued_comment_copies(conn, message_id):
     """Stop unsent copies and drop local outbound text; already delivered copies remain elsewhere."""
     if _has_table(conn, 'slack_posts'):
         conn.execute("UPDATE slack_posts SET text='',state=CASE WHEN state IN ('ready','retry') "
-                     "THEN 'cancelled' ELSE state END,updated_at=? WHERE message_id=?", (now(), message_id))
+                     "THEN 'canceled' ELSE state END,updated_at=? WHERE message_id=?", (now(), message_id))
 
 
 def _refresh_comment_replies(conn, msg):
@@ -5908,7 +5908,7 @@ def task_comment_edit(conn, actor, task_id, message_id, text, approval_id=None):
 
 @private_task_write
 def task_comment_delete(conn, actor, task_id, message_id):
-    """The author takes a comment back. Only its metadata stays for the audit trail, excluded from future comment reads: a run it queued and nobody started is cancelled, the questions it answered
+    """The author takes a comment back. Only its metadata stays for the audit trail, excluded from future comment reads: a run it queued and nobody started is canceled, the questions it answered
     are open again, and the bot it woke loses the delegation that came with it (`task_delegations`)."""
     _own_comment(conn, actor, task_id, message_id)
     ts = now()
@@ -5917,14 +5917,14 @@ def task_comment_delete(conn, actor, task_id, message_id):
     reopened = [r["id"] for r in _rows(conn.execute("SELECT id FROM messages WHERE answered_by_id=?", (message_id,)))]
     conn.execute("UPDATE messages SET answered_by_id=NULL WHERE answered_by_id=?", (message_id,))
     conn.execute("UPDATE task_delegations SET expires_at=? WHERE message_id=? AND expires_at>?", (ts, message_id, ts))
-    cancelled = _has_table(conn, "jobs") and conn.execute(
+    canceled = _has_table(conn, "jobs") and conn.execute(
         "UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'", (message_id,)).rowcount > 0
     _task_event(conn, task_id, actor, "comment", message_id, None)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, task_id))
     row = task(conn, task_id)
     recount(conn, [row["owner_id"], row["requester_id"]])     # a question taken back, or reopened by it
     event(conn, actor, "message.deleted", message_id,
-          {"task": task_id, "reopened": reopened, "cancelled_run": cancelled})
+          {"task": task_id, "reopened": reopened, "canceled_run": canceled})
     deleted = message(conn, message_id, include_deleted=True)
     _withdraw_queued_comment_copies(conn, message_id)
     _refresh_comment_replies(conn, deleted)
@@ -8499,7 +8499,7 @@ def task_run_now(conn, actor, task_id):
 # manager bot a note after each check, and its daily report reads them.
 NOTE_MAX = 8000
 NOTE_WAITING_SQL = (
-    "n.cancelled_at IS NULL AND n.settled_at IS NULL AND (n.carried_by IS NULL OR NOT EXISTS("
+    "n.canceled_at IS NULL AND n.settled_at IS NULL AND (n.carried_by IS NULL OR NOT EXISTS("
     "SELECT 1 FROM attempts a WHERE a.id=n.carried_by AND a.state IN ('leased','running','completed')))")
 
 
@@ -8531,7 +8531,7 @@ def note(conn, note_id):
 
 def note_waiting(conn, row):
     """Whether this note (a row) is still waiting for its bot's next run."""
-    if not row or row.get("cancelled_at") or row.get("settled_at"):
+    if not row or row.get("canceled_at") or row.get("settled_at"):
         return False
     if not row.get("carried_by"):
         return True
@@ -8549,11 +8549,11 @@ def note_cancel(conn, actor, note_id, human=False):
         refuse(conn, actor, "not-found", f"no note {note_id}")
     if actor != row["from_actor"] and not human and not is_human(actor):
         refuse(conn, actor, "note", f"{actor_name(conn, row['from_actor'])} left this note; only they or a person take it back")
-    if row["cancelled_at"]:
+    if row["canceled_at"]:
         return row
     if not note_waiting(conn, row):
         refuse(conn, actor, "note", "a run already carried this note; it cannot be taken back")
-    conn.execute("UPDATE notes SET cancelled_at=?, cancelled_by=? WHERE id=?", (now(), actor, note_id))
+    conn.execute("UPDATE notes SET canceled_at=?, canceled_by=? WHERE id=?", (now(), actor, note_id))
     event(conn, actor, "note.cancel", note_id, {})
     return note(conn, note_id)
 

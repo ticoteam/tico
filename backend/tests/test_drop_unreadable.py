@@ -52,7 +52,7 @@ def suppressed(c, job_id):
         "SELECT detail FROM events WHERE action='job.suppress' AND target=?", (job_id,))]
 
 
-def test_an_unreadable_job_is_cancelled_and_a_readable_one_is_still_claimed(api):
+def test_an_unreadable_job_is_canceled_and_a_readable_one_is_still_claimed(api):
     machine = task_bot(api, lanes=True, others=("finance",))
     secret, finished = secret_taken_away(api), secret_taken_away(api)
     first = new_task(api, "first")
@@ -77,7 +77,7 @@ def test_an_unreadable_job_is_cancelled_and_a_readable_one_is_still_claimed(api)
     assert claim(api, machine, "ops") is None
 
 
-def test_health_counts_no_queued_work_from_the_cancelled_job(api):
+def test_health_counts_no_queued_work_from_the_canceled_job(api):
     machine = task_bot(api, lanes=True, others=("finance",))
     secret_taken_away(api)
     store = api.app.state.store

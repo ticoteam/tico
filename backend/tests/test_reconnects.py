@@ -341,7 +341,7 @@ def test_another_person_asked_on_the_same_task_gets_a_card_that_replaces_the_fir
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='ops'")
     second = ask_secret(api, attempt)                                   # Ben runs the bot now: his card
-    assert second["id"] != first["id"] and request_status(api, first["id"]) == "cancelled"
+    assert second["id"] != first["id"] and request_status(api, first["id"]) == "canceled"
     assert sorted((c["person"], c["status"]) for c in cards(api, t)) == [("human:ana", "retired"), ("human:ben", "open")]
     post(api, f"credential-requests/{second['id']}/save", {"value": "crm-token-0123456789"}, "ben-test")
     assert len(wakes(api, t)) == 1 and shown(api, t)["task"]["status"] in ("open", "doing")
@@ -383,10 +383,10 @@ def test_a_credential_card_whose_task_finishes_or_changes_hands_can_no_longer_be
                 H.task_close(c, "human:ana", t["id"], "Not needed")
             else:
                 H.task_update(c, "human:ana", t["id"], owner="bot:cpo")
-        assert [c["status"] for c in cards(api, t)] == ["retired"] and request_status(api, asked["id"]) == "cancelled"
+        assert [c["status"] for c in cards(api, t)] == ["retired"] and request_status(api, asked["id"]) == "canceled"
         saved = api.post(f"/api/v2/credential-requests/{asked['id']}/save", json={"value": "crm-token-0123456789"},
                          headers=headers("ana-test"))
-        assert saved.status_code >= 400 and request_status(api, asked["id"]) == "cancelled"
+        assert saved.status_code >= 400 and request_status(api, asked["id"]) == "canceled"
 
 
 def test_a_private_task_cards_a_fixer_who_can_read_it_and_never_one_who_cannot(api, monkeypatch):
@@ -449,7 +449,7 @@ def test_a_former_reader_cannot_load_or_save_the_credential_card_by_id(api):
     asked = ask_secret(api, claim(api, machine))
     get(api, f"credential-requests/{asked['id']}", "cara-test")
     make_private(api, t)
-    assert request_status(api, asked["id"]) == "cancelled"
+    assert request_status(api, asked["id"]) == "canceled"
     get(api, f"credential-requests/{asked['id']}", "cara-test", expected=404)
     post(api, f"credential-requests/{asked['id']}/save", {"value": "crm-token-0123456789"}, "cara-test", expected=404)
 
@@ -473,15 +473,15 @@ def test_asking_again_on_one_task_reuses_its_card_and_another_task_keeps_its_own
     assert len(wakes(api, first)) == len(wakes(api, second)) == 1
 
 
-def test_cancelling_the_card_ends_the_wait_with_one_wake_that_says_so(api):
+def test_canceling_the_card_ends_the_wait_with_one_wake_that_says_so(api):
     machine = ops_machine(api)
     t = task(api)
     opened = ask_secret(api, claim(api, machine))
     post(api, f"credential-requests/{opened['id']}/cancel", {})
-    assert [c["status"] for c in cards(api, t)] == ["cancelled"]
+    assert [c["status"] for c in cards(api, t)] == ["canceled"]
     assert shown(api, t)["task"]["status"] in ("open", "doing")
     [woke] = wakes(api, t)
-    assert "cancelled the card for the Acme CRM token" in woke
+    assert "canceled the card for the Acme CRM token" in woke
     assert not [i for i in needs(api) if i["id"] == t["id"]]
 
 

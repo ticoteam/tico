@@ -12,8 +12,8 @@ Use this page with the spec (`docs/openapi/v2.json`), the [SQL guide](hub-sql.md
 - A database at schema version 70 or older is refused. The message is: "This database is at schema version N, below 71,
   the oldest this server upgrades. Start it once with Tico v0.5.x (the release that writes version 71), then upgrade to
   this release." Start the old database once with v0.5.x, then upgrade.
-- Migrations run on the first start. Migrations `0013_rails_renames_wave1` and `0014_rails_renames_wave2` rename the
-  columns. A database that has both the old and the new name of a column is refused, so do not rename columns by hand.
+- Migrations run on the first start. Migrations `0013_rails_renames_wave1`, `0014_rails_renames_wave2` and
+  `0031_rails_renames_wave3` rename the columns. A database that has both the old and the new name of a column is refused, so do not rename columns by hand.
 
 ## Field names
 
@@ -64,9 +64,17 @@ Each needs-you item has `id`, `kind`, `title`, `body`, `subject`, `created_at` a
 
 ## Status values
 
-- `cancelled` is now `canceled` in `jobs.state`, `webhook_sends.state`, `fin_payments.status` and
-  `fin_transfers.status`.
-- Finance cards (`fin_cards.status`) and Assistant actions keep `cancelled` in this release.
+- `cancelled` is now `canceled` everywhere Tico writes it, including `jobs.state`, `webhook_sends.state`,
+  `fin_payments.status`, `fin_transfers.status`, `fin_cards.status`, `assistant_actions.status`,
+  `bot_tool_requests.state`, `bot_transitions.state`, `credential_requests.status`, `model_logins.state`,
+  `seats.request_state`, `service_jobs.state`, `slack_posts.state`, `task_reconnects.ended` and `worktree_waits.state`.
+  Migration `0032_one_spelling_canceled` converts stored rows. A seat being canceled is `canceling`.
+- The same spelling applies to names: `notes.cancelled_at` and `cancelled_by` are `canceled_at` and `canceled_by`, a
+  deferred message's `cancelled_at` is `canceled_at`, the answer to deleting a webhook has `canceled`, a live meeting
+  bot removal has `canceled_turns`, and the spec's `SeatCancelled` is `SeatCanceled`.
+- Four audit events are renamed, stored rows included: `assistant.action.canceled`, `bot.tool_request_canceled`,
+  `bot.transition_canceled` and `seat.request_canceled`.
+- Values from an outside system keep that system's spelling, such as Mercury's `provider_status` on a feed row.
 - Bot onboarding `needs_onboarding` is now `needs_setup`. Readers still accept `needs_onboarding` for one release, but
   new values are `needs_setup` or `onboarded`.
 - A status column refuses a value outside its list. On a trigger column the error is `<table>.<column>: invalid value`.
@@ -118,17 +126,43 @@ SELECT id, created_at FROM messages WHERE json_extract(refs, '$.task') = :task;
 - HTTP headers and `TICO_*` environment variables.
 - MCP tool names and CLI command names. An input that takes a bot, a person or an owner keeps that argument name, because
   it accepts either an id or a name.
-- Route paths, and audit-log event names.
+- Route paths, and audit-log event names other than the four under Status values.
 
-## TODO: still to rename
+## Actor and time columns
 
-> **TODO, not done in this release.** Actor columns still have role names: `owner`, `requester`, `closed_by`,
-> `from_actor`, `to_actor`, `created_by`, `updated_by`, `decided_by`, `requested_by`, `bot` (in SQL and in the API),
-> `operator` (bots and runners), `grp` (automations) and `dept`. The plan is `<role>_id` holding the same actor string.
-> The time names `ts`, `at`, `since`, `due` and `next_due` also keep their old names. The spec still has these
-> fields with their old names: `created` on `BotFileResult`, `PagePublished` and `InboundTaskResult`; `updated` on
-> `UpdateArchiveResult`; `last_sync` on the Granola objects; `due` on `Task`, `TaskCreate` and `TaskUpdate`; `next_due`
-> on `Automation` and `AutomationHeld`; `since` on automation holds; `ts` on `KpiReadingView`, `GoalCheckinView` and the
-> company history events; `at` on `KpiReading`; and `blocked_by` on `UsageLimitView`.
->
-> When this lands, replace this note with the old-to-new table for these names.
+An actor column ends in `_id` and holds the same actor string as before. A time column names its moment. These renames
+apply to the tables named, not to every column with the old name: `tasks.owner` is `owner_id`, `meetings.owner` stays.
+
+| Old | New | Tables |
+|---|---|---|
+| `owner` | `owner_id` | `tasks`, `goals`, `kpis`, `automations` |
+| `owner_actor` | `owner_id` | `conversations` |
+| `operator` | `owner_id` | `runners`, `bot_config`, `enrollments` |
+| `requester` | `requester_id` | `tasks` |
+| `from_actor`, `to_actor` | `sender_id`, `recipient_id` | `messages` |
+| `actor` | `actor_id` | `kpi_readings` |
+| `bot` | `bot_id` | `jobs`, `attempts`, `bot_files` |
+| `created_by`, `updated_by`, `closed_by`, `decided_by`, `requested_by` and other `*_by` | `*_by_id` | `tasks`, `goals`, `kpis`, `goal_kpis`, `approvals`, `cards`, `docs`, `messages` and others |
+| `grp`, `dept` | `group_id`, `department` | `automations`; the task manager tables |
+| `ts` | `created_at` (`measured_at` on `kpi_readings`) | `events`, `task_events`, `goal_events` and other logs |
+| `at`, `since`, `until` | a name for the moment, such as `created_at`, `changed_at`, `started_at`, `ended_at` | `clients/renames.json` has each table |
+| `due`, `next_due` | `due_at`, `next_due_at` | `tasks`, `task_reminders`, `deferrals`; `automations`, `schedules`, `bot_status` |
+| `state` | `saved_state` | `automation_runs` (it was `state_json` before that) |
+
+`clients/renames.json` holds the full list, with every table each name moved on and the tables that keep it.
+
+These request and response fields keep their old names in this release, and the spec lists them: `created` on
+`BotFileResult`, `PagePublished` and `InboundTaskResult`; `updated` on `UpdateArchiveResult`; `last_sync` on the Granola
+objects; `ts` on `KpiReadingView`; `at` on `KpiReading`; and `blocked_by` on `UsageLimitView`. Inputs that take a person
+or a date keep theirs too, such as `owner` and `due` on `TaskCreate` and `TaskUpdate`.
+
+## Check a bot's repository
+
+`hub bot check-names <slug>` lists the old column, field and command names a bot's checkout still uses, and runs on the
+computer without the server. It reads SQL in `hub sql`, SQL-looking strings, keys read from API answers, and `hub`
+commands. A name renamed on some tables only is reported with those tables: `SELECT owner FROM tasks` is flagged and
+`SELECT owner FROM meetings` is not.
+
+`hub bot check-names <slug> --fix` rewrites a name only when it has one new spelling everywhere and no table keeps it.
+It leaves everything else for you to change, including `owner`, `state`, `from_actor`, a bot's `memory/` and SQL outside
+a `hub sql` call, which may be the bot's own database.

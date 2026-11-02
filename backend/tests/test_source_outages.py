@@ -482,7 +482,7 @@ def test_github_retry_disappearing_never_claims_access_recovered(api, monkeypatc
         source_outages.observe(c, 'github:acme/project', 'GitHub checks access', waiting=1)
     at(monkeypatch, '2026-10-31T01:00:00.000000Z')
     with api.app.state.store.transaction() as c:
-        # The remembered move is gone: whether expired, cancelled or closed, that proves no successful read.
+        # The remembered move is gone: whether expired, canceled or closed, that proves no successful read.
         source_outages.sync(c, api.app.state.store.settings)
         assert len(notices(c)) == 2
         prs = [{'id': 'pr', 'repo': 'acme/project'}]

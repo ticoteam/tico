@@ -98,7 +98,7 @@ def test_a_sign_out_that_did_not_take_leaves_the_login_as_it_was(api):
     assert cleared(api, rid) == []
 
 
-def test_a_cancelled_switch_keeps_the_mark_and_the_old_login(api):
+def test_a_canceled_switch_keeps_the_mark_and_the_old_login(api):
     r = online(api)
     rid = r["runner_id"]
     report(api, r, post(api, f"runners/{rid}/logouts", {"runtime": "codex"})["id"], state="signed_out")
@@ -141,7 +141,7 @@ def test_a_signed_out_computer_is_not_given_the_shared_key_until_a_person_says_s
     assert again.status_code == 409
 
 
-def test_a_switch_past_its_commit_point_cannot_be_cancelled_and_one_cancelled_first_is_never_put_in_place(api):
+def test_a_switch_past_its_commit_point_cannot_be_canceled_and_one_canceled_first_is_never_put_in_place(api):
     r = online(api)
     rid = r["runner_id"]
     # Only a switch has a commit point.
@@ -162,14 +162,14 @@ def test_a_switch_past_its_commit_point_cannot_be_cancelled_and_one_cancelled_fi
         expires = c.execute("SELECT expires_at FROM model_logins WHERE id=?", (switch["id"],)).fetchone()[0]
     assert expires >= H.shift(H.now(), seconds=100), "finishing gets about two minutes of its own"
     refused = post(api, f"runners/{rid}/logins/{switch['id']}/cancel", {}, expected=409)
-    assert "can't be cancelled" in refused["error"]["detail"]
+    assert "can't be canceled" in refused["error"]["detail"]
     assert switch["id"] in [p["id"] for p in pending(api, r)], "still the computer's to finish"
     assert report(api, r, switch["id"], state="signed_in") == {"state": "signed_in"}
-    # Cancelled before the commit point: the runner's finishing gets cancelled back, so it keeps the old login.
+    # Canceled before the commit point: the runner's finishing gets canceled back, so it keeps the old login.
     late = post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True})
     post(api, f"runners/{rid}/logins/{late['id']}/cancel", {})
-    assert report(api, r, late["id"], state="finishing") == {"state": "cancelled"}
-    assert get(api, f"runners/{rid}/logins/{late['id']}")["state"] == "cancelled"
+    assert report(api, r, late["id"], state="finishing") == {"state": "cancelled"}   # the runner wire keeps its spelling
+    assert get(api, f"runners/{rid}/logins/{late['id']}")["state"] == "canceled"
 
 
 def test_a_mac_is_never_asked_to_switch_claude_code_which_keeps_its_login_in_the_keychain(api):
@@ -229,7 +229,7 @@ def test_switch_to_subscription_keeps_the_key_until_the_subscription_works_then_
     has_key = lambda: computer_asks(api, token).json()["credentials"][0]["value"] == "sk-team-key-0123456789"
     assert has_key()
 
-    # Cancelled: nothing changes, the key is still what it runs on.
+    # Canceled: nothing changes, the key is still what it runs on.
     first = start({"runtime": "codex", "to": "subscription"})
     assert first.status_code == 200, first.text
     assert first.json()["kind"] == "to_subscription"

@@ -2475,8 +2475,8 @@ def install_views(app, store, auth, mutate, task_view):
             tick = health["last_succeeded_at"] if health else None
             age = max(0, (H.parse_ts(H.now()) - H.parse_ts(tick)).total_seconds()) if tick else None
             active, queued = [], []
-            # Cancelled and uncertain jobs are not "up next": uncertain work already
-            # surfaces as a health issue, cancelled work is history.
+            # Canceled and uncertain jobs are not "up next": uncertain work already
+            # surfaces as a health issue, canceled work is history.
             readable = auth.bot_accesses(c, who)
             jobs = [row for row in c.execute(
                 "SELECT j.*,a.started_at,t.title AS task_title,m.sender_id FROM jobs j "

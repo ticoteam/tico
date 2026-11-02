@@ -49,7 +49,7 @@ const {unrouted} = require('./support/routes.cjs');
         }
         if(p.includes('/phone-requests/')){
           const selected=phoneRequests.find(r=>p.includes('/'+r.request_id+'/'));
-          selected.state=p.endsWith('/accept')?'accepted':'cancelled';
+          selected.state=p.endsWith('/accept')?'accepted':'canceled';
           return json({phone_request:selected});
         }
       }

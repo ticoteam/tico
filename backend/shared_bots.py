@@ -287,7 +287,7 @@ def install(app, store, auth, mutate, settings_admin, execution):
 
 def retire_assignments(c):
     """Temporary task assignments are retired (#420); task sessions replaced them. Their actors are
-    archived and taken off their computers, queued turns cancelled, and open tasks go back to the role
+    archived and taken off their computers, queued turns canceled, and open tasks go back to the role
     they came from. The rows and the assignment_branch* tables stay as history. Idempotent."""
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     for row in c.execute("SELECT bc.bot,bc.config,b.state FROM bot_config bc JOIN bots b ON b.id=bc.bot "

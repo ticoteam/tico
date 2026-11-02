@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS fin_cards (
   budget_id TEXT REFERENCES fin_budgets(id), money_account_id TEXT REFERENCES fin_money_accounts(id),
   kind TEXT NOT NULL CHECK (kind IN ('standing','single_use','person')), limit_amount BIGINT, limit_interval TEXT,
   currency TEXT NOT NULL, merchant_locks TEXT NOT NULL DEFAULT '[]', category_locks TEXT NOT NULL DEFAULT '[]',
-  expires_at TEXT, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','frozen','cancelled')), last4 TEXT,
+  expires_at TEXT, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','frozen','canceled')), last4 TEXT,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT, nickname TEXT NOT NULL DEFAULT '',
   provider_limit BIGINT, sync_status TEXT NOT NULL DEFAULT '', sync_error TEXT, synced_at TEXT);
 

@@ -67,7 +67,7 @@ AUTO_MESSAGES = {
                       "new one, or paste a gateway key here.",
     "invite_used_up": "Tico AI Gateway could not connect automatically: the invite code has been used by all the "
                       "installs it allows. Ask Tico Team for a new one, or paste a gateway key here.",
-    "invite_revoked": "Tico AI Gateway could not connect automatically: Tico cancelled the invite code. Ask Tico Team "
+    "invite_revoked": "Tico AI Gateway could not connect automatically: Tico canceled the invite code. Ask Tico Team "
                       "for a new one, or paste a gateway key here.",
 }
 AUTO_LATER = "Tico AI Gateway could not connect automatically yet. Tico tries again every hour."

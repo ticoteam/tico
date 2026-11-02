@@ -97,7 +97,7 @@ async function open(browser, state) {
       if (state.slowPost) await new Promise(done => setTimeout(done, state.slowPost));
       const action = state.actions[act[1]];
       state.decided.push([act[1], act[2]]);
-      action.status = act[2] === 'confirm' ? 'done' : 'cancelled';
+      action.status = act[2] === 'confirm' ? 'done' : 'canceled';
       // The server says how it went in the chat (assistant.py action_confirm): one more message.
       state.messages.push(say('r' + act[1], 'bot:botops', 'Done: ' + action.description, state.n++, {assistant: true, action_result: act[1]}));
       return json({action});

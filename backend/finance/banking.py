@@ -663,13 +663,13 @@ def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
 
 
 def undo(ctx: Ctx, row: Any) -> None:
-    """A row the provider cancelled, failed or reversed: its hold is released and its entry reversed (for a card, the
+    """A row the provider canceled, failed or reversed: its hold is released and its entry reversed (for a card, the
     reversal gives its use back in the period it posts in, as the books do)."""
     if row["hold_id"]:
         budgeting.release(ctx, str(row["hold_id"]))
         SB.void_settled(ctx.c, str(row["hold_id"]), ctx.at)
     if row["entry_id"]:
-        _unpost(ctx, row, "the bank cancelled this transaction")
+        _unpost(ctx, row, "the bank canceled this transaction")
     SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"status": "ignored", "entry_id": None, "entry_line_id": None,
                                                        "updated_at": ctx.at})
 

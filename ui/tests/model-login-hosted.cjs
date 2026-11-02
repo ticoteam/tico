@@ -2,7 +2,7 @@
 // computer, so Settings > Computers signs Claude Code and Codex in with the provider's link and code only: the dialog
 // starts the sign-in by itself, shows the link (and Codex's one-time code, or Claude's paste field), never what else
 // the CLI printed (a failure gives its message), never points to a terminal when the computer is slow to start, and
-// closes by itself once signed in (saying so in a toast) or when cancelled, cancelling it on the computer. A
+// closes by itself once signed in (saying so in a toast) or when canceled, canceling it on the computer. A
 // self-hosted Tico keeps the computer's lines, the terminal hint and the dialog open after a cancel. Every request is
 // intercepted; the harness capabilities come from runner/harnesses/*.toml.
 const {chromium} = require('playwright');
@@ -67,7 +67,7 @@ const {unrouted} = require('./support/routes.cjs');
             if (state) rows[one[1]].state = state;
             return json({error: {detail}}, status);
           }
-          rows[one[1]].state = 'cancelled';
+          rows[one[1]].state = 'canceled';
           return json(rows[one[1]]);
         }
         if (one && one[2] === '/code') { writes.push({p}); rows[one[1]].code_sent = true; return json(rows[one[1]]); }
@@ -144,7 +144,7 @@ const {unrouted} = require('./support/routes.cjs');
       await page.close();
     }
 
-    // ---- Hosted: Codex. Link and one-time code; Cancel sign-in closes only once the computer's sign-in is cancelled.
+    // ---- Hosted: Codex. Link and one-time code; Cancel sign-in closes only once the computer's sign-in is canceled.
     {
       const {page, writes, errors, signIn, last, refuse} = await open('invited');
       await signIn('codex').click();
@@ -167,14 +167,14 @@ const {unrouted} = require('./support/routes.cjs');
       await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
       await dialog.waitFor({state: 'detached'});
       assert.deepEqual(writes.at(-1), {p: `/api/v2/computers/box/logins/${last().id}/cancel`});
-      await page.locator('.toast', {hasText: 'The sign-in was cancelled.'}).waitFor();
+      await page.locator('.toast', {hasText: 'The sign-in was canceled.'}).waitFor();
       // Refused because the computer is already putting the account in place (409): the pane stays, follows it to
       // signed in, and closes then.
       await signIn('codex').click();
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
       Object.assign(last(), {state: 'waiting', url: 'https://auth.openai.com/codex/device', code: 'WXYZ-67890'});
       await dialog.locator('code[data-code]', {hasText: 'WXYZ-67890'}).waitFor();
-      const late = "The new account is already being put in place, so it can't be cancelled now";
+      const late = "The new account is already being put in place, so it can't be canceled now";
       refuse({status: 409, detail: late, state: 'finishing'});
       await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
       await dialog.locator('[data-status][data-state=finishing]', {hasText: late}).waitFor();
@@ -204,7 +204,7 @@ const {unrouted} = require('./support/routes.cjs');
       Object.assign(last(), {state: 'waiting'});
       await dialog.locator('[data-lines]', {hasText: 'Opening browser to sign in'}).waitFor();
       await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
-      await dialog.locator('[data-status]', {hasText: 'cancelled'}).waitFor();
+      await dialog.locator('[data-status]', {hasText: 'canceled'}).waitFor();
       await dialog.getByRole('button', {name: 'Try again'}).click();
       // The retry is a new sign-in: change it only once the computer has answered its start.
       await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();

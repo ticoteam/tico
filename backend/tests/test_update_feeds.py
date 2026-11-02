@@ -111,7 +111,7 @@ def ids(rows):
 
 
 def waiting(api, slug="ops"):
-    return [n for n in notes(api, slug) if not n["cancelled_at"]]
+    return [n for n in notes(api, slug) if not n["canceled_at"]]
 
 
 

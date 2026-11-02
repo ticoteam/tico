@@ -53,9 +53,9 @@ REQUESTS = ("CREATE TABLE IF NOT EXISTS seat_requests(id TEXT PRIMARY KEY, actor
             "made INTEGER NOT NULL DEFAULT 0)")
 FILING_STALE_SECONDS = 120
 # A seat's cloud agent request (`request_state`): `filing` while Tico is told, `requested` once its ticket is kept,
-# `cancelling` while a cancel is told to Tico, and `cancelled` once the cancel is finished. A seat with an open request
-# changes only once the request is cancelled (refuse_if_requested).
-FILING, REQUESTED, CANCELLING, CANCELLED = "filing", "requested", "cancelling", "cancelled"
+# `canceling` while a cancel is told to Tico, and `canceled` once the cancel is finished. A seat with an open request
+# changes only once the request is canceled (refuse_if_requested).
+FILING, REQUESTED, CANCELING, CANCELED = "filing", "requested", "canceling", "canceled"
 
 
 def ensure(c):
@@ -232,19 +232,19 @@ def seat_record(c, seat_id):
 
 
 def refuse_if_requested(row, c=None):
-    """Refuse a change to a seat that has an open cloud agent request. A request being filed or cancelled is in flight
+    """Refuse a change to a seat that has an open cloud agent request. A request being filed or canceled is in flight
     with Tico, so the change waits for it to finish; a requested seat keeps its line, team and title until the request
-    is cancelled (cancel_request in backend/cloud_agents.py). Filling, closing, renaming, moving and re-teaming a seat all
+    is canceled (cancel_request in backend/cloud_agents.py). Filling, closing, renaming, moving and re-teaming a seat all
     call this, so none of them can land while a request is open. Given the transaction, a request a dead process left in
     flight past its window is recovered first, so the change goes ahead; returns the seat as it now is."""
-    if c is not None and row["request_state"] in (FILING, CANCELLING):
+    if c is not None and row["request_state"] in (FILING, CANCELING):
         from .cloud_agents import _recover_stale
         _recover_stale(c, row["id"])
         row = seat(c, row["id"])
     state = row["request_state"]
-    if state in (FILING, CANCELLING):
+    if state in (FILING, CANCELING):
         raise Problem(state, "This seat's cloud agent request is in progress. Try again in a moment.", 409, retryable=True)
-    if state and state != CANCELLED:
+    if state and state != CANCELED:
         raise Problem("requested", "This seat has a cloud agent request: cancel the request first", 409)
     return row
 
@@ -398,7 +398,7 @@ def update_seat(auth, c, who, seat_id, fields):
 def close_seat(auth, c, who, seat_id):
     row = seat(c, seat_id)
     _may_place(auth, c, who, row["reports_to"])
-    # Closing would leave the ticket open at Tico and the first task waiting; cancelling the request does both.
+    # Closing would leave the ticket open at Tico and the first task waiting; canceling the request does both.
     row = refuse_if_requested(row, c)
     c.execute("UPDATE seats SET closed_at=?,closed_by=? WHERE id=?", (H.now(), who.actor, seat_id))
     from .recruiting import end_draft

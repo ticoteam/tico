@@ -239,11 +239,11 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   repeated key, or an identical request sent at the same time, shares that one seat and ticket. A first task whose title
   matches an open task is refused (`409`, `duplicate`) before Tico hears of it. The first task waits on the seat as a task
   its person owns; `GET /api/v2/seats/{id}/request` shows it to anyone who may read it. While a request is filing, being
-  cancelled, or open, the seat cannot be closed, filled, hired, or renamed, moved or given another team (`409`).
-  **Cancel request** (`POST /api/v2/seats/{id}/cancel-request`) marks the seat `cancelling`, tells Tico on the same
+  canceled, or open, the seat cannot be closed, filled, hired, or renamed, moved or given another team (`409`).
+  **Cancel request** (`POST /api/v2/seats/{id}/cancel-request`) marks the seat `canceling`, tells Tico on the same
   ticket, closes the seat and lets go of the first task: it is declined if the person may update it, else it stays with
   its owner. If Tico cannot be reached, or the last step fails, the seat goes back to `requested` and can be tried again.
-  A request a stopped process left `filing` or `cancelling` is recovered by the next request or cancel on its seat once it
+  A request a stopped process left `filing` or `canceling` is recovered by the next request or cancel on its seat once it
   is older than two minutes, and every such request is recovered when the store starts. A request for a seat in a team
   needs the right to add to that team (`403`), as an add does.
 - **Claude Code and Codex** are added, not requested: `POST /api/v2/cloud-agents/{claude|codex}/add` with `{seat_id}`

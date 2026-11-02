@@ -122,7 +122,7 @@ def cancel_for_attempt(c, attempt_id, reason):
     if not attempt_id or not _exists(c):
         return
     for row in c.execute(f"SELECT * FROM worktree_waits WHERE attempt_id=? AND state IN {OPEN}", (attempt_id,)).fetchall():
-        _finish(c, dict(row), 'cancelled', reason)
+        _finish(c, dict(row), 'canceled', reason)
 
 
 def _ended(c, wait, task):
@@ -180,7 +180,7 @@ def serve(c, owners=None, default_org=''):
 
 def _broken(c, wait, reason):
     """End a wait that failed unexpectedly: the task hears once, quietly, so a lasting fault wakes nothing again."""
-    if _finish(c, wait, 'cancelled', reason):
+    if _finish(c, wait, 'canceled', reason):
         H._wake(c, H.task(c, wait['task_id']), wait['owner'],
                 f"Tico stopped holding a place for this task's {wait['repo']} worktree: {reason}. Run "
                 f"`hub task worktree add {wait['repo']}` again when you work on this task.",
@@ -193,7 +193,7 @@ def _serve_one(c, wait, full, default_org):
     task = H.task(c, wait['task_id'])
     ended = _ended(c, wait, task)
     if ended:
-        _finish(c, wait, 'cancelled', ended)
+        _finish(c, wait, 'canceled', ended)
         link = c.execute("SELECT * FROM task_links WHERE id=? AND kind='worktree' AND state='pending'",
                          (wait['link_id'] or '',)).fetchone()
         if link and json.loads(link['detail'] or '{}').get('checkout_state') == 'queued':
@@ -208,7 +208,7 @@ def _serve_one(c, wait, full, default_org):
         computer = _computer(c, bot)
         if not computer_waits(c, bot):
             # Moved to a computer that cannot prepare a worktree alone: the task is told once and asks again.
-            if _finish(c, wait, 'cancelled', "The bot's computer cannot prepare worktrees by itself"):
+            if _finish(c, wait, 'canceled', "The bot's computer cannot prepare worktrees by itself"):
                 _wake(c, wait, task, f"Tico stopped holding a place for this task's {wait['repo']} worktree: this "
                                      "bot's computer cannot prepare one by itself. Run `hub task worktree add "
                                      f"{wait['repo']}` again when you work on this task.")
@@ -221,7 +221,7 @@ def _serve_one(c, wait, full, default_org):
                 full.add(wait['owner'])
                 return False
             # Permission, computer or path: the wait ends and the task hears why the next time it runs.
-            if _finish(c, wait, 'cancelled', problem.detail):
+            if _finish(c, wait, 'canceled', problem.detail):
                 H._wake(c, task, wait['owner'], f"Tico stopped holding a place for this task's {wait['repo']} "
                                                 f"worktree: {problem.detail}", refs={'worktree_wait': wait['id'], 'quiet': True},
                         trigger='other', source=wait['id'])

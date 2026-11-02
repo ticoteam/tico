@@ -340,7 +340,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             again = reconnects.request_of(c, task["id"], key) if task else None
             if again and again["requester"] != person.actor:
                 # Someone else is to save it now: their card replaces the old one (reconnects.open retires it).
-                c.execute("UPDATE credential_requests SET status='cancelled',updated_at=? WHERE id=?", (H.now(), again["id"]))
+                c.execute("UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=?", (H.now(), again["id"]))
                 again = None
             if again:
                 # Asked again on the same task: its card is still open, so that card is the answer, not a second one.
@@ -352,7 +352,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             for (old,) in c.execute("SELECT id FROM credential_requests WHERE requester=? AND bot=? AND env=? AND status='pending'",
                                     (person.actor, target, body.env)).fetchall():
                 if old not in waited:
-                    c.execute("UPDATE credential_requests SET status='cancelled',updated_at=? WHERE id=?", (H.now(), old))
+                    c.execute("UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=?", (H.now(), old))
             rid = H.new_id()
             row = {"id": rid, "requester": person.actor, "conversation_id": msg["conversation_id"], "bot": target, "asker": asker,
                    "env": body.env, "label": body.label.strip(), "format": body.format.strip(), "help_url": url,
@@ -385,7 +385,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         with store.transaction() as c:
             row = load(c, rid, who)
             if row["status"] == "pending":
-                c.execute("UPDATE credential_requests SET status='cancelled',updated_at=? WHERE id=?", (H.now(), rid))
+                c.execute("UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=?", (H.now(), rid))
                 row = c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone()
                 reconnects.dropped(c, rid)     # a task waiting on this card goes on without it
             return view(c, row, who)

@@ -219,15 +219,15 @@ def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, bot
         assert get(api, "providers/gateway")["url"] == original.url
         assert KEY not in json.dumps(card)
 
-        cancelled = post(api, f"assistant/actions/{card['action']['id']}/cancel", {}, token="ana-test")
-        assert cancelled["action"]["status"] == "canceled"
+        canceled = post(api, f"assistant/actions/{card['action']['id']}/cancel", {}, token="ana-test")
+        assert canceled["action"]["status"] == "canceled"
         assert get(api, "providers/gateway")["url"] == original.url
         assert proposed.calls == []
 
         # Retrying creates one new card; the exact same URL-only request runs once on the owner's tap.
         pending = act(api, ana, "PUT", "providers/gateway", request)
         card = pending.json()
-        assert card["needs_confirm"] and card["action"]["id"] != cancelled["action"]["id"]
+        assert card["needs_confirm"] and card["action"]["id"] != canceled["action"]["id"]
         approved = confirm(api, card, "ana-test")
         assert approved["action"]["status"] == "done"
         assert get(api, "providers/gateway")["url"] == proposed.url

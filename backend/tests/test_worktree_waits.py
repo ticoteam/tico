@@ -200,7 +200,7 @@ def test_one_broken_wait_ends_alone_and_the_heartbeat_still_frees_places(prepare
     beat(api, [{'link_id': link, 'state': 'removed', 'branch': None} for link in links[:2]])
     assert {r['state'] for r in rows(api, 'SELECT state FROM task_links WHERE id IN (?,?)', tuple(links[:2]))} == {'removed'}
     state = {r['task_id']: r for r in rows(api, 'SELECT * FROM worktree_waits')}
-    assert state[tid]['state'] == 'cancelled' and 'RuntimeError' in state[tid]['reason']
+    assert state[tid]['state'] == 'canceled' and 'RuntimeError' in state[tid]['reason']
     assert state[younger]['state'] == 'reserved'
     assert not rows(api, "SELECT * FROM events WHERE action='half.done'")
     told = wakes(api, tid)
@@ -273,12 +273,12 @@ def test_close_reassign_revoke_and_stop_end_the_wait_without_touching_other_task
         c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tasks[1],))
     waits.tick(api.app_state.store, 'Acme', force=True)
     state = {r['task_id']: r['state'] for r in rows(api, 'SELECT * FROM worktree_waits')}
-    assert state == {tasks[0]: 'cancelled', tasks[1]: 'cancelled', tasks[2]: 'waiting', tasks[3]: 'waiting'}
+    assert state == {tasks[0]: 'canceled', tasks[1]: 'canceled', tasks[2]: 'waiting', tasks[3]: 'waiting'}
     # Losing write access to the repository ends the wait when a place frees; the task hears it quietly.
     put(api, 'bots/cmo/repositories', {'mode': 'all', 'all_access': 'read'})
     free(api, filler, links[0])
     state = {r['task_id']: r['state'] for r in rows(api, 'SELECT * FROM worktree_waits')}
-    assert state[tasks[2]] == 'cancelled' and state[tasks[3]] == 'cancelled'
+    assert state[tasks[2]] == 'canceled' and state[tasks[3]] == 'canceled'
     assert all(json.loads(m['refs']).get('quiet') for m in wakes(api, tasks[2]))
     assert not wakes(api, tasks[0]) and not wakes(api, tasks[1])
     # A person stopping the turn that asked ends its waits; another turn's wait stands.
@@ -299,7 +299,7 @@ def test_close_reassign_revoke_and_stop_end_the_wait_without_touching_other_task
     assert done.status_code == 200, done.text
     state = {r['task_id']: r['state'] for r in rows(api, 'SELECT * FROM worktree_waits WHERE task_id IN (?,?)',
                                                      (fifth, tasks[3]))}
-    assert state == {fifth: 'cancelled', tasks[3]: 'waiting'}
+    assert state == {fifth: 'canceled', tasks[3]: 'waiting'}
 
 
 def test_old_computers_keep_the_old_answer_and_health_and_the_task_show_the_wait(prepared):
@@ -321,7 +321,7 @@ def test_old_computers_keep_the_old_answer_and_health_and_the_task_show_the_wait
     beat(api, readiness=old)
     waits.tick(api.app_state.store, 'Acme', force=True)
     waits.tick(api.app_state.store, 'Acme', force=True)
-    assert len(wakes(api, tid)) == 1 and rows(api, 'SELECT state FROM worktree_waits')[0]['state'] == 'cancelled'
+    assert len(wakes(api, tid)) == 1 and rows(api, 'SELECT state FROM worktree_waits')[0]['state'] == 'canceled'
 
 
 def test_the_cli_exits_with_its_own_status_for_a_wait(monkeypatch, capsys):
@@ -339,7 +339,7 @@ def test_the_cli_exits_with_its_own_status_for_a_wait(monkeypatch, capsys):
 
 
 
-def test_a_wait_whose_task_got_blocked_is_cancelled_not_served(prepared):
+def test_a_wait_whose_task_got_blocked_is_canceled_not_served(prepared):
     api, tid, _ = prepared
     filler, links = setup_wait(api, tid)
     assert 'wait' in post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']
@@ -350,7 +350,7 @@ def test_a_wait_whose_task_got_blocked_is_cancelled_not_served(prepared):
                   (blocker, tid, H.now()))
     free(api, filler, links[0])
     wait = rows(api, 'SELECT * FROM worktree_waits WHERE task_id=?', (tid,))[0]
-    assert wait['state'] == 'cancelled' and 'blocked by' in wait['reason'] and wait['link_id'] is None
+    assert wait['state'] == 'canceled' and 'blocked by' in wait['reason'] and wait['link_id'] is None
     assert not wakes(api, tid)
 
 
@@ -370,7 +370,7 @@ def test_two_freed_places_and_repeated_passes_give_one_reservation_and_one_wake(
     assert len(wakes(api, tid)) == 1
 
 
-def test_a_reserved_worktree_whose_task_closes_is_cancelled_once_and_never_prepared(prepared):
+def test_a_reserved_worktree_whose_task_closes_is_canceled_once_and_never_prepared(prepared):
     api, tid, _ = prepared
     filler, links = setup_wait(api, tid)
     assert 'wait' in post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']

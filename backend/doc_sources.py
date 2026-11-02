@@ -177,7 +177,7 @@ class FetchFailure(Exception):
         self.code, self.retry, self.hide = code, retry, hide
 
 
-class Cancelled(Exception):
+class Canceled(Exception):
     pass
 
 
@@ -196,7 +196,7 @@ class GitHub:
 
     def get(self, path, repository=False):
         if self.stopped.is_set():
-            raise Cancelled()
+            raise Canceled()
         headers = {'Accept': 'application/vnd.github+json', 'User-Agent': 'TicoDocs/1.0'}
         if self.token:
             headers['Authorization'] = 'Bearer ' + self.token
@@ -380,13 +380,13 @@ class Sources:
 
     def guard(self, c, job):
         if self.stop.is_set():
-            raise Cancelled()
+            raise Canceled()
         row = c.execute('SELECT s.* FROM doc_sources s JOIN doc_source_jobs j ON j.source_id=s.source_id '
                         'JOIN linked_docs l ON l.id=s.source_id WHERE s.source_id=? AND l.archived=0 '
                         'AND s.generation=? AND j.generation=s.generation AND j.lease=? AND j.lease_until>?',
                         (job['source_id'], job['generation'], job['lease'], time.time())).fetchone()
         if not row:
-            raise Cancelled()
+            raise Canceled()
         c.execute('UPDATE doc_source_jobs SET lease_until=? WHERE source_id=?', (time.time() + LEASE, job['source_id']))
         return row
 
@@ -574,7 +574,7 @@ class Sources:
             return
         try:
             self.refresh(job)
-        except Cancelled:
+        except Canceled:
             return
         except Exception as exc:
             failure = exc if isinstance(exc, FetchFailure) else FetchFailure()
@@ -582,7 +582,7 @@ class Sources:
             with self.store.transaction() as c:
                 try:
                     self.guard(c, job)
-                except Cancelled:
+                except Canceled:
                     return
                 c.execute('UPDATE doc_source_jobs SET lease=\'\',lease_until=0,next_try_at=? WHERE source_id=?',
                           (time.time() + failure.retry, job['source_id']))

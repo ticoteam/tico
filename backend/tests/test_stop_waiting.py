@@ -113,7 +113,7 @@ def test_a_persons_own_message_on_a_finished_task_is_never_suppressed(api, statu
     assert attempt and attempt["message"]["id"] == message["id"]
 
 
-def test_obsolete_notice_is_cancelled_even_when_idle_claim_finds_no_candidate(api, monkeypatch):
+def test_obsolete_notice_is_canceled_even_when_idle_claim_finds_no_candidate(api, monkeypatch):
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))

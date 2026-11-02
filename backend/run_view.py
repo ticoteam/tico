@@ -104,7 +104,7 @@ def decision_note(actor, detail):
 
 
 # The job's state beside a recovery decision: a saved choice still waiting for its lane is held.
-JOB_WORDS = {"uncertain": "Held", "canceled": "Cancelled", "queued": "Queued", "leased": "Running", "running": "Running",
+JOB_WORDS = {"uncertain": "Held", "canceled": "Canceled", "queued": "Queued", "leased": "Running", "running": "Running",
              "input": "Running", "completed": "Done"}
 
 
@@ -135,7 +135,7 @@ def recovery(c, job_ids):
 
 
 def decision_label(decided, name):
-    """"Cancelled: dismissed by BotOps at 09:50Z, <note>": the job's state, the decision, who, when (UTC) and the
+    """"Canceled: dismissed by BotOps at 09:50Z, <note>": the job's state, the decision, who, when (UTC) and the
     note, as one line. Once the job has moved to a later try the state is not this decision's, so the line says only
     what was decided: "Resumed by BotOps at 09:50Z, <note>". `name` turns the decider's actor into a person's name."""
     who = "Tico's auto-reconcile" if decided["by_kind"] == "tico" else name(decided["by"])

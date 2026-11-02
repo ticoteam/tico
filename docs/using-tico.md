@@ -282,7 +282,7 @@ body. Deferred messages (still `note` in the CLI and API) are only for other bot
 leave one, and the normal task/contact permissions apply to deferred work. Never put a secret in either.
 
 The next run started by chat, a Routine, another task or a deadline carries waiting deferred messages and tasks.
-For a deferred message, the API reports `waiting`, `carried` and `cancelled_at`. `carried` means a run received
+For a deferred message, the API reports `waiting`, `carried` and `canceled_at`. `carried` means a run received
 it, not that the bot completed work. A failed run makes it waiting again. A sender or a human who
 can see it can cancel a waiting note; once a live or completed run carries it, it cannot be taken
 back. Cancellation keeps the history. Bots see notes sent by or to them; humans see their own
@@ -290,7 +290,7 @@ sent notes and notes between bots whose activity they may read.
 
 A deferred Task remains open with `next_run_waiting: true` until a run carries it. It then follows
 ordinary task states and needs a completion result. Close it with
-`hub task close <task-id> --note "Cancelled before work began"` under the normal task permissions, or choose
+`hub task close <task-id> --note "Canceled before work began"` under the normal task permissions, or choose
 **Run now** on the task to start it sooner. Deferred does not mean delayed forever: its deadline starts a run. The
 stalled-task check leaves a deferred task alone until a run carries it.
 

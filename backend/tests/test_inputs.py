@@ -386,7 +386,7 @@ def test_a_turn_whose_own_comment_was_taken_back_still_finishes(api):
 
 
 @pytest.mark.parametrize("outcome", ["completed", "failed"])
-def test_a_comment_taken_back_before_the_runtime_got_it_is_cancelled_not_requeued(api, outcome):
+def test_a_comment_taken_back_before_the_runtime_got_it_is_canceled_not_requeued(api, outcome):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])

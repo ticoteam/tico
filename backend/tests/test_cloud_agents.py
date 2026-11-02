@@ -1,6 +1,6 @@
 """Cloud agents (backend/cloud_agents.py): a seat asks Tico's team to connect an agent it does not connect yet, and a
 supported agent is added as a Tico bot. A request is reserved under its key, checked before Tico hears of it, and kept in
-the transaction that keeps its ticket; cancelling it tells Tico and lets go of the first task."""
+the transaction that keeps its ticket; canceling it tells Tico and lets go of the first task."""
 import json
 import threading
 import time
@@ -223,7 +223,7 @@ def test_a_request_tico_accepted_is_kept_even_if_the_line_changed_meanwhile(envi
     kept = ask(api, f"seats/{seat['id']}/request-agent", {"agent": "copilot"})
     monkeypatch.undo()
     assert checks == [seat["id"]] and kept["request_state"] == "requested" and len(filed(hq)) == 1
-    assert ask(api, f"seats/{seat['id']}/cancel-request", {})["request_state"] == "cancelled"
+    assert ask(api, f"seats/{seat['id']}/cancel-request", {})["request_state"] == "canceled"
 
 
 def test_a_person_cannot_place_a_request_under_someone_else_and_nothing_is_filed(environment, hq, monkeypatch):
@@ -234,35 +234,35 @@ def test_a_person_cannot_place_a_request_under_someone_else_and_nothing_is_filed
     assert hq.seen == [] and [s for s in seats(api) if s["agent"]] == []
 
 
-def test_a_seat_with_a_request_is_cancelled_not_closed(environment, hq):
+def test_a_seat_with_a_request_is_canceled_not_closed(environment, hq):
     api = environment()
     seat = ask(api, "cloud-agents/devin/request", {})
     ask(api, f"seats/{seat['id']}/close", {}, expected=409)
     assert [s["id"] for s in seats(api)] == [seat["id"]]
 
 
-def test_cancelling_tells_tico_and_declines_the_first_task(environment, hq):
+def test_canceling_tells_tico_and_declines_the_first_task(environment, hq):
     api = environment()
     seat = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"})
     task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
     [(hq_id, secret)] = [(tid, t["secret"]) for tid, t in hq.tickets.items()]
     mark = len(hq.seen)
-    cancelled = ask(api, f"seats/{seat['id']}/cancel-request", {})
-    assert cancelled["closed"] is True and cancelled["request_state"] == "cancelled"
+    canceled = ask(api, f"seats/{seat['id']}/cancel-request", {})
+    assert canceled["closed"] is True and canceled["request_state"] == "canceled"
     [note] = [r for r in hq.seen[mark:] if r.method == "POST"]
     assert note.url.path == f"/v1/support/{hq_id}/messages" and note.headers["x-ticket-secret"] == secret
     message = hq.tickets[hq_id]["messages"][-1]["body"]
-    assert "Cancelled" in message and "Devin" in message
+    assert "Canceled" in message and "Devin" in message
     assert seats(api) == []
     with api.app.state.store.read() as c:
         assert H.task(c, task["id"])["status"] == "declined"
     # A repeat answers the same and tells Tico nothing more.
     again = ask(api, f"seats/{seat['id']}/cancel-request", {})
-    assert again["request_state"] == "cancelled" and len([r for r in hq.seen[mark:] if r.method == "POST"]) == 1
+    assert again["request_state"] == "canceled" and len([r for r in hq.seen[mark:] if r.method == "POST"]) == 1
     assert api.post(f"/api/v2/seats/{seat['id']}/request-agent", json={"agent": "copilot"}, headers=signed_in()).status_code == 404
 
 
-def test_cancelling_while_tico_is_down_changes_nothing_so_it_can_be_tried_again(environment, hq):
+def test_canceling_while_tico_is_down_changes_nothing_so_it_can_be_tried_again(environment, hq):
     api = environment()
     seat = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"})
     task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
@@ -273,7 +273,7 @@ def test_cancelling_while_tico_is_down_changes_nothing_so_it_can_be_tried_again(
     with api.app.state.store.read() as c:
         assert H.task(c, task["id"])["status"] == "open"
     hq.down = False
-    assert ask(api, f"seats/{seat['id']}/cancel-request", {})["request_state"] == "cancelled"
+    assert ask(api, f"seats/{seat['id']}/cancel-request", {})["request_state"] == "canceled"
 
 
 def test_a_private_first_task_is_listed_only_to_the_people_who_can_read_it(environment, hq):
@@ -397,7 +397,7 @@ def test_a_member_cannot_request_an_agent_for_a_seat_in_a_team_they_cannot_add_t
 
 
 def test_a_request_left_by_a_dead_process_is_recovered_by_the_next_guarded_action(environment, hq):
-    """A process that died mid-request leaves its seat filing (or cancelling). Past the window, the next request or cancel
+    """A process that died mid-request leaves its seat filing (or canceling). Past the window, the next request or cancel
     on that seat recovers it on the spot, without a restart; a fresh one still refuses, since a live process owns it."""
     api = environment()
     stale = H.shift(H.now(), seconds=-(lifecycle.FILING_STALE_SECONDS + 1))
@@ -413,11 +413,11 @@ def test_a_request_left_by_a_dead_process_is_recovered_by_the_next_guarded_actio
     assert ask(api, f"seats/{fresh['id']}/request-agent", {"agent": "copilot"}, expected=409)["error"]["code"] == "filing"
     assert ask(api, f"seats/{filing['id']}/request-agent", {"agent": "copilot"})["agent"] == "copilot"
     assert len(filed(hq)) == 1
-    cancelling = ask(api, "seats", {"title": "Analyst"})
-    ask(api, f"seats/{cancelling['id']}/request-agent", {"agent": "copilot"})
+    canceling = ask(api, "seats", {"title": "Analyst"})
+    ask(api, f"seats/{canceling['id']}/request-agent", {"agent": "copilot"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE seats SET request_state=?,updated_at=? WHERE id=?", (lifecycle.CANCELLING, stale, cancelling["id"]))
-    assert ask(api, f"seats/{cancelling['id']}/cancel-request", {})["request_state"] == "cancelled"
+        c.execute("UPDATE seats SET request_state=?,updated_at=? WHERE id=?", (lifecycle.CANCELING, stale, canceling["id"]))
+    assert ask(api, f"seats/{canceling['id']}/cancel-request", {})["request_state"] == "canceled"
     # A cancel that recovers a stale filing is then refused (there is no request left to cancel), and the recovery holds.
     orphan = ask(api, "seats", {"title": "Writer"})
     with api.app.state.store.transaction() as c:
@@ -451,7 +451,7 @@ def test_a_manager_who_cancels_does_not_decline_a_private_first_task_they_cannot
     with api.app.state.store.transaction() as c:
         H.task_update(c, seat["created_by"], task["id"], private=True)
     assert api.get(f"/api/v2/seats/{seat['id']}/request", headers=riley).json()["tasks"] == []
-    assert ask(api, f"seats/{seat['id']}/cancel-request", {}, headers=riley)["request_state"] == "cancelled"
+    assert ask(api, f"seats/{seat['id']}/cancel-request", {}, headers=riley)["request_state"] == "canceled"
     with api.app.state.store.read() as c:
         assert H.task(c, task["id"])["status"] == "open"
         assert c.execute("SELECT first_task FROM seats WHERE id=?", (seat["id"],)).fetchone()[0] == ""
@@ -521,23 +521,23 @@ def test_a_cancel_holds_its_seat_so_no_change_lands_while_tico_is_told(environme
     hold_call(monkeypatch, lambda method, path: method == "POST" and path.endswith("/messages"), entered, release,
               during=refused_meanwhile)
     answer = {}
-    cancelling = threading.Thread(target=lambda: answer.update(r=api.post(
+    canceling = threading.Thread(target=lambda: answer.update(r=api.post(
         f"/api/v2/seats/{seat['id']}/cancel-request", json={}, headers=signed_in())))
-    cancelling.start()
+    canceling.start()
     assert entered.wait(10)
     release.set()
-    cancelling.join(20)
+    canceling.join(20)
     assert during == [409, 409, 409]
-    assert answer["r"].status_code == 200 and answer["r"].json()["request_state"] == "cancelled"
+    assert answer["r"].status_code == 200 and answer["r"].json()["request_state"] == "canceled"
     [hq_id] = list(hq.tickets)
-    assert len([m for m in hq.tickets[hq_id]["messages"] if "Cancelled" in m["body"]]) == 1
+    assert len([m for m in hq.tickets[hq_id]["messages"] if "Canceled" in m["body"]]) == 1
 
 
 def test_a_cancel_whose_last_step_fails_leaves_the_request_requested_so_it_can_be_tried_again(environment, hq, monkeypatch):
     api = environment()
     seat = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"})
     task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
-    real, calls = cloud_agents._cancelled, []
+    real, calls = cloud_agents._canceled, []
 
     def failing_once(c, seat_id):
         calls.append(seat_id)
@@ -545,13 +545,13 @@ def test_a_cancel_whose_last_step_fails_leaves_the_request_requested_so_it_can_b
             raise Problem("unavailable", "The cancel could not be finished. Try again.", 503, retryable=True)
         return real(c, seat_id)
 
-    monkeypatch.setattr(cloud_agents, "_cancelled", failing_once)
+    monkeypatch.setattr(cloud_agents, "_canceled", failing_once)
     ask(api, f"seats/{seat['id']}/cancel-request", {}, expected=503)
     [still] = seats(api)
     assert still["request_state"] == "requested"
     with api.app.state.store.read() as c:
         assert H.task(c, task["id"])["status"] == "open"
-    assert ask(api, f"seats/{seat['id']}/cancel-request", {})["request_state"] == "cancelled"
+    assert ask(api, f"seats/{seat['id']}/cancel-request", {})["request_state"] == "canceled"
 
 
 def test_an_added_bot_joins_the_seats_team(environment, hq):

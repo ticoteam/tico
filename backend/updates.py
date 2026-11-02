@@ -416,7 +416,7 @@ def settle_sent(c, row):
     age = (H.parse_ts(H.now()) - H.parse_ts(row["sent_at"])).total_seconds()
     if job and job["state"] in ("completed", "canceled", "uncertain", "held"):
         _retry_or_miss(c, row, {"completed": "its run ended without posting an update",
-                                   "canceled": "the request was cancelled",
+                                   "canceled": "the request was canceled",
                                    "uncertain": "its run stopped part-way",
                                    "held": "it could not run"}.get(job["state"], job["state"]))
         return False

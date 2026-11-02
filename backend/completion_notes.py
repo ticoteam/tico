@@ -16,7 +16,7 @@ def record(c, target, task_id):
     saved = c.execute('SELECT value FROM registry_metadata WHERE key=?', (key,)).fetchone()
     old = json.loads(saved[0]) if saved else {}
     note = H.note(c, old.get('note_id')) if old.get('note_id') else None
-    pending = note and not note.get('carried_by') and not note.get('cancelled_at') and not note.get('settled_at')
+    pending = note and not note.get('carried_by') and not note.get('canceled_at') and not note.get('settled_at')
     ids = old.get('tasks', []) if pending else []
     count = int(old.get('count', len(ids))) if pending else 0
     if task_id in ids:

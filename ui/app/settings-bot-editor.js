@@ -626,7 +626,7 @@ function settingsTransitionHTML(t) {
     : t.state === 'blocked' ? `Current-session checkpoint blocked: ${t.error || 'The current computer is unavailable.'}`
     : t.state === 'failed' ? t.error || 'The checkpoint could not be completed.'
     : t.state === 'applied' ? `${name} now uses ${settingsTransitionTarget(t)}.${t.without_checkpoint ? ' No prepared checkpoint was created.' : t.progress.total ? ' Its conversation checkpoint is saved.' : ' It had no active session to checkpoint.'}`
-    : t.state === 'cancelled' ? 'This change was cancelled.' : 'Preparing the change…';
+    : t.state === 'canceled' ? 'This change was canceled.' : 'Preparing the change…';
   const pending = ['preparing','blocked','failed','prepared'].includes(t.state);
   const force = ['blocked','failed'].includes(t.state);
   return `<div class="tmodal-head"><h2 id="transition-title">${t.kind === 'model' ? 'Change model settings' : 'Move bot'} · ${esc(name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-transition-close aria-label="Close">✕</button></div>
@@ -661,7 +661,7 @@ function settingsWatchTransition(id, origin = {}) {
       try { await post(`/v2/settings/transitions/${encodeURIComponent(id)}/cancel`, {}); await paint(); }
       catch (error) {toast(error.message, true); button.currentTarget.disabled = false;}
     });
-    if (['applied','cancelled'].includes(t.state)) {
+    if (['applied','canceled'].includes(t.state)) {
       clearInterval(SETTINGS_TRANSITION_TIMER);
       await loadSettings();
       if (t.state === 'applied') {

@@ -2492,7 +2492,7 @@ STABLE.extend([
      "place when `seat_id` names one, which the bot then fills", "CloudAgentAdded"),
     ("/api/v2/seats/{seat_id}/cancel-request", "post", "Team chart", "cancelSeatRequest",
      "Withdraw a seat's cloud agent request: Tico hears of it, the seat closes and its first task is declined",
-     "SeatCancelled"),
+     "SeatCanceled"),
 ])
 SCHEMAS.update({
     "CloudAgent": obj({"id": "s", "name": "s", "maker": "s", "site": "s", "line": "s", "supported": "b",
@@ -2505,7 +2505,7 @@ SCHEMAS.update({
                       "steps": items({"enum": ["requested", "building", "ready"]}),
                       "tasks": items(obj({"id": "s", "title": "s", "status": "s"}, required=["id", "title", "status"]))},
                      required=["seat", "agent", "steps", "tasks"]),
-    "SeatCancelled": obj({"id": "s", "closed": "b", "request_state": "s"}, required=["id", "closed", "request_state"]),
+    "SeatCanceled": obj({"id": "s", "closed": "b", "request_state": "s"}, required=["id", "closed", "request_state"]),
 })
 SCHEMAS["Seat"]["properties"].update({name: _t("s") for name in ("agent", "agent_name", "request_state")})
 SCHEMAS["Seat"]["required"] = sorted(set(SCHEMAS["Seat"]["required"]) | {"agent", "agent_name", "request_state"})

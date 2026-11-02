@@ -198,7 +198,7 @@
         try {
           await post(`/v2/seats/${encodeURIComponent(seatId)}/cancel-request`, {});
           void refresh(true);
-          if (container) body.innerHTML = '<p class="muted">Request cancelled.</p>';
+          if (container) body.innerHTML = '<p class="muted">Request canceled.</p>';
           else host.close();
         } catch (failure) { toast(failure.message, true); }
       };

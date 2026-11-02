@@ -35,7 +35,8 @@
     "2",
     "2s",
     "2b",
-    "3"
+    "3",
+    "4"
   ],
   "columns": {
     "acceptance_json": "acceptance",
@@ -1105,6 +1106,22 @@
       "renames": {
         "can": [
           "google_connects"
+        ]
+      }
+    },
+    "cancelled_at": {
+      "kept_in": [],
+      "renames": {
+        "canceled_at": [
+          "notes"
+        ]
+      }
+    },
+    "cancelled_by": {
+      "kept_in": [],
+      "renames": {
+        "canceled_by": [
+          "notes"
         ]
       }
     },

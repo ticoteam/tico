@@ -93,7 +93,7 @@ const {unrouted} = require('./support/routes.cjs');
         const one = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)(\/cancel)?$/);
         if (one && one[2]) {
           writes.push({p});
-          rows[one[1]].state = 'cancelled';
+          rows[one[1]].state = 'canceled';
           return json(rows[one[1]]);
         }
         if (one) {
@@ -234,7 +234,7 @@ const {unrouted} = require('./support/routes.cjs');
     await toSub.locator('code', {hasText: 'ABCD-1234'}).waitFor();
     assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/box/logins', body: {runtime: 'codex', to: 'subscription'}});
     await toSub.locator('[data-cancel]').click();
-    await toSub.locator('[data-status]', {hasText: 'cancelled'}).waitFor();
+    await toSub.locator('[data-status]', {hasText: 'canceled'}).waitFor();
     assert.match(await toSub.locator('[data-status]').innerText(), /The API key is still in use\./);
     await page.keyboard.press('Escape');
     await own('codex').getByRole('button', {name: 'Switch to subscription'}).click();
@@ -253,7 +253,7 @@ const {unrouted} = require('./support/routes.cjs');
     await login.locator('code', {hasText: 'ABCD-1234'}).waitFor();
     assert.deepEqual(writes, [{p: '/api/v2/computers/box/logins', body: {runtime: 'claude', switch: true}}]);
     await login.locator('[data-cancel]').click();
-    await login.locator('[data-status]', {hasText: 'cancelled'}).waitFor();
+    await login.locator('[data-status]', {hasText: 'canceled'}).waitFor();
     assert.match(await login.locator('[data-status]').innerText(), /The account signed in before still works\./);
     await page.keyboard.press('Escape');
 

@@ -377,7 +377,7 @@ def test_people_manage_their_own_endpoints_and_the_owner_all(api, net):
     post(api, f"webhooks/{mine['id']}/example", {"type": "task.done"}, token="ben-test")
     assert {s["type"] for s in sends(api, mine["id"])} == {"custom.x", "task.done"}
     gone = post(api, f"webhooks/{mine['id']}/delete", {}, token="ben-test")
-    assert gone["cancelled"] == 2 and {s["state"] for s in sends(api, mine["id"])} == {"canceled"}
+    assert gone["canceled"] == 2 and {s["state"] for s in sends(api, mine["id"])} == {"canceled"}
     get(api, f"webhooks/{mine['id']}", token="ben-test", expected=404)
 
 

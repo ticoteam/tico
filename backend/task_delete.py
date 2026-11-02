@@ -228,7 +228,7 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
     any task is unknown or carries work; the report says which and why. With keep_work=True a task that
     carries work is deleted anyway: its conversation and messages stay where they are, since turns, jobs
     and runs point at them, and no one can read them while the task is gone (task_privacy.readable needs
-    the task). Its queued bot jobs are cancelled. A restore links the conversation back."""
+    the task). Its queued bot jobs are canceled. A restore links the conversation back."""
     ids = list(dict.fromkeys(i.strip() for i in ids if i and i.strip()))
     found = set(_column(c, "SELECT id FROM tasks WHERE id IN ({})", ids))
     missing = [i for i in ids if i not in found]

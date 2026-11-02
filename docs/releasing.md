@@ -171,7 +171,7 @@ published and files one task, "Release notes for vX.Y.Z", for the Technical Writ
 `docs-writer`) with the release's commit range. The command needs `gh` and a `hub` login that can create tasks.
 The command does not replace the release's publishing approval, evidence checklist or rollout.
 
-Run `publish` in the background while validation runs. A validation run that ends cancelled is rerun by `publish` (same
+Run `publish` in the background while validation runs. A validation run that ends canceled is rerun by `publish` (same
 run, up to twice); a failed one still refuses. Its freeze record retains the candidate, run ID, tag and notes task, so
 the same invocation resumes after interruption without dispatching another gate, retagging or filing a second task. If
 interrupted during dispatch before the run ID was saved, inspect Actions and pass `--run <id>` to recover it; mismatched
@@ -198,7 +198,7 @@ Caddy image job runs only when a change reaches the image inputs or `backend/cad
 compiles the changed files and runs the Dockerfile's import check itself. Conftest, `pytest.ini`, workflows,
 dependencies, `docs/` (except `docs/images` and `docs/history`), CHANGELOG.md, the selector, and deleted or
 unparsable files fall back to the full default Python suite and core browser scripts. Main pushes always run that full default suite, and a newer main push never
-cancels an earlier one; only a pull request's superseded run is cancelled. Runner/harness changes also run
+cancels an earlier one; only a pull request's superseded run is canceled. Runner/harness changes also run
 slow conformance on the Rust runner and all its fake harnesses; UI changes select their browser scripts, including
 imported-history for chat changes, or every browser script when the UI mapping is uncertain.
 
@@ -210,7 +210,7 @@ account (fork PRs on GitHub-hosted runners). `scripts/pr_checks.py` sizes the Py
 finishes in about `TICO_CI_JOB_SECONDS` (180) including setup, using JUnit per-file and browser per-script timings
 from the last successful full main run, with collected test counts until timings exist. New files use the observed
 seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check links each job and its elapsed seconds in its summary. It also
-fails if a required job failed or was cancelled. The target is under ten minutes from start to completed checks;
+fails if a required job failed or was canceled. The target is under ten minutes from start to completed checks;
 hosted run receipts, including cache state, establish whether that target is met.
 
 Nothing is mapped by hand or by filename: a test that uses a file in a way the map cannot see (a path built at run

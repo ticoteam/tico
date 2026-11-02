@@ -125,7 +125,7 @@ def clear(c, job_id, note="Its held run is no longer held."):
 
 def release(c, actor, bot):
     """Free the bot's held runs now, whatever their wait, and close their Needs-you item. A held run another path
-    cancelled meanwhile is freed too, so its item closes with it. Answers how many runs were freed."""
+    canceled meanwhile is freed too, so its item closes with it. Answers how many runs were freed."""
     from . import bot_stops
     rows = c.execute("SELECT id,hold_task_id FROM jobs WHERE bot_id=? AND hold_reason=?", (bot, REASON)).fetchall()
     if not rows:

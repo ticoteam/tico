@@ -2030,7 +2030,7 @@ def obsolete_notices_sql():
     the review gate's comment on a refused move once the ticket has changed step since (Tico made the move, or someone
     moved it elsewhere), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended.
     A turn that started and yielded (a drain's time limit, a shared login's hold cap) is never one of them: it is the rest
-    of a turn already under way, often the one that finished the task, and cancelling it left the bot's status on "queued
+    of a turn already under way, often the one that finished the task, and canceling it left the bot's status on "queued
     to continue" with nothing queued (Dev 684). The
     idle claim asks the same question: when it counted notices the claim keeps, every claim from that computer went
     on to the write lock for nothing. It goes from this computer's bots to their queued jobs (jobs_queue): left to
@@ -2118,7 +2118,7 @@ FILER_HOLD_S = 300
 def filer_live(c, message):
     """Whether this is the first notice of a task its bot filed for itself in a turn still out (refs.filed_in,
     H.task_create), filed under FILER_HOLD_S ago. It starts the task's turn once that turn ends or the hold passes; a
-    task the filing turn finished by then is cancelled by the claim's obsolete-notice check instead, so the bot never
+    task the filing turn finished by then is canceled by the claim's obsolete-notice check instead, so the bot never
     runs twice on one thought (Dev 359)."""
     filed_in = (message.get("refs") or {}).get("filed_in")
     return (bool(filed_in) and message["sender_id"] == H.KEEPER
@@ -2832,9 +2832,9 @@ class Execution:
                 held_back = bool(benched) and not quarantine_stops.requeues(c, row)
                 if benched:
                     retry_state = state = "uncertain" if held_back else "queued"
-                cancelled = {job["id"] for job in jobs if (row["stop_requested_at"] and job["id"] == row["job_id"] and not benched)
+                canceled = {job["id"] for job in jobs if (row["stop_requested_at"] and job["id"] == row["job_id"] and not benched)
                              or job["task_status"] in ("done", "closed", "declined")}
-                if row["job_id"] in cancelled:
+                if row["job_id"] in canceled:
                     state = "canceled"
                 c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), row["id"]))
                 from .performance import stamp_attempt
@@ -2865,7 +2865,7 @@ class Execution:
                                       conversation_id=msg["conversation_id"], in_reply_to=msg["id"],
                                       refs={"turn_id": row["id"]})
                 for job in jobs:
-                    job_state = "canceled" if job["id"] in cancelled else retry_state if state == "canceled" else state
+                    job_state = "canceled" if job["id"] in canceled else retry_state if state == "canceled" else state
                     c.execute("UPDATE jobs SET state=? WHERE id=?", (job_state, job["id"]))
                 H.turn_finish(c, H.KEEPER, row["id"], exit_code="failed" if state == "failed" else "interrupted",
                               summary=reason if state == "failed" else "Runner lease expired", usage_reason="no_result")
@@ -3356,7 +3356,7 @@ class Execution:
                 return {'attempt': None, 'waiting': org_turns.REASON}
             selected, prepared = oldest[1], True
         # Selection scans the queue on a read connection. Recheck only that job's current eligibility under the writer
-        # lock. A selected job that is no longer eligible here (the obsolete-notice loop above cancelled it, or its
+        # lock. A selected job that is no longer eligible here (the obsolete-notice loop above canceled it, or its
         # recheck refuses it) is dropped, and the claim takes the next candidate in this same call, passing over the
         # jobs it dropped. A claim drops at most CLAIM_PICKS, so it never loops; then it answers none, as before.
         passed = []
@@ -3899,7 +3899,7 @@ class Execution:
 
     def settles_late(self, c, who, row, body):
         """Whether a finished turn whose job the sweep or a person let go meanwhile still settles it. A completed
-        result is the answer the dismissal assumed would never come: the job was cancelled (the task was closed, or
+        result is the answer the dismissal assumed would never come: the job was canceled (the task was closed, or
         nothing was left to deliver) or queued to run again, and no later attempt has taken it. It settles the job
         completed and its answer is posted where the request was made, a closed task's own room included, and the
         queued rerun never happens. Any other outcome, or a job another attempt (`attempt_id`) or another computer now
@@ -4354,7 +4354,7 @@ class Execution:
                 task_id = work_task_id(origin_message)
                 task = H.task(c, task_id) if task_id else None
                 requester = task["requester_id"] if task else origin["sender_id"]
-                cancelled = bool(task and task["status"] == "closed" and refs.get("task") == task_id)
+                canceled = bool(task and task["status"] == "closed" and refs.get("task") == task_id)
                 # The person's next message in the chat this run answers is the same ask, carried on ("add it to
                 # engineering"): it joins the run rather than queueing behind it.
                 same_chat = (not task and row["conversation_id"] == origin_message["conversation_id"]
@@ -4363,7 +4363,7 @@ class Execution:
                            or (task and task.get("request_id") and row["in_reply_to"] == task["request_id"])
                            or row["kind"] in ("answer", "steer") or refs.get("credential_saved"))
                 if (str(row["sender_id"]).startswith("human:") and (row["sender_id"] != requester or not related)
-                        or row["kind"] == "notice" and not cancelled):
+                        or row["kind"] == "notice" and not canceled):
                     continue
             # A message keeps one attempt_inputs row (message_id is the key). Its job being queued
             # again means a finished run handed it back on purpose (a requeued or deferred turn, a
@@ -4767,7 +4767,7 @@ class Execution:
         # interrupted or failed work, which may have acted, is held for review.
         # A turn a person stopped is over by their choice: nothing to retry and nothing to review.
         stopped = bool(row["stop_requested_at"]) and body.outcome != "completed" or skipped
-        # A quarantine's Stop is no choice to drop the work: what it held back waits for review, not cancelled.
+        # A quarantine's Stop is no choice to drop the work: what it held back waits for review, not canceled.
         held_back = bool(benched) and not quarantine_stops.requeues(c, row)
         # A provider limit inside any error is the usage limit's, whatever the runner flagged; a prompt too large to
         # send starts the next run in a fresh session (backend/run_backoff.py).
@@ -4908,7 +4908,7 @@ class Execution:
             message = H.message(c, incoming["message_id"], include_deleted=True)
             if message["deleted_at"]:
                 # Taken back mid-turn: nothing is left to answer, defer or hold for review, so its job ends with
-                # the turn. A deleted comment's queued job is cancelled the same way (H.task_comment_delete).
+                # the turn. A deleted comment's queued job is canceled the same way (H.task_comment_delete).
                 c.execute("UPDATE jobs SET state=? WHERE message_id=?",
                           ("completed" if body.outcome == "completed" else "canceled", incoming["message_id"]))
                 continue
@@ -5454,7 +5454,7 @@ class Execution:
         A bot with no assignment never claims anything, so every routine occurrence and digest
         for it only lengthens a queue: a bot created before its
         repository existed can have dozens of hourly jobs a day later. The newest stays
-        queued for the machine that eventually takes it on, and the older ones are cancelled;
+        queued for the machine that eventually takes it on, and the older ones are canceled;
         their messages stay unread in the bot's inbox and conversation, so nothing is lost.
         """
         newest, held = {}, []

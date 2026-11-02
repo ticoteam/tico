@@ -240,13 +240,13 @@ def released_event(c, row, detail):
 def cancel_pending(c, row, detail, reason):
     """End a `pending` worktree nothing was checked out for (queued, or an attach not yet confirmed): no computer is
     asked, nothing on disk is touched, its place frees at once. A reserved wait for it ends once with the reason."""
-    detail = {**detail, 'removed_by': 'cancelled', 'release_reason': 'pending cancelled', 'cancelled': reason}
+    detail = {**detail, 'removed_by': 'canceled', 'release_reason': 'pending canceled', 'canceled': reason}
     # Guarded on the stored state: serving waits and the heartbeat's own pass can both reach one reservation.
     if not c.execute("UPDATE task_links SET state='removed',detail=?,updated_at=? WHERE id=? AND state='pending'",
                      (json.dumps(detail), H.now(), row['id'])).rowcount:
         return
     if wait := waits.preparing(c, row['id']):
-        waits._finish(c, wait, 'cancelled', reason)
+        waits._finish(c, wait, 'canceled', reason)
     released_event(c, row, detail)
 
 
@@ -735,7 +735,8 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     if existing:
         detail = json.loads(existing['detail'] or '{}')
         # This is a new allocation on the same link, not another attempt to release the retired tree.
-        for key in (*REMOVAL, 'release_reason', 'removed_by', 'restore_on_reopen', 'cancelled',
+        # A link released before the spelling changed holds `cancelled` in its stored detail.
+        for key in (*REMOVAL, 'release_reason', 'removed_by', 'restore_on_reopen', 'canceled', 'cancelled',
                     'cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up', 'cleanup_retry_generation',
                     'pending_expired', 'error', 'held'):
             detail.pop(key, None)

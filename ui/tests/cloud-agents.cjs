@@ -95,7 +95,7 @@ async function open(browser, viewport, {reducedMotion = 'no-preference', seats =
     if (cancel && method === 'POST') {
       calls.push({method, path: p, body: request.postDataJSON()});
       state.seats = state.seats.filter(s => s.id !== cancel[1]);
-      return json({id: cancel[1], closed: true, request_state: 'cancelled'});
+      return json({id: cancel[1], closed: true, request_state: 'canceled'});
     }
     return json(unrouted(p));
   });
@@ -137,7 +137,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       page.once('dialog', dialog => dialog.accept());
       await seatPage.locator('[data-cloud-cancel]').click();
       await page.locator('#main .cloud-seat-page').waitFor({state: 'detached'});
-      assert.deepEqual(calls.map(c => c.path), ['/api/v2/seats/s-devin/cancel-request'], 'cancelling withdraws the request');
+      assert.deepEqual(calls.map(c => c.path), ['/api/v2/seats/s-devin/cancel-request'], 'canceling withdraws the request');
 
       // The grid from Team's plus menu on Engineering, the way a person opens it: four across, two of them Add, six Request.
       const engineering = page.locator('#tree li.org-group > .noderow', {has: page.locator('[data-group-plus="eng"]')});

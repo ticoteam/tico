@@ -487,7 +487,7 @@ again only after a wait: a minute, doubling with each failure in a row, up to fi
 `claim_check` until one of its runs starts. A login hold that raises for one job holds that job alone. A team-wide
 check that raises fails the claim. **Release** (Health, `hub
 bot release <bot>`, `POST /api/v2/bots/{bot}/release`) frees the held runs at once, whatever their wait, and one that
-fails again is held again. A held run whose task finished meanwhile is cancelled by the next claim once its wait has
+fails again is held again. A held run whose task finished meanwhile is canceled by the next claim once its wait has
 ended.
 
 **Run budgets.** Each bot has `turns_per_hour` (default 300) and `turns_per_day` (default 2500); the owner and administrators set the

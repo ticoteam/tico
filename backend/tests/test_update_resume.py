@@ -110,7 +110,7 @@ def test_queued_work_starts_after_the_update_clears_and_an_operator_pause_stays(
 
 def test_a_capped_turn_continues_after_it_finished_its_own_task(api, monkeypatch):
     """The live v0.4.16 cutover: a turn marked its task done, then reached the drain time limit. The claim's sweep of
-    notices for finished tasks cancelled the continuation, leaving the bot "queued to continue" with nothing queued."""
+    notices for finished tasks canceled the continuation, leaving the bot "queued to continue" with nothing queued."""
     monkeypatch.setenv("TICO_VERSION", NEW)
     machine = runner(api)
     bots = ("ops", "finance")

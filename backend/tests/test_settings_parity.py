@@ -205,7 +205,7 @@ def outcome(answer):
 def tapped(api, card, token):
     """The person's own tap on a card: what the setting's route did with it (ran, refused, or the status it gave),
     with the test database put back as it was before the tap, so the next entry starts from the same fixture. The
-    card is then cancelled, so the next one isn't over the cap on open cards."""
+    card is then canceled, so the next one isn't over the cap on open cards."""
     path = api.app.state.store.settings.db_path
     with closing(sqlite3.connect(":memory:")) as kept:
         with closing(sqlite3.connect(path)) as live:

@@ -564,8 +564,8 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
     from .store import budgets as SB
     ctx = load(c, at)
     view = ctx.view(viewer)
-    if status and status not in ("active", "frozen", "cancelled"):
-        raise invalid("status is active|frozen|cancelled")
+    if status and status not in ("active", "frozen", "canceled"):
+        raise invalid("status is active|frozen|canceled")
     most = page_size(limit)
     marks = decode_cursor(cursor)
     after = marks[0] if marks else ""

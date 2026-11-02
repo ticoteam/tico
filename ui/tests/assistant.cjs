@@ -47,7 +47,7 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/assistant/actions/act3' && method === 'GET') return json({action: state.enrol});
     if (act) {
       const card = {act2: state.bulk, act3: state.enrol}[act[1]] || state.card;
-      state.decided.push([act[1], act[2]]); card.status = act[2] === 'confirm' ? 'done' : 'cancelled';
+      state.decided.push([act[1], act[2]]); card.status = act[2] === 'confirm' ? 'done' : 'canceled';
       if (act[1] === 'act2') card.result = {status_code: 200, error: '1 of 3 did not go through: Task not found'};
       // A new computer's code comes back to the person who tapped, in this answer only.
       if (act[1] === 'act3') return json({action: card, shown_once: {code: 'ONE-TIME-CODE-1234', expires_at: new Date(Date.now() + 9e5).toISOString(), owner_id: 'ana'}});

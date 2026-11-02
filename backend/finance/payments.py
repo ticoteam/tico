@@ -1,7 +1,7 @@
 """Recipients and payments (spec §9). A payment is one immutable instruction (recipient version, amount, money account,
 method, the line it posts to) with one idempotency key for its whole life, sent through Mercury's approval queue so a
 person approves in Mercury too. Lifecycle: queued → awaiting_bank_approval → submitted → settled | returned | failed |
-cancelled, plus unknown when a call timed out after it may have landed. One live payment per obligation; a live
+canceled, plus unknown when a call timed out after it may have landed. One live payment per obligation; a live
 payment keeps its hold until it settles or ends. Direct send is not built: only the owner's switch and its refusal.
 
 The planners run inside `act`; the worker steps (`recheck`, `sent`, `polled`, `found`) are what finance/sync.py runs
@@ -374,7 +374,7 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     status = str(pay["status"])
     if status in ("awaiting_bank_approval", "submitted"):
         if str(pay["mode"]) == "direct":
-            raise FinanceError(CONFLICT, "it was sent to Mercury directly: it cannot be cancelled here")
+            raise FinanceError(CONFLICT, "it was sent to Mercury directly: it cannot be canceled here")
         raise FinanceError(CONFLICT, "it is already in Mercury: reject it in Mercury")
     lost = status == "unknown" and bool(pay["flagged_at"]) and R.is_admin(ctx.org, who, ctx.rights(who))
     if status == "unknown" and not lost:
@@ -486,7 +486,7 @@ def own_counts(ctx: Ctx, counted_json: object, action_id: object) -> set[tuple[s
 
 
 def unreserve(ctx: Ctx, pay: Any) -> None:
-    """A payment that failed or was cancelled gives back the counters it reserved when it was claimed to send (only
+    """A payment that failed or was canceled gives back the counters it reserved when it was claimed to send (only
     those: its action's own count stays, as any refused action's does), once: the record empties."""
     owned = SK.loads_list(pay["counted"])
     if not owned:
@@ -539,7 +539,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     line in view, the recipient is still that version, payments are on, the gate rules (with their counters, less this
     payment's own, and their inputs' ages) and the budget still let it through. "" to go ahead; "wait" when it stays
     queued (the recipient is not at Mercury yet, or a person must look: it is held and asked about); else why it was
-    cancelled (a deny or a declined budget ends it and releases its hold). On "" the limits it fits that it has not
+    canceled (a deny or a declined budget ends it and releases its hold). On "" the limits it fits that it has not
     counted yet are added to `fresh`, for `reserve` once the send is claimed."""
     from . import gating
     rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
@@ -644,7 +644,7 @@ def _accepted(ctx: Ctx, pay: Any, answer: Answer, attempts: int) -> None:
     if str(pay["mode"]) == "direct":
         # A direct send is Mercury's transaction at once (no approver): submitted, and settled when its bank row posts.
         # Its id is kept where an approval request's id goes, and the bank row matches it (banking._settle).
-        gone = str(answer.body.get("status") or "").lower() in ("failed", "blocked", "cancelled")
+        gone = str(answer.body.get("status") or "").lower() in ("failed", "blocked", "cancelled")   # Mercury's spelling
         SK.update(ctx.c, "fin_payments", str(pay["id"]), {
             "status": "submitted", "provider_request_id": str(answer.body.get("id") or answer.body.get("requestId") or ""),
             "attempts": attempts, "last_error": None, "unknown_since": None, "next_try_at": _later(ctx, 1),
@@ -695,7 +695,7 @@ def sent(ctx: Ctx, pay: Any, answer: Answer) -> None:
 
 
 def polled(ctx: Ctx, pay: Any, answer: Answer) -> None:
-    """A request's status from Mercury. Rejected or cancelled in Mercury ends it and releases its hold; approved
+    """A request's status from Mercury. Rejected or canceled in Mercury ends it and releases its hold; approved
     becomes `submitted` until its bank transaction posts (finance/banking.py settles it)."""
     if str(pay["status"]) in ("settled", "failed", "canceled", "returned"):
         return                      # its debit already settled it (or it ended) in this sweep: nothing to move back

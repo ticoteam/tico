@@ -1153,7 +1153,7 @@ class Gateway:
         """Mark a message handled without posting it, so the next pass does not pick it up again."""
         now = self.clock()
         c.execute("INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,error,created_at,updated_at) "
-                  "VALUES(?,?,?,?,'','cancelled','Kept in Tico by their Slack settings',?,?)",
+                  "VALUES(?,?,?,?,'','canceled','Kept in Tico by their Slack settings',?,?)",
                   (row["id"], channel, thread_ts, bot, now, now))
 
     def originate(self):
@@ -1383,7 +1383,7 @@ class Gateway:
                 continue
             with self.store.transaction() as c:
                 if not privacy.public_message(c, H.message(c, post["message_id"])):
-                    c.execute("UPDATE slack_posts SET state='cancelled',text='',error='Task privacy prevents delivery',updated_at=? "
+                    c.execute("UPDATE slack_posts SET state='canceled',text='',error='Task privacy prevents delivery',updated_at=? "
                               "WHERE message_id=? AND state IN ('ready','rate_limited')", (self.clock(), post["message_id"]))
                     continue
                 from . import automation_actions

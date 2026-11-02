@@ -7,7 +7,7 @@
 //!
 //! The same relay signs a login out (the CLI's own logout, checked afterwards), switches it to another account
 //! (signed in on the side in a home of its own, moved into place only once it has finished and the server has agreed
-//! it is no longer cancelled, so a cancelled or failed switch leaves the old login working), and lets the company's shared key sign a signed-out computer login in again.
+//! it is no longer canceled, so a canceled or failed switch leaves the old login working), and lets the company's shared key sign a signed-out computer login in again.
 //! A computer login a person signed out stays signed out (signin.rs SIGNED_OUT_FILE).
 //!
 //! It also clears this computer's own model key (`clear_key`) and puts a new one in its place (`use_key`), or in place of
@@ -182,8 +182,8 @@ pub struct Session {
     runtime: String,
     profile: String,
     inner: Mutex<Inner>,
-    cancelled: AtomicBool,
-    /// The server took this switch's `finishing` report: it can no longer be cancelled, so the new login goes in.
+    canceled: AtomicBool,
+    /// The server took this switch's `finishing` report: it can no longer be canceled, so the new login goes in.
     confirmed: AtomicBool,
 }
 
@@ -195,7 +195,7 @@ impl Session {
             runtime: text_of(&work["runtime"]),
             profile: text_of(&work["profile"]),
             inner: Mutex::new(Inner { state: "starting".into(), dirty: true, ..Default::default() }),
-            cancelled: AtomicBool::new(false),
+            canceled: AtomicBool::new(false),
             confirmed: AtomicBool::new(false),
         })
     }
@@ -545,7 +545,8 @@ fn restore(moved: &[Moved], env: &Env) -> Result<(), String> {
 /// has, a cancel is refused there, so the change can go ahead; a cancel (or a refusal) that came first wins, and so
 /// does no answer.
 fn confirm_commit(s: &Session, late: &str) -> Result<(), (String, String)> {
-    let cancelled = || ("cancelled".to_string(), "Cancelled".to_string());
+    // "cancelled" is the wire's spelling: runners and servers of every release read it (backend/model_login.py WIRE_STATE).
+    let canceled = || ("cancelled".to_string(), "Canceled".to_string());
     {
         let mut i = s.inner.lock().unwrap();
         i.state = "finishing".into();
@@ -558,8 +559,8 @@ fn confirm_commit(s: &Session, late: &str) -> Result<(), (String, String)> {
         if s.confirmed.load(Ordering::SeqCst) {
             return Ok(());
         }
-        if s.cancelled.load(Ordering::SeqCst) {
-            return Err(cancelled());
+        if s.canceled.load(Ordering::SeqCst) {
+            return Err(canceled());
         }
         if Instant::now() > until {
             return Err(("failed".into(), late.into()));
@@ -663,9 +664,9 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             Ok(Some(_)) | Err(_) => break None,
             Ok(None) => {}
         }
-        if s.cancelled.load(Ordering::SeqCst) {
+        if s.canceled.load(Ordering::SeqCst) {
             kill(&mut child);
-            break Some(("cancelled".into(), "Cancelled".into()));
+            break Some(("cancelled".into(), "Canceled".into()));
         }
         if Instant::now() > deadline {
             kill(&mut child);
@@ -692,7 +693,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     let mut keep_side = false;
     let (state, message) = match verdict {
         Some(v) => v,
-        None if s.cancelled.load(Ordering::SeqCst) => ("cancelled".into(), "Cancelled".into()),
+        None if s.canceled.load(Ordering::SeqCst) => ("cancelled".into(), "Canceled".into()),
         None if !child.wait().map(|st| st.success()).unwrap_or(false) => ("failed".into(), "The sign-in command stopped without signing in".into()),
         None if switch.is_some() => {
             // Signed in on the side? Then, once the server agrees, that login takes the old one's place and is checked
@@ -1393,7 +1394,7 @@ impl Logins {
         }
         for (id, s) in &self.sessions {
             if s.live() && !wanted.contains_key(id) {
-                s.cancelled.store(true, Ordering::SeqCst); // cancelled or expired on the server
+                s.canceled.store(true, Ordering::SeqCst); // canceled or expired on the server
             }
         }
         let mut ids: Vec<&String> = wanted.keys().collect();
@@ -1424,11 +1425,11 @@ impl Logins {
                     }
                 };
                 // A switch goes ahead only once the server holds it as finishing; if it had already ended there
-                // (cancelled, expired), the runner stops too.
+                // (canceled, expired), the runner stops too.
                 match text_of(&reply["state"]).as_str() {
                     "finishing" if body["state"] == "finishing" => s.confirmed.store(true, Ordering::SeqCst),
                     // A removal Tico refused at its commit point (a bot runs on it now) stops before anything is removed.
-                    "cancelled" | "expired" | "failed" if s.live() => s.cancelled.store(true, Ordering::SeqCst),
+                    "cancelled" | "expired" | "failed" if s.live() => s.canceled.store(true, Ordering::SeqCst),
                     _ => {}
                 }
                 {
@@ -1449,7 +1450,7 @@ impl Logins {
 
     pub fn stop(&self) {
         for s in self.sessions.values() {
-            s.cancelled.store(true, Ordering::SeqCst);
+            s.canceled.store(true, Ordering::SeqCst);
         }
     }
 }
@@ -1594,7 +1595,7 @@ exit 2
     }
 
     /// Run a switch on its own thread, the way the relay does, with `server` standing in for Tico's answer once the
-    /// runner says it is finishing (true: confirmed; false: it had been cancelled).
+    /// runner says it is finishing (true: confirmed; false: it had been canceled).
     fn switch_with(runner: &Arc<Runner>, config: &Config, server: Option<bool>) -> (Arc<Session>, std::thread::JoinHandle<()>) {
         switch_kind(runner, config, server, "switch")
     }
@@ -1609,7 +1610,7 @@ exit 2
         (s, running)
     }
 
-    /// Stand in for Tico's answer once the runner says `s` is finishing (true: confirmed; false: it had been cancelled).
+    /// Stand in for Tico's answer once the runner says `s` is finishing (true: confirmed; false: it had been canceled).
     fn answer_finishing(s: &Arc<Session>, confirm: bool) {
         let s3 = s.clone();
         std::thread::spawn(move || {
@@ -1618,7 +1619,7 @@ exit 2
                 std::thread::sleep(Duration::from_millis(20));
             }
             if state(&s3).0 == "finishing" {
-                if confirm { s3.confirmed.store(true, Ordering::SeqCst) } else { s3.cancelled.store(true, Ordering::SeqCst) }
+                if confirm { s3.confirmed.store(true, Ordering::SeqCst) } else { s3.canceled.store(true, Ordering::SeqCst) }
             }
         });
     }
@@ -1763,7 +1764,7 @@ exit 2
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "new\n");
         assert_eq!(sides(), 0);
 
-        // Nothing moves before Tico confirms: a switch Tico says was cancelled meanwhile keeps the old login.
+        // Nothing moves before Tico confirms: a switch Tico says was canceled meanwhile keeps the old login.
         std::fs::write(&auth, "old\n").unwrap();
         let (refused, running) = switch_with(&runner, &config, Some(false));
         running.join().unwrap();
@@ -1775,7 +1776,7 @@ exit 2
         std::fs::write(root.join("hold-probe"), "").unwrap();
         let (late, running) = switch_with(&runner, &config, Some(true));
         wait_for(|| root.join("probing").exists());
-        late.cancelled.store(true, Ordering::SeqCst);
+        late.canceled.store(true, Ordering::SeqCst);
         std::fs::write(root.join("release"), "").unwrap();
         running.join().unwrap();
         assert_eq!(state(&late).0, "cancelled", "{:?}", state(&late));
@@ -1796,7 +1797,7 @@ exit 2
         std::fs::remove_file(root.join("refuse")).unwrap();
 
         // Switch to subscription (Computers part 2): the login runs on the company's key until the subscription is in
-        // place. Cancelled before the commit point, or not working once in place, the key stays in use.
+        // place. Canceled before the commit point, or not working once in place, the key stays in use.
         let key_in_use = || runner.sign_in.headless_secret("codex").map(|(_, v)| v) == Some("sk-team-0123456789".into());
         std::fs::write(&team, "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
         std::fs::write(&auth, "old\n").unwrap();
@@ -1887,20 +1888,20 @@ exit 2
         assert_eq!(std::fs::read_to_string(root.join("runs")).unwrap_or_default(), runs, "a CLI ran for an unknown kind");
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
 
-        // A switch cancelled partway leaves the old login exactly as it was.
+        // A switch canceled partway leaves the old login exactly as it was.
         std::fs::write(&auth, "old\n").unwrap();
         std::fs::write(root.join("slow"), "").unwrap();
-        let cancelled = session("switch");
-        let (s2, r2, c2) = (cancelled.clone(), runner.clone(), config.clone());
+        let canceled = session("switch");
+        let (s2, r2, c2) = (canceled.clone(), runner.clone(), config.clone());
         let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
         let until = Instant::now() + Duration::from_secs(10);
-        while state(&cancelled).0 != "waiting" && Instant::now() < until {
+        while state(&canceled).0 != "waiting" && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert_eq!(sides(), 1, "the switch signs in on the side");
-        cancelled.cancelled.store(true, Ordering::SeqCst);
+        canceled.canceled.store(true, Ordering::SeqCst);
         running.join().unwrap();
-        assert_eq!(state(&cancelled).0, "cancelled");
+        assert_eq!(state(&canceled).0, "cancelled");
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
         assert_eq!(sides(), 0);
     }
@@ -2041,7 +2042,7 @@ exit 2
         std::fs::write(&hand, "OPENAI_API_KEY=sk-hand-0123456789\n").unwrap();
         replies.lock().unwrap().0 = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-other-0123456789","source":"computer"}]}"#.into();
         std::fs::write(&hold, "").unwrap();
-        let (cancelled, running) = start_use_key(next, Some(false));
+        let (canceled, running) = start_use_key(next, Some(false));
         wait_for(|| probing.exists());
         let (fetched, logged) = (fetches(), key_logins());
         sign.refresh_now("codex");
@@ -2052,7 +2053,7 @@ exit 2
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "apikey sk-new-0123456789\n");
         std::fs::write(&release, "").unwrap();
         running.join().unwrap();
-        assert_eq!(state(&cancelled), ("cancelled".into(), "Cancelled".into()));
+        assert_eq!(state(&canceled), ("cancelled".into(), "Canceled".into()));
         assert_eq!(read_env(&computer)["OPENAI_API_KEY"], "sk-new-0123456789");
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "apikey sk-new-0123456789\n");
         assert_eq!(read_env(&hand)["OPENAI_API_KEY"], "sk-hand-0123456789");
@@ -2064,7 +2065,7 @@ exit 2
         // Run out on Tico while it is checked (the next poll no longer lists it): the same.
         let (expired, running) = start_use_key(next, None);
         wait_for(|| probing.exists());
-        expired.cancelled.store(true, Ordering::SeqCst);
+        expired.canceled.store(true, Ordering::SeqCst);
         std::fs::write(&release, "").unwrap();
         running.join().unwrap();
         assert_eq!(state(&expired).0, "cancelled");
@@ -2102,9 +2103,9 @@ exit 2
         assert!(sign.signed_out("codex") && !read_env(&computer).contains_key("OPENAI_API_KEY"));
         assert!(sign.headless_secret("codex").is_none());
         // From a cleared key, a cancel leaves it cleared, signed out and with no login.
-        let (cancelled, running) = start_use_key(next, Some(false));
+        let (canceled, running) = start_use_key(next, Some(false));
         running.join().unwrap();
-        assert_eq!(state(&cancelled).0, "cancelled");
+        assert_eq!(state(&canceled).0, "cancelled");
         assert!(sign.signed_out("codex") && !read_env(&computer).contains_key("OPENAI_API_KEY") && !auth.exists() && no_side());
 
         // No key staged for the job, or a shared one: nothing changes.
@@ -2232,8 +2233,8 @@ exit 2
         sign.mark_key_off("codex").unwrap();
         let subscription_in_use = || std::fs::read_to_string(&auth).unwrap() == "chatgpt\n" && sign.key_off("codex")
             && sign.headless_secret("codex").is_none() && !read_env(&computer).contains_key("OPENAI_API_KEY");
-        // Cancelled before its commit point, or a key the provider refuses: the subscription stays signed in and in use.
-        assert_eq!(to_key("codex", codex_key, Some(false)), ("cancelled".into(), "Cancelled".into()));
+        // Canceled before its commit point, or a key the provider refuses: the subscription stays signed in and in use.
+        assert_eq!(to_key("codex", codex_key, Some(false)), ("cancelled".into(), "Canceled".into()));
         assert!(subscription_in_use() && no_side());
         let bad = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-bad-0123456789","source":"computer"}]}"#;
         assert_eq!(to_key("codex", bad, Some(true)), ("failed".into(), "The new key did not sign codex in; the subscription is still in use".into()));
@@ -2414,7 +2415,7 @@ exit 2
             let (s2, r2, c2) = (s.clone(), runner.clone(), Config::load(&path).unwrap());
             let running = std::thread::spawn(move || run_remove(s2, r2, c2));
             wait_for(|| state(&s).0 == "finishing" || !s.live());
-            if server { s.confirmed.store(true, Ordering::SeqCst) } else { s.cancelled.store(true, Ordering::SeqCst) }
+            if server { s.confirmed.store(true, Ordering::SeqCst) } else { s.canceled.store(true, Ordering::SeqCst) }
             running.join().unwrap();
             state(&s)
         };
@@ -2540,17 +2541,17 @@ esac
             assert_eq!(sign_in_status("musecode", &exe, &env).unwrap().0, false);
             assert_eq!(std::fs::read(other).unwrap(), untouched);
 
-            // A cancelled sign-in has already written a new file on the side; the old file must stay in use.
+            // A canceled sign-in has already written a new file on the side; the old file must stay in use.
             std::fs::write(auth, old).unwrap();
             std::fs::write(root.join("hold"), "").unwrap();
-            let cancelled = session("switch");
-            let (s, r, c) = (cancelled.clone(), runner.clone(), config.clone());
+            let canceled = session("switch");
+            let (s, r, c) = (canceled.clone(), runner.clone(), config.clone());
             let running = std::thread::spawn(move || run_session(s, r, c, Duration::from_secs(20)));
             wait_for(|| root.join("started").exists());
             assert_eq!(std::fs::read_to_string(auth).unwrap(), old);
-            cancelled.cancelled.store(true, Ordering::SeqCst);
+            canceled.canceled.store(true, Ordering::SeqCst);
             running.join().unwrap();
-            assert_eq!(state(&cancelled).0, "cancelled", "{:?}", state(&cancelled));
+            assert_eq!(state(&canceled).0, "cancelled", "{:?}", state(&canceled));
             assert_eq!(std::fs::read_to_string(auth).unwrap(), old);
             std::fs::remove_file(root.join("hold")).unwrap();
             std::fs::remove_file(root.join("started")).unwrap();
@@ -2930,10 +2931,10 @@ esac
                 assert_eq!(std::fs::read_to_string(&auth).unwrap(), old);
                 assert!(!root.join("outside").exists());
             }
-            let cancelled = make("switch");
-            answer_finishing(&cancelled, false);
-            run_session(cancelled.clone(), runner.clone(), config.clone(), Duration::from_secs(5));
-            assert_eq!(state(&cancelled).0, "cancelled", "{:?}", state(&cancelled));
+            let canceled = make("switch");
+            answer_finishing(&canceled, false);
+            run_session(canceled.clone(), runner.clone(), config.clone(), Duration::from_secs(5));
+            assert_eq!(state(&canceled).0, "cancelled", "{:?}", state(&canceled));
             assert_eq!(std::fs::read_to_string(&auth).unwrap(), old);
             let switch = make("switch");
             answer_finishing(&switch, true);

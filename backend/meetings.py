@@ -178,5 +178,5 @@ def retire_capture(c):
         meta.update(status='done', ended=meta.get('ended') or H.now(), error=None,
                     warning=None if row['transcript_original'] else 'Tico no longer records; this meeting has no transcript')
         c.execute('UPDATE meetings SET metadata=? WHERE id=?', (json.dumps(meta, sort_keys=True), row['id']))
-    c.execute("UPDATE service_jobs SET state='cancelled',updated_at=? "
+    c.execute("UPDATE service_jobs SET state='canceled',updated_at=? "
               "WHERE kind='recording.process' AND state IN ('queued','running')", (H.now(),))

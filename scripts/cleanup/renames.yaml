@@ -2,7 +2,7 @@
 # in cleanup-spec.md. Do not edit by hand: change the tables in gen_map.py and regenerate.
 # `# CHECK` marks a name the integration owner should confirm before the map is frozen.
 base: 29fcaaf6e
-applied_waves: [1, 2, 2s, 2b, 3]
+applied_waves: [1, 2, 2s, 2b, 3, 4]
 tables: {}
 columns:
   agent_pairings.created: created_at
@@ -374,6 +374,8 @@ columns:
   model_logins.updated: updated_at
   model_subscriptions.created: created_at
   model_subscriptions.updated: updated_at
+  notes.cancelled_at: canceled_at  # one spelling: canceled
+  notes.cancelled_by: canceled_by  # one spelling: canceled
   notes.created: created_at
   oauth_clients.created: created_at
   oauth_clients.redirect_uris_json: redirect_uris
@@ -916,4 +918,11 @@ waves:
       tasks.owner: owner_id
       tasks.requester: requester_id
       tasks.snoozed_by: snoozed_by_id
+  "4":
+    rule: "one spelling: notes.cancelled_at and cancelled_by -> canceled_at and canceled_by (migration 0032)"
+    count: 2
+    global: {}
+    scoped:
+      notes.cancelled_at: canceled_at  # one spelling: canceled
+      notes.cancelled_by: canceled_by  # one spelling: canceled
 collisions: []

@@ -242,7 +242,7 @@ def set_settled_amount(c: sqlite3.Connection, hold_id: str, amount: int) -> int:
 
 
 def void_settled(c: sqlite3.Connection, hold_id: str, at: str) -> int:
-    """A settled charge the bank cancelled or reversed: it no longer uses anything."""
+    """A settled charge the bank canceled or reversed: it no longer uses anything."""
     return c.execute("UPDATE fin_holds SET status='released', released_at=? WHERE id=? AND status='settled'",
                      (at, hold_id)).rowcount
 

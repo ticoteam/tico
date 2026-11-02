@@ -1,5 +1,6 @@
 """The status and state lists (backend/status_values.py): refused outside the list, one spelling per meaning, and an
 upgrade that names what it cannot map rather than guessing."""
+import importlib
 import sqlite3
 
 import pytest
@@ -19,7 +20,7 @@ def _fresh_store(tmp_path):
 
 
 # Columns whose CHECK wants a real value, not a placeholder.
-OVERRIDES = {("fin_payments", "method"): "ach", ("bot_config", "config"): "{}"}
+OVERRIDES = {("fin_payments", "method"): "ach", ("bot_config", "config"): "{}", ("fin_cards", "kind"): "standing"}
 
 
 def _required(conn, table, skip):
@@ -174,3 +175,43 @@ def test_a_stale_needs_onboarding_row_maps_to_needs_setup_and_bot_status_keeps_i
         ("starter", "idle"), ("stuck", "limited")]
     with pytest.raises(sqlite3.IntegrityError, match="status_values_state"):
         conn.execute("UPDATE bot_status SET state='active' WHERE bot='stuck'")
+
+
+def test_migration_0032_moves_every_stored_cancelled_and_skips_what_this_file_lacks(tmp_path):
+    from backend.migrations import renames_data
+    canceled = importlib.import_module("backend.migrations.0032_one_spelling_canceled")
+    conn = sqlite3.connect(tmp_path / "old.db")
+    tables = {(table, column) for table, column in canceled.COLUMNS if table != "bot_transitions"}   # one table absent
+    for table in {table for table, _column in tables}:
+        columns = [column for t, column in tables if t == table]
+        conn.execute(f"CREATE TABLE {table}(id TEXT, {', '.join(columns)})")
+        for column in columns:
+            conn.executemany(f"INSERT INTO {table}(id,{column}) VALUES(?,?)", [("old", "cancelled"), ("kept", "failed")])
+    conn.execute("INSERT INTO seats(id,request_state) VALUES('going','cancelling')")
+    conn.execute("CREATE TABLE fin_feed_txns(id TEXT, provider_status TEXT)")        # Mercury's word stays as sent
+    conn.execute("INSERT INTO fin_feed_txns VALUES('t','cancelled')")
+    conn.execute("CREATE TABLE notes(id TEXT, cancelled_at TEXT, cancelled_by TEXT)")
+    conn.execute("INSERT INTO notes VALUES('n','2026-01-01T00:00:00Z','human:ana')")
+    conn.execute("CREATE TABLE events(action TEXT)")
+    conn.executemany("INSERT INTO events VALUES(?)", [(old,) for old in canceled.EVENTS] + [("task.create",)])
+    conn.execute("DROP TABLE fin_cards")
+    conn.execute("CREATE TABLE fin_cards(id TEXT, provider_status TEXT, status TEXT NOT NULL DEFAULT 'active' "
+                 "CHECK (status IN ('active','frozen','cancelled')))")
+    conn.execute("INSERT INTO fin_cards VALUES('c','cancelled','cancelled')")
+
+    canceled.up(conn)
+    canceled.up(conn)     # a repeat changes nothing
+
+    for table, column in tables:
+        values = {row[0] for row in conn.execute(f"SELECT {column} FROM {table}")}
+        assert "cancelled" not in values, (table, column)
+        assert "canceled" in values, (table, column)
+    assert conn.execute("SELECT request_state FROM seats WHERE id='going'").fetchone() == ("canceling",)
+    assert conn.execute("SELECT provider_status FROM fin_feed_txns").fetchone() == ("cancelled",)
+    assert conn.execute("SELECT canceled_at,canceled_by FROM notes").fetchone() == ("2026-01-01T00:00:00Z", "human:ana")
+    assert ("notes", "cancelled_at", "canceled_at", "4") in renames_data.COLUMNS
+    assert {row[0] for row in conn.execute("SELECT action FROM events")} == {*canceled.EVENTS.values(), "task.create"}
+    assert conn.execute("SELECT status,provider_status FROM fin_cards").fetchone() == ("canceled", "canceled")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE fin_cards SET status='cancelled'")
+    conn.close()

@@ -1129,7 +1129,7 @@ class SettingsAdmin:
         transition = c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone()
         if transition:
             self._manager(c, who, transition["bot"], report=self._transition_scope(transition))
-        if not transition or transition["state"] in ("applied", "cancelled"):
+        if not transition or transition["state"] in ("applied", "canceled"):
             raise Problem("state", "This prepared change is no longer pending", 409)
         active = c.execute("SELECT 1 FROM bot_transition_checkpoints p JOIN jobs j ON j.message_id=p.message_id "
                            "WHERE p.transition_id=? AND j.state IN ('leased','running','input')", (transition_id,)).fetchone()
@@ -1144,17 +1144,17 @@ class SettingsAdmin:
         transition = c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone()
         if transition:
             self._manager(c, who, transition["bot"], report=self._transition_scope(transition))
-        if not transition or transition["state"] in ("applied", "cancelled"):
+        if not transition or transition["state"] in ("applied", "canceled"):
             raise Problem("state", "This prepared change is no longer pending", 409)
         if c.execute("SELECT 1 FROM bot_transition_checkpoints p JOIN jobs j ON j.message_id=p.message_id "
                      "WHERE p.transition_id=? AND j.state IN ('leased','running','input')", (transition_id,)).fetchone():
             raise Problem("busy", "A checkpoint is currently running; wait for it to finish", 409)
         c.execute("UPDATE jobs SET state='canceled' WHERE message_id IN "
                   "(SELECT message_id FROM bot_transition_checkpoints WHERE transition_id=?) AND state='queued'", (transition_id,))
-        c.execute("UPDATE bot_transition_checkpoints SET state='cancelled' WHERE transition_id=? AND state='queued'",
+        c.execute("UPDATE bot_transition_checkpoints SET state='canceled' WHERE transition_id=? AND state='queued'",
                   (transition_id,))
-        c.execute("UPDATE bot_transitions SET state='cancelled',updated_at=? WHERE id=?", (H.now(), transition_id))
-        H.event(c, who.actor, "bot.transition_cancelled", transition["bot"], {"transition": transition_id})
+        c.execute("UPDATE bot_transitions SET state='canceled',updated_at=? WHERE id=?", (H.now(), transition_id))
+        H.event(c, who.actor, "bot.transition_canceled", transition["bot"], {"transition": transition_id})
         return self.get(c, who, transition_id)
 
     def history(self, c, who, limit=100, bot="", before=""):
@@ -1668,7 +1668,7 @@ class SettingsAdmin:
 
 def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     """Take a bot off the org chart and out of work (#535). Its routines are deleted, queued
-    turns cancelled and its computer released; open tasks it owns or requested go to `successor`
+    turns canceled and its computer released; open tasks it owns or requested go to `successor`
     (a bot id) or else its operator; bots reporting to it move up to its own parent. A bot that
     roots a team hands the team to `successor`, which then reports to nobody. Nothing is
     deleted: the rows, tasks and history stay, and the repository is untouched."""

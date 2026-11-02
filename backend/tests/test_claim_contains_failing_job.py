@@ -249,7 +249,7 @@ def test_a_task_gets_no_second_job_while_its_held_job_waits(api, monkeypatch):
     assert [job["held"] for job in task_jobs(api, task_id)] == [1]
 
 
-def test_a_held_job_is_cancelled_by_the_obsolete_pass_only_after_its_wait_ends(api, monkeypatch):
+def test_a_held_job_is_canceled_by_the_obsolete_pass_only_after_its_wait_ends(api, monkeypatch):
     """The obsolete-notice pass leaves a held job alone while its wait runs. Once the wait has ended the job is free,
     and the next claim cancels it, its task being finished, and closes the Needs-you item its hold filed."""
     machine, task_id = held_refresh(api, monkeypatch)
@@ -269,7 +269,7 @@ def test_a_held_job_is_cancelled_by_the_obsolete_pass_only_after_its_wait_ends(a
     assert item_status(api, held["hold_task_id"]) not in H.ACTIVE_STATUSES
 
 
-def test_release_frees_a_held_job_another_path_cancelled_and_closes_its_item(api, monkeypatch):
+def test_release_frees_a_held_job_another_path_canceled_and_closes_its_item(api, monkeypatch):
     """Archiving a bot cancels its queued jobs, held ones too. Release still frees them and closes the Needs-you item
     they filed, so no item waits on a job that can no longer run."""
     machine, task_id = held_refresh(api, monkeypatch)

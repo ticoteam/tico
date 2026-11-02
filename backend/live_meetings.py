@@ -1156,7 +1156,7 @@ class Routing:
         timer.start()
 
     def stop(self):
-        """No more routing (shutdown): pending quiet-window timers are cancelled; `sweep` resumes after a restart."""
+        """No more routing (shutdown): pending quiet-window timers are canceled; `sweep` resumes after a restart."""
         with self.lock:
             self.stopped = True
             for timer in self.timers.values():
@@ -1470,19 +1470,19 @@ def install_live_meetings(app, store, auth, write):
             membership = c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot=?",
                                    (rid, bot_id)).fetchone()
             if not membership:
-                return {"id": rid, "bot": bot_id, "removed": False, "cancelled_turns": [],
+                return {"id": rid, "bot": bot_id, "removed": False, "canceled_turns": [],
                         "event_id": _meeting(c, rid)["next_event_id"]}
             turns = c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? "
                               "AND status IN ('pending','claimed') ORDER BY created_at,id", (rid, bot_id)).fetchall()
-            cancelled = []
+            canceled = []
             for turn in turns:
                 if _finish_pass(c, rid, turn, "bot_detached"):
-                    cancelled.append(turn["id"])
+                    canceled.append(turn["id"])
             c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (rid, bot_id))
             _event(c, rid, "meeting.bot_left", {"bot": bot_id, "removed_by": who.actor,
-                                                  "cancelled_turns": cancelled,
+                                                  "canceled_turns": canceled,
                                                   "reason": "meeting_only_access_revoked"})
-            return {"id": rid, "bot": bot_id, "removed": True, "cancelled_turns": cancelled,
+            return {"id": rid, "bot": bot_id, "removed": True, "canceled_turns": canceled,
                     "event_id": _meeting(c, rid)["next_event_id"]}
         return mutate(request, body, work)
 

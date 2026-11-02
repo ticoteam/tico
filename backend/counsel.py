@@ -559,7 +559,7 @@ def turn_done(c, attempt, outcome, task_id, text):
     read it was allowed to publish from (attempt_read): the task is marked done with the turn's last line other than
     NOT_ADVICE, so it never sits in doing after the work. A run that carried another task copies nothing and finishes
     nothing. A failed,
-    stopped or cancelled turn leaves the task to the normal retry and cleanup; a task Counsel set waiting or already
+    stopped or canceled turn leaves the task to the normal retry and cleanup; a task Counsel set waiting or already
     finished is left as it is."""
     if attempt["bot_id"] != SLUG or outcome != "completed" or not task_id:
         return

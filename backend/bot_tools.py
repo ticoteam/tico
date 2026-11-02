@@ -495,10 +495,10 @@ def unregister(c, auth, settings_admin, settings, who, bot, tool_id):
         found = next((r for r in requests if "pending-" + r["id"] == tool_id and r["kind"] == "add"), None)
         if not found:
             raise Problem("not_found", "That request is not waiting any more", 404)
-        c.execute("UPDATE bot_tool_requests SET state='cancelled' WHERE id=?", (found["id"],))
+        c.execute("UPDATE bot_tool_requests SET state='canceled' WHERE id=?", (found["id"],))
         H.task_close(c, H.KEEPER, found["task_id"], note="Tool request withdrawn; do not apply this change.")
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (found["task_id"],))
-        H.event(c, who.actor, "bot.tool_request_cancelled", bot, {"service": found["service"], "task": found["task_id"]})
+        H.event(c, who.actor, "bot.tool_request_canceled", bot, {"service": found["service"], "task": found["task_id"]})
         return {"canceled": True, "task_id": found["task_id"],
                 "detail": "The request is withdrawn. If BotOps already added the entry it stays until you remove it."}
     if tool_id in ("model", "repo"):

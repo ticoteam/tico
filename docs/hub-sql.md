@@ -97,8 +97,7 @@ its rows hold credential hashes ([Reserved](#what-you-may-read), above).
 - JSON is stored as text in a column named for what it holds (`refs`, `labels`, `payload`). There is no `_json`
   suffix: read it with `json_extract(refs, '$.task')` or `json_each(labels)`.
 
-A few older time columns predate these rules and keep their names: `events.ts`, `kpi_readings.ts`, `tasks.due` and
-`automations.next_due`. `automation_runs.state` holds JSON (the run's saved working data), not a step.
+`automation_runs.saved_state` holds JSON (the run's saved working data), not a step.
 
 ### Actor columns
 
@@ -108,23 +107,23 @@ is the bare id, without the prefix.
 
 | Table | Columns | Holds |
 |---|---|---|
-| `tasks` | `requester, owner, closed_by, checkpoint_by, snoozed_by` | actor string |
-| `messages` | `from_actor, to_actor, answered_by` | actor string |
-| `conversations` | `owner_actor` | actor string |
-| `goals` | `owner, status_by, last_read_by, why_by, created_by` | actor string (`owner` can also be `company`) |
-| `goal_kpis` | `created_by, updated_by` | actor string |
-| `kpis` | `owner, created_by, archived_by` | actor string |
-| `kpi_readings` | `actor` | actor string |
-| `approvals` | `requested_by, decided_by, decision_owner` | actor string |
-| `automations` | `owner` | `person:<id>`, `bot:<id>` or `group:<name>` |
-| `automations` | `created_by` | actor string |
-| `cards` | `made_by, updated_by` | actor string |
-| `docs` | `created_by, updated_by` | actor string |
+| `tasks` | `requester_id, owner_id, closed_by_id, checkpoint_by_id, snoozed_by_id` | actor string |
+| `messages` | `sender_id, recipient_id, answered_by_id` | actor string |
+| `conversations` | `owner_id` | actor string |
+| `goals` | `owner_id, status_by_id, last_read_by_id, why_by_id, created_by_id` | actor string (`owner_id` can also be `company`) |
+| `goal_kpis` | `created_by_id, updated_by_id` | actor string |
+| `kpis` | `owner_id, created_by_id, archived_by_id` | actor string |
+| `kpi_readings` | `actor_id` | actor string |
+| `approvals` | `requested_by_id, decided_by_id, decision_owner` | actor string |
+| `automations` | `owner_id` | `person:<id>`, `bot:<id>` or `group:<name>` |
+| `automations` | `created_by_id` | actor string |
+| `cards` | `made_by_id, updated_by_id` | actor string |
+| `docs` | `created_by_id, updated_by_id` | actor string |
 | `meetings` | `owner` | actor string |
 | `meetings` | `recorded_by, uploaded_by` | an email address or a runner id |
-| `jobs`, `attempts`, `bot_files` | `bot` | bot id |
+| `jobs`, `attempts`, `bot_files` | `bot_id` | bot id |
 | `task_types` | `manager` | bot id |
-| `runners` | `operator` | human id |
+| `runners` | `owner_id` | human id |
 
 ## The useful tables
 
@@ -135,51 +134,51 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | Table | Columns worth knowing | Notes |
 |---|---|---|
 | `bots` | `id, slug, display_name, runtime, model, effort, state, created_at, last_turn_at` | `id` is the bot's permanent id, which actor strings and foreign keys use; `slug` is its name and can change. `state`: active, paused, planned, quarantined, archived |
-| `bot_config` | `bot, team, operator, description, reports_to, repo, thread_mode, revision` | the team chart |
-| `bot_status` | `bot, state, focus, task_id, since, last_turn_at, last_result, next_due, open_tasks, needs_human` | live status; history in `bot_status_history(bot, state, focus, since, until, reason, by)` |
+| `bot_config` | `bot, team, owner_id, description, reports_to, repo, thread_mode, revision` | the team chart |
+| `bot_status` | `bot, state, focus, task_id, changed_at, last_turn_at, last_result, next_due_at, open_tasks, needs_human` | live status; history in `bot_status_history(bot, state, focus, started_at, ended_at, reason, by)` |
 | `humans` | `id, name, email, slack_id, teams` | bots do not get `email` |
 | `principals` | `id, kind, deleted_at` | one row per human, bot and known system actor: `id` is the actor string, `kind` is human, bot, agent, service or system. `deleted_at` is set when the person or bot is removed; the row stays so history still names it |
 | `seats` | `id, title, description, reports_to, team, created_at, created_by, updated_at, updated_by, closed_at, closed_by` | Recruiting seats, readable by everyone like the chart; open ones have `closed_at` NULL; `reports_to` is a bot slug, `human:<id>` or `seat:<id>` |
-| `conversations` | `id, kind, scope, subject, task_id, participants, owner_actor, room_key, created_at, last_message_at, closed_at` | `scope`: direct, personal, shared, task |
-| `messages` | `id, conversation_id, from_actor, to_actor, kind, body, refs, in_reply_to, created_at, delivered_at, read_at, wait_s` | `kind`: say, ask, answer, notice, steer |
-| `tasks` | `id, title, body, requester, owner, status, due, goal_id, conversation_id, created_at, updated_at, done_at, closed_at, closed_by, note, version, acceptance, type_id, step_id, number, step_rank, waiting_on` | `status`: open, doing, waiting, review, ready, done, closed, declined; `waiting_on` the person a waiting task waits on; `number` is the team-wide ticket number a numbered type gives (NULL until one does), `step_rank` the task's place within its step, lower first ([Tasks](tasks.md)) |
+| `conversations` | `id, kind, scope, subject, task_id, participants, owner_id, room_key, created_at, last_message_at, closed_at` | `scope`: direct, personal, shared, task |
+| `messages` | `id, conversation_id, sender_id, recipient_id, kind, body, refs, in_reply_to, created_at, delivered_at, read_at, wait_s` | `kind`: say, ask, answer, notice, steer |
+| `tasks` | `id, title, body, requester_id, owner_id, status, due_at, goal_id, conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, version, acceptance, type_id, step_id, number, step_rank, waiting_on` | `status`: open, doing, waiting, review, ready, done, closed, declined; `waiting_on` the person a waiting task waits on; `number` is the team-wide ticket number a numbered type gives (NULL until one does), `step_rank` the task's place within its step, lower first ([Tasks](tasks.md)) |
 | `task_relations` | `from_task, to_task, kind, created_by, created_at` | every task-to-task relationship, read only when both tasks are; `kind`: `parent` (from is a subtask of to), `blocks` (from blocks to), `related` (stored once, lower id first), `duplicate_of`, `follow_up` (from was split off or followed up from to). It replaces the old `tasks.parent_id` and `tasks.blocked_by`: a task's parent is `SELECT to_task FROM task_relations WHERE from_task=:task AND kind='parent'`, its subtasks `SELECT from_task ... WHERE to_task=:task AND kind='parent'`, its blockers `SELECT from_task ... WHERE to_task=:task AND kind='blocks'` |
 | `task_types` | `id, name, numbered, created_at, updated_at` | types and, in `task_steps(id, type_id, name, position, status)`, their steps; `numbered` is 1 when the type numbers its tasks |
-| `task_events` | `task_id, ts, actor, field, old, new, note` | every change to a task |
+| `task_events` | `task_id, created_at, actor, field, old, new, note` | every change to a task |
 | `task_roles` | `task_id, role, actor, added_by, created_at` | who is on a task, by role (a short name the team chooses: `developer`, `reviewer`, `qa` ...); one actor may hold several roles on a task |
-| `goals` | `id, title, owner, parent_id, body, status, status_note, status_by, status_at, status_source, suggest_status, suggest_note, suggest_at, rank, last_read_at, last_read_by, created_at, created_by, updated_at` | what every human and bot is for; `status`: red, yellow, green, gray (no data), done, dropped, or NULL while not yet scored; `status_source`: `auto` (the Strategy Bot's arithmetic) or `person` (set by hand, sticks until handed back); `suggest_*` is what the arithmetic says over a human's colour; `parent_id` is the goal it supports (optional); `owner` is `bot:x`, `human:x` or `company`; `tasks.goal_id` names the goal a task serves |
-| `goal_events` | `goal_id, ts, actor, field, old, new, note, status_by, status_source` | every change to a goal; a `status` row says who set it and how |
-| `kpis` | `id, slug, name, definition, unit, direction, cadence, owner, source_note, definition_version, created_at, created_by, updated_at` (`goal_id` and `target` are kept for the rows that had them) | a measure that stands on its own; `direction`: up, down, range; `cadence`: daily, weekly, monthly |
-| `goal_kpis` | `goal_id, kpi_id, kind, baseline, baseline_at, target, deadline, min, max, created_at, created_by, updated_at, updated_by` | the link between a goal and a KPI, holding the target: `kind` is `improve` (baseline, target, deadline), `maintain` (min, max) or `none`; `kpi_id` may be `auto:<bot>:<metric>` |
-| `kpi_readings` | `kpi_id, ts, value, actor, source, note, created_at, period_start, period_end, collected_at, evidence, quality, definition_version, supersedes` | appended, never edited; `period_start` and `period_end` are the business time the value describes (`ts` equals `period_end`), `collected_at` when it was collected; `quality`: measured, estimate, partial; a correction is a new row whose `supersedes` names the old one |
-| `kpi_definitions` | `kpi_id, version, ts, actor, name, definition, unit, direction, cadence, source_note` | every version of a KPI's definition |
-| `goal_checkins` | `goal_id, kpi_id, ts, author, source_actor, body, signal` | the owner's own words on how a goal is going; `signal`: on_track, at_risk, off_track |
+| `goals` | `id, title, owner_id, parent_id, body, status, status_note, status_by_id, status_at, status_source, suggest_status, suggest_note, suggest_at, rank, last_read_at, last_read_by_id, created_at, created_by_id, updated_at` | what every human and bot is for; `status`: red, yellow, green, gray (no data), done, dropped, or NULL while not yet scored; `status_source`: `auto` (the Strategy Bot's arithmetic) or `person` (set by hand, sticks until handed back); `suggest_*` is what the arithmetic says over a human's colour; `parent_id` is the goal it supports (optional); `owner` is `bot:x`, `human:x` or `company`; `tasks.goal_id` names the goal a task serves |
+| `goal_events` | `goal_id, created_at, actor, field, old, new, note, status_by, status_source` | every change to a goal; a `status` row says who set it and how |
+| `kpis` | `id, slug, name, definition, unit, direction, cadence, owner_id, source_note, definition_version, created_at, created_by_id, updated_at` (`goal_id` and `target` are kept for the rows that had them) | a measure that stands on its own; `direction`: up, down, range; `cadence`: daily, weekly, monthly |
+| `goal_kpis` | `goal_id, kpi_id, kind, baseline, baseline_at, target, deadline, min, max, created_at, created_by_id, updated_at, updated_by_id` | the link between a goal and a KPI, holding the target: `kind` is `improve` (baseline, target, deadline), `maintain` (min, max) or `none`; `kpi_id` may be `auto:<bot>:<metric>` |
+| `kpi_readings` | `kpi_id, measured_at, value, actor_id, source, note, created_at, period_start, period_end, collected_at, evidence, quality, definition_version, supersedes` | appended, never edited; `period_start` and `period_end` are the business time the value describes (`ts` equals `period_end`), `collected_at` when it was collected; `quality`: measured, estimate, partial; a correction is a new row whose `supersedes` names the old one |
+| `kpi_definitions` | `kpi_id, version, created_at, actor, name, definition, unit, direction, cadence, source_note` | every version of a KPI's definition |
+| `goal_checkins` | `goal_id, kpi_id, created_at, author, source_actor, body, signal` | the owner's own words on how a goal is going; `signal`: on_track, at_risk, off_track |
 | `goal_proposals` | `id, kind, goal_id, kpi_id, payload, reason, proposed_by, proposed_at, status, decided_by, decided_at` | a change waiting for its owner to confirm |
 | `goal_asks` | `kind, ref, owner, task_id, created_at` | the Strategy Bot's task asking a person about a KPI or proposal; `kind`: kpi_red, kpi_stale, proposal; `ref`: the KPI or proposal id |
 | `task_delegations` | `task_id, delegate, requested_by, message_id, expires_at` | |
-| `approvals` | `id, kind, task_id, message_id, payload, requested_by, decided_by, decision, decided_at, consumed_at, created_at` | `kind`: send, spend, publish, merge |
-| `jobs` | `id, message_id, bot, state, created_at, attempt_id` | one per message a bot has to act on; `state`: queued, leased, running, input, completed, failed, uncertain, canceled |
-| `attempts` | `id, job_id, bot, runner_id, state, lease_until, created_at, started_at, finished_at, result, final_text` | a run (`state`: leased, running, input, completed, failed, interrupted, expired); its streamed output is `attempt_events(attempt_id, seq, kind, payload, created_at)` |
+| `approvals` | `id, kind, task_id, message_id, payload, requested_by_id, decided_by_id, decision, decided_at, consumed_at, created_at` | `kind`: send, spend, publish, merge |
+| `jobs` | `id, message_id, bot_id, state, created_at, attempt_id` | one per message a bot has to act on; `state`: queued, leased, running, input, completed, failed, uncertain, canceled |
+| `attempts` | `id, job_id, bot_id, runner_id, state, lease_until, created_at, started_at, finished_at, result, final_text` | a run (`state`: leased, running, input, completed, failed, interrupted, expired); its streamed output is `attempt_events(attempt_id, seq, kind, payload, created_at)` |
 | `turns` | `id, bot, started_at, finished_at, trigger, message_id, task_id, exit, summary, input_tokens, cached_tokens, output_tokens, model, provider, est_cost_usd, usage_reason, billing, trigger_kind, trigger_source, purpose, writes, outcome, did_nothing, rotated, session_kind, session_why, rule_id` | one per run (`id` = the run's attempt id); `exit` is null while running. **Sum `input_tokens`, `cached_tokens`, `output_tokens` and `est_cost_usd`** (input = `input_tokens` + `cached_tokens`); every run finished from this change on, failed, interrupted or usage-limited, has them set (older runs keep what they had, and some have none). A run whose runner counted nothing reads 0 tokens and $0, and `usage_reason` says why (`usage_unreported`, `usage_limited`, `no_result`); `cost_unpriced` means tokens were counted but the model has no list price, so `est_cost_usd` is null. On a run finished from this change on, a null `usage_reason` means usage was measured; an older run has a null reason whether or not it was. The older one-number `tokens_in`, `tokens_out` and `cost` columns are gone: their values moved into `input_tokens`, `output_tokens` and `est_cost_usd` where those were empty (`backend/migrations/0009_drop_turns_legacy_usage.py`). `trigger_kind`, `writes` and `outcome` are explained under [What woke each run](#what-woke-each-run-and-what-it-did) |
 | `run_weekly` | `week, bot, trigger, purpose, runs, input_tokens, cached_input_tokens, output_tokens, acted, no_change, nothing_to_do, unknown, did_nothing, rotated, acted_pct, no_change_pct, nothing_to_do_pct, unknown_pct` | a read-only view: runs per week, bot, trigger and purpose, every attempt counted ([below](#what-woke-each-run-and-what-it-did)) |
 | `rule_weekly` | `week, bot, rule, runs, input_tokens, cached_input_tokens, output_tokens, acted, did_nothing, did_nothing_pct` | a read-only view: runs per week, bot and [wake rule](how-it-works.md#what-happens-when) (`turns.rule_id`, the rule that woke the run; `unknown` for a run before rules), with tokens and the share that did nothing |
-| `schedules` | `id, bot, routine_key, title, cron, event_name, playbook, last_fired_at, next_due, deleted_at` (`timezone` and `enabled` are in `schedule_config(schedule_id, timezone, enabled)`) | routines from before Automations, kept but no longer fired (`docs/routines.md`); `schedule_occurrences(schedule_id, occurrence, task_id, outcome)` says what each firing did |
-| `automations` | `id, name, owner, trigger_type, enabled, builtin, flow, version, created_at, created_by, updated_at, deleted_at` | a routine or automation. `trigger_type` says what starts it; `flow` holds its steps as JSON; `version` is the current version in `automation_versions` |
-| `automation_runs` | `id, automation_id, version, trigger_ref, started_at, finished_at, status, cost, state, claimed_at, wake_at, chain` | one run of an automation. `status` is its outcome ([Status and state columns](status-and-state.md)); `state` is its saved JSON working data, not a step; `version` is the automation version it ran |
-| `events` | `ts, actor, action, target, detail` | the audit log; `action` such as `task.create`, `sql.query` |
+| `schedules` | `id, bot, routine_key, title, cron, event_name, playbook, last_fired_at, next_due_at, deleted_at` (`timezone` and `enabled` are in `schedule_config(schedule_id, timezone, enabled)`) | routines from before Automations, kept but no longer fired (`docs/routines.md`); `schedule_occurrences(schedule_id, occurrence, task_id, outcome)` says what each firing did |
+| `automations` | `id, name, owner_id, trigger_type, enabled, builtin, flow, version, created_at, created_by_id, updated_at, deleted_at` | a routine or automation. `trigger_type` says what starts it; `flow` holds its steps as JSON; `version` is the current version in `automation_versions` |
+| `automation_runs` | `id, automation_id, version, trigger_ref, started_at, finished_at, status, cost, saved_state, claimed_at, wake_at, chain` | one run of an automation. `status` is its outcome ([Status and state columns](status-and-state.md)); `state` is its saved JSON working data, not a step; `version` is the automation version it ran |
+| `events` | `created_at, actor, action, target, detail` | the audit log; `action` such as `task.create`, `sql.query` |
 | `slack_posts` | `message_id, bot, state, attempts, next_attempt_at, slack_ts, created_at, updated_at` | Owner-only outbound queue status for messages the Owner may read; message text, destination and raw errors are hidden. Join `messages` and filter `json_extract(messages.refs, '$.task')` for one task. Other callers receive no rows. |
-| `refusals` | `ts, actor, rule, detail, severity` | the rule a bot broke |
+| `refusals` | `created_at, actor, rule, detail, severity` | the rule a bot broke |
 | `meetings` | `id, title, owner, recorded_by, transcript_readable, notes, created_at, updated_at` | your notes; every team meeting |
 | `meeting_items` | `id, meeting_id, section, text, detail, quote, at_ms, status, created_by, updated_by, pushed_at, result_ref, created_at, updated_at` | a meeting's action items; `section`: doc, task, feature (older rows may say decision or question); `status`: proposed, pushed, dismissed; `result_ref` is the Tico task a push made. Visible exactly where its meeting is ([Meetings](meetings.md), What a meeting turns into) |
 | `meeting_comments` | `id, meeting_id, author, text, at_ms, created_at` | the thread beside a meeting: anyone who can open it can add to it ([Meetings](meetings.md)). Visible exactly where its meeting is |
 | `import_refs` | `source, external_id, meeting_id, runner_id, created_at` | which outside record a meeting was imported from — one row per Close call imported before the transcript-only worker ([Meetings](meetings.md), Close). Visible exactly where its meeting is |
-| `docs` | `id, path, title, body, locked, version, created_by, created_at, updated_by, updated_at` | internal Docs, readable by teammates |
+| `docs` | `id, path, title, body, locked, version, created_by_id, created_at, updated_by_id, updated_at` | internal Docs, readable by teammates |
 | `doc_versions` | `doc_id, version, title, path, body, actor, created_at, note` | versions of visible internal Docs |
 | `linked_docs` | `id, title, url, kind, description, added_by, created_at, updated_at` | linked Docs |
-| `bot_files` | `id, bot, scope, identity, title, kind, locator, current_version, task_id, conversation_id` | Files, with the same task, conversation or bot visibility as their APIs |
+| `bot_files` | `id, bot_id, scope, identity, title, kind, locator, current_version, task_id, conversation_id` | Files, with the same task, conversation or bot visibility as their APIs |
 | `bot_file_versions`, `bot_file_activity` | `file_id, version` or `file_id, action, actor, created_at` | versions and activity of visible Files |
-| `pages` | `file_id, cadence, as_of, replaced_by, archived, created_at, updated_at` | a bot's File published as a page: `file_id` is `bot_files.id`; `cadence`: none, daily, weekly, monthly; `as_of` is the date its data is from; `replaced_by` names the newer page, if any ([Pages](pages.md)) |
-| `cards` | `id, template, settings, title, made_by, created_at, updated_at, updated_by` | a built-in card: `template` is one of Tico's own templates and `settings` its checked settings. A card's numbers are worked out when it is read, for the reader, and are not stored ([Overview](overview.md)) |
+| `pages` | `file_id, cadence, as_of, replaced_by_id, archived, created_at, updated_at` | a bot's File published as a page: `file_id` is `bot_files.id`; `cadence`: none, daily, weekly, monthly; `as_of` is the date its data is from; `replaced_by` names the newer page, if any ([Pages](pages.md)) |
+| `cards` | `id, template, settings, title, made_by_id, created_at, updated_at, updated_by_id` | a built-in card: `template` is one of Tico's own templates and `settings` its checked settings. A card's numbers are worked out when it is read, for the reader, and are not stored ([Overview](overview.md)) |
 | `learnings` | `id, integration, actor, text, created_at, deleted_at` | Tools: what bots and humans learned about a tool (`integration` is the stored column; `integrations/`, `hub tool learn`) |
 | `assistant_action_weekly`, `mcp_call_weekly` | `week, proposer, status, actions, share_pct` and `week, bot, tool, calls, errors, error_pct, avg_ms, max_ms` | read-only totals for the owner and a bot the owner grants them (API only: `PUT /api/v2/outcome-stats/readers/<slug>`; revoke with `read: false`): how Assistant and BotOps proposals settled (`status`: done, failed, canceled, expired ...) and how bot MCP tool calls went, per week. No row, text, id or person is in them; the underlying `assistant_actions` stays unreadable to a bot. The same bot may call `hub mcp stats` (no `--via`) |
 

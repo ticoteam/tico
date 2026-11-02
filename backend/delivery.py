@@ -19,7 +19,7 @@ deferred comments and messages themselves, a bounded page; what does not fit sta
 (`due`) finds the sessions whose earliest deadline came and starts one run for each, which carries everything
 waiting there. It writes the run's job and marks the rows with it (`fired_job`) in one transaction, so a restart
 neither loses a deadline nor fires one twice. A later deadline in a session whose run is still queued joins that run,
-and a run whose items all went in with another turn is cancelled. A bot that is paused or quarantined is passed over until it is active
+and a run whose items all went in with another turn is canceled. A bot that is paused or quarantined is passed over until it is active
 again; spend caps, turns at once and claim holds apply to the run's job as to any other. Sleep when idle counts the
 next deadline as a reason to wake (sleep_idle.routine_times).
 
@@ -207,7 +207,7 @@ def due(conn, at, failures=None):
     from .harnesses import EXTERNAL_HARNESSES
     H = _H()
     out = []
-    # Rows whose run is over are settled first, so a run that never carried them (cancelled, failed) ends their wait
+    # Rows whose run is over are settled first, so a run that never carried them (canceled, failed) ends their wait
     # rather than starting another: a deadline fires once. The items still go in with the session's next turn.
     conn.execute("UPDATE deferrals SET settled_at=?,how='fired' WHERE settled_at IS NULL AND fired_job IS NOT NULL AND "
                  "NOT EXISTS(SELECT 1 FROM jobs j WHERE j.id=deferrals.fired_job "

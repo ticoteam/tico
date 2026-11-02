@@ -3557,7 +3557,7 @@ export type SeatBatchCreate = {
   seats: Array<SeatCreate>;
 };
 
-export type SeatCancelled = {
+export type SeatCanceled = {
   closed: boolean;
   id: string;
   request_state: string;
@@ -5207,7 +5207,7 @@ export type CancelSeatRequestParams = {
   seat_id: string;
 };
 export type CancelSeatRequestBody = never;
-export type CancelSeatRequestResponse = SeatCancelled;
+export type CancelSeatRequestResponse = SeatCanceled;
 
 /** POST /api/v2/model-subscriptions/{sid} */
 export type ChangeModelSubscriptionParams = {
@@ -6744,7 +6744,7 @@ export type ListFinanceCardsParams = {
   holder?: string | null;
   limit?: number;
   q?: string;
-  status?: "active" | "frozen" | "cancelled" | null;
+  status?: "active" | "frozen" | "canceled" | null;
   vendor?: string | null;
   view_as?: string | null;
 };

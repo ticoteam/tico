@@ -1335,7 +1335,7 @@ def test_a_finished_turn_never_settles_a_job_a_later_run_took_even_once_that_run
 def test_a_stop_the_runner_never_heard_still_stands_over_the_answer_it_finished_late(api):
     """Dev 242 R1: a person pressed Stop while the computer was asleep, before the hub marked the lease lapsed. No
     renewal carried it, the lease lapsed, the model finished anyway and the woken runner handed the answer in as
-    completed. It is filed on its run, not posted, and the job ends stopped (cancelled), not completed, whether it was
+    completed. It is filed on its run, not posted, and the job ends stopped (canceled), not completed, whether it was
     still uncertain or the person had dismissed it first."""
     from backend.tests.test_api import runner
     machine = runner(api, 'ana')

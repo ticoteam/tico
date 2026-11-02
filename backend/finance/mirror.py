@@ -1033,11 +1033,11 @@ def _still_matches(ctx: Ctx, row: Any, money: Any) -> bool:
 
 
 def settle_row(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
-    """A bank row as the feed states it, in a mirror. A row the bank cancelled is ignored (the provider's entry is never
+    """A bank row as the feed states it, in a mirror. A row the bank canceled is ignored (the provider's entry is never
     reversed from here). A settled row keeps the entry it has, or finds the provider's entry for it."""
     fid = str(row["id"])
     if t.void or t.reversed:
-        SX.cancel_feed_writes(ctx.c, fid, "the bank cancelled this transaction", ctx.at)
+        SX.cancel_feed_writes(ctx.c, fid, "the bank canceled this transaction", ctx.at)
         SK.update(ctx.c, "fin_feed_txns", fid,
                   {"status": "ignored", "entry_id": None, "entry_line_id": None, "updated_at": ctx.at})
         return

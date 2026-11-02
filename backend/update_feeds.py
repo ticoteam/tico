@@ -134,7 +134,7 @@ def subscribe(c, bot, before, after):
             _state["fetched"].pop(feed, None)
     for category in set(before) - set(after):
         c.execute("DELETE FROM feed_cursors WHERE bot=? AND category=?", (bot, category))
-        c.execute("UPDATE notes SET cancelled_at=?,cancelled_by=? WHERE id IN (SELECT note_id FROM feed_deliveries WHERE bot=? AND "
+        c.execute("UPDATE notes SET canceled_at=?,canceled_by=? WHERE id IN (SELECT note_id FROM feed_deliveries WHERE bot=? AND "
                   "category=?) AND id IN (SELECT n.id FROM notes n WHERE " + H.NOTE_WAITING_SQL + ")",
                   (H.now(), H.KEEPER, bot, category))
 

@@ -26,7 +26,7 @@ function watch(page) {
     if (!HUB_PATH.test(u.pathname) || r.status() < 400) return;
     w.failed.push({method: r.request().method(), path: u.pathname, status: r.status()});
   });
-  // A request the page cancelled itself (a navigation or a reload while it was in flight) is not a failure; a request
+  // A request the page canceled itself (a navigation or a reload while it was in flight) is not a failure; a request
   // that never got an answer is.
   page.on('requestfailed', r => {
     const u = new URL(r.url()), why = r.failure()?.errorText || 'failed';

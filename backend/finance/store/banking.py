@@ -275,8 +275,9 @@ def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_a
 
 
 def settled_total(c: sqlite3.Connection, money_account_id: str) -> tuple[int, str]:
-    """What the provider's current balance holds of this account's feed: the total of its settled rows (a cancelled,
-    failed, blocked or reversed one moved nothing) and the earliest such row's day ("" with none)."""
+    """What the provider's current balance holds of this account's feed: the total of its settled rows (a canceled,
+    failed, blocked or reversed one moved nothing) and the earliest such row's day ("" with none). provider_status is
+    Mercury's own word for the row, so it keeps Mercury's spelling."""
     row = c.execute("SELECT COALESCE(SUM(amount), 0), COALESCE(MIN(txn_date), '') FROM fin_feed_txns WHERE "
                     "money_account_id=? AND pending=0 AND COALESCE(provider_status, '') NOT IN "
                     "('cancelled','failed','blocked','reversed')", (money_account_id,)).fetchone()

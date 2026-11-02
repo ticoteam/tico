@@ -955,7 +955,7 @@ def create_app(settings=None):
                 response.headers["WWW-Authenticate"] = mcp_oauth.challenge_header(settings)
             return response
         except ClientDisconnect:
-            # The caller hung up while its request body was read (a closed tab, a cancelled call): nothing failed here.
+            # The caller hung up while its request body was read (a closed tab, a canceled call): nothing failed here.
             # It ends as 499, client closed request, which the flight recorder and Sentry don't count as a server error.
             # The method only: some addresses carry their own secret (a webhook trigger's).
             logging.getLogger("tico.request").info("%s request: the client disconnected before its body was read",
@@ -3773,8 +3773,8 @@ def create_app(settings=None):
         waiting = H.note_waiting(c, row)
         return {"id": row["id"], "from": row["from_actor"], "to": row["to_actor"], "text": row["body"],
                 "created_at": row["created_at"], "waiting": waiting,
-                "carried": bool(row.get("carried_by")) and not waiting and not row.get("cancelled_at"),
-                "carried_by": row.get("carried_by"), "cancelled_at": row.get("cancelled_at")}
+                "carried": bool(row.get("carried_by")) and not waiting and not row.get("canceled_at"),
+                "carried_by": row.get("carried_by"), "canceled_at": row.get("canceled_at")}
 
     def note_visible(c, who, row):
         # A bot sees the notes it left and the ones left for it; a person, the ones they left and
@@ -4928,7 +4928,7 @@ def create_app(settings=None):
         if body.delivery == "goal" and who.role != "bot" and not may_direct(c, who, row):
             raise Problem("delivery", "Only someone on this task can set its goal: send it with defer", 403)
         # A goal is set in the task's own room only. In a chat the task was filed into, the goal is the chat's
-        # (chat_goals.own_room), so nothing is saved and no control is queued or cancelled there.
+        # (chat_goals.own_room), so nothing is saved and no control is queued or canceled there.
         if body.delivery == "goal" and not own_room(c, row):
             raise Problem("delivery", "This task has no room of its own: send it with steer or queue", 409)
         defer_for = body.defer_for

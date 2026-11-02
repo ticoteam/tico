@@ -380,7 +380,7 @@ def take_inbox(c, provider, person, slug):
     Only their own room: another person's message to it is theirs to relay, not this sync's.
     A message with a job is the computer's while the bot is delivered through its app (backend/app_delivery.py),
     and always once a runner tried it: it reaches the bot once. A job no runner tried, with app delivery off, is
-    cancelled and its message handed over here."""
+    canceled and its message handed over here."""
     room = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=?",
                      ("human:" + person, slug)).fetchone()
     if not room:

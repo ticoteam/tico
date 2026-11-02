@@ -106,7 +106,7 @@ change, use [Edit Instructions](#edit-instructions) as usual, with its approvals
 Turning a category on, or back on, starts from the newest update: the bot gets what comes out from then on, never a
 backlog of what came out while it was off. The same holds when the bot's template changes: it follows the new
 template from its newest update. Unticking a category stops it at once: updates of that category the bot
-has not picked up yet are cancelled too, and unticking both stops all delivery. A server that was down catches up on
+has not picked up yet are canceled too, and unticking both stops all delivery. A server that was down catches up on
 everything it missed, once each and in order, over as many polls as it takes (up to 40 feed pages back; past that it
 starts from the newest 40 pages). Nothing is fetched while no bot subscribes; `TICO_UPDATE_CHECK=off`
 stops the fetching, and `TICO_TEMPLATE_FEED=off` leaves the template category without a feed (it then says so and
@@ -282,8 +282,11 @@ manifest, the instructions, the routines and stale references, reported as `{"re
 entry, so it works on a repository the server has never seen. `clients/preflight.py` is still the
 full check, including credentials, runtime and mail, and is what to run before flipping a bot to
 `active`. `hub bot check-names <slug>` lists the old column, field and command names a checkout still
-uses (SQL in `hub sql`, keys read from the API, old `hub` commands); `--fix` rewrites the ones with a
-single new spelling and runs on the computer, without the server.
+uses (SQL in `hub sql` and SQL-looking strings, keys read from the API, old `hub` commands). A column
+renamed on some tables only is reported with those tables: `SELECT owner FROM tasks` is flagged,
+`SELECT owner FROM meetings` is not. `--fix` rewrites a name only when it has one new spelling
+everywhere and no table keeps it, and leaves the rest for you. It runs on the computer, without the
+server.
 
 ### The `.data/` sibling
 

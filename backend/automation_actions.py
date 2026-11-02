@@ -154,13 +154,13 @@ def _slack(c, auto, run_id, do, args, message):
 
 def slack_held(c, post):
     """An automation's Slack reply whose inbox's send switch went off after it was queued (`slack_posts` row `post`):
-    not posted but cancelled, and the owner gets the draft as a task, as with the switch off when it was queued.
+    not posted but canceled, and the owner gets the draft as a task, as with the switch off when it was queued.
     Returns whether it was held."""
     refs = (H.message(c, post["message_id"]) or {}).get("refs") or {}
     inbox = refs.get("automation_inbox")
     if not inbox or send_on(c, inbox):
         return False
-    c.execute("UPDATE slack_posts SET state='cancelled',error='send_off',updated_at=? WHERE message_id=?",
+    c.execute("UPDATE slack_posts SET state='canceled',error='send_off',updated_at=? WHERE message_id=?",
               (H.now(), post["message_id"]))
     row = c.execute("SELECT id, flow FROM automations WHERE id=?", (refs.get("automation"),)).fetchone()
     if row:

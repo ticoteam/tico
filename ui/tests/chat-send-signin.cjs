@@ -19,7 +19,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
     if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigating = true;
     if (request.method() === 'GET' && path !== '/api/v2/events' && !path.endsWith('/watch')) reads.add(request);
   });
-  // A read still out when the page loads a new document is cancelled with the old one, and Chromium reports neither
+  // A read still out when the page loads a new document is canceled with the old one, and Chromium reports neither
   // requestfinished nor requestfailed for it: left counted, it held the next wait to its deadline ("Fixture reads did
   // not settle"). A new document in the main frame (not a hash change) ends every read made before it.
   page.on('framenavigated', frame => {
@@ -103,7 +103,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
     } while (reads.size || await page.evaluate(() => LIVE_SOON.size > 0));
   };
   // A loaded conversation can precede its stream subscription. Navigating again while WebKit is
-  // still opening that connection reports a cancelled request as an access-control page error.
+  // still opening that connection reports a canceled request as an access-control page error.
   const ready = () => page.waitForFunction(keeper => {
     if (!SESSION.seen || !(keeper ? typeof V2C !== 'undefined' && V2C?.loaded : typeof CONV !== 'undefined' && CONV?.slug === 'sales')
       || !liveConnected() || LIVE.es?.readyState !== EventSource.OPEN) return false;

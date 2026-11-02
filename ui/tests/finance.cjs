@@ -861,7 +861,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
         tag + ': Recently paid asks for the last five paid, by payment date');
       const statusOf = async id => (await page.locator(`tr[data-fin-doc="${id}"] td:nth-child(7)`).innerText()).replace(/\s+/g, ' ').trim();
       assert.equal(await statusOf('bill-3'), 'Approve in Mercury pays Nov 11', tag + ': a bill paying now shows its payment\'s state and day');
-      assert.equal(await statusOf('bill-4'), 'Open Pay cancelled 1–30 late', tag + ': a rejected payment shows beside Open, with its aging');
+      assert.equal(await statusOf('bill-4'), 'Open Pay canceled 1–30 late', tag + ': a rejected payment shows beside Open, with its aging');
       assert.equal(await statusOf('bill-5'), 'Open Pay denied', tag + ': a declined approval shows beside Open');
       assert.ok(!(await page.locator('#fin-body').innerText()).includes('5,130'), tag + ': the open total is not drawn');
       assert.match(await page.locator('[data-fin-email-set]').innerText(), /bills@acme\.example$/, tag + ': the owner\'s bills address control');
@@ -911,7 +911,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(actions(writes).filter(a => a.kind === 'bill_schedule' && a.dry_run).length, 1, tag + ': one dry run');
       await page.locator('tr[data-fin-doc="bill-4"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
-      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Pay cancelled rejected in Mercury/, tag + ': the rail says why it was not paid');
+      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Pay canceled rejected in Mercury/, tag + ': the rail says why it was not paid');
       await page.locator('#fin-rail [data-fin-do="paid"]').click();
       assert.equal(await page.locator('dialog.fin-dlg input[name="amount"]').inputValue(), '1390', tag + ': Mark paid starts at what is left');
       await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});

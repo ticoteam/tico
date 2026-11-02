@@ -72,7 +72,7 @@ def test_a_quarantine_stops_a_turn_that_used_a_shell_with_its_reason_and_holds_i
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0] == 'interrupted'
         assert H.bot(c, 'ops')['state'] == 'quarantined'
-    # Held, not queued and not cancelled: the quarantine's Stop is no one's choice to drop it.
+    # Held, not queued and not canceled: the quarantine's Stop is no one's choice to drop it.
     assert job_state(api, attempt['job_id']) == 'uncertain'
     notice = get(api, f"conversations/{message['conversation_id']}/messages")[-1]
     assert notice['kind'] == 'notice' and notice['body'].startswith(line)
@@ -223,7 +223,7 @@ def test_a_stopped_turn_that_used_a_shell_and_never_reported_back_is_held_for_re
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     assert attempt['job_id'] in review(api)
-    # Its late answer is filed on the run; the job stays held rather than cancelled by the Stop.
+    # Its late answer is filed on the run; the job stays held rather than canceled by the Stop.
     lift(api)
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 3,
          'text': 'Opened the pull request.'}, machine['token'])
@@ -258,7 +258,7 @@ def test_a_person_stop_is_unchanged(api):
     assert renewed['stop'] is True and 'stop_reason' not in renewed
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 3}, machine['token'])
     assert job_state(api, attempt['job_id']) == 'canceled'
-    assert end_reason(api, attempt).startswith('Cancelled by ')
+    assert end_reason(api, attempt).startswith('Canceled by ')
 
 
 def test_all_running_turns_stop_each_judged_on_its_own_with_folded_inputs_following_their_turn(api):

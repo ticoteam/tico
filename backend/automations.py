@@ -1959,7 +1959,7 @@ def settle_mail(c, state):
             result = json.loads((row and row["result"]) or "{}")
             entry["ok"] = now == "done"
             entry["detail"] = ("send_off" if entry["ok"] and result.get("send_off")
-                               else "cancelled: the run failed" if now == "cancelled"
+                               else "canceled: the run failed" if now == "canceled"
                                else str(result.get("detail") or ("done" if entry["ok"] else "no such mail action")))
             entry.update({k: result[k] for k in ("message", "draft", "thread", "send_off") if result.get(k)})
         record["status"] = ("waiting" if any(a["queued"] for a in mail)
@@ -1973,9 +1973,9 @@ def settle_mail(c, state):
 
 
 def _cancel_mail(c, run_id, state=None):
-    """A run that ended failed (or was dropped) sends no mail later: its actions not yet claimed are cancelled, and
-    one out on a lease is cancelled when the lease runs out or its computer asks to retry."""
-    n = c.execute("UPDATE automation_mail_actions SET state='cancelled' WHERE run_id=? AND state='queued'",
+    """A run that ended failed (or was dropped) sends no mail later: its actions not yet claimed are canceled, and
+    one out on a lease is canceled when the lease runs out or its computer asks to retry."""
+    n = c.execute("UPDATE automation_mail_actions SET state='canceled' WHERE run_id=? AND state='queued'",
                   (run_id,)).rowcount
     if n and state is not None:
         settle_mail(c, state)
@@ -1986,7 +1986,7 @@ def _requeue(c, row):
     """Where a mail action goes when its lease runs out or its computer asks to retry: back in the queue, unless
     its run has ended failed meanwhile."""
     run = c.execute("SELECT status FROM automation_runs WHERE id=?", (row["run_id"],)).fetchone() if row["run_id"] else None
-    return "cancelled" if run and run["status"] in ("failed", "skipped") else "queued"
+    return "canceled" if run and run["status"] in ("failed", "skipped") else "queued"
 
 
 def _settle_run(c, run_id):
@@ -2271,7 +2271,7 @@ def _due_failed(c, rid, error=""):
 
 
 def _fail(c, rid, state, now, why):
-    """The tick gives up on a run: failed, its unclaimed mail cancelled, its unfinished items left for a retry."""
+    """The tick gives up on a run: failed, its unclaimed mail canceled, its unfinished items left for a retry."""
     run = c.execute("SELECT automation_id FROM automation_runs WHERE id=?", (rid,)).fetchone()
     if state:
         state.update(status="failed", error=why)
@@ -2851,7 +2851,7 @@ def install(app, store, auth, mutate):
             if not row:
                 raise Problem("not_found", "No such mail action", 404)
             mail_computer(c, who, row["mailbox"])
-            if row["state"] in ("done", "failed", "cancelled"):
+            if row["state"] in ("done", "failed", "canceled"):
                 return {"id": mid, "state": row["state"]}
             state = ("done" if body.ok else _requeue(c, row) if body.retry and row["attempts"] < MAIL_TRIES else "failed")
             result = {**json.loads(row["result"] or "{}"), "ok": body.ok, "detail": body.detail,

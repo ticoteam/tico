@@ -159,7 +159,7 @@ def install(app, store, auth, mutate):
                                                          unattributed=unattributed))
 
     @app.get("/api/v2/finance/cards")
-    def finance_cards(request: Request, status: Literal["active", "frozen", "cancelled"] | None = None,
+    def finance_cards(request: Request, status: Literal["active", "frozen", "canceled"] | None = None,
                       holder: str | None = None, vendor: str | None = Query(None, max_length=120),
                       q: str = Query("", max_length=100), cursor: str | None = Query(None, max_length=600),
                       limit: int = Query(100, ge=1, le=200), view_as: str | None = None):

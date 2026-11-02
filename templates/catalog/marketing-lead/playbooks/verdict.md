@@ -39,7 +39,7 @@ about the bet, so use `--bet-effect none`.
    `--bet-effect` is `supports` for Won, `weakens` for Lost and `none` for Inconclusive, Dropped or an idea with no bet.
    `--confidence` is `low`, `medium` or `high`. Brand-track ideas always carry it. For performance tests, give it when you have one.
 
-6. Cohort numbers that the result rests on (booked, cancelled, retained) come from the source of record, with the view or
+6. Cohort numbers that the result rests on (booked, canceled, retained) come from the source of record, with the view or
    link as the source in `--result`. Do not put a number in the result that you did not read.
 
 ## Learning

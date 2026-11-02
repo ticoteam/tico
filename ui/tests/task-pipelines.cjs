@@ -410,7 +410,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await drag('tdev-held', '#task-body [data-col="dev-blocked"]');
     await page.locator('.task-block-reason [data-cancel]').click();
     assert.equal(await page.evaluate(() => document.activeElement?.dataset.openTask), 'tdev-held',
-      'cancelling a dragged Blocked move restores focus to its card');
+      'canceling a dragged Blocked move restores focus to its card');
     await page.evaluate(task => taskModalShow(task), held);
     await page.waitForFunction(() => document.querySelector('#task-modal [data-prop="step"]')?.textContent.includes('In Progress'));
     await page.locator('#task-modal [data-prop="step"]').click();

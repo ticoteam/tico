@@ -9111,7 +9111,7 @@
                   "enum": [
                     "active",
                     "frozen",
-                    "cancelled"
+                    "canceled"
                   ],
                   "type": "string"
                 },
@@ -23580,7 +23580,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SeatCancelled"
+                  "$ref": "#/components/schemas/SeatCanceled"
                 }
               }
             }
@@ -50773,7 +50773,7 @@
         "title": "SeatBatchCreate",
         "description": "A single confirmed group of Recruiting seats."
       },
-      "SeatCancelled": {
+      "SeatCanceled": {
         "type": "object",
         "properties": {
           "id": {

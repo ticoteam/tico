@@ -403,7 +403,7 @@ def test_money_reads_cut_to_the_viewer_and_a_revoked_grant_is_gone(books):
 
 def test_every_send_is_judged_again_with_its_counters_once_and_a_new_deny_cancels_it(books):
     """C: right before the send, the action's rights, view, rules (counters less its own) and budget run again: a
-    payment that used its own limit still goes; one a rule now denies, or whose payer lost the right, is cancelled."""
+    payment that used its own limit still goes; one a rule now denies, or whose payer lost the right, is canceled."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -572,7 +572,7 @@ def test_a_denied_or_declined_payee_leaves_no_bank_numbers_and_no_vault_row(api)
 
 def test_a_limit_added_after_payments_were_queued_is_reserved_at_send_once(books):
     """N6: queued payments a new monthly limit now covers reserve its counter with their send claim, owned by each
-    payment: the first fits and counts once (a retried send doesn't count it again); the next is over and cancelled."""
+    payment: the first fits and counts once (a retried send doesn't count it again); the next is over and canceled."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -600,7 +600,7 @@ def test_a_limit_added_after_payments_were_queued_is_reserved_at_send_once(books
         assert sorted(status.values())[1].startswith("canceled:Monthly cap"), status
 
 
-def test_a_limit_reserved_at_send_is_given_back_once_when_the_payment_fails_or_is_cancelled(books):
+def test_a_limit_reserved_at_send_is_given_back_once_when_the_payment_fails_or_is_canceled(books):
     """Round 3 #4: what a payment reserved at its send claim comes off the counter when Mercury refuses it or a person
     cancels it after a retry, once (its record empties)."""
     fake = FakeMercury()
@@ -1007,7 +1007,7 @@ def test_a_direct_payment_the_bank_cancels_with_no_request_id_fails_and_its_hold
 
 def test_a_send_time_rule_on_who_asks_cancels_a_payment_someone_else_queued(books):
     """Ben queues a payment; the owner then adds a deny for payments by anyone but the owner. The send-time facts carry
-    actor.owner as the request did, so the payment is cancelled before Mercury sees it."""
+    actor.owner as the request did, so the payment is canceled before Mercury sees it."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)

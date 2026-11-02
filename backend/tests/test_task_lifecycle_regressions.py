@@ -115,7 +115,7 @@ def test_worktree_wait_is_visible_and_survives_stranded_sweep(c, state):
     assert H.waiting_for(c, row) == detail["why"]
     assert H.sweep_stranded(c, at=AT) == []
     assert H.task(c, task["id"])["status"] == "waiting"
-    c.execute("UPDATE worktree_waits SET state='cancelled' WHERE id='wait'")
+    c.execute("UPDATE worktree_waits SET state='canceled' WHERE id='wait'")
     assert H.wait_detail(c, row) is None
 
 

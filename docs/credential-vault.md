@@ -173,9 +173,9 @@ there, else the first of its operator and the company owner who can read the tas
 task waits on the card ([Reconnect cards](tasks.md#reconnect-cards)):
 saving it wakes the task once with "<label> is saved. Continue." in place of the "Saved" message. BotOps asking on its own
 task does the same, for the person it acts for. Asking again on the same task returns the open card; another task's open
-card for the same variable stays (saving either saves both); cancelling the card ends the task's wait and tells the bot.
+card for the same variable stays (saving either saves both); canceling the card ends the task's wait and tells the bot.
 When the task finishes, changes hands, or is made private from the card's person, its card says Not needed and its
-request is cancelled; a person who cannot read the task cannot open its request either.
+request is canceled; a person who cannot read the task cannot open its request either.
 
 If a human pastes a credential into the chat instead, BotOps stores it with `hub credential set <VARIABLE> --for-bot <bot>` (the value on standard input,
 never on the command line) as that human, and the server takes the pasted words out of their messages, the run's recorded events and the answers kept

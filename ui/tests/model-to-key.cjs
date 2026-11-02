@@ -24,7 +24,7 @@ const {unrouted} = require('./support/routes.cjs');
       readiness: {runtimes: {codex: subscription(), claude: subscription()},
         harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude')}},
       profiles: []});
-    // How each job ends on the computer: on its second check, or (`hold`) not until it is cancelled.
+    // How each job ends on the computer: on its second check, or (`hold`) not until it is canceled.
     const ending = {codex: {state: 'done', message: 'Switched to the API key; the subscription is signed out'}, claude: 'hold'};
     // `held`: the next Switch to API key request waits until it is released, as on a slow connection.
     let held = null;
@@ -71,7 +71,7 @@ const {unrouted} = require('./support/routes.cjs');
         const cancel = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)\/cancel$/);
         if (cancel) {
           writes.push({p, body: req.postDataJSON()});
-          return json(Object.assign(rows[cancel[1]], {state: 'cancelled', updated_at: new Date().toISOString()}));
+          return json(Object.assign(rows[cancel[1]], {state: 'canceled', updated_at: new Date().toISOString()}));
         }
         const one = p.match(/^\/api\/v2\/computers\/box\/logins\/(\w+)$/);
         if (one) {
@@ -135,9 +135,9 @@ const {unrouted} = require('./support/routes.cjs');
     await dialog.locator('input[name=secret]').fill(SECRET);
     await dialog.locator('[data-key-go]').click();
     await dialog.getByRole('button', {name: 'Cancel switch'}).click();
-    await dialog.locator('[data-status][data-state=cancelled]').waitFor();
+    await dialog.locator('[data-status][data-state=canceled]').waitFor();
     assert.deepEqual(writes.slice(-1).map(w => w.p), ['/api/v2/computers/box/logins/key1/cancel']);
-    assert.equal(await dialog.locator('[data-status]').innerText(), 'Cancelled. The subscription is still in use.');
+    assert.equal(await dialog.locator('[data-status]').innerText(), 'Canceled. The subscription is still in use.');
     await dialog.locator('[data-actions] [data-close]').click();
 
     // Closing the dialog while it is checked cancels it too.
@@ -149,7 +149,7 @@ const {unrouted} = require('./support/routes.cjs');
     for (let i = 0; i < 50 && writes.at(-1).p !== '/api/v2/computers/box/logins/key2/cancel'; i++) await page.waitForTimeout(100);
     assert.equal(writes.at(-1).p, '/api/v2/computers/box/logins/key2/cancel');
 
-    // Closed while the request is still on its way: the switch it started is cancelled once it is back.
+    // Closed while the request is still on its way: the switch it started is canceled once it is back.
     held = {}; held.promise = new Promise(resolve => { held.release = resolve; });
     await own('claude').getByRole('button', {name: 'Switch to API key'}).click();
     await dialog.locator('input[name=secret]').fill(SECRET);

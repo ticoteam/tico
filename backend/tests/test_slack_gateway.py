@@ -612,7 +612,7 @@ def test_a_muted_bot_stays_in_tico_unless_the_person_is_talking_to_it_in_slack(g
     gateway.originate()
     gateway.mirror()
     posts = {r["message_id"]: r["state"] for r in rows(hub, "SELECT * FROM slack_posts")}
-    assert posts == {answer: "ready", later: "ready", muted: "cancelled", other: "ready"}
+    assert posts == {answer: "ready", later: "ready", muted: "canceled", other: "ready"}
 
 
 @pytest.mark.parametrize('skip', ['wrong_person'])
@@ -786,7 +786,7 @@ def test_a_private_task_reply_with_a_visual_never_reaches_slack(gateway, hub):
     gateway.mirror()
     gateway.deliver()
     assert gateway.slack.posts == []
-    assert all(r["state"] == "cancelled" for r in rows(hub, "SELECT * FROM slack_posts WHERE message_id=?", reply))
+    assert all(r["state"] == "canceled" for r in rows(hub, "SELECT * FROM slack_posts WHERE message_id=?", reply))
 
 
 def test_a_slack_thread_reply_links_to_its_own_room_not_the_bots_usual_chat(gateway, hub):

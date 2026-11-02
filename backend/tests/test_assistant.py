@@ -137,7 +137,7 @@ def test_a_side_effect_runs_only_after_the_person_confirms(api):
         assert c.execute("SELECT count(*) FROM events WHERE action='assistant.action.confirmed'").fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'bot.%' AND detail LIKE '%\"via\": \"assistant\"%'"
                          ).fetchone()[0] >= 1
-    # A cancelled proposal never runs.
+    # A canceled proposal never runs.
     other = post(api, "assistant/actions", {"summary": "Archive Finance", "path": "/api/v2/bots/finance/archive",
                                             "body": {"expected_revision": 1}}, token="ana-test")["action"]
     post(api, f"assistant/actions/{other['id']}/cancel", {}, token="ana-test")

@@ -9,7 +9,7 @@
 //  - a task with no code links and no children has no rail at all; on a phone the rail sits under the details;
 //  - the bot page's Active rows carry one small PR badge each, from the task's pr_state, and none without PRs;
 //  - Runs (GET /tasks/{id}/run-view): the checkpoint with its author, background work still running, each try with what
-//    woke it and what followed it (a resume or dismiss decision beside its state: "Cancelled: dismissed by BotOps at 09:50Z, <note>";
+//    woke it and what followed it (a resume or dismiss decision beside its state: "Canceled: dismissed by BotOps at 09:50Z, <note>";
 //    none on a try with no decision), and the subagent tree with a nested subagent under its parent; a task with no runs has no section.
 // TASK_CODE_SHOTS=<dir> saves the screenshots for the owner.
 const {chromium} = require('playwright');
@@ -322,10 +322,10 @@ async function desktop(browser) {
   // A try with no recovery decision carries no decision label; a dismissed one says it beside its state.
   assert.equal(await runs.locator('.truns-decision').count(), 2);
   assert.doesNotMatch(await tries.first().locator('summary').innerText(), /dismissed|resumed/i);
-  assert.match(await tries.nth(2).locator('summary').innerText(), /^Try 1 of 1 · stopped · Cancelled: dismissed by BotOps at 09:50Z · /);
+  assert.match(await tries.nth(2).locator('summary').innerText(), /^Try 1 of 1 · stopped · Canceled: dismissed by BotOps at 09:50Z · /);
   await tries.nth(2).locator('summary').click();
   assert.equal(await tries.nth(2).locator('.truns-decision').innerText(),
-    'Cancelled: dismissed by BotOps at 09:50Z, Finished before the 60-min limit. Nothing to redo.');
+    'Canceled: dismissed by BotOps at 09:50Z, Finished before the 60-min limit. Nothing to redo.');
   assert.doesNotMatch(await tries.nth(2).innerText(), /Not run again/, 'the decision line replaces the bare next line');
   if (SHOTS) await runs.screenshot({path: path.join(SHOTS, 'task-runs-decision-dark.png')});
   if (SHOTS) { fs.mkdirSync(SHOTS, {recursive: true}); await runs.screenshot({path: path.join(SHOTS, 'task-runs-dark.png')}); }

@@ -46,7 +46,7 @@ async function open(browser, viewport, view) {
       seen.view = {...seen.view, status: 'saved', credential_id: 'c1'};
       return json(seen.view);
     }
-    if (p === '/api/v2/credential-requests/cr1/cancel') { seen.cancels++; seen.view = {...seen.view, status: 'cancelled'}; return json(seen.view); }
+    if (p === '/api/v2/credential-requests/cr1/cancel') { seen.cancels++; seen.view = {...seen.view, status: 'canceled'}; return json(seen.view); }
     return json(unrouted(p));
   });
   await page.goto('https://tico-ui.test/#/bot/botops/chat');

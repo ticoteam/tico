@@ -90,7 +90,7 @@ async function main() {
         const operation = p.split('/').pop(), body = JSON.parse(route.request().postData() || '{}'); calls.push([operation, body]);
         if (method === 'DELETE' && p.includes('/bots/')) {
           world.detail.bots = world.detail.bots.filter(bot => bot.bot !== operation);
-          return json({id: 'live-1', bot: operation, removed: true, cancelled_turns: [], event_id: 10});
+          return json({id: 'live-1', bot: operation, removed: true, canceled_turns: [], event_id: 10});
         }
         if (operation === 'chat' && world.holdChat) {
           await new Promise(resolve => { world.chatWaiters.push(resolve); world.chatHeld?.resolve(); });

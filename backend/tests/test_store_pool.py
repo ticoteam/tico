@@ -107,7 +107,7 @@ def test_failed_writer_releases_admission_and_rolls_back(tmp_path, monkeypatch):
         c.execute("UPDATE t SET x=3")
 
 
-def test_writer_fifo_timeout_and_cancelled_waiter_keep_the_next_writer_live(monkeypatch):
+def test_writer_fifo_timeout_and_canceled_waiter_keep_the_next_writer_live(monkeypatch):
     from collections import deque
     from queue import Queue
     import threading
@@ -164,11 +164,11 @@ def test_writer_fifo_timeout_and_cancelled_waiter_keep_the_next_writer_live(monk
     with pytest.raises(sqlite3.OperationalError, match="database is locked"):
         gate.acquire()
     assert list(gate.queue) == [holder]
-    class Cancelled:
+    class Canceled:
         def wait(self, timeout):
             raise KeyboardInterrupt
     with monkeypatch.context() as patch:
-        patch.setattr(store_module.threading, "Event", Cancelled)
+        patch.setattr(store_module.threading, "Event", Canceled)
         with pytest.raises(KeyboardInterrupt):
             gate.acquire()
     assert list(gate.queue) == [holder]

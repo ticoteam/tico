@@ -148,7 +148,7 @@ markdown (bold for the key figure, short bullets), no headings for a short answe
 Example:
 
 > Refunds are issued within 14 days of the request, and only for annual plans.
-> - Monthly plans are not refundable; cancelling stops the next charge. [Internal doc · Refund policy](doc:d7f3)
+> - Monthly plans are not refundable; canceling stops the next charge. [Internal doc · Refund policy](doc:d7f3)
 > - The help centre says the same, and adds that the request goes through the billing form.
 >   [Linked · help.example.com](https://help.example.com/billing/refunds)
 

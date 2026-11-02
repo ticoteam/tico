@@ -11,7 +11,7 @@ The send is an outbox write (sync.outbox, op `transfer_create`, the provider cal
 key: Mercury's POST /transfer. The claim re-checks it right before that call (recheck, §5 re-check at use): the requester
 still has the payment right and sees both accounts, payments are still on, and the gates still let it through. A gate
 that now asks a person holds it; anything else cancels it. Neither sends. Until its call is claimed, the transfer can be
-cancelled (plan_cancel). An unknown result (no answer, a 5xx, or a worker cut off mid-call) is never sent again on its
+canceled (plan_cancel). An unknown result (no answer, a 5xx, or a worker cut off mid-call) is never sent again on its
 own: the row goes `unknown` and a finance admin is asked to check Mercury. A refused send (4xx) goes `failed` and is
 reported the same way.
 
@@ -148,14 +148,14 @@ def _stop(ctx: Ctx, o: Any, t: Any, why: str, *, hold: bool) -> None:
     SK.update(ctx.c, "fin_outbox", oid, {"status": "failed", "claimed_at": None, "next_try_at": None,
                                          "last_error": why[:300], "updated_at": ctx.at})
     tico.needs_you(ctx.c, payments.admin_person(ctx), f"Transfer of {amount} was not sent",
-                   f"Transfer {tid} was cancelled before it went to Mercury: {why}. Nothing moved.", private=True)
+                   f"Transfer {tid} was canceled before it went to Mercury: {why}. Nothing moved.", private=True)
 
 
 def recheck(ctx: Ctx, o: Any, fresh: list[G.Hit] | None = None) -> bool:
     """Right before Mercury is called (§5, re-check at use), for a transfer write the claim just took: whoever asked still
     has the payment right and sees both accounts, payments are still on for the bank connection, and the gate rules (with
     their counters, less this transfer's own) still let it through. True when it did not, so nothing is sent: the claim
-    is released (a hold) or the transfer is cancelled. On a send, the limits it fits that it has not counted yet go into
+    is released (a hold) or the transfer is canceled. On a send, the limits it fits that it has not counted yet go into
     `fresh`, for `reserve` once the send is claimed."""
     from . import gating
     body = SK.loads(o["payload"])
@@ -248,7 +248,7 @@ def plan_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         # Both writes must still hold: the transfer queued and its write unclaimed. A worker that claimed it first wins.
         if SK.update(ctx.c, "fin_transfers", tid, {"status": "canceled", "updated_at": ctx.at}, "status='queued'") != 1 \
-                or SK.update(ctx.c, "fin_outbox", oid, {"status": "failed", "last_error": "cancelled before it was sent",
+                or SK.update(ctx.c, "fin_outbox", oid, {"status": "failed", "last_error": "canceled before it was sent",
                                                          "next_try_at": None, "updated_at": ctx.at},
                              "status='pending' AND claimed_at IS NULL") != 1:
             raise FinanceError(CONFLICT, "the transfer moved on; check its status")

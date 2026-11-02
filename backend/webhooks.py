@@ -928,17 +928,17 @@ def resume(c, who, hook_id):
 
 
 def delete(c, who, hook_id):
-    """Gone for good: its pending sends are cancelled and its secrets cleared. Finished sends stay in the log until
+    """Gone for good: its pending sends are canceled and its secrets cleared. Finished sends stay in the log until
     the cleanup removes them."""
     hook = _row(c, hook_id)
     may_manage(who, hook)
-    cancelled = c.execute("UPDATE webhook_sends SET state='canceled', last_error='The endpoint was deleted', "
+    canceled = c.execute("UPDATE webhook_sends SET state='canceled', last_error='The endpoint was deleted', "
                           "next_attempt_at=?, claimed_at=NULL WHERE webhook_id=? AND state IN ('ready','sending')",
                           (H.now(), hook_id)).rowcount
     c.execute("UPDATE webhooks SET deleted_at=?, enabled=0, secret='', secret_prev='', headers='[]', updated_at=? WHERE id=?",
               (H.now(), H.now(), hook_id))
-    H.event(c, who.actor, "webhook.deleted", hook_id, {"cancelled": cancelled})
-    return {"id": hook_id, "deleted": True, "cancelled": cancelled}
+    H.event(c, who.actor, "webhook.deleted", hook_id, {"canceled": canceled})
+    return {"id": hook_id, "deleted": True, "canceled": canceled}
 
 
 def send_custom(c, who, hook_id, body):
@@ -998,7 +998,7 @@ def one_send(c, who, hook_id, send_id):
 
 
 def retry(c, who, hook_id, send_id):
-    """Send a failed, cancelled or delivered send again now (a delivered one is a resend). Its id and body stay, so a
+    """Send a failed, canceled or delivered send again now (a delivered one is a resend). Its id and body stay, so a
     receiver that kept the first still drops the repeat."""
     hook = _row(c, hook_id)
     may_manage(who, hook)
@@ -1288,5 +1288,5 @@ def install(app, settings, store, auth, mutate):
 
     @app.post("/api/v2/webhooks/{hook_id}/sends/{send_id}/retry")
     def webhook_retry(request: Request, hook_id: str, send_id: str, body: M.Empty):
-        """Send a failed, cancelled or delivered send again."""
+        """Send a failed, canceled or delivered send again."""
         return mutate(request, body, lambda c: {"send": retry(c, request.state.identity, hook_id, send_id)})

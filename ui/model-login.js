@@ -3,7 +3,7 @@
    field for the code the sign-in page hands back. This page never sees the resulting credential;
    the CLI keeps it on the computer, and the chip flips when the computer reports it is ready.
    The same module signs a login out (after a confirmation naming the bots that stop), switches it to
-   another account (a sign-in on the side: cancelling leaves the old account working), and lets the
+   another account (a sign-in on the side: canceling leaves the old account working), and lets the
    company's shared key sign a signed-out computer login in again. `actionsHTML` draws those buttons for
    any page that lists a login: Settings > Computers and Manage subscription today.
    Clear key / Replace key / Add key (backend/computer_keys.py) are here too, for a login a model key signs in: the key
@@ -19,7 +19,7 @@
   const RUNTIME_NAMES = {codex: 'Codex (ChatGPT)', claude: 'Claude Code'};
   const POLL_MS = 2000, STALLED_S = 30;
   const text = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-  // `finishing`: a switch is putting the new account in place, past the point where it can be cancelled.
+  // `finishing`: a switch is putting the new account in place, past the point where it can be canceled.
   const active = state => ['requested', 'starting', 'waiting', 'finishing'].includes(state);
   const hosted = () => typeof S !== 'undefined' && !!S.config?.hosted;
 
@@ -112,8 +112,8 @@
         label = (login.message || 'The sign-in failed.') + kept;
       } else if (state === 'expired') {
         label = 'The sign-in ran out of time. Start it again.' + kept;
-      } else if (state === 'cancelled') {
-        label = 'The sign-in was cancelled.' + kept;
+      } else if (state === 'canceled') {
+        label = 'The sign-in was canceled.' + kept;
       }
       if (state === 'waiting') {
         head = `<ol class="model-login-steps">
@@ -160,13 +160,13 @@
     });
     actions.addEventListener('click', async event => {
       if (event.target.closest('[data-cancel]')) {
-        // On a hosted Tico the pane closes once the computer's sign-in is cancelled. A refused cancel (a switch
+        // On a hosted Tico the pane closes once the computer's sign-in is canceled. A refused cancel (a switch
         // already putting the new account in place) or a failed one leaves it open, saying why and following it on.
         try {
           login = await post(`${base}/${encodeURIComponent(login.id)}/cancel`, {});
           note = '';
           draw();
-          if (hosted() && login.state === 'cancelled') { toast(status.textContent); stop(); if (dialog.open) dialog.close(); }
+          if (hosted() && login.state === 'canceled') { toast(status.textContent); stop(); if (dialog.open) dialog.close(); }
         } catch (error) { note = error.message; status.textContent = error.message; }
       } else if (event.target.closest('[data-retry]')) {
         void begin();
@@ -571,7 +571,7 @@
           status.textContent = toKey
             ? (row.state === 'done' ? `Switched. ${name} on ${where} now uses ${out.key?.preview || 'the API key'}; the subscription is signed out.`
               : row.state === 'expired' ? `${where} did not finish the switch in time. Check this connection once it reports again.`
-              : row.state === 'cancelled' ? 'Cancelled. The subscription is still in use.'
+              : row.state === 'canceled' ? 'Canceled. The subscription is still in use.'
               : said ? said[0].toUpperCase() + said.slice(1) + (/[.!?]$/.test(said) ? '' : '.')
               : 'The switch did not finish.')
             : row.state === 'done' ? `${adding ? 'Added' : 'Replaced'}. ${name} on ${where} now uses ${out.key?.preview || 'the new key'}.`

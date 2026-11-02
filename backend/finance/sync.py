@@ -475,7 +475,7 @@ def outbox(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
                 ctx = load(c, now)
                 fresh: list[Any] = []
                 if transfers.recheck(ctx, o, fresh):
-                    continue      # re-checked at use: cancelled or held, so nothing is sent
+                    continue      # re-checked at use: canceled or held, so nothing is sent
                 transfers.reserve(ctx, o, fresh)         # with the claim: newly applicable limits move once
         body = SK.loads(o["payload"])
         answer = _send(store, provider, str(o["op"]), body)
@@ -522,8 +522,8 @@ def _send(store: Any, provider: Provider, op: str, body: Mapping[str, Any]) -> A
         if card is None:
             return Answer(200, {"skipped": "no such card"})
         if op == "card_create":
-            if str(card["status"]) == "cancelled":
-                return Answer(200, {"skipped": "cancelled before it was issued"})
+            if str(card["status"]) == "canceled":
+                return Answer(200, {"skipped": "canceled before it was issued"})
             with store.read() as c:
                 limit = cards.issue_limit(c, card)          # its allocation now, never a stale limit
             if limit <= 0:
@@ -543,14 +543,14 @@ def _sync_card(provider: Provider, card: Any) -> Answer:
     want, have = str(card["status"]), str(card["provider_status"] or "active")
     done: dict[str, object] = {}
     if want != have:
-        op = {"cancelled": "cancel", "frozen": "freeze", "active": "unfreeze"}[want]
-        if not (have == "cancelled"):
+        op = {"canceled": "cancel", "frozen": "freeze", "active": "unfreeze"}[want]
+        if not (have == "canceled"):
             got = provider.card_state(pid, op)
             if not got.ok:
                 return got
             done["status"] = want
     limit = int(card["limit_amount"] or 0)
-    if want != "cancelled" and limit > 0 and limit != int(card["provider_limit"] or 0):
+    if want != "canceled" and limit > 0 and limit != int(card["provider_limit"] or 0):
         got = provider.card_limit(pid, limit)
         if not got.ok:
             return Answer(got.status, {**got.body, "confirmed": done})
@@ -609,7 +609,7 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
         elif op == "transfer_create":
             transfers.sent(load(c, now), body, answer.body)
         elif op == "card_create" and answer.body.get("waiting"):
-            # Not issued and not cancelled: it is issued once it has an allocation again (cards.sync).
+            # Not issued and not canceled: it is issued once it has an allocation again (cards.sync).
             SK.update(c, "fin_cards", card_id, {"sync_status": cards.WAITING, "updated_at": now,
                                                 "sync_error": "Not issued until it has an allocation"})
         elif op == "card_create" and not answer.body.get("skipped"):

@@ -27,7 +27,7 @@ keys:
   runtime-wide ready says nothing of a named profile, nor one profile's of another's.
 - `secret:<bot>:<ENV>`: a credential the task's bot asked for (BotOps may ask for another bot's: the card's `bot` is the
   one it is for, the task's `owner` is BotOps) (backend/credential_cards.py); fixed when that variable is stored for
-  or granted to that bot (backend/credentials.py). Cancelling its credential card ends the wait with a wake that
+  or granted to that bot (backend/credentials.py). Canceling its credential card ends the wait with a wake that
   says so (`dropped`).
 
 Anything else (GitHub, an MCP server's OAuth) is a new key with its own fix kind, opened and fixed through the same
@@ -51,7 +51,7 @@ SCHEMA = (
 WAKE_REF = "reconnected"
 CARD_REF = "reconnect"
 RECENT_S = 900          # a bot's task worked this recently is the one a connector failure stops
-OWED = "fixed_at IS NOT NULL AND woke_at IS NULL AND ended IN ('fixed','cancelled')"
+OWED = "fixed_at IS NOT NULL AND woke_at IS NULL AND ended IN ('fixed','canceled')"
 
 
 def secret_key(bot, env):
@@ -120,7 +120,7 @@ def line(c, bot, service, label, fix=None):
 
 
 def view(row):
-    """The card as the thread draws it (message refs `reconnect`): status open, fixed, cancelled or retired."""
+    """The card as the thread draws it (message refs `reconnect`): status open, fixed, canceled or retired."""
     return {"key": row["key"], "service": row["service"], "label": row["label"], "bot": row["bot"],
             "person": row["person"], "fix": json.loads(row["fix"] or "{}"),
             "status": (row.get("ended") or "fixed") if row.get("fixed_at") else "open", "fixed_at": row.get("fixed_at")}
@@ -214,7 +214,7 @@ def _reads(c, row):
 
 def access_changed(c, task_id):
     """The task was made private (hubdb): a card whose person cannot read it now is retired (a credential card's request
-    cancelled) and opened again for the first fixer who can (`person_for`). A credential card is the bot's to ask again
+    canceled) and opened again for the first fixer who can (`person_for`). A credential card is the bot's to ask again
     (a new request, through the API) and a Google card only its mailbox's person can fix, so those stay retired; the
     task stops waiting on them, and its bot is told when nothing else holds it."""
     if not _present(c):
@@ -239,7 +239,7 @@ def access_changed(c, task_id):
 
 
 def _close(c, wait, ended, at=None):
-    """End an open card (fixed, cancelled or retired) and say so on its message. A retired card owes no wake."""
+    """End an open card (fixed, canceled or retired) and say so on its message. A retired card owes no wake."""
     H = _H()
     at = at or H.now()
     if c.execute("UPDATE task_reconnects SET fixed_at=?,ended=?,woke_at=? WHERE task_id=? AND key=? AND fixed_at IS NULL",
@@ -253,12 +253,12 @@ def _close(c, wait, ended, at=None):
 
 def _retire(c, wait, refresh=True, cleared=None):
     """The card stopped standing (its task ended or changed hands, its bot was archived): it asks nothing now, and a
-    credential card's request is cancelled, so nobody saves a credential the task no longer needs."""
+    credential card's request is canceled, so nobody saves a credential the task no longer needs."""
     if not _close(c, wait, "retired"):
         return
     request = json.loads(wait.get("fix") or "{}").get("request")
     if request and _H()._has_table(c, "credential_requests"):
-        c.execute("UPDATE credential_requests SET status='cancelled',updated_at=? WHERE id=? AND status='pending'",
+        c.execute("UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=? AND status='pending'",
                   (_H().now(), request))
     if refresh:
         from . import task_holds
@@ -313,25 +313,25 @@ def _settle_requests(c, waits, at):
 
 
 def dropped(c, request_id):
-    """The person cancelled the credential card a task waits on: the wait ends, and the bot is told it was not saved."""
+    """The person canceled the credential card a task waits on: the wait ends, and the bot is told it was not saved."""
     H = _H()
     if not request_id or not _present(c):
         return []
     rows = H._rows(c.execute("SELECT * FROM task_reconnects WHERE fixed_at IS NULL AND json_extract(fix,'$.request')=?",
                              (request_id,)))
-    closed = [w for w in rows if _close(c, w, "cancelled")]
-    return [w["task_id"] for w in closed if deliver(c, w["task_id"], why="cancelled")]
+    closed = [w for w in rows if _close(c, w, "canceled")]
+    return [w["task_id"] for w in closed if deliver(c, w["task_id"], why="canceled")]
 
 
 def _said(c, wait):
-    if wait["ended"] == "cancelled":
+    if wait["ended"] == "canceled":
         from . import task_holds
-        return f"{task_holds.name(c, wait['person'])} cancelled the card for {wait['label']}: it was not saved."
+        return f"{task_holds.name(c, wait['person'])} canceled the card for {wait['label']}: it was not saved."
     return f"{wait['label']} is " + ("saved" if wait["service"] == "secret" else "reconnected") + "."
 
 
 def _claim_owed(c, task_id, owner):
-    """The fixed or cancelled cards on the task whose wake is still owed to `owner`, claimed for this one wake: a
+    """The fixed or canceled cards on the task whose wake is still owed to `owner`, claimed for this one wake: a
     card opened for another owner is that owner's news, never the task's next owner's."""
     H = _H()
     owed = H._rows(c.execute(f"SELECT * FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} ORDER BY fixed_at, key",

@@ -41,7 +41,8 @@ Retired spellings on this branch:
 
 | Retired | Current | Columns |
 |---|---|---|
-| `cancelled` | `canceled` | `jobs.state`, `webhook_sends.state`, `fin_payments.status`, `fin_transfers.status`, `assistant_actions.status` (stored rows are mapped at startup) |
+| `cancelled` | `canceled` | `jobs.state`, `webhook_sends.state`, `fin_payments.status`, `fin_transfers.status` (migration 0002); `fin_cards.status` and the columns in migration 0032: `assistant_actions.status`, `automation_mail_actions.state`, `bot_tool_requests.state`, `bot_transitions.state`, `bot_transition_checkpoints.state`, `credential_requests.status`, `fin_cards.provider_status`, `model_logins.state`, `seats.request_state`, `service_jobs.state`, `slack_posts.state`, `task_reconnects.ended`, `worktree_waits.state` |
+| `cancelling` | `canceling` | `seats.request_state` (migration 0032) |
 | `needs_onboarding` | `needs_setup` | `bot_config.onboarding_state` (migration 45 rewrote stored rows; this maps any stale row) |
 
 Readers of `bot_config.onboarding_state` still accept `needs_onboarding` for one release (`backend/statuses.py`).
@@ -154,7 +155,7 @@ Transitions:
 - `running` or `queued` to `input`: an ask is sent and the attempt waits (`execution.py`).
 - `input` to `running`: the answer arrives and the attempt resumes (`execution.py`).
 - `leased`, `running` or `input` to `queued` or `uncertain`: the attempt's lease expires or the attempt ends without a result. `queued` when nothing was done yet, `uncertain` otherwise (`execution.py` expiry and end-of-attempt paths).
-- On an attempt's end, each job takes the attempt's outcome state, or `canceled` for jobs a stop cancelled (`execution.py`).
+- On an attempt's end, each job takes the attempt's outcome state, or `canceled` for jobs a stop canceled (`execution.py`).
 - `running` or `input` to `uncertain`, and `leased` to `queued`: hub restart (`backend/backup.py`).
 - `queued` to `completed`: a person answers before any bot runs (`backend/app.py`, `UPDATE jobs SET state='completed' WHERE ... AND state='queued'`).
 - Any open state to `canceled`: stop, task closed or declined, duplicate wake, quota or wake presets (`app_delivery.py`, `delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`).
@@ -498,7 +499,7 @@ Already constrained by a CHECK in the base schema (values unchanged on this bran
 - `meeting_items.status`: proposed, pushed, dismissed.
 - `org_rules.status`: suggested, active, retired. `org_rule_holds.state`: held, sent, kept.
 - `growth_channels.stage`, `growth_ideas.status`: the Growth module's stages and statuses. `growth_segments.status`: serving, testing, next, dropped.
-- `fin_cards.status`: active, frozen, **cancelled**. Left as is (cards are not in the stable set).
+- `fin_cards.status`: active, frozen, canceled (`backend/status_values.py` enforces it with a CHECK).
 - `fin_actions.status`, `fin_bills.status`, `fin_invoices.status`, `fin_entries.status`, `fin_holds.status`, `fin_outbox.status`
   (pending, sent, failed, withheld), `fin_feed_txns.status`, `fin_periods.status`, `fin_reconciliations.status`,
   `fin_recipients.status`, `fin_view_grants.status`, `fin_money_accounts.kind`, and others in the Finance schema.
@@ -523,10 +524,8 @@ Without a CHECK (not constrained here; values are whatever the code writes):
 
 Spellings still outside the stable set:
 
-- `cancelled` in `fin_cards.status`, `automation_mail_actions.state`, `slack_posts.state`,
-  `bot_tool_requests.state`, `credential_requests.status`, `model_logins.state`, `service_jobs.state`, `worktree_waits.state`,
-  `bot_transitions.state` (the lifecycle constant), `reconnects.ended`, and in the finance provider's own status strings and
-  feed rows. Each means the same thing as `canceled`; none is changed.
+- `cancelled` in `fin_feed_txns.provider_status` and Mercury's other status strings and feed rows: Mercury's spelling, kept as
+  it sent them. Tico's own lists are all `canceled` since migration 0032.
 - `complete` in `live_meeting_chat_routes.status` and `live_meeting_windows.status`. Same meaning as `completed`; not changed.
 
 ## Tables named in the plan without a status column on this base
@@ -546,8 +545,8 @@ These are open for the integration owner.
 2. **`attempts.state` `input`.** Listed, but no code path writes it. Keep it (harmless, matches the list the upgrade accepts) or drop it in a later change with a migration.
 3. **`bot_status_history.state` unconstrained.** Old history rows may hold values from older code. A CHECK would make the upgrade refuse them.
 4. **`bot_files.state`.** No code moves a file from `not_synced` back to `ready`. Confirm whether that is intended before a sync feature relies on it.
-5. **`cancelled` and `complete` outside the stable set.** The same meanings are spelled both ways across roughly a dozen tables, and the live-meeting tables use `complete`. Unify in a follow-up, with a migration per table.
+5. **`complete` outside the stable set.** The live-meeting tables use `complete` where other lists say `completed`. Unify in a follow-up, with a migration.
 6. **`approvals.declined` and `goal_proposals.rejected`.** Kept apart on purpose (different records). Unify only if the product wants one word for "refused".
-7. **Public API.** `docs/openapi/v2.json` changes the `cancelled` enum values for webhook sends, payments and transfers to `canceled`. Any client that matches the old spelling breaks.
+7. **Public API.** `docs/openapi/v2.json` changes the `cancelled` enum values for webhook sends, payments, transfers and finance cards to `canceled`. Any client that matches the old spelling breaks.
 8. **`needs_onboarding` readers.** `backend/statuses.py` still accepts it for one release. Remove that acceptance in a later release, after this migration has run everywhere.
 9. **Removing a list value later.** Needs a migration that maps or refuses stored rows first (see "How the lists are enforced").

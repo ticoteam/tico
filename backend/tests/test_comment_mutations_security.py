@@ -86,7 +86,7 @@ def test_already_handed_comments_change_current_record_without_recalling_copies(
         assert H.message(c, said['id']) is None
         if handoff == 'slack':
             row = c.execute('SELECT text,state FROM slack_posts WHERE message_id=?', (said['id'],)).fetchone()
-            assert row['text'] == '' and row['state'] == 'cancelled'
+            assert row['text'] == '' and row['state'] == 'canceled'
 
 
 def test_bot_authorship_is_checked_in_the_domain(api):

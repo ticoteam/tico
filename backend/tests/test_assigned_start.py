@@ -35,7 +35,7 @@ def cancel(api):
 
 
 @pytest.mark.parametrize('profile', ['lead', 'doer'])
-def test_cancelled_assignment_rewakes_once_at_one_hour_and_can_start(api, clock, profile):
+def test_canceled_assignment_rewakes_once_at_one_hour_and_can_start(api, clock, profile):
     machine = task_bot(api, lanes=True)
     with api.app.state.store.transaction() as c:
         put(c, 'ops', profile)

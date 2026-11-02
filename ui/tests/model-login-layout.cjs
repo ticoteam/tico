@@ -23,7 +23,7 @@ async function check(engine) {
         window.row = {id: 'fixture', state: 'starting', created_at: new Date().toISOString(), lines: []};
         window.post = async (url, body) => {
           writes.push({url, body});
-          if (url.endsWith('/cancel')) row.state = 'cancelled';
+          if (url.endsWith('/cancel')) row.state = 'canceled';
           if (url.endsWith('/code')) row.code_sent = true;
           return {...row};
         };
@@ -72,7 +72,7 @@ async function check(engine) {
         assert.ok(geometry.bodyScroll > geometry.bodyHeight, 'long instructions scroll inside the short dialog');
         assert.ok(geometry.actionTop >= 0 && geometry.actionBottom <= geometry.viewport, 'Cancel stays reachable');
         await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
-        await dialog.locator('[data-status][data-state=cancelled]').waitFor();
+        await dialog.locator('[data-status][data-state=canceled]').waitFor();
         assert.match(await dialog.locator('[data-status]').innerText(), /account signed in before still works/);
         await dialog.getByRole('button', {name: 'Close', exact: true}).last().click();
         await dialog.waitFor({state: 'detached'});

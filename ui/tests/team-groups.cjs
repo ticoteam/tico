@@ -585,7 +585,7 @@ async function teamAdd(browser) {
     await page.locator('#org-add-group').click();
     await page.getByRole('menuitem', {name, exact: true}).click();
   };
-  // The plus is reachable by keyboard and cancelling writes nothing.
+  // The plus is reachable by keyboard and canceling writes nothing.
   await page.locator('#org-add-group').focus();
   await page.keyboard.press('ArrowDown');
   await shot(page, 'team-add-menu-desktop');

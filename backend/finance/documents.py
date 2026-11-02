@@ -764,7 +764,7 @@ def unsettle(ctx: Ctx, s: Any, by: str = SYSTEM, *, cash: bool = True) -> None:
 
 
 def feed_gone(ctx: Ctx, feed_id: str, entry_ids: Sequence[str] = ()) -> None:
-    """A feed row unposted (the bank changed or cancelled it, or it was re-categorized): what it paid is owed again,
+    """A feed row unposted (the bank changed or canceled it, or it was re-categorized): what it paid is owed again,
     including what a Finance payment settled through the row's entries (a revised row settles anew, at its new
     amount)."""
     for s in SAP.settlements_from(ctx.c, "feed", feed_id):
@@ -899,7 +899,7 @@ def _bill_budget_gate(ctx: Ctx, bill: Any) -> K.Gate:
 
 
 def payment_ended(ctx: Ctx, pay: Any) -> None:
-    """A bill's payment failed, was returned or cancelled: what it settled is owed again and the bill is open."""
+    """A bill's payment failed, was returned or canceled: what it settled is owed again and the bill is open."""
     obligation = str(pay["obligation"] or "")
     if not obligation.startswith("bill:"):
         return

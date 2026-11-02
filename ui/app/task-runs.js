@@ -5,7 +5,7 @@
 
 const RUNS_POLL_MS = 15000;
 const RUN_STATE_WORDS = {leased: 'starting', running: 'running', expired: 'lease expired', failed: 'failed',
-  interrupted: 'stopped', completed: 'done', cancelled: 'cancelled', stopped: 'stopped', limited: 'hit a usage limit'};
+  interrupted: 'stopped', completed: 'done', canceled: 'canceled', stopped: 'stopped', limited: 'hit a usage limit'};
 const RUN_NEXT_WORDS = {resumed: 'Run again', dismissed: 'Not run again', retried: 'Run again', waiting: 'Waiting for a person',
   queued: 'Queued again'};
 
@@ -17,9 +17,9 @@ function runStateWord(a) {
   return RUN_STATE_WORDS[word] || String(word || '').replace(/_/g, ' ');
 }
 // The job's state beside its recovery decision; a saved choice still waiting for its lane is held (backend/run_view.py).
-const RUN_JOB_WORDS = {uncertain: 'Held', canceled: 'Cancelled', queued: 'Queued', leased: 'Running', running: 'Running',
+const RUN_JOB_WORDS = {uncertain: 'Held', canceled: 'Canceled', queued: 'Queued', leased: 'Running', running: 'Running',
   input: 'Running', completed: 'Done'};
-// "Cancelled: dismissed by BotOps at 09:50Z": the job's state and the resume or dismiss decided about this try, read
+// "Canceled: dismissed by BotOps at 09:50Z": the job's state and the resume or dismiss decided about this try, read
 // from the decision record each time (job_recovery), so a later decision replaces it. The decision carries `state` only
 // while it is about the job's current try; once a later try ran, it says only what was decided ("Resumed by BotOps
 // at 09:50Z"). '' with no decision.

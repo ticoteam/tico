@@ -497,7 +497,7 @@ government rules with citations into the same Suggested tab. Tico works fully wi
   - One task per (routine, due_on) across repeated or concurrent ticks.
   - Catch-up after a missed day.
   - An overdue occurrence doesn't block the next.
-  - Completing the task marks that due date Satisfied; an expired or cancelled task doesn't; reopening undoes it; a
+  - Completing the task marks that due date Satisfied; an expired or canceled task doesn't; reopening undoes it; a
     due date with no routine can be marked by hand.
   - Overdue flips at the end of the day in the due date's zone; an edited repeat keeps its history.
 - **Evals:**
