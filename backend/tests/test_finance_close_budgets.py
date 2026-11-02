@@ -88,3 +88,15 @@ def test_the_hub_close_passes_top_n_and_spend_by_offers_every_group_the_server_h
     assert calls == [("finance/close/2026-10", {"top_n": 5})]
     report = next(t for t in hubtools.TOOLS if t["name"] == "hub_finance_report")
     assert set(report["inputSchema"]["properties"]["by"]["enum"]) == set(FR.GROUPS)
+
+
+def test_the_current_month_shows_its_budget_to_date_beside_the_full_month(books):
+    """§4.4: the current month's budget shows up to today next to the whole month; a past or future month has no
+    budget to date, only its budget."""
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000})
+        assert made.status == "committed", made.reason
+        software = next(r for r in FR.pnl(c, OWNER, "2026-09-01", "2026-10-31", at=AT)["rows"] if r["code"] == "6100")
+        assert software["budget"] == [None, 5_000]
+        assert software["budget_to_date"][0] is None
+        assert 0 < software["budget_to_date"][1] < 5_000

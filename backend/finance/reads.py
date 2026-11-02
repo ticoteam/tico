@@ -341,12 +341,18 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
             if cell.teammate:
                 spent[cell.teammate] = spent.get(cell.teammate, 0) + cell.amount
     budget: dict[str, list[int | None]] = {}
+    budget_to_date: dict[str, list[int | None]] = {}   # the current bucket's budget up to today; None elsewhere (§4.4)
     tops = _filter_budgets(s, f)
     versions = SB.versions(c, [b.id for b in tops], made_by)
     for b in tops:
         cols = [B.in_window(b, versions[b.id], bucket, fy) for bucket in buckets]
         row = budget.setdefault(b.account_id, [None] * len(buckets))
         budget[b.account_id] = [x if y is None else (y if x is None else x + y) for x, y in zip(row, cols, strict=False)]
+        to_date = [B.in_window(b, versions[b.id], (p, min(q, today)), fy) if _column_state(p, q, today) == "current"
+                   else None for p, q in buckets]
+        row = budget_to_date.setdefault(b.account_id, [None] * len(buckets))
+        budget_to_date[b.account_id] = [x if y is None else (y if x is None else x + y)
+                                        for x, y in zip(row, to_date, strict=False)]
     projection: dict[str, list[int]] = {}
     methods: dict[str, set[str]] = {}
     if buckets:
@@ -397,6 +403,7 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                      # "Payroll (private)" with no amount (§7.5): its budget is withheld too, since a narrow
                      # filter's payroll budget can be one person's planned pay.
                      "budget": None if hidden else budget.get(account_id),
+                     "budget_to_date": None if hidden else budget_to_date.get(account_id),
                      "projection": None if hidden else projection.get(account_id),
                      "projection_method": None if hidden else _method(methods.get(account_id))})
     if view == "expenses":
