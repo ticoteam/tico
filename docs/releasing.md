@@ -68,8 +68,9 @@ What a server accepts is what the code enforces. This is the matrix the release 
 | Runner wire | the current and previous minor release, both directions | `scripts/check_wire_contract.py`, [runner-wire-contract.md](runner-wire-contract.md) |
 | Desktop app | the release's own version, or the previous release's files when the shell did not change | the release workflow; see [Desktop apps follow the release](#desktop-apps-follow-the-release) |
 
-A database below schema version 71 is refused, with the message "upgrade to v0.5.x first". Open it once with a v0.5.x
-release (the one that writes version 71), then upgrade. The legacy import (`manage.migrate_legacy`) is the only path that
+A database below schema version 71 is refused: "This database is at schema version N, below 71, the oldest this server
+upgrades. Start it once with Tico v0.5.x (the release that writes version 71), then upgrade to this release." Open it once
+with a v0.5.x release, then upgrade. The legacy import (`manage.migrate_legacy`) is the only path that
 opens an older file directly. A newer database, one whose recorded migration this code does not know, and one whose
 migration file changed after it ran are all refused before anything is written.
 

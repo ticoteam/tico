@@ -48,6 +48,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [API](api.md), [Custom frontend](custom-frontend.md), [Listening API](listening.md#save-decide-and-resolve),
   [Needs you batches](needs-you-batches.md) and [Service keys](service-keys.md), for another system that files tasks.
   [Recorder speech and assist](recorder.md) relays the Tico Recorder's transcription, live text and chat through the Gateway.
+- Clients written against the old names: [Upgrading to the contract release](upgrading-to-contract-release.md).
 - External agents: [Common setup](connect-an-agent.md), [Hermes](hermes-agents.md), [OpenClaw](openclaw-agents.md), [Grok Bot and Dots](external-agent-sync.md).
 - Advanced operations: [Cloud provisioning](install-advanced.md), [Cloud machines](cloud-machines.md), [Many companies on one host](cell.md) and its [stats and debug tools](cell-stats.md), [Sizing](sizing.md), [Observability](observability.md),
   [Databases](databases.md), [Query Tico data](hub-sql.md), [Slack gateway](slack-gateway.md).
