@@ -73,7 +73,21 @@ BOTS = [("coo", "assistant", None), ("botops", "botops", "coo"),
         ("tax", "tax", "finance-lead"), ("accounts-payable", "accounts-payable", "finance-lead"),
         ("pricing", "pricing", "finance-lead"),
         # People and legal
-        ("recruiter", "recruiting", "coo"), ("legal-review", "legal-review", "coo")]
+        ("recruiter", "recruiting", "human:ana"), ("legal-review", "legal-review", "human:ana")]
+
+# The groups the team builder made from the templates, straightened so each bot sits with the bot it reports to and
+# every department has its lead bot as its lead: (group, bots that move into it, lead). The org chart hangs each
+# department under the person its lead reports to. Engineering's bots report to the Product Manager, so it has no lead
+# of its own and hangs under Product.
+GROUP_FIXES = [("leadership", (), "person:ana"),
+               ("operations", ("returns", "compliance"), "bot:ops-manager"),
+               ("support", ("reputation",), "bot:support-lead"),
+               ("marketing", ("creators", "marketplace"), "bot:marketing-lead"),
+               ("sales", ("customer-success",), "bot:sales-lead"),
+               ("product", (), "bot:product-manager"),
+               ("finance", ("pricing",), "bot:finance-lead"),
+               ("legal", ("legal-review",), "bot:legal-review"),
+               ("hr", (), "bot:recruiter")]
 
 # Job titles for bots whose catalog template is only a starting point.
 BOT_NAMES = {"firmware": "Firmware Engineer", "mobile": "Mobile App Engineer", "marketplace": "Marketplace Manager",
@@ -1251,8 +1265,12 @@ GOALS = [
      "", [("Tickets answered the same day", "%", 95, [84, 86, 88], 30)]),
     ("guides", "Publish two useful holiday guides a month", "bot:content", "home-pro", None,
      "", [("Guides published this month", "guides", 2, [0, 1, 1], 20)]),
-    ("books", "Match 98 percent of bank lines within a day", "bot:finance-lead", None, None,
+    ("books", "Match 98 percent of bank lines within a day", "bot:finance-lead", "season", None,
      "", [("Bank lines matched within a day", "%", 98, [93, 95, 97], 30)]),
+    ("contracts", "Review every business install contract within two days", "bot:legal-review", "season", None,
+     "", [("Contracts reviewed within two days", "%", 100, [80, 90, 92], 30)]),
+    ("crew", "Hire two install crew leads before the January installs", "bot:recruiter", "season", None,
+     "", [("Crew leads hired", "people", 2, [0, 0, 1], 60)]),
 ]
 
 # The curator's own pages, written over the seed's outlines: id, title, category, body.

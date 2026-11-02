@@ -60,6 +60,33 @@ function orgGroupUnderStrategyBot(id) {
   for (let hops = 0; g?.parent && byId.has(g.parent) && hops < 20; hops++) g = byId.get(g.parent);
   return g?.org_parent === 'b:goal-manager';
 }
+// Who a group answers to, as a key (`p:<id>` or `b:<bot id>`): whoever its lead (`bot:<id>` or `person:<id>`) reports
+// to, else whoever most of the teammates at its top report to; up the reporting lines (`org_parent`) past anyone inside
+// the group or the groups in it, and past helpers. '' when nobody is above it. Reporting lines, not groups.
+function orgGroupHead(gid, lead = '') {
+  const groups = S.orgGroups || [], within = new Set([gid]);
+  for (let grew = true, hops = 0; grew && hops < 20; hops++) {
+    grew = false;
+    for (const g of groups) if (g.parent && within.has(g.parent) && !within.has(g.id)) { within.add(g.id); grew = true; }
+  }
+  const people = new Map((S.people || []).filter(p => !p.hidden).map(p => ['p:' + p.id, p]));
+  const bots = (S.emps || []).filter(e => !isHelperBot(e) && !['archived', 'retired'].includes(e.status));
+  const inside = new Set([...[...people].filter(([, p]) => within.has(p.team)).map(([k]) => k), ...bots.filter(e => within.has(e.team)).map(e => 'b:' + e.id)]);
+  const boss = key => key.startsWith('p:') ? orgBossKey({kind: 'person', person: people.get(key) || {}}) : orgBossKey({kind: 'bot', ...(botRow(key.slice(2)) || {})});
+  const helper = key => { if (!key.startsWith('b:')) return false; const e = botRow(key.slice(2)); return !e || isHelperBot(e); };
+  const headOf = key => {
+    let up = boss(key);
+    for (let hops = 0; up && (inside.has(up) || helper(up)) && hops < 20; hops++) up = boss(up);
+    return up && !inside.has(up) && !helper(up) ? up : '';
+  };
+  const ref = String(lead || ''), leadKey = ref.startsWith('person:') ? 'p:' + ref.slice(7) : ref.startsWith('bot:') ? 'b:' + ref.slice(4) : '';
+  if (leadKey && inside.has(leadKey)) return headOf(leadKey);
+  const top = [...[...people].filter(([, p]) => p.team === gid).map(([k]) => k), ...bots.filter(e => e.team === gid).map(e => 'b:' + e.id)]
+    .filter(k => !inside.has(boss(k)));
+  const votes = new Map();
+  for (const k of top) { const up = headOf(k); if (up) votes.set(up, (votes.get(up) || 0) + 1); }
+  return [...votes].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+}
 // Where a group hangs: in its parent group, else at the top. The server hangs the top-level group of a Head it puts under
 // the Strategy Bot there too (`org_parent`, backend/strategy_bot.py), and the chart lifts it to the owner with the
 // Head.

@@ -715,8 +715,8 @@ function goalTreeRows(actor, depth, goals, loose, standing = '') {
   const av = actor === GOAL_COMPANY ? `<span class="av gt-co-av" aria-hidden="true">${esc(String(info.name || 'C').trim()[0] || 'C').toUpperCase()}</span>` : info.avatar;
   const bet = g => { const st = GOALS_ST?.strategy, c = g.bet_id && (st?.bets || []).find(x => x.id === g.bet_id); return c ? ` · ${st.label_one || 'Bet'}: ${c.statement}` : ''; };
   const goalCell = g => `<span class="gt-goal" title="${esc(g.title + (g.why || !bet(g) ? ' · Why: ' + (g.why || GOAL_NOT_TIED) : '') + bet(g))}">${gdot(g.status, goalStatusNote(g))}<span class="gt-title">${esc(g.title)}</span></span>`;
-  // "+" adds a goal for this owner (a pointer's hover; a long press on a phone; the header's "+ Goal" for a keyboard).
-  const add = goalMayEdit({owner_id: actor}, GOALS_ST?.goals || []) ? `<span class="gt-add" data-goal-add="${esc(actor)}" aria-hidden="true" title="Add goal">+</span>` : '';
+  // "+" adds a goal for this owner: always there, quiet until a pointer is over the line.
+  const add = goalMayEdit({owner_id: actor}, GOALS_ST?.goals || []) ? `<button type="button" class="gt-add" data-goal-add="${esc(actor)}" title="Add goal" aria-label="Add goal for ${esc(info.name)}">+</button>` : '';
   const row = (cls, goal, inner) => `<li class="gt-row${cls}" data-owner="${esc(actor)}"${goal ? ` data-goal="${esc(goal.id)}"` : ''} style="--d:${depth}" tabindex="0" role="button">`
     + `<span class="gt-ind" aria-hidden="true"></span>${inner}${cls.includes('gt-cont') ? '' : add}</li>`;
   const first = goals[0], words = String(standing || '').trim();
@@ -847,7 +847,7 @@ function goalsRender(state) {
     if (path.has(key)) return '';
     const below = walk(key, depth + 1, new Set([...path, key]));
     if (n.kind === 'group') {
-      const add = goalGroupOwner(n.id) ? `<span class="gt-add" data-goal-add-group="${esc(n.id)}" aria-hidden="true" title="Add goal">+</span>` : '';
+      const add = goalGroupOwner(n.id) ? `<button type="button" class="gt-add" data-goal-add-group="${esc(n.id)}" title="Add goal" aria-label="Add goal for ${esc(n.name)}">+</button>` : '';
       return below ? `<li class="gt-group" data-group="${esc(n.id)}" style="--d:${depth}"><span class="gt-ind" aria-hidden="true"></span><span class="gt-name"><span>${esc(n.name)}</span></span>${add}</li>${below}` : '';
     }
     return rows(n.kind === 'person' ? 'human:' + n.id : 'bot:' + n.id, depth, n.kind === 'person' ? n.person.goals : '') + below;
@@ -858,16 +858,19 @@ function goalsRender(state) {
   const rest = Object.keys(owned).filter(a => !seen.has(a)).map(a => rows(a, 0)).join('');
   body.innerHTML = goalNeedsHtml(state.needs) + `<ul class="gt" id="goal-tree" aria-label="Goals">${tree}${rest}</ul>`;
   goalTreeLines(body.querySelector('#goal-tree'));
-  // Tapping a goal opens it on its own (goalSheetOpen); the name, a line with no goal, or Enter opens the owner's panel.
+  // Tapping a line opens its goal on its own (goalSheetOpen), or a new one for its owner when they have none and the
+  // viewer may add it; the name and avatar open the owner's panel, as does a line the viewer may only read.
   for (const li of body.querySelectorAll('.gt-row')) {
-    const open = () => goalPanelOpen(state, li.dataset.owner, {tapped: li.dataset.goal || ''});
+    const panel = () => goalPanelOpen(state, li.dataset.owner, {tapped: li.dataset.goal || ''});
+    const open = () => li.dataset.goal ? goalSheetOpen(state, {goal: li.dataset.goal})
+      : li.querySelector('[data-goal-add]') ? goalSheetOpen(state, {owner: li.dataset.owner}) : panel();
     li.onclick = ev => {
       if (goalPressed(li)) return;
       if (ev.target.closest('[data-goal-add]')) goalSheetOpen(state, {owner: li.dataset.owner});
-      else if (li.dataset.goal && ev.target.closest('.gt-goal')) goalSheetOpen(state, {goal: li.dataset.goal});
+      else if (ev.target.closest('.gt-av, .gt-name')) panel();
       else open();
     };
-    li.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } };
+    li.onkeydown = ev => { if (ev.target === li && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); open(); } };
     if (li.querySelector('[data-goal-add]')) goalLongPress(li, () => goalSheetOpen(state, {owner: li.dataset.owner}));
   }
   for (const li of body.querySelectorAll('.gt-group')) {
