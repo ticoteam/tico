@@ -163,6 +163,11 @@ def strings_in(node):
     return [str(node)] if isinstance(node, (str, int, float)) and not isinstance(node, bool) else []
 
 
+def test_updates_come_before_stats_on_the_page():
+    page = render.page(view_model())
+    assert 'id="stats-heading"' in page and page.index('id="updates-heading"') < page.index('id="stats-heading"')
+
+
 def test_render_shows_nothing_outside_the_view_model():
     view = view_model()
     view["stats"][0]["cash"] = "SECRETCASH"

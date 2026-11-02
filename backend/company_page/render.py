@@ -396,7 +396,8 @@ def _stats(view, year):
     rest = [s for s in stats if s.get("group") != "pnl"]
     heroes = "".join(_hero(s, year) for s in rest if s.get("chart") in ("bars", "line"))
     tiles = "".join(_tile(s, year) for s in rest if s.get("chart") not in ("bars", "line"))
-    return ('<section class="stats" aria-label="Stats">' + heroes + (f'<div class="tiles">{tiles}</div>' if tiles else "")
+    return ('<section class="stats" aria-labelledby="stats-heading"><h2 id="stats-heading">Stats</h2>' + heroes
+            + (f'<div class="tiles">{tiles}</div>' if tiles else "")
             + (_pnl(pnl) if pnl else "") + "</section>")
 
 
@@ -578,9 +579,9 @@ def _url(company):
 
 
 def page(view, preview=False, theme=""):
-    """The whole page. Stats sit above updates; the newest update is open, and it reads with no script at all. The owner's
-    preview passes `preview`: its logo and fonts arrive as data URIs, which a release never carries, and `theme` can set
-    it light or dark."""
+    """The whole page. Updates come first, stats below them; the newest update is open, and it reads with no script at
+    all. The owner's preview passes `preview`: its logo and fonts arrive as data URIs, which a release never carries, and
+    `theme` can set it light or dark."""
     view = _map(view)
     company = _map(view.get("company"))
     updated = _date(company.get("updated_at"))
@@ -600,7 +601,7 @@ def page(view, preview=False, theme=""):
     header = (f'<header><div class="top">{_brand(company, preview)}<div class="tools">{tools}</div></div>'
               f'<h1>{_e(mission or "Company updates")}</h1><div class="meta"><span class="badge">{mark}{_e(badge_label(view))}</span>'
               + (f'<span>Updated {_e(stamp)}</span>' if stamp else "") + "</div></header>")
-    body = f'<div class="wrap">{header}{_stats(view, year)}{_updates(view, year)}{_footer()}</div>'
+    body = f'<div class="wrap">{header}{_updates(view, year)}{_stats(view, year)}{_footer()}</div>'
     title = f"{name}: {mission}" if name and mission else (name or mission)
     return _document(view, body, title, mission or name, _url(company), preview=preview, scheme=theme)
 
