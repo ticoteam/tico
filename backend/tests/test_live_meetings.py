@@ -1264,3 +1264,23 @@ def test_the_meeting_view_says_the_model_its_replies_are_set_to_now(live, monkey
     assert get(live, f"live-meetings/{plain['id']}")["meeting_model_effective"] == MEETING
     own = post(live, "live-meetings", {"title": "Own", "meeting_model": ""})
     assert (own["meeting_model"], own["meeting_model_effective"]) == ("", "")
+
+
+def test_recorder_discard_ends_without_filing_or_bot_runs(live):
+    """A Recorder Discard calls end only; finalization is the explicit filing boundary."""
+    mid = post(live, "live-meetings", {
+        "title": "Synthetic discarded recording", "client_id": "recorder:discard-fixture",
+        "client": "tico-recorder", "visibility": "private",
+    })["id"]
+    chunk(live, mid, 1, 0, 1000, "Public words before pause")
+    post(live, f"live-meetings/{mid}/control", {"action": "pause"})
+    with live.app.state.store.read() as c:
+        filed_before = c.execute("SELECT count(*) FROM meetings").fetchone()[0]
+        runs_before = c.execute("SELECT count(*) FROM live_meeting_turns").fetchone()[0]
+    assert post(live, f"live-meetings/{mid}/control", {"action": "end"})["state"] == "ended"
+    assert post(live, f"live-meetings/{mid}/control", {"action": "end"})["state"] == "ended"
+    assert settle(live)
+    assert mid not in {m["id"] for m in get(live, "live-meetings")["meetings"]}
+    with live.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM meetings").fetchone()[0] == filed_before
+        assert c.execute("SELECT count(*) FROM live_meeting_turns").fetchone()[0] == runs_before

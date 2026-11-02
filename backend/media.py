@@ -645,6 +645,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         rule = org_rule_check.apply(c, rc, question_text(body, review_text),
                                     question_replay(body, option_files, stored, review_seal))
         if rule and rule.get("held"):
+            if ingest:
+                ask_ingest.skipped(c, ingest, "held")
             return org_rule_check.answer(rule)
         said_text = org_rule_check.warned_text(rule, question) if rule else question
         if guest:
@@ -710,11 +712,15 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             ask["spend"] = spend
         gate = None
         if found:
+            if ingest:
+                ask_ingest.skipped(c, ingest, "folded")     # the question repeats one open on the person: it joins it
             folded_body = org_rule_check.warned_text(rule, body.body) if body.body and rule else body.body
             said = H.fold_question(c, who.actor, found, said_text, ask, title=body.title or question, body=folded_body)
         else:
             # Judged against the plate before the question is on it.
             gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, person) else None
+            if ingest and not gate:
+                ask_ingest.skipped(c, ingest, "target")
             said = H.task_comment(c, who.actor, tid, said_text, ask=ask)
             if gate:
                 ask_ingest.record(c, ingest, gate, tid, said["id"])
@@ -799,14 +805,17 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                         lambda c: [H.resolve_actor(c, body.on)]) if rule_check else None
         # Ask ingest (backend/ask_ingest.py): judged before the write. Sent back with the filter on, the question is
         # withdrawn as soon as it is asked and the task does not wait on the person.
-        ingest = None if org_rule_check.holds(rc) else question_ingest(who, body)
+        with store.read() as c:
+            retry = store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
+        ingest = None if org_rule_check.holds(rc) or retry else question_ingest(who, body)
         # A question the asking rules refuse stores no bytes: the write below refuses it first.
         plain = not H.is_bot(who.actor) or not H.question_refusal(body.on, [asked])
         stored = [blobs.put(item[0], item[2]) if item and plain else None for item in decoded]
         option_files = [(len(item[0]), item[1], item[2]) if item else None for item in decoded]
         checked = review_seal if rc and body.review else None
-        result = mutate(request, body, lambda c: question_write(c, who, body, option_files, stored, ingest, snapshots,
-                                                                rc, checked))
+        from . import ask_ingest
+        result = ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: question_write(
+            c, who, body, option_files, stored, ingest, snapshots, rc, checked)))
         app.state.file_metadata.wake.set()
         return result
 

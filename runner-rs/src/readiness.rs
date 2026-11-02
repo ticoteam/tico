@@ -513,7 +513,11 @@ pub async fn preflight(config: &Config, sign: &SignIn, assignments: &[Value], ru
             problems.push(installing.unwrap_or_else(|| "Runtime executable is not on PATH".into()));
         } else if subscribed(entry, &runtime) {
             // Its own or its team's subscription signs this runtime in at each turn (crate::model_subscriptions):
-            // this computer's sign-in, missing or refused, does not decide.
+            // this computer's sign-in, missing or refused, does not decide. A missing one reads signed in; a refused one
+            // stays as it is, because the claim check reads "ready" as this login being usable if the plan stops covering.
+            if sign_in == "missing" {
+                sign_in = json!("ready");
+            }
         } else if let Some(problem) = &data_problem {
             // Signed in, but its turns can't save a session: the folder is the problem, not the sign-in.
             problems.push(problem.clone());
@@ -909,6 +913,27 @@ mod tests {
             assert_eq!((row["ready"].clone(), row["problems"].clone()), (json!(true), json!([])), "{row:?}");
         }
         set_credential_names(&json!({}));
+        let _ = std::fs::remove_dir_all(config.str("projects_dir"));
+    }
+
+    #[tokio::test]
+    async fn a_bot_a_subscription_signs_in_reads_signed_in_and_one_without_it_still_reads_missing() {
+        let config = checkouts(&["covered-bot", "bare-bot"]);
+        let sign = SignIn::new(Path::new(&config.str("projects_dir")));
+        let assignment = |bot: &str, subscriptions: Value| json!({"bot": bot, "subscriptions": subscriptions,
+            "config": {"runtime": "claude", "harness": "claude", "model": "claude-sonnet-5"}});
+        let assignments = vec![assignment("covered-bot", json!({"claude": "claude_token"})), assignment("bare-bot", json!({}))];
+        // The computer's own Claude login is missing: only the company subscription covers covered-bot.
+        let runtimes = map(json!({"claude": {"installed": true, "authenticated": "missing", "detail": "Not signed in"}}));
+        let rows = preflight(&config, &sign, &assignments, &runtimes, false).await;
+        let (covered, bare) = (row_of(&rows, "covered-bot"), row_of(&rows, "bare-bot"));
+        assert_eq!((covered["ready"].clone(), covered["sign_in"].clone()), (json!(true), json!("ready")), "{covered:?}");
+        assert_eq!((bare["ready"].clone(), bare["sign_in"].clone()), (json!(false), json!("missing")), "{bare:?}");
+        // A refused login stays visible: the server's claim check must not read it as usable once the plan ends.
+        let runtimes = map(json!({"claude": {"installed": true, "authenticated": "rejected", "detail": "Refused"}}));
+        let rows = preflight(&config, &sign, &assignments, &runtimes, false).await;
+        let covered = row_of(&rows, "covered-bot");
+        assert_eq!((covered["ready"].clone(), covered["sign_in"].clone()), (json!(true), json!("rejected")), "{covered:?}");
         let _ = std::fs::remove_dir_all(config.str("projects_dir"));
     }
 }

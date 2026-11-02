@@ -19,8 +19,12 @@ from backend.finance.store import banking as SK
 from backend.finance.store import ledger as SL
 from backend.finance.store import mirror as SX
 from backend.finance.store import schema
+from backend.tests.test_finance_ap import _bill as _native_bill
+from backend.tests.test_finance_ap import _ingest, _txn
+from backend.tests.test_finance_ap import _vendor as _native_vendor
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, account, act, books, finance_template, store)
+    AT, OWNER, FakeMercury, account, act, books, connect, finance_template, store)
+from backend.tests.test_finance_payments import _checking
 
 LATER = "2026-10-15T13:00:00.000000Z"
 
@@ -60,6 +64,7 @@ class FakeBooks:
             return self.replies.pop(0)
         kind = {"account.create": "Account", "party.create": "Vendor", "bill.create": "Bill", "bill.void": "Bill",
                 "invoice.create": "Invoice", "invoice.void": "Invoice", "payment.bill": "BillPayment",
+                "purchaseorder.create": "PurchaseOrder", "estimate.create": "Estimate",
                 "payment.invoice": "Payment", "writeoff.create": "CreditMemo", "credit.apply": "Payment"}.get(
                     op, "JournalEntry")
         return mirror.Sent(True, kind=kind, external_id=str(900 + len(self.sent)), revision="1")
@@ -236,6 +241,46 @@ def test_switching_previews_first_and_a_mirrored_book_refuses_what_the_provider_
         assert (refused.status, refused.code) == ("denied", NOT_AVAILABLE)
 
 
+def test_a_mode_switch_keeps_an_unclear_row_from_paying_a_provider_bill(books):
+    bank = FakeMercury()
+    connect(books, bank)
+    with books.transaction() as c:
+        vendor = _native_vendor(c)
+        for n in (1, 2):
+            bid = _native_bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 5_000}], day="2026-10-01",
+                               number=f"O-{n}")
+            assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+            # Marked five days before the row: the payment search reads that far, the bank matcher only three.
+            paid = act(c, OWNER, "bill_mark_paid",
+                       {"bill_id": bid, "money_account_id": _checking(c), "date": "2026-10-09"})
+            assert paid.status == "committed", paid
+        # Two equal payments still wait for this 50.00 debit, which names no one: it stays new for a person to link.
+        row = _ingest(c, _txn("txn-o", -50.0, who="MERCURY ACH"))
+        assert c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (row,)).fetchone()[:] == ("new", None)
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [_bill(12, 1, 5_000)]
+    cid = _connection(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        provider_bill = _local(c, "Bill:12", "fin_bills")
+        assert len(FR.feed_expected(c, OWNER, row, at=AT)["expected"]) == 2     # the payments still wait for the row
+        for dry in (True, False):
+            refused = act(c, OWNER, "bill_mark_paid", {"bill_id": provider_bill, "feed_id": row}, dry_run=dry)
+            assert (refused.status, refused.code) == ("failed", CONFLICT), refused
+            assert "feed_match" in refused.reason
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op LIKE 'payment.%'").fetchone()[0] == 0
+        # Categorizing the row would queue a journal for it at the provider: a second bank line beside the payments'.
+        queued = c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0]
+        for dry in (True, False):
+            tagged = act(c, OWNER, "categorize", {"feed_id": row, "account_id": account(c, "6100")}, dry_run=dry)
+            assert (tagged.status, tagged.code) == ("failed", CONFLICT), tagged
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == queued
+
+
 def _bank_row(c: sqlite3.Connection, amount: int, day: str) -> tuple[str, str]:
     """A bank account on the 1000 line and one new row on it (what the bank feed brings in)."""
     money, fid = SL.new_id(), SL.new_id()
@@ -367,7 +412,9 @@ def test_a_bill_made_here_goes_to_the_provider_and_is_booked_once_the_provider_c
     assert _drain(books, fake, cid, now=LATER) == []
     assert _sent(fake, "bill.create") == {"party": "Vendor:9", "number": "B-77", "day": "2026-10-05",
                                           "due": "2026-11-05", "memo": "", "lines": [
-                                              {"account": "Account:2", "amount": 1500, "description": "seats"}]}
+                                              {"account": "Account:2", "amount": 1500, "description": "seats", "item":
+                                              "", "item_code": "", "location": "",
+                   "class": "", "project": ""}]}
     with books.read() as c:
         bill = _local(c, "Bill:901", "fin_bills")
         assert tuple(c.execute("SELECT status, total, number FROM fin_bills WHERE id=?", (bill,)).fetchone()) == (

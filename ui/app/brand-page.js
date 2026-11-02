@@ -3,7 +3,8 @@
    is the subsections on the left, one editor in the middle and a rail with the proposed changes (brand_draft proposals,
    decided through /api/v2/proposals), Check copy (POST /api/v2/brand/check) and the versions. The draft saves with its
    revision; a draft changed elsewhere (409) is read again and drawn as it is now. Publishing takes a note.
-   Also the draft, publish and versions pieces the Go-to-market page shares (ui/app/gtm-page.js).
+   Also the draft, publish and versions pieces the go-to-market shares (Growth's Buyers and Learning, growth-buyers.js
+   and growth-learning.js), and the list editor's rows.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -21,7 +22,6 @@ const BR_COLS = {
   colors: [['name', 'Name'], ['hex', 'Colour', 'color']],
   allowed: [['claim', 'Claim', 'long'], ['proof', 'Proof', 'long'], ['check', 'Check'], ['status', 'Status', ['proven', 'due']]],
   examples: [['text', 'Text', 'wide'], ['verdict', 'Verdict', ['on', 'off']], ['why', 'Why', 'long']],
-  wishes: [['text', 'Wish', 'wide'], ['scope', 'Scope'], ['level', 'Level', ['block', 'warn', 'setting']]],
 };
 const BR_LEVEL = {block: 'fail', warn: 'waiting', setting: ''};
 const brHex = h => /^#[0-9a-f]{3}([0-9a-f]{3})?([0-9a-f]{2})?$/i.test(String(h || '').trim()) ? String(h).trim() : '';
@@ -34,7 +34,7 @@ function brInk(hex) {
 }
 const brSw = (c, size = '') => brHex(c.hex) ? `<span class="br-sw${size ? ' ' + size : ''}" style="background:${brHex(c.hex)}" title="${esc(c.name || c.hex)}"></span>` : '';
 
-// ----------------------------------------------------------------- shared with Go-to-market: draft, publish, versions
+// ----------------------------------------------------------------- shared with the go-to-market: draft, publish, versions
 const grDocMay = d => d?.may_edit ?? grAdmin();
 const grDocChanged = d => d?.draft?.changed?.length || 0;
 function grDocToolsHtml(d, state, publish = true) {
@@ -154,7 +154,7 @@ function brandBookHtml(body, {full = false} = {}) {
   const hero = colors[0]?.hex, voice = b.voice || [], words = b.words || {}, claims = b.claims || {};
   const tile = (cls, title, inner) => inner ? `<section class="br-tile ${cls}">${title ? `<h3 class="gr-k">${esc(title)}</h3>` : ''}${inner}</section>` : '';
   const heroTile = `<section class="br-tile br-s8 br-hero"${hero ? ` style="background:${brHex(hero)};color:${brInk(hero)}"` : ''}>
-      <span class="br-name">${esc(companyName())}</span>${b.positioning ? `<span class="br-pos">${esc(b.positioning)}</span>` : ''}
+      <span class="br-name">${esc(b.name || companyName())}</span>${b.positioning ? `<span class="br-pos">${esc(b.positioning)}</span>` : ''}
       ${voice.length ? `<span class="br-traits">${voice.map(v => `<span>${esc(v.trait)}</span>`).join('')}</span>` : ''}</section>`;
   const colorTile = tile('br-s4', 'Colour', colors.length ? `<ul class="br-colors">${colors.map(c =>
     `<li>${brSw(c, 'br-sw-l')}<span>${esc(c.name || '')}</span><code class="muted">${esc(c.hex)}</code></li>`).join('')}</ul>` : '');
@@ -194,7 +194,7 @@ function brandStripHtml(d) {
   const colors = (body.visual?.colors || []).filter(c => brHex(c.hex)), hero = colors[0]?.hex, n = may ? grDocChanged(d) : 0;
   const traits = (body.voice || []).map(v => v.trait).filter(Boolean), never = (body.words?.avoid || []).map(w => w.word).filter(Boolean).slice(0, 4);
   return `<a class="br-strip" href="${BRAND_ROUTE}"><span class="br-strip-hero"${hero ? ` style="background:${brHex(hero)};color:${brInk(hero)}"` : ''}>
-      <span class="br-name">${esc(companyName())}</span>${body.positioning ? `<span class="br-pos">${esc(body.positioning)}</span>` : ''}</span>
+      <span class="br-name">${esc(body.name || companyName())}</span>${body.positioning ? `<span class="br-pos">${esc(body.positioning)}</span>` : ''}</span>
     <span class="br-strip-rest">${colors.length ? `<span class="br-sws" aria-label="Colours">${colors.slice(0, 6).map(c => brSw(c)).join('')}</span>` : ''}
       ${traits.length ? `<span class="br-strip-k"><span class="gr-k">Voice</span>${esc(traits.join(' · '))}</span>` : ''}
       ${never.length ? `<span class="br-strip-k"><span class="gr-k">Never say</span>${never.map(w => `<s class="br-never">${esc(w)}</s>`).join(' ')}</span>` : ''}
@@ -250,7 +250,8 @@ function brandCount(b, key) {
 }
 function brandEditorHtml(sec, b) {
   const v = b?.[sec];
-  if (sec === 'positioning') return `<label class="gr-f"><span>Positioning</span><input name="positioning" maxlength="120" value="${esc(v || '')}"></label>
+  if (sec === 'positioning') return `<label class="gr-f"><span>Name</span><input name="name" maxlength="60" placeholder="${esc(companyName() || '')}" value="${esc(b?.name || '')}"></label>
+      <label class="gr-f"><span>Positioning</span><input name="positioning" maxlength="120" value="${esc(v || '')}"></label>
       <p class="muted gr-count" data-count>${String(v || '').length} / 120</p>`;
   if (sec === 'words') return grRowsHtml('use', 'Use', v?.use) + grRowsHtml('avoid', 'Avoid', v?.avoid);
   if (sec === 'visual') return grRowsHtml('colors', 'Colours', v?.colors) + grField('Fonts', `<input name="fonts" value="${esc((v?.fonts || []).join(', '))}">`)
@@ -258,6 +259,12 @@ function brandEditorHtml(sec, b) {
     + grField('Imagery', `<textarea name="imagery" rows="3">${esc(v?.imagery || '')}</textarea>`);
   if (sec === 'claims') return grRowsHtml('allowed', 'Claims', v?.allowed) + grField('Never claim', `<textarea name="never" rows="3">${esc((v?.never || []).join('\n'))}</textarea>`);
   return grRowsHtml(sec, BR_SUBS.find(s => s[0] === sec)?.[1] || sec, v);
+}
+// What Save sends: the open section, and on Positioning the brand name with it.
+function brandSectionPatch(sec, form) {
+  const patch = {[sec]: brandSectionValue(sec, form)};
+  if (sec === 'positioning') patch.name = form.elements.namedItem('name').value.trim() || null;
+  return patch;
 }
 function brandSectionValue(sec, form) {
   const split = n => (form.elements[n]?.value || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -276,7 +283,7 @@ const brandHitsHtml = hits => !hits ? '' : hits.length ? hits.map(h => `<span cl
 function brandEditHtml(state) {
   const d = state.data, b = d.draft?.body || d.published?.body || {}, changed = new Set(d.draft?.changed || []);
   const nav = `<nav class="br-subs" aria-label="Sections">${BR_SUBS.map(([k, label]) => `<button type="button" data-sub="${k}"${state.sub === k ? ' aria-current="true"' : ''}>
-      <span>${esc(label)}</span>${changed.has(k) ? '<span class="gr-dot gr-ts-review" title="Changed" aria-label="Changed"></span>' : ''}<span class="muted">${brandCount(b, k)}</span></button>`).join('')}</nav>`;
+      <span>${esc(label)}</span>${changed.has(k) || (k === 'positioning' && changed.has('name')) ? '<span class="gr-dot gr-ts-review" title="Changed" aria-label="Changed"></span>' : ''}<span class="muted">${brandCount(b, k)}</span></button>`).join('')}</nav>`;
   const editor = `<form class="card br-editor gr-form" data-sec="${esc(state.sub)}" novalidate>${brandEditorHtml(state.sub, b)}
       <div class="gr-foot"><button class="primary" type="submit">Save</button></div></form>`;
   const props = state.props.length ? `<section class="card gr-sec"><h3 class="gr-k">Proposed</h3>${state.props.map(p => `<div class="br-prop" data-prop="${esc(p.id)}">
@@ -301,7 +308,7 @@ function brandEditBind(state) {
     ev.preventDefault();
     const sec = form.dataset.sec, btn = form.querySelector('[type=submit]');
     btn.disabled = true;
-    if (await grDocSave('/v2/brand', state, {[sec]: brandSectionValue(sec, form)}, brandDraw)) toast('Saved');
+    if (await grDocSave('/v2/brand', state, brandSectionPatch(sec, form), brandDraw)) toast('Saved');
     else if (form.isConnected) btn.disabled = false;
   };
   const check = body.querySelector('[data-check]');

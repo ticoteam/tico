@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Any
 
-from . import budgeting, posting
+from . import budgeting, posting, shared
 from . import closing as CL
 from .context import Ctx
 from .core import budgets as B
@@ -77,8 +77,9 @@ def sees_budget(ctx: Ctx, who: str, b: B.Budget) -> bool:
 
 def may_write(ctx: Ctx, who: str, account_id: str, tags: Mapping[str, str]) -> bool:
     """Whether `who` may write a line or scope with these tags on `account_id`. Reads take any slice that covers a line;
-    a write checks each tag: the team inside the view on that account, and the teammate the writer or a member of a
-    team the view covers. An untagged (unattributed) one needs company-wide view of the account."""
+    a write checks each tag: the team inside the view on that account, and the teammate the writer, a member of a team
+    the view covers, or one of the writer's reports. An untagged (unattributed) one needs company-wide view of the
+    account."""
     view = ctx.view(who)
     if view.everything:
         return True
@@ -92,7 +93,7 @@ def may_write(ctx: Ctx, who: str, account_id: str, tags: Mapping[str, str]) -> b
         return False
     teams = view.teams(account)
     mine = mate == who and any(s.whose == "own" and s.covers_account(account) for s in view.slices)
-    if mate and not mine and ctx.org.team_of.get(mate, "") not in teams:
+    if mate and not mine and ctx.org.team_of.get(mate, "") not in teams and mate not in view.mates(account):
         return False
     return not team or team in teams or bool(mate) and team == ctx.org.team_of.get(mate, "")
 
@@ -111,6 +112,12 @@ def private_scope(ctx: Ctx, who: str, b: B.Budget) -> bool:
         return False
     detail = ctx.view(who).full_detail
     return any(a in private and a not in detail for a in budgeting.scope_accounts(ctx, b))
+
+
+def private_hidden(ctx: Ctx, who: str, account_id: str) -> bool:
+    """Whether a line on this account is private to `who`, who lacks its detail: the reads leave such a line out, so a
+    document with one is not theirs to see or act on (raw_totals._sees takes the same view for the totals)."""
+    return account_id in ctx.private() and account_id not in ctx.view(who).full_detail
 
 
 def shows_numbers(ctx: Ctx, who: str, b: B.Budget) -> bool:
@@ -231,7 +238,8 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                     {"date": when}, {"amount": total})
     V.only(p, ("date", "memo", "source", "source_id", "lines", "basis"))
     e = L.entry(p, ctx.book)
-    e = replace(e, lines=tuple(replace(x, tags=posting.with_team(ctx, x.tags)) for x in e.lines))
+    e = replace(e, lines=tuple(replace(x, tags=shared.check_tags(ctx, posting.with_team(ctx, x.tags)))
+                               for x in e.lines))
     L.check(e, ctx.book, ctx.accounts, SL.closed_on(ctx.c, ctx.book.id, e.entry_date))
     for item in e.lines:
         _need_line(ctx, who, item.account_id, item.tags, new=True)
@@ -261,7 +269,7 @@ def categorize(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     for raw in V.items(p.get("lines"), "lines"):
         q = V.obj(raw, "a line")
         V.only(q, ("line_id", "tags"))
-        wanted[V.text(q, "line_id", 80)] = L.tags(q.get("tags"))
+        wanted[V.text(q, "line_id", 80)] = shared.check_tags(ctx, L.tags(q.get("tags")))
     found = SL.lines(ctx.c, list(wanted))
     changes: list[tuple[object, dict[str, str], dict[str, str]]] = []
     charges: list[tuple[L.Line, int]] = []

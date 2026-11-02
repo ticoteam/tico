@@ -162,7 +162,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       const {page, errors} = await open(browser, {runs: PAST});
       await page.locator('[data-lens="blue-ocean"]').waitFor();
       assert.equal(await page.locator('#main h1').innerText(), 'Strategy');
-      assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Market', 'Strategy', 'Growth', 'Org', 'Goals', 'Budget']);
+      assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Market', 'Strategy', 'Org', 'Goals', 'Budget']);
       assert.equal(await page.locator('.strat-tabs a.cur').innerText(), 'Strategy', 'Lenses are a view of the Strategy tab');
       assert.equal(await page.locator('.strat-sub').innerText(), 'Strategy', 'the way back to the strategy');
       assert.equal(await page.locator('#side [data-nav="strategy"]').getAttribute('aria-current'), 'page');

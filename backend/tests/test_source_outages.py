@@ -327,6 +327,42 @@ def test_mid_turn_primary_quota_uses_strict_saved_session_even_with_a_ready_fall
 
 
 
+@pytest.mark.parametrize('notice,evidence,continued', [
+    ("You've hit your weekly limit · resets at 2026-10-19T07:00:00Z", [], False),
+    # Anything beyond the bare line keeps the session: streamed text, another message, or a host that promised nothing.
+    ("You've hit your weekly limit · resets at 2026-10-19T07:00:00Z", [('delta', 'I will')], True),
+    ("You've hit your weekly limit · resets at 2026-10-19T07:00:00Z", [('message', 'Sent the mail.')], True),
+    ("You've hit your weekly limit · resets at 2026-10-19T07:00:00Z", 'no promise', True),
+])
+def test_a_turn_that_only_reported_its_limit_runs_fresh_after_the_reset(api, monkeypatch, notice, evidence, continued):
+    """Claude Code writes its limit as an assistant message: that line alone is no work to continue, and a new session
+    (a switched subscription, say) must not stop the next turn with CONTINUE_LOST."""
+    from backend.tests.test_login_holds import two_bots
+    machine = two_bots(api, monkeypatch)
+    beat = {'version': 'test', 'platform': 'test', 'readiness': {'ops': True}, 'capabilities': ['capacity_continue_v1']}
+    post(api, 'runners/heartbeat', beat, machine['token'])
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Weekly report', 'body': 'Please do it.'})
+    first = claim(api, machine)
+    post(api, f"attempts/{first['id']}/started", {'thread_id': 'limit-session'}, machine['token'])
+    rows = [('status', {'state': 'active', 'tool_events': evidence != 'no promise'})]
+    rows += [(kind, {'text': text}) for kind, text in (evidence if isinstance(evidence, list) else [])]
+    rows += [('message', {'text': notice, 'final': False}), ('error', {'error': notice, 'limit': True})]
+    post(api, f"attempts/{first['id']}/events", {'events': [{'seq': n, 'kind': kind, 'payload': payload}
+                                                            for n, (kind, payload) in enumerate(rows, 1)]}, machine['token'])
+    post(api, f"attempts/{first['id']}/complete", {'outcome': 'failed', 'limited': True, 'last_seq': len(rows),
+                                                   'text': notice}, machine['token'])
+    with api.app.state.store.read() as c:
+        result = json.loads(c.execute('SELECT result_json FROM attempts WHERE id=?', (first['id'],)).fetchone()[0])
+        assert bool(result.get('quota_continue')) is continued
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'queued'
+        assert bool(c.execute('SELECT checkpoint FROM tasks').fetchone()[0]) is continued
+    at(monkeypatch, '2026-10-19T07:01:00.000000Z', api)
+    post(api, 'runners/heartbeat', beat, machine['token'])
+    again = claim(api, machine)
+    assert again and again['job_id'] == first['job_id']
+    assert again.get('continue_thread') == ('limit-session' if continued else None)
+
+
 def test_same_timestamp_backlog_keeps_the_newest_notice_when_ids_sort_backwards(api, monkeypatch):
     from backend.rules import Decision, WAKE
     at(monkeypatch, '2026-10-27T01:00:00.000000Z')

@@ -36,12 +36,13 @@ function decideYesNoAsk(text) {
   return DEC_YES_NO.has(q.split(/\s+/)[0].replace(/[^A-Za-z]/g, '').toLowerCase());
 }
 // Each Needs you item's key: its kind and id.
-const decideItemKey = it => ({approval: 'approval:', ask: 'ask:', stale: 'stale:'}[it?.kind] || 'task:') + it?.id;
+const decideItemKey = it => ({approval: 'approval:', ask: 'ask:', stale: 'stale:', memory_tidy: 'memory_tidy:'}[it?.kind] || 'task:') + it?.id;
 function decideCards(items) {
   const me = myActor(), asks = [], approvals = [], waiting = [], mine = [], unexplained = [];
   for (const it of items || []) {
     if (it.kind === 'approval') { approvals.push({key: 'approval:' + it.id, type: 'approve', it, at: it.created}); continue; }
     if (it.kind === 'ask') { asks.push({key: 'ask:' + it.id, type: 'ask', it, at: it.created}); continue; }
+    if (it.kind === 'memory_tidy') { approvals.push({key: 'memory_tidy:' + it.id, type: 'memory_tidy', it, at: it.created}); continue; }
     if (it.kind === 'stale') { approvals.push({key: 'stale:' + it.id, type: 'stale', it, at: it.created}); continue; }
     if (!['task', 'question', 'waiting'].includes(it.kind)) continue;
     const q = it.kind === 'question' ? decideQuestion(it) : null;
@@ -310,12 +311,12 @@ function decideRender(st, enter = false) {
   const face = chat ? `<a class="dc-who-face" href="${esc(chat)}" tabindex="-1" aria-hidden="true">${actorFace(from, 32)}</a>`
     : from === 'keeper' ? personCircle('Tico', 32) : actorFace(from, 32);
   const sub = c.type === 'pick' ? qcardSub(c.it) : c.type === 'approve' ? plainActors(approvalTitle(c.it) || c.it.title || '')
-    : c.type === 'ask' || c.type === 'stale' ? ageShort(c.it.created) : decideMeta(c.it);
+    : c.type === 'memory_tidy' ? `Expires ${fmt(c.it.expires)}` : c.type === 'ask' || c.type === 'stale' ? ageShort(c.it.created) : decideMeta(c.it);
   // The chip names what the card is; a task card outside the questions names what it needs (Pay, Review and send).
-  const chip = c.type === 'approve' ? 'Approval' : c.type === 'stale' ? 'Stale check'
+  const chip = c.type === 'approve' ? 'Approval' : c.type === 'stale' ? 'Stale check' : c.type === 'memory_tidy' ? 'Nightly memory tidy'
     : c.type === 'task' && c.it.need && c.it.need !== 'decide' ? needLabel(c.it.need) : 'Question';
   // A card the note goes with: a comment on a task, a note with a decision, the answer to a question.
-  const note = c.type === 'stale' ? '' : `<div class="dc-note"><textarea rows="1" maxlength="4000" aria-label="${c.type === 'ask' ? 'Your answer' : decide ? 'Note' : 'Comment'}" placeholder="${c.type === 'ask' ? 'Your answer' : decide ? 'Add a note' : 'Add a comment'}"></textarea>
+  const note = ['stale', 'memory_tidy'].includes(c.type) ? '' : `<div class="dc-note"><textarea rows="1" maxlength="4000" aria-label="${c.type === 'ask' ? 'Your answer' : decide ? 'Note' : 'Comment'}" placeholder="${c.type === 'ask' ? 'Your answer' : decide ? 'Add a note' : 'Add a comment'}"></textarea>
       ${decide ? '' : `<button type="button" class="dc-send" data-dc="comment" aria-label="Send comment" title="${DC_SEND_WHY}" disabled>${ICON_SEND}</button>`}</div>`;
   stage.innerHTML = `<article class="dc-card${enter ? ' in' : ''}" data-key="${esc(c.key)}">
     <div class="dc-who">${face}
@@ -335,12 +336,12 @@ function decideRender(st, enter = false) {
   if (next) void decideLoad(st, next);
 }
 // A card's deadline: a person's task's due date (a bot's own task's due is only when it looks again).
-const decideDue = it => { const d = ['approval', 'ask', 'stale'].includes(it.kind) ? null : taskDueInfo(it); return d?.kind === 'deadline' ? d : null; };
+const decideDue = it => { const d = ['approval', 'ask', 'stale', 'memory_tidy'].includes(it.kind) ? null : taskDueInfo(it); return d?.kind === 'deadline' ? d : null; };
 function decidePaintBody(st) {
   const c = decideCurrent(st), body = $('.decide .dc-body');
   if (!c || !body) return;
   // Other bots' tasks waiting on the person for the same thing are named on the card.
-  const html = c.type === 'approve' ? decideApprovalHTML(c) : c.type === 'stale' ? decideStaleHTML(c)
+  const html = c.type === 'memory_tidy' ? decideMemoryTidyHTML(st, c) : c.type === 'approve' ? decideApprovalHTML(c) : c.type === 'stale' ? decideStaleHTML(c)
     : (c.type === 'pick' ? decidePickHTML(st, c) : c.type === 'ask' ? decideAskHTML(c) : decideTaskHTML(st, c)) + foldedHTML(c.it) + decideClarifyHTML(c);
   if (body.dataset.html !== html) body.innerHTML = body.dataset.html = html;
 }
@@ -384,6 +385,7 @@ function decideActionsPlain(c, k) {
   // A pick between files has a button under each file: no Pick one row.
   if (c.type === 'pick' && qcardReview(c.it)?.pick) return skip;
   if (c.type === 'pick') return `${skip}<button type="button" disabled>Pick one</button>`;
+  if (c.type === 'memory_tidy') return `<button type="button" data-dc="no">Discard</button><button type="button" class="primary" data-dc="yes"${c.it.keep_available ? '' : ' disabled title="Keep is not available yet"'}>Keep</button>`;
   if (c.type === 'approve') return `<button type="button" data-dc="no">Decline${k('N')}</button><button type="button" class="primary" data-dc="yes">Approve${k('Y')}</button>`;
   if (c.yn) return `<button type="button" data-dc="no">No${k('N')}</button><button type="button" class="primary" data-dc="yes">Yes${k('Y')}</button>`;
   if (c.type === 'ask') return `${skip}<button type="button" class="primary" data-dc="answer" data-dc-text disabled title="Type an answer">Answer</button>`;
@@ -422,6 +424,15 @@ function decideApprovalHTML(c) {
 function decideAskHTML(c) {
   return `<div class="dc-msg md">${safeMd(plainActors(c.it.body || c.it.first_line || c.it.title || ''))}</div>${recommendLine(c.it.recommend, c.it.requester)}`;
 }
+// Plain text for the checked diff/diary: memory is untrusted, never HTML.
+function decideMemoryTidyHTML(st, c) {
+  const it = st.data.get(c.it.id)?.card || c.it;
+  return `<h2>Nightly memory tidy: ${esc(actorLabel('bot:' + it.bot) || it.bot)}</h2>
+    <p>${esc(it.model)} · Estimated cost $${Number(it.cost_usd).toFixed(4)}</p>
+    <p>Memory commit <code>${esc(it.memory_commit)}</code></p>
+    <pre>${esc(it.diary)}</pre><details open><summary>Proposed changes</summary><pre>${esc(it.diff ?? (st.data.get(c.it.id)?.error ? 'Could not load proposed changes. Reopen the card to try again.' : 'Loading proposed changes…'))}</pre></details>`;
+}
+
 // The Stale tickets card: a row per task with Accept and Skip (needs-you.js staleCardRow), Accept all below.
 function decideStaleHTML(c) {
   const sig = (c.it.rows || []).map(r => [r.id, r.task, r.title, r.reason, r.suggest, r.action, r.version]);
@@ -484,6 +495,14 @@ function decideTaskHTML(st, c) {
     ? `<details class="dc-details"><summary>Details</summary>${details}</details>` : ''}`;
 }
 async function decideLoad(st, c, again = false) {
+  if (c.type === 'memory_tidy') {
+    if (st.data.has(c.it.id) && !st.data.get(c.it.id)?.error && !again) return;
+    st.data.set(c.it.id, null);
+    const data = await v2Get(`/v2/memory-tidy/cards/${encodeURIComponent(c.it.id)}`);
+    st.data.set(c.it.id, data?.card ? data : {error: true});
+    if (DEC === st && st.at === c.key) decidePaintBody(st);
+    return;
+  }
   if (!['pick', 'task'].includes(c.type) || st.data.has(c.it.id) && !again) return;
   const id = c.it.id, version = c.it.version;
   if (!st.data.has(id)) st.data.set(id, null);
@@ -510,6 +529,11 @@ function decideWrite(c, what, i, note) {
 function decideWriteBody(c, what, i, note) {
   const shown = DEC?.data.get(c.it.id)?.version;
   const id = encodeURIComponent(c.it.id), to = decideBot(c);
+  if (c.type === 'memory_tidy') {
+    const decision = what === 'yes' ? 'keep' : 'discard';
+    return {writes: [{path: `/v2/memory-tidy/cards/${id}/decide`, body: {decision}}],
+      label: decision === 'keep' ? 'Kept Nightly memory tidy' : 'Discarded Nightly memory tidy'};
+  }
   if (['pick', 'all', 'ticked'].includes(what)) {
     // One pick, Yes to all, or the ticked picks (the rest go to the bot as "not this one"): question-card.js.
     const labels = qcardLabels(c.q, what, i, decideTicked(DEC, c));
@@ -704,8 +728,8 @@ async function decideSend(st, p) {
     if (p.waitSettlement) { decideTextResult(st, p, e.message, false); return; }
     if (!st) return;                            // sent again from an earlier page: nothing on screen to put back
     const changed = e.status === 409 || e.body?.error?.code === 'version_conflict';
-    needsSay(changed ? 'That task changed. Look again.' : e.message, true);
-    st.data.delete(String(p.key).replace(/^task:/, ''));
+    needsSay(changed && !String(p.key).startsWith('memory_tidy:') ? 'That task changed. Look again.' : e.message, true);
+    st.data.delete(String(p.key).replace(/^(?:task|memory_tidy):/, ''));
     if (DEC === st) {
       st.at = p.key;
       decideRender(st, true);

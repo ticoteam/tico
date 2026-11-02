@@ -31,6 +31,7 @@ from . import market_watch as MW
 from . import models as M
 from . import onboarding as O
 from . import strategy as S
+from . import strategy_market as SM
 from . import strategy_setup as SS
 from .company_file import draft as D
 from .company_file import starter
@@ -344,6 +345,8 @@ def _market(c, actor, market, company, skipped):
             if segment["ours"]:
                 MK.create_edge(c, actor, src=_own_company(c, actor, company, evidence), rel="operates_in",
                                dst=seg["id"], evidence_ids=[evidence])
+            if segment["ours"] or segment["next"]:     # its Growth segment, as Where we play now shows it
+                SM.set_status(c, actor, seg["id"], "serving" if segment["ours"] else "next", company)
             return seg["id"]
         found = _best_effort(c, "company_file_segment", made, skipped)
         if found:

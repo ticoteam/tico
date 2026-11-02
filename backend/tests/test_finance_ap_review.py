@@ -89,6 +89,128 @@ def test_payments_marked_paid_meet_one_combined_row_and_an_unclear_row_waits_ins
         assert _balance(c, "1000") - bank == -40_000 and FR.feed_expected(c, OWNER, waits, at=AT)["expected"] == []
 
 
+def _unclear_row(c, who: str) -> tuple[str, str]:
+    """Two equal payments marked paid from checking wait for a 50.00 debit that `who` names: no name picks one of them,
+    so the row stays new. Returns the row and a third open bill owing the same amount to another vendor."""
+    vendor = _vendor(c)
+    one, two = _approved(c, vendor, 5_000, number="W-1"), _approved(c, vendor, 5_000, number="W-2")
+    _mark(c, one, date="2026-10-13")
+    _mark(c, two, date="2026-10-13")
+    row = _ingest(c, _txn("txn-w", -50.0, who=who))
+    assert _unbooked(c, row)
+    return row, _approved(c, _vendor(c, "Northwind"), 5_000, number="W-3")
+
+
+def _unbooked(c, row) -> bool:
+    return tuple(c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (row,)).fetchone()) == ("new", None)
+
+
+def _money(c) -> tuple[int, int, int]:
+    return (_balance(c, "1000"), _balance(c, "2000"), _balance(c, "6900"))
+
+
+def test_an_unbooked_row_that_marked_payments_wait_for_cannot_pay_another_bill(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        row, other = _unclear_row(c, "MERCURY ACH")
+        before = _money(c)
+        refused = act(c, OWNER, "bill_mark_paid", {"bill_id": other, "feed_id": row})
+        dry = act(c, OWNER, "bill_mark_paid", {"bill_id": other, "feed_id": row}, dry_run=True)
+        assert (refused.code, dry.code) == ("conflict", "conflict"), (refused, dry)
+        assert "feed_match" in refused.reason
+        assert FR.bill(c, OWNER, other)["status"] == "open" and _unbooked(c, row)
+        assert _money(c) == before
+
+
+def test_categorizing_an_unclear_row_is_refused_while_marked_payments_wait_for_it(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        # A posting rule for the counterparty does not post the row at ingest: the payments it may settle come first.
+        assert act(c, OWNER, "rule_create", {
+            "kind": "posting", "name": "Mercury", "when": {"counterparty": {"matches": "MERCURY"}},
+            "outcome": {"outcome": "post", "account_id": account(c, "6100")},
+            "examples": [{"input": {"counterparty": "MERCURY ACH"}, "expect": "post"}]}).status == "committed"
+        row, _ = _unclear_row(c, "MERCURY ACH")
+        before = _money(c)
+        for dry in (True, False):
+            tagged = act(c, OWNER, "categorize", {"feed_id": row, "account_id": account(c, "6900")}, dry_run=dry)
+            assert (tagged.status, tagged.code) == ("failed", "conflict"), tagged
+            assert "feed_match" in tagged.reason
+        assert _unbooked(c, row) and _money(c) == before
+
+
+def test_a_transfer_row_of_that_amount_is_still_categorized_while_payments_wait(books):  # noqa: F811
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        _unclear_row(c, "MERCURY ACH")
+        # A move between our own accounts is never matched to payments at ingest, so it is not held back either.
+        move = _ingest(c, _txn("txn-move", -50.0, who="Savings", kind="internalTransfer"))
+        assert _unbooked(c, move)
+        tagged = act(c, OWNER, "categorize", {"feed_id": move, "account_id": account(c, "6900")})
+        assert tagged.status == "committed", tagged
+
+
+def test_a_payment_from_the_account_never_takes_a_transfer_row(books):  # noqa: F811
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        bill = _approved(c, _vendor(c), 5_000, number="T-1")
+        # One side of a move between our accounts, with no name: it waits for its other side, never pays a bill.
+        move = _ingest(c, _txn("txn-move", -50.0, who="", kind="internalTransfer"))
+        _mark(c, bill, date="2026-10-14")
+        assert _unbooked(c, move)
+
+def _paid_from_the_account_while_its_row_is_unclear(c, payment: dict[str, object]) -> None:
+    """A bill paid from the account waits as an outstanding payment instead of taking the unclear row: the bank moves
+    once for the payment, the row stays new, and a person links it (feed_match) to the payment it is."""
+    row, other = _unclear_row(c, "Northwind")
+    before = _money(c)
+    payload = {"bill_id": other, "date": "2026-10-14", **payment}
+    dry = act(c, OWNER, "bill_mark_paid", payload, dry_run=True)
+    assert dry.status == "committed" and _money(c) == before, dry
+    done = act(c, OWNER, "bill_mark_paid", payload)
+    assert done.status == "committed", done
+    assert (done.result["from"], done.result["feed_id"]) == ("expected", None), done
+    assert _unbooked(c, row) and _balance(c, "1000") - before[0] == -5_000
+    listed = FR.feed_expected(c, OWNER, row, at=AT)["expected"]
+    assert sorted(x["number"] for x in listed) == ["W-1", "W-2", "W-3"]
+    pick = next(x["settlement_id"] for x in listed if x["number"] == "W-3")
+    assert act(c, OWNER, "feed_match", {"feed_id": row, "settlement_ids": [pick]}).status == "committed"
+    assert _balance(c, "1000") - before[0] == -5_000 and FR.bill(c, OWNER, other)["status"] == "paid"
+
+
+def test_a_bill_paid_by_money_account_waits_instead_of_taking_an_unclear_row(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        _paid_from_the_account_while_its_row_is_unclear(c, {"money_account_id": _checking(c)})
+
+
+def test_a_bill_paid_on_the_accounts_line_waits_instead_of_taking_an_unclear_row(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        _paid_from_the_account_while_its_row_is_unclear(c, {"account_id": account(c, "1000")})
+
+
+def test_a_payment_still_takes_its_unbooked_row_when_no_other_payment_waits_for_it(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        row = _ingest(c, _txn("txn-r", 300.0, who="Northwind", kind="externalTransfer"))
+        assert _unbooked(c, row)
+        customer = str(act(c, OWNER, "contact_create", {"name": "Northwind", "kind": "customer"}).result["contact_id"])
+        inv = str(act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-10-01",
+                                                   "lines": [{"account_id": account(c, "4000"), "amount": 30_000}]}
+                      ).result["invoice_id"])
+        assert act(c, OWNER, "invoice_send", {"invoice_id": inv}).status == "committed"
+        done = act(c, OWNER, "invoice_record_payment", {"invoice_id": inv, "money_account_id": _checking(c),
+                                                        "date": "2026-10-14"})
+        assert (done.status, done.result["from"], done.result["feed_id"], done.result["status"]) == \
+            ("committed", "feed", row, "paid"), done
+
+
 def test_a_tico_card_charge_paying_an_entered_bill_clears_ap_instead_of_a_second_expense(books):  # noqa: F811
     from backend.tests.test_finance_banking import _arrives, _card_for_eve, _card_holds, _card_use
     fake = FakeMercury()
@@ -271,5 +393,5 @@ def test_reads_cut_private_amounts_unseen_accounts_and_nested_lists(books):  # n
         assert mine and line["attributable"][0] == mine[0]                                # their own tag first
         assert all(x.get("attributable") is None for x in FR.chart(c, OWNER)["accounts"])
         report = FR.report(c, OWNER, "pnl", start="2026-10-01", end="2026-10-31", top_n=1)
-        assert len([r for r in report["rows"] if r.get("key") != "other"]) == 1
+        assert len([r for r in report["rows"] if r.get("key") != FR.OTHER]) == 1
         assert report["rows_total"] > 1 and any(str(r.get("label", "")).startswith("Other · ") for r in report["rows"])

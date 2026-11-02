@@ -1446,7 +1446,8 @@ STABLE.extend([
      "Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies, for a finance admin who sees "
      "sources; the ordinary trigger routes refuse them", "FinanceWebhookDeliveries"),
     ("/api/v2/finance/access", "get", "Finance", "getFinanceAccess",
-     "Who can see what in Finance: teams, each teammate's default, grants and rights, private lines, the defaults",
+     "Who can see what in Finance: teams, each teammate's default, grants and rights, whether the caller may grant "
+     "them more (may_grant), private lines, the defaults",
      "FinanceAccess"),
     ("/api/v2/finance/payments", "get", "Finance", "listFinancePayments",
      "Payments the caller made or whose line they see, newest first, with a cursor; errors only for the payer or a "
@@ -1479,7 +1480,8 @@ STABLE.extend([
      "them; external_rule_id lists those linked to one external rule", "FinanceRules"),
     ("/api/v2/finance/bills", "get", "Finance", "listFinanceBills",
      "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, "
-     "or unpaid), vendor, dates, aging bucket and a search, with the open total by aging bucket and a cursor",
+     "or unpaid), vendor, dates, aging bucket or late, and a search, with the open total by aging bucket and a cursor; "
+     "order=paid_on lists the last paid first",
      "FinanceBills"),
     ("/api/v2/finance/bills/{bill_id}", "get", "Finance", "getFinanceBill",
      "One bill with its lines, the payments settled against it, its attachments and the actions and approvals on it",
@@ -1509,11 +1511,38 @@ STABLE.extend([
      "FinanceInbox"),
     ("/api/v2/finance/reports/{kind}", "get", "Finance", "getFinanceReport",
      "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the "
-     "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row",
+     "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
+     "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
      "FinanceReportOf"),
     ("/api/v2/finance/search", "get", "Finance", "searchFinance",
      "Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees; with kind it pages by "
      "cursor, without it returns the first few of each kind", "FinanceSearch"),
+    ("/api/v2/purchase-orders", "get", "Finance", "listPurchaseOrders",
+     "Purchase orders the caller sees (payables), newest first, by status, vendor and a search over number, memo and "
+     "vendor name, with a cursor", "PurchaseOrders"),
+    ("/api/v2/purchase-orders/{po_id}", "get", "Finance", "getPurchaseOrder",
+     "One purchase order with its lines and what each line has billed", "PurchaseOrder"),
+    ("/api/v2/estimates", "get", "Finance", "listEstimates",
+     "Estimates the caller sees (receivables), newest first, by status, customer and a search over number, memo and "
+     "customer name, with a cursor", "Estimates"),
+    ("/api/v2/estimates/{estimate_id}", "get", "Finance", "getEstimate",
+     "One estimate with its lines; each line says whether it is taxable", "Estimate"),
+    ("/api/v2/locations", "get", "Finance", "listLocations",
+     "Locations by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+     "Locations"),
+    ("/api/v2/locations/{location_id}", "get", "Finance", "getLocation",
+     "One location, archived or not", "LocationOne"),
+    ("/api/v2/items", "get", "Finance", "listItems",
+     "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; "
+     "with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
+     "Items"),
+    ("/api/v2/items/{item_id}", "get", "Finance", "getItem",
+     "One product or service, archived or not; its accounts show to viewers who see them", "ItemOne"),
+    ("/api/v2/projects", "get", "Finance", "listProjects",
+     "Projects by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+     "Projects"),
+    ("/api/v2/projects/{project_id}", "get", "Finance", "getProject",
+     "One project, archived or not", "ProjectOne"),
     ("/api/v2/finance/metrics/{name}", "get", "Finance", "getFinanceMetric",
      "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, "
      "runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, "
@@ -1532,9 +1561,9 @@ STABLE.extend([
      "view_as", "FinanceReport"),
     ("/api/v2/finance/lines/{account_id}", "get", "Finance", "getFinanceLine",
      "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's "
-     "projection, as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
-     "unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). The owner may "
-     "pass view_as",
+     "projection (next_month; by vendor, team and teammate in next_by, named in next_labels), as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
+     "unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). Rows past top_n "
+     "fold into one Other row keyed \" other\", and the group with none is keyed \" unattributed\". The owner may pass view_as",
      "FinanceReport"),
     ("/api/v2/finance/actions", "post", "Finance", "requestFinanceAction",
      "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is "
@@ -1609,8 +1638,10 @@ SCHEMAS.update({
         "teammates": items(obj({"teammate": "s", "kind": "s", "team": "n", "reports_to": "n",
                                 "default": {"type": "string", "enum": ["everything", "team_expenses", "own_expenses",
                                                                        "none"]},
+                                "default_team": "n",
                                 "grants": items({"type": "object", "additionalProperties": True}),
-                                "rights": {"type": ["array", "null"], "items": {"type": "string"}}})),
+                                "rights": {"type": ["array", "null"], "items": {"type": "string"}},
+                                "may_grant": "b"})),
         "private_lines": items(obj({"account_id": "s", "name": "s", "others_see": "s",
                                     "full_detail": {"type": ["array", "null"], "items": {"type": "string"}}})),
         "defaults": obj({"manager": "s", "member": "s", "manager_payroll": "s"}),
@@ -1706,7 +1737,8 @@ SCHEMAS.update({
         "total": "i", "paid": "i", "remaining": "i", "aging": "n", "days_late": "i", "memo": "s", "entry_id": "n",
         "attachments": "i", "created_by": "s", "created_at": "s", "origin": "s", "approved_by": "n",
         "approved_at": "n", "pay_on": "n", "payment": DOC_PAYMENT, "sent_at": "n", "written_off": "i",
-        "payment_link": "n"},
+        "payment_link": "n", "account": {"type": ["object", "null"], "additionalProperties": True}, "split": "b",
+        "team": "n", "paid_on": "n", "paid_by": "n"},
         required=["id", "kind", "number", "date", "status", "currency", "total", "paid", "remaining"]),
     "FinanceDocument": {"allOf": [ref("FinanceDocumentRow"), obj({
         "lines": items(obj({"id": "s", "account": {"type": ["object", "null"], "additionalProperties": True},
@@ -1733,12 +1765,43 @@ SCHEMAS.update({
         "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),
         "counts": {"type": "object", "additionalProperties": {"type": "integer"}}, "more": items({"type": "string"}),
         "next_cursor": "n", "currency": "s", "view_version": "i"}),
-    "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "balance_sheet", "cash_flow",
+    "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "pnl_by", "balance_sheet", "cash_flow",
                                                                  "budget_vs_actual", "ap_aging", "ar_aging",
                                                                  "spend_by"]},
                             "prior": {"type": "object", "additionalProperties": True}}, required=["kind"]),
+    "FinanceOrderRow": obj({
+        "id": "s", "number": "s", "contact": obj({"id": "s", "name": "s"}), "date": "s", "status": "s",
+        "currency": "s", "total": "i", "memo": "s"}, required=["id", "number", "contact", "date", "status", "currency",
+                                                             "total", "memo"]),
+    "PurchaseOrders": obj({"orders": items(ref("FinanceOrderRow")), "next_cursor": "n"}, required=["orders",
+                                                                                                "next_cursor"]),
+    "PurchaseOrder": {"allOf": [ref("FinanceOrderRow"), obj({
+        "lines": items(obj({"id": "s", "line_no": "i"}, required=["id", "line_no"])), "view_version": "i"},
+        required=["lines"])]},
+    "Estimates": obj({"estimates": items(ref("FinanceOrderRow")), "next_cursor": "n"}, required=["estimates",
+                                                                                              "next_cursor"]),
+    "Estimate": {"allOf": [ref("FinanceOrderRow"), obj({
+        "lines": items(obj({"id": "s", "line_no": "i"}, required=["id", "line_no"])), "view_version": "i"},
+        required=["lines"])]},
+    "Locations": obj({"locations": items(ref("Location")), "next_cursor": "n"}, required=["locations", "next_cursor"]),
+    "LocationOne": obj({"location": ref("Location")}, required=["location"]),
+    "Location": obj({"id": "s", "name": "s", "kind": "s", "parent_id": "n", "address": "o", "archived_at": "n"},
+                    required=["id", "name", "kind", "address"]),
+    "Items": obj({"items": items(ref("Item")), "next_cursor": "n"}, required=["items", "next_cursor"]),
+    "ItemOne": obj({"item": ref("Item")}, required=["item"]),
+    "Item": obj({"id": "s", "name": "s", "sku": "s", "kind": {"type": "string", "enum": [
+        "service", "inventory", "non_inventory", "bundle", "category"]}, "unit": "s",
+        "price": {"type": ["integer", "null"]}, "currency": "s", "archived_at": "n", "income_account_id": "n",
+        "expense_account_id": "n", "asset_account_id": "n"},
+        required=["id", "name", "sku", "kind", "unit", "currency"]),
+    "Projects": obj({"projects": items(ref("Project")), "next_cursor": "n"}, required=["projects", "next_cursor"]),
+    "ProjectOne": obj({"project": ref("Project")}, required=["project"]),
+    "Project": obj({"id": "s", "name": "s", "customer_id": "n", "status": {"type": "string",
+                                                                          "enum": ["open", "closed"]},
+                    "archived_at": "n"}, required=["id", "name", "status"]),
     "FinanceSearch": obj({"results": items(obj({"kind": {"type": "string", "enum": [
-        "entry", "feed", "bill", "invoice", "contact", "rule"]}, "id": "s", "label": "s"})),
+        "entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project"]}, "id": "s",
+        "label": "s"})),
         "next_cursor": "n", "currency": "s", "view_version": "i"}),
     "FinanceMetric": obj({"name": "s", "value": {"type": ["integer", "string", "null"]}, "unit": {
         "type": "string", "enum": ["minor", "percent", "months", "count", "days"]}, "as_of": "s",
@@ -2297,6 +2360,27 @@ SCHEMAS['ComputerSubscriptionList'] = obj({
     'capable': items({'type': 'string'})})
 SCHEMAS['ComputerSubscriptionResult'] = obj({
     'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 'n', 'stopped': 'i', 'sessions_reset': 'i'})
+
+
+# Independent reviewer cards: task closure never changes this audience or lifetime.
+TAGS['Memory tidy'] = "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
+STABLE.extend([
+    ('/api/v2/memory-tidy/cards', 'get', 'Memory tidy', 'listMemoryTidyCards',
+     'The named reviewer’s open cards; diffs are fetched on opening a card. Human and bot reviewers.', 'MemoryTidyCards'),
+    ('/api/v2/memory-tidy/cards/{ident}', 'get', 'Memory tidy', 'getMemoryTidyCard',
+     'A named reviewer’s card with its checked diff, including after both pass tasks close.', 'MemoryTidyCardResult'),
+    ('/api/v2/memory-tidy/cards/{ident}/decide', 'post', 'Memory tidy', 'decideMemoryTidyCard',
+     'Discard an open card without repository changes. Keep returns 409 until its separate implementation is available.', 'MemoryTidyCardResult'),
+])
+SCHEMAS['MemoryTidyCard'] = obj({
+    'id': 's', 'kind': {'enum': ['memory_tidy']}, 'bot': 's', 'reviewer': 's', 'requester': 's', 'title': 's',
+    'memory_commit': 's', 'model': 's', 'cost_usd': {'type': 'number', 'description': 'Filing-ledger list-price estimate, including subscription usage.'},
+    'diary': 's', 'diff': {'type': 'string', 'description': 'Checked unified diff; present on detail reads and decisions, omitted from lists.'},
+    'created': 's', 'expires': 's', 'status': {'enum': ['open', 'withdrawn', 'discarded', 'kept']}, 'reason': 's', 'keep_available': 'b',
+}, required=['id', 'kind', 'bot', 'reviewer', 'requester', 'title', 'memory_commit', 'model', 'cost_usd', 'diary',
+             'created', 'expires', 'status', 'reason', 'keep_available'])
+SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
+SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
 
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "

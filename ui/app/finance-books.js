@@ -66,7 +66,7 @@ function finBsDraw() {
   if (d.snapshot) { const m = document.createElement('span'); finMarksDraw(m, d); $('#fin-balanced').append(...m.childNodes); }
   const imp = (d.imported || []).map(m => `${m.month} · ${m.basis === 'cash' ? 'Cash' : 'Accrual'}`).join(', ');
   const prevOf = (key, sec) => { if (!prev) return null; const t = finBsTree(prev[sec] || []).find(r => finBsKey(r) === key); return t ? t.sum : null; };
-  const source = s => `<span class="fin-src">${esc([s.provider, s.name].filter(Boolean).join(' · '))}${s.last4 ? ' ••' + esc(s.last4) : ''}</span>`;
+  const source = s => `<span class="fin-src">${esc([finProvider(s.provider), s.name].filter(Boolean).join(' · '))}${s.last4 ? ' ••' + esc(s.last4) : ''}</span>`;
   const cols = prev ? 5 : 3;
   const out = [];
   for (const [sec, label, key] of FIN_BS_SECTIONS) {
@@ -74,9 +74,9 @@ function finBsDraw() {
     out.push(`<tr class="fin-sec"><td>${label}</td><td colspan="${cols - 1}"></td></tr>`);
     for (const r of tree) {
       const k = finBsKey(r), was = prevOf(k, sec), ch = was == null ? null : finDiff(r.sum - was);
-      const from = [...(r.sources || []).map(source), ...(r.entry_sources || []).map(s => `<span class="fin-src">${esc(s)}</span>`)].join('');
+      const from = [...(r.sources || []).map(source), ...finBsFrom(r).map(finBsSrc)].join('') || '<span class="muted">—</span>';
       out.push(`<tr class="fin-ln${r.kids ? ' fin-parent' : ''}${b.sel === k ? ' fin-on' : ''}" style="--d:${r.depth}" data-fin-line="${esc(k)}" tabindex="0"><td>${esc(r.name)}</td><td class="fin-n">${finNum(r.sum)}</td>${prev
-        ? `<td class="fin-n">${finNum(was)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td class="fin-from">${from}</td></tr>`);
+        ? `<td class="fin-n">${finNum(was)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td><div class="fin-from">${from}</div></td></tr>`);
     }
     const t = totals[key], tp = prev?.totals?.[key], ch = prev && t != null && tp != null ? finDiff(t - tp) : null;
     out.push(`<tr class="fin-subt"><td>Total ${label.toLowerCase()}</td><td class="fin-n">${finNum(t)}</td>${prev ? `<td class="fin-n">${finNum(tp)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td></td></tr>`);
@@ -100,8 +100,15 @@ function finBsRail() {
     ${finKv('Balance', finUsd(row.sum))}${row.kids ? finKv('This line', finUsd(row.balance)) : ''}
     ${srcs.length ? `<h3 class="fin-h">Accounts</h3>${srcs.map(s => finKv(`${s.name || s.provider}${s.last4 ? ' ••' + s.last4 : ''}`,
       `${finUsd(s.provider_balance)}${s.balance_as_of ? ` <span class="muted">${esc(finDayLabel(s.balance_as_of))}</span>` : ''}`)).join('')}` : ''}
-    ${(row.entry_sources || []).length ? `<h3 class="fin-h">From</h3>${row.entry_sources.map(s => `<span class="fin-src">${esc(s)}</span>`).join('')}` : ''}${tail}`);
+    ${finBsFrom(row).length ? `<h3 class="fin-h">From</h3><div class="fin-from">${finBsFrom(row).map(finBsSrc).join('')}</div>` : ''}${tail}`);
 }
+// What a line's entries come from (backend/finance/core/ledger.py SOURCES; pnl: net income, from the P&L). A line fed by a
+// money account shows that account, not its bank or card rows again.
+const FIN_ENTRY_SRC = {manual: 'Journal', import: 'Import', bank: 'Bank', card: 'Cards', bill: 'Bills', invoice: 'Invoices',
+  payment: 'Payments', usage: 'Gateway', sync: 'Books sync', pnl: 'P&L'};
+const finBsFrom = r => (r.entry_sources || []).filter(s => !((r.sources || []).length && (s === 'bank' || s === 'card')));
+const finBsSrc = s => s === 'pnl' ? `<a class="fin-src" href="${finHref('/pnl')}">P&amp;L</a>` : `<span class="fin-src">${esc(FIN_ENTRY_SRC[s] || s)}</span>`;
+const finProvider = p => ({mercury: 'Mercury', stripe: 'Stripe', quickbooks: 'QuickBooks', xero: 'Xero'}[p] || p || '');
 // Under any line: payments still on their way out of each money account, and how far the books are closed.
 function finBsTail() {
   const d = FIN.bs.data, seen = new Set(), due = [];
@@ -109,11 +116,13 @@ function finBsTail() {
     if (seen.has(s.money_account_id) || !s.due_out?.count) continue;
     seen.add(s.money_account_id); due.push(s);
   }
-  return `${due.length ? `<div class="fin-rail-sec"><h3 class="fin-h">Due out</h3>${due.map(s => finKv(`${s.name || s.provider || ''}${s.last4 ? ' ••' + s.last4 : ''} · ${s.due_out.count}`, finUsd(s.due_out.amount))).join('')}</div>` : ''}
-    ${d.closed_through ? `<div class="fin-rail-sec"><h3 class="fin-h">Close</h3>${finKv('Closed through', esc(finDayLabel(d.closed_through)))}</div>` : ''}`;
+  // '' when there is neither, so the empty rail hides (.fin-rail:empty).
+  return (due.length ? `<div class="fin-rail-sec"><h3 class="fin-h">Due out</h3>${due.map(s => finKv(`${s.name || s.provider || ''}${s.last4 ? ' ••' + s.last4 : ''} · ${s.due_out.count}`, finUsd(s.due_out.amount))).join('')}</div>` : '')
+    + (d.closed_through ? `<div class="fin-rail-sec"><h3 class="fin-h">Close</h3>${finKv('Closed through', esc(finDayLabel(d.closed_through)))}</div>` : '');
 }
 
 // ----------------------------------------------------------------- cards
+const FIN_CARD_RANK = {active: 0, frozen: 1, cancelled: 2};
 const FIN_CARD_STATUS = {active: ['ok', 'Active'], frozen: ['waiting', 'Frozen'], cancelled: ['idle', 'Cancelled']};
 function finCardsPage() {
   const caps = finCaps();
@@ -135,7 +144,9 @@ async function finCardsLoad(more) {
   try { d = await get('/v2/finance/cards' + qs + finAs(qs ? '&' : '?'), {fresh: true}); }
   catch (e) { if (FIN?.cards === state && $('#fin-cards')) $('#fin-cards').innerHTML = finFail(e); return; }
   if (FIN?.cards !== state || state.load !== load || !$('#fin-cards')) return;
-  state.rows = more ? [...state.rows, ...(d.cards || [])] : d.cards || [];
+  // Live cards first, then frozen, then cancelled; by name within each.
+  state.rows = (more ? [...state.rows, ...(d.cards || [])] : d.cards || [])
+    .sort((x, y) => (FIN_CARD_RANK[x.status] ?? 3) - (FIN_CARD_RANK[y.status] ?? 3) || finCardName(x).localeCompare(finCardName(y)));
   state.next = d.next || null;
   if (!state.rows.some(c => c.id === state.sel)) state.sel = state.rows[0]?.id || '';
   finCardsDraw(); finCardRail();
@@ -151,7 +162,7 @@ const FIN_CARD_APP = {mercury: 'https://app.mercury.com/cards'};
 function finCardsDraw() {
   const state = FIN.cards, box = $('#fin-cards'); if (!box) return;
   if (!state.rows.length) { box.innerHTML = finNote('No cards yet.'); return; }
-  box.innerHTML = `<table class="fin-t"><thead><tr><th>Card</th><th>Holder</th><th>Budget</th><th class="fin-n">Limit</th><th class="fin-n">Spent</th><th>Status</th></tr></thead><tbody>${state.rows.map(c => {
+  box.innerHTML = `<table class="fin-t fin-card-t"><thead><tr><th>Card</th><th>Holder</th><th>Budget</th><th class="fin-n">Limit</th><th class="fin-n">Spent</th><th>Status</th></tr></thead><tbody>${state.rows.map(c => {
     const [cls, label] = finCardPill(c);
     return `<tr data-fin-card="${esc(c.id)}"${state.sel === c.id ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link">${esc(finCardName(c))}</button></td><td><span class="fin-who">${finAvatar(c.holder, 18)}${esc(finWho(c.holder))}</span></td>
       <td>${c.budget ? esc(c.budget.name) : '<span class="muted">—</span>'}</td><td class="fin-n">${c.limit == null ? '<span class="muted">—</span>' : finNum(c.limit)}</td><td class="fin-n">${finNum(c.spent)}</td>
@@ -292,10 +303,13 @@ function finTxPage() {
       S.route = LAST_ROUTE = location.hash;
       void finTxLoad(false); return;
     }
+    if (ev.target.closest('select[data-fin-tx-line]')) return;
     const tr = ev.target.closest('tr[data-fin-tx]');
     if (tr) { FIN.tx.sel = tr.dataset.finTx; finTxDraw(); finTxRail(); }
   };
+  body.addEventListener('change', ev => { const sel = ev.target.closest('select[data-fin-tx-line]'); if (sel) void finTxLineSave(sel); });
   void finTxLines();
+  if (finCaps().may('finance.book')) void finTxChart();
   void finTxLoad(false);
 }
 // The lines to filter by: the P&L's and balance sheet's lines the viewer sees (from the last P&L read, else one now).
@@ -344,15 +358,58 @@ function finTxDraw() {
   if (FIN_TX.source === 'transfer') { finXferDraw(); return; }
   const state = FIN.tx, box = $('#fin-tx'); if (!box) return;
   if (!state.rows.length) { box.innerHTML = finNote('No transactions.'); return; }
-  box.innerHTML = `<table class="fin-t"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th class="fin-n">Amount</th><th>Teammate</th><th>Vendor</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => {
+  box.innerHTML = `<table class="fin-t fin-tx-t"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th>Line</th><th class="fin-n">Amount</th><th>Teammate</th><th>Vendor</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => {
     const {tags, vendor} = finTxTags(r), key = finTxKey(r);
-    const account = r.kind === 'feed' ? `${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}` : r.account || '';
+    const account = r.kind === 'feed' ? `${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}` : '';
     const status = r.kind === 'feed' ? (r.pending ? 'pending' : r.status) : r.reversed ? 'reversed' : 'posted';
     return `<tr data-fin-tx="${esc(key)}"${state.sel === key ? ' class="fin-on"' : ''}><td class="fin-nowrap">${esc(finDayLabel(r.date))}</td>
-      <td><button type="button" class="fin-link">${esc(r.kind === 'feed' ? r.counterparty || r.description || '' : r.description || r.memo || '')}</button></td><td>${esc(account)}</td>
-      <td class="fin-n">${finCents(r.amount)}</td><td>${tags.teammate ? esc(finWho(tags.teammate)) : '<span class="muted">—</span>'}</td><td>${vendor ? esc(vendor) : '<span class="muted">—</span>'}</td>
+      <td><button type="button" class="fin-link">${esc(r.kind === 'feed' ? r.counterparty || r.description || '' : r.description || r.memo || '')}</button></td><td class="fin-cut">${account ? esc(account) : '<span class="muted">—</span>'}</td><td>${finTxLineCell(r)}</td>
+      <td class="fin-n">${finCents(r.amount)}</td><td>${tags.teammate ? esc(finWho(tags.teammate)) : '<span class="muted">—</span>'}</td><td class="fin-cut">${vendor ? esc(vendor) : '<span class="muted">—</span>'}</td>
       <td><span class="pill ${{posted: 'ok', matched: 'ok', pending: 'waiting', new: 'waiting', ignored: 'idle', reversed: 'idle'}[status] || 'idle'}">${esc(status)}</span></td></tr>`;
   }).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
+}
+// A row's line: a picker for a bank or card row its viewer may categorize (one line, or several on the same line), else
+// the line's name, or Split when its lines go to several.
+function finTxLineCell(r) {
+  const lines = r.kind === 'feed' ? r.lines || [] : [], chart = FIN.tx.chart;
+  const ids = [...new Set(lines.map(l => l.account_id || ''))];
+  if (r.kind !== 'feed') return r.account ? esc(r.account) : '<span class="muted">—</span>';
+  if (ids.length > 1) return 'Split';
+  const cur = ids[0] || '', name = lines[0]?.account || '';
+  // A row split across tags (even on one line) is categorized in the panel, so each part keeps its own tags.
+  if (lines.length > 1 || !finTxCatOn(r) || !Array.isArray(chart)) return name ? esc(name) : '<span class="muted">—</span>';
+  const opt = (v, l) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`;
+  return `<select class="fin-cell-sel" data-fin-tx-line="${esc(finTxKey(r))}" aria-label="Line"${FIN.tx.busy ? ' disabled' : ''}>${cur ? '' : opt('', '—')}${cur && !chart.some(a => a.id === cur) ? opt(cur, name || cur) : ''}${chart.map(a => opt(a.id, a.name)).join('')}</select>`;
+}
+// A line picked in the row: the row moves to it, keeping its tags; a line the viewer may only post to with a teammate
+// or team tag gets theirs (the chart lists the viewer first) when the row has neither. When the rules ask for approval,
+// the rail's form shows the ask.
+async function finTxLineSave(sel) {
+  const state = FIN.tx, key = sel.dataset.finTxLine, r = state.rows.find(x => finTxKey(x) === key);
+  if (!r || !sel.value || state.busy) { finTxDraw(); return; }
+  const line = (state.chart || []).find(a => a.id === sel.value), lines = r.lines || [];
+  const tags = lines.length ? {...(lines[0].tags || {})} : {};
+  delete tags.budget;   // set by the new line's budgets
+  if (line?.company_wide === false && !tags.teammate && !tags.team) {
+    const first = finTxForOpts(line)[0];
+    if (!first) { toast('Not a line you can post to', true); finTxDraw(); return; }
+    const [k, v] = first[0].split(/:(.*)/); tags[k] = v;
+  }
+  const payload = {feed_id: r.id, account_id: sel.value, tags};
+  state.busy = true; sel.disabled = true;
+  try {
+    const res = await finDecide('categorize', payload);
+    state.busy = false;
+    if (FIN?.tx !== state) return;
+    if (res.ask != null) {
+      state.sel = key; state.cat = null;
+      const c = finTxCatState(r); c.now.account = sel.value; c.ask = {who: res.ask, p: payload, sig: res.sig};
+      finTxDraw(); finTxRail(); return;
+    }
+    if (res.status === 'committed') toast('Saved');
+    if (state.cat?.key === key) state.cat = null;
+    void finTxLoad(false);
+  } catch (e) { state.busy = false; toast(e.message, true); if (FIN?.tx === state) finTxDraw(); }
 }
 function finTxRail() {
   if (FIN_TX.source === 'transfer') { finXferRail(); return; }
@@ -477,6 +534,7 @@ async function finTxChart() {
   try { rows = (await get('/v2/finance/chart?for=journal' + finAs(), {fresh: true}))?.accounts; } catch { rows = null; }
   if (FIN?.tx !== state) return;
   state.chart = Array.isArray(rows) ? rows : false;
+  if (state.rows.length && FIN_TX.source !== 'transfer') finTxDraw();
   finTxCatRedraw();
 }
 function finTxCatRedraw() {

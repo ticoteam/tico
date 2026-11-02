@@ -20,6 +20,7 @@
     "heartbeat.request.capabilities[]=\"model_subscriptions_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
     "heartbeat.request.capabilities[]=\"browser_exit_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
     "heartbeat.request.capabilities[]=\"model_subscription_activation_v1\"": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422; only a claim with activate metadata triggers hop-time fetch, and that fetch requires subscription_activated acknowledgement after rollback",
+    "heartbeat.request.capabilities[]=\"model_connect_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
     "heartbeat.request.readiness.trust": "runner-rs/src/readiness.rs trust_field: sent only once GET config says readiness_trust (fallback.rs server_takes_trust)"
   },
   "$defs": {

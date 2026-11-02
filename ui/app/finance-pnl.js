@@ -58,10 +58,13 @@ function finPnlPage() {
         <form class="fin-pop" id="fin-range" hidden><label>From<input type="date" name="start" value="${p.start}" required></label>
           <label>To<input type="date" name="end" value="${p.end}" required></label><button type="submit" class="primary">Apply</button></form></span>
       ${finSeg('basis', 'Basis', [['accrual', 'Accrual'], ['cash', 'Cash']], p.basis)}<span id="fin-pl-marks" class="fin-marks"></span>
-      ${view === 'company' ? `<label class="fin-inline"><span class="muted">Compare</span><select data-fin-compare>${finCompareOptions().map(([v, l]) =>
-        `<option value="${v}"${v === p.compare ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>` : ''}
+      ${view === 'company' ? `<label class="fin-inline"><span class="muted">Compare</span><span class="fin-sel"><span class="fin-sel-v" aria-hidden="true">${esc((finCompareOptions().find(([v]) => v === p.compare) || finCompareOptions()[0])?.[1] || '')}</span><select data-fin-compare>${finCompareOptions().map(([v, l]) =>
+        `<option value="${v}"${v === p.compare ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></span></label>` : ''}
       <span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button></div>
-    ${filters}` + finSplit(`<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`, '', view === 'company' ? 'Selected cell' : 'Breakdown');
+    ${filters}` + finSplit(view === 'expenses'
+      // The org-chart picker: a column beside the table on a wide screen, "+ Filter" on a phone (finance.css).
+      ? `<div class="fin-exp"><div class="fin-tree fin-tree-col" id="fin-tree-col" role="group" aria-label="Filter"></div><div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div></div>`
+      : `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`, '', view === 'company' ? 'Selected cell' : 'Breakdown');
   const body = $('#fin-body');
   body.onclick = ev => finPnlClick(ev);
   body.ondblclick = ev => { const td = ev.target.closest('td[data-fin-budget]'); if (td) finPnlEdit(td); };
@@ -76,7 +79,11 @@ function finPnlPage() {
     p.start = a; p.end = z; p.sel = null; p.budgetCol = -1;
     finPnlPage();
   };
-  body.querySelector('[data-fin-compare]')?.addEventListener('change', ev => { p.compare = ev.target.value; void finPnlLoad(); });
+  body.querySelector('[data-fin-compare]')?.addEventListener('change', ev => {
+    p.compare = ev.target.value;
+    const shown = ev.target.parentElement.querySelector('.fin-sel-v'); if (shown) shown.textContent = ev.target.selectedOptions[0]?.textContent || '';
+    void finPnlLoad();
+  });
   if (view === 'expenses') finFiltersDraw();
   void finPnlLoad();
 }
@@ -199,7 +206,7 @@ function finPnlDraw() {
   const state = FIN.pnl, box = $('#fin-pl'); if (!box || !state?.data) return;
   const data = state.data, cols = data.columns || [], p = FIN_PNL, bi = p.budgetCol, caps = finCaps();
   const {sections} = state.model;
-  if (!sections.length) { box.innerHTML = finNote(state.view === 'expenses' ? 'No expenses in this filter.' : 'No lines yet.'); return; }
+  if (!sections.length) { box.innerHTML = finNote(state.view !== 'expenses' ? 'No lines yet.' : finFilterAny(state.snap || p) ? 'No expenses in this filter.' : 'No expenses.'); return; }
   const years = new Set(cols.map(c => c.start.slice(0, 4))).size > 1;
   const past = cols.filter(c => c.state !== 'future').length, cur = cols.find(c => c.state === 'current');
   const imported = finImportedCols(data, cols);
@@ -401,7 +408,7 @@ async function finPnlRail() {
     const d = await get(`/v2/finance/lines/${encodeURIComponent(row.account_id)}?start=${col.start}&end=${col.end}&top_n=6&limit=1${fq ? '&' + fq : ''}`, {fresh: true});
     if (FIN?.pnl !== state || p.sel !== sel || !$('#fin-by')) return;
     const by = (d.by_teammate || []).filter(r => r.amount);
-    $('#fin-by').innerHTML = by.length ? `<h3 class="fin-h">By teammate</h3>${finBars(by.map(r => ({label: r.key === 'other' ? r.label : finWho(r.key), amount: r.amount})))}` : '';
+    $('#fin-by').innerHTML = by.length ? `<h3 class="fin-h">By teammate</h3>${finBars(by.map(r => ({label: r.key === FIN_OTHER ? r.label : finWho(r.key), amount: r.amount})))}` : '';
   } catch { /* the figures above stand on their own */ }
 }
 function finTeammatesHtml() {
@@ -451,32 +458,36 @@ function finFiltersDraw() {
   const p = FIN_PNL, acc = FIN.acc, caps = finCaps(), on = new Set(finPicked(p));
   const kind = {bots: 'bot', people: 'person'}[p.who];
   const teams = acc.teams || [], members = (acc.teammates || []).filter(t => !kind || t.kind === kind);
-  const kids = id => teams.filter(t => (t.parent || '') === (id || '') || (!id && t.parent && !teams.some(x => x.id === t.parent)));
-  const count = id => { const ids = finTeamsBelow(id); return members.filter(m => ids.has(m.team)).length; };
+  const kids = id => finTeamKids(teams, id);
+  const helpers = members.filter(m => finHelper(m.teammate)), staff = members.filter(m => !finHelper(m.teammate));
+  const count = id => { const ids = finTeamsBelow(id); return staff.filter(m => ids.has(m.team)).length; };
   const pick = (k, label, d) => `<label class="fin-tree-r" style="--d:${d}"><input type="checkbox" data-fin-pick="${esc(k)}"${on.has(k) ? ' checked' : ''}>${label}</label>`;
   const mate = (m, d) => pick('mate:' + m.teammate, finAvatar(m.teammate, 16) + esc(finWho(m.teammate)), d);
   const out = [`<label class="fin-tree-r"><input type="checkbox" data-fin-pick=""${!on.size ? ' checked' : ''}>Everyone</label>`];
   const walk = (team, d) => {
     const n = count(team.id);
     out.push(pick('team:' + team.id, `${esc(team.name)}${n ? `<span class="muted fin-n">${n}</span>` : ''}`, d));
-    for (const m of members.filter(m => m.team === team.id)) out.push(mate(m, d + 1));
+    for (const m of staff.filter(m => m.team === team.id)) out.push(mate(m, d + 1));
     for (const k of kids(team.id)) if (d < 12) walk(k, d + 1);
   };
   for (const t of kids('')) walk(t, 0);
-  for (const m of members.filter(m => !m.team || !teams.some(t => t.id === m.team))) out.push(mate(m, 0));
+  for (const m of staff.filter(m => !m.team || !teams.some(t => t.id === m.team))) out.push(mate(m, 0));
+  if (helpers.length) out.push('<div class="fin-tree-h">Helpers</div>', ...helpers.map(m => mate(m, 0)));
   if (caps?.companyExpenses) out.push(pick('none:', 'Unattributed', 0));
-  box.innerHTML = `<span class="fin-chips" id="fin-chips"></span><span class="fin-pop-at"><button type="button" class="ghost fin-pill" data-fin-filter aria-expanded="false" aria-controls="fin-tree">+ Filter</button>
+  box.innerHTML = `<span class="fin-chips" id="fin-chips"></span><span class="fin-pop-at fin-filter-pop"><button type="button" class="ghost fin-pill" data-fin-filter aria-expanded="false" aria-controls="fin-tree">+ Filter</button>
       <div class="fin-pop fin-tree" id="fin-tree" role="group" aria-label="Filter" hidden>${out.join('')}</div></span>
     ${finSeg('who', 'Who', [['both', 'Bots + people'], ['bots', 'Bots'], ['people', 'People']], p.who)}`;
+  const col = $('#fin-tree-col'); if (col) col.innerHTML = out.join('');
   finChipsDraw();
-  const tree = box.querySelector('#fin-tree');
-  tree.onchange = ev => {
+  const trees = [box.querySelector('#fin-tree'), col].filter(Boolean);
+  const change = ev => {
     const k = ev.target.dataset.finPick; if (k == null) return;
     finPickSet(k, ev.target.checked);
     const now = new Set(finPicked(p));
-    tree.querySelectorAll('[data-fin-pick]').forEach(x => { x.checked = x.dataset.finPick ? now.has(x.dataset.finPick) : !now.size; });
+    for (const t of trees) t.querySelectorAll('[data-fin-pick]').forEach(x => { x.checked = x.dataset.finPick ? now.has(x.dataset.finPick) : !now.size; });
     p.sel = null; finChipsDraw(); void finPnlLoad();
   };
+  for (const t of trees) t.onchange = change;
 }
 
 // ----------------------------------------------------------------- a line's page
@@ -521,8 +532,8 @@ async function finLineLoad() {
   const state = FIN.line, L = FIN_LINE, load = ++state.load, id = encodeURIComponent(state.id);
   const [a, z] = finMonthBounds(L.month), [pa, pz] = finMonthBounds(finPrevMonth(L.month));
   const fq = state.fq ? '&' + state.fq : '';
-  const [cur, prev, budgets] = await Promise.allSettled([get(`/v2/finance/lines/${id}?start=${a}&end=${z}&top_n=50&limit=200${fq}`, {fresh: true}),
-    get(`/v2/finance/lines/${id}?start=${pa}&end=${pz}&top_n=50&limit=1${fq}`, {fresh: true}),
+  const [cur, prev, budgets] = await Promise.allSettled([get(`/v2/finance/lines/${id}?start=${a}&end=${z}&top_n=${FIN_LINE_TOP}&limit=200${fq}`, {fresh: true}),
+    get(`/v2/finance/lines/${id}?start=${pa}&end=${pz}&top_n=${FIN_LINE_TOP}&limit=1${fq}`, {fresh: true}),
     // Each budget as it stands in the month shown (the version in effect then), so a future month shows its own amount.
     get(`/v2/finance/budgets?at=${a}`, {fresh: true})]);
   if (FIN?.line !== state || state.load !== load || !$('#fin-line')) return;
@@ -536,19 +547,31 @@ async function finLineLoad() {
 }
 const FIN_PER = {month: 'mo', quarter: 'qtr', year: 'yr'};
 const finVendorBudget = vendor => (FIN.line?.budgets || []).find(b => b.active && b.account_id === FIN.line.id && b.vendor === vendor && !b.team && !b.teammate);
+const FIN_LINE_TOP = 50;     // the drill-down's top_n: rows past it fold into "Other · n"
+const FIN_OTHER = ' other';  // that row's key (backend/finance/reads.py OTHER): no real key starts with a space
 function finLineKeys() {
   const state = FIN.line, by = 'by_' + FIN_LINE.by, cur = state.cur?.[by] || [], prev = state.prev?.[by] || [];
   const keys = [...cur.map(r => r.key), ...prev.map(r => r.key).filter(k => !cur.some(r => r.key === k))];
   if (FIN_LINE.by === 'vendor') for (const b of state.budgets) if (b.active && b.account_id === state.id && b.vendor && !b.team && !b.teammate && !keys.includes(b.vendor)) keys.push(b.vendor);
+  // Next month's projection by row (next_by). A key with a projection but no spend in either month gets a row while the
+  // reads were not capped; otherwise (or past the cap) it goes into Other, so the column adds up to the line's.
+  const proj = state.cur?.next_by?.[FIN_LINE.by] || {}, names = state.cur?.next_labels?.[FIN_LINE.by] || {};
+  const extra = Object.keys(proj).filter(k => !keys.includes(k)).sort((x, y) => proj[y] - proj[x] || x.localeCompare(y));
+  const room = keys.includes(FIN_OTHER) ? 0 : Math.max(0, FIN_LINE_TOP - keys.length);
+  const fold = extra.slice(room);
+  keys.push(...extra.slice(0, room));
+  if (fold.length && !keys.includes(FIN_OTHER)) keys.push(FIN_OTHER);
   // "Other · n" last, whichever read it came from.
-  keys.sort((x, y) => (x === 'other') - (y === 'other'));
-  return keys.map(k => ({key: k, label: (cur.find(r => r.key === k) || prev.find(r => r.key === k))?.label || k,
-    cur: cur.find(r => r.key === k)?.amount ?? null, prev: prev.find(r => r.key === k)?.amount ?? null}));
+  keys.sort((x, y) => (x === FIN_OTHER) - (y === FIN_OTHER));
+  const folded = fold.length ? fold.reduce((n, k) => n + proj[k], 0) : null;
+  return keys.map(k => ({key: k, label: (cur.find(r => r.key === k) || prev.find(r => r.key === k))?.label || names[k] || (k === FIN_OTHER ? `Other · ${fold.length}` : k),
+    cur: cur.find(r => r.key === k)?.amount ?? null, prev: prev.find(r => r.key === k)?.amount ?? null,
+    proj: k === FIN_OTHER ? folded : proj[k] ?? null}));
 }
 function finLineLabel(key, label) {
-  if (key === 'other') return label;
-  if (FIN_LINE.by === 'teammate') return finWho(key);
-  if (FIN_LINE.by === 'team') return key === 'unattributed' ? 'Unattributed' : finTeamName(key) || label;
+  if (key === FIN_OTHER) return label;
+  if (FIN_LINE.by === 'teammate') return key === FIN_NONE ? 'Unattributed' : finWho(key);
+  if (FIN_LINE.by === 'team') return key === FIN_NONE ? 'Unattributed' : key === 'no_team' ? 'No team' : finTeamName(key) || label;
   // A vendor's label is a contact's name or "" (a contact the viewer can't see), never the key: a bill's key is an id.
   if (FIN_LINE.by === 'vendor') return label || '—';
   return label || key;
@@ -562,7 +585,9 @@ function finLineDraw() {
     : finLineBudget(state.id, state.budgets) ? '' : '<button type="button" class="primary" data-fin-line-add>+ Line budget</button>';
   if (!L.sel || !rows.some(r => r.key === L.sel)) L.sel = rows[0]?.key || '';
   const [cm, pm] = [finDate(L.month + '-01').getMonth(), finDate(finPrevMonth(L.month) + '-01').getMonth()];
-  const head = `<tr><th>${{vendor: 'Vendor', team: 'Team', teammate: 'Teammate'}[L.by]}</th>${vendor ? '<th>Team</th>' : ''}<th class="fin-n">${FIN_MON[pm]}</th><th class="fin-n">${FIN_MON[cm]}</th>${vendor ? `<th class="fin-n fin-b">Budget / mo${finExcl(state.budgetsRead)}</th><th>At limit</th>` : ''}</tr>`;
+  // Next month's projection for each row (the line's default method on that row's history).
+  const nm = state.cur.next_month?.month;
+  const head = `<tr><th>${{vendor: 'Vendor', team: 'Team', teammate: 'Teammate'}[L.by]}</th>${vendor ? '<th>Team</th>' : ''}<th class="fin-n">${FIN_MON[pm]}</th><th class="fin-n">${FIN_MON[cm]}</th>${nm ? `<th class="fin-n fin-p">${FIN_MON[Number(nm.slice(5, 7)) - 1]} proj.</th>` : ''}${vendor ? `<th class="fin-n fin-b">Budget / mo${finExcl(state.budgetsRead)}</th><th>At limit</th>` : ''}</tr>`;
   const body = rows.map(r => {
     const b = vendor && finIsVendor(r.key) ? finVendorBudget(r.key) : null;
     const amount = b?.state?.amount ?? null;
@@ -570,12 +595,12 @@ function finLineDraw() {
     const per = b && b.period !== 'month' ? ` <span class="muted">/ ${FIN_PER[b.period] || b.period}</span>` : '';
     const budgetCell = !vendor ? '' : !finIsVendor(r.key) ? '<td class="fin-n fin-b"></td><td></td>'
       : `<td class="fin-n fin-b">${edit ? `<input class="fin-in" inputmode="decimal" autocomplete="off" data-fin-vb="${esc(r.key)}" value="${finCentsField(amount)}" aria-label="${esc(r.label)} budget a month from ${esc(FIN_MONTH[cm])}">` : finNum(amount) + per}</td><td${b ? '' : ' class="muted"'}>${b ? esc(FIN_AT_LIMIT[b.at_limit] || b.at_limit) : ''}</td>`;
-    return `<tr data-fin-key="${esc(r.key)}"${L.sel === r.key ? ' class="fin-on"' : ''}><td>${esc(finLineLabel(r.key, r.label))}</td>${vendor ? `<td>${b ? esc(b.team ? finTeamName(b.team) : 'All') : ''}</td>` : ''}<td class="fin-n">${r.prev == null ? '<span class="muted">—</span>' : finNum(r.prev)}</td><td class="fin-n">${r.cur == null ? '<span class="muted">—</span>' : finNum(r.cur)}</td>${budgetCell}</tr>`;
+    return `<tr data-fin-key="${esc(r.key)}"${L.sel === r.key ? ' class="fin-on"' : ''}><td>${esc(finLineLabel(r.key, r.label))}</td>${vendor ? `<td>${b ? esc(b.team ? finTeamName(b.team) : 'All') : ''}</td>` : ''}<td class="fin-n">${r.prev == null ? '<span class="muted">—</span>' : finNum(r.prev)}</td><td class="fin-n">${r.cur == null ? '<span class="muted">—</span>' : finNum(r.cur)}</td>${nm ? `<td class="fin-n fin-p">${r.proj == null ? '<span class="muted">—</span>' : finNum(r.proj)}</td>` : ''}${budgetCell}</tr>`;
   }).join('');
   box.innerHTML = rows.length ? `<table class="fin-t"><thead>${head}</thead><tbody>${body}</tbody></table>` : finNote('No spend on this line yet.');
 }
 // Other (the rest, rolled up) and No vendor (spend with none, key unattributed) are not vendors a budget can name.
-const finIsVendor = k => k !== 'other' && k !== 'unattributed';
+const finIsVendor = k => k !== FIN_OTHER && k !== FIN_NONE;
 function finLineRail() {
   const state = FIN.line, L = FIN_LINE; if (!state?.cur) return;
   const row = finLineKeys().find(r => r.key === L.sel);
@@ -584,13 +609,13 @@ function finLineRail() {
   const amount = b?.state?.amount ?? null, spent = row.cur || 0;
   const pct = amount ? Math.min(100, Math.round(spent / amount * 100)) : null;
   // A vendor's own read (lines/{id}?vendor=): how it was paid, by team, its transactions.
-  const one = vendor && row.key !== 'other', got = one ? state.vendors[row.key] : null, d = got?.data || null;
-  const match = e => L.by === 'team' ? (e.tags?.team || 'unattributed') === row.key : (e.tags?.teammate || 'unattributed') === row.key;
-  const entries = one ? (d?.entries || []).slice(0, 5) : row.key === 'other' ? [] : (state.cur.entries || []).filter(match).slice(0, 8);
+  const one = vendor && row.key !== FIN_OTHER, got = one ? state.vendors[row.key] : null, d = got?.data || null;
+  const match = e => L.by === 'team' ? (e.tags?.team || (e.tags?.teammate ? 'no_team' : FIN_NONE)) === row.key : (e.tags?.teammate || FIN_NONE) === row.key;
+  const entries = one ? (d?.entries || []).slice(0, 5) : row.key === FIN_OTHER ? [] : (state.cur.entries || []).filter(match).slice(0, 8);
   const paid = one ? d?.paid_by || [] : [], teams = one ? (d?.by_team || []).filter(r => r.amount) : [];
   const name = finLineLabel(row.key, row.label), lineName = state.cur.account?.name || '';
   const nm = state.cur.next_month, nmLabel = nm?.month ? FIN_MON[Number(nm.month.slice(5, 7)) - 1] : '';
-  const q = new URLSearchParams({account_id: state.id}); if (vendor && row.key !== 'other' && row.key !== 'unattributed') q.set('q', row.key);
+  const q = new URLSearchParams({account_id: state.id}); if (vendor && row.key !== FIN_OTHER && row.key !== FIN_NONE) q.set('q', row.key);
   const paidLabel = r => r.kind === 'card' ? 'Card · ' + r.name : r.kind === 'bank' ? r.name : r.name === 'manual' ? 'Journal' : r.name;
   finRail(`<div class="fin-rail-title"><h2>${esc(name)}</h2><span class="fin-big">${finUsd(row.cur)}${vendor ? ' / mo' : ''}</span></div>
     ${pct == null ? '' : `<div class="fin-bar-m${pct >= 100 ? ' bad' : b && pct >= b.warn_pct ? ' warn' : ''}" aria-hidden="true"><i style="width:${pct}%"></i></div><div class="muted fin-small">${finUsd(spent)} of ${finUsd(amount)} · ${month}</div>`}
@@ -598,12 +623,12 @@ function finLineRail() {
     ${nm && nm.projection != null ? finKv(`${lineName} · ${nmLabel} projected`, finUsd(nm.projection) + finProjTag(nm.projection_method)) : ''}
     ${one && d?.seats != null ? finKv('Seats', esc(Number(d.seats).toLocaleString('en-US'))) : ''}${one && d?.renewal_on ? finKv('Renews', esc(finDayLabel(d.renewal_on))) : ''}
     ${paid.length ? `<h3 class="fin-h">Paid by</h3>${paid.map(r => finKv(paidLabel(r), finUsd(r.amount))).join('')}` : ''}
-    ${teams.length ? `<h3 class="fin-h">By team · ${month}</h3>${finBars(teams.map(r => ({label: r.key === 'unattributed' ? 'Unattributed' : r.key === 'other' ? r.label : finTeamName(r.key) || r.label, amount: r.amount})))}` : ''}
+    ${teams.length ? `<h3 class="fin-h">By team · ${month}</h3>${finBars(teams.map(r => ({label: r.key === FIN_NONE ? 'Unattributed' : r.key === FIN_OTHER ? r.label : finTeamName(r.key) || r.label, amount: r.amount})))}` : ''}
     ${entries.length ? `<h3 class="fin-h">Transactions</h3>${entries.map(e => finKv(finDayLabel(e.date), finCents(e.amount))).join('')}` : ''}
-    ${row.key !== 'other' ? `<a class="fin-more" href="${FIN_ROUTE}/transactions?${q}${state.fq ? '&' + state.fq : ''}">All ${esc(name)} transactions</a>` : ''}`);
+    ${row.key !== FIN_OTHER ? `<a class="fin-more" href="${FIN_ROUTE}/transactions?${q}${state.fq ? '&' + state.fq : ''}">All ${esc(name)} transactions</a>` : ''}`);
   if (!one || got) return;
   const ask = state.vendors[row.key] = {data: null}, [a, z] = finMonthBounds(L.month);
-  const v = row.key === 'unattributed' ? '' : row.key;
+  const v = row.key === FIN_NONE ? '' : row.key;
   get(`/v2/finance/lines/${encodeURIComponent(state.id)}?start=${a}&end=${z}&top_n=10&limit=5&vendor=${encodeURIComponent(v)}${state.fq ? '&' + state.fq : ''}`, {fresh: true})
     .then(x => { ask.data = x || {}; }, () => { ask.data = {}; })
     .then(() => { if (FIN?.line === state && state.vendors[row.key] === ask && FIN_LINE.sel === row.key) finLineRail(); });

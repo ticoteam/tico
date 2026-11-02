@@ -71,11 +71,15 @@ def replace_lines(c: sqlite3.Connection, kind: str, doc_id: str, rows: Sequence[
 
 def docs_page(c: sqlite3.Connection, kind: str, *, book_id: str, statuses: Sequence[str] = (), contact_id: str = "",
               q: str = "", start: str = "", end: str = "", before: tuple[str, str] | None = None,
-              most: int = 200) -> list[Any]:
-    """Bills or invoices newest first by date (then id), with the contact's name as `contact_name`."""
+              most: int = 200, by_paid: bool = False) -> list[Any]:
+    """Bills or invoices newest first by date (then id), or with `by_paid` by when they were last paid (their latest
+    live settlement; never paid last), with the contact's name as `contact_name` and the order's key as `sort_key`
+    (what `before` pages from)."""
     table, _, _, day, contact = DOCS[kind]
-    sql = (f"SELECT d.*, k.name AS contact_name FROM {table} d LEFT JOIN fin_contacts k ON k.id=d.{contact} "
-           "WHERE d.book_id=?")
+    key = (f"COALESCE((SELECT MAX(s.settled_on) FROM fin_settlements s WHERE s.to_kind='{kind}' AND s.to_id=d.id "
+           "AND s.voided_at IS NULL), '')" if by_paid else f"d.{day}")
+    sql = (f"SELECT d.*, k.name AS contact_name, {key} AS sort_key FROM {table} d LEFT JOIN fin_contacts k "
+           f"ON k.id=d.{contact} WHERE d.book_id=?")
     args: list[object] = [book_id]
     if statuses:
         sql += f" AND d.status IN ({_marks(statuses)})"
@@ -93,9 +97,9 @@ def docs_page(c: sqlite3.Connection, kind: str, *, book_id: str, statuses: Seque
         sql += " AND (d.number LIKE ? ESCAPE '\\' OR d.memo LIKE ? ESCAPE '\\' OR k.name LIKE ? ESCAPE '\\')"
         args += [like(q)] * 3
     if before:
-        sql += f" AND (d.{day}<? OR (d.{day}=? AND d.id<?))"
+        sql += f" AND ({key}<? OR ({key}=? AND d.id<?))"
         args += [before[0], before[0], before[1]]
-    return c.execute(sql + f" ORDER BY d.{day} DESC, d.id DESC LIMIT ?", [*args, most]).fetchall()
+    return c.execute(sql + f" ORDER BY {key} DESC, d.id DESC LIMIT ?", [*args, most]).fetchall()
 
 
 def doc_with_contact(c: sqlite3.Connection, kind: str, doc_id: str) -> Any:

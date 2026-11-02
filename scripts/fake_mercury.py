@@ -9,6 +9,9 @@ Control endpoints under /_fake/ are not Mercury's:
                                adds a sent transaction and a transaction.created event (the Events API shows it)
   POST /_fake/approve/<id>     the approver approves a send-money request: it becomes a sent transaction
   POST /_fake/reject/<id>      the approver rejects a send-money request
+  POST /_fake/card-spend       {"card", "amount", "merchant", "date"?, "pending"?}: a purchase on a card (its Mercury id,
+                               last four or nickname) on the IO credit account, with its transaction.created event; a
+                               frozen or cancelled card is declined (a failed transaction), as Mercury does
   GET  /_fake/calls            every Mercury call Tico made, in order (method, path, query, body; never the token)
 
   python3 scripts/fake_mercury.py --port 18790
@@ -28,6 +31,8 @@ FIXTURES = json.loads((Path(__file__).resolve().parent.parent / "backend" / "tes
 PREFIX = "/api/v1"
 BANK, CARD = "acct-chk", "credit-io"          # the checking account and the IO credit account in the fixtures
 SEED_TXNS = ("txn_card_posted", "txn_card_bill_bank", "txn_card_bill_io", "txn_bank_fee", "txn_deposit")
+# The last four Mercury gives each new card, in turn (fictional; never a real card's).
+LAST_FOUR = ("4021", "7713", "3390", "5168", "8842", "2207", "6634", "1958", "9071", "3546")
 
 
 def now() -> str:
@@ -127,6 +132,9 @@ class Handler(BaseHTTPRequestHandler):
             if method == "POST" and name == "txn":
                 status, answer = add_txn(body)
                 return self.reply(status, answer)
+            if method == "POST" and name == "card-spend":
+                status, answer = card_spend(body)
+                return self.reply(status, answer)
             verb, _, rid = name.partition("/")
             if method == "POST" and verb in ("approve", "reject") and rid:
                 status, answer = decide(verb, rid)
@@ -169,7 +177,8 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
     if method == "GET" and parts[0] == "credit" and parts[-1] == "statements":
         return 200, {"statements": [FIXTURES["credit_statement_new"]]}
     if method == "GET" and path == "/cards":
-        mine = [c for c in STATE.cards if c["userId"] == one(q, "userId")]
+        user = one(q, "userId")
+        mine = [c for c in STATE.cards if not user or c["userId"] == user]
         chunk, nxt = page(mine, "id", after, limit)
         return 200, {"cards": chunk, "page": nxt}
     if parts[0] == "cards" and len(parts) >= 2:
@@ -183,15 +192,14 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
             card["nickname"] = body.get("nickname", card["nickname"])
             return 200, card
         if method == "POST" and len(parts) == 3 and parts[2] in ("freeze", "unfreeze", "cancel"):
+            want = {"freeze": "active", "unfreeze": "frozen", "cancel": None}[parts[2]]
+            if card["status"] == "cancelled" or (want and card["status"] != want):
+                return 400, {"message": f"card is {card['status']}"}
             card["status"] = {"freeze": "frozen", "unfreeze": "active", "cancel": "cancelled"}[parts[2]]
+            card["updatedAt"] = now()
             return 200, card
     if method == "POST" and path == "/cards":
-        cid = STATE.new("card")
-        card = {**copy.deepcopy(FIXTURES["card_created"]), "id": cid, "cardId": cid, "userId": body.get("userId"),
-                "nickname": body.get("nickname"), "kind": body.get("kind", "credit"), "status": "active",
-                "spendLimit": body.get("spendLimit")}
-        STATE.cards.append(card)
-        return 200, card
+        return 200, new_card(body)
     if method == "POST" and path == "/recipients":
         rid = STATE.new("rcp")
         STATE.recipients[rid] = {**body, "id": rid}
@@ -212,6 +220,51 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
         chunk, nxt = page(mine, "requestId", after, limit)
         return 200, {"requests": chunk, "page": nxt}
     return 404, {"message": f"fake Mercury does not answer {method} {path}"}
+
+
+def new_card(body: dict) -> dict:
+    """POST /cards: a virtual card, usable at once, in Mercury's card shape (the create answer's cardId and
+    lastFourDigits beside the card fields). A credit card with no accountId is on the org's IO credit account."""
+    cid = STATE.new("card")
+    four = LAST_FOUR[len(STATE.cards) % len(LAST_FOUR)]
+    user = next((u for u in FIXTURES["users"]["users"] if u["id"] == body.get("userId")), None)
+    holder = f"{user['firstName']} {user['lastName']}" if user else "Acme"
+    at = now()
+    card = {**copy.deepcopy(FIXTURES["card_created"]), "id": cid, "cardId": cid, "userId": body.get("userId"),
+            "accountId": body.get("accountId") or CARD, "nameOnCard": holder, "nickname": body.get("nickname"),
+            "lastFour": four, "lastFourDigits": four, "expiration": {"month": 11, "year": int(at[:4]) + 3},
+            "type": "virtual", "kind": body.get("kind", "credit"), "status": "active",
+            "spendLimit": body.get("spendLimit"), "spendLimitType": "cardLimit", "isAgentCard": False,
+            "physicalCardStatus": None, "createdAt": at, "updatedAt": at}
+    STATE.cards.append(card)
+    return card
+
+
+def card_spend(body: dict) -> tuple[int, dict]:
+    """A purchase on a card: a creditCardTransaction carrying its cardId, pending until it posts. Mercury declines a
+    card that is not active, which shows as a failed transaction."""
+    key = str(body.get("card") or "")
+    card = next((c for c in STATE.cards if key in (c["id"], c["lastFour"], c.get("nickname"))), None)
+    if card is None:
+        return 404, {"message": "no such card (its id, last four or nickname)"}
+    try:
+        amount = -abs(float(body["amount"]))
+        day = datetime.fromisoformat(str(body.get("date") or now()[:10])).strftime("%Y-%m-%d")
+    except (KeyError, TypeError, ValueError):
+        return 400, {"message": "amount (a number) is required; date is YYYY-MM-DD"}
+    name = str(body.get("merchant") or "ACME MERCHANT")
+    pending = bool(body.get("pending"))
+    declined = card["status"] != "active"
+    txn = {"id": STATE.new("txn-card"), "accountId": card["accountId"], "amount": amount,
+           "createdAt": f"{day}T15:00:00Z", "postedAt": None if pending or declined else f"{day}T18:00:00Z",
+           "status": "failed" if declined else "pending" if pending else "sent",
+           "failedAt": f"{day}T15:00:01Z" if declined else None,
+           "reasonForFailure": f"Card {card['status']}" if declined else None,
+           "kind": "creditCardTransaction", "counterpartyName": name.upper(), "counterpartyNickname": name,
+           "bankDescription": name.upper(), "cardId": card["id"], "requestId": None, "note": None,
+           "merchant": {"amount": amount, "currency": "USD"}}
+    STATE.add_txn(txn)
+    return 200, {"transaction": txn}
 
 
 def in_search(txn: dict, search: str | None) -> bool:

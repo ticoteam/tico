@@ -210,10 +210,10 @@ def install(app, store, auth, mutate, settings):
         """The owner's yes to a goal read-back, saved by their Assistant in their chat (backend/goal_read_back.py)."""
         return who.role == "owner" and who.via == "assistant" and bool(GR.active())
 
-    def decider(c, who, item):
+    def decider(c, who, item, turn=False):
         """Whether this person may confirm the proposal: a person's own decision, by whoever owns what changes (or the
-        owner's yes to its read-back)."""
-        if who.role not in ("owner", "human") or (who.via and not in_words(who)):
+        owner's yes to its read-back, or `turn`: their own "no" in their Assistant chat)."""
+        if who.role not in ("owner", "human") or (who.via and not turn and not in_words(who)):
             return False
         if item["kind"] in ("strategy_draft", "strategy_realign"):     # the strategy is the owner's (backend/strategy.py)
             return company_editor(who)
@@ -617,7 +617,7 @@ def install(app, store, auth, mutate, settings):
         """The read-back save the middleware let through (backend/app.py), checked again in this write."""
         who, record = request.state.identity, GR.active()
         claim = GR.agreement(c, who, record["cited"], request.method, request.url.path,
-                             getattr(request, "_body", b"") or b"{}")
+                             getattr(request, "_body", b"") or b"{}", auth=auth)
         if claim["goal_read_back"] != record["goal_read_back"] or claim["change"] != record["change"] \
                 or claim["step"] != record["step"]:
             raise GR.not_agreed("The read-back changed while this was saved")
@@ -716,6 +716,7 @@ def install(app, store, auth, mutate, settings):
             raise Problem("validation", f"Change {n} is not an object", 422)
         if why := GR.click_reason(raw):
             raise Problem("stays_a_click", why, 403)
+        read_owners = GR.read_back_access(c, auth, raw)
         kind = raw.get("kind")
         if kind not in GR.KINDS:
             raise Problem("validation", f"Change {n}: kind is one of {', '.join(GR.KINDS)}", 422)
@@ -846,7 +847,8 @@ def install(app, store, auth, mutate, settings):
             about = bold(row["title"]) if row else q((K.kpi(c, p["kpi_id"]) or {}).get("name") or "")
             text = (("Accept" if raw["decision"] == "confirm" else "Turn down") + f" the suggestion on {about}: "
                     + suggestion_words(c, p))
-        return {"n": n, "kind": kind, "text": text, "steps": steps, "watch": watch}
+        return {"n": n, "kind": kind, "text": text, "steps": steps, "watch": watch,
+                "read_owners": read_owners}
 
     def read_back_trial(c, who, changes):
         """Every change made as the owner's own click would make it, in order, then rolled back: what could not be
@@ -937,6 +939,7 @@ def install(app, store, auth, mutate, settings):
             if not back or (H.conversation(c, back["conversation_id"]) or {}).get("owner_actor") != who.actor:
                 raise Problem("not_found", "No such read-back", 404)
             done = GR.saves(c, mid)
+            GR.read_back_access_stored(c, auth, back["changes"], done)
             yes, why_not = None, ""
             if GR.strategy_turn(who):
                 turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
@@ -1384,7 +1387,7 @@ def install(app, store, auth, mutate, settings):
     @app.post("/api/v2/goal-proposals")
     def proposal_create(request: Request, body: M.GoalProposal):
         """Propose a change the caller may not make: clearer wording, a KPI for a goal, a new definition,
-        a target, or a flag (vague, duplicate, unmeasured). The owner confirms or rejects."""
+        a target, or a flag (vague or duplicate). The owner confirms or rejects."""
         who = request.state.identity
         def work(c):
             auth.domain(who)
@@ -1429,6 +1432,32 @@ def install(app, store, auth, mutate, settings):
                     refuse_exposed(c, goal, named or goal["owner"])
             done = G.decide(c, who.actor, pid, body.decision, body.note, why=body.why, option=body.option,
                             moves=body.moves, target=body.target.model_dump() if body.target else None)
+            return {"proposal": reason_view(c, who, done, hidden_owners(c, who))}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/goal-proposals/turned-down")
+    def proposal_turned_down(request: Request, body: M.GoalProposal):
+        """The owner's "no" in their Assistant chat to a suggestion the Strategy Bot would make (a number or a date, a
+        measure, new words, a flag): stored in this one call as a turned-down suggestion on the goal, with the owner's
+        words as its reason. It cites their message (`--on-behalf-of turn`): no read-back and no second yes."""
+        who = request.state.identity
+        def work(c):
+            from . import assistant as assistant_mod
+            auth.domain(who)
+            if who.role != "owner" or body.kind not in GR.TURN_DOWN_KINDS:
+                raise Problem("forbidden", "Only the owner's Assistant turns a suggestion down in chat, for a goal, "
+                              "measure, wording, flag or Why", 403)
+            cited = assistant_mod.instruction(c, who, "turn")["cited"]
+            note = GR.turned_down_words(c, cited)
+            goal = goal_or_404(c, body.goal_id) if body.goal_id else None
+            if body.kpi_id:
+                kpi_or_404(c, who, body.kpi_id)
+            if goal and not readable_goals(c, who, [goal]):
+                raise Problem("not_found", "Unknown goal", 404)
+            item = G.propose(c, who.actor, body.kind, body.goal_id, body.kpi_id, body.payload, body.reason)
+            if not decider(c, who, item, turn=True):
+                raise Problem("forbidden", "Whoever owns the goal or the KPI decides, and only a person, on their own click", 403)
+            done = G.decide(c, who.actor, item["id"], "reject", note)
             return {"proposal": reason_view(c, who, done, hidden_owners(c, who))}
         return mutate(request, body, work)
 

@@ -2,8 +2,9 @@
 active grants, minus private lines. Every read and every action resolves one and asks it about each object.
 
 Default (company setting, seeded): the owner sees everything; managers the expenses of the teams they lead and the
-teams under them; everyone else their own expenses (lines tagged with them). Revenue, the balance sheet, payables,
-receivables and sources are owner-only unless granted. Unattributed lines show only in company-wide views.
+teams under them, and of everyone who reports to them, directly or not; everyone else their own expenses (lines tagged
+with them). Revenue, the balance sheet, payables, receivables and sources are owner-only unless granted. Unattributed
+lines show only in company-wide views.
 """
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -65,11 +66,13 @@ class PrivateLine:
 @dataclass(frozen=True)
 class Slice:
     """Part of the P&L a viewer sees: which accounts (`expense`, `pnl`, or the explicit `ids`) and whose lines
-    (`company`: all, unattributed included; `teams`: lines tagged with one of `teams`; `own`: tagged with the viewer)."""
+    (`company`: all, unattributed included; `teams`: lines tagged with one of `teams`; `mates`: tagged with one of
+    `mates`, a manager's reports; `own`: tagged with the viewer)."""
     accounts: str
     whose: str
     teams: frozenset[str] = frozenset()
     ids: frozenset[str] = frozenset()
+    mates: frozenset[str] = frozenset()
 
     def covers_account(self, account: Account) -> bool:
         if self.accounts == "ids":
@@ -83,6 +86,8 @@ class Slice:
             return True
         if self.whose == "teams":
             return tags.get("team", "") in self.teams
+        if self.whose == "mates":
+            return tags.get("teammate", "") in self.mates
         return bool(viewer) and tags.get("teammate", "") == viewer
 
 
@@ -117,6 +122,11 @@ class View:
             return self.balance_sheet or account.id in self.bs_lines
         return any(s.covers_account(account) for s in self.slices)
 
+    def sees_anything(self) -> bool:
+        """Whether the viewer has a finance view at all: some P&L slice, balance sheet lines, or a side or source."""
+        return bool(self.everything or self.slices or self.balance_sheet or self.bs_lines or self.payables
+                    or self.receivables or self.sources)
+
     def company_wide(self, account: Account) -> bool:
         """Whether this viewer sees every line on `account`, unattributed ones included."""
         if self.everything:
@@ -136,6 +146,14 @@ class View:
                 out |= s.teams
         return frozenset(out)
 
+    def mates(self, account: Account | None = None) -> frozenset[str]:
+        """Every teammate (a manager's reports) whose lines (on `account`, or on any expense line) this viewer sees."""
+        out: set[str] = set()
+        for s in self.slices:
+            if s.whose == "mates" and (account is None or s.covers_account(account)):
+                out |= s.mates
+        return frozenset(out)
+
     def covers_team(self, account: Account, team: str, below: frozenset[str]) -> bool:
         """Whether this viewer sees all of `team` (every team in `below`) on `account`."""
         return self.company_wide(account) or bool(below) and below <= self.teams(account)
@@ -150,12 +168,16 @@ def whose_slice(accounts: str, whose: str, team_below: frozenset[str], ids: froz
 
 
 def default_slices(org: Org, viewer: str, defaults: Defaults) -> tuple[Slice, ...]:
-    """A viewer's default from where they sit: own expenses, and a manager's teams' expenses."""
+    """A viewer's default from where they sit: own expenses, and a manager's teams' and reports' expenses. Reporting
+    lines and team leads come from the org chart, so the view follows them when they change."""
     out: list[Slice] = []
-    led = org.led_by(viewer)
-    if led and defaults.manager == "team_expenses":
-        out.append(Slice(accounts="expense", whose="teams", teams=led))
-    if led or defaults.member == "own_expenses":
+    led, mates = org.led_by(viewer), org.reports(viewer)
+    if defaults.manager == "team_expenses":
+        if led:
+            out.append(Slice(accounts="expense", whose="teams", teams=led))
+        if mates:
+            out.append(Slice(accounts="expense", whose="mates", mates=mates))
+    if led or mates or defaults.member == "own_expenses":
         out.append(Slice(accounts="expense", whose="own"))
     return tuple(out)
 
@@ -208,7 +230,7 @@ def resolve(org: Org, viewer: str, *, grants: Iterable[Grant], defaults: Default
         elif grant.what == "sources":
             sources = True
     detail = frozenset(a for a, p in private.items() if viewer in p.full_detail)
-    manager_payroll = not org.led_by(viewer) or defaults.manager_payroll == "totals"
+    manager_payroll = not org.manages(viewer) or defaults.manager_payroll == "totals"
     return View(viewer=viewer, everything=everything, slices=tuple(slices), balance_sheet=balance_sheet,
                 bs_lines=frozenset(bs_lines), payables=payables, receivables=receivables, sources=sources,
                 full_detail=detail, department_payroll=manager_payroll, version=version, grant_ids=tuple(used))
@@ -218,19 +240,22 @@ def resolve(org: Org, viewer: str, *, grants: Iterable[Grant], defaults: Default
 def check_grant(org: Org, grantor: str, grant: Grant, defaults: Defaults, accounts: Mapping[str, Account]) -> str:
     """Whether `grantor` may make `grant`: "ok", "approval" (a bot's grant, which a person approves), or a denial.
 
-    Owners grant anything. A manager grants to teammates in the teams they lead, only from their own default view
-    (their teams' expenses, or expense lines of them), never company-wide and never what they were granted. Nobody
-    grants to themselves."""
+    Owners grant anything. A manager grants to teammates in the teams they lead and to those who report to them, only
+    from their own default view (their teams' expenses, or expense lines of them), never company-wide and never what
+    they were granted. Nobody grants to themselves."""
     check_shape(grant, org, accounts)
     if grant.subject_kind == "teammate" and grant.subject == grantor:
         raise denied("nobody grants access to themselves")
     if org.owner and grantor == org.owner:
         return "ok"
-    led = org.led_by(grantor)
-    if not led or defaults.manager != "team_expenses":
+    led, mates = org.led_by(grantor), org.reports(grantor)
+    if not (led or mates) or defaults.manager != "team_expenses":
         raise denied("only the owner or the subject's manager grants Finance access")
-    subject_team = grant.subject if grant.subject_kind == "team" else org.team_of.get(grant.subject, "")
-    if subject_team not in led:
+    if grant.subject_kind == "team":
+        theirs = grant.subject in led
+    else:
+        theirs = org.team_of.get(grant.subject, "") in led or grant.subject in mates
+    if not theirs:
         raise denied("a manager grants only to teammates in the teams they manage")
     if grant.what not in ("expenses", "pnl_lines") or grant.whose == "company":
         raise denied("a manager grants only their teams' expenses")
@@ -299,6 +324,9 @@ class Cell:
     vendor: str
     amount: int
     linked: bool = False            # settled private payroll lines were netted out of it (reads._cells); totals say so
+    location: str = ""                 # the location, class and project tag values of its lines ("" when none)
+    class_id: str = ""
+    project: str = ""
 
 
 @dataclass(frozen=True)

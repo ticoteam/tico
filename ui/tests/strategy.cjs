@@ -153,10 +153,7 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
       if (role !== 'owner') return json({error: {code: 'forbidden', detail: 'Only the owner'}}, 403);
       if (p === '/api/v2/market/segments/target') {
         const g = mk.segments.find(x => x.id === body.id);
-        for (const x of mk.segments) { if (body.target === 'ours') x.self = x === g; if (body.target === 'next') x.next = x === g; }
-        if (body.target === 'none') { g.self = false; g.next = false; }
-        if (body.target === 'ours') g.next = false;
-        if (body.target === 'next') g.self = false;
+        g.self = body.target === 'ours'; g.next = body.target === 'next';
         return json({id: body.id, ours: body.target === 'ours', next: body.target === 'next'});
       }
       if (p === '/api/v2/market/segments/remove') {
@@ -361,7 +358,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Where we play: a click makes a segment Us, then Next, then neither (one of each); × removes one, its parts move up;
+    // Where we play: a click makes a segment Us, then Next, then neither (several Us at once); × removes one, its parts move up;
     // one is added by name. Competitors: × removes one, one is added by its site. Related news: hot first, links out.
     {
       const {page, errors, sent, mk} = await open(browser);
@@ -375,17 +372,18 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.equal(await where.locator('.strat-cap').innerText(), 'About $7B a year');
       await tile('offices').click();
       await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/offices"]')?.classList.contains('ours'));
-      assert.equal(await tile('homes').getAttribute('aria-pressed'), 'false', 'one Us');
+      assert.equal(await tile('homes').getAttribute('aria-pressed'), 'true', 'several Us');
+      assert.equal(await where.locator('.strat-tm.ours em').count(), 2, 'each Us marked');
       await tile('offices').click();
       await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/offices"]')?.classList.contains('next'));
       await tile('offices').click();
       await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/offices"]')?.getAttribute('aria-pressed') === 'false');
       await tile('homes').focus();
       await page.keyboard.press('Enter');
-      await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/homes"]')?.classList.contains('ours'));
+      await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/homes"]')?.classList.contains('next'));
       for (let i = 0; i < 100 && sent.filter(x => x[1] === '/api/v2/market/segments/target').length < 4; i++) await page.waitForTimeout(20);
       assert.deepEqual(sent.filter(x => x[1] === '/api/v2/market/segments/target').map(x => [x[2].id, x[2].target]),
-        [['segment/offices', 'ours'], ['segment/offices', 'next'], ['segment/offices', 'none'], ['segment/homes', 'ours']]);
+        [['segment/offices', 'ours'], ['segment/offices', 'next'], ['segment/offices', 'none'], ['segment/homes', 'next']]);
       await tile('offices').hover();
       await tile('offices').locator('[data-seg-x]').click();
       await tile('offices').waitFor({state: 'detached'});

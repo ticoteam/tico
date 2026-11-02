@@ -219,6 +219,13 @@ pub fn prompt_head(attempt: &Value, lines: &mut Vec<(Part, String)>) {
             "This private meeting has its own copy of your repository, `{}`, kept for this meeting alone: what you change there stays in it for the rest of the meeting, is never committed for you, pushed or seen by your other work, and is deleted when the meeting ends.",
             text_of(&session["path"])
         )));
+    } else if session.is_object() && crate::continuity::memory_pass(config) {
+        // A nightly memory tidy pass commits and pushes nothing: its checkout is discarded when the turn ends (discard_pass).
+        lines.push((Part::Standing, format!(
+            "This task has its own checkout of your repository, `{}` on branch `{}`. This is a nightly memory tidy pass: read your memory and knowledge, and change nothing in the checkout. Do not commit or push; what you change there is discarded when the turn ends.",
+            text_of(&session["path"]),
+            text_of(&session["branch"])
+        )));
     } else if session.is_object() {
         // A stateless bot's memory/ and knowledge/ are not committed for it (`finish`), so the line does not say they are.
         let kept = if crate::continuity::stateless(config) { "" } else { " What you leave uncommitted in memory/ or knowledge/ is committed for you when the turn ends." };
@@ -493,6 +500,38 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
             "git timed out".into()
         }
         Err(f) => fault_name(&f),
+    }
+}
+
+/// A memory tidy pass's checkout after its turn: every edit and any commit the turn made there is dropped, so none of it
+/// can reach the bot's main branch (criterion 24). Returns what was changed, as paths and commits, for the run log. The
+/// checkout is the pass's own and its upstream is the bot's main, so discarding back to the upstream is safe; without
+/// one, nothing is discarded and the error says so.
+pub async fn discard_pass(path: &Path, turn: &Env) -> Result<Vec<String>, String> {
+    let env = crate::safegit::environment(turn);
+    let done: Result<Result<Vec<String>, String>, Fault> = async {
+        let ahead = g(path, &env, &["log", "--format=%h", "@{u}..HEAD"], 15).await?;
+        if !ahead.ok() {
+            return Ok(Err("its checkout has no upstream to discard back to".into()));
+        }
+        let status = g(path, &env, &["status", "--porcelain", "--untracked-files=all"], 15).await?;
+        if !status.ok() {
+            return Ok(Err("git status failed".into()));
+        }
+        let mut changed: Vec<String> = ahead.stdout.lines().filter(|l| !l.is_empty()).map(|sha| format!("commit {sha}")).collect();
+        changed.extend(status.stdout.lines().filter(|l| l.len() > 3).map(|l| l[3..].trim_matches('"').to_string()));
+        if !g(path, &env, &["reset", "-q", "--hard", "@{u}"], 45).await?.ok() {
+            return Ok(Err("git reset failed".into()));
+        }
+        if !g(path, &env, &["clean", "-fdq"], 45).await?.ok() {
+            return Ok(Err("git clean failed".into()));
+        }
+        Ok(Ok(changed))
+    }
+    .await;
+    match done {
+        Ok(result) => result,
+        Err(f) => Err(fault_name(&f)),
     }
 }
 
@@ -1059,6 +1098,10 @@ impl Runner {
                     (tracked, problem) = self.task_worktree(place, &session, attempt, env).await?;
                 }
             }
+            if !problem.is_empty() && crate::continuity::memory_pass(&attempt["config"]) {
+                // A memory pass never runs in the bot's own checkout: its edits there would reach main (criterion 24).
+                return Err(format!("the nightly memory tidy pass has no checkout of its own ({problem}), so it did not run"));
+            }
             if !problem.is_empty() {
                 // Without a worktree of its own the task's turn waits for the main checkout like any other.
                 crate::util::diagnostic(&format!("Tico runner: {}: task {} runs in the bot's checkout ({problem})", place.bot, place.task));
@@ -1077,6 +1120,9 @@ impl Runner {
                 // Claude finds a session to resume by its working directory: the worktree keeps threads of its own.
                 suffix = ":worktree";
             }
+        }
+        if crate::continuity::memory_pass(&attempt["config"]) && place.session_path.is_none() {
+            return Err("the nightly memory tidy pass has no checkout of its own, so it did not run".into());
         }
         let dirs = resolve_rules(&self.config.projects_dir(), &attempt["worktrees"]);
         let (rules, digest) = rules_block(&dirs);
@@ -1177,6 +1223,16 @@ impl Runner {
             }
             self.push_checkout(session, env).await
         }
+    }
+
+    /// A nightly memory tidy pass's turn ends here instead of `finish_place`: its checkout is discarded under the
+    /// checkout's git lock and nothing is pushed (`discard_pass`). Returns what it had changed, for the run log, or the problem.
+    pub async fn discard_pass_place(&self, place: &Place, env: &Env) -> Result<Vec<String>, String> {
+        let Some(session) = &place.session_path else {
+            return Err("the pass had no checkout of its own".into());
+        };
+        let _git = self.lanes.git_lock(&place.main_path).lock_owned().await;
+        discard_pass(session, env).await
     }
 
     /// A finished task's worktree goes once its turn has ended, unless a file is still waiting to upload from it.

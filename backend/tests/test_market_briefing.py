@@ -115,6 +115,28 @@ def test_a_replacement_that_touches_no_bet_sends_no_new_event(seeded, events):
         assert c.execute("SELECT count(*) FROM market_briefings").fetchone()[0] == 1
 
 
+def test_an_automation_post_without_items_keeps_the_weeks_items_and_bets(seeded, events):
+    """The daily run posts with `items=None`: its title and page replace the week's, the items the Librarian posted by
+    hand and the bets they touch stay, and no second event goes out for the same bets. A week with no row gets []."""
+    from types import SimpleNamespace
+
+    from backend import market_briefing as MB
+    cited, _ = publish_bets(seeded)
+    hand = brief(seeded, items=[item("company/northwind")])["briefing"]
+    assert hand["bets"] == [cited["id"]] and len(events) == 1
+    with seeded.app.state.store.transaction() as c:
+        MB.post(c, SimpleNamespace(actor="human:ana"), WEEK, "Daily", "Run text.", None,
+                source={"automation": "auto_t", "run": "r"})
+    kept = get(seeded, "market/briefings/" + WEEK)["briefing"]
+    assert (kept["title"], kept["body"]) == ("Daily", "Run text.")
+    assert (kept["items"], kept["bets"]) == (hand["items"], [cited["id"]])
+    assert kept["source"] == {"automation": "auto_t", "run": "r"} and len(events) == 1
+    with seeded.app.state.store.transaction() as c:
+        MB.post(c, SimpleNamespace(actor="human:ana"), "2026-W45", "Empty", "Body.", None)
+    empty = get(seeded, "market/briefings/2026-W45")["briefing"]
+    assert (empty["items"], empty["bets"]) == ([], [])
+
+
 def test_market_labels_a_briefing_by_how_often_it_is_posted(seeded):
     """A briefing by hand is the week's; one an automation posts each day (the built-in, every morning) is the day's;
     one posted by a once-a-week schedule is the week's again."""

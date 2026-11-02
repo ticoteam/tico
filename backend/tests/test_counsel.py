@@ -981,7 +981,7 @@ def test_a_hostile_page_title_is_fenced_and_the_task_title_is_fixed(api, monkeyp
     monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT, title=hostile))
     r = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     row = task_row(api, r["task_id"])
-    assert row["title"] == f"Read document (file {r['file']['id']} v1)"
+    assert row["title"] == f"Read document (file {r['file']['id']} v1; source {r['source']['id']})"
     assert hostile not in row["title"]
     assert hostile in row["body"] and hostile not in outside_fence(row["body"])
 
@@ -1061,6 +1061,38 @@ def test_an_identical_reread_returns_the_open_task_and_a_closed_one_opens_a_new_
     third = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     assert third["existing"] is False and third["task_id"] != first["task_id"]
     assert third["file"]["version"] == 1
+
+
+@pytest.mark.parametrize("document_kind", ["file", "link"])
+def test_read_identity_includes_source_and_receipts_match_persisted_reads(api, monkeypatch, document_kind):
+    """Two sources can read one version in flight; each same-source retry keeps its own task."""
+    org(api)
+    counsel_on(api)
+    if document_kind == "file":
+        file_id, _ = store_file(api, CONTRACT)
+        document = {"file_id": file_id}
+    else:
+        monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT))
+        document = {"url": "https://vendor.example/terms"}
+    sources = [source(api, name="Acme Vendor"), source(api, name="Globex")]
+    reads = [post(api, "rules/read", {**document, "source_id": sid}) for sid in sources]
+    assert reads[0]["task_id"] != reads[1]["task_id"]
+    assert reads[0]["file"] == reads[1]["file"]
+    assert all(read["existing"] is False for read in reads)
+    for sid, read in zip(sources, reads):
+        again = post(api, "rules/read", {**document, "source_id": sid})
+        assert again["task_id"] == read["task_id"] and again["existing"] is True
+        for receipt in (read, again):
+            with api.app.state.store.read() as c:
+                persisted = c.execute("SELECT * FROM rule_reads WHERE task_id=?", (receipt["task_id"],)).fetchone()
+                task = c.execute("SELECT title, body, closed_at, status FROM tasks WHERE id=?", (receipt["task_id"],)).fetchone()
+                source_row = c.execute("SELECT name, kind FROM rule_sources WHERE id=?", (sid,)).fetchone()
+            assert receipt["source"]["id"] == persisted["source_id"] == sid
+            assert f"source {sid})" in task["title"]
+            assert receipt["file"]["id"] == persisted["file_id"]
+            assert receipt["file"]["version"] == persisted["version"]
+            assert f"From: {source_row['name']} ({source_row['kind']})" in task["body"]
+            assert task["closed_at"] is None and task["status"] not in ("done", "closed", "declined")
 
 
 def test_the_server_refuses_counsel_outward_routes_and_comments_only_on_its_own_task(api, monkeypatch):

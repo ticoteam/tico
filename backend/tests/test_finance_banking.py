@@ -696,7 +696,7 @@ def test_a_re_categorized_row_nets_out_its_teammate_tag_in_the_expenses_rollup(b
         assert untagged.status == "committed", untagged
         by_mate = FR.expenses(c, OWNER, "2026-10-01", "2026-10-31", "teammate", at=AT)
         assert {r["key"]: r["amount"] for r in by_mate["rows"]}.get("human:ana", 0) == 0
-        assert {r["key"]: r["amount"] for r in by_mate["rows"]}["unattributed"] == 1_500
+        assert {r["key"]: r["amount"] for r in by_mate["rows"]}[FR.NONE] == 1_500
 
 
 def test_an_ignored_teammate_tagged_row_nets_out_and_its_drilldown_shows_the_reversed_pair(books):
@@ -716,7 +716,7 @@ def test_an_ignored_teammate_tagged_row_nets_out_and_its_drilldown_shows_the_rev
         assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900")}).status == "committed"
         by_mate = {r["key"]: r["amount"] for r in FR.expenses(c, OWNER, "2026-10-01", "2026-10-31", "teammate",
                                                               at=AT)["rows"]}
-        assert by_mate["human:ana"] == 0 and by_mate["unattributed"] == 4_210
+        assert by_mate["human:ana"] == 0 and by_mate[FR.NONE] == 4_210
         drill = FR.line_detail(c, OWNER, account(c, "6900"), "2026-10-01", "2026-10-31", teammates=("human:ana",),
                                at=AT)["entries"]
         assert sorted(e["amount"] for e in drill) == [-4_210, 4_210]

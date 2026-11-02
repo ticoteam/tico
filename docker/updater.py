@@ -68,6 +68,10 @@ SNAPSHOTS = "/data/snapshots"   # inside the server container: the data volume
 KEEP_SNAPSHOTS = int(os.environ.get("TICO_UPDATER_KEEP_SNAPSHOTS", "3"))
 SNAPSHOT_SECONDS = int(os.environ.get("TICO_UPDATER_SNAPSHOT_SECONDS", "900"))
 SELF_UPDATE = os.environ.get("TICO_UPDATER_SELF", "always")   # "never" leaves this updater on its image
+# The runner's default memory cap is the installer's rule (docker/runner-memory.sh, copied into this image). Inside a
+# container /proc/meminfo is the host's total unless LXCFS is mounted, so the default is the host's, as the installer's is.
+MEMINFO = os.environ.get("TICO_UPDATER_MEMINFO", "/proc/meminfo")
+RUNNER_MEMORY_RULE = os.environ.get("TICO_RUNNER_MEMORY_RULE", "/usr/local/bin/tico-runner-memory")
 SWAP_HELPER = "tico-updater-swap"
 STATUS_FILE = ".updater-status.json"   # the outcome survives the updater being replaced
 PREVIOUS = ".bundle-previous"
@@ -156,8 +160,57 @@ class Unsettled(RuntimeError):
     already accepted (an accepted stop runs to its end), so what that command does to the containers is unknown."""
 
 
+def runner_memory_default():
+    """The default TICO_RUNNER_MEMORY for this host ("27g"), or "" when the host gets no cap."""
+    try:
+        result = subprocess.run(["sh", RUNNER_MEMORY_RULE, MEMINFO], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def env_file_sets(name):
+    """Whether the install's .env sets the key in any form compose reads (`NAME=v`, `NAME = v`, `NAME: v`, `export NAME=v`):
+    its value wins over the default, and an empty value counts. A commented line does not."""
+    pattern = re.compile(r"[ \t]*(?:export[ \t]+)?%s[ \t]*[=:]" % re.escape(name))
+    try:
+        with open(os.path.join(PROJECT, ".env")) as f:
+            return any(pattern.match(line) for line in f)
+    except OSError:
+        return False
+
+
+def cap_running_runner():
+    """A runner recreated by an older updater, which knows nothing of the default, has no memory limit. Give it the default
+    live: `docker update` sets the limit of the running container, and the container keeps it on its own restarts. Only a
+    runner with no limit is changed, so a limit someone set stays. Failures are logged and ignored."""
+    if MODE != "runner" or env_file_sets("TICO_RUNNER_MEMORY"):
+        return
+    cap = runner_memory_default()
+    if not cap:
+        return
+    try:
+        ids = compose("ps", "-q", SERVICE, timeout=INSPECT_SECONDS).split()
+        if not ids:
+            return
+        limit = docker_run(["docker", "inspect", "--format", "{{.HostConfig.Memory}}", ids[0]], capture_output=True,
+                           text=True, check=True, timeout=INSPECT_SECONDS).stdout.strip()
+        if limit != "0":
+            return
+        docker_run(["docker", "update", "--memory", cap, "--memory-swap", cap, ids[0]], capture_output=True, text=True,
+                   check=True, timeout=INSPECT_SECONDS)
+        print("tico-updater: capped the runner's memory at %s, the default for this computer" % cap, flush=True)
+    except Exception as exc:
+        print("tico-updater: could not cap the runner's memory (%s); leaving it as it is" % exc, flush=True)
+
+
 def compose(*args, tag=None, timeout=600, extra_env=None):
     env = {**os.environ, **({"TICO_TAG": tag} if tag else {}), **(extra_env or {})}
+    # The environment of compose outranks .env, so the default is set only when .env leaves the cap unset.
+    if MODE == "runner" and "TICO_RUNNER_MEMORY" not in env and not env_file_sets("TICO_RUNNER_MEMORY"):
+        cap = runner_memory_default()
+        if cap:
+            env["TICO_RUNNER_MEMORY"] = cap
     files = ["-f", os.path.join(PROJECT, COMPOSE_FILE)] if COMPOSE_FILE else []
     override = os.path.join(PROJECT, OVERRIDE_FILE)
     if COMPOSE_FILE and os.path.exists(override):   # the installer's own additions (--server-network); an update keeps them
@@ -1160,4 +1213,5 @@ if __name__ == "__main__":
         sys.exit(replace_self())
     load_status()
     ensure_token()
+    threading.Thread(target=cap_running_runner, daemon=True).start()   # not in front of the server: a slow docker waits here
     ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
