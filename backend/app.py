@@ -1455,7 +1455,8 @@ def create_app(settings=None):
                                  kind="message")
         if body.conversation_id:
             conv = auth.conversation(c, who, body.conversation_id, write=True)
-            if to not in conv["participants"]:
+            from . import threads
+            if to not in threads.legacy_participants(c, conv):
                 raise Problem("forbidden", "Recipient is not a conversation participant", 403)
         if body.in_reply_to:
             msg = H.message(c, body.in_reply_to)
@@ -3587,8 +3588,10 @@ def create_app(settings=None):
 
     def conversation_target(c, who, cid):
         conv = auth.conversation(c, who, cid, write=True)
-        target = next((p for p in conv["participants"] if p != who.actor and p.startswith("bot:")), None)
-        target = target or next((p for p in conv["participants"] if p != who.actor), None)
+        from . import threads
+        people = threads.legacy_participants(c, conv)
+        target = next((p for p in people if p != who.actor and p.startswith("bot:")), None)
+        target = target or next((p for p in people if p != who.actor), None)
         if not target:
             raise Problem("recipient", "This conversation has no other recipient", 422)
         return target

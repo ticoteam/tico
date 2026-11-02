@@ -1524,6 +1524,17 @@ def _dm_members(c, root, rows=None):
     return [a for a in dict.fromkeys(members) if str(a).startswith(("human:", "bot:"))]
 
 
+def legacy_participants(c, conv):
+    """Who a legacy caller (an old client or runner) may address in this conversation. A thread with a stored audience
+    also counts its native members (as _dm_members reads them): a native DM lists only its starter in
+    participants_json, and the other people are its thread members. A legacy row keeps its participant list."""
+    people = list((conv or {}).get("participants") or [])
+    root = root_of(c, conv) if conv else None
+    if not root or not root.get("audience"):
+        return people
+    return list(dict.fromkeys(people + _dm_members(c, root)))
+
+
 def _sub_thread_posters(c, thread_id, exclude):
     """The bots that posted in this sub-thread: a reply in it wakes them (rule 3)."""
     return [r[0] for r in c.execute("SELECT DISTINCT from_actor FROM messages WHERE conversation_id=? AND id<>? "
