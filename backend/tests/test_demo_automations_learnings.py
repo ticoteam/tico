@@ -86,7 +86,8 @@ def test_last_night_shows_the_routed_correction_with_its_source(built):
         assert bot["id"] == "technical-support" and "1 task" in bot["saw"]
         [entry] = bot["entries"]
         assert "flat surface" in entry["title"]
-        assert any("Correction" in source["quote"] for source in entry["sources"])
+        [source] = [s for s in entry["sources"] if "Correction" in s["quote"]]
+        assert source["label"].startswith("task Ben in Call back owners whose calibration failed twice")
         assert "Before calibrating" in entry["change"]["diff"]
 
 
@@ -98,6 +99,8 @@ def test_the_night_before_saves_a_smaller_change(built):
         [bot] = api.get(f"/api/v2/learnings/{night['id']}").json()["sections"]["bots"]
         [entry] = bot["entries"]
         assert "hold the phone still" in entry["title"].lower()
+        [source] = [s for s in entry["sources"] if "hold the phone still" in s["quote"].lower()]
+        assert source["label"].startswith("task Ben in Call back owners whose calibration failed twice")
 
 
 LAST_HOUR = "2026-09-25T17:30:00.000000Z"   # the build's now is 18:30 UTC
@@ -129,6 +132,26 @@ def test_the_ledger_and_declined_card_tasks_are_done_and_read_by_ana(built):
                 assert task["status"] == "done"
                 thread = api.get(f"/api/v2/threads/{task['conversation_id']}").json()
                 assert thread["me"]["unread"] == 0
+
+
+def test_each_deploy_closes_its_own_release_notes_task(built):
+    _, settings = built
+    with signed_in(settings) as api:
+        runs, _ = runs_of(api, automation_ids(api)["Finished deploys to release notes"])
+        statuses = {}
+        for run in runs:
+            task = api.get(f"/api/v2/tasks/{task_of(run)}").json()["task"]
+            statuses[task["title"]] = task["status"]
+        assert statuses == {"Write the release notes for app 3.1.0": "done",
+                            "Write the release notes for cloud 1.8.1": "done",
+                            "Write the release notes for cloud 1.8.2": "open"}
+
+
+def test_the_packet_runs_leave_technical_support_its_focus(built):
+    _, settings = built
+    with signed_in(settings) as api:
+        status = {row["bot"]: row for row in api.get("/api/v2/status").json()["bots"]}
+        assert status["technical-support"]["focus"] == "Calibration callbacks"
 
 
 def test_two_bots_hear_each_tico_release_after_the_first(built):

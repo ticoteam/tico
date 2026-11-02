@@ -20,7 +20,9 @@ from ..store import H
 
 FINISH_AFTER = timedelta(minutes=12)    # how long a night's run takes after it starts
 MAX_AHEAD_JOBS = 40                     # the most queued jobs a packet's run works through before its own
-CLAIM_TRIES = 30                        # empty claims in a row a computer asks again before it gives up
+CLAIM_TRIES = 30                        # polls a computer makes for a bot's job before it gives up
+CLAIM_POLL = timedelta(seconds=5)       # the gap between two polls on the demo clock (a computer takes work after 120 s)
+WORK_WINDOW = timedelta(minutes=5)      # room a packet's run needs after its bot starts, before the build's now
 CLOSE_MARGIN = timedelta(minutes=1)     # a task closed "now" is closed this long before the build's now
 
 CONTENT = {
@@ -93,7 +95,8 @@ CONTENT = {
              "body": "Use the merged pull requests since the last release.",
              "owner": "release-notes"}}]},
     ],
-    # Events the company's systems report, oldest first within a day. `at` is [days ago, hours before that].
+    # Events the company's systems report, in any order: the seed plays them oldest first. `at` is [days ago, hours before
+    # that].
     "events": [
         {"at": [6, 6.0], "name": "custom.calibration.failed", "subject": "unit/U-1042", "actor": "bot:support-qa",
          "data": {"unit": "U-1042", "attempt": 1}, "close": "calibration"},
@@ -186,7 +189,6 @@ CONTENT = {
         # A bot works its packet this long after the night's run starts: a message wakes it in the task, and its run
         # claims, saves what it learned, and completes.
         "work_after_minutes": 25,
-        "wake": "Your packet for last night is in this task. Read it and keep what applies to your work.",
         "nights": [
             {"days": 6, "items": []},
             {"days": 5, "items": [
@@ -211,24 +213,24 @@ CONTENT = {
                  "text": "Creators get the Storefront demo a week before the launch post.",
                  "learnable": 0.85, "scores": {"creators": 0.9, "marketing-lead": 0.8, "content": 0.6}}]},
             {"days": 2, "items": [
-                {"task": "howtos", "author": "human:ben", "hours": 5,
-                 "label": "Ben in Outline three how-to posts for the help centre",
+                {"task": "cal-callbacks", "author": "human:ben", "hours": 5,
+                 "label": "Ben in Call back owners whose calibration failed twice",
                  "text": "Calibration: hold the phone still at the wall, not panning. A moving phone is the usual cause.",
                  "learnable": 0.9, "scores": {"technical-support": 0.9, "support": 0.8, "content": 0.7}}],
              # The technical-support bot works its packet and saves one line (a smaller change).
              "learned": [{"bot": "technical-support", "subject": "Hold the phone still at the wall while calibrating",
                           "rule": "Calibration: hold the phone still at the wall, not panning.",
-                          "source": 'task Ben in Outline three how-to posts: "Calibration: hold the phone still at the '
-                                    'wall, not panning."',
-                          "summary": "Read the packet. Saved the calibration how-to rule."}]},
+                          "source": 'task Ben in Call back owners whose calibration failed twice: "Calibration: hold the '
+                                    'phone still at the wall, not panning."',
+                          "summary": "Read the packet. Saved the calibration callback rule."}]},
             {"days": 1, "items": [
                 {"task": "cal-units", "author": "human:ben", "hours": 6,
                  "label": "Ben in Decide whether owners get a unit swap after two failed calibrations",
                  "text": "After two failed calibrations, offer the owner a unit swap. Do not book a third redo.",
                  "learnable": 0.8, "scores": {"technical-support": 0.8, "support-lead": 0.6, "escalations": 0.5}}]},
             {"days": 0, "items": [
-                {"task": "howtos", "author": "human:ben", "hours": 3,
-                 "label": "Ben in Outline three how-to posts for the help centre",
+                {"task": "cal-callbacks", "author": "human:ben", "hours": 3,
+                 "label": "Ben in Call back owners whose calibration failed twice",
                  "text": "Correction: ask customers to set the phone on a flat surface before calibrating.",
                  "learnable": 0.95, "scores": {"technical-support": 0.95}},
                 {"task": "ticket-replies", "author": "human:ben", "hours": 5,
@@ -239,8 +241,8 @@ CONTENT = {
              "learned": [{"bot": "technical-support",
                           "subject": "Learned from Ben: set the phone on a flat surface before calibrating",
                           "rule": "Before calibrating, ask the customer to set the phone on a flat surface.",
-                          "source": 'task Ben in Outline three how-to posts: "Correction: ask customers to set the phone '
-                                    'on a flat surface before calibrating."',
+                          "source": 'task Ben in Call back owners whose calibration failed twice: "Correction: ask '
+                                    'customers to set the phone on a flat surface before calibrating."',
                           "summary": "Read the packet. Saved the flat-surface correction as a working rule."}]},
         ],
     },
@@ -267,7 +269,7 @@ def seed(b):
     from ..demo_seed import TOKENS   # the demo's people sign in with these, as the API expects
     store = b.store
     aids = _automations(b)
-    for spec in CONTENT["events"]:
+    for spec in _oldest_first(CONTENT["events"]):
         _event(b, spec, aids)
     _mail_loop(b, aids)
     _hold(b, aids, TOKENS)
@@ -279,6 +281,11 @@ def seed(b):
 
 def _stamp(at):
     return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
+def _oldest_first(items):
+    """The items in the order they happened, so each run is the newest one when its own trigger is processed."""
+    return sorted(items, key=lambda i: -(i["at"][0] * 24 + i["at"][1]))
 
 
 def _at(b, days, hours):
@@ -372,7 +379,7 @@ def _mail_item(b, item, aids):
 def _mail_loop(b, aids):
     """Each mail in its turn (drained as it goes), oldest first, then the loop, which the run guard holds in one go, so
     no run is started before the hold is in place."""
-    for item in sorted(CONTENT["mail"], key=lambda i: -(i["at"][0] * 24 + i["at"][1])):
+    for item in _oldest_first(CONTENT["mail"]):
         _mail_item(b, item, aids)
     loop = CONTENT["loop"]
     _at(b, *loop["at"])
@@ -433,7 +440,7 @@ def _learn(b):
     for spec in CONTENT["learnings"]["nights"]:
         day = today - timedelta(days=spec["days"])
         run_at = datetime.combine(day, time(learnings.HOUR), tzinfo=learnings.ZONE).astimezone(timezone.utc)
-        if run_at + work_after > b.now:
+        if run_at + work_after + WORK_WINDOW > b.now:
             break   # this night, and any after it, has not finished (and its bots worked their packets) yet
         if previous:
             b.clock.at = run_at - timedelta(hours=2)
@@ -492,18 +499,28 @@ def _run(b, slug, task, summary, learned):
         b.call("POST", f"attempts/{aid}/complete",
                {"outcome": "completed", "text": summary if mine else "", "last_seq": 0}, token=b.mac["token"])
         if mine:
+            _keep_focus(b, slug)
             return
     raise RuntimeError(f"{slug} has more than {MAX_AHEAD_JOBS} jobs queued ahead of packet task {task}")
 
 
+def _keep_focus(b, slug):
+    """A finished run leaves its bot idle with no focus, as the product does. The company's story gives each bot its
+    focus, so after the run the bot has the focus it had: the run came and went, and the story's status stays."""
+    from ..demo_content import FOCUS
+    if FOCUS.get(slug):
+        b.write(lambda c: H.status_set(c, H.KEEPER, slug, focus=FOCUS[slug]))
+
+
 def _claim(b, slug):
-    """The computer's next job for the bot, or None. An empty claim is a pass, as on the runner's own clock: a claim
-    that cancels a notice its task no longer needs, or meets a job it cannot hand out, answers with nothing, and the
-    next claim takes the next job."""
+    """The computer's next job for the bot, or None. The computer polls as its runner does: an empty claim is a pass,
+    and the next poll comes CLAIM_POLL later on the demo clock. It takes work only after two minutes of unbroken
+    contact, so a single claim at one instant would never be handed a job."""
     for _ in range(CLAIM_TRIES):
         claim = b.call("POST", "jobs/claim", {"bot": slug}, token=b.mac["token"])["attempt"]
         if claim:
             return claim
+        b.clock.at += CLAIM_POLL
     return None
 
 
