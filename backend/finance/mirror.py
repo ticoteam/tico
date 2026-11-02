@@ -12,6 +12,7 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any, Protocol, cast
 
+from .. import outbox as O
 from ..records import core as RC
 from ..records import reads as RR
 from ..records import store as RS
@@ -39,6 +40,7 @@ from .store import tico
 
 OUTBOX_MOST = 50                            # writes out claimed in one pass
 RETRY = (60, 300, 1800, 3600)               # seconds to wait after each failed try of a write (the last repeats)
+WRITE_SCHEDULE = O.Waits(RETRY, repeat_last=True)
 CLAIM_MINUTES = 10                          # a write claimed this long ago with no answer was cut off mid-call
 MATCH_MOST = 500                            # bank rows looked at in one pass to find their provider entry
 PENDING_MOST = 500                          # provider records the books could not take in, kept to be read again
@@ -2120,9 +2122,9 @@ def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], p
             tico.needs_you(c, SX.connection_owner(c, cid), f"QuickBooks refused the {RECORD_KINDS[kind][2]} write",
                            sent.error[:300])
     else:
-        delay = RETRY[min(attempts, len(RETRY)) - 1]
+        delay = WRITE_SCHEDULE.wait_for(attempts)
         SK.update(c, "fin_outbox", oid, {"attempts": attempts, "claimed_at": None, "last_error": sent.error[:300],
-                                         "next_try_at": M.stamp(now, delay * 1_000_000), "updated_at": now})
+                                         "next_try_at": M.stamp(now, int(delay * 1_000_000)), "updated_at": now})
 
 
 # The creates a provider may already hold when a retry comes: a cut-off call can have landed, and a provider's
