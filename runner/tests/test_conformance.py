@@ -265,7 +265,7 @@ def test_task_model_fallback_runs_in_a_side_session_from_the_checkpoint_and_keep
 
     company(api, "anthropic", "xai")
     computer.start()
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Follow the Acme release", "body": "Keep the release ready."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Follow the Acme release", "body": "Keep the release ready."})
 
     def completed(count):
         turns = until(lambda: (a if len(a := [t for t in computer.attempts() if t["state"] == "completed"]) >= count
@@ -325,7 +325,7 @@ def test_returning_task_model_receives_the_completed_fallback_checkpoint(api, co
 
     company(api, "anthropic", "xai")
     computer.start()
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Continue the Acme release", "body": "Keep the release ready."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Continue the Acme release", "body": "Keep the release ready."})
 
     def completed(count):
         turns = until(lambda: (a if len(a := [t for t in computer.attempts() if t["state"] == "completed"]) >= count
@@ -510,7 +510,7 @@ def test_the_first_turn_after_the_update_gets_its_own_threads_history_and_no_oth
     assert "Private words from Ana" in first_dm["prompt"] and "Earlier words in public" not in first_dm["prompt"]
 
     # Task turns stay on the old shared thread, with no pack.
-    task = post(api, "tasks", {"title": "Check the launch date", "body": "Look it up", "owner_id": "bot:ops"})
+    task = post(api, "tasks", {"title": "Check the launch date", "body": "Look it up", "owner": "bot:ops"})
     until(lambda: settled_count() == 6, "the task turn")
     task_turn = computer.prompts()[-1]
     assert task["id"] and task_turn["argv"][task_turn["argv"].index("--resume") + 1] == old_session
@@ -540,7 +540,7 @@ def test_a_public_session_hears_a_report_on_an_open_task_and_not_one_on_a_privat
     public = post(api, "threads", {"title": "Launch", "audience": "company", "body": "Launch week"})
     post(api, f"threads/{public['id']}/messages", {"text": "@ops what is next?"})
     until(lambda: settled_count() == 1, "the first public turn")
-    tasks = [post(api, "tasks", {"title": title, "body": "Look into it", "owner_id": "bot:ops", "private": private})
+    tasks = [post(api, "tasks", {"title": title, "body": "Look into it", "owner": "bot:ops", "private": private})
              for title, private in (("Book the venue", False), ("Acme acquisition", True))]
     until(lambda: settled_count() == 3, "the task turns")
     with api.app.state.store.transaction() as c:
@@ -1025,7 +1025,7 @@ def test_an_api_key_codex_login_is_never_asked_for_plan_usage(api, computer):
 def test_two_tasks_of_one_bot_run_side_by_side_in_their_own_lanes(api, computer, setup):
     computer.start()
     for title in ("SLOW first", "SLOW second"):
-        post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Please do " + title + "."})
+        post(api, "tasks", {"owner": "ops", "title": title, "body": "Please do " + title + "."})
     until(lambda: len([c for c in computer.calls() if c.get("method") == "turn/completed"]) == 2, "both task turns", timeout=60)
     turns = codex_turns(computer)
     waits = [e for a in computer.attempts() for e in computer.events(a["id"]) if e["kind"] == "status" and e["payload"].get("waiting")]
@@ -1210,7 +1210,7 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
                            "status": "active", "session": "task"}),))
     computer.start()
 
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Build product", "body": "Please build the product."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Build product", "body": "Please build the product."})
     until(lambda: any(a["state"] == "completed" for a in computer.attempts()), "the task's first turn")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (task["id"],))  # a started task gets a worktree

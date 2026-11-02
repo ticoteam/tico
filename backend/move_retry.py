@@ -73,12 +73,18 @@ def hint(kind, text=""):
             "restore the review entry.")
 
 
+def _detail(link):
+    """A PR link's stored detail as a dict ({} when it holds anything else)."""
+    detail = H._json(link.get("detail"), {})
+    return detail if isinstance(detail, dict) else {}
+
+
 def fingerprint(c, row):
     """What the gate reads that a later change can clear: each linked PR's head and checks, the note, the ticket's
     newest message from anyone but Tico."""
     from . import review_gate
-    links = sorted((p["id"], p.get("checks") or "", str((H._json(p.get("detail"), {}) or {}).get("head_sha") or ""),
-                    json.dumps((H._json(p.get("detail"), {}) or {}).get("checks") or {}, sort_keys=True))
+    links = sorted((p["id"], p.get("checks") or "", str(_detail(p).get("head_sha") or ""),
+                    json.dumps(_detail(p).get("checks") or {}, sort_keys=True))
                    for p in review_gate.links(c, row))
     newest = c.execute("SELECT max(rowid) FROM messages WHERE conversation_id=? AND sender_id<>? AND deleted_at IS NULL",
                        (row.get("conversation_id") or "", H.KEEPER)).fetchone()[0]

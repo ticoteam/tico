@@ -2674,7 +2674,7 @@ def _writer(conn, actor):
     return actor
 
 
-def resolve_actor(conn, value):
+def resolve_actor(conn: object, value: object) -> "str | None":
     """`cmo`, `bot:cmo`, `ana`, `human:ana`, `keeper` -> the actor string, or None.
 
     None is what rule 2 refuses on: an address that is not a bot, a human or the keeper.
