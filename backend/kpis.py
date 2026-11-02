@@ -196,8 +196,9 @@ def range_label(low, high, unit=""):
 
 
 def target_label(kpi, link):
-    """'→ 65% by Dec 31' or 'range 40–60', or '' when the link sets none."""
-    if not link or link.get("kind") == "none":
+    """'→ 65% by Dec 31' or 'range 40–60', or '' when the link sets none. A proposed target with no kind sets none,
+    as validate_target reads it (a kpi_target card's payload; its KeyError made GET /proposals a 500)."""
+    if not link or (link.get("kind") or "none") == "none":
         return ""
     unit = kpi.get("unit") or ""
     if link["kind"] == "maintain":
