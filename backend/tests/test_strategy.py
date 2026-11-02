@@ -427,8 +427,11 @@ def test_the_old_company_vision_moves_into_the_first_draft(api):
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM strategy_versions")
         c.execute("DELETE FROM strategy_events")
+        # Upsert: a restarted hub (or a test database restored from a snapshot) already has the row.
         c.execute("INSERT INTO company_profile (id, vision, description, updated_at, updated_by) "
-                  "VALUES ('company','Acme for every landlord.','Bots that run rentals.',?, 'human:ana')", (H.now(),))
+                  "VALUES ('company','Acme for every landlord.','Bots that run rentals.',?, 'human:ana') "
+                  "ON CONFLICT(id) DO UPDATE SET vision=excluded.vision, description=excluded.description, "
+                  "updated_at=excluded.updated_at, updated_by=excluded.updated_by", (H.now(),))
         S.ensure(c)
     assert draft(api)["vision"] == "Acme for every landlord."
     assert draft(api)["sections"]["sell"] == "Bots that run rentals."
