@@ -312,6 +312,15 @@ def unstanding(org: Org, grants: Iterable[Grant], defaults: Defaults, accounts: 
     return [g.id for g in grants if g.status == "active" and not standing(org, g, defaults, accounts)]
 
 
+def left_team(org: Org, grant: Grant) -> frozenset[str]:
+    """The members a team grant was made for who are no longer on its team (spec §7.5: they lose it at once). Such a
+    member is forgotten from the grant's snapshot, so rejoining the team does not bring the grant back."""
+    if grant.subject_kind != "team" or grant.new_members:
+        return frozenset()
+    below = org.below(grant.subject)
+    return frozenset(m for m in grant.members if org.team_of.get(m, "") not in below)
+
+
 def may_revoke(org: Org, actor: str, grant: Grant) -> bool:
     return actor == grant.granted_by or bool(org.owner) and actor == org.owner
 

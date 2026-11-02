@@ -18,7 +18,7 @@ from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
 from . import rights, sync, tax, usage
-from .context import Ctx, load
+from .context import Ctx, is_set_up, load
 from .core import kinds as K
 from .core import org as O
 from .core import validate as V
@@ -407,6 +407,14 @@ def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]
         _close(ctx, row, "withdrawn", "withdrawn", why)
         out.append(str(row["id"]))
     return out
+
+
+def revalidate_org(c: sqlite3.Connection, at: str | None = None) -> None:
+    """Tico's org chart, membership or a grantor's view changed outside an action: write down what that did to the view
+    grants now (spec §7.5), the same revalidation an action runs. Called by Tico's roster save; a no-op until Finance
+    is set up."""
+    if is_set_up(c):
+        handlers.suspend_unstanding(load(c, at))
 
 
 def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = None) -> ActionResult | None:

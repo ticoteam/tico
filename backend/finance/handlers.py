@@ -1185,7 +1185,12 @@ def right_revoke(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def suspend_unstanding(ctx: Ctx) -> list[str]:
     """Write down what view resolution already does: grants their grantor could no longer make are suspended, with a
-    view version bump and an audit row, so the owner can see them (spec §7.5)."""
+    view version bump and an audit row, so the owner can see them (spec §7.5). A team grant also forgets the members
+    who have left its team, so that rejoining does not bring the grant back."""
+    for g in SA.grants(ctx.c, "active") + SA.grants(ctx.c, "suspended"):
+        left = VW.left_team(ctx.org, g)
+        if left:
+            SA.set_members(ctx.c, g.id, g.members - left)
     bad = VW.unstanding(ctx.org, SA.grants(ctx.c), SA.defaults(ctx.c), ctx.accounts)
     for gid in bad:
         SA.set_grant_status(ctx.c, gid, "suspended", SYSTEM, ctx.at)
