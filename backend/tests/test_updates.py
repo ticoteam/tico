@@ -265,12 +265,12 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     post(api, "humans/ben", {"reports_to": "ana"})
     post(api, "humans/cara", {"update_draft": False})
-    post(api, "tasks", {"owner_id": "human:ana", "title": "Ship the pricing page", "body": "x"})
-    raise_plan = post(api, "tasks", {"owner_id": "human:ana", "title": "Secret raise plan", "body": "x", "private": True})
-    done = post(api, "tasks", {"owner_id": "human:ana", "title": "Secret finished offer", "body": "x", "private": True})
-    post(api, "tasks", {"owner_id": "human:ben", "title": "Secret ask of Ben", "body": "x", "private": True})
-    audit = post(api, "tasks", {"owner_id": "bot:finance", "title": "Restricted audit", "body": "x"})
-    budget = post(api, "tasks", {"owner_id": "bot:ops", "title": "Approve the ad budget", "body": "x"})
+    post(api, "tasks", {"owner": "human:ana", "title": "Ship the pricing page", "body": "x"})
+    raise_plan = post(api, "tasks", {"owner": "human:ana", "title": "Secret raise plan", "body": "x", "private": True})
+    done = post(api, "tasks", {"owner": "human:ana", "title": "Secret finished offer", "body": "x", "private": True})
+    post(api, "tasks", {"owner": "human:ben", "title": "Secret ask of Ben", "body": "x", "private": True})
+    audit = post(api, "tasks", {"owner": "bot:finance", "title": "Restricted audit", "body": "x"})
+    budget = post(api, "tasks", {"owner": "bot:ops", "title": "Approve the ad budget", "body": "x"})
     say(api, "My salary talks are next week")             # her private Assistant chat
     store = api.app.state.store
     with store.transaction() as c:

@@ -18,7 +18,7 @@ def finish(api, r, text="A draft"):
 
 
 def draft_then_tell(**extra):
-    return {"name": "Draft", "owner_id": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, **extra, "steps": [
+    return {"name": "Draft", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, **extra, "steps": [
         {"id": "draft", "type": "llm", "as": "bot:ops", "prompt": "Draft a reply", "out": "reply"},
         {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "coo", "text": "{{reply.text}}"}}]}
 

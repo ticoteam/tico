@@ -38,7 +38,7 @@ def setup(api, monkeypatch, tasks=8, when="2026-10-24T12:00:00.000000Z"):
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     for n in range(tasks):
-        post(api, "tasks", {"owner_id": "ops", "title": f"Review change {n}", "body": "Please review it."})
+        post(api, "tasks", {"owner": "ops", "title": f"Review change {n}", "body": "Please review it."})
     return machine
 
 

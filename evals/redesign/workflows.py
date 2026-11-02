@@ -1425,7 +1425,7 @@ def hand_self(org):
         # A new title each turn: the product refuses a second open task with the same owner and text (422 duplicate),
         # which would end the loop by itself instead of by the turn budget.
         title = f"Next step {attempt.get('id', '')}"
-        made = org.api("post", "/api/v2/tasks", {"title": title, "body": "Scenario task.", "owner_id": OPENAI_REF},
+        made = org.api("post", "/api/v2/tasks", {"title": title, "body": "Scenario task.", "owner": OPENAI_REF},
                        who=token, wave=W2)
         if made.status >= 300:
             raise Unmet(W2, f"hand itself the next task: {made.status} {made.excerpt()}")

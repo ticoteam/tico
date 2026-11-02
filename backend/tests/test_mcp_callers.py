@@ -19,7 +19,7 @@ def offered(api, token):
 def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
     hermes_bot(api)
     lists = {
-        "owner_id": offered(api, "ana-test"),
+        "owner": offered(api, "ana-test"),
         "admin": offered(api, "ben-test"),
         "member": offered(api, "cara-test"),
         "bot": offered(api, setup_attempt(api, "ops")[2]["token"]),

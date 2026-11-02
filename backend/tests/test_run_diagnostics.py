@@ -11,7 +11,7 @@ def start(api):
     machine = runner(api)
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Inspect runs', 'body': 'Please summarize the current work.'})
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Inspect runs', 'body': 'Please summarize the current work.'})
     attempt = claim(api, machine, 'ops')
     msg = attempt['message']
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'thread'}, machine['token'])
@@ -43,7 +43,7 @@ def test_kill_timeout_and_model_error_record_end_reason_and_last_tool(api, cause
     # Metadata uses the existing run gate, including a bot reading its own run.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE run_backoff SET wait_until=NULL")  # the failure's wait is over
-    post(api, 'tasks', {'title': 'Inspect previous run', 'body': 'Read the previous run reason.', 'owner_id': 'ops'})
+    post(api, 'tasks', {'title': 'Inspect previous run', 'body': 'Read the previous run reason.', 'owner': 'ops'})
     next_run = claim(api, machine, 'ops')
     assert next_run
     assert next(r for r in get(api, 'bots/ops/turns', next_run['token']) if r['id'] == a['id'])['end_reason'] == expected

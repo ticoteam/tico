@@ -125,7 +125,7 @@ def test_a_new_automation_is_on_only_when_the_request_says_so():
 
 
 def test_a_refusal_fails_when_a_saved_flow_names_the_forbidden_inbox():
-    observed = {"created": [{"name": "Priya", "owner_id": "person:dana", "enabled": False,
+    observed = {"created": [{"name": "Priya", "owner": "person:dana", "enabled": False,
                              "trigger": {"type": "message", "inbox": "priya@acme.example"}, "steps": []}]}
     assert failed(checker.check_case(BY_ID["priya-inbox-refuse"], observed)) == {"nothing saved",
                                                                                  "forbidden inbox not named"}

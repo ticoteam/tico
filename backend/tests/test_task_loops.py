@@ -5,7 +5,7 @@ from backend.store import H
 
 
 def test_a_looping_task_is_named_in_health_and_its_people_are_told_once(api):
-    tid = post(api, "tasks", {"owner_id": "ops", "title": "Ship the importer", "body": "x"})["id"]
+    tid = post(api, "tasks", {"owner": "ops", "title": "Ship the importer", "body": "x"})["id"]
     with api.app.state.store.transaction() as c:
         for i in range(task_loops.LOOP_CHANGES):
             H.task_update(c, H.KEEPER if i % 2 else "bot:ops", tid, status="waiting" if i % 2 else "review", mover=True)

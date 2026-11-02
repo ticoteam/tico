@@ -15,7 +15,7 @@ def notes_for(api, slug):
 
 def test_a_lifted_quarantine_leaves_the_bot_a_note_with_the_refusal_that_stopped_it(api):
     token = bot_token(api, "cpo")
-    item = post(api, "tasks", {"owner_id": "cpo", "title": "Research exports", "body": "x"})
+    item = post(api, "tasks", {"owner": "cpo", "title": "Research exports", "body": "x"})
     for _ in range(H.QUARANTINE_AT + 1):
         r = api.post("/api/v2/tasks/" + item["id"], json={"version": item["version"], "number": 993}, headers=headers(token))
         assert r.status_code == 403, r.text

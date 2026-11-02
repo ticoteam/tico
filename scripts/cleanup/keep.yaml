@@ -46,6 +46,16 @@ keys:
   backend/strategy_setup.py: [started, finished]
   clients/hubtools.py: [owner, requester, due, from_actor, at]   # a tool's input takes a name or an id
   clients/remotecli.py: [owner, due]
+  ui/app/org-rules.js: [owner, due, replaced_by]   # a rule's due dates and their form
+  ui/app/settings-people.js: [owner]   # a person's owner flag, the access view's owner
+  ui/app/finance-*.js: [owner, due]   # finance documents, budgets, capabilities
+  ui/app/integrations.js: [owner]   # a tool's owner
+  # meetings.owner, recorded_by and uploaded_by hold emails or runner ids (the columns and the metadata keep them).
+  backend/meetings.py: [owner, recorded_by, uploaded_by]
+  backend/meeting_review.py: [owner]
+  backend/meetings_schema.py: [owner, recorded_by, uploaded_by]
+  backend/imports.py: [owner, recorded_by, uploaded_by]
+  ui/app/meetings.js: [owner, due, recorded_by, uploaded_by]
   backend/company_file/*.py: [dept, owner]   # the company file's draft, a stored document
   backend/sample_company.py: [dept, owner]
   backend/tests/test_company_file.py: [dept, owner, due]
@@ -183,8 +193,6 @@ broad:
     archived_by: archived_by_id
     last_read_by: last_read_by_id
     why_by: why_by_id
-    recorded_by: recorded_by_id
-    uploaded_by: uploaded_by_id
     replaced_by: replaced_by_id
     dept: department
     grp: group_id

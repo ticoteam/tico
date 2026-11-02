@@ -277,7 +277,7 @@ class Org(World):
 # ---------------------------------------------------------------------------------------------- shared steps
 def send(org, who, owner, title):
     """A task from `who` to `owner` (a bare slug or person id), as the sender creates it."""
-    return org.api("post", "/api/v2/tasks", {"title": title, "body": "Scenario task.", "owner_id": owner}, who=who,
+    return org.api("post", "/api/v2/tasks", {"title": title, "body": "Scenario task.", "owner": owner}, who=who,
                    wave=W2)
 
 

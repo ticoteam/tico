@@ -24,7 +24,7 @@ def fork(sid, paths, otherwise=None):
 
 def run_of(steps, payload=None, services=None):
     services = services or Services()
-    run = E.execute({"name": "t", "owner_id": "person:ana", "trigger": {"type": "event", "name": "x"}, "steps": steps},
+    run = E.execute({"name": "t", "owner": "person:ana", "trigger": {"type": "event", "name": "x"}, "steps": steps},
                     payload or {}, services)
     return run, [args["text"] for do, args in services.acted]
 

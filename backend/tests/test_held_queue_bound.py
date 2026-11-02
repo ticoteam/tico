@@ -16,7 +16,7 @@ def queue(api, monkeypatch):
         monkeypatch.setattr(H, name, 100000)
     tokens = {slug: setup_attempt(api, slug, 'ben' if slug == 'cpo' else 'ana')[2]['token']
               for slug in ('ops', 'cpo', 'doc-updater')}
-    tasks = [post(api, 'tasks', {'owner_id': 'finance', 'title': 'Check fixture invoices', 'body': 'Synthetic work'},
+    tasks = [post(api, 'tasks', {'owner': 'finance', 'title': 'Check fixture invoices', 'body': 'Synthetic work'},
                   token=tokens[sender]) for sender in ('ops', 'cpo')]
     return api, tokens, tasks
 

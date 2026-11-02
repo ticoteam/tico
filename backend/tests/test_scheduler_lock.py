@@ -144,8 +144,8 @@ def test_tick_task_queries_read_an_index_not_the_tasks_table(api):
 
 def test_split_tick_still_fires_each_occurrence_and_reminder_once(api):
     store = api.app.state.store
-    task = post(api, "tasks", {"owner_id": "coo", "title": "File the report", "body": "Due today",
-                               "due_at": "2026-09-10T15:00:00Z"})
+    task = post(api, "tasks", {"owner": "coo", "title": "File the report", "body": "Due today",
+                               "due": "2026-09-10T15:00:00Z"})
     with store.transaction() as c:
         made = [routine(c, f"m{i}", f"Morning {i}", due="2026-09-09T16:00:00.000000Z") for i in range(3)]
     # Two schedulers, as across a restart: neither the occurrences nor the reminder fire twice.
@@ -164,7 +164,7 @@ def test_split_tick_still_fires_each_occurrence_and_reminder_once(api):
 def test_reminder_rechecks_the_task_under_the_lock(api, monkeypatch):
     """A task done or moved between the read and the write gets no reminder."""
     store = api.app.state.store
-    task = post(api, "tasks", {"owner_id": "coo", "title": "Moved", "body": "b", "due_at": "2026-09-10T15:00:00Z"})
+    task = post(api, "tasks", {"owner": "coo", "title": "Moved", "body": "b", "due": "2026-09-10T15:00:00Z"})
     original = H.tasks_due_for_bots
 
     def read_then_finish(c, through):
@@ -181,7 +181,7 @@ def test_reminder_rechecks_the_task_under_the_lock(api, monkeypatch):
 def test_reminder_sent_meanwhile_is_not_sent_again(api, monkeypatch):
     """Another server's tick sends the reminder between this tick's read and its write: one message, no failure."""
     store = api.app.state.store
-    task = post(api, "tasks", {"owner_id": "coo", "title": "Raced", "body": "b", "due_at": "2026-09-10T15:00:00Z"})
+    task = post(api, "tasks", {"owner": "coo", "title": "Raced", "body": "b", "due": "2026-09-10T15:00:00Z"})
     import backend.scheduler as scheduler
     original = scheduler.remind
 

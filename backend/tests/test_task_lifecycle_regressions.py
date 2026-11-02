@@ -211,7 +211,7 @@ def test_trashed_task_prevents_its_step_changing_before_restore(c, edit):
 
 @pytest.mark.parametrize("merged", [False, True])
 def test_opening_task_refreshes_links_without_touching_tasks_or_close_timer(api, monkeypatch, merged):
-    tasks = [post(api, "tasks", {"owner_id": "cpo", "title": title, "body": "x", "links": [PR]})
+    tasks = [post(api, "tasks", {"owner": "cpo", "title": title, "body": "x", "links": [PR]})
              for title in ("Ship export", "Review export")]
     service = api.app.state.github_app
     with service.store.transaction() as c:

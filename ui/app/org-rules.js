@@ -69,7 +69,7 @@ const ruRepeatWord = r => (RU_REPEATS.find(([k]) => k === r) || [, r || ''])[1];
 const ruPill = status => { const [label, tone] = RU_STATUS[status] || [status, '']; return `<span class="pill ru-pill ${tone}">${esc(label)}</span>`; };
 // A rule's due dates, the most urgent first: overdue, then due soon, upcoming, satisfied; the nearest within each.
 const RU_URGENCY = {overdue: 0, due_soon: 1, upcoming: 2, satisfied: 3};
-const ruDueSorted = rule => (rule.due_at || []).slice().sort((a, b) => (RU_URGENCY[a.status] ?? 9) - (RU_URGENCY[b.status] ?? 9) || a.due_on.localeCompare(b.due_on));
+const ruDueSorted = rule => (rule.due || []).slice().sort((a, b) => (RU_URGENCY[a.status] ?? 9) - (RU_URGENCY[b.status] ?? 9) || a.due_on.localeCompare(b.due_on));
 // The most urgent one, and "+N" for the rest (those the view counts but leaves out too).
 // A routine's lead time: "14 days before"; null with no routine.
 const ruLead = days => days == null ? null : `${days} day${days === 1 ? '' : 's'} before`;
@@ -86,7 +86,7 @@ async function ruAll(path) {
   let cursor = '';
   for (let i = 0; i < RU_PAGES; i++) {
     const page = await get(path + (path.includes('?') ? '&' : '?') + 'limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), {fresh: true});
-    out.push(...(page.rules || page.sources || page.due_at || []));
+    out.push(...(page.rules || page.sources || page.due || []));
     cursor = page.next_cursor;
     if (!cursor) break;
   }
@@ -102,7 +102,7 @@ async function ruLoad(tab) {
     } else if (tab === 'external') {
       [state.rules.external, state.sources] = await Promise.all([ruAll('/v2/rules?kind=external'), ruAll('/v2/rule-sources')]);
     } else if (tab === 'due') {
-      state.due_at = await ruAll('/v2/rules/due?next=3660d');
+      state.due = await ruAll('/v2/rules/due?next=3660d');
     } else {
       state.suggested = await ruAll('/v2/rules?status=suggested');
     }
@@ -279,13 +279,13 @@ function ruDrawExternal(filters, list) {
   for (const r of all) if (r.source) { const was = from.get(r.source.id); from.set(r.source.id, {name: r.source.name, n: (was?.n || 0) + 1}); }
   const sorted = [...from].sort((a, b) => b[1].n - a[1].n || a[1].name.localeCompare(b[1].name));
   const shown = f.moreFrom ? sorted : sorted.slice(0, 5);
-  const withDue = all.filter(r => (r.due_at || []).length).length;
+  const withDue = all.filter(r => (r.due || []).length).length;
   filters.innerHTML = `${ruSearch()}
     <div class="ru-fh">From</div>${shown.map(([id, s]) => ruFacet('from', id, s.name, s.n, f.from === id)).join('') || '<div class="ru-fnone">—</div>'}
     ${sorted.length > 5 && !f.moreFrom ? `<button type="button" class="ru-f ru-more" data-ru-more>${sorted.length - 5} more</button>` : ''}
     <div class="ru-fh">Who</div>${ruScopeFacets(all, 'who', 'who') || '<div class="ru-fnone">—</div>'}
-    <div class="ru-fh">Due</div>${ruFacet('due', '1', 'Has a due date', withDue, !!f.due_at)}`;
-  const rows = all.filter(r => (!f.from || r.source?.id === f.from) && ruScopeHas(r.who, f.who) && (!f.due_at || (r.due_at || []).length)
+    <div class="ru-fh">Due</div>${ruFacet('due', '1', 'Has a due date', withDue, !!f.due)}`;
+  const rows = all.filter(r => (!f.from || r.source?.id === f.from) && ruScopeHas(r.who, f.who) && (!f.due || (r.due || []).length)
     && ruMatches(r.text + ' ' + r.description + ' ' + (r.source?.name || ''), f.q));
   const head = '<div class="ru-row ru-head" role="row"><span>Rule</span><span>From</span><span>Who</span><span>Due</span></div>';
   const body = rows.map(r => `<a class="ru-row${ruSel(r.id) ? ' sel' : ''}" role="row" href="${ruHref('external', {rule: r.id})}" data-rule="${esc(r.id)}">
@@ -295,7 +295,7 @@ function ruDrawExternal(filters, list) {
 }
 
 function ruDrawDue(filters, list) {
-  const all = RU.due_at, f = RU.filter;
+  const all = RU.due, f = RU.filter;
   const by = k => all.filter(d => d.status === k).length;
   filters.innerHTML = `<div class="ru-fh">Status</div>${Object.entries(RU_STATUS).map(([k, [label]]) => ruFacet('status', k, label, by(k), f.status === k)).join('')}
     <div class="ru-fh">Routine</div>${ruFacet('routine', 'on', 'Task', all.filter(d => d.task_days != null).length, f.routine === 'on')}${ruFacet('routine', 'none', 'None', all.filter(d => d.task_days == null).length, f.routine === 'none')}`;
@@ -306,7 +306,7 @@ function ruDrawDue(filters, list) {
       <span class="ru-c ru-day">${esc(ruDay(d.due_on))}</span><span class="ru-txt">${esc(d.rule.text)}</span>
       <span class="ru-c" data-l="Repeats">${esc(ruRepeatWord(d.repeats))}</span>
       <span class="ru-c${d.task_days != null ? '' : ' ru-none'}" data-l="Routine">${esc(ruLead(d.task_days) || '—')}</span>
-      <span class="ru-c ru-owner" data-l="Owner">${ruOwnerHTML(d.owner_id)}</span><span class="ru-c">${ruPill(d.status)}</span></a>`).join('');
+      <span class="ru-c ru-owner" data-l="Owner">${ruOwnerHTML(d.owner)}</span><span class="ru-c">${ruPill(d.status)}</span></a>`).join('');
   list.innerHTML = `<div class="ru-table ru-duet" role="table">${head}${body}</div>${body ? '' : `<p class="muted ru-pad">${all.length ? 'Nothing matches.' : 'No due dates yet.'}</p>`}`;
 }
 function ruOwnerHTML(actor) {
@@ -391,7 +391,7 @@ function ruWire() {
     const facet = t.closest('[data-ru-f]');
     if (facet) {
       const key = facet.dataset.ruF, v = facet.dataset.v;
-      RU.filter[key] = key === 'due' ? !RU.filter.due_at : RU.filter[key] === v ? '' : v;
+      RU.filter[key] = key === 'due' ? !RU.filter.due : RU.filter[key] === v ? '' : v;
       ruDraw(); void ruSettingsReach(RU); return;
     }
     if (t.closest('[data-ru-more]')) { RU.filter.moreFrom = true; ruDraw(); return; }
@@ -666,7 +666,7 @@ async function ruRulePanel(side, id, note = '') {
     if (!confirm('Retire this rule?')) return;
     try {
       const out = await post('/v2/rules/' + encodeURIComponent(r.id) + '/retire', {version: r.version});
-      const dues = (out.due_at || []).filter(d => !d.retired_at);
+      const dues = (out.due || []).filter(d => !d.retired_at);
       if (dues.length && confirm(dues.length === 1 ? 'Remove its due date too?' : `Remove its ${dues.length} due dates too?`))
         for (const d of dues) await post('/v2/rule-due/' + encodeURIComponent(d.id) + '/remove', {});
       location.hash = ruHref(RU.tab);
@@ -696,7 +696,7 @@ async function ruDuePanel(side, id, ruleId, note = '') {
     }
     if (side.dataset.open !== want) return;
     // An edit ended this row and started another: open the live one.
-    if (d.ended_on && d.replaced_by_id) { location.replace(ruHref('due', {due: d.replaced_by_id})); return; }
+    if (d.ended_on && d.replaced_by) { location.replace(ruHref('due', {due: d.replaced_by})); return; }
     if (d.retired_at || d.ended_on) { gone(); return; }
   }
   let rules = [];
@@ -710,7 +710,7 @@ async function ruDuePanel(side, id, ruleId, note = '') {
   if (side.dataset.open !== want) return;
   const edit = fresh ? true : !!d.can_edit, dis = edit ? '' : ' disabled';
   const opt = (v, l, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(l)}</option>`;
-  const owner = d?.owner_id || '';
+  const owner = d?.owner || '';
   const owners = `<optgroup label="Bots">${ruBots().map(b => opt('bot:' + b.id, b.name, owner)).join('')}</optgroup>
     <optgroup label="People">${ruPeople().map(p => opt('human:' + p.id, p.name, owner || myActor())).join('')}</optgroup>`;
   // Routine: none, or a task opened for the owner N days before each due day (an automation, linked by routine_id).
@@ -751,15 +751,15 @@ async function ruDuePanel(side, id, ruleId, note = '') {
       let saved;
       if (fresh) {
         const target = rule?.id || f.rule.value;
-        const body = {first_due: f.due_at.value, repeats: f.repeats.value, owner: f.owner_id.value};
+        const body = {first_due: f.due.value, repeats: f.repeats.value, owner: f.owner.value};
         if (f.routine.value === 'task') body.task_days = Number(f.task_days.value);
         saved = await post('/v2/rules/' + encodeURIComponent(target) + '/due', body);
       } else {
         // A new date or repeat starts again from the date shown (the next one due), not the first date ever set, so
         // occurrences already satisfied stay behind. An owner change alone keeps the anchor.
         const body = {};
-        if (f.due_at.value !== d.due_on || f.repeats.value !== d.repeats) { body.first_due = f.due_at.value; body.repeats = f.repeats.value; }
-        if (f.owner_id.value !== d.owner_id) body.owner_id = f.owner_id.value;
+        if (f.due.value !== d.due_on || f.repeats.value !== d.repeats) { body.first_due = f.due.value; body.repeats = f.repeats.value; }
+        if (f.owner.value !== d.owner) body.owner = f.owner.value;
         const days = f.routine.value === 'task' ? Number(f.task_days.value) : null;
         if (days !== lead) body.task_days = days;
         saved = Object.keys(body).length ? await post('/v2/rule-due/' + encodeURIComponent(d.id), body) : d;

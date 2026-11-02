@@ -279,11 +279,11 @@ def test_muse_links_as_one_bot_beside_dots(api):
 
 def test_a_task_for_a_synced_bot_is_refused_with_what_to_do_instead(api):
     sync(api, designer())
-    r = api.post("/api/v2/tasks", json={"owner_id": "grok-designer", "title": "Redo the logo", "body": "x"},
+    r = api.post("/api/v2/tasks", json={"owner": "grok-designer", "title": "Redo the logo", "body": "x"},
                  headers=headers())
     assert r.status_code == 422 and "only syncs its chat here" in r.text
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Redo the logo", "body": "x"})
-    post(api, "tasks/" + task["id"], {"version": task["version"], "owner_id": "grok-designer"}, expected=422)
+    task = post(api, "tasks", {"owner": "ops", "title": "Redo the logo", "body": "x"})
+    post(api, "tasks/" + task["id"], {"version": task["version"], "owner": "grok-designer"}, expected=422)
     # Its routines would be tasks too: none can be set, and one left from before is passed over by an event.
     from backend import routines
     from backend.store import H

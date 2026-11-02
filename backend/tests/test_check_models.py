@@ -38,7 +38,7 @@ def parent_turn(api):
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
-    parent = post(api, "tasks", {"owner_id": "ops", "title": "Ship the import fix", "body": "Open the PR and get it reviewed."})
+    parent = post(api, "tasks", {"owner": "ops", "title": "Ship the import fix", "body": "Open the PR and get it reviewed."})
     turn = claim(api, machine)
     assert turn["task"]["id"] == parent["id"] and turn["config"]["runtime"] == "claude"
     return machine, parent, turn
@@ -56,7 +56,7 @@ def finish(api, machine, turn, segment=None, during=None):
 
 def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_the_parent(api):
     machine, parent, turn = parent_turn(api)
-    sub = post(api, "tasks", {"owner_id": "ops", "title": "Review PR 700 with another model",
+    sub = post(api, "tasks", {"owner": "ops", "title": "Review PR 700 with another model",
                               "body": "https://github.com/ticoteam/tico/pull/700", "check_model": "grok",
                               "check_role": "review", "relations": [{"task": parent["id"], "kind": "parent"}]},
                turn["token"])
@@ -87,7 +87,7 @@ def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_
 
 def test_a_parents_turn_after_the_check_keeps_the_bots_own_session(api):
     machine, parent, turn = parent_turn(api)
-    post(api, "tasks", {"owner_id": "ops", "title": "Check the migration with Grok", "body": "Read the migration plan.",
+    post(api, "tasks", {"owner": "ops", "title": "Check the migration with Grok", "body": "Read the migration plan.",
                         "check_model": "grok:grok-4.6", "relations": [{"task": parent["id"], "kind": "parent"}]},
          turn["token"])
     with api.app.state.store.read() as c:
@@ -105,7 +105,7 @@ def test_a_parents_turn_after_the_check_keeps_the_bots_own_session(api):
 ])
 def test_a_check_model_names_only_what_the_company_enabled_for_the_bots_own_subtask(api, body, status, words):
     machine, parent, turn = parent_turn(api)
-    ask = {"owner_id": "ops", "title": "Review the change", "body": "Read it.",
+    ask = {"owner": "ops", "title": "Review the change", "body": "Read it.",
            "relations": [{"task": parent["id"], "kind": "parent"}], **body}
     refused = post(api, "tasks", ask, turn["token"], expected=status)
     assert words in json.dumps(refused)
@@ -115,15 +115,15 @@ def test_a_check_model_names_only_what_the_company_enabled_for_the_bots_own_subt
 
 def test_a_person_cannot_file_one_and_a_signed_out_runtime_is_refused_and_not_handed_the_turn(api):
     machine, parent, turn = parent_turn(api)
-    post(api, "tasks", {"owner_id": "ops", "title": "Review it", "body": "Read it.", "check_model": "grok",
+    post(api, "tasks", {"owner": "ops", "title": "Review it", "body": "Read it.", "check_model": "grok",
                         "relations": [{"task": parent["id"], "kind": "parent"}]}, expected=422)
     heartbeat(api, machine, grok="missing")
-    refused = post(api, "tasks", {"owner_id": "ops", "title": "Review it on Grok", "body": "Read it.",
+    refused = post(api, "tasks", {"owner": "ops", "title": "Review it on Grok", "body": "Read it.",
                                   "check_model": "grok", "relations": [{"task": parent["id"], "kind": "parent"}]},
                    turn["token"], expected=409)
     assert refused["code"] == "runner_not_ready" if "code" in refused else "runner_not_ready" in json.dumps(refused)
     heartbeat(api, machine)
-    sub = post(api, "tasks", {"owner_id": "ops", "title": "Review it on Grok", "body": "Read it.", "check_model": "grok",
+    sub = post(api, "tasks", {"owner": "ops", "title": "Review it on Grok", "body": "Read it.", "check_model": "grok",
                               "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     finish(api, machine, turn)
     heartbeat(api, machine, grok="missing")
@@ -134,7 +134,7 @@ def test_a_person_cannot_file_one_and_a_signed_out_runtime_is_refused_and_not_ha
 
 def check_filed(api, title="Review PR 701 on Grok"):
     machine, parent, turn = parent_turn(api)
-    sub = post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Read it.", "check_model": "grok",
+    sub = post(api, "tasks", {"owner": "ops", "title": title, "body": "Read it.", "check_model": "grok",
                               "check_role": "review", "relations": [{"task": parent["id"], "kind": "parent"}]},
                turn["token"])
     finish(api, machine, turn)
@@ -158,7 +158,7 @@ def test_a_limit_on_the_check_model_holds_the_check_alone_and_the_bot_keeps_work
         assert status["state"] != "limited" and not cooling_off(c, "ops"), "Grok's limit is not the bot's"
         assert "grok usage limit on a check" in status["focus"] and "claude" not in status["focus"]
         assert limit_streak(c, "ops") == 0 and last_limit(c, "ops") is None, "a check's limits are not the bot's"
-    person = post(api, "tasks", {"owner_id": "ops", "title": "Answer the customer", "body": "Reply to the import question."})
+    person = post(api, "tasks", {"owner": "ops", "title": "Answer the customer", "body": "Reply to the import question."})
     other = claim(api, machine)
     assert other["task"]["id"] == person["id"] and other["config"]["runtime"] == "claude"
     finish(api, machine, other)
@@ -173,9 +173,9 @@ def test_a_limit_on_the_check_model_holds_the_check_alone_and_the_bot_keeps_work
 
 def test_a_check_handed_to_another_bot_is_that_bots_ordinary_task(api):
     machine, parent, turn = parent_turn(api)
-    sub = post(api, "tasks", {"owner_id": "ops", "title": "Review it on Grok", "body": "Read it.", "check_model": "grok",
+    sub = post(api, "tasks", {"owner": "ops", "title": "Review it on Grok", "body": "Read it.", "check_model": "grok",
                               "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
-    post(api, "tasks/" + sub["id"], {"owner_id": "coo", "version": sub["version"]}, turn["token"])
+    post(api, "tasks/" + sub["id"], {"owner": "coo", "version": sub["version"]}, turn["token"])
     with api.app.state.store.read() as c:
         assert H.check_model(c, sub["id"], "coo") is None and H.check_model(c, sub["id"], "ops") is None
         assert H.check_model(c, sub["id"])["model"] == "grok-4.6", "the record itself stays"
@@ -184,7 +184,7 @@ def test_a_check_handed_to_another_bot_is_that_bots_ordinary_task(api):
 def test_work_under_a_check_continues_the_checks_session_not_the_parents(api):
     machine, parent, sub = check_filed(api)
     # A person's subtask under the check (a bot's own subtask is its own root anyway).
-    below = post(api, "tasks", {"owner_id": "ops", "title": "Read the migration file", "body": "Line by line.",
+    below = post(api, "tasks", {"owner": "ops", "title": "Read the migration file", "body": "Line by line.",
                                 "relations": [{"task": sub["id"], "kind": "parent"}]})
     with api.app.state.store.read() as c:
         assert H.session_root(c, "ops", below["id"]) == sub["id"]
@@ -220,7 +220,7 @@ def codex_check(api):
     machine, parent, turn = parent_turn(api)
     company(api, "anthropic", "openai", "xai")
     all_ready(api, machine)
-    sub = post(api, "tasks", {"owner_id": "ops", "title": "Review PR 702 on Codex", "body": "Read it.",
+    sub = post(api, "tasks", {"owner": "ops", "title": "Review PR 702 on Codex", "body": "Read it.",
                               "check_model": "codex", "check_role": "review",
                               "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     finish(api, machine, turn)
@@ -371,7 +371,7 @@ def test_a_check_skips_a_next_model_its_computer_cannot_run(api):
     machine, parent, turn = parent_turn(api)
     company(api, "anthropic", "openai", "xai", "cursor")
     all_ready(api, machine, signed_out=("grok",), extra=("cursor",))
-    sub = post(api, "tasks", {"owner_id": "ops", "title": "Review PR 703 on Codex", "body": "Read it.",
+    sub = post(api, "tasks", {"owner": "ops", "title": "Review PR 703 on Codex", "body": "Read it.",
                               "check_model": "codex", "check_role": "review",
                               "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     finish(api, machine, turn)

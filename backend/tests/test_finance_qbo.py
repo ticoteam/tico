@@ -359,7 +359,7 @@ def test_withheld_rehearsal_writes_stay_visible_and_are_not_sent(books):
 def test_a_bill_made_here_is_posted_as_an_expense_on_its_account_with_its_vendor_and_number():
     wire = Wire(QC.Reply(200, {"Bill": {"Id": "901", "SyncToken": "0"}}))
     sent = _client(wire).send("bill.create", {"party": "Vendor:9", "number": "B-77", "day": "2026-10-05",
-                                              "due_at": "2026-11-05", "memo": "", "lines": [
+                                              "due": "2026-11-05", "memo": "", "lines": [
                                                   {"account": "Account:2", "amount": 1500, "description": "seats"}]},
                               "bill-key")
     assert (sent.ok, sent.kind, sent.external_id) == (True, "Bill", "901")
@@ -373,7 +373,7 @@ def test_an_invoice_line_is_billed_by_the_item_that_sells_to_its_account_or_refu
     wire = Wire(QC.Reply(200, {"QueryResponse": {"Item": [{"Id": "7", "IncomeAccountRef": {"value": "3"}}]}}),
                 QC.Reply(200, {"Invoice": {"Id": "902", "SyncToken": "0"}}))
     sent = _client(wire).send("invoice.create", {"party": "Customer:4", "number": "I-5", "day": "2026-10-05",
-                                                 "due_at": "", "memo": "", "lines": [
+                                                 "due": "", "memo": "", "lines": [
                                                      {"account": "Account:3", "amount": 2000, "description": "x"}]},
                               "invoice-key")
     assert (sent.ok, sent.kind, sent.external_id) == (True, "Invoice", "902")
@@ -383,7 +383,7 @@ def test_an_invoice_line_is_billed_by_the_item_that_sells_to_its_account_or_refu
 
     wire = Wire(QC.Reply(200, {"QueryResponse": {"Item": [{"Id": "7", "IncomeAccountRef": {"value": "40"}}]}}))
     sent = _client(wire).send("invoice.create", {"party": "Customer:4", "number": "I-6", "day": "2026-10-05",
-                                                 "due_at": "", "memo": "", "lines": [
+                                                 "due": "", "memo": "", "lines": [
                                                      {"account": "Account:3", "amount": 2000, "description": "x"}]},
                               "invoice-key-2")
     assert sent.ok is False and sent.final is True and "no QuickBooks item sells to account 3" in sent.error

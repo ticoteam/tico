@@ -5,7 +5,7 @@ from backend.tests.test_api import api, headers, post  # noqa: F401
 
 
 def test_adopted_legacy_urls_serve_original_and_new_ids_serve_latest(api):
-    tid = post(api, "tasks", {"title": "Review versions", "owner_id": "ops", "body": "Read the report."})["id"]
+    tid = post(api, "tasks", {"title": "Review versions", "owner": "ops", "body": "Read the report."})["id"]
     blobs = api.app.state.blobs
     digest = blobs.put(b"original")
     with api.app.state.store.transaction() as c:

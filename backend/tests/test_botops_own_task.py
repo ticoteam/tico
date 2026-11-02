@@ -22,7 +22,7 @@ def _route(api, path, method="POST", refuse=None):
 def _commented(api, machine, comment="Chris here: go ahead and finish this"):
     """Ops files work for BotOps; BotOps' first run ends; Ana comments on the task, which starts BotOps' next run."""
     ops = claim(api, machine, "ops")
-    task = post(api, "tasks", {"owner_id": "botops", "title": "Align Ops' mail instructions",
+    task = post(api, "tasks", {"owner": "botops", "title": "Align Ops' mail instructions",
                                "body": "Update the docs only."}, token=ops["token"])
     finish(api, machine, ops)
     finish(api, machine, claim(api, machine, "botops"))
@@ -57,7 +57,7 @@ def test_a_worktree_on_someone_elses_task_still_borrows(api, botops):
     """Only BotOps' own task is its own work: a worktree on Ops' task goes through the requester's rights as before."""
     _ready(api, botops)
     _, attempt = _commented(api, botops)
-    other = post(api, "tasks", {"owner_id": "ops", "title": "Ops' own work", "body": "x"}, token="ana-test")
+    other = post(api, "tasks", {"owner": "ops", "title": "Ops' own work", "body": "x"}, token="ana-test")
     path = f"/api/v2/tasks/{other['id']}/worktrees"
     _route(api, path)
     tried = api.post(path, json={"repo": "acme/site"}, headers=headers(attempt["token"]))
@@ -194,12 +194,12 @@ def test_private_subtask_from_bot_requested_run_is_judged_in_default_rehearsal(a
     api.app.state.judge = model
     _ready(api, botops)
     ops = claim(api, botops, "ops")
-    task = post(api, "tasks", {"owner_id": "botops", "title": "Align Ops mail instructions",
+    task = post(api, "tasks", {"owner": "botops", "title": "Align Ops mail instructions",
                                "body": "Update the docs only."}, token=ops["token"])
     finish(api, botops, ops)
     attempt = claim(api, botops, "botops")
     filed = api.post("/api/v2/tasks", headers=headers(attempt["token"]), json={
-        "owner_id": "ana", "title": "Which mailbox should Ops send from?",
+        "owner": "ana", "title": "Which mailbox should Ops send from?",
         "body": "Choose support@ or hello@", "visibility": "private",
         "relations": [{"task": task["id"], "kind": "parent"}]})
     assert filed.status_code == 200, filed.text

@@ -54,10 +54,10 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback.off',json('true'))")
         c.execute("UPDATE bot_config SET config=json_set(config,'$.runtime','codex') WHERE bot='finance'")
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Prepare the deployment plan', 'body': 'Review existing code.'})
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Prepare the deployment plan', 'body': 'Review existing code.'})
     first = claim(api, machine)
     limit(api, machine, first, errors=('Usage limit; usage window resets at 2026-10-27T07:00:00Z',))
-    other = post(api, 'tasks', {'owner_id': 'finance', 'title': 'Review the invoice', 'body': 'Read it.'})
+    other = post(api, 'tasks', {'owner': 'finance', 'title': 'Review the invoice', 'body': 'Read it.'})
     with api.app.state.store.transaction() as c:
         managers(c)
     for hour in range(2, 7):
@@ -89,7 +89,7 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
 def test_mid_turn_fallback_quota_is_saved_and_resumes_at_its_own_reset(api, monkeypatch, outcome):
     from backend.tests.test_login_holds import two_bots
     machine = two_bots(api, monkeypatch)
-    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Read the startup instructions', 'body': 'Continue the task.'})
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Read the startup instructions', 'body': 'Continue the task.'})
     first = claim(api, machine)
     post(api, f"attempts/{first['id']}/started", {'thread_id': 'saved-primary'}, machine['token'])
     seq = events(api, machine, first, [
@@ -117,7 +117,7 @@ def test_an_absolute_reset_is_not_extended_by_a_later_status_refresh(api, monkey
     machine = runner(api)
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Review the startup rules', 'body': 'Read them.'})
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Review the startup rules', 'body': 'Read them.'})
     first = claim(api, machine)
     limit(api, machine, first, errors=('Usage limit; usage window resets at 2026-10-27T07:00:00Z',))
     with api.app.state.store.transaction() as c:

@@ -149,9 +149,9 @@ def test_a_check_that_merely_runs_keeps_the_ticket_at_its_step(api):
 
 
 def test_same_blocker_joins_the_open_ask_and_both_wake(api):
-    first = create(api, "cpo", {"owner_id": "human:ana", "title": "Grant Actions write", "body": "403 on dispatch.",
+    first = create(api, "cpo", {"owner": "human:ana", "title": "Grant Actions write", "body": "403 on dispatch.",
                                 "blocker": REFUSAL})["task"]
-    reply = create(api, "qa", {"owner_id": "human:ana", "title": "Remote test run refused", "body": "403.",
+    reply = create(api, "qa", {"owner": "human:ana", "title": "Remote test run refused", "body": "403.",
                                "blocker": {**REFUSAL, "repo": "Acme/App", "endpoint": " workflow_dispatch "}})
     second = reply["task"]
     assert reply["joined"]["task"] == first["id"]
@@ -171,14 +171,14 @@ def test_same_blocker_joins_the_open_ask_and_both_wake(api):
 
 
 def test_different_endpoint_is_a_separate_ask(api):
-    first = create(api, "cpo", {"owner_id": "human:ana", "title": "Grant Actions write", "body": "403.", "blocker": REFUSAL})
-    other = create(api, "qa", {"owner_id": "human:ana", "title": "Contents write refused", "body": "403.",
+    first = create(api, "cpo", {"owner": "human:ana", "title": "Grant Actions write", "body": "403.", "blocker": REFUSAL})
+    other = create(api, "qa", {"owner": "human:ana", "title": "Contents write refused", "body": "403.",
                                "blocker": {**REFUSAL, "endpoint": "contents"}})
     assert "joined" not in other and other["task"]["owner_id"] == "human:ana"
-    status = create(api, "qa", {"owner_id": "human:ana", "title": "Dispatch not found", "body": "404.",
+    status = create(api, "qa", {"owner": "human:ana", "title": "Dispatch not found", "body": "404.",
                                 "blocker": {**REFUSAL, "status": 404}})
     assert "joined" not in status and status["task"]["owner_id"] == "human:ana"
-    repo = create(api, "qa", {"owner_id": "human:ana", "title": "Other repo refused", "body": "403.",
+    repo = create(api, "qa", {"owner": "human:ana", "title": "Other repo refused", "body": "403.",
                               "blocker": {**REFUSAL, "repo": "acme/site"}})
     assert "joined" not in repo and repo["task"]["owner_id"] == "human:ana"
     with api.app.state.store.transaction() as c:
@@ -188,12 +188,12 @@ def test_different_endpoint_is_a_separate_ask(api):
 @pytest.mark.parametrize("endpoint", ["/hooks/Deploy", "/hooks/deploy/"])
 def test_case_or_slash_different_endpoint_is_a_separate_ask(api, endpoint):
     refusal = {**REFUSAL, "endpoint": "/hooks/deploy"}
-    first = create(api, "cpo", {"owner_id": "human:ana", "title": "Deploy endpoint refused", "body": "403.",
+    first = create(api, "cpo", {"owner": "human:ana", "title": "Deploy endpoint refused", "body": "403.",
                                 "blocker": refusal})["task"]
-    other = create(api, "qa", {"owner_id": "human:ana", "title": "Other endpoint refused", "body": "403.",
+    other = create(api, "qa", {"owner": "human:ana", "title": "Other endpoint refused", "body": "403.",
                                "blocker": {**refusal, "endpoint": endpoint}})
     assert "joined" not in other and other["task"]["owner_id"] == "human:ana"
-    same = create(api, "cmo", {"owner_id": "human:ana", "title": "Deploy refused again", "body": "403.",
+    same = create(api, "cmo", {"owner": "human:ana", "title": "Deploy refused again", "body": "403.",
                               "blocker": {**refusal, "endpoint": " /hooks/deploy "}})
     assert same["joined"]["task"] == first["id"], "an identical path still joins its open ask"
     with api.app.state.store.transaction() as c:
@@ -204,8 +204,8 @@ def test_case_or_slash_different_endpoint_is_a_separate_ask(api, endpoint):
 
 
 def test_unlinking_a_joined_task_asks_separately(api):
-    first = create(api, "cpo", {"owner_id": "human:ana", "title": "Grant Actions write", "body": "403.", "blocker": REFUSAL})["task"]
-    second = create(api, "qa", {"owner_id": "human:ana", "title": "Remote run refused", "body": "403.", "blocker": REFUSAL})["task"]
+    first = create(api, "cpo", {"owner": "human:ana", "title": "Grant Actions write", "body": "403.", "blocker": REFUSAL})["task"]
+    second = create(api, "qa", {"owner": "human:ana", "title": "Remote run refused", "body": "403.", "blocker": REFUSAL})["task"]
     with api.app.state.store.transaction() as c:
         H.TR.relate(c, "bot:qa", second["id"], first["id"], "blocked_by", remove=True)
         row = H.task(c, second["id"])
@@ -213,28 +213,28 @@ def test_unlinking_a_joined_task_asks_separately(api):
 
 
 def test_private_blockers_never_join(api):
-    first = create(api, "cpo", {"owner_id": "human:ana", "title": "Grant Actions write", "body": "403.", "blocker": REFUSAL,
+    first = create(api, "cpo", {"owner": "human:ana", "title": "Grant Actions write", "body": "403.", "blocker": REFUSAL,
                                 "private": True})["task"]
-    second = create(api, "qa", {"owner_id": "human:ana", "title": "Remote run refused", "body": "403.", "blocker": REFUSAL})
+    second = create(api, "qa", {"owner": "human:ana", "title": "Remote run refused", "body": "403.", "blocker": REFUSAL})
     assert "joined" not in second and second["task"]["owner_id"] == "human:ana"
-    third = create(api, "cmo", {"owner_id": "human:ana", "title": "Remote run refused again", "body": "403.",
+    third = create(api, "cmo", {"owner": "human:ana", "title": "Remote run refused again", "body": "403.",
                                 "blocker": REFUSAL, "private": True})
     assert "joined" not in third and third["task"]["owner_id"] == "human:ana"
     assert first["id"] != second["task"]["id"]
 
 
 def test_devops_person_ask_holds_its_own_task_and_later_asks_join_it(api):
-    devops_task = create(api, "qa", {"owner_id": "bot:devops-engineer", "title": "Remote run refused", "body": "403.",
+    devops_task = create(api, "qa", {"owner": "bot:devops-engineer", "title": "Remote run refused", "body": "403.",
                                      "blocker": REFUSAL})["task"]
     assert devops_task["owner_id"] == "bot:devops-engineer"
-    again = create(api, "cpo", {"owner_id": "bot:devops-engineer", "title": "Dispatch refused", "body": "403.",
+    again = create(api, "cpo", {"owner": "bot:devops-engineer", "title": "Dispatch refused", "body": "403.",
                                 "blocker": REFUSAL})
     assert again["joined"]["task"] == devops_task["id"], "a second ask to DevOps joins its open task"
-    person = create(api, "devops-engineer", {"owner_id": "human:ana", "title": "Grant Actions write", "body": "Only you can.",
+    person = create(api, "devops-engineer", {"owner": "human:ana", "title": "Grant Actions write", "body": "Only you can.",
                                              "blocker": REFUSAL})
     assert "joined" not in person and person["task"]["owner_id"] == "human:ana"
     assert devops_task["id"] in person["warning"]
-    later = create(api, "cmo", {"owner_id": "bot:devops-engineer", "title": "Dispatch refused again", "body": "403.",
+    later = create(api, "cmo", {"owner": "bot:devops-engineer", "title": "Dispatch refused again", "body": "403.",
                                 "blocker": REFUSAL})
     assert later["joined"]["task"] == person["task"]["id"], "the person ask is preferred"
     with api.app.state.store.transaction() as c:
@@ -243,9 +243,9 @@ def test_devops_person_ask_holds_its_own_task_and_later_asks_join_it(api):
 
 
 def test_private_devops_person_ask_does_not_hold_public_devops_work(api):
-    devops_task = create(api, "qa", {"owner_id": "bot:devops-engineer", "title": "Remote run refused", "body": "403.",
+    devops_task = create(api, "qa", {"owner": "bot:devops-engineer", "title": "Remote run refused", "body": "403.",
                                      "blocker": REFUSAL})["task"]
-    person = create(api, "devops-engineer", {"owner_id": "human:ana", "title": "Private permission ask",
+    person = create(api, "devops-engineer", {"owner": "human:ana", "title": "Private permission ask",
                                             "body": "Only you can.", "blocker": REFUSAL, "private": True})
     assert "joined" not in person and person["task"]["private"]
     with api.app.state.store.transaction() as c:
@@ -257,9 +257,9 @@ def test_private_devops_person_ask_does_not_hold_public_devops_work(api):
 
 
 def test_a_person_filing_is_never_joined_and_bad_blockers_are_refused(api):
-    create(api, "cpo", {"owner_id": "human:ana", "title": "Grant Actions write", "body": "403.", "blocker": REFUSAL})
+    create(api, "cpo", {"owner": "human:ana", "title": "Grant Actions write", "body": "403.", "blocker": REFUSAL})
     r = api.post("/api/v2/tasks", headers={"Authorization": "Bearer ana-test", "Idempotency-Key": str(uuid.uuid4())},
                  json={"owner": "human:ana", "title": "Grant it today", "body": "403.", "blocker": REFUSAL})
     assert r.status_code == 200 and "joined" not in r.json()
     for bad in ({**REFUSAL, "repo": "acme"}, {**REFUSAL, "status": "403"}, {**REFUSAL, "endpoint": " / "}):
-        create(api, "qa", {"owner_id": "human:ana", "title": "Refused", "body": "x", "blocker": bad}, expected=422)
+        create(api, "qa", {"owner": "human:ana", "title": "Refused", "body": "x", "blocker": bad}, expected=422)

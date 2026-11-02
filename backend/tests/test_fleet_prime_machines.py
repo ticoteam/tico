@@ -7,7 +7,7 @@ from backend.tests.test_views import as_member
 
 def test_fleet_snapshot_reads_no_assignment_per_bot(api):
     as_member(api, "ben@acme.example")
-    post(api, "tasks", {"title": "Fleet prime", "body": "Run", "owner_id": "coo"}, "ben-test")
+    post(api, "tasks", {"title": "Fleet prime", "body": "Run", "owner": "coo"}, "ben-test")
     machine = runner(api)
     assign(api, machine, "coo")
     ready(api, machine, ["coo"])

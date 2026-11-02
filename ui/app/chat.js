@@ -271,7 +271,7 @@ function v2RunHTML(m) {
     if (!given.has(id)) rows.push(v2RunRow('task ·', esc(t.title), {task: id}));
   for (const d of run.did || []) {
     if (d.kind === 'task') {
-      const verb = d.owner === m.from_actor ? 'made itself a task' : `gave ${youAware(d.owner_id)} a task`;
+      const verb = d.owner_id === m.sender_id ? 'made itself a task' : `gave ${youAware(d.owner_id)} a task`;
       rows.push(v2RunRow(esc(verb) + ' ·', esc(d.title), {task: d.task_id})); said.push(verb);
     } else if (d.kind === 'link') {
       const ref = shortRef(d.url);

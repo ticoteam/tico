@@ -38,7 +38,7 @@ def hop_fails(api, machine, attempt):
 def test_a_limit_whose_fallback_fails_at_start_waits_for_the_reset_not_for_a_person(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     at(monkeypatch, "2026-10-21T19:54:13.000000Z", api)
-    post(api, "tasks", {"owner_id": "ops", "title": "Review PR 1", "body": "Please review it."})
+    post(api, "tasks", {"owner": "ops", "title": "Review PR 1", "body": "Please review it."})
     first = claim(api, machine)
     hop_fails(api, machine, first)
     assert job_state(api, first["job_id"]) == "queued"
@@ -64,7 +64,7 @@ def test_a_limit_whose_fallback_fails_at_start_waits_for_the_reset_not_for_a_per
 def test_without_another_fallback_the_job_runs_again_after_the_reset(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     at(monkeypatch, "2026-10-21T19:54:13.000000Z", api)
-    post(api, "tasks", {"owner_id": "ops", "title": "Review PR 1", "body": "Please review it."})
+    post(api, "tasks", {"owner": "ops", "title": "Review PR 1", "body": "Please review it."})
     first = claim(api, machine)
     hop_fails(api, machine, first)
     at(monkeypatch, "2026-10-26T20:01:00.000000Z", api)
@@ -87,7 +87,7 @@ def held_the_old_way(api, machine, attempt):
 def test_runs_held_after_a_limit_resume_together_oldest_first_once_it_resets(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     at(monkeypatch, "2026-10-21T19:54:13.000000Z", api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Review PR 1", "body": "Please review it."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Review PR 1", "body": "Please review it."})
     first = claim(api, machine)
     held_the_old_way(api, machine, first)
     # A second request on the same task, held in the same turn (the runner folded it in).
@@ -118,7 +118,7 @@ def test_a_run_held_after_a_limit_is_dismissed_once_a_later_turn_on_its_task_fin
         api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     at(monkeypatch, "2026-10-21T19:54:13.000000Z", api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Review PR 1", "body": "Please review it."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Review PR 1", "body": "Please review it."})
     first = claim(api, machine)
     held_the_old_way(api, machine, first)
     post(api, "chat/ops", {"text": "Please summarize the reviews."})
@@ -148,7 +148,7 @@ def test_a_run_held_after_a_limit_is_dismissed_once_a_later_turn_on_its_task_fin
 def test_a_hop_that_used_an_approval_is_left_for_a_person(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     at(monkeypatch, "2026-10-21T19:54:13.000000Z", api)
-    post(api, "tasks", {"owner_id": "ops", "title": "Pay the invoice", "body": "Please pay it."})
+    post(api, "tasks", {"owner": "ops", "title": "Pay the invoice", "body": "Please pay it."})
     first = claim(api, machine)
     with api.app.state.store.transaction() as c:
         message = c.execute("SELECT message_id FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0]
@@ -163,7 +163,7 @@ def test_a_hop_that_used_an_approval_is_left_for_a_person(api, monkeypatch):
 def test_a_run_held_after_a_limit_resumes_when_the_bot_moves_to_another_model(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     at(monkeypatch, "2026-10-21T19:54:13.000000Z", api)
-    post(api, "tasks", {"owner_id": "ops", "title": "Review PR 1", "body": "Please review it."})
+    post(api, "tasks", {"owner": "ops", "title": "Review PR 1", "body": "Please review it."})
     first = claim(api, machine)
     held_the_old_way(api, machine, first)
     at(monkeypatch, "2026-10-21T20:30:00.000000Z", api)

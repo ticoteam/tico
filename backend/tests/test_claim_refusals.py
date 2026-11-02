@@ -68,7 +68,7 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
     def control(**body):
         post(api, "bots/ops/control", {**body, "expected_revision": get(api, "bots/ops")["revision"]})
     task, other = new_task(api, "the check"), new_task(api, "unrelated")
-    child = post(api, "tasks", {"owner_id": "ops", "title": "review", "body": "Review it.",
+    child = post(api, "tasks", {"owner": "ops", "title": "review", "body": "Review it.",
                                 "relations": [{"task": task["id"], "kind": "parent"}]})
     control(action="pause")
     control(action="scope", task_id=task["id"])
@@ -115,9 +115,9 @@ def test_a_limited_bots_turn_carries_only_next_run_work_inside_the_limit_until_r
     monkeypatch.setattr(bot_to_bot, "continue_backlog", lambda c, bot: backlog.append(bot))
     machine = task_bot(api, lanes=True)
     task = new_task(api, "the check")
-    child = post(api, "tasks", {"owner_id": "ops", "title": "review", "body": "Review it.", "next_run": True,
+    child = post(api, "tasks", {"owner": "ops", "title": "review", "body": "Review it.", "next_run": True,
                                 "relations": [{"task": task["id"], "kind": "parent"}]})
-    other = post(api, "tasks", {"owner_id": "ops", "title": "unrelated", "body": "Do it later.", "next_run": True})
+    other = post(api, "tasks", {"owner": "ops", "title": "unrelated", "body": "Do it later.", "next_run": True})
     note = post(api, "notes", {"to": "ops", "text": "Cancellations are flat."})["note"]
     post(api, "bots/ops/control", {"action": "scope", "task_id": task["id"],
                                    "expected_revision": get(api, "bots/ops")["revision"]})

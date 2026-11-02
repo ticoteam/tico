@@ -191,11 +191,11 @@ function taskRailPaint(d, t) {
   const st = d.taskRail ||= {open: new Set()};
   const kids = st.kids || [];
   const old = $('[data-sub-add]', rail);
-  if (old) st.owner_id = old.elements.owner_id.value;
+  if (old) st.owner = old.elements.owner.value;
   const typed = old?.elements.title.value || '', focused = !!old && old.contains(document.activeElement) ? document.activeElement.name : '';
   // Code is drawn from the full task only: list rows carry no worktree details (ahead, behind, files, errors).
   const code = st.full && String(st.full.id) === String(t.id) ? taskCodeHTML(st.full) : '';
-  const html = code + taskSubtasksHTML(t, kids, st.open, st.adding, st.owner_id, st.refused);
+  const html = code + taskSubtasksHTML(t, kids, st.open, st.adding, st.owner, st.refused);
   rail.innerHTML = html;
   rail.hidden = !html;
   d.classList.toggle('has-rail', !!html);
@@ -233,13 +233,13 @@ function taskRailBind(d, t) {
     const who = ev.target.closest('[data-sub-owner]');
     if (who) {
       const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll('option[value]:not([value=""])');
-      const st = d.taskRail, current = $('[data-sub-add]', rail)?.elements.owner_id.value;
+      const st = d.taskRail, current = $('[data-sub-add]', rail)?.elements.owner.value;
       propMenu(d, who, {label: 'For', find: 'Find a person or bot', items: [...opts].map(o => {
         const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
         return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: o.value === current};
       }), onPick: it => {
-        const form = $('[data-sub-add]', rail); if (form) form.elements.owner_id.value = it.value;
-        st.owner_id = it.value; taskRailPaint(d, t); $('[data-sub-owner]', rail)?.focus();
+        const form = $('[data-sub-add]', rail); if (form) form.elements.owner.value = it.value;
+        st.owner = it.value; taskRailPaint(d, t); $('[data-sub-owner]', rail)?.focus();
       }});
       return;
     }
@@ -274,9 +274,9 @@ function taskRailBind(d, t) {
   rail.onsubmit = async ev => {
     const form = ev.target.closest('[data-sub-add]'); if (!form) return;
     ev.preventDefault();
-    const input = form.elements.title, title = input.value.trim(), owner = form.elements.owner_id.value;
+    const input = form.elements.title, title = input.value.trim(), owner = form.elements.owner.value;
     if (!title || form.dataset.busy) return;
-    if (!owner) { form.elements.owner_id.focus(); return; }
+    if (!owner) { form.elements.owner.focus(); return; }
     form.dataset.busy = '1'; input.disabled = true;
     d.taskRail.owner_id = owner; d.taskRail.refused = '';
     $('[data-sub-add-error]', rail)?.remove();

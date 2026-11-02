@@ -38,7 +38,7 @@ def test_an_ask_whose_wait_fails_still_returns_its_id_and_a_retry_is_not_sent_tw
 
 
 def test_a_task_waiting_on_a_person_nobody_asked_shows_in_health_until_they_are_asked(api):
-    tid = post(api, "tasks", {"owner_id": "ops", "title": "Renew the Acme domain", "body": "x"})["id"]
+    tid = post(api, "tasks", {"owner": "ops", "title": "Renew the Acme domain", "body": "x"})["id"]
     with api.app.state.store.transaction() as c:
         # Set waiting on Ana before asks became subtasks, so the task itself waits on her.
         c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?",
@@ -78,8 +78,8 @@ def test_a_wait_with_no_plain_ask_goes_last_and_its_bot_is_asked_once_to_restate
     from backend import restate_asks
     store = api.app.state.store
     plain = "Approve the venue for Friday? If yes, I'll book it."
-    explained = post(api, "tasks", {"owner_id": "ops", "title": "Book the venue", "body": "x"})["id"]
-    legacy = post(api, "tasks", {"owner_id": "ops", "title": "Renew the Acme domain", "body": "x"})["id"]
+    explained = post(api, "tasks", {"owner": "ops", "title": "Book the venue", "body": "x"})["id"]
+    legacy = post(api, "tasks", {"owner": "ops", "title": "Renew the Acme domain", "body": "x"})["id"]
     with store.transaction() as c:
         explained = H.task_update(c, "bot:ops", explained, status="waiting", waiting_on="ana", note=plain)["asked_in"]["id"]
         # Set waiting before the plain-ask rule, with the bot's shorthand as its only words.

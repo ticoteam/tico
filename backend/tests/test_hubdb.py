@@ -1358,7 +1358,7 @@ class MarketNotesMoved(HubCase):
                           "payload_json TEXT NOT NULL, imported_at TEXT NOT NULL, PRIMARY KEY(id,digest))")
         overview = {"id": "market/overview", "title": "Overview", "content": "The market is small.", "category": "Market",
                     "collection": "market", "search": "The market is small.", "format": "markdown",
-                    "owner_id": MK.CURATOR, "fetched": "2026-10-01T00:00:00.000000Z", "seeded": True}
+                    "owner": MK.CURATOR, "fetched": "2026-10-01T00:00:00.000000Z", "seeded": True}
         raw = json.dumps(overview)
         self.conn.execute("INSERT INTO documents VALUES(?,?,?,?,?,?)",
                           ("market/overview", "external", "market", raw, "d1", "2026-10-01T00:00:00.000000Z"))

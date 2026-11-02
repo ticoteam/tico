@@ -188,7 +188,7 @@ def test_mine_reads_the_bots_rules_and_settings_without_writing(api):
 def test_retire_returns_the_due_dates_and_leaves_the_history(api):
     org(api)
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
-    due = post(api, f"rules/{r['id']}/due", {"first_due": "2026-01-15", "repeats": "monthly", "owner_id": "ops"})
+    due = post(api, f"rules/{r['id']}/due", {"first_due": "2026-01-15", "repeats": "monthly", "owner": "ops"})
     retired = post(api, f"rules/{r['id']}/retire", {"version": 1})
     assert retired["rule"]["status"] == "retired"
     assert [d["id"] for d in retired["due_at"]] == [due["id"]]
@@ -204,7 +204,7 @@ def test_two_open_occurrences_need_a_day_to_satisfy(api):
     org(api)
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
     start = (D.local_today("America/Los_Angeles") - timedelta(days=30)).isoformat()
-    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "weekly", "owner_id": "ops"})
+    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "weekly", "owner": "ops"})
     post(api, f"rule-due/{due['id']}/satisfied", {}, expected=422)
     marked = post(api, f"rule-due/{due['id']}/satisfied", {"due_on": start})
     assert marked["satisfied"] == start
@@ -214,7 +214,7 @@ def test_editing_a_due_date_keeps_its_history(api):
     org(api)
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
     start = (D.local_today("America/Los_Angeles") - timedelta(days=1)).isoformat()
-    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner_id": "ops"})
+    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner": "ops"})
     post(api, f"rule-due/{due['id']}/satisfied", {})
     edited = post(api, f"rule-due/{due['id']}", {"first_due": "2027-03-01"})
     assert edited["replaces"] == due["id"]
@@ -328,7 +328,7 @@ def test_a_due_date_keeps_its_edit_chain_and_is_readable_by_id(api):
     org(api)
     r = rule(api, {"kind": "internal", "text": "Ops answers within a day.", "who": {"bots": ["ops"]}})
     start = (D.local_today("America/Los_Angeles") - timedelta(days=1)).isoformat()
-    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner_id": "ops"})
+    due = post(api, f"rules/{r['id']}/due", {"first_due": start, "repeats": "once", "owner": "ops"})
     post(api, f"rule-due/{due['id']}/satisfied", {})
     second = post(api, f"rule-due/{due['id']}", {"first_due": "2027-03-01"})["id"]
     listed = get(api, f"rules/{r['id']}")

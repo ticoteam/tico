@@ -294,12 +294,12 @@ function openTaskCreate(owner = '', opts = {}) {
   let privateTouched = false;
   creation.elements.private.addEventListener('change', () => { privateTouched = true; });
   const privateDefault = () => {
-    const bot = botRow(creation.elements.owner_id.value);
+    const bot = botRow(creation.elements.owner.value);
     if (parent?.private || !privateTouched)
       creation.elements.private.checked = !!parent?.private || !!bot?.private_tasks_default;
     creation.elements.private.disabled = !!parent?.private;
   };
-  creation.elements.owner_id.addEventListener('change', privateDefault); privateDefault();
+  creation.elements.owner.addEventListener('change', privateDefault); privateDefault();
   goalOptions().then(goals => {
     const sel = $('#task-create-form select[name=goal]'); if (!sel || !goals.length) return;
     sel.innerHTML = '<option value="">No goal</option>' + goals.map(g =>
@@ -310,7 +310,7 @@ function openTaskCreate(owner = '', opts = {}) {
   $('#task-create-form').onsubmit = async ev => {
     ev.preventDefault();
     const form = ev.target, btn = form.querySelector('[type=submit]'), msg = $('#task-create-msg');
-    const title = form.title.value.trim(), owner = form.owner_id.value, body = form.body.value.trim();
+    const title = form.title.value.trim(), owner = form.owner.value, body = form.body.value.trim();
     if (!title || !owner) { msg.textContent = 'Choose who this is for.'; return; }
     if (!body) { msg.textContent = 'Add details.'; form.body.focus(); return; }
     btn.disabled = true; msg.textContent = 'Creating…';

@@ -519,10 +519,10 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
         assert can_run(c, "ops", "codex")["can_run"] is True
         # ... but not on a runner too old to take one.
         assert can_run(c, "cpo", "codex")["can_run"] is False
-    parent = post(api, "tasks", {"owner_id": "ops", "title": "Ship the import fix", "body": "Open the PR."})
+    parent = post(api, "tasks", {"owner": "ops", "title": "Ship the import fix", "body": "Open the PR."})
     turn = claim(api, m)
     assert turn["task"]["id"] == parent["id"]
-    sub = post(api, "tasks", {"owner_id": "ops", "title": "Review it on Codex", "body": "Read it.", "check_model": "codex",
+    sub = post(api, "tasks", {"owner": "ops", "title": "Review it on Codex", "body": "Read it.", "check_model": "codex",
                               "check_role": "review", "relations": [{"task": parent["id"], "kind": "parent"}]},
                turn["token"])
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-parent"}, m["token"])

@@ -137,7 +137,7 @@ def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
          'capabilities': ['task_lanes_v2', 'session_roots_v1', 'task_goals_v1'], 'readiness': {
          'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': 'codex', 'goals': True}}}}, machine['token'])
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Publish the Acme summary', 'body': 'For the board.',
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Publish the Acme summary', 'body': 'For the board.',
                                'acceptance_criteria': ['The summary is in Docs']})
     attempt = claim(api, machine)
     goal = attempt['chat_goal']
@@ -158,7 +158,7 @@ def task_goal_world(api):
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
          'capabilities': ['task_lanes_v2', 'session_roots_v1', 'task_goals_v1'], 'readiness': {
          'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': 'codex', 'goals': True}}}}, machine['token'])
-    return machine, post(api, 'tasks', {'owner_id': 'ops', 'title': 'Publish the Acme summary', 'body': 'For the board.'})
+    return machine, post(api, 'tasks', {'owner': 'ops', 'title': 'Publish the Acme summary', 'body': 'For the board.'})
 
 
 def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_completes_the_task(api):

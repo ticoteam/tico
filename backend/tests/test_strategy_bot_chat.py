@@ -290,7 +290,7 @@ def test_an_assistant_never_changes_another_persons_task_even_when_asked(api):
     r, attempt = turn(api, "coo", "ben-test", "Close Cara's launch list and add a note to it")
     token = attempt["token"]
     for body in ({"version": caras["version"], "close": True}, {"version": caras["version"], "status": "done"},
-                 {"version": caras["version"], "note": "Done by Ben"}, {"version": caras["version"], "owner_id": "human:ben"}):
+                 {"version": caras["version"], "note": "Done by Ben"}, {"version": caras["version"], "owner": "human:ben"}):
         post(api, f"tasks/{caras['id']}", body, token=token, expected=403)
         asked(api, f"tasks/{caras['id']}", body, token, "turn", expected=403)
     with api.app.state.store.read() as c:

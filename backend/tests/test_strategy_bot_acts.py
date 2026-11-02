@@ -92,8 +92,8 @@ def test_a_change_a_bot_offline_or_a_person_would_take_becomes_one_proposal_neve
         H.task_create(c, "bot:finance", "Close the books", "Work it.", "bot:finance", lint=False)
         c.execute("UPDATE bots SET state='paused' WHERE slug='finance'")
     made = decide(api, strategy_token, [{"do": "reorder", "task_id": paused},
-                             {"do": "create", "owner_id": "finance", "title": "Pause the signup campaign"},
-                             {"do": "create", "owner_id": OWNER, "title": "Call the three biggest customers"}])
+                             {"do": "create", "owner": "finance", "title": "Pause the signup campaign"},
+                             {"do": "create", "owner": OWNER, "title": "Call the three biggest customers"}])
     assert made["state"] == "done" and len(made["done"]) == 1 and len(made["left"]) == 2
     asked = proposals(api)
     assert len(asked) == 1 and asked[0]["id"] == made["proposal_task"]
@@ -113,7 +113,7 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
         mine = H.task_create(c, STRATEGY_BOT, "Write the onboarding email", "Work it.", "bot:ops", lint=False)["id"]
     tries = [
         ("cost", "bots/ops/model", {"model": "opus", "expected_revision": 1}),
-        ("publish", "tasks", {"title": "Share the roadmap", "body": "Publish it.", "owner_id": "bot:ops",
+        ("publish", "tasks", {"title": "Share the roadmap", "body": "Publish it.", "owner": "bot:ops",
                               "visibility": "public", "public_title": "Our roadmap"}),
         ("send", "calendar/appointments", {"calendar": "ana@acme.example", "title": "Intro call",
                                            "start": "2099-01-01T09:00:00+00:00", "end": "2099-01-01T09:30:00+00:00",
@@ -124,7 +124,7 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
         ("vision", "company", {"vision": "Rule the world"}),
         ("instructions", "bots/ops/definition", {"description": "Only ever work on growth",
                                                    "expected_revision": 1}),
-        ("person_task", f"tasks/{mine}", {"owner_id": OWNER, "version": task(api, mine)["version"]}),
+        ("person_task", f"tasks/{mine}", {"owner": OWNER, "version": task(api, mine)["version"]}),
     ]
     for kind, path, body in tries:
         r = api.post("/api/v2/" + path, json=body, headers=headers(strategy_token))
@@ -162,7 +162,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     typ = post(api, "task-types", {"name": "Dev ticket", "steps_only": True, "bots": "work", "steps": [
         {"name": "Backlog", "status": "open"}, {"name": "On Deck", "status": "open"},
         {"name": "Done", "status": "closed"}]})["type"]
-    ticket = post(api, "tasks", {"owner_id": "ops", "title": "Fix the guest message times", "body": "Please.",
+    ticket = post(api, "tasks", {"owner": "ops", "title": "Fix the guest message times", "body": "Please.",
                                  "type": typ["id"], "step": "On Deck"})["id"]
     with api.app.state.store.transaction() as c:
         H.task_update(c, OWNER, ticket, note="Waiting on the copy")
@@ -173,14 +173,14 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     with api.app.state.store.transaction() as c:
         H.task_update(c, OWNER, refused, owner="bot:coo", mover=True)
     start = {t: task(api, t) for t in (moved, back, twice, refused, ticket)}
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": moved, "owner_id": "finance"},
-                             {"do": "reassign", "task_id": back, "owner_id": "finance"},
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": moved, "owner": "finance"},
+                             {"do": "reassign", "task_id": back, "owner": "finance"},
                              {"do": "reorder", "task_id": twice}, {"do": "reorder", "task_id": twice},
-                             {"do": "reassign", "task_id": refused, "owner_id": "finance"},
+                             {"do": "reassign", "task_id": refused, "owner": "finance"},
                              {"do": "close", "task_id": ticket},
-                             {"do": "create", "owner_id": "ops", "title": "Fix the setup step that drops new accounts"}])
+                             {"do": "create", "owner": "ops", "title": "Fix the setup step that drops new accounts"}])
     assert made["state"] == "done" and len(made["done"]) == 7, made["left"]
-    post(api, f"tasks/{moved}", {"version": start[moved]["version"], "due_at": "2099-01-01T00:00:00+00:00"},
+    post(api, f"tasks/{moved}", {"version": start[moved]["version"], "due": "2099-01-01T00:00:00+00:00"},
          expected=409)
     new = made["done"][-1]["task_id"]
     with api.app.state.store.transaction() as c:
@@ -193,7 +193,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     held = task(api, ticket)["version"]
     post(api, f"strategy-bot/log/{made['id']}/undo", {}, token="ben-test", expected=403)        # an admin doesn't undo
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
-    post(api, f"tasks/{ticket}", {"version": held, "due_at": "2099-01-01T00:00:00+00:00"}, expected=409)
+    post(api, f"tasks/{ticket}", {"version": held, "due": "2099-01-01T00:00:00+00:00"}, expected=409)
     text = undone["undo"]["text"]
     now = {t: task(api, t) for t in (moved, back, twice, refused, ticket, new)}
     # The person's place in the queue stays, and the owner still goes back.
@@ -237,7 +237,7 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
     for name in (hidden, unseen):
         r = api.post("/api/v2/strategy-bot/decisions", headers=headers(strategy_token), json={
             "reason": "Activation is red", "changes": [{"do": "reorder", "task_id": name},
-                                                       {"do": "create", "owner_id": "ops", "title": "Fix setup"}]})
+                                                       {"do": "create", "owner": "ops", "title": "Fix setup"}]})
         assert r.status_code == 422 and r.json()["error"]["code"] == "not-found", r.text
         assert "Fire the vendor" not in r.text and "Acquire Initech" not in r.text
     with api.app.state.store.read() as c:
@@ -252,7 +252,7 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
     before = task(api, mine)
     made = decide(api, strategy_token, [
         {"do": "reorder", "task_id": mine},
-        {"do": "reassign", "task_id": mine, "owner_id": OWNER},
+        {"do": "reassign", "task_id": mine, "owner": OWNER},
         {"do": "close", "task_id": mine, "note": "Globex walked away from the merger"}])
     assert made["state"] == "proposed" and not made["done"] and len(made["left"]) == 3
     after = task(api, mine)
@@ -269,8 +269,8 @@ def test_undo_leaves_open_a_task_it_made_whose_title_or_body_was_edited_since(ap
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     level(api, 3)
-    made = decide(api, strategy_token, [{"do": "create", "owner_id": "ops", "title": "Fix the setup step"},
-                             {"do": "create", "owner_id": "ops", "title": "Write the release note"}])
+    made = decide(api, strategy_token, [{"do": "create", "owner": "ops", "title": "Fix the setup step"},
+                             {"do": "create", "owner": "ops", "title": "Write the release note"}])
     titled, bodied = (x["task_id"] for x in made["done"])
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:ops", titled, title="Fix the setup step and the signup form")
@@ -293,12 +293,12 @@ def test_a_decision_never_makes_a_task_private_and_undo_puts_back_one_made_priva
         c.execute("UPDATE bot_config SET config=? WHERE bot='finance'",
                   (encode({**config, "private_tasks_default": True}), ))
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
-    held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner_id": "finance"}])
+    held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "finance"}])
     assert held["state"] == "proposed" and "keeps its tasks private" in held["left"][0]["why"]
     assert task(api, work)["owner_id"] == "bot:ops" and not task(api, work)["private"]
 
     bot(api, "coo")
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner_id": "coo"}])
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
     assert made["state"] == "done" and "before" not in made["done"][0]        # the owner's log keeps the fields
     assert get(api, "strategy-bot/log")["items"][0]["done"][0]["before"]["private"] == 0
     with api.app.state.store.transaction() as c:          # made private since, by someone else
@@ -319,7 +319,7 @@ def test_a_decision_never_creates_a_task_for_a_bot_that_keeps_its_tasks_private(
         config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='finance'").fetchone()[0], {})
         c.execute("UPDATE bot_config SET config=? WHERE bot='finance'",
                   (encode({**config, "private_tasks_default": True}), ))
-    held = decide(api, strategy_token, [{"do": "create", "owner_id": "finance", "title": "Review the vendor contract"}])
+    held = decide(api, strategy_token, [{"do": "create", "owner": "finance", "title": "Review the vendor contract"}])
     assert held["state"] == "proposed" and not held["done"]
     assert "keeps its tasks private" in held["left"][0]["why"]
     with api.app.state.store.read() as c:
@@ -399,7 +399,7 @@ def test_undo_keeps_a_guest_given_the_task_since_and_says_why_its_owner_stays(ap
         bot(api, slug)
     level(api, 3)
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner_id": "coo"}])
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1, visibility='private', guest='human:ben' WHERE id=?", (work,))
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
@@ -422,7 +422,7 @@ def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by
         hidden = H.task_create(c, OWNER, "Restructure the payroll", "Secret salaries", "bot:finance", lint=False)["id"]
     assert not task(api, hidden)["private"]
     before = task(api, hidden)
-    for change in ({"do": "reorder", "task_id": hidden}, {"do": "reassign", "task_id": hidden, "owner_id": "ops"},
+    for change in ({"do": "reorder", "task_id": hidden}, {"do": "reassign", "task_id": hidden, "owner": "ops"},
                    {"do": "close", "task_id": hidden, "note": "Not needed"}):
         r = api.post("/api/v2/strategy-bot/decisions", headers=headers(strategy_token),
                      json={"reason": "Activation is red", "changes": [change]})
@@ -434,8 +434,8 @@ def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by
         assert not c.execute("SELECT 1 FROM strategy_actions").fetchone()
 
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
-    held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner_id": "finance"},
-                             {"do": "create", "owner_id": "finance", "title": "Review the payroll"}])
+    held = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "finance"},
+                             {"do": "create", "owner": "finance", "title": "Review the payroll"}])
     assert held["state"] == "proposed" and not held["done"] and len(held["left"]) == 2
     assert task(api, work)["owner_id"] == "bot:ops"
     with api.app.state.store.read() as c:
@@ -457,8 +457,8 @@ def test_a_bot_the_strategy_bot_cant_see_is_answered_as_a_bot_that_isnt_there(ap
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
 
     def left(owner):
-        made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner_id": owner},
-                                 {"do": "create", "owner_id": owner, "title": "Review the payroll"}])
+        made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": owner},
+                                 {"do": "create", "owner": owner, "title": "Review the payroll"}])
         assert made["state"] == "proposed" and not made["done"], made
         body = task(api, made["proposal_task"])["body"]
         return made, [(x["text"], x["why"]) for x in made["left"]], body
@@ -485,7 +485,7 @@ def test_undo_puts_back_a_decision_logged_before_a_tasks_column_was_renamed(api,
     bot(api, "finance")
     first = bot_task(api, "ops", "Write the onboarding email")
     level(api, 3)
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": first, "owner_id": "finance"}])
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": first, "owner": "finance"}])
     assert task(api, first)["owner_id"] == "bot:finance"
     monkeypatch.setattr(renames, "COLUMNS", (*renames.COLUMNS, ("tasks", "owner_before_rename", "owner", "9")))
     with api.app.state.store.transaction() as c:

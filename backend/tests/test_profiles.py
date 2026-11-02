@@ -68,11 +68,11 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
 def turn_for(api, slug):
     """What a routine for `slug` is today: an automation whose Bot turn step is the bot's. It runs on a task made for
     another bot; returns its run's status once no task for `slug` was opened by it."""
-    aid = post(api, "automations", {"name": "Notes", "owner_id": "person:ana",
+    aid = post(api, "automations", {"name": "Notes", "owner": "person:ana",
                                     "trigger": {"type": "event", "name": "task.created"},
                                     "steps": [{"id": "notes", "type": "bot_turn", "bot": "bot:" + slug,
                                                "prompt": "Write the notes."}]})["id"]
-    post(api, "tasks", {"owner_id": "cpo", "title": "Start the notes", "body": "Please."})
+    post(api, "tasks", {"owner": "cpo", "title": "Start the notes", "body": "Please."})
     api.app.state.store.automations.drain()
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM tasks WHERE owner_id=?", ("bot:" + slug,)).fetchone()
@@ -241,7 +241,7 @@ def test_a_lead_is_woken_by_people_and_hears_the_rest_once_a_day(api):
         mine = H.task_create(c, "bot:boss", "Ask around", "x", "bot:ops")
         c.execute("DELETE FROM jobs")
         # News about its task is held for the digest: the job waits, then a tick plans it for the next 09:00.
-        held = news(c, H.task(c, mine["id"]) | {"owner_id": "bot:boss"}, "Step moved: Open -> Doing")
+        held = news(c, H.task(c, mine["id"]) | {"owner": "bot:boss"}, "Step moved: Open -> Doing")
         assert held["refs"]["rule"] == "profile_lead_digest" and held["refs"]["wake_batch"] == "rule"
         job = c.execute("SELECT id,held,created_at FROM jobs WHERE bot_id='boss'").fetchone()
         assert job["held"] == 1
@@ -392,11 +392,11 @@ def test_a_monitor_and_a_reviewer_still_run_their_automation_turns(api):
         with pytest.raises(H.Refused):
             H.task_create(c, "human:ana", "Fix the thing", "x", "bot:watch")
     for slug in ("watch", "checker"):
-        aid = post(api, "automations", {"name": "Sweep " + slug, "owner_id": "person:ana",
+        aid = post(api, "automations", {"name": "Sweep " + slug, "owner": "person:ana",
                                         "trigger": {"type": "event", "name": "task.created"},
                                         "steps": [{"id": "sweep", "type": "bot_turn", "bot": "bot:" + slug,
                                                    "prompt": "Check the watchlist."}]})["id"]
-        post(api, "tasks", {"owner_id": "cpo", "title": "Start " + slug, "body": "Please."})
+        post(api, "tasks", {"owner": "cpo", "title": "Start " + slug, "body": "Please."})
         api.app.state.store.automations.drain()
         runs = get(api, f"automations/{aid}/runs")["runs"]
         assert runs and runs[0]["status"] != "failed", runs

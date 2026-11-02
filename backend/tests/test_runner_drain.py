@@ -12,7 +12,7 @@ def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_tu
         assign(api, machine, bot)
     ready(api, machine, bots)
     for bot in bots:
-        tasks.append(post(api, "tasks", {"owner_id": bot, "title": "Check the synthetic report", "body": "Use only fixture data."}))
+        tasks.append(post(api, "tasks", {"owner": bot, "title": "Check the synthetic report", "body": "Use only fixture data."}))
         attempts.append(claim(api, machine, bot))
     running = attempts[-1]
     post(api, f"attempts/{running['id']}/started", {"thread_id": "midturn"}, machine["token"])
@@ -49,7 +49,7 @@ def test_a_capped_turn_resumes_its_session_without_checkpointing_partial_output_
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Prepare a synthetic report", "body": "Use only fixture data."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Prepare a synthetic report", "body": "Use only fixture data."})
     attempt = claim(api, machine, "ops")
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "saved-thread"}, machine["token"])
     line = "Paused at the computer's drain time limit; work and session saved, queued to continue"

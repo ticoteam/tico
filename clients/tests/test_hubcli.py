@@ -257,7 +257,7 @@ class Stub(BaseHTTPRequestHandler):
         if self.path == "/api/v2/tasks/T1":
             return self.reply(200, {"task": {"id": "T1", "status": body.get("status"), "version": 4}})
         if self.path == "/api/v2/tasks" and body.get("check_model"):
-            return self.reply(200, {"task": {"id": "T2", "owner_id": body["owner"], "title": body["title"]}})
+            return self.reply(200, {"task": {"id": "T2", "owner": body["owner"], "title": body["title"]}})
         if self.path == "/api/v2/bots/writer/tools":
             return self.reply(200, {"ok": True, "dry_run": bool(body.get("dry_run"))})
         if self.path == "/api/v2/approvals":
@@ -567,7 +567,7 @@ def test_creation_qa_override_and_paths_survive_cli_and_mcp(monkeypatch, choice)
     args = hubcli.parser().parse_args(['task', 'create', '--owner', 'cpo', '--title', 'UI change',
         '--body', 'x', '--qa', choice, '--change-path', 'ui/page.js', '--qa-not-checkable-live'])
     remotecli.run(args)
-    hubtools.BY_NAME['hub_task_create']['fn'](api, {'owner_id': 'cpo', 'title': 'UI change', 'body': 'x',
+    hubtools.BY_NAME['hub_task_create']['fn'](api, {'owner': 'cpo', 'title': 'UI change', 'body': 'x',
         'qa': choice == 'yes', 'change_paths': ['ui/page.js'], 'qa_not_checkable_live': True})
     assert len(sent) == 2
     assert all(p['qa'] is (choice == 'yes') and p['change_paths'] == ['ui/page.js']

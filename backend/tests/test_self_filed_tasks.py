@@ -33,7 +33,7 @@ def complete(api, machine, attempt, text="Done."):
 def test_a_task_a_bot_files_for_itself_starts_once_the_filing_turn_ends(api):
     machine = task_bot(api, lanes=True)
     active = busy(api, machine)
-    mine = post(api, "tasks", {"owner_id": "ops", "title": "Tidy the roadmap", "body": "Close stale items."},
+    mine = post(api, "tasks", {"owner": "ops", "title": "Tidy the roadmap", "body": "Close stale items."},
                 token=active["token"])
     assert claim(api, machine) is None
     # A task a person files still starts beside the turn.
@@ -52,10 +52,10 @@ def test_self_filed_release_qa_keeps_the_filing_turn_hold(api, child):
     if child:
         typ = post(api, "task-types", {"name": "Release flow", "steps": [
             {"name": "Post Release QA", "status": "review", "flow": {"check": "release_qa"}}]})["type"]
-        parent = post(api, "tasks", {"owner_id": "finance", "title": "Released work", "body": "Verify it.",
+        parent = post(api, "tasks", {"owner": "finance", "title": "Released work", "body": "Verify it.",
                                      "type": typ["id"], "step": "Post Release QA"}, token=active["token"])
         fields = {"title": "Verify shipped behavior", "relations": [{"kind": "parent", "task": parent["id"]}]}
-    mine = post(api, "tasks", {"owner_id": "ops", "body": "Check the release.", **fields}, token=active["token"])
+    mine = post(api, "tasks", {"owner": "ops", "body": "Check the release.", **fields}, token=active["token"])
     with api.app.state.store.read() as c:
         notice = c.execute("SELECT refs FROM messages WHERE recipient_id='bot:ops' "
                            "AND json_extract(refs,'$.task')=? ORDER BY rowid DESC", (mine["id"],)).fetchone()
@@ -70,7 +70,7 @@ def test_self_filed_release_qa_keeps_the_filing_turn_hold(api, child):
 def test_a_task_the_filing_turn_finished_starts_no_turn(api):
     machine = task_bot(api, lanes=True)
     active = busy(api, machine)
-    order = post(api, "tasks", {"owner_id": "ops", "title": "Spec to top of roadmap when ready",
+    order = post(api, "tasks", {"owner": "ops", "title": "Spec to top of roadmap when ready",
                                 "body": "Standing order: move it when routines land."}, token=active["token"])
     # Claims come between the filing and the finishing: none starts the task beside the turn that filed it.
     assert claim(api, machine) is None
@@ -124,7 +124,7 @@ def test_a_tico_wake_on_a_finished_task_that_changed_nothing_posts_no_reply(api)
 def test_an_answer_on_an_open_task_still_reaches_the_person(api):
     """A turn whose reply is its whole work (a question filed as a task) writes nothing and still answers."""
     r = machine(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Which bank feed is late?", "body": "Just tell me."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Which bank feed is late?", "body": "Just tell me."})
     attempt = claim(api, r)
     start(api, r, attempt)
     finish(api, r, attempt, "The Monzo feed, by two days.")
@@ -134,7 +134,7 @@ def test_an_answer_on_an_open_task_still_reaches_the_person(api):
 def finished_and_woken(api, refs=None, first_text="Held."):
     """A completed task and a later recheck claimed before its finishing transition: (runner, task, turn)."""
     r = machine(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Hold the spec", "body": "Hold it until routines land."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Hold the spec", "body": "Hold it until routines land."})
     first = claim(api, r)
     start(api, r, first)
     done(api, task["id"], first["token"])
@@ -164,7 +164,7 @@ def test_a_decided_approval_or_a_reported_push_still_reports(api):
 def test_a_task_a_bot_files_for_another_bot_starts_at_once(api):
     machine = task_bot(api, lanes=True, others=("finance",))
     active = busy(api, machine)
-    theirs = post(api, "tasks", {"owner_id": "finance", "title": "Pay the invoice", "body": "Due today."},
+    theirs = post(api, "tasks", {"owner": "finance", "title": "Pay the invoice", "body": "Due today."},
                   token=active["token"])
     after = claim(api, machine)
     assert (after["bot"], H.message_task_id(after["message"])) == ("finance", theirs["id"])
@@ -174,7 +174,7 @@ def test_the_hold_ends_after_a_few_minutes_even_while_the_filing_turn_runs(api):
     from backend import execution
     machine = task_bot(api, lanes=True)
     active = busy(api, machine)
-    mine = post(api, "tasks", {"owner_id": "ops", "title": "Build the docs", "body": "In parallel."},
+    mine = post(api, "tasks", {"owner": "ops", "title": "Build the docs", "body": "In parallel."},
                 token=active["token"])
     assert claim(api, machine) is None
     with api.app.state.store.transaction() as c:
@@ -186,7 +186,7 @@ def test_the_hold_ends_after_a_few_minutes_even_while_the_filing_turn_runs(api):
 def test_a_task_the_filing_turn_declined_starts_no_turn(api):
     machine = task_bot(api, lanes=True)
     active = busy(api, machine)
-    order = post(api, "tasks", {"owner_id": "ops", "title": "Maybe tidy", "body": "Only if needed."},
+    order = post(api, "tasks", {"owner": "ops", "title": "Maybe tidy", "body": "Only if needed."},
                  token=active["token"])
     assert claim(api, machine) is None
     version = get(api, "tasks/" + order["id"], active["token"])["task"]["version"]
@@ -199,7 +199,7 @@ def test_a_person_who_finishes_the_task_with_a_question_gets_the_answer(api):
     """The bot learns of a person's own act (done, with a note) only from Tico's notice: the notice keeps who acted,
     so the bot's answer is posted although its turn wrote nothing."""
     r = machine(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Send the contract", "body": "For signature."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Send the contract", "body": "For signature."})
     first = claim(api, r)
     start(api, r, first)
     version = get(api, "tasks/" + task["id"], first["token"])["task"]["version"]
@@ -218,7 +218,7 @@ def test_a_task_the_filing_turn_left_waiting_starts_no_turn(api):
     """A standing order parked by the turn that filed it is woken by what it waits for, not by its first notice."""
     machine = task_bot(api, lanes=True)
     active = busy(api, machine)
-    order = post(api, "tasks", {"owner_id": "ops", "title": "Spec to top when routines land", "body": "Standing order."},
+    order = post(api, "tasks", {"owner": "ops", "title": "Spec to top when routines land", "body": "Standing order."},
                  token=active["token"])
     version = get(api, "tasks/" + order["id"], active["token"])["task"]["version"]
     post(api, "tasks/" + order["id"], {"version": version, "status": "waiting",

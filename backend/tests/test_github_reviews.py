@@ -217,7 +217,7 @@ def test_github_refusing_a_review_403_files_one_devops_task_not_the_type_manager
     with api.app_state.store.read() as c:
         filed = [dict(r) for r in c.execute("SELECT owner_id, title FROM tasks WHERE requester_id=? AND title LIKE 'GitHub refused%'",
                                              (H.KEEPER,))]
-    assert filed == [{"owner_id": "bot:devops-engineer", "title": f"GitHub refused cmo's review on {REPO} (403)"}]
+    assert filed == [{"owner": "bot:devops-engineer", "title": f"GitHub refused cmo's review on {REPO} (403)"}]
 
 
 def test_github_rate_limiting_a_review_403_files_no_task(api, gh, tmp_path, monkeypatch):

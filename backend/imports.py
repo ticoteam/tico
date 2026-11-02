@@ -402,7 +402,7 @@ def install_imports(app, store, auth, execution, mutate):
         meta.update(kind="meeting", status="done", started=started, ended=end_of(started, duration_ms, meta.get("ended")),
                     duration_ms=duration_ms, source=body.source, source_type="meeting",
                     source_context=body.context, transcript_provider=body.source, import_hash=fingerprint,
-                    recorded_by_id=who.email, uploaded_by_id=runner["id"] if runner else who.email,
+                    recorded_by=who.email, uploaded_by=runner["id"] if runner else who.email,
                     warning=None, error=None)
         if body.title or not existing:
             meta["title"] = body.title or meta.get("title") or "Imported meeting"
@@ -439,7 +439,7 @@ def install_imports(app, store, auth, execution, mutate):
             c.execute("INSERT INTO recording_source_refs(source,resource_type,external_id,meeting_id,created_at) "
                       "VALUES(?,?,?,?,?)", (*key, rid, H.now()))
         H.event(c, machine.actor, "meeting.imported", rid,
-                {"source": body.source, "owner_id": who.email, "turns": len(turns), "notes": bool(body.notes),
+                {"source": body.source, "owner": who.email, "turns": len(turns), "notes": bool(body.notes),
                  "existing": existing})
         if not existing:
             announce(c, auth, rid, meta)
@@ -477,7 +477,7 @@ def install_imports(app, store, auth, execution, mutate):
                 start = datetime.fromisoformat(body.started.replace("Z", "+00:00"))
                 for candidate in c.execute("SELECT m.id,m.metadata FROM meetings m "
                                            "LEFT JOIN media_control mc ON mc.meeting_id=m.id "
-                                           "WHERE lower(m.owner_id)=? AND mc.deleted_at IS NULL",
+                                           "WHERE lower(m.owner)=? AND mc.deleted_at IS NULL",
                                            (body.owner_email,)):
                     meta = json.loads(candidate["metadata"])
                     cal = meta.get("calendar") or {}
@@ -510,7 +510,7 @@ def install_imports(app, store, auth, execution, mutate):
                 meta.update(kind="meeting", title=body.title or "Close call", note="", preview="",
                             status="done", started=body.started, ended=body.ended,
                             duration_ms=body.duration_ms,
-                            recorded_by_id=person["email"], uploaded_by_id=runner["id"], private=False,
+                            recorded_by=person["email"], uploaded_by=runner["id"], private=False,
                             review_state=initial_review(c, owner) if body.owner_email else "live",
                             source=body.source, source_type=body.resource_type,
                             source_context=body.context, warning=None, error=None)

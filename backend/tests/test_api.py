@@ -175,7 +175,7 @@ def put(api, path, body, token="ana-test", expected=200):
 
 
 def runner(api, operator="ana", label="Test Mac"):
-    code = post(api, "enrollments", {"owner_id": operator})["code"]
+    code = post(api, "enrollments", {"operator": operator})["code"]
     return post(api, "runners/enroll", {"code": code, "label": label, "platform": "test"})
 
 
@@ -211,7 +211,7 @@ def setup_attempt(api, bot="ops", operator="ana"):
     ready(api, r, [bot])
     if bot == "coo":
         # Nobody chats with the assistant; a person hands it a task.
-        msg = post(api, "tasks", {"owner_id": bot, "title": "Summarize", "body": "Please summarize the current work."})
+        msg = post(api, "tasks", {"owner": bot, "title": "Summarize", "body": "Please summarize the current work."})
     else:
         msg = post(api, "chat/" + bot, {"text": "Please summarize the current work."})
     return r, msg, claim(api, r)
@@ -234,15 +234,15 @@ def test_no_local_owner_or_header_spoofing(api):
 
 
 def test_schema_rejects_forged_actor_and_missing_fields(api):
-    post(api, "tasks", {"owner_id": "coo", "title": "Create something", "body": "Do it", "requester_id": "human:ben"}, expected=422)
-    post(api, "tasks", {"owner_id": "coo", "title": "Missing body"}, expected=422)
-    r = api.post("/api/v2/tasks", json={"owner_id": "coo", "title": "Create report", "body": "A report"},
+    post(api, "tasks", {"owner": "coo", "title": "Create something", "body": "Do it", "requester": "human:ben"}, expected=422)
+    post(api, "tasks", {"owner": "coo", "title": "Missing body"}, expected=422)
+    r = api.post("/api/v2/tasks", json={"owner": "coo", "title": "Create report", "body": "A report"},
                  headers={"Authorization": "Bearer ana-test"})
     assert r.status_code == 422
 
 
 def test_task_and_queue_commit_once_with_concurrent_retries(api):
-    body = {"owner_id": "coo", "title": "Review the proposal", "body": "Give a recommendation."}
+    body = {"owner": "coo", "title": "Review the proposal", "body": "Give a recommendation."}
     with ThreadPoolExecutor(max_workers=4) as pool:
         replies = list(pool.map(lambda _: post(api, "tasks", body, key="same-operation"), range(4)))
     assert len({r["id"] for r in replies}) == 1
@@ -254,7 +254,7 @@ def test_task_and_queue_commit_once_with_concurrent_retries(api):
 
 
 def test_task_version_conflict_preserves_first_write(api):
-    task = post(api, "tasks", {"owner_id": "coo", "title": "Review design", "body": "Recommend improvements."})
+    task = post(api, "tasks", {"owner": "coo", "title": "Review design", "body": "Recommend improvements."})
     updated = post(api, "tasks/" + task["id"], {"version": 1, "note": "First revision"})
     assert updated["version"] == 2
     post(api, "tasks/" + task["id"], {"version": 1, "note": "Stale revision"}, expected=409)
@@ -267,8 +267,8 @@ def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(
     still lands in that person's own room."""
     post(api, "chat/coo", {"text": "Hello"}, expected=403)
     post(api, "messages", {"to": "coo", "text": "Hello"}, token="ben-test", expected=403)
-    ana = post(api, "tasks", {"owner_id": "coo", "title": "Ana's review", "body": "Private context."})
-    ben = post(api, "tasks", {"owner_id": "coo", "title": "Ben's review", "body": "Private context."},
+    ana = post(api, "tasks", {"owner": "coo", "title": "Ana's review", "body": "Private context."})
+    ben = post(api, "tasks", {"owner": "coo", "title": "Ben's review", "body": "Private context."},
                   token="ben-test")
     assert ana["conversation_id"] != ben["conversation_id"]
     get(api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=403)
@@ -286,7 +286,7 @@ def test_shared_room_membership_updates_and_revokes_history_access(api):
 
 
 def test_private_task_reference_is_denied(api):
-    task = post(api, "tasks", {"owner_id": "inbox", "title": "Review inbox", "body": "Review private messages."})
+    task = post(api, "tasks", {"owner": "inbox", "title": "Review inbox", "body": "Review private messages."})
     get(api, "tasks/" + task["id"], "cara-test", expected=404)
     post(api, "chat/cpo", {"text": "Read this", "refs": {"task": task["id"]}}, token="cara-test", expected=404)
 

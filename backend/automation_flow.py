@@ -502,7 +502,7 @@ ACTION_ARGS = {
     "create_task": {"title": "required: the task's title",
                     "body": "the task's text",
                     "owner_id": "a person id or a bot slug (default the automation's owner)",
-                    "due_at": "a date (YYYY-MM-DD) for the task; a due-date trigger's due day by default"},
+                    "due": "a date (YYYY-MM-DD) for the task; a due-date trigger's due day by default"},
     "assign": {"owner": "required: a person id or a bot slug",
                "text": "a note on the change (or note)"},
     "note": {"text": "the note (or note)",

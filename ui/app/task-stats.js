@@ -75,7 +75,7 @@ function taskStatsRemember() {
   try { localStorage.setItem('tico.tasks.stats', JSON.stringify({days: FLOW_ST.days, stage: FLOW_ST.stage, unit: FLOW_ST.unit})); } catch {}
 }
 // The filters as a query; `owner` overrides the dialog's owner (the chart's person).
-function flowQuery(st, days, owner = st.owner_id) {
+function flowQuery(st, days, owner = st.owner) {
   const q = new URLSearchParams({days, tz: -new Date().getTimezoneOffset()});
   if (st.type) q.set('type', st.type);
   if (owner) q.set('owner', owner);
@@ -144,7 +144,7 @@ function flowChartPlan(unit) {
 }
 function flowChartGet(st) {
   // The person is the task's current owner (the endpoint's owner filter), not who moved it.
-  return flowGet(st, flowQuery(st, flowChartPlan(st.unit).days, st.owner_id || st.who));
+  return flowGet(st, flowQuery(st, flowChartPlan(st.unit).days, st.owner || st.who));
 }
 async function taskStatsChartLoad() {
   const st = FLOW_ST; if (!st) return;
@@ -253,8 +253,8 @@ function taskStatsRender() {
   if (people) {
     const pick = row => {
       const sel = $('#task-stats-dialog select[data-flow="owner"]');
-      if (!row || !sel || ![...sel.options].some(o => o.value === row.dataset.owner_id)) return;
-      sel.value = st.owner_id = row.dataset.owner_id; taskStatsLoad();
+      if (!row || !sel || ![...sel.options].some(o => o.value === row.dataset.owner)) return;
+      sel.value = st.owner = row.dataset.owner; taskStatsLoad();
     };
     people.onclick = ev => pick(ev.target.closest('tr[data-owner]'));
     people.onkeydown = ev => { if (ev.key === 'Enter') pick(ev.target.closest('tr[data-owner]')); };
@@ -277,7 +277,7 @@ function taskStatsChartRender() {
   const avg = [...list].reverse().find(b => b.avg != null)?.avg;
   const key = `<i></i>${esc(avgWord)}${avg != null ? ' ' + flowAvgN(avg) : ''}`;
   // The dialog's owner filter already narrows the chart; the chart's own picker shows only without it.
-  const pick = st.owner_id ? '' : `<select data-flow-who aria-label="Person"><option value="">Everyone</option>${flowChartPeople(st.data, st.who)
+  const pick = st.owner ? '' : `<select data-flow-who aria-label="Person"><option value="">Everyone</option>${flowChartPeople(st.data, st.who)
     .map(([a, name]) => `<option value="${esc(a)}"${a === st.who ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select>`;
   box.innerHTML = `<div class="flow-chart-head"><strong>${esc(word)} per ${unit}</strong>
       <span class="flow-avg-key muted tnum" data-flow-tip>${key}</span><span class="spacer"></span>${pick}

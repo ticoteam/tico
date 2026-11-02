@@ -1,8 +1,8 @@
 """SQLite migration for durable meeting sources."""
 MEETING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meetings (
- id TEXT PRIMARY KEY, title TEXT NOT NULL, owner_id TEXT NOT NULL,
- recorded_by_id TEXT, uploaded_by_id TEXT, metadata TEXT NOT NULL,
+ id TEXT PRIMARY KEY, title TEXT NOT NULL, owner TEXT NOT NULL,
+ recorded_by TEXT, uploaded_by TEXT, metadata TEXT NOT NULL,
  transcript_original TEXT NOT NULL DEFAULT '', transcript_readable TEXT NOT NULL DEFAULT '',
  notes TEXT NOT NULL DEFAULT '', content_hash TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -31,7 +31,7 @@ ALTER TABLE meetings ADD COLUMN review_state TEXT NOT NULL DEFAULT 'live'
  CHECK (review_state IN ('pending','live','dismissed'));
 UPDATE meetings SET metadata=json_set(metadata,'$.review_state','live','$.ready_announced',json('true'))
  WHERE review_state='live';
-CREATE INDEX IF NOT EXISTS meetings_review_owner ON meetings(review_state,owner_id COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS meetings_review_owner ON meetings(review_state,owner COLLATE NOCASE);
 """
 
 # The three sections a meeting fills up, plus the two read-only context lists

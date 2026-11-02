@@ -33,8 +33,8 @@ def test_pause_record_and_legacy_fallback(api, monkeypatch):
 
 def test_only_readable_open_tasks_count_and_no_new_control_permission(api, monkeypatch):
     monkeypatch.setattr(company_billing, 'paused', lambda *args: False)
-    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check visible work', 'body': 'Review the design.'})
-    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check private work', 'body': 'Review the design.', 'private': True})
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Check visible work', 'body': 'Review the design.'})
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Check private work', 'body': 'Review the design.', 'private': True})
     mine = read(api, 'cara-test').json()
     assert mine['can_control'] is False and mine['open_tasks'] == 1
     post(api, 'bots/ops/control', {'action': 'pause', 'expected_revision': mine['revision']}, 'cara-test', expected=403)

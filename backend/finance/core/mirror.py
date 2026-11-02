@@ -278,7 +278,7 @@ def decode(d: Mapping[str, Any]) -> Record:
                        str(d.get("basis", "both")), str(d.get("currency", "")),
                        refund_of=str(d.get("refund_of", "")))
     if kind == "Document":
-        return Document(ext, str(d["party"]), str(d["number"]), str(d["day"]), str(d["due_at"]), int(d["total"]),
+        return Document(ext, str(d["party"]), str(d["number"]), str(d["day"]), str(d["due"]), int(d["total"]),
                         _lines(d["lines"]), str(d.get("memo", "")), _pairs(d.get("links", [])),
                         int(d.get("tax", 0)), str(d.get("currency", "")),
                         control=str(d.get("control", "")))

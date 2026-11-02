@@ -36,13 +36,13 @@ function auTeam(a) {
   return home ? auGroupName(home) : '';
 }
 const auTrigLine = a => auKind(a) === 'system' ? a.schedule || a.controls?.schedule || 'Tico' : auSource(a.trigger) || AU_TRIGGER_WORDS[a.trigger?.type] || '';
-const auActive = f => f.trig.size + !!f.status + !!f.team + !!f.owner_id;
+const auActive = f => f.trig.size + !!f.status + !!f.team + !!f.owner;
 
 function auMatches(a, f = AU.f) {
   if (f.trig.size && !f.trig.has(auKind(a))) return false;
   if (f.status && auState(a) !== f.status) return false;
   if (f.team && auTeam(a) !== f.team) return false;
-  if (f.owner_id && a.owner_id !== f.owner_id) return false;
+  if (f.owner && a.owner_id !== f.owner) return false;
   return !f.q || [a.name, auTrigLine(a), auActorName(a.owner_id), AU_KIND_WORDS[auKind(a)], a.description]
     .join(' ').toLowerCase().includes(f.q);
 }
@@ -74,7 +74,7 @@ function auAllQuery() {
   const f = AU.f, p = new URLSearchParams({range: AU.range});
   if (AU.rstatus) p.set('status', AU.rstatus);
   if (f.trig.size) p.set('trigger', [...f.trig].join(','));
-  if (f.owner_id) p.set('owner', f.owner_id);
+  if (f.owner) p.set('owner', f.owner);
   if (f.q || f.status || f.team) {
     const ids = auShown().map(a => a.id);
     if (ids.length <= AU_IDS_MAX) p.set('ids', ids.join(',') || 'none');
@@ -116,7 +116,7 @@ function auFacetsDraw() {
     ${teams.length ? `<div class="au-fg" role="group" aria-label="Team"><div class="au-lb">Team</div>
       ${teams.map(t => btn('data-fteam', t, f.team === t, auIcon('groups'), t, count(a => auTeam(a) === t))).join('')}</div>` : ''}
     <div class="au-fg" role="group" aria-label="Owner"><div class="au-lb">Owner</div>
-      ${owners.map(([o, name]) => btn('data-fowner', o, f.owner_id === o, personCircle(name, 16), name, count(a => a.owner_id === o))).join('')}</div>`;
+      ${owners.map(([o, name]) => btn('data-fowner', o, f.owner === o, personCircle(name, 16), name, count(a => a.owner_id === o))).join('')}</div>`;
 }
 function auCtlDraw() {
   const ctl = AU.root.querySelector('.au-ctl'), list = AU.tab === 'list', n = auActive(AU.f);

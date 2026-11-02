@@ -74,7 +74,7 @@ def test_an_answer_given_elsewhere_is_quoted_by_the_asker_or_owner_bot_and_the_a
 
 
 def test_the_resolve_route_refuses_a_person_who_did_not_ask(api):
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Draft the board report", "body": "For Friday."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Draft the board report", "body": "For Friday."})
     with api.app.state.store.transaction() as c:
         asked = question(c, OPS, task["id"])
     path = f"/api/v2/tasks/{task['id']}/comments/{asked['id']}/resolve"

@@ -10,7 +10,7 @@ from backend.tests.test_wake_rules import jobs, setup
 
 def due(c, task):
     key = "github-task-wake:" + task["id"]
-    save_metadata(c, key, {**metadata(c, key), "due_at": H.shift(H.now(), seconds=-1)})
+    save_metadata(c, key, {**metadata(c, key), "due": H.shift(H.now(), seconds=-1)})
 
 
 def sent(c, task, item="Checks finished on tico#1: passed", armed=False, head="a" * 40, result="pass"):

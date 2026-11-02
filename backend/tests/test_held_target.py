@@ -22,7 +22,7 @@ def test_a_bots_message_and_comment_to_a_held_bot_wait_and_run_once_it_is_back(a
     machine = runner(api, label="Finance Mac")
     assign(api, machine, "finance")
     ready(api, machine, ["finance"])
-    task = post(api, "tasks", {"owner_id": "finance", "title": "Check the invoice run", "body": "Read the fixture invoices"},
+    task = post(api, "tasks", {"owner": "finance", "title": "Check the invoice run", "body": "Read the fixture invoices"},
                 token=attempt["token"])
     while (work := claim(api, machine, "finance")):            # the new-task notice: done before it is held
         finish(api, machine, work)
@@ -36,7 +36,7 @@ def test_a_bots_message_and_comment_to_a_held_bot_wait_and_run_once_it_is_back(a
     comment = post(api, f"tasks/{task['id']}/comments", {"text": "Finding 1", "needs_action": True}, token=attempt["token"])
     assert "is kept" in sent["warning"] and "is kept" in comment["warning"], (sent, comment)
     assert ("until about" if held == "quarantined" else "until a person resumes it") in sent["warning"]
-    refused = post(api, "tasks", {"owner_id": "finance", "title": "Check the payroll run", "body": "Read it"},
+    refused = post(api, "tasks", {"owner": "finance", "title": "Check the payroll run", "body": "Read it"},
                    token=attempt["token"], expected=422)
     assert refused["error"]["code"] == "target_inactive" and "is not a repeat" in refused["error"]["detail"]
     kept = {sent["id"], comment["comment"]["id"]}

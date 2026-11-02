@@ -531,7 +531,7 @@ def tickets(run, w, n, owner=None, step=None, title="Ticket"):
             owner = run.t.builders[i % len(run.t.builders)].slug
         tags = ["major"] if run.rng.random() < run.scenario.major else []
         # A task always has an owner: an unassigned ticket is the person's until the board hands it to a bot.
-        made.append(w.post("tasks", {"owner_id": owner or "ana", "title": f"{title} {i + 1}",
+        made.append(w.post("tasks", {"owner": owner or "ana", "title": f"{title} {i + 1}",
                                      "body": "Build it.", "type": w.dev["id"], "step": step or first.name,
                                      "labels": tags}))
     return [m.get("task", m) for m in made]

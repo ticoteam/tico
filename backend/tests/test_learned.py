@@ -36,7 +36,7 @@ def finish(api, r, attempt):
 def test_only_the_owner_reads_and_changes_the_company_layer(api):
     strategy_bot(api)
     post(api, "company", {"vision": "Every team runs on bots"})
-    post(api, "goals", {"owner_id": "company", "title": "Ship the desktop app"})
+    post(api, "goals", {"owner": "company", "title": "Ship the desktop app"})
     mine = get(api, "assistant/learned")
     assert mine["personal"] == []
     assert (mine["company"]["vision"], [g["title"] for g in mine["company"]["priorities"]], mine["company"]["entries"]) \
@@ -134,7 +134,7 @@ def test_an_assistant_learns_in_its_persons_chat_and_reads_it_fresh_each_turn(ap
 def test_the_owners_assistant_learns_both_layers_in_the_owners_chat_and_nowhere_else(api):
     strategy_bot(api)
     post(api, "company", {"vision": "Every team runs on bots"})
-    post(api, "goals", {"owner_id": "company", "title": "Ship the desktop app"})
+    post(api, "goals", {"owner": "company", "title": "Ship the desktop app"})
     learn(api, "Short summaries, numbers first")
     r = runner(api)
     for bot in ("ops", "goal-manager", "coo"):

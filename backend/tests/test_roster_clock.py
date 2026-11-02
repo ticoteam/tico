@@ -157,8 +157,8 @@ def test_a_restart_that_changes_nothing_leaves_the_change_counters_where_they_we
     The first restart applies what the seeded rows still need; the second must change nothing."""
     from fastapi.testclient import TestClient
     from backend.app import create_app
-    post(api, "tasks", {"owner_id": "ops", "title": "Restart probe", "body": "Nothing changes on a restart."})
-    post(api, "tasks", {"owner_id": "cpo", "title": "Private restart probe", "body": "Nor does this.", "private": True})
+    post(api, "tasks", {"owner": "ops", "title": "Restart probe", "body": "Nothing changes on a restart."})
+    post(api, "tasks", {"owner": "cpo", "title": "Private restart probe", "body": "Nor does this.", "private": True})
     settings = api.app.state.store.settings
     with TestClient(create_app(settings)):
         pass

@@ -33,7 +33,7 @@ def cond(field, op, value, **extra):
 
 def task_input(title):
     """A task_received trigger's output: the task builder-claude sent Dana (CONTRACT §2 Feeding input)."""
-    return {"task": {"title": title, "body": "Scenario task.", "owner_id": DANA_REF, "requester_id": CLAUDE_REF}}
+    return {"task": {"title": title, "body": "Scenario task.", "owner": DANA_REF, "requester": CLAUDE_REF}}
 
 
 def message_input(msg_id, sender, subject):
@@ -532,7 +532,7 @@ def on_builtin(org, f, method, who, payload=None):
 def s29_steps(org, f):
     org.step(f, "listing", listing, org)
     org.step(f, "post", org.api, "post", "/api/v2/automations", {
-        "name": "Fake built-in · dana", "owner_id": DANA_REF, "enabled": True, "builtin": True, "trigger": SCHEDULE,
+        "name": "Fake built-in · dana", "owner": DANA_REF, "enabled": True, "builtin": True, "trigger": SCHEDULE,
         "steps": [{"id": "gate", "type": "filter", "enabled": True, "rules": []}]}, wave=W3)
     org.step(f, "lead_pause", on_builtin, org, f, "patch", LEAD, {"enabled": False})
     org.step(f, "dana_pause", on_builtin, org, f, "patch", DANA, {"enabled": False})

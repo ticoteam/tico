@@ -49,7 +49,7 @@ def task_type(c, name="Dev tickets"):
 def test_created_creates_one_linked_review_and_names_rule_in_history(api):
     with api.app.state.store.transaction() as c:
         typ = task_type(c)
-    made = rule(api, action="create_task", params={"owner_id": "cpo", "title": "Review {{task.title}}"},
+    made = rule(api, action="create_task", params={"owner": "cpo", "title": "Review {{task.title}}"},
                 when={"type": typ["id"]})
     with api.app.state.store.transaction() as c:
         original = make(c, "Implement widget", type=typ["id"])
@@ -80,8 +80,8 @@ def test_done_note_once_per_transition_and_once_more_after_reopen(api):
 
 
 def test_created_action_cannot_start_a_same_or_alternate_rule_chain(api):
-    made = rule(api, action="create_task", params={"owner_id": "ops", "title": "Derived work"})
-    other = rule(api, action="create_task", params={"owner_id": "cpo", "title": "Alternate work"})
+    made = rule(api, action="create_task", params={"owner": "ops", "title": "Derived work"})
+    other = rule(api, action="create_task", params={"owner": "cpo", "title": "Alternate work"})
     with api.app.state.store.transaction() as c:
         make(c)
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 3
@@ -94,8 +94,8 @@ def test_created_action_cannot_start_a_same_or_alternate_rule_chain(api):
 
 def test_sourceless_create_action_cannot_start_a_task_trigger_chain(api):
     from backend import rules as R
-    rule(api, "webhook.received", "create_task", {"owner_id": "ops", "title": "From webhook"})
-    made = rule(api, action="create_task", params={"owner_id": "ops", "title": "Must not chain"})
+    rule(api, "webhook.received", "create_task", {"owner": "ops", "title": "From webhook"})
+    made = rule(api, action="create_task", params={"owner": "ops", "title": "Must not chain"})
     with api.app.state.store.transaction() as c:
         R.judge_event(c, "webhook.received", {"trigger": "synthetic", "delivery": "one"})
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 1
@@ -105,7 +105,7 @@ def test_sourceless_create_action_cannot_start_a_task_trigger_chain(api):
 
 
 def test_missing_bot_and_throwing_action_preserve_task_and_row_error_time(api, monkeypatch):
-    gone = rule(api, "task.done", "create_task", {"owner_id": "cpo", "title": "Review work"})
+    gone = rule(api, "task.done", "create_task", {"owner": "cpo", "title": "Review work"})
     broken = rule(api, "task.done", params={"text": "Must roll back"})
     from backend import rules as R
     def failing(c, tid, params, said):
@@ -143,8 +143,8 @@ def test_webhook_transport_failure_reaches_rule_row_after_task_saved(api):
 
 
 def test_private_source_uses_author_read_view_and_creates_private_copy(api):
-    allowed = rule(api, "task.done", "create_task", {"owner_id": "cpo", "title": "Private copy", "body": "{{task.body}}"})
-    denied = rule(api, "task.done", "create_task", {"owner_id": "cpo", "title": "Must not copy"}, by="human:ben")
+    allowed = rule(api, "task.done", "create_task", {"owner": "cpo", "title": "Private copy", "body": "{{task.body}}"})
+    denied = rule(api, "task.done", "create_task", {"owner": "cpo", "title": "Must not copy"}, by="human:ben")
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
         task = make(c, private=True)
@@ -250,7 +250,7 @@ def test_scopes_and_all_five_conditions_match_task_owner_not_message_recipient(a
         roster["org_groups"] = {"engineering": {"name": "Engineering"}, "web": {"name": "Web", "parent": "engineering"}}
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
         c.execute("UPDATE bot_config SET team='web',config=json_set(config,'$.team','web') WHERE bot='ops'")
-    condition = {"type": typ["id"], "step": "Open", "tag": "triage", "owner_id": "ops", "requester_id": "ana"}
+    condition = {"type": typ["id"], "step": "Open", "tag": "triage", "owner": "ops", "requester": "ana"}
     scoped = [rule(api, scope_kind=kind, scope_id=ident, when=condition) for kind, ident in
               (("team", ""), ("type", typ["id"]), ("department", "engineering"), ("bot", "ops"))]
     with api.app.state.store.transaction() as c:

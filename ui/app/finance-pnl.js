@@ -619,7 +619,7 @@ function finLineRail() {
   const paidLabel = r => r.kind === 'card' ? 'Card · ' + r.name : r.kind === 'bank' ? r.name : r.name === 'manual' ? 'Journal' : r.name;
   finRail(`<div class="fin-rail-title"><h2>${esc(name)}</h2><span class="fin-big">${finUsd(row.cur)}${vendor ? ' / mo' : ''}</span></div>
     ${pct == null ? '' : `<div class="fin-bar-m${pct >= 100 ? ' bad' : b && pct >= b.warn_pct ? ' warn' : ''}" aria-hidden="true"><i style="width:${pct}%"></i></div><div class="muted fin-small">${finUsd(spent)} of ${finUsd(amount)} · ${month}</div>`}
-    ${b ? finKv('Budget' + finExcl(b.state), `${finUsd(amount)} <span class="muted">/ ${{month: 'month', quarter: 'quarter', year: 'year'}[b.period] || b.period}</span>`) + finKv('Warn at', b.warn_pct + '%') + finKv('At limit', esc((FIN_AT_LIMIT[b.at_limit] || b.at_limit) + (b.at_limit === 'ask' && b.owner_id ? ' ' + finWho(b.owner_id) : ''))) : ''}
+    ${b ? finKv('Budget' + finExcl(b.state), `${finUsd(amount)} <span class="muted">/ ${{month: 'month', quarter: 'quarter', year: 'year'}[b.period] || b.period}</span>`) + finKv('Warn at', b.warn_pct + '%') + finKv('At limit', esc((FIN_AT_LIMIT[b.at_limit] || b.at_limit) + (b.at_limit === 'ask' && b.owner ? ' ' + finWho(b.owner) : ''))) : ''}
     ${nm && nm.projection != null ? finKv(`${lineName} · ${nmLabel} projected`, finUsd(nm.projection) + finProjTag(nm.projection_method)) : ''}
     ${one && d?.seats != null ? finKv('Seats', esc(Number(d.seats).toLocaleString('en-US'))) : ''}${one && d?.renewal_on ? finKv('Renews', esc(finDayLabel(d.renewal_on))) : ''}
     ${paid.length ? `<h3 class="fin-h">Paid by</h3>${paid.map(r => finKv(paidLabel(r), finUsd(r.amount))).join('')}` : ''}

@@ -25,7 +25,7 @@ def first_wait(api):
                        "runner_id": machine["runner_id"]})
     scribe = scribe_id(api)
     ready(api, machine, ["ops", scribe])
-    task = post(api, "tasks", {"owner_id": "scribe", "title": "Count the public words", "body": "Count them."})
+    task = post(api, "tasks", {"owner": "scribe", "title": "Count the public words", "body": "Count them."})
     attempt = claim(api, machine)
     assert attempt["bot_id"] == scribe and attempt["task"]["id"] == task["id"]
     with api.app.state.store.read() as c:

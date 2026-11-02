@@ -18,7 +18,7 @@ def _stale_ask(api, task_id, body, days=10):
 def test_clarify_sends_the_winning_prompt_once_and_leaves_the_ask_open(api):
     _, _, finance = setup_attempt(api, "finance")
     pick = post(api, "tasks", {"title": "Gusto or Rippling for payroll?",
-                               "body": "Should payroll move to Gusto or Rippling?", "owner_id": "human:ana"})
+                               "body": "Should payroll move to Gusto or Rippling?", "owner": "human:ana"})
     ask = _stale_ask(api, pick["id"], "Should payroll move to Gusto or Rippling?")
 
     card = next(i for i in get(api, "needs-you")["items"] if i["id"] == pick["id"])
@@ -64,7 +64,7 @@ def test_clarify_on_a_loose_ask_reaches_the_bot_with_no_task(api):
 
 def test_clarify_on_a_waiting_task_wakes_the_bot_but_keeps_the_wait(api):
     _, _, finance = setup_attempt(api, "finance")
-    vendor = post(api, "tasks", {"title": "Switch the payroll vendor", "body": "x", "owner_id": "bot:finance"})
+    vendor = post(api, "tasks", {"title": "Switch the payroll vendor", "body": "x", "owner": "bot:finance"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana', note=? WHERE id=?",
                   ("Waiting on Ana to pick the vendor.", vendor["id"]))

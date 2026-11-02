@@ -23,7 +23,7 @@ def task_bot(api, lanes, capability="task_lanes_v2", capacity=8, others=()):
 
 
 def new_task(api, title, owner="ops"):
-    return post(api, "tasks", {"owner_id": owner, "title": title, "body": "Please do " + title + "."})
+    return post(api, "tasks", {"owner": owner, "title": title, "body": "Please do " + title + "."})
 
 
 def test_task_lanes_run_side_by_side_and_each_lane_stays_serial(api):

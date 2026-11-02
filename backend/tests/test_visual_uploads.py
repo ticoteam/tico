@@ -65,7 +65,7 @@ def test_a_bots_chat_reply_attaches_a_big_picture_and_a_big_page(api, checkout):
 
 def test_a_bots_task_comment_attaches_a_big_picture_and_a_big_page(api, checkout):
     _, attempt = turn(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Signups chart", "body": "x"}, "ben-test")
+    task = post(api, "tasks", {"owner": "ops", "title": "Signups chart", "body": "x"}, "ben-test")
     made = hubtools.task_comment(Hub(api, attempt["token"]), {
         "id": task["id"], "text": "Two visuals",
         "visuals": [{"path": "chart.png", "title": "Signups"}, {"path": "page.html", "title": "Funnel"}]})

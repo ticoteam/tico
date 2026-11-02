@@ -111,7 +111,7 @@ def test_private_assignment_reaches_the_bots_manager_and_no_one_else(api, clock)
     task_bot(api, lanes=True)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Private assigned work', 'body': 'Keep this private.', 'private': True})
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Private assigned work', 'body': 'Keep this private.', 'private': True})
     cancel(api)
     advance(api, clock, 1)
     assert sweep(api) == [task['id']]
@@ -417,7 +417,7 @@ def test_orphan_and_failed_delivery_are_recorded_once_and_do_not_starve_next_bat
 def test_queue_refusal_checks_the_observed_jobs_message_privacy_for_bot_readers(api, clock):
     from backend.auth import Identity
     task_bot(api, lanes=True)
-    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Private refused work', 'body': 'Synthetic private task.', 'private': True})
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Private refused work', 'body': 'Synthetic private task.', 'private': True})
     set_cap(api, 0)
     store = api.app.state.store
     store.settings.test_identities['finance-observer'] = Identity('bot:finance', 'bot', agent='hermes')

@@ -31,7 +31,7 @@ def _qa_ticket(api, reviews=(("approve", waivers.HEAD), ("approve", waivers.HEAD
     """A ticket at the renamed QA step, its reviews titled for the renamed review steps."""
     with api.app.state.store.read() as c:
         typ = H.type_get(c, "Dev tickets")
-    r = waivers.call(api, "POST", "tasks", body={"owner_id": "cpo", "title": title, "body": "Fix it.",
+    r = waivers.call(api, "POST", "tasks", body={"owner": "cpo", "title": title, "body": "Fix it.",
                                                  "type": typ["id"], "step": "Acceptance", "links": [waivers.PR]})
     assert r.status_code == 200, r.text
     row = r.json()["task"]

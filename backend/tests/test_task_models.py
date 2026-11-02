@@ -35,7 +35,7 @@ def ops_on_sonnet(api):
 
 
 def task_turn(api, machine, title="Tidy the changelog"):
-    task = post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Sort the entries."})
+    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Sort the entries."})
     turn = claim(api, machine)
     assert turn["task"]["id"] == task["id"]
     return task, turn
@@ -195,7 +195,7 @@ def test_a_check_subtask_keeps_its_check_model_over_the_task_model_and_says_so(a
     set_task_model(api, HAIKU)
     parent, turn = task_turn(api, machine, "Ship the import fix")
     assert turn["config"]["model"] == "claude-haiku-5-5", "the builder's own task follows the task model set on it"
-    sub = post(api, "tasks", {"owner_id": "ops", "title": "Review PR 700 with another model", "body": "Read it.",
+    sub = post(api, "tasks", {"owner": "ops", "title": "Review PR 700 with another model", "body": "Read it.",
                               "check_model": "grok", "check_role": "review",
                               "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     finish(api, machine, turn, HAIKU_RAN)

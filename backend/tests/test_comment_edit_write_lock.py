@@ -20,7 +20,7 @@ BIG = 20000
 
 
 def _comment(api, text="Words to withdraw", title="Review the report"):
-    task = post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Please review."})
+    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Please review."})
     return task, post(api, f"tasks/{task['id']}/comments", {"text": text})["comment"]
 
 
@@ -31,7 +31,7 @@ def _answers(c, count, quoting=None):
         if quoting and i % 500 == 0:
             return json.dumps({"comment": dict(quoting, body="old words"), "comments": [dict(quoting, body="old")]})
         if i % 5 == 0:
-            other = {"id": str(uuid.uuid4()), "sender_id": "bot:ops", "body": "x" * 200, "kind": "say"}
+            other = {"id": str(uuid.uuid4()), "from_actor": "bot:ops", "body": "x" * 200, "kind": "say"}
             return json.dumps({"comment": other, "task": {"id": str(uuid.uuid4())}})
         return json.dumps({"ok": True, "id": str(uuid.uuid4()), "detail": "y" * 300})
     c.executemany("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
@@ -140,7 +140,7 @@ SHAPES = (
     lambda m: [m, {"id": m["id"]}],                                       # an answer that is a list
     lambda m: {"comment": dict(m, sender_id=None)},                     # from_actor present but null
     lambda m: {"ref": {"id": m["id"], "title": "not a message"}},         # the id without from_actor: kept
-    lambda m: {"id": m["id"], "sender_id": "bot:ops", "body": "old"},   # the answer is the message
+    lambda m: {"id": m["id"], "from_actor": "bot:ops", "body": "old"},   # the answer is the message
     lambda m: {"note": json.dumps(m)},                                    # quoted inside a string: kept
     lambda m: {"comment": dict(m, id=[m["id"]])},                         # an id that is not a string: kept
     lambda m: {"comment": dict(m, id="someone-else")},                    # another message
@@ -257,7 +257,7 @@ def test_the_server_indexes_an_older_servers_answers_after_it_starts(tmp_path):
     settings = Settings(db_path=tmp_path / "hub.db")
     store = Store(settings)
     store.initialize(seed_market=False)
-    message = {"id": "m-older", "sender_id": "bot:ops", "body": "old words"}
+    message = {"id": "m-older", "from_actor": "bot:ops", "body": "old words"}
     with store.transaction() as c:
         for statement in ("DROP TRIGGER idempotency_messages_insert", "DROP TRIGGER idempotency_messages_update",
                           "DROP TRIGGER idempotency_messages_delete", "DROP TABLE idempotency_messages"):

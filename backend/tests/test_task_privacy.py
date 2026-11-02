@@ -33,10 +33,10 @@ def test_private_two_party_matrix(api, requester, owner):
 
 def test_company_read_does_not_grant_work_but_dev_type_does(api):
     token = bot_token(api, 'ops')
-    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Build the board adapter', 'body': 'Implement the adapter.'})
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Build the board adapter', 'body': 'Implement the adapter.'})
     assert not task['private']
     assert get(api, 'tasks/' + task['id'], token=token)['task']['id'] == task['id']
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner_id': 'ops'}, token=token, expected=403)
+    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner': 'ops'}, token=token, expected=403)
     typ = post(api, 'task-types', {'name': 'Dev', 'bots': 'work', 'steps': [
         {'name': 'Todo', 'status': 'open'}, {'name': 'PR Review', 'status': 'review'}]})['type']
     task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'type': typ['id']})
@@ -58,13 +58,13 @@ def test_private_defaults_reassignment_and_human_publication(api):
             config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
             config['private_tasks_default'] = True
             c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), slug))
-    assigned = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Review the request', 'body': 'Review it.'})
-    created = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Draft the response', 'body': 'Draft it.', 'private': False}, token=cpo)
+    assigned = post(api, 'tasks', {'owner': 'ops', 'title': 'Review the request', 'body': 'Review it.'})
+    created = post(api, 'tasks', {'owner': 'cmo', 'title': 'Draft the response', 'body': 'Draft it.', 'private': False}, token=cpo)
     assert assigned['private'] and created['private']
-    explicit = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Review the public request', 'body': 'Review it.', 'private': False})
+    explicit = post(api, 'tasks', {'owner': 'ops', 'title': 'Review the public request', 'body': 'Review it.', 'private': False})
     assert not explicit['private']
     post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'private': False}, token=ops, expected=422)
-    changed = post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'owner_id': 'cpo'})
+    changed = post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'owner': 'cpo'})
     assert changed['private']
     get(api, 'tasks/' + assigned['id'], token=ops, expected=404)
     assert get(api, 'tasks/' + assigned['id'], token=cpo)['task']['private']
@@ -75,8 +75,8 @@ def test_private_defaults_reassignment_and_human_publication(api):
 
 
 def test_private_parent_has_no_ancestry_bypass_and_requires_detachment(api):
-    parent = post(api, 'tasks', {'owner_id': 'ben', 'title': 'Review the packet', 'body': 'Review it.', 'private': True})
-    child = post(api, 'tasks', {'owner_id': 'priya', 'title': 'Check the packet', 'body': 'Check it.',
+    parent = post(api, 'tasks', {'owner': 'ben', 'title': 'Review the packet', 'body': 'Review it.', 'private': True})
+    child = post(api, 'tasks', {'owner': 'priya', 'title': 'Check the packet', 'body': 'Check it.',
                                'relations': [{'task': parent['id'], 'kind': 'parent'}]}, token='ben-test')
     assert child['private'] and child['requester_id'] == 'human:ben'
     get(api, 'tasks/' + child['id'], expected=404)
@@ -91,13 +91,13 @@ def test_private_parent_has_no_ancestry_bypass_and_requires_detachment(api):
 
 
 def test_cached_comment_response_cannot_bypass_reassignment(api):
-    task = post(api, 'tasks', {'owner_id': 'ben', 'title': 'Review the private draft', 'body': 'Review it.', 'private': True})
+    task = post(api, 'tasks', {'owner': 'ben', 'title': 'Review the private draft', 'body': 'Review it.', 'private': True})
     replay_headers = headers('ben-test')
     url = '/api/v2/tasks/' + task['id'] + '/comments'
     first = api.post(url, json={'text': 'Sensitive response.'}, headers=replay_headers)
     assert first.status_code == 200, first.text
     task = get(api, 'tasks/' + task['id'])['task']
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner_id': 'priya'})
+    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner': 'priya'})
     response = api.post(url, json={'text': 'Sensitive response.'}, headers=replay_headers)
     assert response.status_code == 404 and 'Sensitive response.' not in response.text
 
@@ -143,8 +143,8 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
 
 
 def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
-    private = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Review sensitive evidence', 'body': 'Review it.', 'private': True})
-    public = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Review release timing', 'body': 'Review it.'})
+    private = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review sensitive evidence', 'body': 'Review it.', 'private': True})
+    public = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review release timing', 'body': 'Review it.'})
     post(api, 'tasks/' + public['id'] + '/relations', {'task': private['id'], 'kind': 'blocked_by'}, expected=422)
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')", (private['id'], public['id'], 'blocks'))
@@ -228,7 +228,7 @@ def test_a_visuals_line_link_to_a_private_task_message_opens_only_for_its_reader
     What it opens is the task as the reader may see it: its readers get the message, anyone else not-found."""
     from urllib.parse import parse_qs, urlsplit
     from backend import visuals
-    task = post(api, 'tasks', {'owner_id': 'ben', 'title': 'Board pack', 'body': 'Chart the quarter.', 'private': True})
+    task = post(api, 'tasks', {'owner': 'ben', 'title': 'Board pack', 'body': 'Chart the quarter.', 'private': True})
     with api.app.state.store.transaction() as c:
         cid = H.task(c, task['id'])['conversation_id']
         said = H.say(c, 'human:ben', 'human:ana', 'Quarter attached, revenue up.', conversation_id=cid,

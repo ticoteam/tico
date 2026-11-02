@@ -25,7 +25,7 @@ def job_of(c, task_id, bot="ops"):
 
 def secret_taken_away(api):
     """A private task handed to ops, then taken off it with its notice still queued: ops may no longer read it."""
-    secret = post(api, "tasks", {"owner_id": "ops", "title": "Salary bands", "body": "Please review.", "private": True})
+    secret = post(api, "tasks", {"owner": "ops", "title": "Salary bands", "body": "Please review.", "private": True})
     with api.app.state.store.transaction() as c:
         assert job_of(c, secret["id"])["state"] == "queued"
         # Any way a bot loses read access to a queued message; the claim and the sweep judge only the verdict.

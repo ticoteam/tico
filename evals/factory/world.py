@@ -114,7 +114,7 @@ class World:
             if "engineering-lead" in bots:   # a live install's Dev type is its Head of Engineering's (fixed by role)
                 c.execute("UPDATE task_types SET manager='engineering-lead' WHERE id=?", (self.dev["id"],))
         self.scheduler = Scheduler(self.store, self.app.state.execution)
-        code = self.post("enrollments", {"owner_id": "ana"})["code"]
+        code = self.post("enrollments", {"operator": "ana"})["code"]
         self.runner = self.post("runners/enroll", {"code": code, "label": "Sim", "platform": "test"})
         for slug in self.bot_slugs:
             self.post("bots/" + slug + "/assignment", {"runner_id": self.runner["runner_id"], "expected_generation": 0})
@@ -131,7 +131,7 @@ class World:
         self.dev = self.post("task-types/" + self.dev["id"], {"steps": steps})["type"]
         for lead in self.roles.get("lead", []) if self.board.lead_sweep else []:
             self.post("automations", {
-                "name": "Hourly board sweep", "owner_id": "bot:" + lead, "enabled": True, "builtin": False,
+                "name": "Hourly board sweep", "owner": "bot:" + lead, "enabled": True, "builtin": False,
                 "trigger": {"type": "schedule", "cron": f"0 */{max(1, int(self.board.lead_sweep_hours))} * * *",
                             "tz": "UTC"},
                 "steps": [{"id": "sweep", "type": "bot_turn", "bot": "bot:" + lead,

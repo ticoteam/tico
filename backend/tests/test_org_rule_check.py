@@ -164,7 +164,7 @@ def test_an_all_bots_rule_covers_a_bot_made_later(ruled):
 # ---- every hook ---------------------------------------------------------------------------------------------------
 
 def task_for_ops(api, title="Write the launch note"):
-    return post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Draft it."})
+    return post(api, "tasks", {"owner": "ops", "title": title, "body": "Draft it."})
 
 
 def test_a_safe_comment_then_a_forbidden_edit_keeps_the_old_text(ruled):
@@ -196,7 +196,7 @@ def test_a_task_body_or_close_note_held_leaves_the_task_unchanged(ruled):
 def test_a_new_task_from_a_bot_is_held(ruled):
     api, _ = ruled
     color_rule(api)
-    got = post(api, "tasks", {"owner_id": "ana", "title": "Pick a palette", "body": "Our favorite color is red."},
+    got = post(api, "tasks", {"owner": "ana", "title": "Pick a palette", "body": "Our favorite color is red."},
                token="ops-test")
     assert got["held"] and sql(api, "SELECT id FROM tasks WHERE title='Pick a palette'") == []
 
@@ -205,8 +205,8 @@ def test_a_mixed_bulk_change_holds_only_the_breaking_task(ruled):
     api, _ = ruled
     color_rule(api)
     a = task_for_ops(api)
-    b = post(api, "tasks", {"owner_id": "ops", "title": "Pick the palette", "body": "Our favorite color is red."})
-    r = api.post("/api/v2/task-bulk", json={"filter": {"ids": [a["id"], b["id"]]}, "action": "owner", "owner_id": "ana"},
+    b = post(api, "tasks", {"owner": "ops", "title": "Pick the palette", "body": "Our favorite color is red."})
+    r = api.post("/api/v2/task-bulk", json={"filter": {"ids": [a["id"], b["id"]]}, "action": "owner", "owner": "ana"},
                  headers=headers("ops-test"))
     assert r.status_code == 200, r.text
     owners = {row["id"]: row["owner_id"] for row in sql(api, "SELECT id, owner_id FROM tasks WHERE id IN (?,?)", (a["id"], b["id"]))}
@@ -219,7 +219,7 @@ def test_a_note_to_a_bot_and_a_wake_bot_step_are_checked(ruled):
     rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}})
     got = post(api, "notes", {"to": "finance", "text": "FYI our favorite color is red."}, token="ops-test")
     assert got["held"] and bodies(api, "FYI our favorite") == []
-    aid = post(api, "automations", {"name": "Tell", "owner_id": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
+    aid = post(api, "automations", {"name": "Tell", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
                                     "steps": [{"id": "w", "type": "action", "do": "wake_bot",
                                                "args": {"bot": "finance", "text": "Wake: favorite color is red"}}]})["id"]
     post(api, f"automations/{aid}/run", {})
@@ -618,7 +618,7 @@ def test_the_assistant_writing_as_itself_is_checked(ruled):
 def test_a_public_task_is_judged_on_its_public_text_for_the_whole_company(ruled):
     api, judge = ruled
     rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "with": {"people": ["cara"]}})
-    got = post(api, "tasks", {"owner_id": "ops", "title": "Ship the palette", "body": "Internal draft.",
+    got = post(api, "tasks", {"owner": "ops", "title": "Ship the palette", "body": "Internal draft.",
                               "visibility": "public", "public_title": "New palette",
                               "public_summary": "Our favorite color is red."}, token="ops-test")
     assert got["held"], got
@@ -640,9 +640,9 @@ def test_a_task_change_warning_rides_on_the_change_itself(ruled):
 def test_automation_assign_judges_the_task_handed_over_and_replies_reach_their_people(ruled):
     api, judge = ruled
     color_rule(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Our favorite color is red."})
-    for args in ({"owner_id": "ana"}, {"owner_id": "ana", "note": "Over to you."}):
-        aid = post(api, "automations", {"name": "Hand " + str(len(args)), "owner_id": "bot:ops",
+    task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Our favorite color is red."})
+    for args in ({"owner": "ana"}, {"owner": "ana", "note": "Over to you."}):
+        aid = post(api, "automations", {"name": "Hand " + str(len(args)), "owner": "bot:ops",
                                         "trigger": {"type": "event", "name": "x.y"},
                                         "steps": [{"id": "a", "type": "action", "do": "assign", "args": args}]})["id"]
         post(api, f"automations/{aid}/run", {"input": {"task": {"id": task["id"]}}})
@@ -1101,8 +1101,8 @@ def test_rule_checks_and_ask_ingest_count_their_own_daily_calls(ruled):
 
 def hand_over(api):
     """An automation of ops that assigns its run's task to Ana."""
-    step = {"id": "a", "type": "action", "do": "assign", "args": {"owner_id": "ana"}}
-    return post(api, "automations", {"name": "Hand", "owner_id": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
+    step = {"id": "a", "type": "action", "do": "assign", "args": {"owner": "ana"}}
+    return post(api, "automations", {"name": "Hand", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
                                      "steps": [step]})["id"]
 
 
@@ -1176,7 +1176,7 @@ def test_send_anyway_refuses_once_the_task_changed(ruled):
     api, _ = ruled
     color_rule(api, if_broken="escalate", reviewer="ben")
     task = task_for_ops(api)
-    held = post(api, f"tasks/{task['id']}", {"version": task["version"], "owner_id": "ana",
+    held = post(api, f"tasks/{task['id']}", {"version": task["version"], "owner": "ana",
                                              "note": "Our favorite color is red."}, token="ops-test")["held"]
     post(api, f"tasks/{task['id']}", {"version": task["version"], "body": "Launch is Tuesday."})
     r = send_anyway(api, held["id"], expected=409)
@@ -1203,7 +1203,7 @@ def edit_after_check(api, monkeypatch, task_id, body, times=1):
 def test_a_version_bump_never_releases_a_block_on_an_assign(ruled, monkeypatch):
     api, _ = ruled
     color_rule(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Our favorite color is red."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Our favorite color is red."})
     edit_after_check(api, monkeypatch, task["id"], "Our favorite color is red.")
     post(api, f"automations/{hand_over(api)}/run", {"input": {"task": {"id": task["id"]}}})
     assert sql(api, "SELECT owner_id FROM tasks WHERE id=?", (task["id"],))[0]["owner_id"] == "bot:ops"
@@ -1213,7 +1213,7 @@ def test_a_version_bump_never_releases_a_block_on_an_assign(ruled, monkeypatch):
 def test_an_assign_whose_task_changed_after_a_pass_checks_again_before_it_runs(ruled, monkeypatch):
     api, judge = ruled
     color_rule(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Pick one."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Pick one."})
     edit_after_check(api, monkeypatch, task["id"], "Our favorite color is red.")
     post(api, f"automations/{hand_over(api)}/run", {"input": {"task": {"id": task["id"]}}})
     assert sql(api, "SELECT owner_id FROM tasks WHERE id=?", (task["id"],))[0]["owner_id"] == "bot:ops"
@@ -1224,7 +1224,7 @@ def test_an_assign_whose_task_changed_after_a_pass_checks_again_before_it_runs(r
 def test_a_task_that_keeps_changing_fails_the_step_and_writes_nothing(ruled, monkeypatch):
     api, _ = ruled
     color_rule(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Pick one."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Pick one."})
     edit_after_check(api, monkeypatch, task["id"], "Pick two.", times=5)
     aid = hand_over(api)
     post(api, f"automations/{aid}/run", {"input": {"task": {"id": task["id"]}}})
@@ -1288,12 +1288,12 @@ def test_retries_of_one_blocked_mail_keep_one_hold_and_the_third_escalates_it(ru
 def test_send_anyway_refuses_a_comment_whose_task_went_to_someone_else(ruled):
     api, judge = ruled
     color_rule(api, if_broken="escalate", reviewer="ben")
-    task = post(api, "tasks", {"owner_id": "ana", "title": "Palette notes", "body": "Collect ideas."}, token="ops-test")
+    task = post(api, "tasks", {"owner": "ana", "title": "Palette notes", "body": "Collect ideas."}, token="ops-test")
     task = task.get("task", task)
     held = post(api, f"tasks/{task['id']}/comments", {"text": "Our favorite color is red."}, token="ops-test")["held"]
     nonce = get(api, f"rule-holds/{held['id']}", token="ben-test")["nonce"]
     version = sql(api, "SELECT version FROM tasks WHERE id=?", (task["id"],))[0]["version"]
-    post(api, f"tasks/{task['id']}", {"version": version, "owner_id": "ben"})
+    post(api, f"tasks/{task['id']}", {"version": version, "owner": "ben"})
     calls = len(judge.calls)
     r = send_anyway(api, held["id"], expected=409)
     assert r["error"]["code"] == "changed" and len(judge.calls) == calls
@@ -1346,7 +1346,7 @@ def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(rul
     assert row["title"] == title and row["body"] == "Draft it."
     assert row["note"].startswith("Warning:") and row["note"].endswith("Waiting on the vendor.")
     post(api, "roadmaps/settings", {"bot_public_approval": False})
-    made = post(api, "tasks", {"owner_id": "ops", "title": "Ship the palette", "body": "Internal draft.",
+    made = post(api, "tasks", {"owner": "ops", "title": "Ship the palette", "body": "Internal draft.",
                                "visibility": "public", "public_title": "Our favorite color is red"}, token="ops-test")
     made = sql(api, "SELECT title, body, public_title, public_summary FROM tasks WHERE id=?",
                (made.get("task", made)["id"],))[0]
@@ -1359,10 +1359,10 @@ def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(rul
 def test_a_warned_hand_off_puts_its_line_before_the_note_already_there(ruled):
     api, _ = ruled
     color_rule(api, if_broken="warn")
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Our favorite color is red."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Our favorite color is red."})
     task = post(api, f"tasks/{task['id']}", {"version": task["version"], "note": "Waiting on the vendor."})
     task = task.get("task", task)
-    got = post(api, f"tasks/{task['id']}", {"version": task["version"], "owner_id": "ana"}, token="ops-test")
+    got = post(api, f"tasks/{task['id']}", {"version": task["version"], "owner": "ana"}, token="ops-test")
     assert got["rule_warning"]
     row = sql(api, "SELECT owner_id, note FROM tasks WHERE id=?", (task["id"],))[0]
     assert row["owner_id"] == "human:ana"
@@ -1396,7 +1396,7 @@ def test_automation_warnings_land_on_the_posted_text_and_the_hand_off_note(ruled
     posted = AU._warned_args(None, None, gate, "post_update", {}, key, values)["text"]
     assert posted == "Warning: careful.\n\nOur favorite color is red."
     assert AU._rule_key("create_task", {"title": "T", "body": "B"}) == "body"
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Our favorite color is red."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Our favorite color is red."})
     task = post(api, f"tasks/{task['id']}", {"version": task["version"], "note": "Waiting on the vendor."})
     task = task.get("task", task)
     aid = hand_over(api)
@@ -1572,8 +1572,8 @@ def test_send_anyway_refuses_an_automation_whose_actor_changed(ruled):
     api, _ = ruled
     color_rule(api, if_broken="escalate", reviewer="ben")
     step = {"id": "t", "type": "action", "do": "create_task",
-            "args": {"owner_id": "ana", "title": "Palette", "body": "Our favorite color is red."}}
-    aid = post(api, "automations", {"name": "File", "owner_id": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
+            "args": {"owner": "ana", "title": "Palette", "body": "Our favorite color is red."}}
+    aid = post(api, "automations", {"name": "File", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
                                     "steps": [step]})["id"]
     post(api, f"automations/{aid}/run", {})
     [hold] = sql(api, "SELECT id FROM org_rule_holds WHERE operation='automation'")
@@ -1594,7 +1594,7 @@ def test_public_task_text_is_checked_for_the_whole_company(ruled):
     assert got["held"], got
     assert "Cara" in judge.calls[-1]["state"]["to"]
     # Making a task public alone publishes the public text written before: that text is judged.
-    drafted = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
                                   "public_title": "New palette", "public_summary": "Our favorite color is red."})
     got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
                token="ops-test")
@@ -1613,7 +1613,7 @@ def test_with_no_rule_in_force_bot_writes_resolve_no_audience(ruled, monkeypatch
     task = task_for_ops(api)
     post(api, f"tasks/{task['id']}/comments", {"text": "Ask @ana or ben@acme.example about it."}, token="ops-test")
     assert "held" not in post(api, "updates", {"body": "- Shipped the launch note."}, token="ops-test")
-    aid = post(api, "automations", {"name": "Post", "owner_id": "bot:finance", "trigger": {"type": "event", "name": "x.y"},
+    aid = post(api, "automations", {"name": "Post", "owner": "bot:finance", "trigger": {"type": "event", "name": "x.y"},
                                     "steps": [{"id": "p", "type": "action", "do": "post_update",
                                                "args": {"text": "- Closed the books."}}]})["id"]
     post(api, f"automations/{aid}/run", {})
@@ -1675,7 +1675,7 @@ def test_a_warned_publish_puts_its_line_on_the_public_summary_the_roadmap_shows(
     api, _ = ruled
     color_rule(api, if_broken="warn")
     post(api, "roadmaps/settings", {"bot_public_approval": False})
-    drafted = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
                                   "public_title": "New palette", "public_summary": "Our favorite color is red."})
     got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
                token="ops-test")
@@ -1684,7 +1684,7 @@ def test_a_warned_publish_puts_its_line_on_the_public_summary_the_roadmap_shows(
     assert shown["title"] == "New palette"
     assert shown["summary"].startswith("Warning:") and shown["summary"].endswith("Our favorite color is red.")
     # A new public title on a public task with no summary: the line alone is the summary, the title kept whole.
-    bare = post(api, "tasks", {"owner_id": "ops", "title": "Logo", "body": "Draft it.", "visibility": "public",
+    bare = post(api, "tasks", {"owner": "ops", "title": "Logo", "body": "Draft it.", "visibility": "public",
                                "public_title": "New logo"})
     got = post(api, f"tasks/{bare['id']}", {"version": bare["version"], "public_title": "Our favorite color is red"},
                token="ops-test")
@@ -1705,7 +1705,7 @@ def approved_publish(api, task_id, changes):
 def test_a_warned_publish_a_person_approved_goes_out_exactly_as_approved(ruled):
     api, _ = ruled
     color_rule(api, if_broken="warn")
-    drafted = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
                                   "public_title": "New palette", "public_summary": "Our favorite color is red."})
     approval = approved_publish(api, drafted["id"], {"visibility": "public"})
     got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public",
@@ -1728,7 +1728,7 @@ def test_publishing_while_clearing_a_summary_judges_only_what_is_published(ruled
     api, judge = ruled
     color_rule(api)
     post(api, "roadmaps/settings", {"bot_public_approval": False})
-    drafted = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
                                   "public_title": "Safe title", "public_summary": "Our favorite color is red."})
     got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public",
                                                "public_summary": ""}, token="ops-test")
@@ -1771,7 +1771,7 @@ def test_a_warned_summary_at_the_cap_publishes_with_its_line(ruled):
     color_rule(api, if_broken="warn")
     post(api, "roadmaps/settings", {"bot_public_approval": False})
     summary = ("Our favorite color is red. " * 400)[:7999] + "Z"
-    drafted = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
                                   "public_title": "New palette", "public_summary": summary})
     got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
                token="ops-test")
@@ -1786,7 +1786,7 @@ def test_a_new_task_public_by_its_types_default_carries_the_line_on_its_summary(
     post(api, "roadmaps/settings", {"bot_public_approval": False})
     changelog = post(api, "task-types", {"name": "Changelog", "default_visibility": "public",
                                          "steps": [{"name": "Drafted", "status": "open"}]})["type"]
-    made = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Draft it.", "type": changelog["id"],
+    made = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "type": changelog["id"],
                                "public_title": "Our favorite color is blue"}, token="ops-test")
     made = made.get("task", made)
     assert made["visibility"] == "public"
@@ -1850,7 +1850,7 @@ def test_a_second_warned_publish_of_a_summary_at_the_cap_keeps_one_line(ruled):
     color_rule(api, if_broken="warn")
     post(api, "roadmaps/settings", {"bot_public_approval": False})
     summary = ("Our favorite color is red. " * 400)[:7999] + "Z"
-    drafted = post(api, "tasks", {"owner_id": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
                                   "public_title": "New palette", "public_summary": summary})
     got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
                token="ops-test")
@@ -1984,7 +1984,7 @@ def test_a_warned_automation_update_passes_refusing_writing_checks(ruled, monkey
     api, _ = ruled
     color_rule(api, if_broken="warn")
     monkeypatch.setattr(hubdb, "STYLE_LINT", "refuse")
-    aid = post(api, "automations", {"name": "Post", "owner_id": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
+    aid = post(api, "automations", {"name": "Post", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
                                     "steps": [{"id": "p", "type": "action", "do": "post_update",
                                                "args": {"text": "- Our favorite color is blue."}}]})["id"]
     post(api, f"automations/{aid}/run", {})

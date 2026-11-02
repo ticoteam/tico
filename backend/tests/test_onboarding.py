@@ -170,7 +170,7 @@ def test_setup_lays_out_each_picked_role_once_as_a_recruiting_seat_and_creates_n
     assert "Answers the support inbox." in seat["description"] and "You answer Acme" not in seat["description"]
     opened = api.get(f"/api/v2/seats/{seat['id']}", headers=signed_in())
     assert opened.status_code == 200 and opened.json()["description_by"] == "person"
-    assert api.get("/api/v2/tasks", params={"owner_id": "botops"}, headers=signed_in()).json()["tasks"] == []
+    assert api.get("/api/v2/tasks", params={"owner": "botops"}, headers=signed_in()).json()["tasks"] == []
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM bots WHERE slug='support'").fetchone()
         assert not c.execute("SELECT 1 FROM assignments WHERE bot NOT IN ('coo','botops')").fetchone()
@@ -230,7 +230,7 @@ def test_completing_twice_duplicates_neither_a_bot_nor_a_task(environment):
     assert [row["slug"] for row in again["bots"]] == [row["slug"] for row in first["bots"]]
     assert {row["slug"]: row["setup_task_id"] for row in again["bots"]} == {
         row["slug"]: row["setup_task_id"] for row in first["bots"]}
-    tasks = api.get("/api/v2/tasks", params={"owner_id": "botops"}, headers=signed_in()).json()["tasks"]
+    tasks = api.get("/api/v2/tasks", params={"owner": "botops"}, headers=signed_in()).json()["tasks"]
     assert len(tasks) == 1
 
 

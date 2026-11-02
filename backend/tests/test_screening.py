@@ -180,7 +180,7 @@ def test_each_detector_switches_off_on_its_own(api, quiet):
     assert engine.calls == []
     # A rule's task no longer waits for a model that will not be asked: it opens now, with the patterns' line.
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
-    rule_row(api, {"action": "create_task", "owner_id": "ops", "title": "Order call"}, when={"trigger": "shop"})
+    rule_row(api, {"action": "create_task", "owner": "ops", "title": "Order call"}, when={"trigger": "shop"})
     assert hook(api, made["url"], body=json.dumps({"note": ATTACK}).encode(),
                 headers={"Idempotency-Key": "d1"}).status_code == 202
     (filed,) = owned(api, "bot:ops")
@@ -208,7 +208,7 @@ def test_a_signed_event_with_no_prose_skips_the_model():
 
 # ---------------------------------------------------------------------------------------------- webhooks
 def automation(api, steps, owner="person:ana"):
-    return post(api, "automations", {"name": "New order", "owner_id": owner, "trigger": {"type": "webhook", "id": "shop"},
+    return post(api, "automations", {"name": "New order", "owner": owner, "trigger": {"type": "webhook", "id": "shop"},
                                      "steps": steps})["id"]
 
 
@@ -221,7 +221,7 @@ def call(api, delivery, payload):
 def test_a_webhook_automations_task_and_turn_are_held_for_a_person_and_released_by_handing_over(api):
     engine = model(api, score=0.96, kind="instruction_hijack")
     aid = automation(api, [{"id": "file", "type": "action", "do": "create_task",
-                            "args": {"title": "Order", "owner_id": "ops", "body": "{{webhook.data.note}}"}},
+                            "args": {"title": "Order", "owner": "ops", "body": "{{webhook.data.note}}"}},
                            {"id": "work", "type": "bot_turn", "bot": "ops", "prompt": "Handle: {{webhook.data.note}}"}])
     before = wakes(api)
     call(api, "d1", {"note": ATTACK})
@@ -241,7 +241,7 @@ def test_a_webhook_automations_task_and_turn_are_held_for_a_person_and_released_
 def test_a_webhook_under_the_hold_line_reaches_the_bot_with_a_warning_and_plain_text_as_before(api):
     model(api, score=lambda text: 0.6 if "4411" in text and "ignore" in text else 0.02, kind="ignore_previous_instructions")
     automation(api, [{"id": "file", "type": "action", "do": "create_task",
-                      "args": {"title": "Order {{webhook.delivery}}", "owner_id": "ops", "body": "{{webhook.data.note}}"}}])
+                      "args": {"title": "Order {{webhook.delivery}}", "owner": "ops", "body": "{{webhook.data.note}}"}}])
     call(api, "d1", {"note": ATTACK})
     call(api, "d2", {"note": PLAIN})
     warned, plain = owned(api, "bot:ops")
@@ -253,7 +253,7 @@ def test_a_webhook_under_the_hold_line_reaches_the_bot_with_a_warning_and_plain_
 def test_a_webhook_rule_task_waits_for_the_model_after_the_write_and_is_held_for_the_webhooks_maker(api, quiet):
     from backend.tests.test_triggers import hook, rule_row
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
-    rule_row(api, {"action": "create_task", "owner_id": "ops", "title": "Order call"}, when={"trigger": "shop"})
+    rule_row(api, {"action": "create_task", "owner": "ops", "title": "Order call"}, when={"trigger": "shop"})
     engine = model(api, score=0.97)
     assert hook(api, made["url"], body=json.dumps({"note": ATTACK}).encode(),
                 headers={"Idempotency-Key": "d1"}).status_code == 202
@@ -387,7 +387,7 @@ def broken(*args, **kwargs):
 def test_a_failing_model_check_still_files_a_webhook_rule_task_with_the_patterns_warning(api, monkeypatch):
     from backend.tests.test_triggers import hook, rule_row
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
-    rule_row(api, {"action": "create_task", "owner_id": "ops", "title": "Order call"}, when={"trigger": "shop"})
+    rule_row(api, {"action": "create_task", "owner": "ops", "title": "Order call"}, when={"trigger": "shop"})
     model(api, score=0.97)
     monkeypatch.setattr(S, "model_ready", broken)
     assert hook(api, made["url"], body=json.dumps({"note": ATTACK}).encode(),

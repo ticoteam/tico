@@ -202,7 +202,7 @@ def test_a_bot_still_in_setup_holds_work_from_bots_in_sight_and_is_not_busy_for_
     from backend.tests.test_api import headers, post
     store = api.app.state.store
     # Work it held from before an upgrade, when "Set up" bots still took tasks; onboarding bots take none now.
-    task = api.post("/api/v2/tasks", json={"owner_id": "finance", "title": "Reconcile the October invoices", "body": "Before the close."},
+    task = api.post("/api/v2/tasks", json={"owner": "finance", "title": "Reconcile the October invoices", "body": "Before the close."},
                     headers=headers()).json()["task"]
     from backend.tests.test_api import unrelated_task_managers
     with api.app.state.store.transaction() as c:
@@ -210,7 +210,7 @@ def test_a_bot_still_in_setup_holds_work_from_bots_in_sight_and_is_not_busy_for_
     with store.transaction() as c:
         secret = H.task_create(c, "human:cara", "Review the salary bands", "Only for Cara.", "bot:finance", private=True)
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='finance'")
-    refused = api.post("/api/v2/tasks", json={"owner_id": "finance", "title": "Another one", "body": "x"}, headers=headers())
+    refused = api.post("/api/v2/tasks", json={"owner": "finance", "title": "Another one", "body": "x"}, headers=headers())
     assert refused.status_code >= 400 and "still onboarding" in refused.text
     refused = api.post(f"/api/v2/tasks/{task['id']}/run-now", json={}, headers=headers())
     assert refused.status_code >= 400 and "still onboarding" in refused.text
@@ -418,10 +418,10 @@ def test_botops_stuck_list_skips_an_own_blocked_parent_while_its_bot_is_busy_or_
 
 def test_creating_a_task_that_blocks_two_of_its_ancestors_returns_both_warnings(api):
     from backend.tests.test_api import post
-    root = post(api, "tasks", {"owner_id": "ops", "title": "Ship the release", "body": "x"})
-    window = post(api, "tasks", {"owner_id": "ops", "title": "Open the deploy window", "body": "x",
+    root = post(api, "tasks", {"owner": "ops", "title": "Ship the release", "body": "x"})
+    window = post(api, "tasks", {"owner": "ops", "title": "Open the deploy window", "body": "x",
                                  "relations": [{"task": root["id"], "kind": "parent"}]})
-    made = post(api, "tasks", {"owner_id": "finance", "title": "Hold merges until RELEASED", "body": "x",
+    made = post(api, "tasks", {"owner": "finance", "title": "Hold merges until RELEASED", "body": "x",
                                "relations": [{"task": window["id"], "kind": "parent"},
                                              {"task": window["id"], "kind": "blocks"},
                                              {"task": root["id"], "kind": "blocks"}]})

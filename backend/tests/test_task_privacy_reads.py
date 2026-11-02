@@ -110,7 +110,7 @@ def test_private_execution_output_context_and_grants_revoke_on_reassignment(api)
     post(api, f"attempts/{attempt['id']}/events", {"events": [{"seq": 1, "kind": "message", "payload": {"text": "Private runtime output"}}]}, machine["token"])
     get(api, f"turns/{attempt['id']}/steps", expected=404)
     get(api, f"turns/{attempt['id']}/steps", "ben-test")
-    post(api, "tasks/" + row["id"], {"version": attempt["task"]["version"], "owner_id": "finance"}, "ben-test")
+    post(api, "tasks/" + row["id"], {"version": attempt["task"]["version"], "owner": "finance"}, "ben-test")
     get(api, "messages/" + attempt["message"]["id"], attempt["token"], expected=404)
     assert api.get(f"/api/v2/conversations/{row['conversation_id']}/messages", headers=headers(attempt["token"])).status_code in (403, 404)
     assert api.post("/api/v2/jobs/claim", json={"bot": "ops", "start_places": True}, headers=headers(machine["token"], key)).status_code in (403, 404)
@@ -128,7 +128,7 @@ def test_private_execution_cannot_publish_public_task_or_wider_reply(api):
     public = task(api, private=False, requester="bot:ops", owner="bot:ops", title="Public work")
     for ident in (public["id"], public["id"][:8]):
         post(api, "tasks/" + ident, {"version": public["version"], "body": "Private derived output"}, attempt["token"], expected=403)
-    post(api, "tasks", {"owner_id": "ops", "title": "Private follow-up", "body": "Keep this private", "private": False}, attempt["token"], expected=403)
+    post(api, "tasks", {"owner": "ops", "title": "Private follow-up", "body": "Keep this private", "private": False}, attempt["token"], expected=403)
     post(api, "messages", {"to": "ana", "text": "Private derived output"}, attempt["token"], expected=403)
     post(api, "updates", {"body": "Private derived output"}, attempt["token"], expected=403)
     post(api, "integrations/github/learnings", {"text": "Private derived output"}, attempt["token"], expected=403)
@@ -187,7 +187,7 @@ def test_verified_legal_requester_is_kept_without_forged_human_grants(api, reque
         assign(api, machine, "ops", generation=assigned["generation"] if assigned else 0)
     ready(api, machine, ["ops"])
     attempt = claim(api, machine, "ops")
-    followup = post(api, "tasks", {"owner_id": "ops", "title": "Review the agreement", "body": "Review its terms."}, attempt["token"])
+    followup = post(api, "tasks", {"owner": "ops", "title": "Review the agreement", "body": "Review its terms."}, attempt["token"])
     assert followup["private"] and followup["requester_id"] == requester
     assert followup["owner_id"] == "bot:ops"
     get(api, "tasks/" + followup["id"], expected=404)
@@ -252,7 +252,7 @@ def test_delegated_creation_keeps_defaults_and_requires_actual_bot_audience(api,
                       (encode({**config, "private_tasks_default": True}), sensitive))
         before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
         rooms_before = c.execute("SELECT count(*) FROM conversations").fetchone()[0]
-    created = post(api, "tasks", {"owner_id": owner, "title": "Review delegated work", "body": "Review it.",
+    created = post(api, "tasks", {"owner": owner, "title": "Review delegated work", "body": "Review it.",
                                    "private": explicit}, "acted-test", expected=expected)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == before + (expected == 200)
@@ -262,7 +262,7 @@ def test_delegated_creation_keeps_defaults_and_requires_actual_bot_audience(api,
         assert created["private"] and created["requester_id"] == "human:ben" and created["owner_id"] == "bot:finance"
         assert get(api, "tasks/" + created["id"], "acted-test")["task"]["private"]
         # A signed-in person keeps their explicit choice to publish.
-        public = post(api, "tasks", {"owner_id": owner, "title": "Review public work", "body": "Review it.",
+        public = post(api, "tasks", {"owner": owner, "title": "Review public work", "body": "Review it.",
                                      "private": False}, "ben-test")
         assert public["private"] is False
 
@@ -602,7 +602,7 @@ def running_turn(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    work = post(api, "tasks", {"owner_id": "ops", "title": "Release", "body": "Ship it."})
+    work = post(api, "tasks", {"owner": "ops", "title": "Release", "body": "Ship it."})
     attempt = claim(api, r)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, r["token"])
     with api.app.state.store.read() as c:

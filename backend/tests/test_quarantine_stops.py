@@ -276,7 +276,7 @@ def test_all_running_turns_stop_each_judged_on_its_own_with_folded_inputs_follow
     post(api, f"attempts/{first['id']}/inputs/{folded['id']}/ack", {}, machine['token'])
     attempts = [first]
     for title in ['Check the export', 'Check the archive']:
-        post(api, 'tasks', {'owner_id': 'ops', 'title': title, 'body': 'Check the saved files.'})
+        post(api, 'tasks', {'owner': 'ops', 'title': title, 'body': 'Check the saved files.'})
         attempt = claim(api, machine)
         assert attempt is not None
         post(api, f"attempts/{attempt['id']}/started", {'thread_id': title}, machine['token'])

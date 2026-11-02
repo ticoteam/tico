@@ -9,7 +9,7 @@ def meta(name, data, file_id):
 
 
 def test_needs_you_links_only_the_approved_bytes_and_keeps_that_version(api):
-    tid = post(api, "tasks", {"owner_id": "ops", "title": "Send the report", "body": "Mail it to Ava."})["id"]
+    tid = post(api, "tasks", {"owner": "ops", "title": "Send the report", "body": "Mail it to Ava."})["id"]
     report = post(api, f"tasks/{tid}/files", {"name": "report.md", "text": "# Report"})
     other = post(api, f"tasks/{tid}/files", {"name": "notes.md", "text": "# Notes"})
     payload = {"to": ["ava@creator.example"], "cc": [], "subject": "Report", "body_sha256": "a" * 64,

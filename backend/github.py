@@ -69,12 +69,12 @@ def _links_for(c, url):
 def _due(c, task, burst):
     # Under a wake preset the preset is the one timer: the burst goes out on the next flush, and the hold coalesces it
     # from then (backend/wake_presets.py). Current behaviour keeps the three-minute burst.
-    return H.now() if _preset_owner(c, task) else burst.get("due_at") or H.shift(H.now(), seconds=170)
+    return H.now() if _preset_owner(c, task) else burst.get("due") or H.shift(H.now(), seconds=170)
 
 
 def _save_burst(c, task, burst, **parts):
     from .repositories import save_metadata
-    kept = {k: v for k, v in {**burst, **parts, "due_at": _due(c, task, burst)}.items() if v or k == "due"}
+    kept = {k: v for k, v in {**burst, **parts, "due": _due(c, task, burst)}.items() if v or k == "due"}
     save_metadata(c, "github-task-wake:" + task["id"], kept)
 
 
@@ -148,7 +148,7 @@ def flush_wakes(c):
     for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'github-task-wake:%'").fetchall():
         with isolated(c, "github_wake", row["key"]):
             burst = metadata(c, row["key"])
-            if burst.get("due_at", "") > H.now():
+            if burst.get("due", "") > H.now():
                 continue
             task = H.task(c, row["key"].split(":", 1)[1])
             live = bool(task and task["status"] in (*H.ACTIVE_STATUSES, "blocked"))

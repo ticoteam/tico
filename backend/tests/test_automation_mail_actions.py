@@ -97,7 +97,7 @@ def computer(api, tmp_path, monkeypatch):
 
 
 def automate(api, *steps):
-    return post(api, "automations", {"name": "Invoices", "owner_id": "person:ana",
+    return post(api, "automations", {"name": "Invoices", "owner": "person:ana",
                                      "trigger": {"type": "message", "inbox": BOX}, "steps": list(steps)})["id"]
 
 
@@ -340,7 +340,7 @@ def test_a_slack_reply_delivered_after_the_switch_went_off_is_held_as_a_draft_ta
         held = dict(c.execute("SELECT state, error FROM slack_posts").fetchone())
         task = c.execute("SELECT owner_id, title FROM tasks WHERE title LIKE 'Draft reply:%'").fetchone()
         state = json.loads(c.execute("SELECT saved_state FROM automation_runs WHERE id='run_s'").fetchone()[0])
-    assert held == {"state": "cancelled", "error": "send_off"} and dict(task) == {"owner_id": "human:ana",
+    assert held == {"state": "cancelled", "error": "send_off"} and dict(task) == {"owner": "human:ana",
                                                                                    "title": "Draft reply: On it"}
     assert state["steps"][0]["outputs"]["detail"] == "send_off"
 

@@ -8,7 +8,7 @@ NOTE_STEP = {"id": "tell", "type": "action", "enabled": True, "do": "wake_bot", 
 
 
 def flow(**extra):
-    return {"name": "Morning check", "owner_id": "person:ana", "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
+    return {"name": "Morning check", "owner": "person:ana", "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
             "steps": [NOTE_STEP], **extra}
 
 

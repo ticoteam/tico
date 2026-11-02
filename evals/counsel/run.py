@@ -177,7 +177,7 @@ def live(docs, url, token, only, wait=3600):
     me = call("GET", "me")["actor"]
     # One holder per run: an open one from an earlier run would make this a duplicate ask.
     started = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
-    holder = call("POST", "tasks", {"owner_id": me, "title": f"Documents for the Counsel eval ({started})",
+    holder = call("POST", "tasks", {"owner": me, "title": f"Documents for the Counsel eval ({started})",
                                     "body": "Each document the Counsel eval adds to Rules, attached here."})
     holder_id = (holder.get("task") or holder)["id"]
     suggestions = {}

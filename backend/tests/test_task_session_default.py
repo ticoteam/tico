@@ -45,7 +45,7 @@ def test_a_retired_assignment_hands_its_task_back_awake_but_waits_out_a_running_
     from backend.store import H
     from backend.tests.test_api import post, runner
     machine = runner(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Assigned work", "body": "Keep going."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Assigned work", "body": "Keep going."})
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) VALUES('ops-a1','ops-a1','Ops A1','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('ops-a1',?,'ana')",

@@ -201,7 +201,7 @@ def test_a_tag_rule_assigns_the_task_through_a_reassignment_and_records_the_rule
         moved = c.execute("SELECT actor, old, new, note FROM task_events WHERE task_id=? AND field='owner'",
                           (task["id"],)).fetchone()
         assert tuple(moved) == (H.KEEPER, "bot:cpo", "bot:ops", f"Rule {row['id']}")
-        assert actions(c, row["id"]) == [{"rule": row["id"], "action": "assign", "owner_id": "bot:ops"}]
+        assert actions(c, row["id"]) == [{"rule": row["id"], "action": "assign", "owner": "bot:ops"}]
 
 
 def test_an_assign_rule_never_hands_a_private_task_to_someone_who_cannot_read_it(api):

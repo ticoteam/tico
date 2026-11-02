@@ -301,7 +301,7 @@ def test_ask_ingest_and_rule_checks_have_their_own_slots(gate, monkeypatch):
 
 def test_a_persons_own_task_for_someone_is_not_gated_but_counts(gate):
     api, model, token = gate
-    out = post(api, "tasks", {"owner_id": "ben", "title": "Read the contract", "body": "By Friday."})
+    out = post(api, "tasks", {"owner": "ben", "title": "Read the contract", "body": "By Friday."})
     assert out["owner_id"] == "human:ben" and not model.calls
     with api.app.state.store.read() as c:
         assert A.load(c, "human:ben") == (1, 0)
@@ -911,7 +911,7 @@ def test_a_bots_bulk_handoff_tells_it_why_for_each_task(gate):
     api, model, token = gate
     plate(api, 15)
     ids = [own_task(api, token, f"Pick launch option {n}")["id"] for n in range(3)]
-    r = api.post("/api/v2/task-bulk", json={"filter": {"ids": ids}, "action": "owner", "owner_id": "ben"},
+    r = api.post("/api/v2/task-bulk", json={"filter": {"ids": ids}, "action": "owner", "owner": "ben"},
                  headers=headers(token))
     assert r.status_code == 200, r.text
     lines = {line["id"]: line for line in r.json()["tasks"]["changed"]}

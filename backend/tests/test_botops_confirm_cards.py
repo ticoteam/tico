@@ -285,7 +285,7 @@ def test_gateway_address_change_with_an_environment_key_is_refused_at_once(api, 
 
 def test_a_computers_code_is_only_on_the_persons_card(api, botops):
     ana = turn(api, botops, person="ana-test", text="Add a computer for me")
-    answer = act(api, ana, "POST", "enrollments", {"owner_id": "ana"})
+    answer = act(api, ana, "POST", "enrollments", {"operator": "ana"})
     assert answer.status_code == 200 and answer.json()["needs_confirm"] and "code" not in answer.json(), answer.text
     card = answer.json()
     card_in_chat(api, card, "ana")
@@ -372,7 +372,7 @@ def test_a_client_that_sends_no_header_gets_the_same_card_or_refusal(api, botops
     ana = turn(api, botops, person="ana-test", text="Do these for me")
     cards = (("POST", "access/owner", {"person": "ben", "expected_revision": get(api, "access")["owner_id"]["revision"],
                                        "confirm": True}),
-             ("POST", "enrollments", {"owner_id": "ana"}),
+             ("POST", "enrollments", {"operator": "ana"}),
              ("POST", "system/update", {"version": "9.9.9"}),
              ("PUT", "access/rules", {"botops_manages_bots": False}),
              ("POST", f"seats/{seat['id']}/hire", {"template": "support"}),

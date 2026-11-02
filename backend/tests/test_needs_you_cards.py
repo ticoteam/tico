@@ -15,19 +15,19 @@ SEND = {"to": ["Jennie Ooten <jennie@acme.example>"], "cc": [], "subject": "$200
 
 def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
     _, _, finance = setup_attempt(api, "finance")
-    deal = post(api, "tasks", {"title": "Referral deal for rental owners", "body": "x", "owner_id": "bot:finance"})
+    deal = post(api, "tasks", {"title": "Referral deal for rental owners", "body": "x", "owner": "bot:finance"})
     send = approval_for_ana(api, kind="send", payload=SEND, task=deal["id"], token=finance["token"])
     merge = approval_for_ana(api, kind="merge", payload={"repo": "acme/site", "pr": 12}, task=deal["id"],
                              token=finance["token"])
-    keys = post(api, "tasks", {"title": "Add the new OpenAI keys", "body": "Rotate them", "owner_id": "human:ana",
-                               "due_at": H.shift(H.now(), days=5)}, token=finance["token"])
-    murphy = post(api, "tasks", {"title": "Call Murphy back", "body": "About the lease", "owner_id": "human:ana",
-                                 "due_at": H.shift(H.now(), days=2)}, token=finance["token"])
-    offsite = post(api, "tasks", {"title": "Plan next year's offsite", "body": "x", "owner_id": "human:ana",
-                                  "due_at": H.shift(H.now(), days=60)}, token=finance["token"])
+    keys = post(api, "tasks", {"title": "Add the new OpenAI keys", "body": "Rotate them", "owner": "human:ana",
+                               "due": H.shift(H.now(), days=5)}, token=finance["token"])
+    murphy = post(api, "tasks", {"title": "Call Murphy back", "body": "About the lease", "owner": "human:ana",
+                                 "due": H.shift(H.now(), days=2)}, token=finance["token"])
+    offsite = post(api, "tasks", {"title": "Plan next year's offsite", "body": "x", "owner": "human:ana",
+                                  "due": H.shift(H.now(), days=60)}, token=finance["token"])
     # A bot's task waiting on Ana, its BotOps child waiting on her too (parked on her directly, as before a wait
     # became a subtask), and the subtask that asks her: one card.
-    vendor = post(api, "tasks", {"title": "Switch the payroll vendor", "body": "x", "owner_id": "bot:finance"})
+    vendor = post(api, "tasks", {"title": "Switch the payroll vendor", "body": "x", "owner": "bot:finance"})
     with api.app.state.store.transaction() as c:
         fix = H.task_create(c, "bot:finance", "Give finance the payroll connector", "x", "bot:ops",
                             parent_id=vendor["id"])
@@ -95,7 +95,7 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
 
 def test_do_what_you_recommend_answers_and_closes_the_card(api):
     _, _, finance = setup_attempt(api, "finance")
-    tool = post(api, "tasks", {"title": "Pick the outbound tool", "body": "x", "owner_id": "bot:finance"})
+    tool = post(api, "tasks", {"title": "Pick the outbound tool", "body": "x", "owner": "bot:finance"})
     with api.app.state.store.transaction() as c:
         conv = H.task(c, tool["id"])["conversation_id"]
         plain = H.say(c, "bot:finance", "human:ana", "Which day suits?", kind="ask", conversation_id=conv,
@@ -117,7 +117,7 @@ def test_do_what_you_recommend_answers_and_closes_the_card(api):
 
 def test_do_what_you_recommend_answers_a_question_on_a_file_version(api):
     _, _, finance = setup_attempt(api, "finance")
-    plan = post(api, "tasks", {"title": "Review the payroll plan", "body": "x", "owner_id": "bot:finance"})
+    plan = post(api, "tasks", {"title": "Review the payroll plan", "body": "x", "owner": "bot:finance"})
     question = {"questions": [{"id": "verdict", "header": "Review", "question": "Ship it?", "other": False,
                                "options": [{"label": "Approve", "then": "Go with Approve"}, {"label": "Request changes", "then": "Go with Request changes"}]}], "who": "ana"}
     made = post(api, f"tasks/{plan['id']}/files", {"name": "plan.md", "text": "# Plan", "ask": question},
@@ -134,7 +134,7 @@ def test_do_what_you_recommend_answers_a_question_on_a_file_version(api):
 def test_a_side_question_on_a_persons_task_is_answered_not_finished(api):
     _, _, finance = setup_attempt(api, "finance")
     deck = post(api, "tasks", {"title": "Prepare the board deck", "body": "For Thursday's board meeting",
-                               "owner_id": "human:ana"}, token=finance["token"])
+                               "owner": "human:ana"}, token=finance["token"])
     with api.app.state.store.transaction() as c:
         asked = H.say(c, "bot:finance", "human:ana", "Shall I pull the Q3 numbers from Stripe for you?", kind="ask",
                       conversation_id=H.task(c, deck["id"])["conversation_id"],
@@ -146,7 +146,7 @@ def test_a_side_question_on_a_persons_task_is_answered_not_finished(api):
 
 def test_waits_under_one_project_without_a_card_above_them_each_keep_their_card(api):
     _, _, finance = setup_attempt(api, "finance")
-    launch = post(api, "tasks", {"title": "Q4 launch", "body": "x", "owner_id": "bot:finance"})
+    launch = post(api, "tasks", {"title": "Q4 launch", "body": "x", "owner": "bot:finance"})
     with api.app.state.store.transaction() as c:
         stripe = H.task_create(c, "bot:finance", "Pay the Stripe invoice", "x", "bot:finance", parent_id=launch["id"])
         venue = H.task_create(c, "bot:finance", "Book the venue", "x", "bot:finance", parent_id=launch["id"])
@@ -173,7 +173,7 @@ def test_what_it_takes_reads_money_and_sign_ins_not_every_mention():
 
 def test_a_question_asked_again_did_not_go_away(api):
     _, _, finance = setup_attempt(api, "finance")
-    tool = post(api, "tasks", {"title": "Pick the outbound tool", "body": "x", "owner_id": "bot:finance"})
+    tool = post(api, "tasks", {"title": "Pick the outbound tool", "body": "x", "owner": "bot:finance"})
     with api.app.state.store.transaction() as c:
         conv = H.task(c, tool["id"])["conversation_id"]
         H.say(c, "bot:finance", "human:ana", "Apollo or Clay?", kind="ask", conversation_id=conv, refs={"task": tool["id"]})
@@ -188,7 +188,7 @@ def test_a_question_asked_again_did_not_go_away(api):
 
 def test_a_wait_above_another_open_card_stays_after_a_one_tap_answer(api):
     _, _, finance = setup_attempt(api, "finance")
-    launch = post(api, "tasks", {"title": "Q4 launch", "body": "x", "owner_id": "bot:finance"})
+    launch = post(api, "tasks", {"title": "Q4 launch", "body": "x", "owner": "bot:finance"})
     with api.app.state.store.transaction() as c:
         venue = H.task_create(c, "bot:finance", "Which venue?", "Which venue should we book?", "human:ana",
                               parent_id=launch["id"])
@@ -209,7 +209,7 @@ def test_an_approval_keeps_its_needs_you_mark_while_only_the_clock_moves(api, mo
     from backend import events as E
     store, auth, view = api.app.state.store, api.app.state.auth, api.app.state.task_view
     approval = approval_for_ana(api)
-    other = post(api, "tasks", {"title": "Review the plan", "body": "x", "owner_id": "human:ana"})
+    other = post(api, "tasks", {"title": "Review the plan", "body": "x", "owner": "human:ana"})
     first = get(api, "needs-you")
     (card,) = [x for x in first["items"] if x["id"] == approval["id"]]
     real = H.now
@@ -235,10 +235,10 @@ def test_an_approval_keeps_its_needs_you_mark_while_only_the_clock_moves(api, mo
 def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_again(api):
     _, _, finance = setup_attempt(api, "finance")
     for n in range(4):
-        post(api, "tasks", {"title": f"Sign form {n}", "body": "x", "owner_id": "human:ana",
-                            "due_at": H.shift(H.now(), days=n + 1)}, token=finance["token"])
+        post(api, "tasks", {"title": f"Sign form {n}", "body": "x", "owner": "human:ana",
+                            "due": H.shift(H.now(), days=n + 1)}, token=finance["token"])
     approval_for_ana(api, token=finance["token"])
-    post(api, "tasks", {"title": "Plan the offsite", "body": "x", "owner_id": "human:ana"})
+    post(api, "tasks", {"title": "Plan the offsite", "body": "x", "owner": "human:ana"})
     whole = get(api, "needs-you")
     assert whole["next"] is None and whole["count"] == len(whole["items"]) >= 6 and "bots" not in whole
     seen, cursor, page = [], None, None
@@ -254,7 +254,7 @@ def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_agai
     assert page["bots"] == views.needs_bots(whole["items"], "human:ana") and page["bots"]["bot:finance"] >= 4
 
     held = get(api, "needs-you?limit=2")["next"]
-    post(api, "tasks", {"title": "Call the bank", "body": "x", "owner_id": "human:ana"})
+    post(api, "tasks", {"title": "Call the bank", "body": "x", "owner": "human:ana"})
     again = get(api, f"needs-you?limit=2&cursor={held}")
     assert again["restart"] is True and ids(again["items"]) == ids(get(api, "needs-you")["items"][:2])
     get(api, "needs-you?limit=2&cursor=nonsense", expected=422)
@@ -264,7 +264,7 @@ def test_each_card_task_is_read_by_id_once_however_many_cards(api):
     """The list reads its cards' task rows in one pass: the owner's rows are the read, and their visibility comes from
     the same statement as the chain's rows. A second read by id of every card cost a full row each (bodies included)."""
     for n in range(12):
-        post(api, "tasks", {"title": f"Card {n}", "body": "x" * 4000, "owner_id": "human:ana"})
+        post(api, "tasks", {"title": f"Card {n}", "body": "x" * 4000, "owner": "human:ana"})
     page, statements = traced(api, lambda: get(api, "needs-you"))
     assert len([i for i in page["items"] if i["kind"] == "task"]) == 12
     by_id = [s for s in statements if "FROM tasks WHERE id IN" in s]

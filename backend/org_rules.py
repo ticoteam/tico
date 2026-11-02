@@ -473,7 +473,7 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "if_broken": row["if_broken"], "reviewer": reviewer, "status": row["status"],
         "suggested_by": row["suggested_by"], "decided_by": row["decided_by"], "decided_at": row["decided_at"],
         "version": row["version"], "created_at": row["created_at"], "updated_at": row["updated_at"],
-        "due_at": [{"id": d["id"], "due_on": d["due_on"], "status": d["status"], "repeats": d["repeats"],
+        "due": [{"id": d["id"], "due_on": d["due_on"], "status": d["status"], "repeats": d["repeats"],
                  "task_days": d["task_days"]}
                 for d in dues[:DUE_PER_RULE]],
         "due_more": max(0, len(dues) - DUE_PER_RULE),
@@ -797,8 +797,8 @@ def add_due(c, auth, who, rule_id, body):
     if days is not RR.UNCHANGED and days is not None:
         RR.sync(c, who.actor, D.one(c, due_id), row["text"], days, _via(who))
     after = D.views(c, [D.one(c, due_id)])[0]
-    _audit(c, who.actor, rule_id, None, {"due_at": after}, who)
-    _event(c, who.actor, "due_added", rule_id, {"due_at": due_id})
+    _audit(c, who.actor, rule_id, None, {"due": after}, who)
+    _event(c, who.actor, "due_added", rule_id, {"due": due_id})
     return after
 
 
@@ -839,7 +839,7 @@ def edit_due(c, auth, who, due_text, body):
         RR.sync(c, who.actor, D.one(c, new_id), rule["text"], days, _via(who))
     after = D.views(c, [D.one(c, new_id)])[0]
     replaces = row["id"] if replaced else None
-    _audit(c, who.actor, rule["id"], {"due_at": before}, {"due_at": after}, who)
+    _audit(c, who.actor, rule["id"], {"due": before}, {"due": after}, who)
     _event(c, who.actor, "due_edited", rule["id"], {"due": new_id, "replaces": replaces})
     return {**after, "replaces": replaces}
 
@@ -862,8 +862,8 @@ def remove_due(c, auth, who, due_text):
     from . import rule_due_routine as RR
     RR.off(c, who.actor, row, _via(who))
     stored = D.one(c, row["id"])
-    _audit(c, who.actor, rule["id"], {"due_at": before}, {"due_at": D.views(c, [stored])[0]}, who)
-    _event(c, who.actor, "due_removed", rule["id"], {"due_at": row["id"]})
+    _audit(c, who.actor, rule["id"], {"due": before}, {"due": D.views(c, [stored])[0]}, who)
+    _event(c, who.actor, "due_removed", rule["id"], {"due": row["id"]})
     return {"id": row["id"], "retired_at": stored["retired_at"]}
 
 
@@ -1250,7 +1250,7 @@ def install(app, store, auth, mutate):
         def work(c):
             return decide_rule(c, auth, who, rule_id, data, "accept")
         result = mutate(request, body, work)
-        return {"rule": fresh(who, rule_id), "due": result["due_at"]}
+        return {"rule": fresh(who, rule_id), "due": result["due"]}
 
     @app.post("/api/v2/rules/{rule_id}/skip")
     def rules_skip(request: Request, rule_id: str, body: RuleDecide):
@@ -1260,7 +1260,7 @@ def install(app, store, auth, mutate):
         def work(c):
             return decide_rule(c, auth, who, rule_id, {"version": body.version}, "skip")
         result = mutate(request, body, work)
-        return {"rule": fresh(who, rule_id), "due": result["due_at"]}
+        return {"rule": fresh(who, rule_id), "due": result["due"]}
 
     @app.post("/api/v2/rules/{rule_id}/retire")
     def rules_retire(request: Request, rule_id: str, body: RuleDecide):
@@ -1270,7 +1270,7 @@ def install(app, store, auth, mutate):
         def work(c):
             return decide_rule(c, auth, who, rule_id, {"version": body.version}, "retire")
         result = mutate(request, body, work)
-        return {"rule": fresh(who, rule_id), "due": result["due_at"]}
+        return {"rule": fresh(who, rule_id), "due": result["due"]}
 
     @app.post("/api/v2/rules/{rule_id}/due")
     def rules_due_add(request: Request, rule_id: str, body: DueAdd):

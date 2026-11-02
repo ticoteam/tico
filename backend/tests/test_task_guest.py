@@ -170,7 +170,7 @@ def test_a_guest_who_cannot_read_the_bots_opens_that_task_and_no_other_work_of_t
         current = get(api, f"bots/{slug}/access", "ana-test")
         put(api, f"bots/{slug}/access", {"see": {"everyone": True}, "read": {"people": ["ana", "ben"]},
                                         "write": {"everyone": True}, "revision": current["revision"]})
-    other = post(api, "tasks", {"owner_id": "ops", "title": "Ops weekly sweep", "body": "Routine."})
+    other = post(api, "tasks", {"owner": "ops", "title": "Ops weekly sweep", "body": "Routine."})
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
     attempt = run_on(api)
     post(api, "tasks", subtask(row["id"], "cara"), attempt["token"])

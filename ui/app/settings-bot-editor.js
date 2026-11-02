@@ -379,14 +379,14 @@ function settingsEditBot(slug = '', inline = false) {
       slugInput.value = slugFromName(name.value);
       if (!repoEdited) repo.value = slugInput.value ? `bot-${slugInput.value}` : '';
     });
-    form.elements.owner_id.addEventListener('change', () => { operatorEdited = true; });
+    form.elements.operator.addEventListener('change', () => { operatorEdited = true; });
     form.elements.reports_to.addEventListener('change', event => {
       const parent = S.emps.find(row => row.id === event.target.value);
-      if (!operatorEdited && !form.elements.runner_id.value && parent?.owner_id) form.elements.owner_id.value = parent.owner_id;
+      if (!operatorEdited && !form.elements.runner_id.value && parent?.owner_id) form.elements.operator.value = parent.owner_id;
     });
     form.elements.runner_id.addEventListener('change', event => {
-      const selected = event.target.selectedOptions[0]?.dataset.owner_id;
-      if (selected) form.elements.owner_id.value = selected;
+      const selected = event.target.selectedOptions[0]?.dataset.operator;
+      if (selected) form.elements.operator.value = selected;
     });
     const combo = dialog.querySelector('[data-add-choice]');
     if (combo) {
@@ -478,7 +478,7 @@ function settingsEditBot(slug = '', inline = false) {
           status: form.elements.status.value, ...(slugChosen || form.elements.repo.dataset.edited ? {repo: form.elements.repo.value} : {}),
           private_tasks_default: form.elements.private_tasks_default.checked,
           thread_mode: form.elements.thread_mode.value, shared: form.elements.shared.checked, model: choice.model, effort: choice.effort,
-          harness: choice.harness, operator: form.elements.owner_id.value || S.me?.id,
+          harness: choice.harness, operator: form.elements.operator.value || S.me?.id,
           runner_id: form.elements.runner_id.value || null});
       }
       if (!inline) dialog.close();

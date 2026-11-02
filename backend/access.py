@@ -587,8 +587,8 @@ def _keep_mailbox(c, person, address):
 def _follow_address(c, pid, old, new):
     """Meetings filed for a person by address (backend/meetings.py filed_for), a meeting delivery they asked for and a
     Granola sync, which acts as the address it was connected with: all follow the person when the address changes."""
-    c.execute("UPDATE meetings SET owner_id=?, metadata=CASE WHEN lower(json_extract(metadata,'$.owner'))=? "
-              "THEN json_set(metadata,'$.owner',?) ELSE metadata END WHERE lower(owner_id)=?", (new, old, new, old))
+    c.execute("UPDATE meetings SET owner=?, metadata=CASE WHEN lower(json_extract(metadata,'$.owner'))=? "
+              "THEN json_set(metadata,'$.owner',?) ELSE metadata END WHERE lower(owner)=?", (new, old, new, old))
     c.execute("UPDATE meeting_deliveries SET requested_by=? WHERE lower(requested_by)=?", (new, old))
     c.execute("UPDATE granola_connections SET email=? WHERE actor=?", (new, "human:" + pid))
 
@@ -699,7 +699,7 @@ def view(c, settings, roster, proxy_kind, owner_id):
         left = bool(p.get("hidden"))
         role = role_of(access, owner["email"], p["email"])
         people.append({"id": p["id"], "name": p["name"], "email": p["email"], "title": p["title"],
-                       "team": p["team"], "left": left, "owner_id": role == "owner",
+                       "team": p["team"], "left": left, "owner": role == "owner",
                        "role": role, "bot_admin": role == "admin",
                        "create_bots": can_create_bots(p, role),
                        "add_people": can_add_people(p, role, domains_),

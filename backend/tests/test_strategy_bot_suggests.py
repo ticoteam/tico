@@ -62,7 +62,7 @@ def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api)
     # A task for a person stays the person's to make, at every level.
     post(api, "goal-proposals", {"kind": "recovery", "goal_id": goal["id"], "payload": {
         "evidence": "x", "options": [{"label": "Ana does it", "actions": [
-            {"do": "create", "owner_id": OWNER, "title": "Fix it yourself"}]}]}}, token=strategy_token, expected=422)
+            {"do": "create", "owner": OWNER, "title": "Fix it yourself"}]}]}}, token=strategy_token, expected=422)
     before = {t["id"]: t["rank"] for t in tasks_of(api, "bot:ops")}
     proposal = recovery(api, goal["id"], second, strategy_token)
     sync(api)

@@ -35,7 +35,7 @@ def _file(run, w):
         if len(run.asked) >= 2 or t["id"] in run.asked or not _open_check(w, t):
             continue
         if not run.asked:
-            child = w.post("tasks", {"owner_id": "ana", "title": CHILD, "body": "Confirm the contract covers this.",
+            child = w.post("tasks", {"owner": "ana", "title": CHILD, "body": "Confirm the contract covers this.",
                                      "relations": [{"task": t["id"], "kind": "parent"}]})
             child = child.get("task", child)
         else:

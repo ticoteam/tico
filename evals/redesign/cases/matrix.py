@@ -216,7 +216,7 @@ def sample_for(kind, n, row, mails):
     if kind == "slack":
         return {"message": {"channel": "dm", "from": "omar@acme.example", "text": text, "ts": f"1700000000.{n:06d}"}}
     if kind == "task":
-        return {"task": {"title": text, "body": "Matrix task.", "owner_id": DANA_REF, "requester_id": CLAUDE_REF,
+        return {"task": {"title": text, "body": "Matrix task.", "owner": DANA_REF, "requester": CLAUDE_REF,
                          "session": SENDER_SESSION}}
     if kind == "webhook":
         return {"body": {"title": text}}
@@ -548,7 +548,7 @@ def combo_floor(rows_):
 
 
 def probe_payload(name, steps):
-    return {"name": name, "owner_id": DANA_REF, "enabled": True, "builtin": False,
+    return {"name": name, "owner": DANA_REF, "enabled": True, "builtin": False,
             "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}, "steps": steps}
 
 

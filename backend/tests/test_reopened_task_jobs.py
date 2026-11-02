@@ -8,7 +8,7 @@ from backend.tests.test_task_lanes import task_bot
 
 
 def reopened(api, sweep=True):
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check the installed runtime',
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Check the installed runtime',
                               'body': 'Check the installed runtime.', 'next_run': True})
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:ops', task['id'], status='waiting', note='Waiting for installation evidence')
@@ -82,7 +82,7 @@ def test_reopened_job_keeps_real_gates_and_health_reports_them(api, gate):
 
 def test_a_completed_carrier_does_not_strand_reopened_work(api):
     machine = task_bot(api, lanes=True)
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check runtime history',
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Check runtime history',
                               'body': 'Check the installed history.', 'next_run': True})
     post(api, 'chat/ops', {'text': 'Check the queued work.'})
     carrier = post(api, 'jobs/claim', {'next_run': True}, machine['token'])['attempt']
@@ -101,7 +101,7 @@ def test_a_completed_carrier_does_not_strand_reopened_work(api):
 @pytest.mark.parametrize('worked', [False, True])
 def test_carrier_after_reopen_settles_before_queued_notice_starts(api, worked):
     machine = task_bot(api, lanes=True)
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check the installation receipt',
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Check the installation receipt',
                               'body': 'Check the installation receipt.', 'next_run': True})
     # An older chat job claims first and carries the newly reopened work.
     post(api, 'chat/ops', {'text': 'Check the pending receipts.'})
@@ -135,7 +135,7 @@ def test_carrier_after_reopen_settles_before_queued_notice_starts(api, worked):
 
 def test_quiet_work_without_a_reopening_still_waits(api):
     machine = task_bot(api, lanes=True)
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Check on the next run',
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Check on the next run',
                               'body': 'Check the counts next time.', 'next_run': True})
     with api.app.state.store.read() as c:
         assert auto_tasks.refusal(c, H.task(c, task['id']), {}, woken=True) == 'task_next_run'

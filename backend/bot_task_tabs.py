@@ -58,7 +58,7 @@ ITEM = re.compile(r"(page|card):[A-Za-z0-9_.-]{1,100}")
 # field -> what its value is. Lists are "any of"; every row of a tab must match.
 FIELDS = {"status": "statuses", "step": "steps", "type": "types", "assigned_to": "party", "asked_by": "party",
           "waiting_on": "waiting", "needs": "attention", "created_within": "days", "updated_within": "days", "done_within": "days",
-          "due_at": "due", "label": "label"}
+          "due": "due", "label": "label"}
 WAITING = ("any", "person", "bot", "me", "not_me")
 
 

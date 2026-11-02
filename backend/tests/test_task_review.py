@@ -8,7 +8,7 @@ from clients.hubcli import parser
 
 
 def task(api, title="Review the draft"):
-    return post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Read the report."})["id"]
+    return post(api, "tasks", {"owner": "ops", "title": title, "body": "Read the report."})["id"]
 
 
 def ask(who=None, other=True):
@@ -154,9 +154,9 @@ def test_requester_bot_can_open_person_uploads_and_adopted_legacy_ids(api):
     machine = runner(api)
     assign(api, machine, "coo")
     ready(api, machine, ["coo"])
-    post(api, "tasks", {"owner_id": "coo", "title": "Review a draft", "body": "Read the report."})
+    post(api, "tasks", {"owner": "coo", "title": "Review a draft", "body": "Read the report."})
     token = claim(api, machine, "coo")["token"]
-    tid = post(api, "tasks", {"owner_id": "ops", "title": "Review the draft", "body": "Read the report."}, token)["id"]
+    tid = post(api, "tasks", {"owner": "ops", "title": "Review the draft", "body": "Read the report."}, token)["id"]
     made = attach(api, tid)
     assert api.get(made["link"], headers=headers(token)).content == b"# Report"
     digest = api.app.state.blobs.put(b"old")
@@ -264,8 +264,8 @@ def test_the_person_a_bot_asked_wakes_it_with_their_answer(api):
 
 
 def test_done_news_skips_a_bot_that_cannot_read_the_task(api):
-    parent = post(api, "tasks", {"owner_id": "ops", "title": "Plan the launch week", "body": "All of it."})["id"]
-    child = post(api, "tasks", {"owner_id": "inbox", "title": "Draft the launch mail", "body": "One page.",
+    parent = post(api, "tasks", {"owner": "ops", "title": "Plan the launch week", "body": "All of it."})["id"]
+    child = post(api, "tasks", {"owner": "inbox", "title": "Draft the launch mail", "body": "One page.",
                                 "relations": [{"task": parent, "kind": "parent"}]})["id"]
     version = get(api, f"tasks/{child}")["task"]["version"]
     post(api, f"tasks/{child}", {"version": version, "status": "done", "note": "Sent the draft."})

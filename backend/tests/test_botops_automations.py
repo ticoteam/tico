@@ -20,7 +20,7 @@ LABEL = {"id": "tag", "type": "action", "enabled": True, "do": "label", "args": 
 
 
 def flow(**extra):
-    return {"name": "Receipts", "owner_id": "person:cara", "trigger": CARA_INBOX, "steps": [ARCHIVE], **extra}
+    return {"name": "Receipts", "owner": "person:cara", "trigger": CARA_INBOX, "steps": [ARCHIVE], **extra}
 
 
 def test_a_person_asks_and_botops_saves_off_unless_asked_on(api, botops):
@@ -97,7 +97,7 @@ def test_a_bot_asks_and_botops_proposes_where_that_bot_may_not_change(api, botop
     with api.app.state.store.transaction() as c:
         H.task_create(c, "bot:finance", "Automate the receipts", "Archive receipts.", "bot:botops", lint=False)
     attempt = claim(api, botops, "botops")
-    draft = {"name": "Ana's receipts", "owner_id": "person:ana", "trigger": {"type": "event", "name": "x.y"}, "steps": []}
+    draft = {"name": "Ana's receipts", "owner": "person:ana", "trigger": {"type": "event", "name": "x.y"}, "steps": []}
     err, proposed = mcp(api, "hub_automation_create", draft, attempt["token"])
     assert not err and proposed["pending"] == 1 and proposed["can_edit"] is False, proposed
     shown = get(api, f"automations/{proposed['id']}")
@@ -116,7 +116,7 @@ def test_a_bot_asks_and_botops_proposes_where_that_bot_may_not_change(api, botop
     assert err, refused                                                     # a switch is not a proposal
     err, refused = mcp(api, "hub_automation_restore", {"id": anas, "n": 2}, attempt["token"])
     assert err, refused
-    err, own = mcp(api, "hub_automation_create", {**draft, "name": "Mine", "owner_id": "bot:finance"}, attempt["token"])
+    err, own = mcp(api, "hub_automation_create", {**draft, "name": "Mine", "owner": "bot:finance"}, attempt["token"])
     assert not err and own["can_edit"] is True and own["enabled"] is False, own   # its own: saved, off by default
     on = post(api, f"automations/{proposed['id']}/versions/1/restore", {})    # Ana's Turn on
     assert on["enabled"] is True and on["version"] == 1

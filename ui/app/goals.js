@@ -395,9 +395,9 @@ function goalMeasureHtml(g, may) {
 function goalMeasurePlan(form, g) {
   if (!form.elements.metric) return {};
   const k = g.id ? goalMeasure(g) : null, link = k?.link || {};
-  const name = form.elements.metric.value.trim(), target = form.elements.target.value.trim(), due = form.elements.due_at.value;
+  const name = form.elements.metric.value.trim(), target = form.elements.target.value.trim(), due = form.elements.due.value;
   if (form.elements.target.disabled) return {};
-  if (Boolean(target) !== Boolean(due)) return {missing: target ? form.elements.due_at : form.elements.target};
+  if (Boolean(target) !== Boolean(due)) return {missing: target ? form.elements.due : form.elements.target};
   const aim = target ? {kind: 'improve', target: Number(target), deadline: due} : {kind: 'none'};
   if (k) {
     if (n2(link.target) === (target ? Number(target) : null) && (link.deadline || '') === due) return {};
@@ -409,7 +409,7 @@ function goalMeasurePlan(form, g) {
 }
 const n2 = v => v == null || v === '' ? null : Number(v);
 function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) {
-  const title = form.elements.title, ownerSel = form.elements.owner_id, parentSel = form.elements.parent, betSel = form.elements.bet;
+  const title = form.elements.title, ownerSel = form.elements.owner, parentSel = form.elements.parent, betSel = form.elements.bet;
   const save = form.querySelector('[type=submit]');
   form.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); done(); } };
   form.querySelector('[data-goal-cancel]').onclick = () => done();
@@ -448,9 +448,9 @@ function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) 
       if (g.id) {
         const body = {};
         if (words !== g.title) body.title = words;
-        if (ownerSel && !ownerSel.disabled && ownerSel.value !== g.owner_id) body.owner_id = ownerSel.value;
+        if (ownerSel && !ownerSel.disabled && ownerSel.value !== g.owner_id) body.owner = ownerSel.value;
         if (parentSel && !parentSel.disabled && parentSel.value !== (g.parent_id || '')) body.parent_id = parentSel.value;
-        else if (body.owner_id === GOAL_COMPANY && g.parent_id) body.parent_id = '';   // a team goal supports nothing
+        else if (body.owner === GOAL_COMPANY && g.parent_id) body.parent_id = '';   // a team goal supports nothing
         if (betSel && betSel.value !== (g.bet_id || '')) body.bet_id = betSel.value;   // "" unlinks it
         if (Object.keys(body).length) await post('/v2/goals/' + encodeURIComponent(g.id), body);
       } else {

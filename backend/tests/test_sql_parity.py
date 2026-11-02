@@ -21,7 +21,7 @@ def seeded(api):
     for name, token, bot in (("ana", "ana-test", "ops"), ("ben", "ben-test", "ops"), ("cara", "cara-test", "cpo")):
         chats[name] = post(api, f"chat/{bot}", {"text": f"{name} in the private room"}, token=token)["conversation_id"]
         post(api, f"chat/{bot}", {"text": f"{name} again"}, token=token)
-    tasks = [post(api, "tasks", {"owner_id": owner, "title": f"{who} to {owner}", "body": "Do it."}, token=token)["id"]
+    tasks = [post(api, "tasks", {"owner": owner, "title": f"{who} to {owner}", "body": "Do it."}, token=token)["id"]
              for who, token, owner in (("ana", "ana-test", "ops"), ("ana", "ana-test", "inbox"), ("ben", "ben-test", "finance"),
                                        ("cara", "cara-test", "ops"), ("cara", "cara-test", "coo"))]
     meetings = [import_meeting(api, token, title=title, external_id=title.replace(" ", "-"), **extra)["id"] for title, token, extra in (
@@ -40,7 +40,7 @@ def seeded(api):
 
 
 def actors(seeded):
-    return {"owner_id": "ana-test", "member": "ben-test", "person with a private room": "cara-test",
+    return {"owner": "ana-test", "member": "ben-test", "person with a private room": "cara-test",
             "bot": seeded["attempt"]["token"]}
 
 

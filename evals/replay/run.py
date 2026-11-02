@@ -52,7 +52,7 @@ def prompt_of(server, token, bot):
 def prepare(server, token, me, case):
     """The case's opening state, owned by the caller so nothing runs until it is handed over."""
     task = case["task"]
-    made = ok(server, "POST", "tasks", {"title": task["title"], "body": task.get("body") or task["title"], "owner_id": me,
+    made = ok(server, "POST", "tasks", {"title": task["title"], "body": task.get("body") or task["title"], "owner": me,
                                         "acceptance_criteria": task.get("acceptance_criteria") or []}, token)
     tid = made["task"]["id"]
     for f in case.get("files") or []:
@@ -65,7 +65,7 @@ def prepare(server, token, me, case):
 def hand_over(server, token, tid, bot):
     current = ok(server, "GET", f"tasks/{tid}", token=token)["task"]
     # The new owner is woken by the reassignment itself; a run-now on top could queue a second run.
-    ok(server, "POST", f"tasks/{tid}", {"version": current["version"], "owner_id": "bot:" + bot}, token)
+    ok(server, "POST", f"tasks/{tid}", {"version": current["version"], "owner": "bot:" + bot}, token)
 
 
 def outcome(server, token, tid, bot):

@@ -99,7 +99,7 @@ def test_the_colour_of_a_kpi_is_pace_or_range_and_no_fresh_data_is_gray():
 
 # ------------------------------------------------------------------ the API
 def goal_with_kpi(api, target=None, token="ana-test", owner="ana", cadence="daily"):
-    goal = post(api, "goals", {"title": "Raise activation", "owner_id": owner}, token=token)["goal"]
+    goal = post(api, "goals", {"title": "Raise activation", "owner": owner}, token=token)["goal"]
     body = {"name": "Activation", "unit": "%", "cadence": cadence, "definition": "Signed-up accounts that finish setup",
             "goal_id": goal["id"], **(target or {"kind": "improve", "baseline": 40, "target": 70, "deadline": "2099-12-31"})}
     return goal, post(api, "kpis", body, token=token)["kpi"]
@@ -146,7 +146,7 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
     logged = log(api, kpi["id"], 52, evidence="https://bi.example/activation", note="September", period_end=H.now())
     with api.app.state.store.transaction() as c:
         strategy_bot.set_level(c, "human:ana", 2)                  # above Passive, a stale KPI waits in Needs you
-    stale = post(api, "kpis", {"name": "Unreported measure", "owner_id": "me"})["kpi"]
+    stale = post(api, "kpis", {"name": "Unreported measure", "owner": "me"})["kpi"]
     assert any(item.get("kpi_id") == stale["id"] for item in get(api, "goals/needs-you")["items"])
     post(api, f"kpis/{stale['id']}/archive", {})
     assert all(item.get("kpi_id") != stale["id"] for item in get(api, "goals/needs-you")["items"])
@@ -320,7 +320,7 @@ def test_the_kpis_of_the_old_tables_become_links_with_an_improvement_target():
 
 def test_archive_restore_recomputes_every_linked_goal_with_its_own_target(api):
     goal, kpi = goal_with_kpi(api, {"kind": "maintain", "min": 40, "max": 60})
-    other = post(api, "goals", {"title": "Second goal", "owner_id": "ana"})["goal"]
+    other = post(api, "goals", {"title": "Second goal", "owner": "ana"})["goal"]
     post(api, f"goals/{other['id']}/kpis", {"kpi_id": kpi["id"], "kind": "maintain", "min": 70})
     log(api, kpi["id"], 50, period_end=H.now())
     assert [goal_of(api, g["id"])["status"] for g in (goal, other)] == ["green", "red"]

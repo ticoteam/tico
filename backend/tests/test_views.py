@@ -34,9 +34,9 @@ def test_tico_fleet_snapshot_is_bound_to_the_initiating_human(api):
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:      # finance takes requests from Ana alone
         restrict(c, "finance", people=["ana"])
-    post(api, "tasks", {"title": "Review product direction", "body": "Choose the next slice", "owner_id": "cpo"},
+    post(api, "tasks", {"title": "Review product direction", "body": "Choose the next slice", "owner": "cpo"},
          "ben-test")
-    post(api, "tasks", {"title": "What is blocked?", "body": "List it", "owner_id": "coo"}, "ben-test")
+    post(api, "tasks", {"title": "What is blocked?", "body": "List it", "owner": "coo"}, "ben-test")
     machine = runner(api)
     assign(api, machine, "coo")
     ready(api, machine, ["coo"])

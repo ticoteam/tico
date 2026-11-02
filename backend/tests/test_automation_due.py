@@ -16,7 +16,7 @@ from backend.tests.automation_fakes import Services
 from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_automation_runs import FIND, make, sql
 
-OPEN = {"id": "open", "type": "action", "do": "create_task", "args": {"title": "Payroll", "owner_id": "coo"}}
+OPEN = {"id": "open", "type": "action", "do": "create_task", "args": {"title": "Payroll", "owner": "coo"}}
 
 
 def due(api, trigger, steps=(OPEN,), owner="person:ana", at=datetime(2030, 1, 1, tzinfo=timezone.utc)):
@@ -140,7 +140,7 @@ def test_a_due_day_only_routine_without_a_rule_id_stores_no_rule_id(api):
 
 def test_a_step_due_overrides_the_occurrence_due_day(api):
     step = {"id": "open", "type": "action", "do": "create_task",
-            "args": {"title": "Payroll", "owner_id": "coo", "due_at": "2030-04-02"}}
+            "args": {"title": "Payroll", "owner": "coo", "due": "2030-04-02"}}
     due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"}, steps=[step])
     tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
     assert [row["due_at"] for row in sql(api, "SELECT due_at FROM tasks WHERE title='Payroll'")] == ["2030-04-02"]
@@ -185,7 +185,7 @@ def test_a_routine_saved_without_the_new_fields_still_loads_and_runs(api):
     {"type": "due", "first_due": "2030-01-31", "repeats": "monthly", "tz": "Mars/Olympus"},
 ])
 def test_a_bad_due_trigger_is_refused_on_save(api, trigger):
-    body = post(api, "automations", {"name": "Bad", "owner_id": "person:ana", "trigger": trigger,
+    body = post(api, "automations", {"name": "Bad", "owner": "person:ana", "trigger": trigger,
                                      "steps": [OPEN]}, expected=422)
     assert "trigger" in str(body)
 
@@ -272,7 +272,7 @@ def test_decide_on_a_due_run_is_given_the_occurrence_fields():
     flow = {"name": "Review", "owner": "person:ana", "steps": [
         {"id": "d", "type": "decide", "set": "due-review@1", "out": "d1"}],
         "trigger": {"type": "due", "first_due": "2030-03-01", "repeats": "once"}}
-    values = {"due_at": {"due_on": "2030-03-01", "first_due": "2030-03-01", "repeats": "once", "open_days": 14,
+    values = {"due": {"due_on": "2030-03-01", "first_due": "2030-03-01", "repeats": "once", "open_days": 14,
                       "tz": "UTC", "rule_due_id": "rdd_7", "run_at": "2030-02-15T00:00:00.000000Z"}}
     E.execute(flow, values, services)
     assert services.judged[0]["values"] == {"due_on": "2030-03-01", "rule_due_id": "rdd_7"}
@@ -407,7 +407,7 @@ def test_a_failed_run_under_changed_dates_neither_counts_nor_moves_the_cursor(ap
 
 
 def test_a_retry_after_a_later_step_failed_keeps_the_task_its_first_attempt_made(api, monkeypatch):
-    second = {"id": "second", "type": "action", "do": "create_task", "args": {"title": "Second", "owner_id": "coo"}}
+    second = {"id": "second", "type": "action", "do": "create_task", "args": {"title": "Second", "owner": "coo"}}
     aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"}, steps=[OPEN, second])
     real = hubdb.task_create
     failed = []
@@ -461,7 +461,7 @@ def test_a_bot_occurrence_due_in_two_weeks_is_stalled_when_idle_and_a_plain_task
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     store = api.app.state.store
-    bot_step = {"id": "open", "type": "action", "do": "create_task", "args": {"title": "Payroll", "owner_id": "bot:ops"}}
+    bot_step = {"id": "open", "type": "action", "do": "create_task", "args": {"title": "Payroll", "owner": "bot:ops"}}
     aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"}, steps=[bot_step])
     _pass_at(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
     occurrence = sql(api, "SELECT id FROM tasks WHERE occurrence=?", (f"{aid}:2030-03-01",))[0]["id"]

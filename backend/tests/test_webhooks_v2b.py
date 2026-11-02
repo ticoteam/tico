@@ -30,7 +30,7 @@ SLACK_HEADERS = {"x-slack-signature": SLACK_V0, "x-slack-request-timestamp": str
 def listener(api, trigger, steps=None, name="Order"):
     """An automation on the incoming webhook `trigger` (what a routine on `webhook.<id>` became)."""
     steps = steps or [{"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "Ship it."}}]
-    return post(api, "automations", {"name": name, "owner_id": "person:ana", "trigger": {"type": "webhook", "id": trigger},
+    return post(api, "automations", {"name": name, "owner": "person:ana", "trigger": {"type": "webhook", "id": trigger},
                                      "steps": steps})["id"]
 
 
@@ -143,7 +143,7 @@ def test_forward_sends_the_incoming_payload_on_untouched_and_signed(api, net):
 
 def test_create_task_files_a_templated_task_once_in_the_rule_makers_name(api):
     setup(api)
-    params = {"action": "create_task", "owner_id": "cpo", "title": "Order {{data.order}} for {{data.customer.name}}",
+    params = {"action": "create_task", "owner": "cpo", "title": "Order {{data.order}} for {{data.customer.name}}",
               "body": "Look at {{type}}."}
     made = rule(api, then="action", params=params)["rule"]
     done = judge(api)

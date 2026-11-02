@@ -9,7 +9,7 @@ from backend.tests.test_execution_review import aged, sweep
 
 
 def task_attempt(api, machine, title="Count the words"):
-    task = post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Count them."})
+    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Count them."})
     attempt = claim(api, machine)
     assert attempt["task"]["id"] == task["id"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": title}, machine["token"])
@@ -72,7 +72,7 @@ def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api
     assert len(kept) == NODE_LIMIT and kept[0]["id"] == 0 and kept[-1]["id"] == NODE_LIMIT + 9
 
     # A run that also carried a private task is left out for whoever cannot read that task.
-    hidden = post(api, "tasks", {"owner_id": "ops", "title": "Private", "body": "Only Ana.", "private": True})
+    hidden = post(api, "tasks", {"owner": "ops", "title": "Private", "body": "Only Ana.", "private": True})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, hidden["id"]))
     assert get(api, f"tasks/{tid}/run-view", token="cara-test")["runs"] == []

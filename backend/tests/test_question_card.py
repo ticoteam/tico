@@ -62,7 +62,7 @@ def test_a_pick_question_without_its_picks_or_what_happens_or_with_ids_is_refuse
 
 def test_a_comment_question_from_a_bot_to_a_person_keeps_the_rules_and_a_person_s_does_not(api):
     _, _, attempt = setup_attempt(api)
-    task = post(api, "tasks", {"owner_id": "bot:ops", "title": "Pick the logo", "body": "x"})
+    task = post(api, "tasks", {"owner": "bot:ops", "title": "Pick the logo", "body": "x"})
     ask = {"questions": [{"id": "q", "header": "", "question": "Which logo?", "options": [{"label": "Blue"}, {"label": "Red"}]}],
            "who": "ana"}
     r = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "Which logo?", "ask": ask},
@@ -99,11 +99,11 @@ def test_send_ticked_says_not_this_one_for_each_unticked_pick_and_yes_to_all_say
 def test_the_card_says_what_it_holds_up_and_decide_puts_a_building_item_first(api):
     """Acceptance 15, 17 and 19, from the Needs you item the card reads."""
     _, _, attempt = setup_attempt(api)
-    item = post(api, "tasks", {"owner_id": "bot:ops", "title": "Website sales chat build", "body": "Spec.",
+    item = post(api, "tasks", {"owner": "bot:ops", "title": "Website sales chat build", "body": "Spec.",
                                "type": "Product roadmap", "step": "Building"})
-    ticket = post(api, "tasks", {"owner_id": "bot:ops", "title": "Build the chat widget", "body": "x",
+    ticket = post(api, "tasks", {"owner": "bot:ops", "title": "Build the chat widget", "body": "x",
                                  "relations": [{"task": item["id"], "kind": "parent"}]})
-    plain = post(api, "tasks", {"owner_id": "bot:ops", "title": "Tidy the drafts folder", "body": "x"})
+    plain = post(api, "tasks", {"owner": "bot:ops", "title": "Tidy the drafts folder", "body": "x"})
     building = _ask(api, attempt["token"], "h1", question="Website sales chat: go with these picks?", multi=True,
                     options=PICKS, parent=ticket["id"],
                     body="Website sales chat: go with these picks?\n\nRun 8719e1a6 failed: ValueError in reports/plan.md").json()
@@ -118,7 +118,7 @@ def test_the_card_says_what_it_holds_up_and_decide_puts_a_building_item_first(ap
     items = {i["id"]: i for i in get(api, "needs-you")["items"]}
     card, other = items[building["task"]["id"]], items[old["task"]["id"]]
     assert card["holds_up"] == {"id": item["id"], "title": "Website sales chat build", "kind": "roadmap", "step": "Building",
-                                "due_at": None, "soonest": None}
+                                "due": None, "soonest": None}
     assert other["holds_up"]["title"] == "Tidy the drafts folder" and other["holds_up"]["kind"] == "task"
     assert (card["tier"], other["tier"]) == (1, 2)
     # The why line never carries the body's ids, paths or errors; a plain first paragraph is one.
@@ -139,10 +139,10 @@ def test_due_or_going_ahead_within_two_working_days_comes_first_and_weekends_do_
 def test_a_dated_task_under_an_undated_building_item_keeps_its_urgency(api):
     """The header names the roadmap item, but the nearest due date of the work held up still puts the card first."""
     _, _, attempt = setup_attempt(api)
-    item = post(api, "tasks", {"owner_id": "bot:ops", "title": "Website sales chat build", "body": "Spec.",
+    item = post(api, "tasks", {"owner": "bot:ops", "title": "Website sales chat build", "body": "Spec.",
                                "type": "Product roadmap", "step": "Building"})
     tomorrow = H.shift(H.now(), hours=24)
-    ticket = post(api, "tasks", {"owner_id": "bot:ops", "title": "Build the chat widget", "body": "x", "due_at": tomorrow,
+    ticket = post(api, "tasks", {"owner": "bot:ops", "title": "Build the chat widget", "body": "x", "due": tomorrow,
                                  "relations": [{"task": item["id"], "kind": "parent"}]})
     asked = _ask(api, attempt["token"], "u1", question="Website sales chat: go with these picks?", multi=True,
                  options=PICKS, parent=ticket["id"]).json()
@@ -165,9 +165,9 @@ def test_a_card_on_the_roadmap_item_itself_does_not_say_it_holds_itself_up_but_k
     """The header never names the card's own task; Decide's order still counts its step and due date."""
     _, _, attempt = setup_attempt(api)
     tomorrow = H.shift(H.now(), hours=24)
-    dated = post(api, "tasks", {"owner_id": "bot:ops", "title": "Website sales chat build", "body": "Spec.", "due_at": tomorrow,
+    dated = post(api, "tasks", {"owner": "bot:ops", "title": "Website sales chat build", "body": "Spec.", "due": tomorrow,
                                 "type": "Product roadmap", "step": "Building"})
-    undated = post(api, "tasks", {"owner_id": "bot:ops", "title": "Pricing page refresh", "body": "Spec.",
+    undated = post(api, "tasks", {"owner": "bot:ops", "title": "Pricing page refresh", "body": "Spec.",
                                   "type": "Product roadmap", "step": "Building"})
     with api.app.state.store.transaction() as c:
         for row in (dated, undated):
@@ -178,9 +178,9 @@ def test_a_card_on_the_roadmap_item_itself_does_not_say_it_holds_itself_up_but_k
     assert [(items[r["id"]]["holds_up"], items[r["id"]]["tier"]) for r in (dated, undated)] == [(None, 0), (None, 1)]
 
     # Under a parent, the parent is what it holds up, dated by the item's own due.
-    parent = post(api, "tasks", {"owner_id": "bot:ops", "title": "Launch the website", "body": "x"})
-    sub = post(api, "tasks", {"owner_id": "bot:ops", "title": "Website chat for launch", "body": "Spec.",
-                              "type": "Product roadmap", "step": "Building", "due_at": tomorrow,
+    parent = post(api, "tasks", {"owner": "bot:ops", "title": "Launch the website", "body": "x"})
+    sub = post(api, "tasks", {"owner": "bot:ops", "title": "Website chat for launch", "body": "Spec.",
+                              "type": "Product roadmap", "step": "Building", "due": tomorrow,
                               "relations": [{"task": parent["id"], "kind": "parent"}]})
     with api.app.state.store.read() as c:
         held = views.holds_up(c, H.task(c, sub["id"]), lambda tid: True)

@@ -71,7 +71,7 @@ def test_existing_bots_use_performance_and_new_bots_start_as_doers(api):
     assert [(j["state"], j["held"]) for j in jobs(api)] == [("queued", 0), ("queued", 1)]
     made = post(api, "bots", {"slug": "scout", "display_name": "Scout", "description": "A test bot.", "status": "active",
                               "repo": "emp-scout", "thread_mode": "personal", "model": "hermes-profile",
-                              "effort": "as-configured", "harness": "hermes", "owner_id": "ana", "owners": ["ana"],
+                              "effort": "as-configured", "harness": "hermes", "operator": "ana", "owners": ["ana"],
                               "runner_id": None})
     assert made["wake"]["preset"] == "performance" and made["profile"]["name"] == "doer"
     listed = {b["slug"]: b for b in get(api, "bots")}
@@ -116,7 +116,7 @@ def test_immediate_wakes_are_never_held_and_a_duplicate_wakes_once(api, name):
 @pytest.mark.parametrize("name,window", [("token_saver", 1800), ("performance", 60)])
 def test_an_unchanged_webhook_queues_nothing_and_the_preset_is_its_only_timer(api, name, window):
     preset(api, "ops", name)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Repair checks", "body": "x", "links": [PR]})
+    task = post(api, "tasks", {"owner": "ops", "title": "Repair checks", "body": "x", "links": [PR]})
     failing = {"action": "created", "repository": {"full_name": "ticoteam/tico"}, "pull_request": {"html_url": PR},
                "comment": {"id": 1, "user": {"login": "sam"}}}
     with api.app.state.store.transaction() as c:

@@ -155,7 +155,10 @@ STABLE = ("tasks", "messages", "conversations", "bots", "humans", "principals", 
           "automation_runs", "goals", "goal_kpis", "kpis", "kpi_readings", "bot_files", "pages", "meetings",
           "approvals", "cards", "docs", "task_types", "task_steps", "runners")
 ACTOR_NAMES = {"owner": "owner_id", "requester": "requester_id", "bot": "bot_id", "actor": "actor_id"}
-NOT_ACTOR_BY = {("tasks", "carried_by"): "the attempt id that carried the task, not an actor"}
+NOT_ACTOR_BY = {("tasks", "carried_by"): "the attempt id that carried the task, not an actor",
+                ("meetings", "owner"): "an email, not an actor; Release 2 names it",
+                ("meetings", "recorded_by"): "an email or a runner id, not an actor; Release 2 names it",
+                ("meetings", "uploaded_by"): "an email or a runner id, not an actor; Release 2 names it"}
 # Named like a time, holds something else: left alone. task_reconnects.ended is how the card ended (fixed, cancelled, retired).
 M3_KEPT = {("task_reconnects", "ended")}
 
@@ -254,7 +257,7 @@ def build(tables, virtual):
         for col in tables.get(table, []):
             if (table, col) in WAVE3_SPECIAL:
                 add("3", table, col, WAVE3_SPECIAL[(table, col)])
-            elif col in ACTOR_NAMES:
+            elif col in ACTOR_NAMES and (table, col) not in NOT_ACTOR_BY:
                 add("3", table, col, ACTOR_NAMES[col])
             elif col.endswith("_by") and (table, col) not in NOT_ACTOR_BY:
                 add("3", table, col, col + "_id", WAVE3_NOTES.get((table, col), ""))

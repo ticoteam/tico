@@ -222,7 +222,7 @@ def _occurrence(c, auto, args, values):
 
     The rule due date the task stands for (`rule_due_id`) is never the run's input, a manual run's sample included: it
     is the automation's own trigger's, and only while the automation is that due date's routine (rule_due.links)."""
-    occurrence = values.get("due_at") if isinstance(values.get("due_at"), dict) else {}
+    occurrence = values.get("due") if isinstance(values.get("due"), dict) else {}
     if not occurrence.get("due_on"):
         return str(args.get("due") or "") or None, None, {"automation": auto["id"]}
     from . import automation_due as D
@@ -443,7 +443,7 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
     name = str(auto["flow"].get("name") or auto["id"])
     title = f"{name} · {label}"[:300] if label else name[:300]
     # A due-date run's turn is that occurrence's task, due and marked the same way as a create_task's (`_occurrence`).
-    due, marker, occ_refs = _occurrence(c, auto, {}, {"due_at": occurrence} if occurrence else {})
+    due, marker, occ_refs = _occurrence(c, auto, {}, {"due": occurrence} if occurrence else {})
     task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), due=due, lint=False, deduplicate=False,
                          routine=True, trigger="other", trigger_source="automation:" + auto["id"], occurrence=marker,
                          occurrence_step=str(step_id) if marker else None, rule_due_id=occ_refs.get("rule_due_id"),

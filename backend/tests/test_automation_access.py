@@ -13,7 +13,7 @@ WAKE = {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops",
 
 
 def flow(owner="person:ana", trigger=None, steps=(WAKE,)):
-    return {"name": "Test", "owner_id": owner, "trigger": trigger or {"type": "event", "name": "x.y"}, "steps": list(steps)}
+    return {"name": "Test", "owner": owner, "trigger": trigger or {"type": "event", "name": "x.y"}, "steps": list(steps)}
 
 
 def mail(msg_id="m1"):
@@ -71,7 +71,7 @@ def test_find_mail_reads_only_the_owners_mailboxes(api):
 
 
 def test_a_manual_runs_input_names_only_what_the_owner_may_read(api):
-    secret = post(api, "tasks", {"owner_id": "cpo", "title": "Ben's secret", "body": "x", "private": True},
+    secret = post(api, "tasks", {"owner": "cpo", "title": "Ben's secret", "body": "x", "private": True},
                   token="ben-test")
     aid = post(api, "automations", flow(owner="bot:ops", steps=[
         {"id": "n", "type": "action", "do": "note", "args": {"text": "Seen"}}]))["id"]
@@ -82,7 +82,7 @@ def test_a_manual_runs_input_names_only_what_the_owner_may_read(api):
 
 
 def test_task_actions_act_as_the_owner_with_the_automation_as_via(api):
-    made = post(api, "tasks", {"owner_id": "ops", "title": "Check the deploy", "body": "Please."})
+    made = post(api, "tasks", {"owner": "ops", "title": "Check the deploy", "body": "Please."})
     aid = post(api, "automations", flow(steps=[
         {"id": "n", "type": "action", "do": "note", "args": {"text": "Seen by the automation"}}]))["id"]
     run = post(api, f"automations/{aid}/run", {"input": {"task": {"id": made["id"]}}})["run"]

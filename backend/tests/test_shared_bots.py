@@ -86,9 +86,9 @@ def test_tasks_and_chat_route_only_to_an_active_branch_while_enabled(api):
     share(api)
     branch(api, runner(api, 'cara'))
     branch_actor = H.bot_actor(bot_id(api, 'cpo-cara'))
-    mine = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Review design', 'body': 'Please review.'}, 'cara-test')
+    mine = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review design', 'body': 'Please review.'}, 'cara-test')
     assert mine['owner_id'] == branch_actor
-    other = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Review another design', 'body': 'Please review.'})
+    other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review another design', 'body': 'Please review.'})
     assert other['owner_id'] == 'bot:cpo'
     task_chat = post(api, f'tasks/{other["id"]}/chat', {'text': 'Discuss the design'}, 'cara-test')
     assert task_chat['bot'] == bot_id(api, 'cpo-cara')
@@ -125,7 +125,7 @@ def test_archive_restores_branches_without_losing_their_work_or_assignment(api):
     share(api)
     computer = runner(api, 'cara')
     branch(api, computer)
-    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Keep work', 'body': 'Please.'}, 'cara-test')
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Keep work', 'body': 'Please.'}, 'cara-test')
     branch_id = bot_id(api, 'cpo-cara')
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
     with api.app.state.store.read() as c:

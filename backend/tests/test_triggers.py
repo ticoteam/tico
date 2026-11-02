@@ -13,7 +13,7 @@ def hook(api, url, body=b'{"order": 42}', headers=None):
 
 def listener(api, trigger_id, bot="ops", text="Ship it.", name="New order"):
     """An automation on the webhook whose Bot turn hands `bot` the call, the way a routine on `webhook.<id>` did."""
-    return post(api, "automations", {"name": name, "owner_id": "person:ana", "trigger": {"type": "webhook", "id": trigger_id},
+    return post(api, "automations", {"name": name, "owner": "person:ana", "trigger": {"type": "webhook", "id": trigger_id},
                                      "steps": [{"id": "work", "type": "bot_turn", "bot": bot,
                                                 "prompt": text + " {{webhook.content}}"}]})["id"]
 

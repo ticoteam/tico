@@ -347,7 +347,7 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   if (!current()) return;
   const canChange = admin || !doc.locked;
   const crumb = `<p class="muted docs-crumb" title="${esc(doc.path)}">${esc(docsFolderWords(docsDir(doc.path)))}</p>`;
-  const meta = `Version ${doc.version} · Updated ${esc(ago(doc.updated_at))} by ${esc(doc.updated_by_name || doc.updated_by)}`;
+  const meta = `Version ${doc.version} · Updated ${esc(ago(doc.updated_at))} by ${esc(doc.updated_by_name || doc.updated_by_id)}`;
   if (editing && canChange) {
     reader.innerHTML = back + `<header class="docs-reader-head docs-edit-head"><div class="docs-reader-title">${crumb}<h2>Edit</h2><p class="docs-meta">${meta}</p></div></header>`;
     reader.append(DocsEditor.editor({doc, onSaved: saved => { location.hash = docsHref(saved.id); }, onCancel: () => { location.hash = docsHref(doc.id); },

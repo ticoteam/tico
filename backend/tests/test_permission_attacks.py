@@ -96,7 +96,7 @@ def weekly(api, bot):
     """A bot's weekly report: what a routine was, as an automation the bot owns. Automations name a bot by its id."""
     with api.app.state.store.read() as c:
         bot = H.resolve_bot(c, bot)["id"]
-    return {"name": "Report", "owner_id": H.bot_actor(bot), "trigger": {"type": "schedule", "cron": "0 9 * * 1"},
+    return {"name": "Report", "owner": H.bot_actor(bot), "trigger": {"type": "schedule", "cron": "0 9 * * 1"},
             "steps": [{"id": "report", "type": "bot_turn", "bot": bot, "prompt": "Weekly"}]}
 
 
@@ -127,7 +127,7 @@ def test_botops_changes_automations_and_quarantines_only_as_a_person_who_manages
 # ------------------------------------------------------------------ members' bots and computers
 def test_a_members_bot_runs_on_their_own_or_an_admin_opened_computer_and_stays_theirs(api, botops):
     add_dee(api)
-    code = post(api, "enrollments", {"owner_id": "cara"}, token="cara-test")["code"]
+    code = post(api, "enrollments", {"operator": "cara"}, token="cara-test")["code"]
     caras = close_computer(api, post(api, "runners/enroll", {"code": code, "label": "Cara Mac", "platform": "test"}))
     assert call(api, "post", "bots/register", "dee-test", {"slug": "dees"}).status_code == 200
     place = {"runner_id": caras["runner_id"], "expected_generation": 0}
@@ -153,8 +153,8 @@ def test_a_member_reads_no_hidden_bots_activity_and_no_registry_through_sql_or_g
     assert {"bot.note", "cara.did"} <= seen and "bot.secret_change" not in seen
     assert sql(api, "SELECT key FROM registry_metadata", "cara-test") == []
     assert "people" in sql(api, "SELECT key FROM registry_metadata", "ben-test")           # an Admin reads it
-    goal = post(api, "goals", {"title": "Close all NDAs by Q4", "owner_id": "bot:" + restricted, "top": True})["goal"]
-    open_goal = post(api, "goals", {"title": "Ship it", "owner_id": "bot:ops", "top": True})["goal"]
+    goal = post(api, "goals", {"title": "Close all NDAs by Q4", "owner": "bot:" + restricted, "top": True})["goal"]
+    open_goal = post(api, "goals", {"title": "Ship it", "owner": "bot:ops", "top": True})["goal"]
     tree = get(api, "goals/tree", "cara-test")
     assert [g["id"] for g in tree["goals"]] == [open_goal["id"]] and "bot:" + restricted not in tree["owners"]
     assert goal["id"] in [g["id"] for g in get(api, "goals/tree")["goals"]]

@@ -5,7 +5,7 @@ from backend.tests.test_api import api, headers, post
 
 
 def test_task_json_compression_preserves_privacy_and_display_names(api):
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Review private sample work",
+    task = post(api, "tasks", {"owner": "ops", "title": "Review private sample work",
                               "body": "Private sample details. " * 200, "private": True})
     path = "/api/v2/tasks?limit=100"
     plain = api.get(path, headers={**headers(), "Accept-Encoding": "identity"})

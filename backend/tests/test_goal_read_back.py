@@ -14,7 +14,7 @@ from backend.tests.test_strategy_bot_chat import strategy_bot, turn
 
 
 def goal(api, title, owner="ops", **extra):
-    return post(api, "goals", {"title": title, "owner_id": owner, **extra})["goal"]
+    return post(api, "goals", {"title": title, "owner": owner, **extra})["goal"]
 
 
 def finish(api, r, attempt, text="Done."):
@@ -53,7 +53,7 @@ def save(api, attempt, step, expected=200, ref="turn"):
                  expected=expected)
 
 
-NEW_GOAL = {"kind": "goal_create", "title": "Get 100 companies to try Tico", "owner_id": "ops",
+NEW_GOAL = {"kind": "goal_create", "title": "Get 100 companies to try Tico", "owner": "ops",
             "measure": {"name": "Companies that tried Tico"},
             "target": {"kind": "improve", "target": 100, "deadline": "2026-11-28"}}
 
@@ -217,7 +217,7 @@ def test_a_change_to_a_goal_reads_back_was_and_now_for_the_changed_fields_only(a
     row = goal(api, "Launch the docs", parent_id=serves["id"])
     r, attempt = turn(api, "coo", "ana-test", "Fix the docs goal")
     text = read_back(api, attempt, {"kind": "goal_update", "goal_id": row["id"], "title": "Ship the docs",
-                                    "owner_id": "ops", "parent_id": serves["id"], "why": "Docs bring developers"})["text"]
+                                    "owner": "ops", "parent_id": serves["id"], "why": "Docs bring developers"})["text"]
     assert ("Change **Launch the docs**: title was “Launch the docs”, now “Ship the docs”; Why was none, now "
             "“Docs bring developers”") in text
     assert "owner_id" not in text and "supports" not in text
@@ -238,7 +238,7 @@ def six_changes(api):
         {"kind": "measure_add", "goal_id": a["id"], "measure": {"name": "Docs pages"}},
         {"kind": "target_set", "goal_id": b["id"], "kpi_id": kpi["id"], "target": {"kind": "improve", "target": 99.9, "deadline": "2027-03-31"}},
         {"kind": "suggestion", "proposal_id": wording["id"], "decision": "confirm"},
-        {"kind": "goal_create", "title": "Answer support in a day", "owner_id": "ops"},
+        {"kind": "goal_create", "title": "Answer support in a day", "owner": "ops"},
         {"kind": "measure_remove", "goal_id": b["id"], "kpi_id": kpi["id"]},
     ]
 
@@ -356,7 +356,7 @@ def test_what_stays_a_click_is_refused_at_read_back_with_one_reason_and_nothing_
     refused = read_back(api, attempt, {"kind": "goal_update", "goal_id": row["id"], "parent_id": row["id"]},
                         expected=422)["error"]
     assert "Change 1 can't be saved" in refused["detail"]
-    read_back(api, attempt, *[{"kind": "goal_create", "title": f"Goal {i}", "owner_id": "ops"} for i in range(21)],
+    read_back(api, attempt, *[{"kind": "goal_create", "title": f"Goal {i}", "owner": "ops"} for i in range(21)],
               expected=422)
 
 
@@ -366,7 +366,7 @@ def test_only_the_owners_strategy_bot_turn_saves_on_a_yes(api):
     r, attempt = assistant_turn(api, "ben-test", "Set a goal for Ops")
     read_back(api, attempt, NEW_GOAL, expected=403)
     # Another person's Assistant still proposes a goal on a card, as before.
-    refused = asked(api, "goals", {"title": "x", "owner_id": "ops"}, attempt["token"], "turn", expected=403)["error"]
+    refused = asked(api, "goals", {"title": "x", "owner": "ops"}, attempt["token"], "turn", expected=403)["error"]
     assert refused["code"] == "confirm_required"
 
 
@@ -411,8 +411,8 @@ def test_cli_read_back_and_cited_save_use_the_server_agreement(api, monkeypatch,
     r, attempt = turn(api, "coo", "ana-test", 'Set two goals')
     monkeypatch.setattr(remotecli, 'Client', TurnClient)
     monkeypatch.setenv('HUB_API_URL', 'https://synthetic.invalid')
-    changes = [{'kind': 'goal_create', 'owner_id': 'company', 'title': 'First', 'why': 'Purpose'},
-               {'kind': 'goal_create', 'owner_id': 'company', 'title': 'Second'}]
+    changes = [{'kind': 'goal_create', 'owner': 'company', 'title': 'First', 'why': 'Purpose'},
+               {'kind': 'goal_create', 'owner': 'company', 'title': 'Second'}]
     assert hubcli.main(['goal', 'read-back', json.dumps(changes)]) == 0
     back = json.loads(capsys.readouterr().out)
     assert back['message_id'] == room_messages(api)[-1]['id']
@@ -450,8 +450,8 @@ def test_read_back_refuses_goals_measures_and_suggestions_the_strategy_bot_canno
         {"kind": "goal_update", "goal_id": hidden["id"], "title": "Changed"},
         {"kind": "measure_add", "goal_id": public["id"], "measure": {"kpi_id": kpi["id"]}},
         {"kind": "suggestion", "proposal_id": suggestion["id"], "decision": "confirm"},
-        {"kind": "goal_create", "title": "New", "owner_id": "inbox"},
-        {"kind": "goal_create", "title": "New", "owner_id": "ops", "parent_id": hidden["id"]},
+        {"kind": "goal_create", "title": "New", "owner": "inbox"},
+        {"kind": "goal_create", "title": "New", "owner": "ops", "parent_id": hidden["id"]},
     ]
     before = room_messages(api)
     for change in changes:
@@ -467,7 +467,7 @@ def test_a_yes_saves_a_goal_without_optional_measures_and_later_sync_does_not_na
     from backend import goal_asks as GA
     strategy_bot(api)
     r, attempt = turn(api, "coo", "ana-test", "Publish the guide")
-    back = read_back(api, attempt, {"kind": "goal_create", "title": "Publish the guide", "owner_id": "ops"})
+    back = read_back(api, attempt, {"kind": "goal_create", "title": "Publish the guide", "owner": "ops"})
     assert "warning" not in back["text"].lower()
     step = back["changes"][0]["steps"][0]
     assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed"
@@ -485,7 +485,7 @@ def test_unattended_strategy_bot_can_file_a_card_but_cannot_save_a_goal_or_targe
     as_bot(api, "goal-manager", "strategy-test")
     row = goal(api, "Publish the guide")
     kpi = post(api, f"goals/{row['id']}/kpis", {"name": "Guides read"})["kpi"]
-    for path, body, status in (("goals", {"title": "Unattended", "owner_id": "ops"}, 403),
+    for path, body, status in (("goals", {"title": "Unattended", "owner": "ops"}, 403),
                        ("goals/" + row["id"], {"title": "Unattended"}, 409),
                        (f"goals/{row['id']}/kpis/{kpi['id']}", {"kind": "improve", "target": 30, "deadline": "2099-12-31"}, 409)):
         post(api, path, body, token="strategy-test", expected=status)
@@ -605,7 +605,7 @@ def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited
     strategy_bot(api)
     r, attempt = turn(api, "coo", "ana-test", "Publish the guide")
     if edited == "created_owner":
-        change = {"kind": "goal_create", "title": "Publish the guide", "owner_id": "ops", "why": "Public purpose"}
+        change = {"kind": "goal_create", "title": "Publish the guide", "owner": "ops", "why": "Public purpose"}
     else:
         row = goal(api, "Publish the guide")
         change = {"kind": "goal_update", "goal_id": row["id"], "title": "Publish guide today"}

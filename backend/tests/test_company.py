@@ -87,11 +87,11 @@ def test_no_bot_writes_the_company_or_accepts_a_why_the_strategy_bot_included(ap
     post(api, "company", {"vision": "Said for her."}, token="ana-via", expected=403)
     assert get(api, "company")["company"]["vision"] == ""
     # A bot's own goal: still no Why written by the bot, and no accept.
-    gid = post(api, "goals", {"title": "Answer every ticket in an hour", "owner_id": "ops"})["goal"]["id"]
+    gid = post(api, "goals", {"title": "Answer every ticket in an hour", "owner": "ops"})["goal"]["id"]
     post(api, f"goals/{gid}/why", {"why": "Support is the vision."}, token=ops, expected=403)
     post(api, f"goals/{gid}/why", {"why": "Support is the vision."}, token=strategy_token, expected=403)
     # Nor the Assistant writing it straight onto the owner's goal for her, with a Why waiting there: nothing changes.
-    company_goal = post(api, "goals", {"title": "Grow rentals 30%", "owner_id": "company"})["goal"]["id"]
+    company_goal = post(api, "goals", {"title": "Grow rentals 30%", "owner": "company"})["goal"]["id"]
     waiting = propose_why(api, company_goal, "More rentals is the vision.", strategy_token)
     post(api, f"goals/{company_goal}/why", {"why": "Said for her."}, token="ana-via", expected=403)
     unchanged = goal(api, company_goal)

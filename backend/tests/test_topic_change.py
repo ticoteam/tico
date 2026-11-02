@@ -557,7 +557,7 @@ def test_never_checked_under_three_turns_since_the_last_clear(chat):
 
 def test_never_checked_in_a_task_chat(chat):
     api, _, _, model, _ = chat
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Look into it", "body": "The login bug"})
+    task = post(api, "tasks", {"owner": "ops", "title": "Look into it", "body": "The login bug"})
     post(api, f"tasks/{task['id']}/chat", {"text": UNRELATED})
     post(api, "chat/ops", {"text": UNRELATED, "refs": {"task": task["id"]}})
     assert model.calls == [] and checks(api) == []

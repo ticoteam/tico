@@ -23,19 +23,19 @@ def snapshot(meta, transcript='', notes='', conn=None, readable=None):
     meta = {**meta, 'review_state': meta.get('review_state') or (old['review_state'] if old else 'live')}
     transcript = transcript or (old['transcript_original'] if old else '')
     notes = notes or (old['notes'] if old else '')
-    recorded = meta.get('recorded_by') or (old['recorded_by_id'] if old else None)
-    uploaded = meta.get('uploaded_by') or (old['uploaded_by_id'] if old else None)
+    recorded = meta.get('recorded_by') or (old['recorded_by'] if old else None)
+    uploaded = meta.get('uploaded_by') or (old['uploaded_by'] if old else None)
     readable = readable if readable is not None else (readable_transcript(transcript) if transcript else '')
     metadata = json.dumps({**meta, 'recorded_by': recorded, 'uploaded_by': uploaded,
                            'readability_version': 'paragraphs-v1'}, sort_keys=True)
     digest = hashlib.sha256((metadata + transcript + notes).encode()).hexdigest()
     ts = H.now()
     conn.execute('''INSERT INTO meetings
-        (id,title,owner_id,recorded_by_id,uploaded_by_id,metadata,transcript_original,
+        (id,title,owner,recorded_by,uploaded_by,metadata,transcript_original,
          transcript_readable,notes,content_hash,created_at,updated_at,review_state)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET title=excluded.title, owner_id=excluded.owner_id,
-        recorded_by_id=excluded.recorded_by_id, uploaded_by_id=excluded.uploaded_by_id,
+        ON CONFLICT(id) DO UPDATE SET title=excluded.title, owner=excluded.owner,
+        recorded_by=excluded.recorded_by, uploaded_by=excluded.uploaded_by,
         metadata=excluded.metadata, transcript_original=excluded.transcript_original,
         transcript_readable=excluded.transcript_readable, notes=excluded.notes,
         content_hash=excluded.content_hash, updated_at=excluded.updated_at, review_state=excluded.review_state''',
@@ -66,14 +66,14 @@ def get(rid, conn=None):
 
 
 def filed_for(record, who):
-    return who.role in ('owner', 'human') and bool(who.email) and record['owner_id'].lower() == who.email.lower()
+    return who.role in ('owner', 'human') and bool(who.email) and record['owner'].lower() == who.email.lower()
 
 
 def pending_count(c, who):
     if who.role not in ('owner', 'human') or not who.email:
         return 0
     return c.execute("SELECT count(*) FROM meetings m LEFT JOIN media_control mc ON mc.meeting_id=m.id "
-                     "WHERE m.review_state='pending' AND m.owner_id=? COLLATE NOCASE AND mc.deleted_at IS NULL",
+                     "WHERE m.review_state='pending' AND m.owner=? COLLATE NOCASE AND mc.deleted_at IS NULL",
                      (who.email.lower(),)).fetchone()[0]
 
 
@@ -154,7 +154,7 @@ def context(record):
         f"Calendar event: {cal.get('event_id') or 'Not linked'}",
         f"Scheduled: {cal.get('start') or 'Unknown'} — {cal.get('end') or 'Unknown'}",
         f"Held: {meta.get('started') or 'Unknown'} — {meta.get('ended') or 'Unknown'}",
-        f"Filed by: {record.get('recorded_by_id') or 'Unknown'}",
+        f"Filed by: {record.get('recorded_by') or 'Unknown'}",
         f"Sent by: {delivery.get('requested_by') or 'Unknown'} at {delivery.get('requested_at') or 'Unknown'}",
         f"Calendar invitees (attendance unverified): {', '.join(cal.get('attendees') or []) or 'Unknown'}",
         f"Participants (as the source listed them): {', '.join(listed or meta.get('confirmed_attendees') or []) or 'Not listed'}",

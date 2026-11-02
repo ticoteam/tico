@@ -10,7 +10,7 @@ def task_attempt(api):
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Count the words", "body": "Count them."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Count the words", "body": "Count them."})
     return machine, task, claim(api, machine)
 
 

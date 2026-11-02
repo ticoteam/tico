@@ -17,7 +17,7 @@ def ticket(api, receipt=None, **fields):
             {'name': 'In Progress', 'status': 'doing'}, {'name': 'Review 1', 'status': 'review'},
             {'name': 'Review 1 Fixes', 'status': 'doing'}, {'name': 'Review 2', 'status': 'review'},
             {'name': 'Done', 'status': 'done'}])
-    task = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Improve messages', 'body': 'Build messages.',
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve messages', 'body': 'Build messages.',
                               'type': typ['id'], 'step': 'In Progress', 'links': [PR], **fields})
     hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
     if receipt:
@@ -33,7 +33,7 @@ def move(api, task, step='Review 1'):
 
 def test_qa_pending_marker_is_scoped_to_each_links_task(api):
     task = ticket(api)
-    plain = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
+    plain = post(api, 'tasks', {'owner': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_links SET detail=? WHERE task_id=? AND kind='pr'",
                   (json.dumps({'qa_default_pending': True, 'kept': 'metadata'}), plain['id']))
@@ -117,7 +117,7 @@ def test_mixed_note_keeps_current_result_separate_from_history_and_unrun_checks(
             'and installed behavior not run.')
     task = ticket(api, text)
     assert move(api, task).status_code == 200
-    child = api.post('/api/v2/tasks', headers=headers(), json={'owner_id': 'cmo', 'title': 'Review 1: PR #412',
+    child = api.post('/api/v2/tasks', headers=headers(), json={'owner': 'cmo', 'title': 'Review 1: PR #412',
         'body': 'Review the change.', 'relations': [{'task': task['id'], 'kind': 'parent'}]})
     assert child.status_code == 200, child.text
     with api.app.state.store.transaction() as c:
@@ -208,12 +208,12 @@ def test_task_and_pr_creation_qa_default_and_author_override_are_once(api):
         apply_creation_qa(c, pr, ['ui/page.js'])
         apply_creation_qa(c, pr, ['docs/help.md'])
         assert 'qa' in H.task_labels(H.task(c, task['id']))
-    task2 = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Author override', 'body': 'x', 'type': task['type_id'],
+    task2 = post(api, 'tasks', {'owner': 'cpo', 'title': 'Author override', 'body': 'x', 'type': task['type_id'],
         'qa': False, 'change_paths': ['ui/page.js'], 'links': ['https://github.com/ticoteam/tico/pull/413']})
     with api.app.state.store.transaction() as c:
         apply_creation_qa(c, {'html_url': 'https://github.com/ticoteam/tico/pull/413'}, ['ui/page.js'])
         assert 'qa' not in H.task_labels(H.task(c, task2['id']))
-    task3 = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'UI creation', 'body': 'x', 'type': task['type_id'],
+    task3 = post(api, 'tasks', {'owner': 'cpo', 'title': 'UI creation', 'body': 'x', 'type': task['type_id'],
         'change_paths': ['ui/page.js']})
     assert 'qa' in task3['labels'] and 'not checkable live' in task3['note']
 

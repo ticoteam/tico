@@ -115,9 +115,9 @@ def world(api):
     attempt = claim(api, machine)
     with api.app.state.store.transaction() as c:   # a person's Mac: its credential reads as them
         c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (machine["runner_id"],))
-    private = post(api, "tasks", {"owner_id": "inbox", "title": "Sort the inbox", "body": "Private to Ana."})
-    coo_task = post(api, "tasks", {"owner_id": "ops", "title": "Summarize the week", "body": "For ops."})
-    finance_task = post(api, "tasks", {"owner_id": "finance", "title": "Close the books", "body": "For finance."})
+    private = post(api, "tasks", {"owner": "inbox", "title": "Sort the inbox", "body": "Private to Ana."})
+    coo_task = post(api, "tasks", {"owner": "ops", "title": "Summarize the week", "body": "For ops."})
+    finance_task = post(api, "tasks", {"owner": "finance", "title": "Close the books", "body": "For finance."})
     return {"ana_room": ana_room, "steven_room": steven_room, "machine": machine, "attempt": attempt,
             "private": private, "coo_task": coo_task, "finance_task": finance_task}
 

@@ -211,7 +211,7 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
 def test_librarian_edits_of_docs_and_task_comments_change_only_ticos_terms(named):
     api = named
     _, attempt = turn(api, bot="librarian")            # the Librarian's own run, with its own credential
-    tid = post(api, "tasks", {"owner_id": "librarian", "title": "Brightwater FAQ", "body": "Tidy the FAQ."})["id"]
+    tid = post(api, "tasks", {"owner": "librarian", "title": "Brightwater FAQ", "body": "Tidy the FAQ."})["id"]
     for path, original, want in _cases():
         for token, body in ((attempt["token"], want), ("ana-test", original)):
             who = "person" if token == "ana-test" else "librarian"
@@ -288,7 +288,7 @@ def _files():
 @pytest.mark.parametrize("name,data", _files(), ids=[n for n, _ in _files()])
 def test_stored_files_come_back_byte_for_byte_from_every_read_path(named, name, data):
     api = named
-    tid = post(api, "tasks", {"owner_id": "ops", "title": "Brightwater files", "body": "The depot's files."})["id"]
+    tid = post(api, "tasks", {"owner": "ops", "title": "Brightwater files", "body": "The depot's files."})["id"]
     uploaded = api.post(f"/api/v2/tasks/{tid}/files", files={"file": (name, data)}, headers=headers())
     assert uploaded.status_code == 200, uploaded.text
     first = uploaded.json()["file"]["id"]

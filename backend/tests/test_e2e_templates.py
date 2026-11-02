@@ -47,6 +47,6 @@ def test_a_company_from_the_template_has_its_bot_and_a_first_task_queues_a_job(a
     post(api, f"bots/{slug}/onboarded", {})
 
     before = jobs_for(api, bot_id)
-    post(api, "tasks", {"owner_id": slug, "title": f"First task for {template}",
+    post(api, "tasks", {"owner": slug, "title": f"First task for {template}",
                         "body": "Say what you can do for the company this week, in two sentences."})
     assert jobs_for(api, bot_id) == before + 1, "the first task did not queue a job for the bot"

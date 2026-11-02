@@ -27,8 +27,8 @@ def jobs(c):
 
 
 def test_a_snoozed_task_leaves_lists_and_needs_you_for_the_people_on_it_only(api):
-    mine = post(api, "tasks", {"owner_id": "ana", "title": "Renew the domain", "body": "x"})
-    bots = post(api, "tasks", {"owner_id": "ops", "title": "Tidy the runbooks", "body": "x"})
+    mine = post(api, "tasks", {"owner": "ana", "title": "Renew the domain", "body": "x"})
+    bots = post(api, "tasks", {"owner": "ops", "title": "Tidy the runbooks", "body": "x"})
     # Someone neither on the task nor a mover may not set it aside; a role on it is enough.
     post(api, f"tasks/{bots['id']}/snooze", {"until": ahead(30)}, token="ben-test", expected=403)
     post(api, f"tasks/{bots['id']}", {"version": bots["version"], "roles": {"reviewer": ["ben"]}})
@@ -85,7 +85,7 @@ def test_at_its_date_a_snoozed_task_is_back_and_its_bot_is_woken_once(api):
 
 
 def test_unsnoozing_early_brings_it_back_now_and_wakes_its_bot(api):
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Update the price page", "body": "x"})
+    task = post(api, "tasks", {"owner": "ops", "title": "Update the price page", "body": "x"})
     post(api, f"tasks/{task['id']}/snooze", {"until": ahead(30)})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
@@ -143,7 +143,7 @@ def test_a_bot_snoozes_its_own_task_with_a_note_and_the_note_comes_back_when_it_
 
 def test_a_note_is_cleared_by_unsnoozing_and_by_finishing_and_refused_when_long(api):
     store = api.app.state.store
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Renew the certificate", "body": "x"})
+    task = post(api, "tasks", {"owner": "ops", "title": "Renew the certificate", "body": "x"})
     post(api, f"tasks/{task['id']}/snooze", {"until": ahead(30), "note": "x" * 501}, expected=422)
     shown = post(api, f"tasks/{task['id']}/snooze", {"until": ahead(30), "note": "  Ask the vendor  "})
     assert hold(shown, "snoozed")["reason"] == "Ask the vendor"
@@ -165,7 +165,7 @@ def snooze_comments(c, task_id):
 
 
 def test_a_snooze_that_changes_bumps_the_version_and_the_same_one_again_does_not(api):
-    task = post(api, "tasks", {"owner_id": "ana", "title": "Sign the lease", "body": "x"})
+    task = post(api, "tasks", {"owner": "ana", "title": "Sign the lease", "body": "x"})
     day = ahead(20)[:10]
     first = post(api, f"tasks/{task['id']}/snooze", {"until": day, "note": "Ask the landlord"})
     assert first["version"] == task["version"] + 1

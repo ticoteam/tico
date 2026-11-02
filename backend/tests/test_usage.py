@@ -89,7 +89,7 @@ def seed(api):
 
 
 def post_task(api, owner):
-    return post(api, "tasks", {"owner_id": owner, "title": "Digest", "body": "Do it."})["id"]
+    return post(api, "tasks", {"owner": owner, "title": "Digest", "body": "Do it."})["id"]
 
 
 def usage(api, token="ana-test", expected=200, **params):

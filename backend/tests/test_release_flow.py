@@ -27,7 +27,7 @@ def _team(api):
 
 def _ticket(api, dev, title, number=412, tags=()):
     url = PR.replace("/412", f"/{number}")
-    ticket = post(api, "tasks", {"owner_id": "cpo", "title": title, "body": "x", "links": [url], "type": dev["id"],
+    ticket = post(api, "tasks", {"owner": "cpo", "title": title, "body": "x", "links": [url], "type": dev["id"],
                                  "step": "Pending Release", "labels": list(tags)})
     hook(api, "pull_request", pr_event("closed", html_url=url, merged=True, merge_commit_sha="abc%d" % number,
                                        merged_at="2026-10-19T12:42:19Z"))

@@ -312,7 +312,7 @@ def stale_blocker(run, w, team, i):
     if first["id"] not in run.merged_at or getattr(run, "blocker_added", False):
         return
     run.blocker_added = True
-    old = w.post("tasks", {"owner_id": "engineering-lead", "title": "Restore an old check", "body": "Old."})
+    old = w.post("tasks", {"owner": "engineering-lead", "title": "Restore an old check", "body": "Old."})
     old = old.get("task", old)
     w.post(f"tasks/{first['id']}/relations", {"task": old["id"], "kind": "blocked_by"})
 

@@ -457,7 +457,7 @@ def string_groups(src):
     A part is (start, end) source offsets of literal text, so edits land on the source exactly; an f-string's
     replacement fields become PLACEHOLDER in the group's text."""
     tokens = list(tokenize.generate_tokens(io.StringIO(src.text).readline))
-    groups, current, depth, parts, nested = [], None, 0, None, []
+    groups, current, depth, nested = [], None, 0, []
     i = 0
 
     def flush():
@@ -706,7 +706,7 @@ class PyFile:
         if holders and len(news) == 1 and None not in news:
             return news.pop()
         broad = self.wave.broad.get(old)
-        if broad and not holders and not self._input_key(node):
+        if broad and not holders and not self._input_key(node) and not self._test_body_key(node):
             return broad
         return None
 
@@ -715,6 +715,11 @@ class PyFile:
     INPUT_RECEIVERS = {"args", "arguments", "kwargs", "params", "body", "payload", "query", "request", "inputs",
                        "input", "form", "req", "tool_args", "fields", "patch", "changes", "update", "updates"}
     INPUT_KEYWORDS = {"json", "body", "data", "params"}
+
+    def _test_body_key(self, node):
+        """A test's dict-literal key: a request's body or a saved flow, not a row (a row's fake names its table)."""
+        parent = self.parents.get(node)
+        return "/tests/" in "/" + self.rel and isinstance(parent, ast.Dict) and any(k is node for k in parent.keys)
 
     def _input_key(self, node):
         """Whether a key literal reads a request's input or sits in a body sent to the API."""
@@ -1197,7 +1202,6 @@ def js_tokens(text):
     """(kind, start, end, value) with kind in ident, string, template, punct, number, regex; comments dropped.
     Template literals yield their text chunks as 'template' tokens and their ${...} contents as code."""
     out, i, n = [], 0, len(text)
-    stack = []                       # for templates: brace depth markers
     prev_sig = None
 
     def lex_template(i):
@@ -1371,6 +1375,9 @@ def js_file(rel, text, wave, report, keep):
                 report.site("dom-api", rel, ln, value, line(text, start))
                 continue
             owner = toks[k - 2] if k >= 2 else None
+            if owner and owner[0] == "ident" and owner[3] in ("elements", "dataset", "form"):   # a form control, an attribute
+                report.site("dom-name", rel, ln, value, line(text, start))
+                continue
             if owner and owner[0] == "ident" and owner[3] in JSON_DOCS and not value.endswith("_json"):
                 report.site("json-key", rel, ln, value, line(text, start))
                 continue

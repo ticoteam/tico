@@ -17,7 +17,7 @@ def task_notice(api, task, refs, *, quiet=False, body="Check the runtime notice.
 
 
 def quiet_task(api, title='Check the weekly runtime report'):
-    return post(api, 'tasks', {'owner_id': 'ops', 'title': title,
+    return post(api, 'tasks', {'owner': 'ops', 'title': title,
                                'body': 'Check the weekly runtime report.', 'next_run': True})
 
 

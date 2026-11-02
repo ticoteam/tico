@@ -31,7 +31,7 @@ def ticket(api, step="Review 1", labels=()):
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, "Dev tickets", [{"name": n, "status": s} for n, s in STEPS])
         rules.seed_dev(c)
-    task = post(api, "tasks", {"owner_id": "cpo", "title": "Improve messages", "body": "Build messages.",
+    task = post(api, "tasks", {"owner": "cpo", "title": "Improve messages", "body": "Build messages.",
                                "type": typ["id"], "step": "In Progress", "links": [PR]})
     hook(api, "pull_request", pr_event("opened", head={"sha": HEAD}))
     receipt(api, task)

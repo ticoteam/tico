@@ -283,7 +283,7 @@ def test_a_private_task_is_never_published_to_an_endpoint_whose_owner_cannot_rea
 
 def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sends_nothing_twice(api, net):
     made = make(api, events=["task.done", "task.state_changed", "task.assigned"])
-    task = _post(api, "tasks", {"owner_id": "ops", "title": "Ship it", "body": "Ship it."})
+    task = _post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Ship it."})
     doing = _post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"})
     _post(api, f"tasks/{task['id']}", {"version": doing["version"], "status": "done", "note": "Shipped."})
     kinds = [s["type"] for s in sends(api, made["id"])]
@@ -296,7 +296,7 @@ def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sen
 def test_catalog_examples_have_the_top_level_keys_their_producers_send(api, net):
     from backend import event_catalog as catalog
     made = make(api, events=["task.*", "approval.*"])
-    task = _post(api, "tasks", {"owner_id": "ops", "title": "Ship it", "body": "Ship it."})
+    task = _post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Ship it."})
     _post(api, f"tasks/{task['id']}/comments", {"text": "Soon."})
     doing = _post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"})
     _post(api, f"tasks/{task['id']}", {"version": doing["version"], "status": "done", "note": "Shipped."})

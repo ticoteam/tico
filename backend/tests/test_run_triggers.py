@@ -183,7 +183,7 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     if case == "reply_to_person":
         post(api, "chat/ops", {"text": "Anything new?"})
     else:
-        task = post(api, "tasks", {"owner_id": "ops", "title": "Check the bank feed", "body": "Daily."})
+        task = post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
     attempt = claim(api, r)
     start(api, r, attempt)
     token = attempt["token"]
@@ -247,8 +247,8 @@ def worktree(api, task_id, attempt, path):
 def test_a_push_from_the_runs_own_task_worktree_is_acting(api, case):
     """Tico never sees a git push; the runner reports the ones from the run's task worktrees with its result."""
     r = machine(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Fix the export", "body": "Push the fix."})
-    other = post(api, "tasks", {"owner_id": "ops", "title": "Tidy the docs", "body": "Later."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Fix the export", "body": "Push the fix."})
+    other = post(api, "tasks", {"owner": "ops", "title": "Tidy the docs", "body": "Later."})
     attempt = claim(api, r)
     start(api, r, attempt)
     worktree(api, task["id"], attempt, "tasks/fix/app")
@@ -268,7 +268,7 @@ def test_a_push_from_the_runs_own_task_worktree_is_acting(api, case):
 def test_a_run_that_started_a_fresh_session_says_why_and_the_week_counts_it(api, case):
     """The runner reports a session left behind for its size (runner-rs/src/rotate.rs); the token table counts it."""
     r = machine(api)
-    post(api, "tasks", {"owner_id": "ops", "title": "Watch the release", "body": "Each hour."})
+    post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
     attempt = claim(api, r)
     start(api, r, attempt)
     body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
@@ -295,7 +295,7 @@ def test_a_run_that_started_a_fresh_session_says_why_and_the_week_counts_it(api,
 ])
 def test_a_run_says_whether_it_resumed_its_session_and_a_new_one_is_in_the_tasks_history(api, session, said):
     r = machine(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Watch the release", "body": "Each hour."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
     attempt = claim(api, r)
     start(api, r, attempt)
     post(api, f"attempts/{attempt['id']}/complete",
@@ -311,7 +311,7 @@ def test_a_run_says_whether_it_resumed_its_session_and_a_new_one_is_in_the_tasks
 
 def test_a_completion_from_an_older_runner_has_no_session_and_a_session_that_is_too_long_is_refused(api):
     r = machine(api)
-    post(api, "tasks", {"owner_id": "ops", "title": "Watch the release", "body": "Each hour."})
+    post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
     attempt = claim(api, r)
     start(api, r, attempt)
     body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
@@ -326,7 +326,7 @@ def test_a_completion_from_an_older_runner_has_no_session_and_a_session_that_is_
 def test_a_persons_clear_and_a_topic_change_in_a_task_room_are_in_the_tasks_history(api):
     from backend import views
     machine(api)
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Watch the release", "body": "Each hour."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
     with api.app.state.store.transaction() as c:
         room = c.execute("SELECT id FROM conversations WHERE task_id=?", (task["id"],)).fetchone()[0]
         views.clear_chat_session(c, api.app.state.store.settings, "human:ana", "ops", room)
@@ -376,7 +376,7 @@ def test_health_does_not_count_a_first_session_a_cleared_one_or_a_topic_change(a
 
 def test_a_restore_ends_open_runs_with_an_outcome(api):
     r = machine(api)
-    post(api, "tasks", {"owner_id": "ops", "title": "Check the bank feed", "body": "Daily."})
+    post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
         c.execute(f"UPDATE turns SET finished_at=?,exit='interrupted',{RT.SETTLE_SQL} WHERE id=?",
@@ -462,15 +462,15 @@ def test_the_weekly_table_adds_up_only_runs_the_reader_may_read(api):
         return attempt
 
     ran(lambda: post(api, "chat/ops", {"text": "My own numbers, please."}))      # Ana's room: its message and inputs
-    shared = post(api, "tasks", {"owner_id": "ops", "title": "Check the bank feed", "body": "Daily."})
+    shared = post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
     ran(lambda: None)                                                             # Ben may read this task, for now
-    secret = post(api, "tasks", {"owner_id": "ops", "title": "Plan the reorg", "body": "Ana only."})
+    secret = post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Ana only."})
     with store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret["id"],))
     ran(lambda: None)                                                             # a run on Ana's private task
     # A run Ben may read the attempt of, but not its turn (the turn names Ana's private task): not a turnless
     # attempt, so not counted at all.
-    post(api, "tasks", {"owner_id": "ops", "title": "Check the card feed", "body": "Daily."})
+    post(api, "tasks", {"owner": "ops", "title": "Check the card feed", "body": "Daily."})
     hidden_turn = ran(lambda: None)
     with store.transaction() as c:
         c.execute("UPDATE turns SET task_id=? WHERE id=?", (secret["id"], hidden_turn["id"]))
@@ -501,15 +501,15 @@ def test_a_run_whose_inputs_came_from_a_private_task_leaves_the_weekly_table(api
     as_member(api, "ben@acme.example")
     r = machine(api)
     store = api.app.state.store
-    private = post(api, "tasks", {"owner_id": "ops", "title": "Plan the reorg", "body": "Ana only.", "private": True})
+    private = post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Ana only.", "private": True})
     secret = claim(api, r)
     start(api, r, secret)
     finish(api, r, secret)
-    post(api, "tasks", {"owner_id": "ops", "title": "Check the bank feed", "body": "Daily."})
+    post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})
     tainted = claim(api, r)
     start(api, r, tainted)
     finish(api, r, tainted)
-    post(api, "tasks", {"owner_id": "ops", "title": "Check the card feed", "body": "Daily."})
+    post(api, "tasks", {"owner": "ops", "title": "Check the card feed", "body": "Daily."})
     lost = claim(api, r)
     with store.transaction() as c:
         c.execute("DELETE FROM turns WHERE id=?", (lost["id"],))

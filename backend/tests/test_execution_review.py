@@ -822,7 +822,7 @@ def test_a_held_run_names_its_task_and_owner_only_to_who_may_read_it(api):
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Archive the old bots', 'body': 'Archive them and tell Priya.', 'private': True})
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Archive the old bots', 'body': 'Archive them and tell Priya.', 'private': True})
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'held'}, machine['token'])
     post(api, f"attempts/{attempt['id']}/events", {'events': [
@@ -845,7 +845,7 @@ def test_a_held_run_on_a_private_task_is_not_handed_to_botops(api):
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Ana only', 'body': 'Private work.', 'private': True})
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Ana only', 'body': 'Private work.', 'private': True})
     attempt = claim(api, machine)
     for run in (attempt, None):
         if run is None:
@@ -871,7 +871,7 @@ def test_a_held_company_task_involving_a_bot_the_reader_cannot_read_stays_unname
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Counsel memo for Acme', 'body': 'Draft it.'})
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Counsel memo for Acme', 'body': 'Draft it.'})
     task_id = task.get('task', task).get('id') or task['refs']['task']
     attempt = claim(api, machine)
     with api.app.state.store.transaction() as c:
@@ -1494,7 +1494,7 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Archive the old bots', 'body': 'Archive them and tell Priya.'})
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Archive the old bots', 'body': 'Archive them and tell Priya.'})
     task_id = task.get('task', task).get('id') or task['refs']['task']
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'held'}, machine['token'])
@@ -1533,7 +1533,7 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Ship the receipts fix', 'body': 'Push it and open the PR.'})
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Ship the receipts fix', 'body': 'Push it and open the PR.'})
     task_id = task.get('task', task).get('id') or task['refs']['task']
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'drained'}, machine['token'])
@@ -1584,7 +1584,7 @@ def busy_folded_run(api):
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Ship the receipts fix', 'body': 'Push it and open the PR.'})
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Ship the receipts fix', 'body': 'Push it and open the PR.'})
     task_id = task.get('task', task).get('id') or task['refs']['task']
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'drained'}, machine['token'])
@@ -1699,9 +1699,9 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Weekly digest', 'body': 'Send it.'})
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Weekly digest', 'body': 'Send it.'})
     stop_partway(api, machine, claim(api, machine), 'company')
-    private = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Ana only', 'body': 'Private work.', 'private': True})
+    private = post(api, 'tasks', {'owner': 'ops', 'title': 'Ana only', 'body': 'Private work.', 'private': True})
     private_id = private.get('task', private).get('id') or private['refs']['task']
     # The keeper settles the request Ana's private run was for and leaves the comment carried on that run.
     ready(api, machine, ['ops'])
@@ -1872,7 +1872,7 @@ def test_a_busy_bots_stopped_run_records_dependency_until_task_and_lane_free(api
     machine = runner(api)
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    stopped = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Read the notes', 'body': 'Read the notes.'})
+    stopped = post(api, 'tasks', {'owner': 'ops', 'title': 'Read the notes', 'body': 'Read the notes.'})
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'stopped'}, machine['token'])
     events = [{'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
@@ -1881,7 +1881,7 @@ def test_a_busy_bots_stopped_run_records_dependency_until_task_and_lane_free(api
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 2,
          'text': 'Runner restarted during execution'}, machine['token'])
     post(api, f"tasks/{stopped['id']}/comments", {'text': 'Any news?', 'needs_action': True})   # fenced behind it
-    busy = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Something else', 'body': 'Do something else.'})
+    busy = post(api, 'tasks', {'owner': 'ops', 'title': 'Something else', 'body': 'Do something else.'})
     other = claim(api, machine)
     post(api, f"attempts/{other['id']}/started", {'thread_id': 'busy'}, machine['token'])
 
@@ -1929,7 +1929,7 @@ def test_auto_reconcile_defers_only_for_the_live_work_identity_that_matches(api,
     if live_match == 'no_task_conversation':
         target = post(api, 'chat/ops', {'text': 'A stopped request'})
     else:
-        target_task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Stopped request', 'body': 'Read this.'})
+        target_task = post(api, 'tasks', {'owner': 'ops', 'title': 'Stopped request', 'body': 'Read this.'})
         target = target_task
     target_attempt = claim(api, machine)
     post(api, f"attempts/{target_attempt['id']}/started", {'thread_id': 'stopped'}, machine['token'])
@@ -1942,7 +1942,7 @@ def test_auto_reconcile_defers_only_for_the_live_work_identity_that_matches(api,
                                         'ON j.message_id=m.id WHERE j.id=?',
                                         (target_attempt['job_id'],)).fetchone())
 
-    other_task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Different task', 'body': 'Continue elsewhere.'})
+    other_task = post(api, 'tasks', {'owner': 'ops', 'title': 'Different task', 'body': 'Continue elsewhere.'})
     live_attempt = claim(api, machine)
     assert live_attempt and live_attempt['job_id'] != target_attempt['job_id']
 

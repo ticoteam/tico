@@ -31,7 +31,7 @@ def during(run, w, team, i):
         held = w.sql("SELECT id FROM tasks WHERE type_id=? AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=tasks.id AND e.field='move_retry') ORDER BY created_at, id LIMIT 1",
                      (w.dev["id"],))
         if held:
-            child = w.post("tasks", {"owner_id": "ana", "title": "Confirm the wording with support",
+            child = w.post("tasks", {"owner": "ana", "title": "Confirm the wording with support",
                                      "body": "Check the new wording before this goes to review.",
                                      "relations": [{"task": held[0]["id"], "kind": "parent"}]})
             run.child = [held[0]["id"], child.get("task", child)["id"], None]

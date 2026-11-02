@@ -26,7 +26,7 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
     hold_bot(api, machine, monkeypatch)                  # ops: held after five failed runs, its last stop on record
     assign(api, machine, "doc-updater")
     ready(api, machine, ["ops", "doc-updater"])
-    post(api, "tasks", {"owner_id": "doc-updater", "title": "Update the guide", "body": "Please update it."})
+    post(api, "tasks", {"owner": "doc-updater", "title": "Update the guide", "body": "Please update it."})
     live = claim(api, machine, "doc-updater")
     post(api, f"attempts/{live['id']}/started", {"thread_id": "t-live"}, machine["token"])       # a live run
     with api.app.state.store.transaction() as c:

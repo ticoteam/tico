@@ -228,7 +228,7 @@ def test_market_questions_are_kept_as_answered_so_the_owner_can_skip_and_resume(
 def test_a_market_setup_task_is_only_ever_the_owners_own_librarian_task(desk):
     # The owner can write any preferences row, so a stored task id is checked: it must be the Librarian's task and
     # the owner's own, or the setup shows no task.
-    elsewhere = post(desk, "tasks", {"owner_id": "ops", "title": "Not the Librarian's", "body": "x"})
+    elsewhere = post(desk, "tasks", {"owner": "ops", "title": "Not the Librarian's", "body": "x"})
     elsewhere = elsewhere.get("task", elsewhere)
     bens = post(desk, "librarian/setup/docs", {"note": "On the wiki"}, token="ben-test")["task_id"]
     for forged in (elsewhere["id"], bens):

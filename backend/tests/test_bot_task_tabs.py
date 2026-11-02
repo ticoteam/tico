@@ -343,8 +343,8 @@ def test_needs_you_supplements_deduplicate_beyond_first_page_without_leaking_pri
 
 def test_attention_counts_include_approvals_in_whole_list():
     from backend import views
-    items = [{"kind": "task", "id": "owned", "owner_id": "human:ana", "requester_id": "bot:ops", "status": "open"},
-             {"kind": "waiting", "id": "wait", "owner_id": "bot:ops", "requester_id": "human:ana", "status": "waiting", "waiting_on": "human:ana"},
+    items = [{"kind": "task", "id": "owned", "owner": "human:ana", "requester": "bot:ops", "status": "open"},
+             {"kind": "waiting", "id": "wait", "owner": "bot:ops", "requester": "human:ana", "status": "waiting", "waiting_on": "human:ana"},
              {"kind": "approval", "id": "approval", "requested_by": "bot:ops"},
              {"kind": "approval", "id": "other", "requested_by": "human:ben"}]
     assert views.needs_bots(items, "human:ana") == {"bot:ops": 3}

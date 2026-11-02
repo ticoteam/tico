@@ -17,8 +17,8 @@ def bot_ask(c, tid, text, refs=None, to="human:ana"):
 
 
 def test_a_newer_ask_or_the_tasks_end_supersedes_and_old_asks_fold_out(api):
-    tid = post(api, "tasks", {"owner_id": "ops", "title": "Pick a vendor", "body": "x"})["id"]
-    other = post(api, "tasks", {"owner_id": "ops", "title": "Pick a venue", "body": "x"})["id"]
+    tid = post(api, "tasks", {"owner": "ops", "title": "Pick a vendor", "body": "x"})["id"]
+    other = post(api, "tasks", {"owner": "ops", "title": "Pick a venue", "body": "x"})["id"]
     with api.app.state.store.transaction() as c:
         first = bot_ask(c, tid, "Which vendor, A or B?")
         budget = bot_ask(c, tid, "What is the budget?", to="human:ben")

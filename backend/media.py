@@ -232,7 +232,7 @@ def may_write(who, record):
     if record.get("review_state", "live") != "live":
         return MS.filed_for(record, who)
     return who.role == "owner" or (who.role == "human" and bool(who.email)
-                                   and record["owner_id"].lower() == who.email.lower())
+                                   and record["owner"].lower() == who.email.lower())
 
 
 def shared_meeting(record, who):

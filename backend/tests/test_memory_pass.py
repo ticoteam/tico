@@ -16,7 +16,7 @@ def pass_filed(api, spec="codex:gpt-6.1-sol"):
     machine, parent, turn = parent_turn(api)
     company(api, "anthropic", "openai", "xai")
     all_ready(api, machine)
-    sub = post(api, "tasks", {"owner_id": "ops", "title": "Nightly memory tidy: 2026-11-02", "body": "Read memory.",
+    sub = post(api, "tasks", {"owner": "ops", "title": "Nightly memory tidy: 2026-11-02", "body": "Read memory.",
                               "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
     finish(api, machine, turn)
     with api.app.state.store.transaction() as c:

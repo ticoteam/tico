@@ -141,7 +141,7 @@ def test_no_vision_is_the_first_thing_it_asks_above_passive_and_saving_one_close
     """Spec test 3: with no vision, the Strategy Bot's first item above Passive asks for it, at the top of the owner's
     list, and it closes by itself once a vision is saved. At Passive it is never asked."""
     goal_manager(api)
-    post(api, "kpis", {"name": "Unreported measure", "owner_id": "me", "cadence": "weekly"})
+    post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
     sync(api)
     assert asks(api, OWNER) == []                                           # Passive: nothing asked
     raise_level(api, 2)
@@ -163,7 +163,7 @@ def test_why_proposals_reach_the_owner_as_one_item(api):
     item, never one per goal, above Passive; it closes once every one is settled."""
     strategy_token = with_strategy_bot(api, level=2)
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
-    goals = [post(api, "goals", {"title": title, "owner_id": "company"})["goal"]["id"] for title in ("Grow rentals", "Cut churn")]
+    goals = [post(api, "goals", {"title": title, "owner": "company"})["goal"]["id"] for title in ("Grow rentals", "Cut churn")]
     first = propose_why(api, goals[0], "More rentals is more landlords on Tico.", strategy_token)
     second = propose_why(api, goals[1], "Landlords who stay are the vision.", strategy_token)
     sync(api)                                                               # the second joins the same item
@@ -186,14 +186,14 @@ def test_no_daily_limit_in_one_persons_needs_you_most_important_first(api):
     and counts what it asked today per person."""
     strategy_token = with_strategy_bot(api, level=2)
     for n in range(7):
-        post(api, "kpis", {"name": f"Measure {n}", "owner_id": "me", "cadence": "weekly"})
+        post(api, "kpis", {"name": f"Measure {n}", "owner": "me", "cadence": "weekly"})
     sync(api)
     mine = asks(api, OWNER)
     assert len(mine) == 8 and mine[0]["kind"] == "vision"
     shown = get(api, "goals/needs-you")["items"]
     assert len(shown) == 8 and all(i.get("task") for i in shown) and shown[0]["kind"] == "vision"
-    post(api, "tasks", {"title": "One more question", "body": "Why?", "owner_id": OWNER}, token=strategy_token)
-    post(api, "tasks", {"title": "A question for Ben", "body": "Why?", "owner_id": "human:ben"}, token=strategy_token)
+    post(api, "tasks", {"title": "One more question", "body": "Why?", "owner": OWNER}, token=strategy_token)
+    post(api, "tasks", {"title": "A question for Ben", "body": "Why?", "owner": "human:ben"}, token=strategy_token)
     assert get(api, "strategy-bot")["asked_today"] == {OWNER: 9, "human:ben": 1}
     assert get(api, "strategy-bot", token=strategy_token)["asked_today"] == {OWNER: 9, "human:ben": 1}
     assert get(api, "strategy-bot", token="cara-test")["asked_today"] == {}                 # a member: only their own
@@ -332,10 +332,10 @@ def test_with_no_chosen_level_passive_pauses_the_note_and_withdraws_what_waits_a
     with store.transaction() as c:
         strategy_bot.reconcile(c)
     assert review_enabled(api)
-    goal_id = post(api, "goals", {"title": "Grow rentals", "owner_id": "company"})["goal"]["id"]
+    goal_id = post(api, "goals", {"title": "Grow rentals", "owner": "company"})["goal"]["id"]
     payload = {"evidence": "Activation fell from 40% to 10% this week.", "pick": 0, "options": [
         {"label": "Finance pauses the campaign", "actions": [
-            {"do": "create", "owner_id": "finance", "title": "Pause the signup campaign"}]}]}
+            {"do": "create", "owner": "finance", "title": "Pause the signup campaign"}]}]}
     waiting = post(api, "goal-proposals", {"kind": "recovery", "goal_id": goal_id, "reason": "Red for a week",
                                            "payload": payload}, token=strategy_token)["proposal"]
     assert waiting["status"] == "pending"
@@ -378,7 +378,7 @@ def test_lowering_to_passive_keeps_the_vision_and_why_asks_until_they_are_resolv
     """v3: at Passive nothing new is asked, but a vision or Why ask filed above it stays open and shown until its cause
     is resolved; only then does it close."""
     strategy_token = with_strategy_bot(api, level=2)
-    goal_id = post(api, "goals", {"title": "Grow rentals", "owner_id": "company"})["goal"]["id"]
+    goal_id = post(api, "goals", {"title": "Grow rentals", "owner": "company"})["goal"]["id"]
     why = propose_why(api, goal_id, "More rentals is more landlords on Tico.", strategy_token)
     sync(api)
     filed = {a["kind"]: a["id"] for a in asks(api, OWNER)}
@@ -387,8 +387,8 @@ def test_lowering_to_passive_keeps_the_vision_and_why_asks_until_they_are_resolv
     sync(api)
     assert {a["kind"]: a["id"] for a in asks(api, OWNER) if a["status"] == "open"} == filed
     assert {"vision", "why"} <= {i["kind"] for i in get(api, "goals/needs-you")["items"]}
-    post(api, "goals", {"title": "Cut churn", "owner_id": "company"})
-    post(api, "kpis", {"name": "Unreported measure", "owner_id": "me", "cadence": "weekly"})
+    post(api, "goals", {"title": "Cut churn", "owner": "company"})
+    post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
     sync(api)
     assert {a["id"] for a in asks(api)} == set(filed.values())               # nothing new at Passive
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})

@@ -134,9 +134,9 @@ def test_a_new_bet_in_a_proposal_links_the_growth_ideas_that_serve_it_when_confi
 def test_live_by_bet_counts_every_live_goal_past_the_sample_of_20(api):
     # 20 closed goals sort first (owner ana before cara), so the sample of 20 holds none of the 21 live ones.
     bet = ready(api)
-    closed = [post(api, "goals", {"title": f"Old {i}", "owner_id": "ana", "bet_id": bet["id"]})["goal"]["id"] for i in range(20)]
+    closed = [post(api, "goals", {"title": f"Old {i}", "owner": "ana", "bet_id": bet["id"]})["goal"]["id"] for i in range(20)]
     for i in range(21):
-        post(api, "goals", {"title": f"Live {i}", "owner_id": "cara", "bet_id": bet["id"]})
+        post(api, "goals", {"title": f"Live {i}", "owner": "cara", "bet_id": bet["id"]})
     with api.app.state.store.transaction() as c:
         c.execute(f"UPDATE goals SET status='done' WHERE id IN ({','.join('?' * len(closed))})", closed)
     view = get(api, "strategy")
@@ -160,14 +160,14 @@ def test_a_title_only_section_rename_from_a_proposal_renames_and_keeps_the_body(
 
 def test_goals_by_bet_hides_goals_the_reader_may_not_see_and_task_only_goals_are_gray(api):
     bet = ready(api)
-    mine = post(api, "goals", {"title": "Sign 10 landlords", "owner_id": "ana", "bet_id": bet["id"]})["goal"]
+    mine = post(api, "goals", {"title": "Sign 10 landlords", "owner": "ana", "bet_id": bet["id"]})["goal"]
     publish(api)
     view = get(api, "strategy")
     assert [g["id"] for g in view["goals_by_bet"][bet["id"]]] == [mine["id"]]
     assert view["health_by_bet"][bet["id"]] == "gray"
     assert view["website"] is None
     # A bot's goal is listed only to whoever may read that bot (goal_routes.readable_goals).
-    theirs = post(api, "goals", {"title": "Answer every lead", "owner_id": "ana", "bet_id": bet["id"]})["goal"]
+    theirs = post(api, "goals", {"title": "Answer every lead", "owner": "ana", "bet_id": bet["id"]})["goal"]
 
     class Auth:
         @staticmethod
@@ -177,7 +177,7 @@ def test_goals_by_bet_hides_goals_the_reader_may_not_see_and_task_only_goals_are
         c.execute("UPDATE goals SET owner_id='bot:acme-helper' WHERE id=?", (theirs["id"],))
         listed = S.goals_by_bet(c, Auth, Identity("human:cara", "human"), [bet["id"]])
     assert [g["id"] for g in listed[bet["id"]]] == [mine["id"]]
-    post(api, "goals", {"title": "Nope", "owner_id": "ana", "bet_id": "missing"}, expected=422)
+    post(api, "goals", {"title": "Nope", "owner": "ana", "bet_id": "missing"}, expected=422)
     goal, kpi = goal_with_kpi(api)
     post(api, f"goals/{goal['id']}", {"bet_id": bet["id"]})
     log(api, kpi["id"], 41)
@@ -368,7 +368,7 @@ def test_the_owner_runs_the_strategy_through_the_hub_tools(api):
     assert not err and out["n"] == 1 and "Landlords pay for bots" in out["text"]
     err, _ = ok("hub_strategy_draft", {"summary": "Mine."}, token="cara-test")
     assert err
-    err, out = ok("hub_goal_create", {"owner_id": "ana", "title": "Sign 10 landlords",
+    err, out = ok("hub_goal_create", {"owner": "ana", "title": "Sign 10 landlords",
                                       "bet_id": get(api, "strategy")["bets"][0]["id"]})
     assert not err and out["bet_id"]
 
@@ -412,7 +412,7 @@ def test_hub_sql_shows_strategy_proposals_only_to_the_owner_and_the_bot_that_pro
     strategy_token = with_strategy_bot(api)
     one = ready(api)
     add_bet(api, "Landlords refer landlords")
-    post(api, "goals", {"title": "Sign 10 landlords", "owner_id": "cara", "bet_id": one["id"]})
+    post(api, "goals", {"title": "Sign 10 landlords", "owner": "cara", "bet_id": one["id"]})
     publish(api)
     post(api, f"strategy/bets/{one['id']}", {"status": "retired"})
     publish(api, "Second")                                              # files a strategy_realign card

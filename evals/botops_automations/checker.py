@@ -51,7 +51,7 @@ def canon(flow):
 def validate(flow, owner, name):
     """None when the flow passes the save check, else the reason it is refused."""
     try:
-        F.check({"name": name, "owner_id": owner, "trigger": flow.get("trigger"), "steps": flow.get("steps") or [],
+        F.check({"name": name, "owner": owner, "trigger": flow.get("trigger"), "steps": flow.get("steps") or [],
                  "batch": flow.get("batch")})
     except Exception as exc:   # a malformed answer is a failed check, never a crash
         return str(exc) or type(exc).__name__

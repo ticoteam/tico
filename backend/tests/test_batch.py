@@ -9,7 +9,7 @@ from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
 
 def ask_ana(api, bot, text, title="Pick the outbound tool", token=None):
     """A bot that owns a task Ana filed asks him its one question."""
-    task = post(api, "tasks", {"title": title, "body": "Decide", "owner_id": bot})
+    task = post(api, "tasks", {"title": title, "body": "Decide", "owner": bot})
     token = token or setup_attempt(api, bot)[2]["token"]
     return post(api, f"tasks/{task['id']}/ask", {"text": text}, token=token)
 
@@ -25,12 +25,12 @@ def approval_for_ana(api, bot="finance", kind="spend", payload=None, task=None, 
 def test_responses_are_recorded_not_applied_and_commit_applies_them_with_the_persons_identity(api):
     _, _, finance = setup_attempt(api, "finance")
     # Both decisive items trace back to Ana, so the approval leads on its kind.
-    ads = post(api, "tasks", {"title": "Run the LinkedIn ads", "body": "Q4", "owner_id": "bot:finance"})
+    ads = post(api, "tasks", {"title": "Run the LinkedIn ads", "body": "Q4", "owner": "bot:finance"})
     approval = approval_for_ana(api, token=finance["token"], task=ads["id"])
     ask = ask_ana(api, "finance", "Close or Apollo?", token=finance["token"])
-    chore = post(api, "tasks", {"title": "Sign the lease", "body": "Ready", "owner_id": "human:ana"},
+    chore = post(api, "tasks", {"title": "Sign the lease", "body": "Ready", "owner": "human:ana"},
                  token=finance["token"])
-    junk = post(api, "tasks", {"title": "Drop the old draft to Yair", "body": "Obsolete", "owner_id": "human:ana"},
+    junk = post(api, "tasks", {"title": "Drop the old draft to Yair", "body": "Obsolete", "owner": "human:ana"},
                 token=finance["token"])
     b = post(api, "batch", {})
     bid = b["id"]
@@ -98,7 +98,7 @@ def test_a_batch_belongs_to_a_person_and_a_failed_item_does_not_stop_the_commit(
 
 def test_done_on_a_bots_request_needs_no_words_and_the_bot_hears_who_finished_it(api):
     _, _, finance = setup_attempt(api, "finance")
-    chore = post(api, "tasks", {"title": "Sign the lease", "body": "Ready", "owner_id": "human:ana"}, token=finance["token"])
+    chore = post(api, "tasks", {"title": "Sign the lease", "body": "Ready", "owner": "human:ana"}, token=finance["token"])
     b = post(api, "batch", {})
     assert b["item"]["key"] == "task:" + chore["id"]
     post(api, f"batch/{b['id']}/respond", {"kind": "decide", "decision": "done"})
@@ -115,11 +115,11 @@ def test_what_a_person_asked_for_leads_unless_a_bots_item_presses(api):
     _, _, finance = setup_attempt(api, "finance")
     _, _, ops = setup_attempt(api, "ops")
     approval = approval_for_ana(api, token=finance["token"])
-    chore = post(api, "tasks", {"title": "Rotate the report template", "body": "Housekeeping", "owner_id": "human:ana"},
+    chore = post(api, "tasks", {"title": "Rotate the report template", "body": "Housekeeping", "owner": "human:ana"},
                  token=finance["token"])
-    todo = post(api, "tasks", {"title": "Book the venue", "body": "For the offsite", "owner_id": "human:ana"})
-    quote = post(api, "tasks", {"title": "Quote for Acme", "body": "A customer", "owner_id": "bot:ops"}, token="ben-test")
-    confirm = post(api, "tasks", {"title": "Confirm the Acme discount", "body": "For the quote", "owner_id": "human:ana",
+    todo = post(api, "tasks", {"title": "Book the venue", "body": "For the offsite", "owner": "human:ana"})
+    quote = post(api, "tasks", {"title": "Quote for Acme", "body": "A customer", "owner": "bot:ops"}, token="ben-test")
+    confirm = post(api, "tasks", {"title": "Confirm the Acme discount", "body": "For the quote", "owner": "human:ana",
                                   "relations": [{"task": quote["id"], "kind": "parent"}]}, token=ops["token"])
     items = {i["id"]: i for i in get(api, "needs-you")["items"]}
     order = list(items)
@@ -132,8 +132,8 @@ def test_what_a_person_asked_for_leads_unless_a_bots_item_presses(api):
     assert [g["who"] for g in b["lineup"]] == ["bot:ops", "bot:finance"]
 
     # Overdue, or waiting (a day for an approval, which holds its bot up): a bot's item goes ahead again.
-    overdue = post(api, "tasks", {"title": "Renew the domain", "body": "Lapsed", "owner_id": "human:ana",
-                                  "due_at": H.shift(H.now(), days=-1)}, token=finance["token"])
+    overdue = post(api, "tasks", {"title": "Renew the domain", "body": "Lapsed", "owner": "human:ana",
+                                  "due": H.shift(H.now(), days=-1)}, token=finance["token"])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE approvals SET created_at=? WHERE id=?", (H.shift(H.now(), days=-2), approval["id"]))
     order = [i["id"] for i in get(api, "needs-you")["items"]]

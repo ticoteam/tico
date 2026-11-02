@@ -106,10 +106,10 @@ def test_a_bot_run_sees_the_relations_it_may_read_and_nothing_of_the_rest(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    secret = post(api, "tasks", {"owner_id": "cara", "title": "Secret salary review", "body": "x", "private": True},
+    secret = post(api, "tasks", {"owner": "cara", "title": "Secret salary review", "body": "x", "private": True},
                   token="ben-test")
-    blocker = post(api, "tasks", {"owner_id": "cpo", "title": "Write the refund copy", "body": "x"})
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Ship the refund page", "body": "x",
+    blocker = post(api, "tasks", {"owner": "cpo", "title": "Write the refund copy", "body": "x"})
+    task = post(api, "tasks", {"owner": "ops", "title": "Ship the refund page", "body": "x",
                                "relations": [{"task": blocker["id"], "kind": "blocked_by"}]})
     post(api, "tasks/" + secret["id"] + "/relations", {"task": task["id"]}, token="ben-test")
     assert claim(api, r, "ops") is None, "an unfinished blocker prevents automatic pickup"

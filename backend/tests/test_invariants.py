@@ -74,8 +74,8 @@ def test_a_run_past_its_lease_by_ten_minutes_fires_and_a_recent_or_finished_one_
 
 
 def test_a_bot_task_in_progress_with_no_run_for_an_hour_fires_and_one_with_a_queued_run_does_not(api, monkeypatch):
-    stuck = post(api, "tasks", {"owner_id": "ops", "title": "Draft the notes", "body": "x"})["id"]
-    waiting = post(api, "tasks", {"owner_id": "ops", "title": "Pick a venue", "body": "x"})["id"]
+    stuck = post(api, "tasks", {"owner": "ops", "title": "Draft the notes", "body": "x"})["id"]
+    waiting = post(api, "tasks", {"owner": "ops", "title": "Pick a venue", "body": "x"})["id"]
     store = api.app.state.store
     # One example at most, and the busy task is the older: it must not use up the limit ahead of the stuck one.
     monkeypatch.setattr(I, "LIMIT", 1)
@@ -89,8 +89,8 @@ def test_a_bot_task_in_progress_with_no_run_for_an_hour_fires_and_one_with_a_que
 
 
 def test_a_question_to_a_person_who_has_since_left_fires_and_one_to_a_present_person_does_not(api):
-    tid = post(api, "tasks", {"owner_id": "ops", "title": "Pick a vendor", "body": "x"})["id"]
-    other = post(api, "tasks", {"owner_id": "ops", "title": "Set a budget", "body": "x"})["id"]
+    tid = post(api, "tasks", {"owner": "ops", "title": "Pick a vendor", "body": "x"})["id"]
+    other = post(api, "tasks", {"owner": "ops", "title": "Set a budget", "body": "x"})["id"]
     store = api.app.state.store
     with store.transaction() as c:
         task = H.task(c, tid)

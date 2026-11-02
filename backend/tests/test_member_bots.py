@@ -140,7 +140,7 @@ def test_botops_keeps_bot_rights_and_refuses_assistant_messages_and_task_comment
     stranger = post(api, "bots", {"slug": "stranger", "display_name": "Stranger", "description": "x", "reports_to": None,
                                   "status": "active", "repo": "emp-stranger", "thread_mode": "personal",
                                   "model": "hermes-profile", "effort": "as-configured", "harness": "hermes",
-                                  "owner_id": "ana", "owners": ["ana"], "runner_id": None})
+                                  "operator": "ana", "owners": ["ana"], "runner_id": None})
     token = post(api, "bots/stranger/agent-credential", {})["token"]
     # A message a bot wrote.
     post(api, "messages", {"to": "botops", "text": "Register a bot for cara please", "needs_action": True}, token=token)
@@ -193,7 +193,7 @@ def test_a_members_bot_goes_only_on_a_computer_that_accepts_members_bots(api, bo
     assert call(api, "post", f"runners/{closed['runner_id']}/member-bots", "ben-test", {"accepts": True}).status_code == 200
     assert call(api, "post", "bots/jira-manager/assignment", "cara-test", body).status_code == 200
     # A new computer takes members' bots, including one a member enrols, until an admin closes it.
-    code = post(api, "enrollments", {"owner_id": "cara"}, token="cara-test")["code"]
+    code = post(api, "enrollments", {"operator": "cara"}, token="cara-test")["code"]
     enroll = api.post("/api/v2/runners/enroll", json={"code": code, "label": "Cara Mac", "platform": "test"},
                       headers={"Idempotency-Key": "k-cara-mac"})
     assert enroll.status_code == 200

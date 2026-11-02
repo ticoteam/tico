@@ -282,14 +282,14 @@ class Doors:
         made = org.api("post", "/api/v2/triggers", {"name": "Shop", "id": "shop"})
         self.shop = made.body["trigger"]["url"]
         org.api("post", "/api/v2/automations", {
-            "name": "Shop order", "owner_id": "person:" + DANA_ID, "enabled": True, "builtin": False,
+            "name": "Shop order", "owner": "person:" + DANA_ID, "enabled": True, "builtin": False,
             "trigger": {"type": "webhook", "id": "shop"},
             "steps": [{"id": "file", "type": "action", "enabled": True, "do": "create_task",
-                       "args": {"title": "{{webhook.delivery}}", "owner_id": DOOR_BOT["webhook"],
+                       "args": {"title": "{{webhook.delivery}}", "owner": DOOR_BOT["webhook"],
                                 "body": "{{webhook.content}}"}}]})
         made = org.api("post", "/api/v2/triggers", {"name": "Orders", "id": "orders"})
         self.orders = made.body["trigger"]["url"]
-        rule_row(org, {"action": "create_task", "owner_id": DOOR_BOT["rule"], "title": "Rule {{delivery}}"},
+        rule_row(org, {"action": "create_task", "owner": DOOR_BOT["rule"], "title": "Rule {{delivery}}"},
                  when={"trigger": "orders"}, by="human:" + DANA_ID)
         org.api("post", "/api/v2/tags", {"key": "roadmap"})
         org.api("post", "/api/v2/roadmaps/settings", {"labels": ["roadmap"], "cors_origins": ["https://acme.example"],

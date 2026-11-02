@@ -64,7 +64,7 @@ def test_owner_reopens_done_and_preserves_human_closure(api, status):
 def test_substantive_changes_release_the_put_back_hold(api, change):
     machine = task_bot(api, lanes=True)
     [task] = deck(api, 1)
-    blocker = post(api, 'tasks', {'owner_id': 'ana', 'title': 'Supply the prerequisite', 'body': 'Supply it.'})
+    blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Supply the prerequisite', 'body': 'Supply it.'})
     attempt = take(api, machine)
     if change == 'blocker_done':
         # An explicit working move means linking the blocker does not auto-return it first.
@@ -94,7 +94,7 @@ def test_linking_a_blocker_reverses_only_an_automatic_start_before_a_finished_ru
     settle(api, machine, by_task[tasks[0]['id']])
     update(api, tasks[1], by_task[tasks[1]['id']]['token'], 'waiting', 'Waiting for input.')
     update(api, tasks[1], by_task[tasks[1]['id']]['token'], 'doing')
-    blocker = post(api, 'tasks', {'owner_id': 'ana', 'title': 'Finish prerequisite', 'body': 'Finish it.'})
+    blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Finish prerequisite', 'body': 'Finish it.'})
     with api.app.state.store.read() as c:
         jobs = c.execute('SELECT count(*) FROM jobs').fetchone()[0]
         turns = c.execute('SELECT count(*) FROM turns').fetchone()[0]
@@ -141,7 +141,7 @@ def test_dev_return_prefers_on_deck_over_backlog_and_owner_can_reopen_steps_only
         {'name': 'Backlog', 'status': 'open'}, {'name': 'On Deck', 'status': 'open'},
         {'name': 'In Progress', 'status': 'doing'}, {'name': 'Review 1', 'status': 'review'},
         {'name': 'Done', 'status': 'done'}]})['type']
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Build requested feature',
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build requested feature',
                              'body': 'Build the requested feature.', 'type': typ['id'], 'step': 'On Deck'})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")
@@ -167,9 +167,9 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
     typ = post(api, 'task-types', {'name': 'Dev tickets', 'steps': [
         {'name': 'Backlog', 'status': 'open'}, {'name': 'On Deck', 'status': 'open'},
         {'name': 'In Progress', 'status': 'doing'}, {'name': 'Done', 'status': 'done'}]})['type']
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Build the queued feature',
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the queued feature',
                              'body': 'Build it.', 'type': typ['id'], 'step': 'In Progress'})
-    blocker = post(api, 'tasks', {'owner_id': 'ana', 'title': 'Supply a dependency', 'body': 'Supply it.'})
+    blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Supply a dependency', 'body': 'Supply it.'})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")
         if release == 'manual':
@@ -216,9 +216,9 @@ def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_t
     typ = post(api, 'task-types', {'name': 'Dev tickets', 'steps': [
         {'name': 'On Deck', 'status': 'open'}, {'name': 'In Progress', 'status': 'doing'},
         {'name': 'Done', 'status': 'done'}]})['type']
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Build the dependent feature',
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the dependent feature',
                              'body': 'Build it.', 'type': typ['id'], 'step': 'On Deck'})
-    blocker = post(api, 'tasks', {'owner_id': 'ana', 'title': 'Prepare the dependency', 'body': 'Prepare it.'})
+    blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Prepare the dependency', 'body': 'Prepare it.'})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")
     assert take(api, machine)['task']['id'] == task['id']

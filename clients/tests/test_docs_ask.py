@@ -24,7 +24,7 @@ class Api:
 
 def test_a_bot_asks_with_an_ask_message_and_gets_the_answer():
     api = Api("bot", [{"messages": [], "execution": {"state": "running"}},
-                      {"messages": [{"id": "a1", "in_reply_to": "m1", "sender_id": "bot:librarian", "body": ANSWER}],
+                      {"messages": [{"id": "a1", "in_reply_to": "m1", "from_actor": "bot:librarian", "body": ANSWER}],
                        "execution": {"state": "completed"}}])
     out = D.ask(api, "How long do refunds take?", 30, sleep=lambda s: None)
     assert out["covered"] and len(out["citations"]) == 2 and out["answer"].startswith("Refunds")
@@ -53,7 +53,7 @@ def test_timeout_ids_resume_without_sending_a_second_question_and_mcp_waits_are_
     api = Api("human", [{"messages": [], "execution": {"state": "queued"}}])
     pending = D.ask(api, "Refunds?", 0)
     assert pending == {"timeout": True, "conversation_id": "c1", "message_id": "m1"}
-    api.replies.append({"messages": [{"id": "a1", "in_reply_to": "m1", "sender_id": "bot:librarian", "body": ANSWER}],
+    api.replies.append({"messages": [{"id": "a1", "in_reply_to": "m1", "from_actor": "bot:librarian", "body": ANSWER}],
                         "execution": {"state": "completed"}})
     done = D.status(api, pending["conversation_id"], pending["message_id"])
     assert done["answer"] == ANSWER and done["message_id"] == "m1"

@@ -23,7 +23,7 @@ def bot(api, slug, reports_to=None, operator="ana"):
     """A bot the owner makes; the returned token is its agent credential, which acts as the bot."""
     post(api, "bots", {"slug": slug, "display_name": slug.title(), "description": "A test bot.",
                        "reports_to": reports_to, "status": "active", "repo": "emp-" + slug, "thread_mode": "personal",
-                       "model": "hermes-profile", "effort": "as-configured", "harness": "hermes", "owner_id": operator,
+                       "model": "hermes-profile", "effort": "as-configured", "harness": "hermes", "operator": operator,
                        "owners": ["ana"], "runner_id": None})
     return post(api, f"bots/{slug}/agent-credential", {})["token"]
 
@@ -130,7 +130,7 @@ def test_a_routine_a_manager_bot_reaches_follows_both_switches(api):
     lead = bot(api, "lead")
     bot(api, "counsel", reports_to="lead")
     store = api.app.state.store
-    flow, who = {"owner_id": "bot:" + bot_id(api, "counsel")}, Identity("bot:" + bot_id(api, "lead"), "bot")
+    flow, who = {"owner": "bot:" + bot_id(api, "counsel")}, Identity("bot:" + bot_id(api, "lead"), "bot")
     with store.read() as c:
         assert automations.may_change(c, who, flow)
     post(api, "bots/lead/manages-reports", {"manages_reports": False, "expected_revision": revision(api, "lead")})
@@ -168,7 +168,7 @@ def test_the_hub_tools_and_the_model_route_work_for_a_manager_bot(api):
     err, out = call(api, "hub_bot_task_model", {"bot": "counsel", "model": "claude-haiku-5-5"}, token=lead)
     assert not err, out
     assert any(row["via"] == "report_manager" for row in changes_to(api, "counsel", "task_model"))
-    task = post(api, "tasks", {"owner_id": "counsel", "title": "Review the lease", "body": "Check the break clause."})
+    task = post(api, "tasks", {"owner": "counsel", "title": "Review the lease", "body": "Check the break clause."})
     err, out = call(api, "hub_task_model", {"id": task["id"], "model": "claude-haiku-5-5"}, token=lead)
     assert err, out
     assert get(api, "tasks/" + task["id"])["run_model"] is None
@@ -177,7 +177,7 @@ def test_the_hub_tools_and_the_model_route_work_for_a_manager_bot(api):
 def test_a_manager_bot_follows_its_reports_model_change_without_reading_its_checkpoints(api):
     lead = bot(api, "lead")
     bot(api, "counsel", reports_to="lead")
-    task = post(api, "tasks", {"owner_id": "counsel", "title": "Review the lease", "body": "Check the break clause."})
+    task = post(api, "tasks", {"owner": "counsel", "title": "Review the lease", "body": "Check the break clause."})
     store = api.app.state.store
     counsel = bot_id(api, "counsel")
     with store.transaction() as c:
@@ -499,11 +499,11 @@ def test_a_manager_bot_files_an_instruction_change_as_a_next_run_task_for_its_re
     bot(api, "counsel", reports_to="lead")
     bot(api, "stranger", reports_to="human:cara")
     post(api, "bots/stranger/definition", {"bot_contact": "replies", "expected_revision": revision(api, "stranger")})
-    filed = post(api, "tasks", {"owner_id": "counsel", "title": "Change the NDA steps",
+    filed = post(api, "tasks", {"owner": "counsel", "title": "Change the NDA steps",
                                 "body": "Update your AGENT.md: ask for the counterparty's name first.", "next_run": True},
                  token=lead)
     row = get(api, f"tasks/{filed['id']}")["task"]
     assert row["owner_id"] == "bot:" + bot_id(api, "counsel") and row["next_run"] is True
-    post(api, "tasks", {"owner_id": "stranger", "title": "Change the steps", "body": "Do it.", "next_run": True},
+    post(api, "tasks", {"owner": "stranger", "title": "Change the steps", "body": "Do it.", "next_run": True},
          token=lead, expected=403)
 

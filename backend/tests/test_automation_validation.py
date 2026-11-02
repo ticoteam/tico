@@ -11,7 +11,7 @@ QUESTIONS = {"bucket": {"type": "choice", "instructions": "Where does it go?",
 
 
 def flow(*steps, **extra):
-    return {"name": "Inbox · ana", "owner_id": "person:ana", "trigger": {"type": "message", "inbox": "ana@acme.example"},
+    return {"name": "Inbox · ana", "owner": "person:ana", "trigger": {"type": "message", "inbox": "ana@acme.example"},
             "steps": list(steps), **extra}
 
 
@@ -135,7 +135,7 @@ def test_bad_steps_are_refused(step, words):
 
 
 @pytest.mark.parametrize("extra, words", [
-    ({"owner_id": "team:x"}, "owner"),
+    ({"owner": "team:x"}, "owner"),
     ({"group": "engineering"}, "group"),
     ({"spend_cap": {"per_30m": -1}}, "spend_cap"),
     ({"spend_cap": {"per_hour": 1}}, "spend_cap"),

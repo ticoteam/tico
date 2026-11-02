@@ -14,7 +14,7 @@ def claim(api, r, next_run=True):
 
 
 def later(api, **more):
-    return post(api, "tasks", {"owner_id": "ops", "title": "Watch the new refund requests",
+    return post(api, "tasks", {"owner": "ops", "title": "Watch the new refund requests",
                                "body": "Released today; check the counts on your next run.",
                                "next_run": True, **more})
 

@@ -19,7 +19,7 @@ TEXT = "File the Acme sales tax return."
 def linked(api, first="2030-03-01", repeats="once", days=14, owner="ops"):
     org(api)
     r = rule(api, {"kind": "internal", "text": TEXT, "who": {"bots": ["ops"]}})
-    due = post(api, f"rules/{r['id']}/due", {"first_due": first, "repeats": repeats, "owner_id": owner,
+    due = post(api, f"rules/{r['id']}/due", {"first_due": first, "repeats": repeats, "owner": owner,
                                               "timezone": "UTC", "task_days": days})
     return r, due
 
@@ -133,7 +133,7 @@ def test_an_edit_of_repeats_moves_the_routine_to_the_new_row_and_keeps_history(a
     assert [link["id"] for link in get(api, f"rule-due/{edited['id']}")["chain"]] == [due["id"], edited["id"]]
     # An owner change in place moves the task's owner and who the routine acts as.
     patch(api, aid, {"enabled": False})
-    post(api, f"rule-due/{edited['id']}", {"owner_id": "ana"})
+    post(api, f"rule-due/{edited['id']}", {"owner": "ana"})
     auto = automation(api, aid)
     assert auto["owner_id"] == "person:ana" and auto["steps"][0]["args"]["owner"] == "human:ana"
     assert auto["enabled"] is False                                         # an edit never resumes a paused routine
@@ -180,8 +180,8 @@ def test_due_soon_follows_the_routines_lead_time(api):
     org(api)
     r = rule(api, {"kind": "internal", "text": TEXT, "who": {"bots": ["ops"]}})
     day = (D.local_today("UTC") + timedelta(days=40)).isoformat()
-    plain = post(api, f"rules/{r['id']}/due", {"first_due": day, "repeats": "once", "owner_id": "ops", "timezone": "UTC"})
-    early = post(api, f"rules/{r['id']}/due", {"first_due": day, "repeats": "once", "owner_id": "ops", "timezone": "UTC",
+    plain = post(api, f"rules/{r['id']}/due", {"first_due": day, "repeats": "once", "owner": "ops", "timezone": "UTC"})
+    early = post(api, f"rules/{r['id']}/due", {"first_due": day, "repeats": "once", "owner": "ops", "timezone": "UTC",
                                                 "task_days": 45})
     assert plain["status"] == "upcoming" and plain["task_days"] is None    # 30 days with no routine
     assert early["status"] == "due_soon"
@@ -225,30 +225,30 @@ def test_a_due_dates_owner_is_the_caller_a_teammate_in_who_or_someone_they_manag
     r = rule(api, {"kind": "internal", "text": TEXT, "who": {"bots": ["ops"]}})
     body = {"first_due": "2030-03-01", "repeats": "once", "timezone": "UTC", "task_days": 14}
     for owner in ("ana", "ben"):
-        post(api, f"rules/{r['id']}/due", {**body, "owner_id": owner}, token="cara-test", expected=403)
+        post(api, f"rules/{r['id']}/due", {**body, "owner": owner}, token="cara-test", expected=403)
     assert sql(api, "SELECT id FROM automations WHERE flow LIKE '%rule_due_id%'") == []
-    mine = post(api, f"rules/{r['id']}/due", {**body, "owner_id": "cara"}, token="cara-test")
-    ops = post(api, f"rules/{r['id']}/due", {**body, "owner_id": "ops"}, token="cara-test")
+    mine = post(api, f"rules/{r['id']}/due", {**body, "owner": "cara"}, token="cara-test")
+    ops = post(api, f"rules/{r['id']}/due", {**body, "owner": "ops"}, token="cara-test")
     assert automation(api, ops["routine_id"])["owner_id"] == "bot:ops"
     # Someone below her on the chart is hers to name too.
     with api.app.state.store.transaction() as c:
         raw = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         raw["people"].append({"id": "dan", "email": "dan@acme.example", "reports_to": "cara"})
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(raw),))
-    post(api, f"rules/{r['id']}/due", {**body, "owner_id": "dan"}, token="cara-test")
+    post(api, f"rules/{r['id']}/due", {**body, "owner": "dan"}, token="cara-test")
     # The owner names anyone.
-    assert post(api, f"rules/{r['id']}/due", {**body, "owner_id": "ben"})["owner_id"] in ("human:ben", "ben")
+    assert post(api, f"rules/{r['id']}/due", {**body, "owner": "ben"})["owner_id"] in ("human:ben", "ben")
     # An owner change passes the same test; an edit that keeps the owner is not asked again.
-    post(api, f"rule-due/{ops['id']}", {"owner_id": "ana"}, token="cara-test", expected=403)
+    post(api, f"rule-due/{ops['id']}", {"owner": "ana"}, token="cara-test", expected=403)
     assert automation(api, ops["routine_id"])["owner_id"] == "bot:ops"
-    post(api, f"rule-due/{mine['id']}", {"owner_id": "ops"}, token="cara-test")
+    post(api, f"rule-due/{mine['id']}", {"owner": "ops"}, token="cara-test")
     post(api, f"rule-due/{ops['id']}", {"owner": "ops", "task_days": 7}, token="cara-test")
 
 
 def cara_routine(api, trigger, expected=200):
     """Cara's own "Before a due date" automation, which opens a task for her."""
-    body = {"name": "Mine", "owner_id": "person:cara", "enabled": True, "trigger": {"type": "due", **trigger},
-            "steps": [{"id": "open", "type": "action", "do": "create_task", "args": {"title": "Mine", "owner_id": "cara"}}]}
+    body = {"name": "Mine", "owner": "person:cara", "enabled": True, "trigger": {"type": "due", **trigger},
+            "steps": [{"id": "open", "type": "action", "do": "create_task", "args": {"title": "Mine", "owner": "cara"}}]}
     return post(api, "automations", body, token="cara-test", expected=expected)
 
 
@@ -264,7 +264,7 @@ def test_only_the_linked_routine_names_a_due_date_and_a_forged_task_satisfies_no
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE automations SET flow=json_set(flow, '$.trigger.rule_due_id', ?) WHERE id=?",
                   (due["id"], mine["id"]))
-    post(api, f"automations/{mine['id']}/run", {"input": {"due_at": {"due_on": "2030-03-01", "tz": "UTC",
+    post(api, f"automations/{mine['id']}/run", {"input": {"due": {"due_on": "2030-03-01", "tz": "UTC",
                                                                   "rule_due_id": due["id"]}}}, token="cara-test")
     [opened] = tasks(api, mine["id"])
     assert sql(api, "SELECT rule_due_id FROM tasks WHERE id=?", (opened["id"],))[0]["rule_due_id"] is None

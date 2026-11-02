@@ -22,7 +22,7 @@ class Stop(BaseException):
 
 
 def make(api, steps, trigger=EVENT, owner="person:ana", **extra):
-    return post(api, "automations", {"name": "Test", "owner_id": owner, "trigger": trigger, "steps": steps, **extra})["id"]
+    return post(api, "automations", {"name": "Test", "owner": owner, "trigger": trigger, "steps": steps, **extra})["id"]
 
 
 def queued(api, aid, payload=None):
@@ -49,7 +49,7 @@ def hub(api):
 # ---------------------------------------------------------------------------------------------- saved and resumed
 def test_a_run_cut_off_after_an_effect_goes_on_from_its_save_and_does_not_do_it_twice(api, monkeypatch):
     aid = make(api, [{"id": "spawn", "type": "action", "do": "create_task", "args": {"title": "Acme follow up",
-                                                                                     "owner_id": "coo"}},
+                                                                                     "owner": "coo"}},
                      {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "coo", "text": "Done"}}])
     rid = queued(api, aid)
     save = automations.HubServices.checkpoint
@@ -114,7 +114,7 @@ def test_a_bots_turn_started_by_an_automation_cannot_start_it_again(api):
     attempt = claim(api, r)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=r["token"])
     # In its turn the bot hands coo a task: a task coo received, the automation's own trigger.
-    post(api, "tasks", {"owner_id": "coo", "title": "Acme hand-off", "body": "Please."}, token=attempt["token"])
+    post(api, "tasks", {"owner": "coo", "title": "Acme hand-off", "body": "Please."}, token=attempt["token"])
     assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1
 
 
@@ -560,7 +560,7 @@ FIND = {"id": "look", "type": "find", "source": "tasks", "query": "Acme batch", 
 
 def test_items_with_the_same_time_are_all_found_one_page_at_a_time(api):
     aid = make(api, [FIND])
-    ids = [post(api, "tasks", {"owner_id": "ops", "title": f"Acme batch {n}", "body": "x"})["id"] for n in range(3)]
+    ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {n}", "body": "x"})["id"] for n in range(3)]
     with api.app.state.store.transaction() as c:
         c.execute(f"UPDATE tasks SET created_at=? WHERE id IN ({','.join('?' * len(ids))})", (H.now(), *ids))
     counts = [post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]["count"] for _ in range(4)]
@@ -578,7 +578,7 @@ def test_a_stale_pr_find_starts_before_its_creation_and_other_finds_do_not(api):
 
 def test_the_watermark_moves_only_once_an_item_is_finished(api, monkeypatch):
     aid = make(api, [FIND, {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "ops", "text": "x"}}])
-    post(api, "tasks", {"owner_id": "ops", "title": "Acme batch one", "body": "x"})
+    post(api, "tasks", {"owner": "ops", "title": "Acme batch one", "body": "x"})
     before = sql(api, "SELECT found_since FROM automations WHERE id=?", (aid,))[0]["found_since"]
     queued(api, aid)
 
@@ -614,7 +614,7 @@ def test_a_turn_is_titled_with_exactly_its_automations_name(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    aid = post(api, "automations", {"name": "Morning check", "owner_id": "person:ana", "trigger": EVENT,
+    aid = post(api, "automations", {"name": "Morning check", "owner": "person:ana", "trigger": EVENT,
                                     "steps": [{"id": "brief", "type": "bot_turn", "bot": "ops", "prompt": "Brief"}]})["id"]
     post(api, f"automations/{aid}/run", {})
     assert sql(api, "SELECT title FROM tasks WHERE title LIKE 'Morning check%'") == [{"title": "Morning check"}]
@@ -625,7 +625,7 @@ def test_each_item_of_a_find_starts_its_own_turn(api):
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     aid = make(api, [{**FIND, "limit": 10}, {"id": "answer", "type": "bot_turn", "bot": "ops", "prompt": "Look"}])
-    ids = [post(api, "tasks", {"owner_id": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
+    ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
            for word in ("one", "two")]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET created_at=? WHERE id IN (?,?)", (H.now(), *ids))
@@ -641,7 +641,7 @@ def test_items_that_share_a_title_each_start_their_own_turn(api):
     assign(api, r, "ops")
     ready(api, r, ["ops"])
     aid = make(api, [{**FIND, "limit": 10}, {"id": "answer", "type": "bot_turn", "bot": "ops", "prompt": "Look"}])
-    ids = [post(api, "tasks", {"owner_id": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
+    ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
            for word in ("one", "two")]
     with api.app.state.store.transaction() as c:
         # Both items now carry one title, so only the turns' own identity tells them apart.
@@ -690,7 +690,7 @@ def test_a_failed_item_is_tried_again_once_then_passed_over_and_counted(api):
     bad = {"id": "gate", "type": "filter", "rules": [
         {"when": [{"field": "item.title", "op": "contains", "value": "bad"}], "then": [{"do": "post_update"}]}]}
     aid = make(api, [{**FIND, "limit": 10}, bad])
-    ids = [post(api, "tasks", {"owner_id": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
+    ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {word}", "body": "x"})["id"]
            for word in ("bad", "good")]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET created_at=? WHERE id IN (?,?)", (H.now(), *ids))

@@ -173,16 +173,16 @@ function taskRepos(t) {
 }
 const resolveMe = v => v === 'me' ? myActor() : v;
 function taskPassesFilters(t, f) {
-  if (f.owner_id?.length && !f.owner_id.some(v => resolveMe(v) === t.owner_id || (!v.includes(':') && t.owner_id === 'bot:' + v))) return false;
+  if (f.owner?.length && !f.owner.some(v => resolveMe(v) === t.owner_id || (!v.includes(':') && t.owner_id === 'bot:' + v))) return false;
   if (f.asked?.length && !f.asked.some(v => resolveMe(v) === taskRequester(t))) return false;
   if (f.team?.length && !f.team.includes(taskTeam(t) || 'none')) return false;
   if (f.tag?.length && !f.tag.some(v => (t.labels || []).includes(v))) return false;
   if (f.repo?.length && !f.repo.some(v => taskRepos(t).includes(v))) return false;
   if (f.pr?.length && !f.pr.includes(taskHasPR(t) ? 'yes' : 'no')) return false;
-  if (f.due_at?.length) {
+  if (f.due?.length) {
     const due = taskDueInfo(t), now = Date.now();
     const hit = {overdue: !!due?.late, week: !!due && due.at >= now && due.at < now + 7 * 86400000, any: !!due, none: !due};
-    if (!f.due_at.some(v => hit[v])) return false;
+    if (!f.due.some(v => hit[v])) return false;
   }
   return true;
 }
@@ -1022,7 +1022,7 @@ async function tasksBulkUndo(state) {
     try {
       const fresh = (await get(`/v2/tasks/${encodeURIComponent(prev.id)}`)).task;
       const body = prev.typed && prev.step_id ? {step: prev.step_id} : {status: prev.status};
-      if (fresh.owner_id !== prev.owner_id) body.owner_id = actorSlug(prev.owner_id) || prev.owner_id;
+      if (fresh.owner_id !== prev.owner_id) body.owner = actorSlug(prev.owner_id) || prev.owner_id;
       await post(`/v2/tasks/${encodeURIComponent(prev.id)}`, {version: fresh.version, ...body});
       ok++;
     } catch (e) { failed.push({id: prev.id, title: prev.title, why: e.message}); }

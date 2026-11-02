@@ -153,7 +153,7 @@ def test_a_delivery_naming_the_tico_trigger_from_a_relay_hq_does_not_list_as_sys
 
 def test_an_automation_on_the_tico_trigger_fires_and_webhook_received_is_not_judged(api, hq, judged, monkeypatch):
     relay_for(api, hq)
-    aid = post(api, "automations", {"name": "A notice", "owner_id": "person:ana", "trigger": {"type": "webhook", "id": "_tico"},
+    aid = post(api, "automations", {"name": "A notice", "owner": "person:ana", "trigger": {"type": "webhook", "id": "_tico"},
                                     "steps": [{"id": "read", "type": "bot_turn", "bot": "ops",
                                                "prompt": "Read it. {{webhook.content}}"}]})["id"]
     seen = []

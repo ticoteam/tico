@@ -7,7 +7,7 @@ from backend.tests.test_api import api, get, headers, post, setup_attempt  # noq
 
 def question(api, *, questions=None):
     _, _, attempt = setup_attempt(api)
-    task = post(api, 'tasks', {'owner_id': 'bot:ops', 'title': 'Choose a draft', 'body': 'Synthetic draft'})
+    task = post(api, 'tasks', {'owner': 'bot:ops', 'title': 'Choose a draft', 'body': 'Synthetic draft'})
     ask = {'who': 'ana', 'questions': questions or [
         {'id': 'decision', 'header': '', 'question': 'Which draft?',
          'options': [{'label': 'Blue', 'then': 'Keep the blue draft'},

@@ -100,7 +100,7 @@ def setup_with(tasks, each=0, providers=(), groups=()):
         for bot in team.all:
             if bot.slug.startswith("fleet-"):
                 for n in range(each):
-                    w.post("tasks", {"owner_id": bot.slug, "title": f"Routine {n + 1}", "body": "Look at the queue."})
+                    w.post("tasks", {"owner": bot.slug, "title": f"Routine {n + 1}", "body": "Look at the queue."})
         tickets(run, w, tasks)
     return setup
 
@@ -108,7 +108,7 @@ def setup_with(tasks, each=0, providers=(), groups=()):
 def packet_task(slug):
     """One task the bot owns, which the person's messages to it are about: the run keeps its id."""
     def setup(run, w, team):
-        made = w.post("tasks", {"owner_id": slug, "title": "Acme packet", "body": "Check the packet figures."})
+        made = w.post("tasks", {"owner": slug, "title": "Acme packet", "body": "Check the packet figures."})
         run.packet = made.get("task", made)["id"]
     return setup
 
@@ -126,7 +126,7 @@ def routine(slug, count):
     has queued work to resume with once the login is back."""
     def act(run, w, team):
         for n in range(count):
-            w.post("tasks", {"owner_id": slug, "title": f"Routine {n + 1}", "body": "Look at the queue."})
+            w.post("tasks", {"owner": slug, "title": f"Routine {n + 1}", "body": "Look at the queue."})
     return act
 
 

@@ -136,13 +136,13 @@ def test_mcp_and_cli_chat_name_the_bot_by_slug(api, sales):
 
 # ----------------------------------------------------------------------------- tasks
 def test_tasks_are_assigned_taken_and_closed_by_slug_or_id(api, sales):
-    by_slug = post(api, "tasks", {"owner_id": "sales-helper", "title": "Draft the price sheet", "body": "For Acme."})
-    by_actor = post(api, "tasks", {"owner_id": "bot:sales-helper", "title": "Call the lead", "body": "Today."})
-    by_id = post(api, "tasks", {"owner_id": sales, "title": "Send the deck", "body": "To Acme."})
+    by_slug = post(api, "tasks", {"owner": "sales-helper", "title": "Draft the price sheet", "body": "For Acme."})
+    by_actor = post(api, "tasks", {"owner": "bot:sales-helper", "title": "Call the lead", "body": "Today."})
+    by_id = post(api, "tasks", {"owner": sales, "title": "Send the deck", "body": "To Acme."})
     assert {by_slug["owner_id"], by_actor["owner_id"], by_id["owner_id"]} == {"bot:" + sales}
     # handed to another bot and back, by slug
-    moved = post(api, "tasks/" + by_slug["id"], {"owner_id": "ops", "version": by_slug["version"]})
-    back = post(api, "tasks/" + by_slug["id"], {"owner_id": "sales-helper", "version": moved["version"]})
+    moved = post(api, "tasks/" + by_slug["id"], {"owner": "ops", "version": by_slug["version"]})
+    back = post(api, "tasks/" + by_slug["id"], {"owner": "sales-helper", "version": moved["version"]})
     assert back["owner_id"] == "bot:" + sales
     # the list filters by either
     for owner in ("sales-helper", "bot:sales-helper", sales, "bot:" + sales):
@@ -150,14 +150,14 @@ def test_tasks_are_assigned_taken_and_closed_by_slug_or_id(api, sales):
         assert {by_slug["id"], by_actor["id"], by_id["id"]} <= ids, owner
     # the bot takes and closes its own task through the MCP tools
     token = bot_token(api, sales)
-    made = tool(api, token, "hub_task_create", {"owner_id": "me", "title": "Follow up with Acme", "body": "Next week."})
+    made = tool(api, token, "hub_task_create", {"owner": "me", "title": "Follow up with Acme", "body": "Next week."})
     assert column(api, "SELECT owner_id FROM tasks WHERE title='Follow up with Acme'") == ["bot:" + sales], made
     own = column(api, "SELECT id FROM tasks WHERE title='Follow up with Acme'")[0]
     tool(api, token, "hub_task_close", {"id": own, "note": "Sent"})
     assert column(api, "SELECT status FROM tasks WHERE id=?", own) == ["closed"]
     tool(api, "ana-test", "hub_task_close", {"id": by_id["id"], "note": "Sent"})
     assert column(api, "SELECT status FROM tasks WHERE id=?", by_id["id"]) == ["closed"]
-    listed = tool(api, "ana-test", "hub_task_list", {"owner_id": "sales-helper"})
+    listed = tool(api, "ana-test", "hub_task_list", {"owner": "sales-helper"})
     rows = listed["tasks"] if isinstance(listed, dict) else listed
     assert by_slug["id"] in {t["id"] for t in rows}
 
@@ -191,7 +191,7 @@ def test_automations_and_routines_owned_by_the_bot_store_its_id(api, sales):
 
 
 def test_goals_chart_groups_and_caps_name_the_bot_by_slug_and_store_its_id(api, sales):
-    goal = tool(api, "ana-test", "hub_goal_create", {"owner_id": "sales-helper", "title": "Close ten deals this month"})
+    goal = tool(api, "ana-test", "hub_goal_create", {"owner": "sales-helper", "title": "Close ten deals this month"})
     assert goal.get("owner_id") in ("bot:" + sales, sales), goal
     lead = create_bot(api, "sales-lead")
     tool(api, "ana-test", "hub_org_reports_to", {"teammate": "bot:sales-helper", "reports_to": "sales-lead"})
@@ -220,7 +220,7 @@ def test_after_a_rename_everything_follows_the_id_and_the_old_slug_is_free(api, 
     machine = runner(api)
     assign(api, machine, "sales-helper")
     ready(api, machine, [sales])
-    task = post(api, "tasks", {"owner_id": "sales-helper", "title": "Draft the price sheet", "body": "For Acme."})
+    task = post(api, "tasks", {"owner": "sales-helper", "title": "Draft the price sheet", "body": "For Acme."})
     post(api, "chat/sales-helper", {"text": "Before the rename"})
     finish(api, machine, claim(api, machine, "sales-helper"))
 
@@ -236,11 +236,11 @@ def test_after_a_rename_everything_follows_the_id_and_the_old_slug_is_free(api, 
     # chat, claim, tasks and tools work by the new slug and by the id
     post(api, "chat/revenue-helper", {"text": "After the rename"})
     assert claim(api, machine, "revenue-helper")["bot"] == sales
-    assert post(api, "tasks", {"owner_id": "revenue-helper", "title": "New sheet", "body": "x"})["owner_id"] == "bot:" + sales
-    lost = api.post("/api/v2/tasks", json={"owner_id": "sales-helper", "title": "Lost", "body": "x"}, headers=headers())
+    assert post(api, "tasks", {"owner": "revenue-helper", "title": "New sheet", "body": "x"})["owner_id"] == "bot:" + sales
+    lost = api.post("/api/v2/tasks", json={"owner": "sales-helper", "title": "Lost", "body": "x"}, headers=headers())
     assert lost.status_code in (404, 422), lost.text                # the old slug takes no task
-    tool(api, "ana-test", "hub_task_create", {"owner_id": sales, "title": "By id", "body": "x"})
-    tool(api, "ana-test", "hub_task_create", {"owner_id": "revenue-helper", "title": "By new slug", "body": "x"})
+    tool(api, "ana-test", "hub_task_create", {"owner": sales, "title": "By id", "body": "x"})
+    tool(api, "ana-test", "hub_task_create", {"owner": "revenue-helper", "title": "By new slug", "body": "x"})
     assert column(api, "SELECT DISTINCT owner_id FROM tasks WHERE title IN ('By id','By new slug')") == ["bot:" + sales]
     # the roster shows the new label on the same id
     employee = next(e for e in api.get("/api/employees", headers=headers()).json() if e["id"] == sales)

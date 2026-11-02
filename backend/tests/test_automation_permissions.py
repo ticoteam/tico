@@ -68,7 +68,7 @@ def test_the_top_of_the_org_may_change_anything_and_a_runner_nothing():
 def test_seeing_follows_the_same_rule_on_every_surface(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
-    aid = post(api, "automations", {"name": "Ops", "owner_id": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
+    aid = post(api, "automations", {"name": "Ops", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
                                     "steps": []})["id"]
     assert [a["id"] for a in get(api, "automations", "ben-test")["automations"]] == [aid]
     assert get(api, "automations", "cara-test")["automations"] == []
@@ -84,9 +84,9 @@ def test_automations_follow_their_owner_into_a_new_group(api):
     """A bot moved to another group takes its automations with it, so the new group's lead may change them."""
     eng = post(api, "groups", {"name": "Engineering", "add": {"bots": ["ops"]}})["id"]
     rel = post(api, "groups", {"name": "Release"})["id"]
-    aid = post(api, "automations", {"name": "Ops", "owner_id": "bot:ops", "group": f"group:{eng}",
+    aid = post(api, "automations", {"name": "Ops", "owner": "bot:ops", "group": f"group:{eng}",
                                     "trigger": {"type": "event", "name": "x.y"}, "steps": []})["id"]
-    other = post(api, "automations", {"name": "Coo", "owner_id": "bot:coo", "group": f"group:{eng}",
+    other = post(api, "automations", {"name": "Coo", "owner": "bot:coo", "group": f"group:{eng}",
                                       "trigger": {"type": "event", "name": "x.y"}, "steps": []})["id"]
     assert api.patch(f"/api/v2/groups/{rel}", json={"add": {"bots": ["ops"]}}, headers=headers()).status_code == 200
     moved = get(api, f"automations/{aid}")
@@ -98,7 +98,7 @@ def test_a_chat_may_name_only_an_automation_its_writer_can_see(api):
     """A chat's refs.automation (BotOps edits the open one): the automation must exist and the writer must be able to
     see it, the rule GET /api/v2/automations/{aid} applies."""
     chat = {"text": "Change this one", "refs": {"automation": "auto_missing"}}
-    aid = post(api, "automations", {"name": "Ops", "owner_id": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
+    aid = post(api, "automations", {"name": "Ops", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
                                     "steps": []})["id"]
     named = {"text": "Change this one", "refs": {"automation": aid}}
     assert api.post("/api/v2/chat/ops", json=named, headers=headers()).status_code == 200
@@ -113,6 +113,6 @@ class Off(Chart):
 
 
 def test_a_bot_whose_switch_is_off_reaches_nothing_below_it_but_its_own_routines():
-    assert not AU.may_change(None, bot("lead"), {"owner_id": "bot:builder-a"}, Off())
-    assert AU.may_change(None, bot("lead"), {"owner_id": "bot:lead"}, Off())
-    assert AU.may_change(None, person("chris"), {"owner_id": "bot:builder-a"}, Off())
+    assert not AU.may_change(None, bot("lead"), {"owner": "bot:builder-a"}, Off())
+    assert AU.may_change(None, bot("lead"), {"owner": "bot:lead"}, Off())
+    assert AU.may_change(None, person("chris"), {"owner": "bot:builder-a"}, Off())

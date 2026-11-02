@@ -22,7 +22,7 @@ def test_claim_hands_out_the_queued_job_to_the_free_claude_fallback_that_health_
     with api.app.state.store.transaction() as c:
         login_holds.record(c, machine["runner_id"], "", "fake", hit=hit, reset=reset)
         login_holds.record(c, machine["runner_id"], "", "codex", hit=hit, reset=reset)
-    post(api, "tasks", {"owner_id": "ops", "title": "Free work", "body": "Please do it."})
+    post(api, "tasks", {"owner": "ops", "title": "Free work", "body": "Please do it."})
     with api.app.state.store.read() as c:
         reasons = list(queued_reasons(c, api.app.state.store.settings, machine["runner_id"], "ops"))
     assert [why for _, why in reasons] == [None], "Health should say the queued job is handed out"

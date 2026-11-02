@@ -371,7 +371,7 @@ def linked(c, row, routine_id):
         return True
     for found in c.execute("SELECT before, after FROM audit_log WHERE object=?", ("org_rule:" + row["rule_id"],)):
         for raw in found:
-            due = (json.loads(raw) or {}).get("due_at") if raw else None
+            due = (json.loads(raw) or {}).get("due") if raw else None
             if isinstance(due, dict) and due.get("id") == row["id"] and due.get("routine_id") == routine_id:
                 return True
     return False

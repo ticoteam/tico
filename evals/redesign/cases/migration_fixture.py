@@ -67,7 +67,7 @@ HOURLY = {OPENAI_ID: 3.00, CLAUDE_ID: 5.00, RELEASE_ID: 0.25}
 TEAM_BUDGET = {"turns_per_hour": 120, "turns_per_day": 1000}
 GUARD = {"turns_per_hour": 300, "turns_per_day": 2500}   # CONTRACT §1 run guard defaults
 BOT_BUDGET = (OPENAI_ID, {"turns_per_hour": 600})         # set above the guard: kept
-GOAL = {"title": "Ship the v2 billing page", "owner_id": LEAD_ID}
+GOAL = {"title": "Ship the v2 billing page", "owner": LEAD_ID}
 
 
 def _call(org, name, method, path, payload=None):

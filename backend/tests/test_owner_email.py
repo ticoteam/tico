@@ -49,7 +49,7 @@ def test_the_owner_changes_their_email_in_place_and_every_copy_moves_at_once(env
     before = state(api)
     result = change(api, " Morgan@New.example ")
     after = state(api)
-    assert result == {"owner_id": NEW, "revision": before["owner_id"]["revision"] + 1, "person": "morgan"}
+    assert result == {"owner": NEW, "revision": before["owner_id"]["revision"] + 1, "person": "morgan"}
     assert after["humans"] == {**before["humans"], "morgan": NEW}             # same id, no second human
     assert after["roster"] == {**before["roster"], "morgan": NEW}
     assert after["owner_id"]["email"] == NEW and after["owner_id"]["revision"] == before["owner_id"]["revision"] + 1

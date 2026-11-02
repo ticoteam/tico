@@ -17,7 +17,7 @@ def world(api, goals=True):
     post(api, "runners/heartbeat", {"version": "test", "platform": "test",
          "capabilities": ["task_lanes_v2", "session_roots_v1", "task_goals_v1"], "readiness": {
          "schema_version": 1, "bots": {"ops": {"ready": True, "runtime": "codex", "goals": goals}}}}, machine["token"])
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Plan the launch", "body": "For the team."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team."})
     return machine, task["id"]
 
 
@@ -144,7 +144,7 @@ def test_the_send_says_which_ways_a_reader_may_deliver(api):
     assert isinstance(cd["steers"], bool) and cd["goal"] is True
 
     # A person's task with no bot on it: nothing to deliver to.
-    person = post(api, "tasks", {"owner_id": "human:ana", "title": "Call the venue", "body": "Ask about Friday."})
+    person = post(api, "tasks", {"owner": "human:ana", "title": "Call the venue", "body": "Ask about Friday."})
     assert get(api, f"tasks/{person['id']}")["comment_delivery"] == {
         "default": None, "default_for": None, "steer": False, "queue": False, "steers": False, "goal": False}
 

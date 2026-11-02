@@ -42,16 +42,16 @@ def populate(client):
     ids["direct_message"] = sent["id"]
     # Tasks: created for a person, handed to a bot, moved through done, then closed by the owner.
     made = api.call("post", "tasks", json={"title": "Draft the launch plan", "body": "Please draft it.",
-                                           "owner_id": "human:ana"})["task"]
+                                           "owner": "human:ana"})["task"]
     ids["task"] = made["id"]
-    assigned = api.call("post", "tasks/%s" % made["id"], json={"version": made["version"], "owner_id": "bot:ops"})
+    assigned = api.call("post", "tasks/%s" % made["id"], json={"version": made["version"], "owner": "bot:ops"})
     doing = api.call("post", "tasks/%s" % made["id"], json={"version": assigned["task"]["version"], "status": "doing"})
     done = api.call("post", "tasks/%s" % made["id"], json={"version": doing["task"]["version"], "status": "done",
                                                             "note": "Drafted."})
     api.call("post", "tasks/%s" % made["id"], json={"version": done["task"]["version"], "status": "closed",
                                                      "note": "Accepted."})
     open_task = api.call("post", "tasks", json={"title": "Check the vendor list", "body": "Compare the three.",
-                                                "owner_id": "bot:ops"})["task"]
+                                                "owner": "bot:ops"})["task"]
     ids["open_task"] = open_task["id"]
     # A bot's turn: a file, a page and a spend approval it asks a person to decide.
     machine, attempt = bot_turn(client)
@@ -76,7 +76,7 @@ def populate(client):
     ids["pending_approval"] = waiting["id"]          # still open: it shows in Needs you
     finish_turn(client, machine, attempt)
     # A goal with a measure, one reading, and a check-in.
-    goal = api.call("post", "goals", json={"title": "Raise activation", "owner_id": "me"})["goal"]
+    goal = api.call("post", "goals", json={"title": "Raise activation", "owner": "me"})["goal"]
     ids["goal"] = goal["id"]
     kpi = api.call("post", "kpis", json={"name": "Activation", "unit": "%", "cadence": "daily", "goal_id": goal["id"],
                                          "kind": "improve", "baseline": 40, "target": 70, "deadline": "2099-12-31"})["kpi"]
@@ -85,7 +85,7 @@ def populate(client):
     api.call("post", "goals/%s/checkins" % goal["id"], json={"body": "On plan.", "signal": "on_track"})
     # An automation a person owns: scheduled, one step that wakes the ops bot.
     auto = api.call("post", "automations", json={
-        "name": "Morning check", "owner_id": "person:ana",
+        "name": "Morning check", "owner": "person:ana",
         "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}, "steps": [NOTE_STEP]})
     ids["automation"] = auto["id"] if "id" in auto else auto["automation"]["id"]
     return ids
@@ -215,6 +215,6 @@ def viewer_sets(client):
     what was there before the turn (see e2e/tests/test_upgrade.py)."""
     api = Api(client)
     machine, attempt = bot_turn(client)
-    result = {"owner_id": _view(api, OWNER), "member": _view(api, MEMBER), "bot": _view(api, attempt["token"])}
+    result = {"owner": _view(api, OWNER), "member": _view(api, MEMBER), "bot": _view(api, attempt["token"])}
     finish_turn(client, machine, attempt)
     return result

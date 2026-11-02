@@ -85,7 +85,7 @@ def test_chat_and_task_attachments_survive_full_backup_restore(api, tmp_path):
     from backend.backup import restore_bundle
     from backend.tests.test_backup_bundle import ObjectStore, bundle, target
     chat = upload(api, 'chat/cpo', {'text': 'Private attachment'}, 'ben-test')
-    task = upload(api, 'tasks', {'title': 'Recover task file', 'body': 'Review', 'owner_id': 'cpo'}, 'ben-test', data=b'Task bytes')
+    task = upload(api, 'tasks', {'title': 'Recover task file', 'body': 'Review', 'owner': 'cpo'}, 'ben-test', data=b'Task bytes')
     storage = ObjectStore()
     report = bundle(api, storage)
     assert report['objects'] == 2
@@ -107,7 +107,7 @@ def test_chat_and_task_attachments_survive_full_backup_restore(api, tmp_path):
 def test_person_forwards_a_chat_file_to_a_bot_task_and_only_readers_gain_it(api):
     chat = upload(api, 'chat/product-design', {'text': 'Source export'}, 'ben-test', data=b'Chat bytes')
     attachment = chat['message']['refs']['attachments'][0]
-    tid = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Use the export', 'body': 'Read it.'}, 'ben-test')['id']
+    tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Use the export', 'body': 'Read it.'}, 'ben-test')['id']
     machine = runner(api)
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
@@ -140,7 +140,7 @@ def test_sharing_a_chat_file_into_a_private_task_leaves_the_chat_file_readable(a
     ready(api, machine, ['ops'])
     attempt = claim(api, machine, 'ops')
     assert attempt['conversation']['id'] == chat['conversation']['id']
-    tid = post(api, 'tasks', {'owner_id': 'cpo', 'title': 'Private', 'body': 'Read it.', 'private': True}, 'ben-test')['id']
+    tid = post(api, 'tasks', {'owner': 'cpo', 'title': 'Private', 'body': 'Read it.', 'private': True}, 'ben-test')['id']
     post(api, f'tasks/{tid}/comments', {'text': 'The export', 'attachments': [attachment['id'] + '@1']}, 'ben-test')
     assert api.get(attachment['url'], headers=headers(attempt['token'])).status_code == 200
 
@@ -160,7 +160,7 @@ def test_a_shared_chat_file_records_what_an_upload_does(api, monkeypatch):
     uploading it, and wakes the preview worker rather than leaving it to the next poll."""
     chat = upload(api, 'chat/product-design', {'text': 'Source export'}, 'ben-test', data=b'Chat bytes')
     ref = chat['message']['refs']['attachments'][0]['id'] + '@1'
-    tid = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Use the export', 'body': 'Read it.'}, 'ben-test')['id']
+    tid = post(api, 'tasks', {'owner': 'ops', 'title': 'Use the export', 'body': 'Read it.'}, 'ben-test')['id']
     wake = CountedWake()
     monkeypatch.setattr(api.app.state.file_metadata, 'wake', wake)
     forwarded = post(api, f'tasks/{tid}/comments', {'text': 'The export', 'attachments': [ref]},

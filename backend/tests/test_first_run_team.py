@@ -56,14 +56,14 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     assert listed["support"]["onboarding_state"] == "needs_setup" and listed["coo"]["onboarding_state"] == ""
     detail = api.get("/api/v2/bots/support", headers=who).json()
     assert (detail["template"], detail["template_version"], detail["state"]) == ("support", releases.version(), "active")
-    assert api.get("/api/v2/tasks", params={"owner_id": "botops"}, headers=who).json()["tasks"] == []   # no BotOps task
+    assert api.get("/api/v2/tasks", params={"owner": "botops"}, headers=who).json()["tasks"] == []   # no BotOps task
     assert support_routine(api)["automation"] and enabled(api) == 0
     with api.app.state.store.read() as c:
         assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='support'").fetchone()[0])["materialize"] is True
 
     # Nothing wakes it but a person: a task notice waits, the person's own message is claimed.
     ready(api, computer, ["support"])
-    api.post("/api/v2/tasks", json={"owner_id": "support", "title": "Look at the queue", "body": "x"}, headers=signed_in())
+    api.post("/api/v2/tasks", json={"owner": "support", "title": "Look at the queue", "body": "x"}, headers=signed_in())
     assert claim(api, computer, "support") is None
     started = post(api, "chat/support", {"text": "Let's set you up."}, token="local-owner-secret-token-0123456789")
     assert enabled(api) == 1          # starting the setup switched its first routine on: nobody approves it separately

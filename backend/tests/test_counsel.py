@@ -1113,7 +1113,7 @@ def test_the_server_refuses_counsel_outward_routes_and_comments_only_on_its_own_
         assert r.status_code == 403, (path, r.text)
         assert "not its to make" in r.text
     # A comment on a task that is not Counsel's own is refused; on its own read task, from its run, it is not.
-    other = post(api, "tasks", {"owner_id": "ops", "title": "Ops work", "body": "Ordinary work."})
+    other = post(api, "tasks", {"owner": "ops", "title": "Ops work", "body": "Ordinary work."})
     assert api.post(f"/api/v2/tasks/{other['id']}/comments", headers=token, json={"body": "hi"}).status_code == 403
     read = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     token = read_run(api)

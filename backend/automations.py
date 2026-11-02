@@ -1809,7 +1809,7 @@ class HubServices:
                 return None
             started = A.start_turn(c, self.auto, self.run_id, ctx["step"], who, prompt, self.hub.settings.assistant_bot,
                                    ctx["key"], label=ctx.get("label"), run_model=ctx.get("run_model"),
-                                   occurrence=ctx["values"].get("due_at"))
+                                   occurrence=ctx["values"].get("due"))
             if found and found["action"] == "warn":
                 from . import screening
                 screening.note(c, found, "webhook", started["ref"], bot=bot)
@@ -2123,7 +2123,7 @@ def due_input(trigger, day):
     """The payload a due occurrence's run starts with, for its due day `day`: what `_due_pass` fires, and what a manual
     run without input is given. Its `due` object makes the task's due and occurrence (backend/automation_actions.py)."""
     zone, open_days = D.zone_of(trigger), D.open_days_of(trigger)
-    return {"due_at": {"due_on": day.isoformat(), "first_due": trigger["first_due"], "repeats": trigger["repeats"],
+    return {"due": {"due_on": day.isoformat(), "first_due": trigger["first_due"], "repeats": trigger["repeats"],
                     "open_days": open_days, "tz": zone, "rule_due_id": trigger.get("rule_due_id"),
                     "run_at": _iso(D.fire_at(day, open_days, zone))}}
 

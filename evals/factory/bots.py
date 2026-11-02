@@ -300,7 +300,7 @@ class Builder(Bot):
         if "major" in labels(task) and self.architects:
             plan = next((c for c in w.checks(task["id"]) if c["title"].startswith("Plan:")), None)
             if not plan:
-                w.post("tasks", {"owner_id": self.pick(self.architects, set()), "title": f"Plan: {task['title']}",
+                w.post("tasks", {"owner": self.pick(self.architects, set()), "title": f"Plan: {task['title']}",
                                  "body": "Plan this feature: the approach, the risks, the order of work.",
                                  "relations": [{"task": task["id"], "kind": "parent"}]}, token=self.token)
                 return "asked the architect for a plan"

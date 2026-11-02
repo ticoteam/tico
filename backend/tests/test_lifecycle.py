@@ -12,7 +12,7 @@ def as_bot(api, slug):
 
 def debrief(api):
     """An automation that gives ops a turn on each shared meeting."""
-    return post(api, "automations", {"name": "Meeting debrief", "owner_id": "person:ana",
+    return post(api, "automations", {"name": "Meeting debrief", "owner": "person:ana",
                                      "trigger": {"type": "event", "name": "meeting.ready"},
                                      "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:ops",
                                                 "prompt": "Pull the product asks out of this meeting."}]})["id"]
@@ -40,7 +40,7 @@ def test_a_recruiting_seat_holds_no_work_which_stays_with_its_manager(api):
     shown = {s["id"]: s for s in get(api, "org")["seats"]}
     assert shown[seat["id"]]["stage"] == "recruiting" and shown[seat["id"]]["reports_to"] == "coo"
 
-    refused = api.post("/api/v2/tasks", json={"owner_id": "seat:" + seat["id"], "title": "Answer the backlog", "body": "x"},
+    refused = api.post("/api/v2/tasks", json={"owner": "seat:" + seat["id"], "title": "Answer the backlog", "body": "x"},
                        headers=headers())
     assert refused.status_code >= 400 and "still being recruited" in refused.text and "coo" in refused.text, refused.text
     with api.app.state.store.read() as c:
@@ -77,9 +77,9 @@ def test_an_onboarding_bot_learns_only_and_every_other_attempt_is_refused_plainl
     as_member(api, "ben@acme.example")
     token = as_bot(api, "ops")
 
-    given = api.post("/api/v2/tasks", json={"owner_id": "ops", "title": "Audit the queue", "body": "x"}, headers=headers())
+    given = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Audit the queue", "body": "x"}, headers=headers())
     assert given.status_code >= 400 and "still onboarding" in given.text, given.text
-    filed = api.post("/api/v2/tasks", json={"owner_id": "finance", "title": "Help me", "body": "x"}, headers=headers(token))
+    filed = api.post("/api/v2/tasks", json={"owner": "finance", "title": "Help me", "body": "x"}, headers=headers(token))
     assert filed.status_code >= 400 and "still onboarding" in filed.text, filed.text
 
     # It talks with its manager, and nobody else.
@@ -89,7 +89,7 @@ def test_an_onboarding_bot_learns_only_and_every_other_attempt_is_refused_plainl
         sent = api.post("/api/v2/messages", json={"to": to, "text": "Hello"}, headers=headers(token))
         assert sent.status_code == 409 and "still onboarding" in sent.text, (to, sent.text)
 
-    task = post(api, "tasks", {"owner_id": "finance", "title": "Close the month", "body": "x"})
+    task = post(api, "tasks", {"owner": "finance", "title": "Close the month", "body": "x"})
     said = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "I can help"}, headers=headers(token))
     assert said.status_code >= 400 and "still onboarding" in said.text, said.text
 
@@ -142,7 +142,7 @@ def test_an_onboarding_bot_leaves_no_note_answer_or_word_on_a_task_kept_from_bef
     # work does not cover them, and asking again on the same task would join that question rather than file one.
     ops, finance, cpo = (as_bot(api, slug) for slug in ("ops", "finance", "cpo"))
     as_member(api, "ben@acme.example")
-    kept = post(api, "tasks", {"owner_id": "ops", "title": "Audit the queue", "body": "x"})
+    kept = post(api, "tasks", {"owner": "ops", "title": "Audit the queue", "body": "x"})
     question = {"on": "human:ben", "question": "Which queue first?", "parent": kept["id"]}
     post(api, "task-questions", question, token=ops)
     onboarding(api, "ops", manager="coo")

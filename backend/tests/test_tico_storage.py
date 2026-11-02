@@ -306,7 +306,7 @@ def test_a_private_tasks_file_in_tico_storage_is_refused_to_a_person_without_acc
     picture, tid = png(), task(api)
     early = attach(api, tid, 'early.png', picture + b'early')
     sync(on())
-    task_id = post(api, "tasks", {"owner_id": "ops", "title": "Private chart", "body": "x", "private": True}, "ben-test")["id"]
+    task_id = post(api, "tasks", {"owner": "ops", "title": "Private chart", "body": "x", "private": True}, "ben-test")["id"]
     made_file = api.post(f"/api/v2/tasks/{task_id}/files", files={'file': ('chart.png', picture)},
                          headers=headers("ben-test"))
     assert made_file.status_code == 200, made_file.text
@@ -552,7 +552,7 @@ def test_stopping_offers_the_export_and_new_files_go_back_to_own_storage(api, ti
 def test_the_owners_export_leaves_out_files_private_to_someone_else(api, tico):
     made, hq, sync = tico
     sync(on())
-    secret_task = post(api, "tasks", {"owner_id": "cara", "title": "Cara's", "body": "x", "private": True}, "cara-test")["id"]
+    secret_task = post(api, "tasks", {"owner": "cara", "title": "Cara's", "body": "x", "private": True}, "cara-test")["id"]
     r = api.post(f"/api/v2/tasks/{secret_task}/files", json={"name": "mine.txt", "text": "cara only"},
                  headers=headers("cara-test"))
     assert r.status_code == 200, r.text

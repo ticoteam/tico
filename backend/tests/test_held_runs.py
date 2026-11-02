@@ -83,7 +83,7 @@ def test_a_review_closed_soon_after_it_was_filed_reopens_on_the_next_sweep(api):
 
 def held_again(api, machine):
     """A second run of ops, on a task, stops partway after a shell call and is held."""
-    post(api, 'tasks', {'owner_id': 'ops', 'title': 'Ship the export', 'body': 'Build it and open the PR.'})
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Ship the export', 'body': 'Build it and open the PR.'})
     ready(api, machine, ['ops'])
     attempt = claim(api, machine)
     stop_partway(api, machine, attempt, 'held-again')
@@ -298,12 +298,12 @@ def task_held(api, private=False):
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
-    task = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Ship the export', 'body': 'Build it and open the PR.',
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Ship the export', 'body': 'Build it and open the PR.',
                               'private': private})
     task_id = task.get('task', task).get('id') or task['refs']['task']
     attempt = claim(api, machine)
     stop_partway(api, machine, attempt, 'held')
-    other = post(api, 'tasks', {'owner_id': 'ops', 'title': 'Weekly digest', 'body': 'Send it.'})
+    other = post(api, 'tasks', {'owner': 'ops', 'title': 'Weekly digest', 'body': 'Send it.'})
     other_id = other.get('task', other).get('id') or other['refs']['task']
     # Tico hands a review child's verdict back to its parent task as its own notice.
     with api.app.state.store.transaction() as c:

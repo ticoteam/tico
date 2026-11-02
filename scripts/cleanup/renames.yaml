@@ -361,10 +361,7 @@ columns:
   meeting_versions.metadata_json: metadata
   meetings.created: created_at
   meetings.metadata_json: metadata
-  meetings.owner: owner_id
-  meetings.recorded_by: recorded_by_id
   meetings.updated: updated_at
-  meetings.uploaded_by: uploaded_by_id
   memory_tidy_cards.created: created_at
   memory_tidy_cards.decided: decided_at
   memory_tidy_cards.edits_json: edits
@@ -867,7 +864,7 @@ waves:
       webhook_attempts.at: created_at  # row time
   "3":
     rule: "actor columns in the stable SQL set -> <role>_id; operator -> owner_id; grp -> group_id; dept -> department (needs review, not applied)"
-    count: 42
+    count: 39
     global: {}
     scoped:
       approvals.decided_by: decided_by_id
@@ -897,9 +894,6 @@ waves:
       kpis.archived_by: archived_by_id
       kpis.created_by: created_by_id
       kpis.owner: owner_id
-      meetings.owner: owner_id
-      meetings.recorded_by: recorded_by_id
-      meetings.uploaded_by: uploaded_by_id
       messages.answered_by: answered_by_id
       messages.from_actor: sender_id
       messages.to_actor: recipient_id

@@ -12,7 +12,7 @@ def hermes_bot(api, slug="scout", status="active", token="ana-test", **overrides
                               "reports_to": None, "status": status, "repo": "emp-" + slug,
                               "thread_mode": "personal", "model": "hermes-profile",
                               "effort": "as-configured", "harness": "hermes",
-                              "owner_id": "ana", "owners": ["ana"], "runner_id": None, **overrides},
+                              "operator": "ana", "owners": ["ana"], "runner_id": None, **overrides},
                 token=token)
 
 

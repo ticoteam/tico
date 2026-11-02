@@ -108,7 +108,7 @@ def test_safe_disposition(mime, inline):
 
 
 def task(api):
-    return post(api, 'tasks', {'owner_id': 'ops', 'title': 'Review media', 'body': 'Open the file.'})['id']
+    return post(api, 'tasks', {'owner': 'ops', 'title': 'Review media', 'body': 'Open the file.'})['id']
 
 
 def attach(api, tid, name, data):

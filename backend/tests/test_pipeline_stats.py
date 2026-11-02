@@ -20,7 +20,7 @@ def board(api):
 
 def ticket(api, typ, step, owner="ops", private=False):
     ask = uuid.uuid4().hex[:8]
-    return post(api, "tasks", {"owner_id": owner, "title": f"Build {ask}", "body": f"Build {ask}.", "type": typ, "step": step,
+    return post(api, "tasks", {"owner": owner, "title": f"Build {ask}", "body": f"Build {ask}.", "type": typ, "step": step,
                                "private": private})
 
 
@@ -39,7 +39,7 @@ def test_counts_follow_the_board_snoozed_in_closed_out_private_only_for_its_read
     private = ticket(api, typ, steps["Review"], private=True)
     reviewed = ticket(api, typ, steps["Review"])
     done = ticket(api, typ, steps["Review"])
-    child = post(api, "tasks", {"owner_id": "cpo", "title": "Review it", "body": "Review it.",
+    child = post(api, "tasks", {"owner": "cpo", "title": "Review it", "body": "Review it.",
                                 "relations": [{"task": reviewed["id"], "kind": "parent"}]})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_events SET created_at=? WHERE task_id=? AND field='step'", (H.shift(H.now(), hours=-30), old["id"]))
@@ -81,7 +81,7 @@ def test_a_queued_job_behind_an_unreviewed_interrupted_run_is_dead_not_queued(ap
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Ship the fix", "body": "Please ship it."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Ship the fix", "body": "Please ship it."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
         # The computer restarted mid-run: the run may have acted, so its task waits for a person's review.
@@ -117,7 +117,7 @@ def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Ship the fix", "body": "Please ship it."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Ship the fix", "body": "Please ship it."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='interrupted', finished_at=?, result=? WHERE id=?",
@@ -144,7 +144,7 @@ def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypat
     ready(api, r, ["ops"])
     failed = {}
     for name, private, age in (("open", False, 3), ("private", True, 1)):
-        post(api, "tasks", {"owner_id": "ops", "title": f"Fix {name}", "body": "Please fix it.", "private": private})
+        post(api, "tasks", {"owner": "ops", "title": f"Fix {name}", "body": "Please fix it.", "private": private})
         attempt = claim(api, r)
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE attempts SET state='failed', finished_at=? WHERE id=?", (H.shift(H.now(), hours=-age), attempt["id"]))

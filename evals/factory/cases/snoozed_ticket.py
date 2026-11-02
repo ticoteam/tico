@@ -13,7 +13,7 @@ SNOOZE_AT, SNOOZE_HOURS, UNSNOOZE_AT = at(1), 3, at(2)
 
 def setup(run, w, team):
     tickets(run, w, 5)
-    parked = w.post("tasks", {"owner_id": team.builders[-1].slug, "title": "Parked ticket", "body": "Build it.",
+    parked = w.post("tasks", {"owner": team.builders[-1].slug, "title": "Parked ticket", "body": "Build it.",
                               "type": w.dev["id"], "step": w.board.first().name, "next_run": True})
     run.parked = parked.get("task", parked)["id"]
     run.snoozed = {}      # ticket id -> [snoozed at, until, unsnoozed at or None]

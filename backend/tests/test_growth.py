@@ -145,7 +145,7 @@ def test_a_bot_files_and_edits_its_own_idea_but_not_another_bots(api):
     post(api, f"growth/ideas/{tid}/score", {"i": 1, "c": 1, "e": 1}, token=finance, expected=403)
     post(api, f"growth/ideas/{tid}/score", {"i": 11, "c": 1, "e": 1}, token=ops, expected=422)
     assert post(api, f"growth/ideas/{tid}/score", {"i": 9, "c": 9, "e": 9}, token="ben-test")["idea"]["ice"] == 9.0
-    plain = post(api, "tasks", {"owner_id": "ops", "title": "Clean the van", "body": "Clean it."})
+    plain = post(api, "tasks", {"owner": "ops", "title": "Clean the van", "body": "Clean it."})
     get(api, f"growth/ideas/{plain['id']}", expected=404)
 
 
@@ -196,7 +196,7 @@ def test_idea_test_and_verdict_close_the_task_and_count_as_bet_evidence(api):
 def test_working_lists_open_subtasks_of_ideas(api):
     ops = bot(api, "ops")
     made = post(api, "growth/ideas", {"title": "Door hangers in Elm Park"}, token=ops)["idea"]
-    sub = post(api, "tasks", {"owner_id": "ops", "title": "Print 500 door hangers", "body": "Print them.",
+    sub = post(api, "tasks", {"owner": "ops", "title": "Print 500 door hangers", "body": "Print them.",
                               "relations": [{"task": made["task_id"], "kind": "parent"}]}, token=ops)
     items = get(api, "growth/working")["items"]
     assert [(i["task_id"], i["idea_task_id"]) for i in items] == [(sub["id"], made["task_id"])]

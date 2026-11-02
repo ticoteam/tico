@@ -145,9 +145,9 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     for bot in ("ops", "finance"):
         T.assign(api, r, bot)
     T.ready(api, r, ["ops", "finance"])
-    secret = T.post(api, "tasks", {"owner_id": "ops", "title": "Secret", "body": "x", "private": True})
-    T.post(api, "tasks", {"owner_id": "finance", "title": "Open", "body": "y"})
-    bens = T.post(api, "tasks", {"owner_id": "finance", "title": "Ben's", "body": "z", "private": True}, token="ben-test")
+    secret = T.post(api, "tasks", {"owner": "ops", "title": "Secret", "body": "x", "private": True})
+    T.post(api, "tasks", {"owner": "finance", "title": "Open", "body": "y"})
+    bens = T.post(api, "tasks", {"owner": "finance", "title": "Ben's", "body": "z", "private": True}, token="ben-test")
     T.post(api, "chat/ops", {"text": "hello"})
     T.post(api, "chat/finance", {"text": "hi"}, token="ben-test")
     with store.transaction() as c:

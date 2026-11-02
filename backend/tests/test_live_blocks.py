@@ -30,13 +30,13 @@ def view(api, fid, who, version=1, follow=True):
 def test_a_live_page_shows_each_viewer_only_what_they_may_see_and_escapes_titles(api, monkeypatch):
     monkeypatch.setattr(api.app.state.store.settings, "visual_origin", VISUALS)
     _, attempt = turn(api)
-    mine = post(api, "tasks", {"owner_id": "ops", "title": "<script>alert(1)</script> Renew", "body": "x",
+    mine = post(api, "tasks", {"owner": "ops", "title": "<script>alert(1)</script> Renew", "body": "x",
                                "private": True}, "ben-test")
-    theirs = post(api, "tasks", {"owner_id": "ops", "title": "Cara private ask", "body": "x", "private": True},
+    theirs = post(api, "tasks", {"owner": "ops", "title": "Cara private ask", "body": "x", "private": True},
                   "cara-test")
     wait_on(api, mine["id"], "human:ben")
     wait_on(api, theirs["id"], "human:cara")
-    shared = post(api, "tasks", {"owner_id": "ops", "title": "Weekly review", "body": "x", "private": False}, "ben-test")
+    shared = post(api, "tasks", {"owner": "ops", "title": "Weekly review", "body": "x", "private": False}, "ben-test")
     html_page = (f'<html><body><h1>Asks</h1><tico-tasks waiting-on="viewer" limit="5"></tico-tasks>'
                  f'<tico-task id="{theirs["id"]}"></tico-task><tico-files task="{theirs["id"]}"></tico-files>'
                  f'<tico-files task="{shared["id"]}"></tico-files></body></html>').encode()
@@ -69,7 +69,7 @@ def test_a_page_with_live_blocks_is_never_the_hosted_copy(api, monkeypatch):
     monkeypatch.setattr(api.app.state.store.settings, "visual_origin", VISUALS)
     monkeypatch.setattr(tico_storage, "visual_link", lambda *args, **kwargs: None)
     _, attempt = turn(api)
-    shared = post(api, "tasks", {"owner_id": "ops", "title": "Weekly review", "body": "x", "private": False}, "ben-test")
+    shared = post(api, "tasks", {"owner": "ops", "title": "Weekly review", "body": "x", "private": False}, "ben-test")
     live = page(api, attempt, shared["id"], "live.html", live_bytes)
     shown = view(api, live, "ben")
     assert shown.status_code == 200 and b"Nothing waiting on you" in shown.content

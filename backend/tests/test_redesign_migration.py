@@ -321,7 +321,7 @@ def test_a_turn_prompt_runs_whole_up_to_32000_characters():
     from backend.tests.automation_fakes import Services
     words = "Acme instructions. " * 1000                                    # 19,000 characters
     services = Services()
-    E.execute({"name": "T", "owner_id": "person:ana", "trigger": {"type": "event", "name": "x.y"},
+    E.execute({"name": "T", "owner": "person:ana", "trigger": {"type": "event", "name": "x.y"},
                "steps": [{"id": "t", "type": "bot_turn", "bot": "coo", "prompt": words}]}, {}, services)
     assert services.turns[0]["prompt"] == words
 

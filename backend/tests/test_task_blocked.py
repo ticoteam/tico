@@ -95,7 +95,7 @@ def test_owner_block_keeps_reason_time_and_resume_step(api):
 def test_a_dependency_hold_keeps_the_step_wakes_nobody_and_clearing_keeps_it_too(api):
     from backend import task_relations as TR
     task = ticket(api)
-    blocker = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
+    blocker = post(api, 'tasks', {'owner': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
     with api.app.state.store.transaction() as c:
         TR.relate(c, H.KEEPER, task['id'], blocker['id'], 'blocked_by')
         from backend import task_blocked
@@ -136,7 +136,7 @@ def test_gate_refusal_commits_block_without_advancing_review(api):
 
 def test_two_dependencies_block_until_both_clear(api):
     task = ticket(api)
-    children = [post(api, 'tasks', {'owner_id': 'cmo', 'title': f'Prepare resource {i}', 'body': 'Prepare it.'}) for i in range(2)]
+    children = [post(api, 'tasks', {'owner': 'cmo', 'title': f'Prepare resource {i}', 'body': 'Prepare it.'}) for i in range(2)]
     from backend import task_relations as TR
     with api.app.state.store.transaction() as c:
         for child in children:
@@ -553,7 +553,7 @@ def test_an_old_blocker_does_not_put_a_merged_ticket_back_on_hold(api):
     reverted or fixed forward, not Blocked."""
     from backend import step_flow, task_relations as TR
     task = ticket(api)
-    old = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Restore an old check', 'body': 'Old.'})
+    old = post(api, 'tasks', {'owner': 'cmo', 'title': 'Restore an old check', 'body': 'Old.'})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE task_steps SET flow=? WHERE id=?", (json.dumps({"can_hold": False}), task['step_id']))
         TR.add_blocker(c, H.KEEPER, task['id'], old['id'])
@@ -579,9 +579,9 @@ def test_a_ticket_an_old_version_parked_in_blocked_returns_to_its_step_and_stays
     dependency = ticket(api)
     _old_board(api, dependency)
     typ = dependency['type_id']
-    manual, stale = (post(api, 'tasks', {'owner_id': 'cpo', 'title': title, 'body': 'Build it.', 'type': typ,
+    manual, stale = (post(api, 'tasks', {'owner': 'cpo', 'title': title, 'body': 'Build it.', 'type': typ,
                                          'step': 'In Progress'}) for title in ('Build the manual one', 'Build the stale one'))
-    blocker = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
+    blocker = post(api, 'tasks', {'owner': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
     with api.app.state.store.transaction() as c:
         steps = {s['name']: s['id'] for s in H.type_get(c, dependency['type_id'])['steps']}
         TR.relate(c, H.KEEPER, dependency['id'], blocker['id'], 'blocked_by')
@@ -606,7 +606,7 @@ def test_a_ticket_an_old_version_parked_in_blocked_returns_to_its_step_and_stays
 def test_a_move_made_while_held_is_where_the_hold_clears_to(api):
     from backend import task_relations as TR, task_blocked
     task = ticket(api)
-    blocker = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
+    blocker = post(api, 'tasks', {'owner': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
     with api.app.state.store.transaction() as c:
         TR.relate(c, H.KEEPER, task['id'], blocker['id'], 'blocked_by')
         task_blocked.sweep(c, H.now())
@@ -624,7 +624,7 @@ def _held_in_blocked_from(api, task, came_from):
     """A held ticket an earlier version moved into its Blocked step with no saved step: its last step move is into
     Blocked, from the step it came from."""
     from backend import task_relations as TR
-    blocker = post(api, 'tasks', {'owner_id': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
+    blocker = post(api, 'tasks', {'owner': 'cmo', 'title': 'Ship the dependency', 'body': 'Build it.'})
     _team_blocked(api, task)
     with api.app.state.store.transaction() as c:
         TR.relate(c, H.KEEPER, task['id'], blocker['id'], 'blocked_by')

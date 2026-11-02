@@ -133,7 +133,7 @@ def test_queued_work_says_it_waits_for_the_computer_to_update_only_once_the_comp
     r = runner(api, label="Team box")
     assign(api, r, "ops")
     chat = post(api, "chat/ops", {"text": "Are you there?"})
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Check the invoices", "body": "Today."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Check the invoices", "body": "Today."})
     store = api.app.state.store
     queued, held = ("Saved — queued", "Queued"), ("Saved — waiting for the computer to update", "Waiting for the computer to update")
 

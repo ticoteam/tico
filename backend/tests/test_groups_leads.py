@@ -154,7 +154,7 @@ def test_a_bare_person_id_in_reports_to_is_that_person(api):
 def test_deleting_a_group_takes_its_peoples_automations_to_the_group_above(api):
     outer = send(api, "POST", "groups", {"name": "Product"})["id"]
     inner = send(api, "POST", "groups", {"name": "Web", "parent": outer, "add": {"people": ["ana"]}})["id"]
-    aid = post(api, "automations", {"name": "Acme digest", "owner_id": "person:ana", "group": "group:" + inner,
+    aid = post(api, "automations", {"name": "Acme digest", "owner": "person:ana", "group": "group:" + inner,
                                     "trigger": {"type": "event", "name": "x.y"}, "steps": []})["id"]
     send(api, "DELETE", "groups/" + inner)
     with api.app.state.store.read() as c:
@@ -164,9 +164,9 @@ def test_deleting_a_group_takes_its_peoples_automations_to_the_group_above(api):
 def test_deleting_a_group_moves_what_it_owns_and_what_outsiders_tagged_with_it(api):
     outer = send(api, "POST", "groups", {"name": "Product"})["id"]
     inner = send(api, "POST", "groups", {"name": "Web", "parent": outer})["id"]
-    owned = post(api, "automations", {"name": "Acme web digest", "owner_id": "group:" + inner, "group": "group:" + inner,
+    owned = post(api, "automations", {"name": "Acme web digest", "owner": "group:" + inner, "group": "group:" + inner,
                                       "trigger": {"type": "event", "name": "x.y"}, "steps": []})["id"]
-    tagged = post(api, "automations", {"name": "Acme web check", "owner_id": "person:ana", "group": "group:" + inner,
+    tagged = post(api, "automations", {"name": "Acme web check", "owner": "person:ana", "group": "group:" + inner,
                                        "trigger": {"type": "event", "name": "x.y"}, "steps": []})["id"]
     send(api, "DELETE", "groups/" + inner)
     with api.app.state.store.read() as c:

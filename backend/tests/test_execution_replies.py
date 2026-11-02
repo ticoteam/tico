@@ -26,7 +26,7 @@ def test_equal_answers_to_distinct_inputs_are_delivered_once(api, kind):
     assert finish(api, runner, attempt)["in_reply_to"] == first["id"]
     ready(api, runner, ["ops"])
     if kind == "task":
-        task = post(api, "tasks", {"owner_id": "ops", "title": "Check the second folder", "body": "Check its contents"})
+        task = post(api, "tasks", {"owner": "ops", "title": "Check the second folder", "body": "Check its contents"})
         with api.app.state.store.read() as c:
             second = H.message(c, c.execute("SELECT message_id FROM jobs WHERE state='queued' AND bot_id='ops'").fetchone()[0])
     else:
@@ -100,7 +100,7 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Check the packet", "body": "Check the fixture packet", "private": True})
+    task = post(api, "tasks", {"owner": "ops", "title": "Check the packet", "body": "Check the fixture packet", "private": True})
     attempt = claim(api, machine)
     start(api, machine, attempt)
     task = post(api, "tasks/" + task["id"], {"version": attempt["task"]["version"], "status": "done", "quiet": True}, attempt["token"])
@@ -114,7 +114,7 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
     elif revocation == "runner":
         post(api, f"runners/{machine['runner_id']}/revoke", {})
     elif revocation == "private-task":
-        post(api, "tasks/" + task["id"], {"version": task["version"], "owner_id": "finance"})
+        post(api, "tasks/" + task["id"], {"version": task["version"], "owner": "finance"})
     else:
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
@@ -189,12 +189,12 @@ def test_a_task_session_becomes_the_tasks_one_primary_session_and_a_shared_threa
     with api.app.state.store.transaction() as c:
         config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
         c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "bot"}),))
-    shared = post(api, "tasks", {"owner_id": "ops", "title": "Check the shared folder", "body": "Check it"})
+    shared = post(api, "tasks", {"owner": "ops", "title": "Check the shared folder", "body": "Check it"})
     assert turn(shared, "shared-thread") == {}
     with api.app.state.store.transaction() as c:
         config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
         c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "session": "task"}),))
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Check the task folder", "body": "Check it"})
+    task = post(api, "tasks", {"owner": "ops", "title": "Check the task folder", "body": "Check it"})
     assert turn(task, "old") == {"session:ops/old": True}
     # Someone linked the next thread before it ran: it becomes the one primary, the old one an alternate.
     post(api, f"tasks/{task['id']}/links", {"url": "ops/new", "kind": "session"})
@@ -209,7 +209,7 @@ def test_a_runs_confirmed_thread_replaces_the_one_it_started_on_and_only_while_i
     assign(api, r, "ops")
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"ops": True},
                                     "capabilities": ["task_lanes_v2"]}, token=r["token"])
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Watch the Acme release", "body": "Watch build 41"})
+    task = post(api, "tasks", {"owner": "ops", "title": "Watch the Acme release", "body": "Watch build 41"})
     attempt = claim(api, r)
     path = f"attempts/{attempt['id']}/"
     post(api, path + "started", {"thread_id": "old-thread"}, r["token"])

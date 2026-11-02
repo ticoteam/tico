@@ -150,7 +150,7 @@ def install_context_search(app, store, auth):
                     continue
                 meta = row["metadata"]
                 turns = meta.get("turns") or []
-                people = json.dumps([row["owner_id"], meta.get("recorded_by"), meta.get("calendar"),
+                people = json.dumps([row["owner"], meta.get("recorded_by"), meta.get("calendar"),
                                      meta.get("participants"),
                                      (meta.get("source_context") or {}).get("lead_name"),
                                      [t.get("speaker") for t in turns]])

@@ -868,7 +868,7 @@ def test_readiness_skips_a_private_worktree_it_cannot_read_and_keeps_the_ones_it
     from backend.auth import Identity
     computer = Identity('runner:r1', 'runner', runner_id='r1')
     with api.app_state.store.read() as c, pytest.raises(task_privacy.Problem):
-        task_privacy.require_payload(c, computer, {'worktree_actions': [{'task_id': tid, 'owner_id': 'cmo', 'action': 'restore'}]})
+        task_privacy.require_payload(c, computer, {'worktree_actions': [{'task_id': tid, 'owner': 'cmo', 'action': 'restore'}]})
 
 
 
@@ -1193,7 +1193,7 @@ def test_a_delayed_old_push_clears_on_the_next_clean_report_and_a_real_fix_forwa
     def held():
         with api.app_state.store.read() as c:
             row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
-            return W.held_reason(c, {**row, 'owner_id': 'bot:cmo'}, json.loads(row['detail']))
+            return W.held_reason(c, {**row, 'owner': 'bot:cmo'}, json.loads(row['detail']))
     # A real fix-forward: C pushed, and the computer is at C too. Held until C's pull request finishes.
     deliver('c' * 40)
     report['last_commit'] = 'c' * 40
@@ -1244,7 +1244,7 @@ def test_only_the_task_owners_own_turn_holds_its_tree(prepared):
         assert not W.live_turn(c, tid, 'bot:cpo')                               # a reviewer's or other bot's view
         c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tid,))        # the task moved to another bot
         assert not W.live_turn(c, tid, 'bot:cmo')                               # the former owner's turn holds nothing
-        row = {'task_id': tid, 'owner_id': 'bot:cmo', 'repo': 'Acme/product', 'branch': None}
+        row = {'task_id': tid, 'owner': 'bot:cmo', 'repo': 'Acme/product', 'branch': None}
         assert W.held_reason(c, row, {}) == ''
 
 

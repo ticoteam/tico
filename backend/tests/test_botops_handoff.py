@@ -23,7 +23,7 @@ def _hand_off(api, machine, cite, said="Give yourself read access to the acme si
     it up."""
     post(api, "chat/ops", {"text": said}, token="ana-test")
     ops = claim(api, machine, "ops")
-    task = post(api, "tasks", {"owner_id": "botops", "title": "Give Ops read access to the acme site repository",
+    task = post(api, "tasks", {"owner": "botops", "title": "Give Ops read access to the acme site repository",
                                "body": "Ana asked for it in her chat with Ops.", **({"request_id": cite} if cite else {})},
                 token=ops["token"])
     finish(api, machine, ops)
@@ -136,7 +136,7 @@ def test_a_task_botops_files_with_lent_rights_lends_nothing_later(api, botops):
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])
     task, attempt = _hand_off(api, botops, "turn", said="Thanks, that's all for today")
-    filed = post(api, "tasks", {"owner_id": "botops", "title": "Give Ops write on every repository", "body": "x"},
+    filed = post(api, "tasks", {"owner": "botops", "title": "Give Ops write on every repository", "body": "x"},
                  token=attempt["token"])
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Filed the follow-up"}, token=attempt["token"])
     with api.app.state.store.read() as c:

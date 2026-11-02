@@ -55,7 +55,7 @@ def test_a_bot_cannot_import_and_a_machine_files_only_for_a_person_on_the_roster
         assert api.post("/api/v2/meetings/import", json={**body, **extra}, headers=headers(token)).status_code == status
     made = api.post("/api/v2/meetings/import", json={**body, "owner_email": "Ben@Acme.example"}, headers=headers(machine["token"])).json()
     record = meeting(api, made["id"], "ben-test")
-    assert record["owner_id"] == "ben@acme.example" and record["can_edit"] is True and record["uploaded_by_id"] == machine["runner_id"]
+    assert record["owner"] == "ben@acme.example" and record["can_edit"] is True and record["uploaded_by"] == machine["runner_id"]
     # It is the same meeting whichever door files it: the key is the person's, not the machine's.
     again = import_meeting(api, "ben-test", title="From a machine", transcript=TEXT, source="granola", external_id="g-7")
     assert again["id"] == made["id"] and again["existing"] is True

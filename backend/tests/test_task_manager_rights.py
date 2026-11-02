@@ -38,7 +38,7 @@ def change(api, task, token, **fields):
 
 
 @pytest.mark.parametrize('fields,field', [({'status': 'doing'}, 'status'),
-    ({'due_at': '2027-01-01T00:00:00Z'}, 'due'), ({'owner_id': 'cpo'}, 'owner'),
+    ({'due': '2027-01-01T00:00:00Z'}, 'due'), ({'owner': 'cpo'}, 'owner'),
     ({'title': 'Check the revised packet'}, 'title'), ({'body': 'Review the revised packet.'}, 'body'),
     ({'rank': 12}, 'rank'), ({'step_rank': 11}, 'step_rank')])
 def test_manager_updates_and_is_named_in_history(api, manager, fields, field):

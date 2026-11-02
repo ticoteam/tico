@@ -22,7 +22,7 @@ def test_pages_return_every_waiting_message_once_through_ties(api):
     msg = post(api, "chat/ops", {"text": "Hello"})
     with store.transaction() as c:
         first = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
-        base = {**first, "sender_id": "human:ana", "recipient_id": "bot:ops", "read_at": None, "delivered_at": None}
+        base = {**first, "from_actor": "human:ana", "to_actor": "bot:ops", "read_at": None, "delivered_at": None}
         c.execute("UPDATE messages SET read_at=?, delivered_at=? WHERE recipient_id='bot:ops'", (H.now(), H.now()))
         # 40 waiting messages in 8 instants of 5 each, then the ones that are not waiting.
         clone(c, "messages", base, 40, created_at=lambda i: H.shift(first["created_at"], seconds=-(i // 5)),
@@ -53,7 +53,7 @@ def test_a_backlog_in_rooms_the_turn_was_not_handed_is_not_walked(api, monkeypat
         rooms = [uuid.uuid4().hex for _ in range(60)]
         clone(c, "conversations", conv, 60, id=lambda i: rooms[i], room_key=lambda i: "room-" + rooms[i])
         first = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
-        clone(c, "messages", {**first, "sender_id": "keeper", "recipient_id": "bot:ops", "kind": "notice",
+        clone(c, "messages", {**first, "from_actor": "keeper", "to_actor": "bot:ops", "kind": "notice",
                               "delivered_at": H.now(), "read_at": None}, 300,
               created_at=lambda i: H.shift(first["created_at"], seconds=i + 1), conversation_id=lambda i: rooms[i % 60],
               body=lambda i: f"notice {i}")
@@ -90,7 +90,7 @@ def test_readable_messages_split_by_hidden_pages_are_found_across_them(api, monk
         clone(c, "messages", {**first, "read_at": None}, len(spots), created_at=lambda i: newer(spots[i]),
               body=lambda i: f"readable {i}")
         holes = [p for p, kind in enumerate(order) if kind == "hidden"]
-        clone(c, "messages", {**first, "sender_id": "keeper", "recipient_id": "bot:ops", "kind": "notice",
+        clone(c, "messages", {**first, "from_actor": "keeper", "to_actor": "bot:ops", "kind": "notice",
                               "delivered_at": H.now(), "read_at": None}, len(holes),
               created_at=lambda i: newer(holes[i]), conversation_id=lambda i: rooms[i % 40], body=lambda i: f"notice {i}")
         c.execute("UPDATE messages SET read_at=NULL WHERE id=?", (msg["id"],))
@@ -123,11 +123,11 @@ def test_the_newest_hundred_readable_arrive_oldest_first_with_their_answers(api)
     msg = post(api, "chat/ops", {"text": "Hello"})
     with store.transaction() as c:
         first = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
-        base = {**first, "sender_id": "bot:ops", "recipient_id": "human:ana", "read_at": None}
+        base = {**first, "from_actor": "bot:ops", "to_actor": "human:ana", "read_at": None}
         clone(c, "messages", base, INBOX_LIMIT + 50, created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1),
               kind=lambda i: "ask" if i == 0 else "say", body=lambda i: f"reply {i}")
         ask = c.execute("SELECT id FROM messages WHERE kind='ask' AND recipient_id='human:ana'").fetchone()["id"]
-        clone(c, "messages", {**first, "sender_id": "human:ana", "recipient_id": "bot:ops", "kind": "answer",
+        clone(c, "messages", {**first, "from_actor": "human:ana", "to_actor": "bot:ops", "kind": "answer",
                               "in_reply_to": ask}, 1, body=lambda i: "yes")
         newest = [r["id"] for r in c.execute("SELECT id FROM messages WHERE recipient_id='human:ana' AND read_at IS NULL "
                                              "AND deleted_at IS NULL ORDER BY created_at DESC, rowid DESC")][:INBOX_LIMIT]

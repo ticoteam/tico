@@ -140,7 +140,7 @@ function finDocPage(kind) {
   FIN.doc = {kind, rows: [], next: null, sel: '', load: 0, one: null, oneLoad: 0, email: ''};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(f.q)}" placeholder="${esc(k.search)}" aria-label="${esc(k.search)}"></label>
       ${finSeg('status', 'Status', k.filters, f.status)}<span class="spacer"></span><span id="fin-doc-email" class="fin-doc-email"></span>
-      ${kind === 'bill' && caps.owner_id && !caps.viewing ? '<label class="fin-inline" data-fin-direct-box hidden><input type="checkbox" role="switch" class="people-switch" data-fin-direct aria-label="Direct send"><span>Direct send</span></label>' : ''}
+      ${kind === 'bill' && caps.owner && !caps.viewing ? '<label class="fin-inline" data-fin-direct-box hidden><input type="checkbox" role="switch" class="people-switch" data-fin-direct aria-label="Direct send"><span>Direct send</span></label>' : ''}
       ${caps.may(k.right) ? `<button type="button" class="primary" data-fin-doc-add>+ ${k.label}</button>` : ''}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-docs">${skelRows(6, {dot: false})}</div>`, '', k.label);
   const body = $('#fin-body');
@@ -451,7 +451,7 @@ async function finDocAdd(kind) {
     if (!contact) throw new Error('Pick a ' + k.who.toLowerCase());
     const payload = {[bill ? 'vendor_id' : 'customer_id']: contact, [bill ? 'bill_date' : 'invoice_date']: el.date.value, lines: docLines};
     if (el.number.value.trim()) payload.number = el.number.value.trim();
-    if (el.due_at.value) payload.due_date = el.due_at.value;
+    if (el.due.value) payload.due_date = el.due.value;
     if (el.memo.value.trim()) payload.memo = el.memo.value.trim();
     if (bill) payload.origin = 'manual';
     return [bill ? 'bill_create' : 'invoice_create', payload];

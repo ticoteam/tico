@@ -41,7 +41,7 @@ def as_manager(api):
 
 def quiet_task(api, title="Reconcile the Acme invoices", private=False, owner="bot:coo"):
     """A task its bot let go quiet three hours ago, with nothing running for the bot."""
-    made = api.post("/api/v2/tasks", json={"title": title, "body": "Details for " + title, "owner_id": owner}, headers=signed_in())
+    made = api.post("/api/v2/tasks", json={"title": title, "body": "Details for " + title, "owner": owner}, headers=signed_in())
     assert made.status_code == 200, made.text
     made = made.json()["task"]
     with api.app.state.store.transaction() as c:

@@ -75,7 +75,7 @@ def call(api, method, path, token='ana-test', body=None):
 
 def child(api, ticket, title, status='done', verdict=None, head=None):
     """A review or QA subtask with a recorded verdict, written directly: the review gate is not under test here."""
-    r = call(api, 'POST', 'tasks', body={'owner_id': 'cmo', 'title': 'Check it', 'body': 'Check the change.',
+    r = call(api, 'POST', 'tasks', body={'owner': 'cmo', 'title': 'Check it', 'body': 'Check the change.',
                                         'relations': [{'task': ticket['id'], 'kind': 'parent'}]})
     assert r.status_code == 200, r.text
     with api.app.state.store.transaction() as c:
@@ -93,7 +93,7 @@ def ticket(api, owner='cpo', step='In QA', checks=None, reviews=(('approve', HEA
            title='Fix the checkout total'):
     with api.app.state.store.read() as c:
         typ = H.type_get(c, 'Dev tickets')
-    r = call(api, 'POST', 'tasks', body={'owner_id': owner, 'title': title, 'body': 'Fix it.',
+    r = call(api, 'POST', 'tasks', body={'owner': owner, 'title': title, 'body': 'Fix it.',
                                         'type': typ['id'], 'step': step, 'links': [PR]})
     assert r.status_code == 200, r.text
     row = r.json()['task']

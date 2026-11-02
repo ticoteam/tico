@@ -735,7 +735,7 @@ def test_a_bot_check_that_raises_does_not_stop_another_bots_open_task_from_start
     for bot in ("ops", "cpo"):
         assign(api, machine, bot)
     ready(api, machine, ["ops", "cpo"])
-    tasks = {bot: post(api, "tasks", {"owner_id": bot, "title": f"Implement the {bot} report",
+    tasks = {bot: post(api, "tasks", {"owner": bot, "title": f"Implement the {bot} report",
                                       "body": "Build the requested feature."}) for bot in ("ops", "cpo")}
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")        # no notice queued: only the backfill starts them
@@ -757,7 +757,7 @@ def open_task_only(api, machine, bots):
     for bot in bots:
         assign(api, machine, bot)
     ready(api, machine, list(bots))
-    tasks = {bot: post(api, "tasks", {"owner_id": bot, "title": f"Implement the {bot} report",
+    tasks = {bot: post(api, "tasks", {"owner": bot, "title": f"Implement the {bot} report",
                                       "body": "Build the requested feature."}) for bot in bots}
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")

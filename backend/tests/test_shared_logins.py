@@ -83,7 +83,7 @@ def test_a_turns_login_class_puts_release_blockers_first_then_reviews_and_a_pers
     c = H.connect(tmp_path / "hub.db")
     H.sync_registry(c, EMPLOYEES, PEOPLE)
     make = lambda title, **kw: H.task(c, H.task_create(c, ANA, title, "Check it.", CMO, lint=False, **kw)["id"])  # noqa: E731
-    person, bot = {"sender_id": "human:ana"}, {"sender_id": "bot:lead"}
+    person, bot = {"from_actor": "human:ana"}, {"from_actor": "bot:lead"}
     release, critical, plain = make("Release v1", labels=["release-blocker"]), make("PR 7", labels=["critical-path"]), make("Chore")
     assert login_class(c, release, bot, None) == "release"
     assert login_class(c, critical, bot, None) == "review"
@@ -93,7 +93,7 @@ def test_a_turns_login_class_puts_release_blockers_first_then_reviews_and_a_pers
     assert login_class(c, make("QA: v1", parent_id=release["id"]), bot, None) == "release"
     assert login_class(c, make("Review 1: PR 7", parent_id=critical["id"]), bot, None) == "review"
     # A standing watch never jumps the queue, labelled or not.
-    assert login_class(c, release, {"sender_id": "keeper", "refs": {"wake": "next-run"}}, None) == "other"
+    assert login_class(c, release, {"from_actor": "keeper", "refs": {"wake": "next-run"}}, None) == "other"
     assert login_class(c, release, person, {"id": "r1"}) == "other"
 
 
@@ -125,7 +125,7 @@ def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    tid = post(api, "tasks", {"owner_id": "ops", "title": "Count the words", "body": "Count them."})["id"]
+    tid = post(api, "tasks", {"owner": "ops", "title": "Count the words", "body": "Count them."})["id"]
     a = claim(api, r)
     assert "stop" not in post(api, f"attempts/{a['id']}/renew", {}, r["token"])
     with api.app.state.store.transaction() as c:
@@ -143,7 +143,7 @@ def test_a_turn_waiting_for_its_login_whose_task_is_closed_meanwhile_is_skipped_
         assert not c.execute("SELECT 1 FROM messages WHERE kind='notice' AND body LIKE 'Stopped by%'").fetchone()
     assert claim(api, r) is None
     # A person's own comment waiting behind the login is never skipped: their words still get an answer.
-    tid = post(api, "tasks", {"owner_id": "ops", "title": "Count the lines", "body": "Count them."})["id"]
+    tid = post(api, "tasks", {"owner": "ops", "title": "Count the lines", "body": "Count them."})["id"]
     post(api, f"tasks/{tid}/comments", {"text": "@ops count the blank ones too"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
@@ -162,7 +162,7 @@ def test_a_person_stopping_a_turn_before_it_started_ends_it_unstarted(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    post(api, "tasks", {"owner_id": "ops", "title": "Count the words", "body": "Count them."})
+    post(api, "tasks", {"owner": "ops", "title": "Count the words", "body": "Count them."})
     a = claim(api, r)
     post(api, "bots/ops/stop", {"run_id": a["id"]})
     assert post(api, f"attempts/{a['id']}/renew", {}, r["token"])["stop"] is True

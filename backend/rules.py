@@ -123,7 +123,7 @@ WAKE_EVENTS = {
     "stall_check": "a stall or status check",
     "routine": "a routine ran",
     "schedule": "a scheduled run",
-    "due_at": "a task's due date came",
+    "due": "a task's due date came",
     "snooze": "a task's snooze ended",
     "next_run": "a next-run task is next",
     "update": "an update was requested",

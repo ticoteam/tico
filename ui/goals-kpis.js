@@ -643,13 +643,13 @@ async function kpiAddBind(form, goal, done) {
         if (!text('name')) { form.elements.name.focus(); return; }
         Object.assign(body, {name: text('name'), definition: text('definition'), unit: text('unit'), direction: form.elements.direction.value,
           cadence: form.elements.cadence.value, source_note: text('source_note')});
-        if (form.elements.owner_id.value !== goal.owner_id) body.owner_id = form.elements.owner_id.value;
+        if (form.elements.owner.value !== goal.owner_id) body.owner = form.elements.owner.value;
       }
     } else {
       if (!text('name')) { form.elements.name.focus(); return; }
       path = '/v2/kpis';
       body = {name: text('name'), definition: text('definition'), unit: text('unit'), direction: form.elements.direction.value,
-        cadence: form.elements.cadence.value, source_note: text('source_note'), owner: form.elements.owner_id.value};
+        cadence: form.elements.cadence.value, source_note: text('source_note'), owner: form.elements.owner.value};
     }
     submit.disabled = true;
     try { await post(path, body); done(true); }
@@ -860,15 +860,15 @@ function goalsRender(state) {
   goalTreeLines(body.querySelector('#goal-tree'));
   // Tapping a goal opens it on its own (goalSheetOpen); the name, a line with no goal, or Enter opens the owner's panel.
   for (const li of body.querySelectorAll('.gt-row')) {
-    const open = () => goalPanelOpen(state, li.dataset.owner_id, {tapped: li.dataset.goal || ''});
+    const open = () => goalPanelOpen(state, li.dataset.owner, {tapped: li.dataset.goal || ''});
     li.onclick = ev => {
       if (goalPressed(li)) return;
-      if (ev.target.closest('[data-goal-add]')) goalSheetOpen(state, {owner: li.dataset.owner_id});
+      if (ev.target.closest('[data-goal-add]')) goalSheetOpen(state, {owner: li.dataset.owner});
       else if (li.dataset.goal && ev.target.closest('.gt-goal')) goalSheetOpen(state, {goal: li.dataset.goal});
       else open();
     };
     li.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } };
-    if (li.querySelector('[data-goal-add]')) goalLongPress(li, () => goalSheetOpen(state, {owner: li.dataset.owner_id}));
+    if (li.querySelector('[data-goal-add]')) goalLongPress(li, () => goalSheetOpen(state, {owner: li.dataset.owner}));
   }
   for (const li of body.querySelectorAll('.gt-group')) {
     const plus = li.querySelector('[data-goal-add-group]');
@@ -969,7 +969,7 @@ function goalUpdateHtml(g, P) {
     </form>`;
 }
 function goalPanelHtml(state) {
-  const P = state.panel, actor = P.owner_id, info = goalOwnerInfo(actor);
+  const P = state.panel, actor = P.owner, info = goalOwnerInfo(actor);
   const goals = state.goals.filter(g => goalLive(g) && g.owner_id === actor).sort(goalRank);
   const may = goalMayEdit({owner: actor}, state.goals);
   const other = state.other.filter(k => k.owner_id === actor);
@@ -1015,8 +1015,8 @@ function goalPanelHtml(state) {
 function goalPanelRender(state) {
   const dlg = document.getElementById('goal-panel'), P = state.panel;
   if (!dlg?.open || !P || P.kpi || dlg._state !== state) return;
-  dlg.setAttribute('aria-label', goalOwnerInfo(P.owner_id).name);
-  dlg.dataset.owner_id = P.owner_id;
+  dlg.setAttribute('aria-label', goalOwnerInfo(P.owner).name);
+  dlg.dataset.owner = P.owner;
   const scroll = dlg.querySelector('.gp-body')?.scrollTop || 0;
   const toasts = [...dlg.querySelectorAll(':scope > .toast')];   // a toast shown in the panel (Undo) outlives a redraw
   dlg.innerHTML = goalPanelHtml(state);
@@ -1030,7 +1030,7 @@ function goalPanelRender(state) {
   const form = body.querySelector('[data-goal-form]');
   if (form) {
     const id = form.dataset.goalForm, g = state.goals.find(x => x.id === id) || {};
-    bindGoalForm(form, g, state.goals, {company: id === 'company', owner: P.owner_id}, async ok => {
+    bindGoalForm(form, g, state.goals, {company: id === 'company', owner: P.owner}, async ok => {
       setGoal('');
       if (ok && GOALS_ST === state) goalsRender(state);
     });
@@ -1046,7 +1046,7 @@ function goalPanelRender(state) {
     try { await post('/v2/goals/' + encodeURIComponent(b.dataset.goalAuto) + '/status/auto', {}); await reload(); }
     catch (e) { toast(e.message || 'Could not hand the colour back', true); b.disabled = false; }
   };
-  goalFinishedMount(body.querySelector('[data-gp-finished]'), P.owner_id, state.goals, reload);
+  goalFinishedMount(body.querySelector('[data-gp-finished]'), P.owner, state.goals, reload);
   bindKpiLines(body);
   bindProposals(body, reload);
   bindGoalWhy(state, body, reload);
@@ -1061,7 +1061,7 @@ function goalPanelRender(state) {
     P.historyLoading = true;
     P.historyError = false;
     redraw();
-    const result = await v2Get(`/v2/kpis?owner=${encodeURIComponent(P.owner_id)}&include_archived=true`);
+    const result = await v2Get(`/v2/kpis?owner=${encodeURIComponent(P.owner)}&include_archived=true`);
     if (state.panel !== P) return;
     P.historyLoading = false;
     P.historyError = !result;

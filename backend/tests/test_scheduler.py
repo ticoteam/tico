@@ -46,7 +46,7 @@ def test_schedule_survives_restart_without_duplicate_work(api):
 
 
 def test_due_reminder_deduplicates_across_scheduler_restart(api):
-    task = post(api, "tasks", {"owner_id": "coo", "title": "Review deadline", "body": "Review pending work", "due_at": "2026-09-10T15:00:00Z"})
+    task = post(api, "tasks", {"owner": "coo", "title": "Review deadline", "body": "Review pending work", "due": "2026-09-10T15:00:00Z"})
     store = api.app.state.store
     for _ in range(2):
         Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 10, 17, tzinfo=timezone.utc))
@@ -130,7 +130,7 @@ def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, mon
     machine = runner(api)
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Review private work", "body": "x", "private": True})
+    task = post(api, "tasks", {"owner": "ops", "title": "Review private work", "body": "x", "private": True})
     finish(api, machine, claim(api, machine, "ops"))
     post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Continue this private request.'})
     store, execution = api.app.state.store, api.app.state.execution

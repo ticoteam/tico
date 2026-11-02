@@ -156,7 +156,7 @@ def outbound_automation(api):
     """A stored automation that sends outside, off: synthetic rows, no delivery worker runs here. Wake rules that sent
     outside became automations; an automation is no catalogue setting, so it is never the Assistant's to change."""
     hook = post(api, "webhooks", {"name": "Synthetic", "url": "https://example.com/hook", "events": ["*"]})["webhook"]
-    return post(api, "automations", {"name": "Send out", "owner_id": "person:ana", "enabled": False,
+    return post(api, "automations", {"name": "Send out", "owner": "person:ana", "enabled": False,
                                      "trigger": {"type": "event", "name": "task.created"},
                                      "steps": [{"id": "send", "type": "action", "do": "call_webhook",
                                                 "args": {"webhook": hook["id"], "type": "custom.settings_test"}}]})

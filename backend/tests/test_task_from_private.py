@@ -85,7 +85,7 @@ def test_a_reader_of_the_new_task_sees_its_parent_only_as_a_private_task(api):
     for bot in ("finance", "doc-updater"):
         token = bot_token(api, bot)
         shown = get(api, "tasks/" + made["id"], token)["task"]
-        assert shown["relations"]["parent"] == [{"id": None, "title": "a private task", "status": None, "owner_id": None,
+        assert shown["relations"]["parent"] == [{"id": None, "title": "a private task", "status": None, "owner": None,
                                                  "direction": "out", "private": True}]
         assert row["id"] not in json.dumps(shown["relations"])
         listed = get(api, "tasks?owner=bot:finance", token)
@@ -224,7 +224,7 @@ def test_outside_a_private_run_the_route_is_refused(api):
 
 @pytest.mark.parametrize("change,status,words", [
     ({"private": True}, 422, "A task from private work is company-visible: leave out --private"),
-    ({"owner_id": "human:cara"}, 403, "A task from private work is for a bot: ask a person with `hub task question`"),
+    ({"owner": "human:cara"}, 403, "A task from private work is for a bot: ask a person with `hub task question`"),
     ("company parent", 403, "File a task from private work under the private task it comes from, or with no parent"),
     ("related", 403, "A task from private work is related to no private task but its parent"),
 ])

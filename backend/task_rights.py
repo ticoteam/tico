@@ -49,7 +49,7 @@ def represents(c, actor, party):
 
 
 def participant(c, actor, row):
-    return any(represents(c, actor, row[k]) for k in ('owner', 'requester'))
+    return any(represents(c, actor, row[k]) for k in ('owner_id', 'requester_id'))
 
 
 def mover(c, actor, row, current=None):
@@ -58,7 +58,7 @@ def mover(c, actor, row, current=None):
     if current or actor == H.KEEPER or current is None and H.can_move(c, actor):
         return True
     return any(H.is_human(row[k]) and represents(c, actor, row[k]) and H.can_move(c, row[k])
-               for k in ('owner', 'requester'))
+               for k in ('owner_id', 'requester_id'))
 
 
 def private_subjects(c, actor):

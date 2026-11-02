@@ -253,12 +253,12 @@ def test_room_provenance_is_reused_only_within_its_read_snapshot(live, derived):
 
 
 def publication_responses(api, token):
-    team_task = post(api, "tasks", {"owner_id": "ops", "title": "Review synthetic team plan",
+    team_task = post(api, "tasks", {"owner": "ops", "title": "Review synthetic team plan",
                                    "body": "Check the synthetic plan.", "private": False})
     writes = {
         "human": ("messages", {"to": "ana", "kind": "ask", "text": "Synthetic meeting summary?"}),
         "bot": ("messages", {"to": "finance", "text": "Review this synthetic meeting summary."}),
-        "task": ("tasks", {"owner_id": "finance", "title": "Review synthetic meeting plan",
+        "task": ("tasks", {"owner": "finance", "title": "Review synthetic meeting plan",
                            "body": "Review this synthetic summary.", "private": False}),
         "comment": (f"tasks/{team_task['id']}/comments", {"text": "Synthetic meeting summary."}),
         "status": ("bots/ops/status", {"focus": "Synthetic meeting summary."}),
@@ -268,7 +268,7 @@ def publication_responses(api, token):
 
 
 def file_metadata_responses(api, token):
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Review synthetic shared file",
+    task = post(api, "tasks", {"owner": "ops", "title": "Review synthetic shared file",
                               "body": "Check this synthetic reference.", "private": False})
     existing = post(api, "files/uploads", {"name": "synthetic-public.md", "text": "Synthetic public file",
                                            "title": "Public synthetic reference", "task": task["id"]}, token="ops-live")["file"]
@@ -333,7 +333,7 @@ def test_private_meeting_execution_cannot_publish_to_nonmembers_and_can_reply(li
 def test_private_meeting_execution_is_told_why_a_shared_write_is_refused_and_still_reads(live, derived):
     mid, attempt = derived
     writes = {"docs": {"title": "Embargo", "body": "The press embargo lifts Nov 17."}, "pages": {},
-              "tasks": {"owner_id": "ops", "title": "Embargo"}, "messages": {"to": "finance", "text": "Embargo Nov 17"}}
+              "tasks": {"owner": "ops", "title": "Embargo"}, "messages": {"to": "finance", "text": "Embargo Nov 17"}}
     for path, body in writes.items():
         r = live.post("/api/v2/" + path, json=body, headers=headers(attempt["token"]))
         assert r.status_code == 403 and r.json()["error"]["detail"] == task_privacy.PRIVATE_MEETING_REFUSAL, (path, r.text)
@@ -394,7 +394,7 @@ def test_meeting_visibility_is_rechecked_under_the_write_lock(live, monkeypatch,
     assign(live, machine, "ops")
     ready(live, machine, ["ops"])
     attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
-    task = post(live, "tasks", {"owner_id": "ops", "title": "Review synthetic team plan",
+    task = post(live, "tasks", {"owner": "ops", "title": "Review synthetic team plan",
                               "body": "Check the synthetic plan.", "private": False})
     store = live.app.state.store
     write = store.mutate
@@ -638,7 +638,7 @@ def test_existing_provenance_clock_upgrades_meeting_sources(live, derived):
 
 
 def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatch):
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Inspect synthetic ordinary work",
+    task = post(api, "tasks", {"owner": "ops", "title": "Inspect synthetic ordinary work",
                                "body": "Review synthetic notes.", "private": False})
     cid = task["conversation_id"]
     with api.app.state.store.transaction() as c:
@@ -686,7 +686,7 @@ def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(l
     mid, attempt = derived
     store, auth, aid = live.app.state.store, live.app.state.auth, attempt["id"]
     # Bots read history in task rooms.
-    root_room = {"id": post(live, "tasks", {"owner_id": "ops", "title": "Synthetic public request", "body": "Synthetic"})["conversation_id"]}
+    root_room = {"id": post(live, "tasks", {"owner": "ops", "title": "Synthetic public request", "body": "Synthetic"})["conversation_id"]}
     with store.transaction() as c:
         root = H.say(c, "human:ana", "human:ben", "Synthetic public request", conversation_id=root_room["id"])
         c.execute("UPDATE jobs SET message_id=? WHERE id=?", (root["id"], attempt["job_id"]))
@@ -749,7 +749,7 @@ def test_meeting_turn_writes_unsettle_only_the_rooms_naming_the_turn(live, deriv
 
     mid, attempt = derived
     store, auth = live.app.state.store, live.app.state.auth
-    root_room = post(live, "tasks", {"owner_id": "ops", "title": "Synthetic public request", "body": "Synthetic"})["conversation_id"]
+    root_room = post(live, "tasks", {"owner": "ops", "title": "Synthetic public request", "body": "Synthetic"})["conversation_id"]
     with store.transaction() as c:
         # The run's keeper input stays in a room with no stored meeting binding: only the turn row makes it one.
         c.execute("UPDATE conversations SET room_key=NULL WHERE id=?", (attempt["message"]["conversation_id"],))

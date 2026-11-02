@@ -327,7 +327,7 @@ def _with_unspecified(xbooks: XeroBooks) -> None:
 
 def _doc_body(number: str) -> dict[str, Any]:
     """A document as the outbox translates it: its party and its lines by their provider keys."""
-    return {"party": "Contact:contact-1", "number": number, "day": "2026-10-05", "due_at": "2026-11-04", "memo": "Consulting",
+    return {"party": "Contact:contact-1", "number": number, "day": "2026-10-05", "due": "2026-11-04", "memo": "Consulting",
             "lines": [{"account": "Account:acct-4000", "amount": 10000, "description": "Consulting"}]}
 
 

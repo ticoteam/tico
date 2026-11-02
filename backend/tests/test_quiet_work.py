@@ -24,7 +24,7 @@ def setup(api):
 
 
 def later(api, title="Watch the new refund requests"):
-    return post(api, "tasks", {"owner_id": "ops", "title": title, "body": "Check the counts on your next run.",
+    return post(api, "tasks", {"owner": "ops", "title": title, "body": "Check the counts on your next run.",
                                "next_run": True})
 
 
@@ -127,7 +127,7 @@ def test_a_pull_request_refreshed_is_not_work_and_one_pushed_to_is(api):
 def test_handled_drops_a_condition_stored_earlier(api):
     """Review 1: a run that deferred and then said it is done with it is not brought back by the old condition."""
     r = setup(api)
-    blocker = post(api, "tasks", {"owner_id": "ops", "title": "Dev 241 review", "body": "Review it."})
+    blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs")
     task = later(api, "Dev 242")
@@ -146,7 +146,7 @@ def test_handled_drops_a_condition_stored_earlier(api):
 
 def test_deferred_until_a_task_is_done_runs_once_when_it_is(api):
     r = setup(api)
-    blocker = post(api, "tasks", {"owner_id": "ops", "title": "Dev 241 review", "body": "Review it."})
+    blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM jobs")       # ops's own run for the blocker is not what this tests
     task = later(api, "Dev 242")
@@ -208,7 +208,7 @@ def test_next_run_puts_it_back_at_once(api):
 
 def test_a_person_defers_through_the_api_and_wrong_asks_are_refused(api):
     setup(api)
-    blocker = post(api, "tasks", {"owner_id": "ops", "title": "Dev 241 review", "body": "Review it."})
+    blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
     task = later(api)
     got = post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"]})
     assert got["deferred"]["resume"]["task"] == blocker["id"] and got["next_run_waiting"] is False
@@ -226,7 +226,7 @@ def test_a_person_defers_through_the_api_and_wrong_asks_are_refused(api):
 
 def test_run_now_drops_a_stored_condition(api):
     setup(api)
-    blocker = post(api, "tasks", {"owner_id": "ops", "title": "Dev 241 review", "body": "Review it."})
+    blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
     task = later(api)
     post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"]})
     got = post(api, f"tasks/{task['id']}/run-now", {})["task"]

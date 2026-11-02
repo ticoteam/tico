@@ -42,7 +42,7 @@ def test_botops_continuation_keeps_the_requester_and_quiet_progress_stays_on_the
     active = turn(api, botops, person="ana-test", text="Review ops and keep working until done")
     with api.app.state.store.read() as c:
         origin = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (active["id"],)).fetchone()[0]
-    task = post(api, "tasks", {"owner_id": "botops", "title": "Review ops", "body": "Finish the requested review",
+    task = post(api, "tasks", {"owner": "botops", "title": "Review ops", "body": "Finish the requested review",
                               "request_id": origin}, active["token"])
     assert task["requester_id"] == "human:ana" and task["request_id"] == origin
     post(api, "tasks/" + task["id"], {"version": task["version"], "note": "QA detailed progress", "quiet": True}, active["token"])
@@ -260,7 +260,7 @@ def test_a_task_botops_files_from_a_persons_chat_lends_their_rights_to_its_own_r
     from the task notice, was refused bot registration."""
     from backend.tests.test_member_bots import register
     active = turn(api, botops, person="ana-test", text="Add a Software Engineer bot in engineering")
-    task = post(api, "tasks", {"owner_id": "botops", "title": "Build a bot: Software Engineer", "body": "Build it.",
+    task = post(api, "tasks", {"owner": "botops", "title": "Build a bot: Software Engineer", "body": "Build it.",
                                "request_id": "turn"}, active["token"])
     with api.app.state.store.read() as c:
         origin = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (active["id"],)).fetchone()[0]
@@ -338,7 +338,7 @@ def test_a_comment_taken_back_while_the_turn_read_it_does_not_break_the_turns_fi
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
     path = f"tasks/{task['id']}/comments"
@@ -368,7 +368,7 @@ def test_a_turn_whose_own_comment_was_taken_back_still_finishes(api):
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     path = f"tasks/{task['id']}/comments"
@@ -390,7 +390,7 @@ def test_a_comment_taken_back_before_the_runtime_got_it_is_cancelled_not_requeue
     r = runner(api)
     assign(api, r, "ops")
     ready(api, r, ["ops"])
-    task = post(api, "tasks", {"owner_id": "ops", "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
     path = f"tasks/{task['id']}/comments"
@@ -413,7 +413,7 @@ def _a_turn_started_by_a_comment(api, bot="ops", r=None):
         r = runner(api)
         assign(api, r, bot)
         ready(api, r, [bot])
-    task = post(api, "tasks", {"owner_id": bot, "title": "Review the report", "body": "Please review."})
+    task = post(api, "tasks", {"owner": bot, "title": "Review the report", "body": "Please review."})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     path = f"tasks/{task['id']}/comments"

@@ -31,7 +31,7 @@ def test_a_limited_bot_with_a_turn_running_can_be_moved_to_another_model(api, mo
     signed_in(api, machine, ["ops"], ("codex", "claude"))
     post(api, "bots/ops/transitions", {"kind": "model", "model": "gpt-6-luna", "expected_revision": revision(api)})
 
-    post(api, "tasks", {"owner_id": "ops", "title": "Plan the week", "body": "Please do it."})
+    post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
     limit(api, machine, claim(api, machine))                    # the model's plan runs out
     assert status(api)["state"] == "limited"
 
@@ -71,7 +71,7 @@ def test_a_move_to_another_computer_still_waits_for_the_running_turn(api):
     machine, other = runner(api), runner(api, label="Other Mac")
     assign(api, machine, "ops")
     signed_in(api, machine, ["ops"], ("codex",))
-    post(api, "tasks", {"owner_id": "ops", "title": "Plan the week", "body": "Please do it."})
+    post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
     turn = claim(api, machine)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-" + turn["id"]}, machine["token"])
     signed_in(api, other, [], ("fake", "codex"))
@@ -89,7 +89,7 @@ def test_a_turn_leased_before_a_model_change_does_not_start_the_new_models_sessi
     assign(api, machine, "ops")
     signed_in(api, machine, ["ops"], ("codex", "claude"))
     post(api, "bots/ops/transitions", {"kind": "model", "model": "gpt-6-luna", "expected_revision": revision(api)})
-    post(api, "tasks", {"owner_id": "ops", "title": "Plan the week", "body": "Please do it."})
+    post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
     turn = claim(api, machine)                                  # handed the old model
     at(monkeypatch, "2026-10-21T23:25:20.000000Z", api)
     post(api, "bots/ops/transitions", {"kind": "model", "model": "claude-haiku-5-5", "expected_revision": revision(api)})
@@ -105,7 +105,7 @@ def limited_with_a_retry_running(api, monkeypatch, machine, model="gpt-6-luna"):
         c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ("codex", "claude"))
     post(api, "bots/ops/model", {"model": model, "expected_revision": revision(api)})
-    post(api, "tasks", {"owner_id": "ops", "title": "Plan the week", "body": "Please do it."})
+    post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
     limit(api, machine, claim(api, machine))
     assert status(api)["state"] == "limited"
     at(monkeypatch, "2026-10-21T23:25:00.000000Z", api)
@@ -197,7 +197,7 @@ def test_after_the_gateways_cap_another_tico_model_waits_on_the_same_key(api, mo
     machine = runner(api)
     assign(api, machine, "ops")
     signed_in(api, machine, ["ops"], ("codex",))
-    post(api, "tasks", {"owner_id": "ops", "title": "Plan the week", "body": "Please do it."})
+    post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
     limit(api, machine, claim(api, machine), errors=("Tico AI Gateway: cap_reached for this key",))
     settings = api.app.state.store.settings
     with api.app.state.store.transaction() as c:
@@ -216,7 +216,7 @@ def test_a_turn_moved_to_another_model_on_the_same_login_holds_that_login_when_i
     assign(api, machine, "ops")
     signed_in(api, machine, ["ops"], ("codex", "claude"))
     post(api, "bots/ops/model", {"model": "claude-opus-5-5", "expected_revision": revision(api)})
-    post(api, "tasks", {"owner_id": "ops", "title": "Plan the week", "body": "Please do it."})
+    post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Please do it."})
     turn = claim(api, machine)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-" + turn["id"]}, machine["token"])
     post(api, "bots/ops/model", {"model": "claude-haiku-5-5", "expected_revision": revision(api)})

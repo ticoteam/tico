@@ -234,7 +234,7 @@ def test_a_client_that_hangs_up_during_the_body_read_is_a_499_not_a_5xx(tmp_path
     traceback, and the 5xx count stays 0; a normal request is still a 200 and a handler that raises still a 500."""
     registry = tmp_path / "registry"
     registry.mkdir()
-    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner_id": "ana@acme.example"}))
+    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example"}))
     app = create_app(Settings(db_path=tmp_path / "hub.db", registry_dir=registry, flight_recorder=True, test_identities={
         "ana-test": Identity("human:ana", "owner", "ana@acme.example")}))
 
@@ -508,7 +508,7 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
     monkeypatch.setattr(flight, "LONG_HOLD_MS", 30)
     registry = tmp_path / "registry"
     registry.mkdir()
-    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner_id": "ana@acme.example"}))
+    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example"}))
     app = create_app(Settings(db_path=tmp_path / "hub.db", registry_dir=registry, flight_recorder=True, test_identities={
         "ana-test": Identity("human:ana", "owner", "ana@acme.example")}))
     store, rec = app.state.store, app.state.flight
