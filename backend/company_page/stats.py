@@ -226,24 +226,21 @@ class _Books:
         self.c, self.at, self.iso = c, at, at.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         self._pnl, self._metric = {}, {}
         self.viewer, self.ready = "", False
-        self.accounts, self.private, self.unit, self.exponent = {}, {}, "", 2
+        self.accounts, self.private, self.unit, self.exponent = {}, frozenset(), "", 2
+        from ..finance import reads as FR
         try:
-            from ..finance import context as FC
-            from ..finance.core import money
-            from ..finance.store import access as SA
-            ctx = FC.load(c, self.iso)
+            view = FR.book_view(c, self.iso)
         except self._errors():
             return
-        self.viewer = FC.owner(c)
+        self.viewer = view.viewer
         self.ready = bool(self.viewer)
-        self.accounts, self.private = ctx.accounts, SA.private_lines(c)
-        currency = ctx.book.base_currency
-        self.unit, self.exponent = SYMBOL.get(currency, currency), money.EXPONENTS.get(currency, 2)
+        self.accounts, self.private = view.accounts, view.private
+        self.unit, self.exponent = SYMBOL.get(view.currency, view.currency), view.exponent
 
     @staticmethod
     def _errors():
-        from ..finance.core.errors import FinanceError
-        return FinanceError
+        from ..finance import reads as FR
+        return FR.FinanceError
 
     def _major(self, minor):
         """Whole currency units: cents on a tile would be false precision, and the exact cents are no one's business."""
@@ -299,8 +296,8 @@ class _Books:
         return _without_leading_zeros(out)
 
     def line(self, account_id, quarterly):
-        from ..finance.core.ledger import descendants
-        under = descendants(self.accounts, account_id)
+        from ..finance import reads as FR
+        under = FR.descendant_ids(self.accounts, account_id)
 
         def value(read, idx):
             return self._major(sum(sum(read["rows"].get(a, ([], ""))[0][i:i + 1] or [0]) for a in under for i in idx))
@@ -489,14 +486,14 @@ class _Check:
     def _sum(self, total, accounts, name):
         """A total and its parts, by account. A line stat covers everything under it in the chart. A total shown with no
         line beside it is the sum of its active accounts: when that is one private account, the total is its figure."""
-        from ..finance.core.ledger import descendants
+        from ..finance import reads as FR
         lines = ["line:" + a for a in accounts if "line:" + a in self.shown and "line:" + a != total]
         if not lines:
             if total in self.shown and self._private_alone_in_a_period(total, accounts):
                 self.hold((total,), f"{self._label(total)} is the only active line under {name} in a period shown, "
                                     f"which is private.")
             return
-        covered = set().union(*(descendants(self.books.accounts, q[5:]) for q in lines))
+        covered = set().union(*(FR.descendant_ids(self.books.accounts, q[5:]) for q in lines))
         uncovered = [a for a in accounts if a not in covered and "line:" + a != total]
         kept = [self.state(q) for q in lines] + [self.state("line:" + a) for a in uncovered]
         secret = [r for r in kept if r["mode"] != "show"]
@@ -517,7 +514,7 @@ class _Check:
         totals = [q for q in ("revenue", "spend", "cost_of_revenue") if q in self.shown]
         if not self.books.ready or not (lines or totals):
             return
-        from ..finance.core.ledger import descendants, pnl_section
+        from ..finance import reads as FR
         accounts = self.books.accounts
         try:
             active = self.books.active_accounts()
@@ -526,12 +523,12 @@ class _Check:
             return
         income = {a for a in active if accounts[a].type == "income"}
         expense = {a for a in active if accounts[a].type == "expense"}
-        cost = {a for a in expense if pnl_section(accounts, accounts[a]) == "cost_of_revenue"}
+        cost = {a for a in expense if FR.pnl_section_of(accounts, a) == "cost_of_revenue"}
         self._sum("revenue", income, "revenue")
         self._sum("spend", expense, "total spend")
         self._sum("cost_of_revenue", cost, "cost of revenue")
         for q in lines:
-            under = descendants(accounts, q[5:]) & active
+            under = FR.descendant_ids(accounts, q[5:]) & active
             self._sum(q, under, "that line")
 
     def run(self):
@@ -798,7 +795,8 @@ def _source_defaults(c, source_kind, ref_id):
             raise Problem("ref_id", f"A metric is {', '.join(METRIC_CLASS)}", 422)
         return METRIC_CLASS[ref_id], METRIC_LABEL[ref_id], ""
     if source_kind == "finance_line":
-        row = H._one(c, "SELECT name, type FROM fin_accounts WHERE id=?", (ref_id,))
+        from ..finance import reads as FR
+        row = FR.account_name_and_type(c, ref_id)
         if not row or row["type"] not in ("income", "expense"):
             raise Problem("ref_id", "A line is an income or expense account", 422)
         return "pnl_line", row["name"], ""
@@ -808,14 +806,13 @@ def _source_defaults(c, source_kind, ref_id):
 def available(c):
     """What an owner can put on the board, by name and never with a value. Each kind is capped on its own, so a long list
     of KPIs can't crowd out Finance. A private Finance line is left out: it can never show, and its name is private too."""
-    from ..finance.store import access as SA
-    private = SA.private_lines(c)
+    from ..finance import reads as FR
+    private = FR.private_line_ids(c)
     metrics = [{"source_kind": "finance_metric", "ref_id": ref, "label": label} for ref, label in METRIC_LABEL.items()]
     kpis = [{"source_kind": "kpi", "ref_id": r["id"], "label": r["name"]} for r in c.execute(
         "SELECT id, name FROM kpis WHERE archived_at IS NULL ORDER BY lower(name), id LIMIT ?", (AVAILABLE_MOST,))]
-    lines = [{"source_kind": "finance_line", "ref_id": r["id"], "label": r["name"]} for r in c.execute(
-        "SELECT id, name FROM fin_accounts WHERE type IN ('income','expense') AND active=1 ORDER BY code, id LIMIT ?",
-        (AVAILABLE_MOST,)) if r["id"] not in private]
+    lines = [{"source_kind": "finance_line", "ref_id": r["id"], "label": r["name"]}
+             for r in FR.income_and_expense_accounts(c, AVAILABLE_MOST) if r["id"] not in private]
     return kpis + metrics + lines
 
 
