@@ -422,6 +422,7 @@ def test_gap_books_check_kinds_can_be_paged(api):
                       "'needs_entry','',?)", (f"bin_{n}", received, "a" * 64, received))
     err, late = call(api, "hub_finance_inbox", {"kind": "unreconciled"}, token=token)
     assert not err and [(i["kind"], i["id"]) for i in late["items"]] == [("unreconciled", "books")], late
+    assert late["items"][0]["label"] == "Books not reconciled yet", late          # never reconciled: no day count
     err, first = call(api, "hub_finance_inbox", {"kind": "bill_email", "limit": 1}, token=token)
     assert not err and [i["id"] for i in first["items"]] == ["bin_1"] and first["next_cursor"], first
     err, second = call(api, "hub_finance_inbox", {"kind": "bill_email", "limit": 1, "cursor": first["next_cursor"]},
