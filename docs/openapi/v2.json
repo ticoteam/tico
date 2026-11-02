@@ -33008,7 +33008,7 @@
         ]
       },
       "patch": {
-        "summary": "Rename, archive or unarchive a thread, or change who it is for; its managers only",
+        "summary": "Rename, archive or unarchive a thread, change who it is for, or set how many days a root keeps its messages (`retention_days`, null for good); its managers only",
         "operationId": "updateThread",
         "parameters": [
           {
@@ -62557,6 +62557,17 @@
               }
             ],
             "title": "Audience Group Id"
+          },
+          "retention_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retention Days"
           }
         },
         "type": "object",
@@ -62878,6 +62889,13 @@
           },
           "members": {
             "type": "object"
+          },
+          "retention_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Days a root keeps its messages; null keeps them for good"
           },
           "home": {
             "type": [

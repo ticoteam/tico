@@ -6003,14 +6003,18 @@ def thread_members_remove(api, args):
                     key=_key(args))
 
 
-@tool("hub_thread_update", "Rename a thread, archive or unarchive it, or change who may read it: members, team (a group) "
-      "or company. Only its starter or an admin can make a thread public.",
+@tool("hub_thread_update", "Rename a thread, archive or unarchive it, change who may read it: members, team (a group) "
+      "or company, or set how long it keeps its messages. Only its starter or an admin can make a thread public.",
       {"thread": THREAD_ID, "title": _s("The new title"), "archived": {"type": "boolean"},
        "audience": {"type": "string", "enum": ["members", "team", "company"]},
-       "audience_group_id": _s("For audience team: the group's id")},
+       "audience_group_id": _s("For audience team: the group's id"),
+       "retention_days": {"type": ["integer", "null"], "description": "On a root thread: delete its messages and its "
+                          "sub-threads' after this many days; null keeps them for good"}},
       required=("thread",), writes=True)
 def thread_update(api, args):
     body = {key: args[key] for key in ("title", "archived", "audience", "audience_group_id") if args.get(key) is not None}
+    if "retention_days" in args:
+        body["retention_days"] = args["retention_days"]
     return api.patch(_thread_path(args["thread"]), body, key=_key(args))
 
 

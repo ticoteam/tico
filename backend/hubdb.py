@@ -3003,8 +3003,9 @@ def sync_registry(conn, employees, people):
 
 # ----------------------------------------------------------------------------- conversations
 def open_conversation(conn, actor, participants, kind="chat", subject="", task_id=None,
-                      scope=None, owner_actor=None, room_key=None, allow_planned=False, allow_held=False):
-    """A thread between any set of bots and humans. Reach (rule 2) is checked per participant."""
+                      scope=None, owner_actor=None, room_key=None, allow_planned=False, allow_held=False, announce=True):
+    """A thread between any set of bots and humans. Reach (rule 2) is checked per participant. `announce=False`: the
+    caller has not finished it (who reads a task's room depends on the task), and announces it when it has."""
     _writer(conn, actor)
     if kind not in CONVERSATION_KINDS:
         refuse(conn, actor, "kind", f"a conversation is {'|'.join(CONVERSATION_KINDS)}, not {kind}")
@@ -3046,7 +3047,11 @@ def open_conversation(conn, actor, participants, kind="chat", subject="", task_i
     if new_dm and scope == "direct":
         from . import threads
         threads.personal_dm(conn, row["id"], actor, people)
-    return conversation(conn, row["id"])
+    made = conversation(conn, row["id"])
+    if announce:
+        from . import threads
+        threads._emit_thread_created(conn, made, actor)
+    return made
 
 
 def _pair_conversation(conn, actor, other, kind, subject="", allow_held=False):
@@ -3098,6 +3103,9 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     target = _reach(conn, actor, to_actor, allow_held=True)
     refs = dict(refs or {})
     warnings = []
+    from . import threads
+    if threads.never_wakes(refs, target):
+        refs["quiet"] = True       # decided before anything below reads quiet: no hold, no note, no run
 
     if is_bot(actor) and actor == target:
         refuse(conn, actor, "self", "a bot cannot send work to itself")
@@ -3127,20 +3135,9 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
 
     # rules 4 and 7: what a person has to read
     if is_bot(actor) and is_human(target) and kind in ("say", "notice"):
-        parent = (_one(conn, "SELECT from_actor,conversation_id FROM messages WHERE id=?", (in_reply_to,))
-                  if in_reply_to else None)
-        replying_to_person = bool(parent and parent["from_actor"] == target and
-                                  parent["conversation_id"] == conv["id"])
-        solicited = (replying_to_person or _opener(conn, conv["id"]) == target or
-                     bool(refs.get("task") or refs.get("approval")))
-        if not solicited:
-            day = now()[:10]
+        if not threads.solicited(conn, conv["id"], actor, target, refs, in_reply_to):
             # Counted per delivery (backend/threads.py): what reached this person, addressed or not.
-            n = conn.execute(
-                "SELECT COUNT(*) FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
-                "WHERE m.from_actor=? AND d.recipient=? AND d.created_at>=? "
-                "AND m.refs_json LIKE '%\"unsolicited\": true%'",
-                (actor, target, day)).fetchone()[0]
+            n = threads.unsolicited_today(conn, actor, target)
             if n >= UNSOLICITED_PER_DAY:
                 refuse(conn, actor, "unsolicited",
                        f"{n} unsolicited messages to {actor_id(target)} today; the cap is "
@@ -3425,6 +3422,9 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         refs = {**(refs or {}), wake_rules.CAUSED_BY: wake_rules.CAUSE.get()}
     # Token saving 2/9: a wake its bot's own write caused, or news about a parked task, waits for the next run. The
     # rules engine (backend/rules.py) decides, names the rule on the message (refs.rule) and fails open.
+    from . import threads as thread_rules
+    if thread_rules.never_wakes(refs, target) and not (refs or {}).get("quiet"):
+        refs = {**refs, "quiet": True}      # a writer that came here without `say` (a remote author's post)
     from . import rules as wake_rule_engine
     if isinstance(refs, dict) and wake_rule_engine.PARKED_NOTICE in refs:
         refs = {k: v for k, v in refs.items() if k != wake_rule_engine.PARKED_NOTICE}
@@ -5886,7 +5886,7 @@ def _refresh_comment_replies(conn, msg):
     def refresh(value):
         if isinstance(value, dict):
             if value.get("id") == msg["id"] and "from_actor" in value:
-                return msg
+                return {**value, **msg}     # what the route added beside the message (thread_id, warnings) stays
             return {k: refresh(v) for k, v in value.items()}
         if isinstance(value, list):
             return [refresh(v) for v in value if not (msg.get("deleted_at") and isinstance(v, dict)
@@ -6215,7 +6215,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         # The person of the chat it came from follows it into its room, where its replies reach them.
         watcher = _room_person(conn, started_in, {"requester": requester, "owner": target}) if started_in and not private else None
         conv = open_conversation(conn, actor, list(dict.fromkeys([actor, requester, target, *([watcher] if is_human(watcher) else [])])),
-                                 kind="task", subject=title, scope="task", allow_planned=allow_planned)
+                                 kind="task", subject=title, scope="task", allow_planned=allow_planned, announce=False)
         dedicated = True
     row = {"id": new_id(), "title": title, "body": body, "requester": requester, "owner": target,
            "status": "open", "due": due, "conversation_id": conv["id"],
@@ -6280,6 +6280,9 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         event(conn, actor, "task.lint", row["id"], {"problems": plain})
     event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
     _building(conn, None)
+    if dedicated:
+        from . import threads
+        threads._emit_thread_created(conn, conversation(conn, conv["id"]), actor)
     hook(conn, "task.created", row["id"], lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id), actor, revision=0)
     from . import task_trigger_rules
     task_trigger_rules.created(conn, row["id"], actor)

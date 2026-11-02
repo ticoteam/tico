@@ -45,6 +45,7 @@ ALTER TABLE conversations ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0;       
 ALTER TABLE conversations ADD COLUMN last_unread_seq INTEGER NOT NULL DEFAULT 0;  -- human-or-addressed counter
 ALTER TABLE conversations ADD COLUMN archived_at TEXT;
 ALTER TABLE conversations ADD COLUMN updated_at TEXT;
+ALTER TABLE conversations ADD COLUMN retention_days INTEGER;   -- on a root: how long messages stay (§5); NULL keeps them
 -- owner_actor already exists and is reused:
 --   home     -> the Home's owner: 'bot:<slug>' | 'human:<id>' | 'group:<id>'
 --   personal -> the DM's starter (migrated personal rooms: their owner, as today)
@@ -123,6 +124,7 @@ CREATE TABLE IF NOT EXISTS message_deliveries (
   carrier_id TEXT,                             -- the carrier message that started the run (§4.4)
   attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT, error TEXT,
   delivered_at TEXT, read_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  unsolicited INTEGER NOT NULL DEFAULT 0,      -- counted against the bot's cap to this recipient (§4.7)
   UNIQUE (message_id, recipient));
 CREATE INDEX IF NOT EXISTS message_deliveries_waiting ON message_deliveries(recipient, created_at)
   WHERE state IN ('pending','delivered','capped','held');
@@ -131,6 +133,11 @@ CREATE INDEX IF NOT EXISTS message_deliveries_loop ON message_deliveries(root_id
   WHERE cause='bot' AND recipient LIKE 'bot:%' AND mode IN ('steer','queue');
 CREATE INDEX IF NOT EXISTS message_deliveries_outside ON message_deliveries(state, next_attempt_at)
   WHERE recipient LIKE 'slack:%' OR recipient LIKE 'peer:%';
+
+-- A message waiting for routing (§4.3 rule 4); the row goes when it is routed or given up on.
+CREATE TABLE IF NOT EXISTS thread_routings (
+  message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 
 -- Who a message names (C2). Mentions never grant access; in_audience=0 rows produced a warning to the author.
 CREATE TABLE IF NOT EXISTS message_mentions (
@@ -321,8 +328,13 @@ threads.members(c, viewer, thread_id, *, cursor=None, limit=100) -> {"members": 
 threads.follow(c, viewer, thread_id, *, notify="live") ; threads.unfollow(c, viewer, thread_id)
 threads.set_audience(c, principal, thread_id, audience, *, audience_group_id=None)
 threads.update(c, principal, thread_id, *, title=None, archived=None)
+threads.set_retention(c, principal, thread_id, days)           # a root's manager; days=None keeps messages for good
 ```
-- Posting, being mentioned or owning the thread's task sets `following=1` (reason posted|mentioned|task).
+- Posting, being mentioned or owning the thread's task sets `following=1` (reason posted|mentioned|task), over a row a
+  read left at `following=0`, keeping its read mark and notify level. A DM delivery or a join only makes the row, so it
+  never undoes an unfollow.
+- A join reads up to now across the whole tree: the root followed, each sub-thread a read mark. A group joins by each of
+  its people and bots not already reading; anyone already reading keeps what they have not read.
 - **Mentions and following never grant access.** A mention outside the audience writes `in_audience=0`, no
   delivery, and returns `warnings: [{"rule": "mention_outside", "actor": ...}]` to the author: on the result of
   `threads.post`, `hubdb.say` and every route built on them (REST answers the dict as is; CLI/MCP print it), beside
@@ -338,6 +350,11 @@ threads.apply_revision(c, origin, *, body=None, deleted=False) -> message view|N
 - Asks, answers and notices can't be edited. Delete clears the body (tombstone: `deleted_at`, body '', revision+1),
   reopens the asks it answered (as `task_comment_delete` does), sets undelivered deliveries to `moot`, re-queues
   outside deliveries at the new revision (an edit or tombstone goes out), and scrubs mentions and caches.
+- An edit re-reads its mentions: one taken out goes `moot` and its run not started is cancelled; one added is delivered
+  as a post's mention (cap, wake rule, loop guard; never a second wake for one message); one outside the audience
+  warns its author.
+- Every copy of the words follows: carriers, notes, Slack posts not sent, stored retry answers, and (on a delete) a
+  sub-thread's title and reactions.
 - Highest revision wins; an older or repeated `(origin_id, revision)` is ignored. A delete is final.
 - A Tico-held edit is never mirrored out: outside deliveries carry only revisions that were delivered locally.
 
@@ -365,13 +382,26 @@ Per (message, bot), deduplicated, first match wins:
 2. the bot's Home → `queue`;
 3. a reply in a sub-thread the bot last posted in → `queue`;
 4. routing (the Slack gateway's decision model, ≤3 bots) when the message names nobody and the thread has several
-   bots → `queue`;
+   bots → `queue` (`backend/thread_routing.py`);
 5. a following bot with `notify=digest` → `digest`;
 6. otherwise none (no row).
 
+Rule 4 is asked after the post: a person's message that names no one writes one `thread_routings` row, and the
+scheduler's tick starts a worker when a row is due. With fewer than two candidate bots no model is called. With no
+decision model, the month's spend at its cap, or the person's daily decision cap reached, nobody is woken and the
+message stays in the thread. A bot's own unaddressed post is not routed.
+
+Rule 5 is batched (`backend/thread_bot_digest.py`): every hour plain code writes one keeper notice per bot with `digest`
+deliveries waiting, naming the threads and their counts and none of their words, and settles those deliveries with it as
+their `carrier_id`. No model is called unless a batch has content. A delivery the bot can no longer read goes `moot`; a
+paused or quarantined bot keeps its deliveries; a new batch waits while the last batch's run has not started. The run
+reads the threads it names only if the bot is still in their audience at the claim (`thread_bot_digest.grant`).
+
 Never wakes: the author itself, imports and replays (`refs.import`/`refs.replay`), a message whose
-`refs.origin` names that same bot within the loop window, and follow-up nudges and update cards (`refs.follow_up`,
-`refs.card`: `threads.quiet_notice`; `post` also marks them `quiet`, so not even the addressed bot's run starts). Today's bot-to-bot hold (`rules.bot_to_bot_decision`)
+`refs.origin` names that same bot (`threads.never_wakes`), and follow-up nudges and update cards (`refs.follow_up`,
+`refs.card`: `threads.quiet_notice`; `post` also marks them `quiet`, so not even the addressed bot's run starts). This
+binds the primary recipient too: its delivery is `mode='none'` and its message is `quiet`. A `refs.origin` holds no time,
+so a bot's own message coming back never wakes it, however late. Today's bot-to-bot hold (`rules.bot_to_bot_decision`)
 and `wake_rules.judge` still run per delivery and may turn `queue` into `defer`.
 
 ### 4.4 Runs
@@ -392,7 +422,9 @@ further bot.
 recipient, `steer|queue`) per `root_id` per rolling hour. Past it a wake is written `state='capped'` (never
 dropped) and the root gets one Needs-you item (`threads.capped(c, viewer)`, deduplicated per root). Capped
 deliveries resume in order (`threads.resume_capped(c, root_id)`) when a human posts in the root or the window
-reopens (the scheduler calls `threads.reopen_windows(c)`).
+reopens (the scheduler's tick calls `threads.reopen_due(store)`, plain SQL with no model). Each wake the window lets go
+counts in the window from then (its `created_at` moves), so a backlog goes at the guard's rate, not at once. A person's
+post lets them all go at their original times.
 
 ### 4.6 Readers rekeyed to deliveries
 The inbox (`H.inbox_pages`, `H.inbox`, `H.undelivered`), `H.mark_delivered`/`mark_read`, `_reach` and the
@@ -403,7 +435,10 @@ that (open asks to a person, approvals).
 ### 4.7 Solicited vs unsolicited (C2)
 In a DM the person opened, every bot post is solicited; posts carrying a task or approval ref stay solicited. In a
 person's Home or an unaddressed post, a bot counts as solicited only when it answers that person (a mention, ask
-or reply to them). Otherwise today's cap (`UNSOLICITED_PER_DAY`) applies, counted per delivery.
+or reply to them), judged for each person on the post (`threads.solicited`). Otherwise today's cap
+(`UNSOLICITED_PER_DAY`) applies, counted per delivery (`message_deliveries.unsolicited`). Past the cap an addressed post
+is refused as before; a further recipient gets no delivery, the message stays in the thread, and its author gets the
+warning `{"rule": "unsolicited_cap", "actor": ...}`.
 
 ## 5. C4: order and read state
 - `messages.seq` is per install, strictly increasing, from `sequences('messages')`. Tree order:
@@ -432,6 +467,17 @@ threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
 - Unread count for a viewer = messages in the thread with `seq > last_read_seq` that are human-authored or
   addressed to that viewer (a delivery row for them), excluding their own. Other bot posts are **activity** (a
   dot, never a count).
+
+Retention: a root may set `conversations.retention_days` (1 to `RETENTION_MAX_DAYS`; null keeps messages for good;
+never on a task or meeting thread). `backend/thread_retention.py` deletes what is past it in the root and its sub-threads,
+in short batches every 15 minutes, as an author's delete does: the canonical row and every derived copy in one
+transaction (revisions, mentions, reactions, search, runs not started, carriers, notes, Slack posts not sent, stored
+retry answers, a sub-thread's title, file links). The row stays as a tombstone so seqs hold. The purge is local: an
+outside destination keeps what it already received and gets no tombstone. A run's transcript keeps what it read, under
+transcript retention. A message's file goes by the file delete path (`file_library.release_message_files`): its blob row
+and any `chat-file:` copy in that write, the bytes queued in `blob_purges` and removed by `file_library.loop` (every
+60 s, retried). A blob another message, a task, the trash, a meeting, a letter, market evidence or another file holds
+stays. Each batch writes one `thread.purged` event and one audit row.
 
 ## 6. C5: replication
 - `origin_id` = `'<uuidv7>@<install id>'` (`census.install_id_in`), immutable; replicated messages keep the
@@ -558,7 +604,7 @@ Thread view (`threads.view(c, viewer, row)`):
 | `GET /api/v2/threads/search?q=` | T2 (FTS5), filtered by `threads.readable` per message |
 | `POST /api/v2/threads {title, audience, audience_group_id, members, parent_message_id, body}` | `threads.create` (+ `threads.post` when `body`) |
 | `POST /api/v2/threads/{id}/messages {text, kind, to, refs, parent_message_id}` | `threads.post` |
-| `PATCH /api/v2/threads/{id} {title, archived, audience, audience_group_id}` | `threads.update` / `threads.set_audience` |
+| `PATCH /api/v2/threads/{id} {title, archived, audience, audience_group_id, retention_days}` | `threads.update` / `threads.set_audience` / `threads.set_retention` |
 | `GET/POST/DELETE /api/v2/threads/{id}/members[/{actor}]` | `threads.members` / `add_member` / `remove_member` |
 | `PUT/DELETE /api/v2/threads/{id}/follow {notify}` | `threads.follow` / `unfollow` |
 | `PATCH/DELETE /api/v2/messages/{id}` | `threads.edit_message` / `delete_message` |
@@ -570,7 +616,9 @@ Timeline messages: the existing message view plus `thread_id`, `root_id`, `seq`,
 `/api/v2/conversations/*` stay as aliases for one release. Every list is paged and byte-capped.
 
 ## 11. Outside tracks' hooks
-- Thread webhooks: `threads._emit_thread_created(c, thread)` (create and sub_thread),
+- Thread webhooks and rules: `threads._emit_thread_created(c, thread, actor)` (every route: create, dm, home,
+  sub_thread and `hubdb.open_conversation`, a task's room once its task is written; to webhooks and `event` automations
+  whose owner may read the thread),
   `threads._emit_message_created(c, thread, message)` (post) and `threads._emit_message_held(c, thread, actor,
   verdict)` (a held post) are no-ops on core; integration points them at `backend/thread_webhooks.py`. They run inside
   the write transaction and must only enqueue.

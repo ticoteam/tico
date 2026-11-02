@@ -1133,16 +1133,16 @@ def hub_checks(c, task):
     return True
 
 
-def on_event(c, type_, subject, data, actor):
+def on_event(c, type_, subject, data, actor, access=None):
     """A catalog event (backend/event_catalog.py): `event` automations on it, and `task_received` on a task that now
-    has an owner."""
+    has an owner. `access(row)`: whether this automation's owner may hear of it, for an event about something private."""
     from . import event_catalog as CAT
     name = CAT.canonical(type_) or type_
     facts = data() if callable(data) else (data or {})
     payload = {"event": {"name": name, "subject": subject, "actor": actor, **({"data": facts} if facts else {})}}
     # A trigger may name an event by an alias (a converted routine's `release_published`): it hears the canonical name.
     fire(c, "event", payload, f"{name}:{subject}",
-         lambda t: CAT.matches(t["name"], name) or (CAT.canonical(t["name"]) or t["name"]) == name)
+         lambda t: CAT.matches(t["name"], name) or (CAT.canonical(t["name"]) or t["name"]) == name, access=access)
     if name in ("task.created", "task.assigned") and isinstance(facts, dict) and facts.get("owner"):
         task = H.task(c, subject)
         if task and not H.task_private(c, task) and hub_checks(c, task):

@@ -89,6 +89,8 @@ def via_tool(client, args, **more):
         fields["computer"] = args.computer  # explicit null is the bot's own internet; omission only reads
     if args.fn == "computer browser-exit" and "sharing" in fields:
         fields["sharing"] = fields["sharing"] == "on"
+    if args.fn == "thread update" and fields.pop("keep_forever", False):
+        fields["retention_days"] = None  # explicit null keeps its messages for good; omission leaves the policy alone
     fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
