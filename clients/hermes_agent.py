@@ -1391,7 +1391,7 @@ def cmd_doctor(args):
             if me.get("actor") == "bot:" + str(config.get("bot_id")):
                 say("ok", f"GET /api/v2/me works: {me.get('actor')} ({me.get('agent') or me.get('role')})")
             else:
-                say("problem", f"GET /api/v2/me answers {me.get('actor')!r}, not bot:{config.get('bot')}")
+                say("problem", f"GET /api/v2/me answers {me.get('actor')!r}, not bot:{config.get('bot_id')}")
         except Failure as exc:
             message = blocked_message(exc, config.get("slug") or config.get("bot_id", args.profile)) or str(exc)
             say("problem", "GET /api/v2/me failed: " + message)
