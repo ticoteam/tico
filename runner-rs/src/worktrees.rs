@@ -6,7 +6,7 @@
 //! the server reserved for a waiting task (backend/worktree_waits.py) is checked out and set up here, while
 //! its bot is idle (`prepare`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -1124,6 +1124,131 @@ fn own(row: &Map<String, Value>, key: &str) -> String {
     row.get(key).map(text_of).unwrap_or_default()
 }
 
+/// Git's conflict-marker lines with their labels dropped, so a file and git's own re-merge of its stages compare equal.
+fn marker_shape(text: &str) -> String {
+    static MARKER: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    MARKER.get_or_init(|| Regex::new(r"(?m)^(<{7}|\|{7}|>{7})(?: .*)?$").unwrap()).replace_all(text, "$1").into_owned()
+}
+
+/// A scratch folder inside the worktree's git folder, removed when it goes out of scope.
+struct Scratch(PathBuf);
+impl Drop for Scratch {
+    fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+}
+
+/// True when a conflicted file is still exactly git's own conflicted text for its stages: nothing resolved or edited.
+async fn untouched_conflict(path: &Path, gitdir: &Path, name: &str, env: &Env) -> R<bool> {
+    let Ok(text) = std::fs::read_to_string(path.join(name)) else { return Ok(false) };
+    let mut stages: HashMap<&str, String> = HashMap::new();
+    for stage in ["1", "2", "3"] {
+        let shown = git(path, env, &["show", &format!(":{stage}:{name}")], false).await?;
+        if shown.ok() {
+            stages.insert(stage, shown.stdout);
+        }
+    }
+    let (Some(ours), Some(theirs)) = (stages.get("2"), stages.get("3")) else { return Ok(false) };
+    // The git wrapper decodes output lossily, so a stage that is not UTF-8 arrives with replacement characters and
+    // cannot be compared with the file exactly: keep it rather than let an edit to those characters pass as untouched.
+    if stages.values().any(|stage| stage.contains('\u{FFFD}')) {
+        return Ok(false);
+    }
+    let base = stages.get("1").cloned().unwrap_or_default();
+    let scratch = Scratch(gitdir.join(format!("tico-merge-check-{}", uuid::Uuid::new_v4().simple())));
+    std::fs::create_dir_all(&scratch.0)?;
+    let (o, b, t) = (scratch.0.join("ours"), scratch.0.join("base"), scratch.0.join("theirs"));
+    std::fs::write(&o, ours)?;
+    std::fs::write(&b, base)?;
+    std::fs::write(&t, theirs)?;
+    let (o, b, t) = (o.display().to_string(), b.display().to_string(), t.display().to_string());
+    let shaped = marker_shape(&text);
+    for flags in [vec![], vec!["--diff3"]] {
+        let mut args = vec!["merge-file", "-p"];
+        args.extend(flags);
+        args.extend([o.as_str(), b.as_str(), t.as_str()]);
+        let merged = git(path, env, &args, false).await?;
+        if (1..=127).contains(&merged.code) && marker_shape(&merged.stdout) == shaped {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The tree git's own merge of HEAD and MERGE_HEAD writes, from `git merge-tree --write-tree` output: None when the
+/// output is not one (an older git refuses the option, which keeps the worktree).
+fn merge_tree_oid(out: &Out) -> Option<String> {
+    let tree = out.stdout.lines().next().unwrap_or("").trim();
+    let shaped = (out.code == 0 || out.code == 1) && (tree.len() == 40 || tree.len() == 64) && tree.bytes().all(|b| b.is_ascii_hexdigit());
+    shaped.then(|| tree.to_string())
+}
+
+/// Aborts a merge this removal finds abandoned in its own tree, before any switch, add or commit: the rules of
+/// runner/worktrees.py `_clear_merge`. Anything not provably abandoned is kept, untouched.
+async fn clear_merge(path: &Path, link: &str, release: bool, env: &Env) -> R<()> {
+    let gitdir = PathBuf::from(git(path, env, &["rev-parse", "--path-format=absolute", "--git-dir"], true).await?.stdout.trim());
+    if !gitdir.join("MERGE_HEAD").exists() {
+        return Ok(());
+    }
+    if release {
+        return Err(WtErr::msg("kept: merge in progress; finish or abort it to free this worktree"));
+    }
+    const UNRESOLVED: &str = "kept: merge in progress with resolved or unrecognised conflicts; commit or abort it to free this worktree";
+    if ["CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"].iter().any(|n| gitdir.join(n).exists()) {
+        return Err(WtErr::msg(UNRESOLVED));
+    }
+    let listed = git(path, env, &["ls-files", "-u", "-z"], true).await?.stdout;
+    let unmerged: BTreeSet<String> = listed.split('\0').filter_map(|entry| entry.split_once('\t').map(|(_, name)| name.to_string())).collect();
+    if unmerged.is_empty() {
+        return Err(WtErr::msg(UNRESOLVED));
+    }
+    for name in &unmerged {
+        if !untouched_conflict(path, &gitdir, name, env).await? {
+            return Err(WtErr::msg(UNRESOLVED));
+        }
+    }
+    let tree = merge_tree_oid(&git(path, env, &["merge-tree", "--write-tree", "HEAD", "MERGE_HEAD"], false).await?);
+    let Some(tree) = tree else {
+        return Err(WtErr::msg(UNRESOLVED));
+    };
+    // Renames off: a staged deletion paired with an identical addition must still be listed as a deletion.
+    let mut touched: BTreeSet<String> = BTreeSet::new();
+    for listing in [
+        git(path, env, &["diff", "--no-renames", "--name-only", "-z", "HEAD", "MERGE_HEAD"], true).await?.stdout,
+        git(path, env, &["diff", "--no-renames", "--cached", "--name-only", "-z"], true).await?.stdout,
+    ] {
+        touched.extend(listing.split('\0').filter(|name| !name.is_empty()).map(str::to_string));
+    }
+    // Git's output is read as text here, so a name that is not text shows up as the replacement character: keep it.
+    if touched.iter().chain(unmerged.iter()).any(|name| name.contains('\u{FFFD}')) {
+        return Err(WtErr::msg(UNRESOLVED));
+    }
+    // The abort refuses an unstaged edit to a path the merge itself changed, so keep that case with the same error.
+    let changed: BTreeSet<String> = git(path, env, &["diff", "--no-renames", "--name-only", "-z", "HEAD", &tree], true).await?.stdout
+        .split('\0').filter(|name| !name.is_empty()).map(str::to_string).collect();
+    let edited: BTreeSet<String> = git(path, env, &["diff", "--no-renames", "--name-only", "-z"], true).await?.stdout
+        .split('\0').filter(|name| !name.is_empty()).map(str::to_string).collect();
+    if edited.iter().any(|name| changed.contains(name) && !unmerged.contains(name)) {
+        return Err(WtErr::msg(UNRESOLVED));
+    }
+    // The index must hold git's own merge result for every path the merge touched, conflicts aside. Any other entry is
+    // a resolution, which the abort would discard. Equal blobs prove nothing: a resolution can select either side.
+    for name in touched.iter().filter(|name| !unmerged.contains(*name)) {
+        // Mode and blob both: a staged mode change on a path the merge touched would otherwise be reset by the abort.
+        // Literal name: a pathspec would read `[`, `*` or `?` as patterns and match a sibling file's entry.
+        let ours: Vec<String> = git(path, env, &["--literal-pathspecs", "ls-files", "-s", "--", name], false).await?.stdout.split_whitespace().take(2).map(str::to_string).collect();
+        let expected: Vec<String> = git(path, env, &["--literal-pathspecs", "ls-tree", &tree, "--", name], false).await?.stdout.split_whitespace().enumerate().filter(|(i, _)| *i != 1).take(2).map(|(_, t)| t.to_string()).collect();
+        if ours != expected {
+            return Err(WtErr::msg(UNRESOLVED));
+        }
+    }
+    git(path, env, &["merge", "--abort"], true).await?;
+    // The removal leaves no row note: the server's worktree link has no field for one, so the abort is recorded here.
+    let mut record = Map::new();
+    record.insert("link".into(), json!(link));
+    record.insert("conflicted_paths".into(), json!(unmerged.len()));
+    crate::flight::emit("worktree_merge_aborted", record);
+    Ok(())
+}
+
 pub async fn act<F, Fut>(workspace: &Path, row: &mut Map<String, Value>, action: &str, env: &Env, vault: &[String], still_closed: F) -> R<&'static str>
 where
     F: Fn() -> Fut,
@@ -1183,6 +1308,7 @@ where
             return Err(WtErr::msg("Repository default branch is unknown; refresh Repositories before cleanup"));
         }
         git(&base, env, &["worktree", "prune", "--expire", "now"], true).await?;
+        clear_merge(&path, &own(row, "id"), crate::util::truthy(row.get("release")), env).await?;
         let ignored = git(&path, env, &["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], true).await?.stdout;
         if ignored.split('\0').any(|n| !n.is_empty() && !build_file(n)) {
             return Err(WtErr::msg("kept: ignored files"));
@@ -1803,5 +1929,368 @@ mod tests {
         assert!(secret_name(".env.local") && secret_name("server.pem") && !secret_name("main.rs"));
         assert_eq!(wip_branch(&json!({"task_id": "0123456789", "id": "abcdefgh"})), "wip/01234567-abcdef");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    const UNRESOLVED: &str = "kept: merge in progress with resolved or unrecognised conflicts; commit or abort it to free this worktree";
+
+    fn test_env() -> Env {
+        std::env::vars().collect()
+    }
+
+    /// A git command in `dir` with a fixed identity; panics with git's stderr when it fails.
+    fn sh(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C").arg(dir)
+            .args(["-c", "user.name=Sam", "-c", "user.email=sam@example.com"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// Whether a git command in `dir` succeeds (a merge that conflicts exits 1).
+    fn sh_ok(dir: &Path, args: &[&str]) -> bool {
+        std::process::Command::new("git")
+            .arg("-C").arg(dir)
+            .args(["-c", "user.name=Sam", "-c", "user.email=sam@example.com"])
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    }
+
+    struct Merge {
+        workspace: PathBuf,
+        remote: PathBuf,
+        path: PathBuf,
+        row: Map<String, Value>,
+    }
+
+    /// A task worktree whose merge of main is left in progress: main changes each `conflicts` name, deletes each
+    /// `deleted` name and adds a clean file, `mainonly`. The task's own commit is pushed, so nothing is unpushed.
+    fn merge_in_progress(folder: &Path, conflicts: &[&str], deleted: &[&str]) -> Merge {
+        merge_in_progress_with(folder, conflicts, deleted, &[], &[])
+    }
+
+    /// As `merge_in_progress`, and main also adds each `copies` name with the content of the task's `other` file.
+    fn merge_in_progress_with(folder: &Path, conflicts: &[&str], deleted: &[&str], copies: &[&str], adds: &[&str]) -> Merge {
+        merge_in_progress_bytes(folder, conflicts, deleted, copies, adds, |name| format!("task {name}\n").into_bytes(), |name| format!("main {name}\n").into_bytes())
+    }
+
+    /// As `merge_in_progress_with`, with each conflicted name's task and main content given as raw bytes.
+    fn merge_in_progress_bytes(
+        folder: &Path, conflicts: &[&str], deleted: &[&str], copies: &[&str], adds: &[&str],
+        task: impl Fn(&str) -> Vec<u8>, main: impl Fn(&str) -> Vec<u8>,
+    ) -> Merge {
+        let (workspace, remote, clone) = (folder.join("workspace"), folder.join("remote.git"), folder.join("clone"));
+        let base = workspace.join("repos/org__product");
+        let path = workspace.join("tasks/12345678/org__product");
+        std::fs::create_dir_all(workspace.join("repos")).unwrap();
+        std::fs::create_dir_all(workspace.join("tasks/12345678")).unwrap();
+        let names: Vec<&str> = conflicts.iter().chain(deleted).copied().collect();
+        sh(folder, &["init", "-q", "--bare", "--initial-branch=main", remote.to_str().unwrap()]);
+        sh(folder, &["clone", "-q", remote.to_str().unwrap(), clone.to_str().unwrap()]);
+        for name in &names {
+            std::fs::write(clone.join(name), format!("base {name}\n")).unwrap();
+        }
+        sh(&clone, &["add", "-A"]);
+        sh(&clone, &["commit", "-qm", "Base"]);
+        sh(&clone, &["push", "-q", "origin", "main"]);
+        sh(folder, &["clone", "-q", remote.to_str().unwrap(), base.to_str().unwrap()]);
+        sh(&base, &["worktree", "add", "-q", "-b", "tico/12345678-build", path.to_str().unwrap(), "origin/main"]);
+        for name in &names {
+            std::fs::write(path.join(name), task(name)).unwrap();
+        }
+        std::fs::write(path.join("other"), "other\n").unwrap();
+        sh(&path, &["add", "-A"]);
+        sh(&path, &["commit", "-qm", "Task"]);
+        sh(&path, &["push", "-q", "origin", "tico/12345678-build"]);
+        for name in conflicts {
+            std::fs::write(clone.join(name), main(name)).unwrap();
+        }
+        for name in deleted {
+            std::fs::remove_file(clone.join(name)).unwrap();
+        }
+        std::fs::write(clone.join("mainonly"), "main only\n").unwrap();
+        for name in adds {
+            std::fs::write(clone.join(name), "").unwrap();
+        }
+        if !copies.is_empty() {
+            std::fs::write(clone.join("other"), "other\n").unwrap();
+        }
+        for name in copies {
+            std::fs::write(clone.join(name), "other\n").unwrap();
+        }
+        sh(&clone, &["add", "-A"]);
+        sh(&clone, &["commit", "-qm", "Main"]);
+        sh(&clone, &["push", "-q", "origin", "main"]);
+        sh(&base, &["fetch", "-q", "--no-tags", "origin"]);
+        assert!(!sh_ok(&path, &["merge", "-q", "--no-edit", "origin/main"]), "the merge must conflict");
+        sh(&path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        let row = json!({
+            "id": "link1", "link_id": "link1", "task_id": "12345678abcdef", "path": "tasks/12345678/org__product",
+            "repo": "org/product", "branch": "tico/12345678-build", "default_branch": "main", "state": "present"
+        });
+        Merge { workspace, remote, path, row: row.as_object().unwrap().clone() }
+    }
+
+    fn temp_folder(name: &str) -> Folder {
+        let root = std::env::temp_dir().join(format!("tico-merge-{name}-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        Folder(root.canonicalize().unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_mid_merge_tree_with_untouched_conflicts_is_saved_and_removed() {
+        let folder = temp_folder("saved");
+        let mut m = merge_in_progress(&folder.0, &["file", "second"], &[]);
+        std::fs::write(m.path.join("other"), "edited\n").unwrap();
+        let state = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap();
+        assert_eq!(state, "removed");
+        assert!(!m.path.exists());
+        let wip = wip_branch(&Value::Object(m.row.clone()));
+        assert_eq!(sh(&m.remote, &["show", &format!("{wip}:other")]), "edited");
+        assert_eq!(sh(&m.remote, &["show", &format!("{wip}:file")]), "task file");
+        assert_eq!(sh(&m.remote, &["show", &format!("{wip}:second")]), "task second");
+        assert!(!sh(&m.remote, &["ls-tree", "--name-only", &wip]).lines().any(|name| name == "mainonly"));
+    }
+
+    #[tokio::test]
+    async fn a_conflict_resolved_by_hand_keeps_the_merge_and_the_worktree() {
+        let folder = temp_folder("resolved");
+        let mut m = merge_in_progress(&folder.0, &["file"], &[]);
+        std::fs::write(m.path.join("file"), "resolved by hand\n").unwrap();
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        assert_eq!(std::fs::read_to_string(m.path.join("file")).unwrap(), "resolved by hand\n");
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert_eq!(sh(&m.path, &["symbolic-ref", "--short", "HEAD"]), "tico/12345678-build");
+        assert!(!sh(&m.remote, &["show-ref", "--heads"]).contains("wip/"));
+    }
+
+    #[tokio::test]
+    async fn a_resolution_staged_beside_a_conflict_is_kept() {
+        let folder = temp_folder("staged");
+        let mut m = merge_in_progress(&folder.0, &["file", "second"], &[]);
+        std::fs::write(m.path.join("file"), "resolved and staged\n").unwrap();
+        sh(&m.path, &["add", "file"]);
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert_eq!(std::fs::read_to_string(m.path.join("file")).unwrap(), "resolved and staged\n");
+        assert!(sh(&m.path, &["diff", "--cached", "--name-only"]).lines().any(|name| name == "file"));
+    }
+
+    #[tokio::test]
+    async fn a_modify_delete_conflict_without_markers_is_kept() {
+        let folder = temp_folder("modify-delete");
+        let mut m = merge_in_progress(&folder.0, &["second"], &["file"]);
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+    }
+
+    #[tokio::test]
+    async fn a_release_tree_mid_merge_is_kept_and_never_aborted() {
+        let folder = temp_folder("release");
+        let mut m = merge_in_progress(&folder.0, &["file"], &[]);
+        m.row.insert("release".into(), json!(true));
+        m.row.insert("prs_finished".into(), json!(true));
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), "kept: merge in progress; finish or abort it to free this worktree");
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert!(std::fs::read_to_string(m.path.join("file")).unwrap().contains("<<<<<<< "));
+    }
+
+    #[tokio::test]
+    async fn another_operation_beside_a_merge_is_kept() {
+        for marker in ["CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"] {
+            let folder = temp_folder(&format!("op-{marker}"));
+            let mut m = merge_in_progress(&folder.0, &["file"], &[]);
+            let gitdir = PathBuf::from(sh(&m.path, &["rev-parse", "--path-format=absolute", "--git-dir"]));
+            if marker.starts_with("rebase") {
+                std::fs::create_dir_all(gitdir.join(marker)).unwrap();
+            } else {
+                std::fs::write(gitdir.join(marker), format!("{}\n", sh(&m.path, &["rev-parse", "HEAD"]))).unwrap();
+            }
+            let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+            assert_eq!(err.text(), UNRESOLVED, "{marker}");
+            sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_staged_deletion_paired_with_an_identical_addition_is_kept() {
+        let folder = temp_folder("deletion-copy");
+        let mut m = merge_in_progress_with(&folder.0, &["file"], &[], &["copy"], &[]);
+        sh(&m.path, &["rm", "-q", "other"]);
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert!(!sh(&m.path, &["ls-files"]).lines().any(|name| name == "other"));
+    }
+
+    #[tokio::test]
+    async fn a_staged_addition_the_merge_did_not_make_is_kept() {
+        let folder = temp_folder("addition");
+        let mut m = merge_in_progress(&folder.0, &["file"], &[]);
+        std::fs::write(m.path.join("extra"), "bot file\n").unwrap();
+        sh(&m.path, &["add", "extra"]);
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert_eq!(sh(&m.path, &["show", ":extra"]), "bot file");
+    }
+
+    #[tokio::test]
+    async fn an_unstaged_edit_to_a_path_the_merge_changed_is_kept() {
+        let folder = temp_folder("unstaged");
+        let mut m = merge_in_progress(&folder.0, &["file"], &[]);
+        std::fs::write(m.path.join("mainonly"), "edited after the merge\n").unwrap();
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert_eq!(std::fs::read_to_string(m.path.join("mainonly")).unwrap(), "edited after the merge\n");
+    }
+
+    #[tokio::test]
+    async fn every_conflict_resolved_and_staged_with_the_merge_open_is_kept() {
+        let folder = temp_folder("all-resolved");
+        let mut m = merge_in_progress(&folder.0, &["file", "second"], &[]);
+        std::fs::write(m.path.join("file"), "resolved\n").unwrap();
+        std::fs::write(m.path.join("second"), "resolved\n").unwrap();
+        sh(&m.path, &["add", "-A"]);
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+    }
+
+    #[test]
+    fn the_merge_result_tree_is_read_only_when_git_wrote_one() {
+        let oid = "0123456789abcdef0123456789abcdef01234567";
+        let out = |code: i32, stdout: &str| Out { code, stdout: stdout.into(), stderr: String::new() };
+        assert_eq!(merge_tree_oid(&out(129, "usage: git merge-tree")), None);
+        assert_eq!(merge_tree_oid(&out(0, "not a tree\n")), None);
+        assert_eq!(merge_tree_oid(&out(0, &format!("{oid}\n"))).as_deref(), Some(oid));
+        assert_eq!(merge_tree_oid(&out(1, &format!("{oid}\nCONFLICT (content): file\n"))).as_deref(), Some(oid));
+    }
+
+    async fn resolution_beside_a_conflict_is_kept(side: &str, kept: &str) {
+        let folder = temp_folder(&format!("side-{}", side.trim_start_matches("--")));
+        let mut m = merge_in_progress(&folder.0, &["file", "second"], &[]);
+        sh(&m.path, &["checkout", side, "--", "file"]);
+        sh(&m.path, &["add", "file"]);
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert_eq!(sh(&m.path, &["symbolic-ref", "--short", "HEAD"]), "tico/12345678-build");
+        assert_eq!(std::fs::read_to_string(m.path.join("file")).unwrap(), format!("{kept}\n"));
+        assert_eq!(sh(&m.path, &["show", ":file"]), kept);
+        assert!(!sh(&m.remote, &["show-ref", "--heads"]).contains("wip/"));
+    }
+
+    #[tokio::test]
+    async fn a_resolution_taking_our_side_beside_a_conflict_is_kept() {
+        resolution_beside_a_conflict_is_kept("--ours", "task file").await;
+    }
+
+    #[tokio::test]
+    async fn a_resolution_taking_main_beside_a_conflict_is_kept() {
+        resolution_beside_a_conflict_is_kept("--theirs", "main file").await;
+    }
+
+    #[tokio::test]
+    async fn a_line_ending_only_edit_to_a_conflicted_file_is_kept() {
+        let folder = temp_folder("crlf");
+        let mut m = merge_in_progress(&folder.0, &["file"], &[]);
+        let bytes = std::fs::read(m.path.join("file")).unwrap();
+        let crlf: Vec<u8> = bytes.iter().flat_map(|&b| if b == b'\n' { vec![b'\r', b'\n'] } else { vec![b] }).collect();
+        std::fs::write(m.path.join("file"), crlf).unwrap();
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert!(std::fs::read(m.path.join("file")).unwrap().windows(2).any(|w| w == b"\r\n"));
+    }
+
+    #[tokio::test]
+    async fn a_staged_mode_change_on_a_path_the_merge_touched_is_kept() {
+        let folder = temp_folder("mode");
+        let mut m = merge_in_progress(&folder.0, &["file"], &[]);
+        sh(&m.path, &["update-index", "--chmod=+x", "mainonly"]);
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(m.path.join("mainonly"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert!(sh(&m.path, &["diff", "--cached", "--summary"]).contains("mode 100755"));
+    }
+
+    #[tokio::test]
+    async fn a_resolution_of_a_bracketed_name_beside_a_sibling_is_kept() {
+        let folder = temp_folder("bracket");
+        let mut m = merge_in_progress_with(&folder.0, &["file"], &[], &[], &["x[1].txt", "x1.txt"]);
+        std::fs::write(m.path.join("x[1].txt"), "two").unwrap();
+        sh(&m.path, &["add", "x[1].txt"]);
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert_eq!(sh(&m.path, &["show", ":x[1].txt"]), "two");
+    }
+
+
+    #[tokio::test]
+    async fn a_conflict_edited_to_replacement_characters_over_invalid_stage_bytes_is_kept() {
+        let folder = temp_folder("lossy-stage");
+        let mut m = merge_in_progress_bytes(&folder.0, &["file"], &[], &[], &[], |_| b"task \xff\n".to_vec(), |_| b"main \xfe\n".to_vec());
+        let working = std::fs::read(m.path.join("file")).unwrap();
+        // The same conflict with each invalid byte replaced by U+FFFD: valid UTF-8, so the working file reads as text.
+        let edited = String::from_utf8_lossy(&working).into_owned().into_bytes();
+        assert_ne!(edited, working);
+        std::fs::write(m.path.join("file"), &edited).unwrap();
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        assert_eq!(std::fs::read(m.path.join("file")).unwrap(), edited);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert_eq!(sh(&m.path, &["symbolic-ref", "--short", "HEAD"]), "tico/12345678-build");
+        assert!(!sh(&m.remote, &["show-ref", "--heads"]).contains("wip/"));
+    }
+
+    #[tokio::test]
+    async fn an_unrelated_unstaged_edit_that_is_not_utf8_is_saved_and_removed() {
+        let folder = temp_folder("unrelated-bytes");
+        let mut m = merge_in_progress(&folder.0, &["file"], &[]);
+        std::fs::write(m.path.join("other"), b"edited \xff\n").unwrap();
+        let state = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap();
+        assert_eq!(state, "removed");
+        let wip = wip_branch(&Value::Object(m.row.clone()));
+        let saved = std::process::Command::new("git")
+            .arg("-C").arg(&m.remote).args(["show", &format!("{wip}:other")])
+            .output().unwrap().stdout;
+        assert_eq!(saved, b"edited \xff\n");
+    }
+
+    #[tokio::test]
+    async fn a_conflicted_file_that_is_not_utf8_is_kept() {
+        let folder = temp_folder("not-utf8-file");
+        let mut m = merge_in_progress_bytes(&folder.0, &["file"], &[], &[], &[], |_| b"task \xff\n".to_vec(), |_| b"main \xfe\n".to_vec());
+        let working = std::fs::read(m.path.join("file")).unwrap();
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        assert_eq!(std::fs::read(m.path.join("file")).unwrap(), working);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert!(!sh(&m.remote, &["show-ref", "--heads"]).contains("wip/"));
+    }
+
+    #[tokio::test]
+    async fn a_merged_path_name_that_is_not_text_is_kept() {
+        let folder = temp_folder("not-text-name");
+        let mut m = merge_in_progress_with(&folder.0, &["file"], &[], &[], &["caf\u{FFFD}.txt"]);
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
     }
 }
